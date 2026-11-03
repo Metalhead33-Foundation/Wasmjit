@@ -663,10 +663,11 @@ Re-measured on 2026-11-03 for the FP16/M8 slice (`4d52031`), from
 | Command | Result | Reading |
 |---|---|---|
 | `env MAKE=/usr/bin/make /usr/bin/make -j16` | **exit 0** | The tree builds with the f16 helper TU and the new header. |
-| `./Test/WasmJit` | **17,544 assertions / 608 test cases, all passed** | FP16 adds 71 assertions / 3 cases; M8 adds 15 / 1; the promoted spec scripts add 19 cases; the header-tier and header-doc gates stay green. |
+| `./Test/WasmJit` | **17,545 assertions / 608 test cases, all passed** | FP16 adds 71 assertions / 3 cases; M8 adds 15 / 1; the promoted spec scripts add 19 cases; the SLJIT narrow-return canary adds 1; the header-tier and header-doc gates stay green. |
 | `./Test/WasmJit '~[spec]'` | **17,128 assertions / 400 test cases, all passed** | The hand-written half is green on its own. |
-| `WASM_SPEC_VALIDATE=1 ./Test/WasmJit` | **17,544 assertions / 608 cases, all passed**; curated negatives **3,275 / 3,277** with the two known `tag` entries | No regression in the strict decoder/validator/linker sweep. |
-| `ASAN_OPTIONS=detect_leaks=0 ./build/Desktop-ASan/Test/WasmJit '~[spec]~[compilation-policy]'` | **17,098 assertions / 397 cases, exit 0**; no ASan memory error | The missing ASan evidence is recorded. LeakSanitizer's reports are confined to LibJIT's uninstrumented context/type caches (1,432,070 bytes / 16,911 allocations); `[compilation-policy]` is excluded because LibJIT's CFG optimizer is impractically slow under ASan. |
+| `WASM_SPEC_VALIDATE=1 ./Test/WasmJit` | **17,545 assertions / 608 cases, all passed**; curated negatives **3,275 / 3,277** with the two known `tag` entries | No regression in the strict decoder/validator/linker sweep. |
+| `./build/Desktop-Release/Test/WasmJit` | **17,545 assertions / 608 cases, all passed** | The release configuration is green too; the `[sljit]` canary regression covers the libffi narrow-return fix. |
+| `ASAN_OPTIONS=detect_leaks=0 ./build/Desktop-ASan/Test/WasmJit '~[spec]~[compilation-policy]'` | **17,099 assertions / 397 cases, exit 0**; no ASan memory error | The missing ASan evidence is recorded. LeakSanitizer's reports are confined to LibJIT's uninstrumented context/type caches (1,432,070 bytes / 16,911 allocations); `[compilation-policy]` is excluded because LibJIT's CFG optimizer is impractically slow under ASan. |
 | `./Test/WasmJit '[docs]'` / `'[headerdoc]'` / `'[tiers]'` | **1015 / 2**, **6 / 3**, **245 / 3** | The note shape, header comments and 66-header tier classification hold (including `wasm_f16.hpp`). |
 | `./Test/abi-check.sh build/Desktop-Debug` | **OK** — `libWasmBase` 0 removed / 123 added, `libLibJit` 0 removed / 5 added | The additive-only rule (`G2`) holds; the additions are the f16 helper exports, the D5 fusion trampolines and the dispatcher overrides. |
 | `./Test/install-check.sh build/Desktop-Debug` | **OK** — `i32`, `f64`, `i32+i32`, `v128`, `i32+v128` | The installed surface still links and runs. |

@@ -192,15 +192,23 @@ TEST_CASE("sljit: the session invokes a compiled callable through the host ABI",
 	const WASM::FuncType functionType = parsed.module->funcTypeAt(callable->localTypeIdx);
 	std::int32_t left = 20;
 	std::int32_t right = 22;
-	std::int32_t result = 0;
+	// `libffi` may write a machine word for an i32 return. The canary is the
+	// regression assertion that `Session::invoke` copies only the declared size
+	// and never overwrites the caller's adjacent storage.
+	struct ResultSlot {
+		std::int32_t result;
+		std::uint32_t canary;
+	} slot{ 0, 0xA5A5A5A5u };
 	const std::vector<const void*> arguments = { &left, &right };
 	bool trapped = false;
 	WASM::TrapKind trapKind = WASM::TrapKind::Internal;
 	std::string trapMessage;
 
 	REQUIRE(session->invoke(*instance, *callable, functionType, instance->context(),
-			arguments, &result, sizeof(result), trapped, trapKind, trapMessage));
-	REQUIRE(result == 42);
+			arguments, &slot.result, sizeof(slot.result), trapped, trapKind,
+			trapMessage));
+	REQUIRE(slot.result == 42);
+	REQUIRE(slot.canary == 0xA5A5A5A5u);
 	REQUIRE_FALSE(trapped);
 	REQUIRE(trapMessage.empty());
 }

@@ -29,7 +29,10 @@ The emitter lowers a straight-line integer subset:
 
 `BackendSession` adds the tuple layout (`computeAggregateLayout`), the
 diagnostic lane-wise `i32x4` operation (real SLJIT code, freed on destruction)
-and `invoke` (a `libffi` call over the marshalled slots).
+and `invoke` (a `libffi` call over the marshalled slots). `invoke` marshals a
+narrow integer return through an aligned scratch word and copies only the
+declared result size: `libffi` may write a full machine word, and a 4-byte caller
+slot must not be overrun (the `[sljit]` canary test pins this).
 
 ## What it refuses
 
@@ -42,12 +45,14 @@ The per-function reasons are available from
 
 ## Known limitations
 
-- generated wasm code is never freed: `ModuleInstantiator` has no
-  instance-teardown hook, so there is nowhere safe to call `sljit_free_code`;
 - one executable mapping per function, because `SLJIT_WX_EXECUTABLE_ALLOCATOR=1`
   is defined so code never lives in a read-write-execute page;
 - no `rawFnPtr` driver and no `tailEntry` thunk: the callable's entry is the raw
   generated code and the core falls back to `call` + `return` for tail calls.
+
+Generated code **is** released on `Runtime::unload` and runtime teardown through
+`ModuleCompiler::releaseInstance`; the earlier "never freed" limitation is
+closed.
 
 ## Files
 

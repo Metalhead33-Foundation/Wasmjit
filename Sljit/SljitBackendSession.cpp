@@ -9,7 +9,10 @@
 
 #include <ffi.h>
 
+#include <algorithm>
+#include <array>
 #include <cstdint>
+#include <cstring>
 #include <stdexcept>
 #include <utility>
 
@@ -182,13 +185,14 @@ bool Session::invoke(const WASM::ModuleInstance& instance,
 	}
 
 	ffi_type* returnType = &ffi_type_void;
+	std::size_t resultSize = 0;
 	if (functionType.results.size() == 1) {
 		returnType = ffiTypeOf(functionType.results[0].val.opcode);
 		if (returnType == nullptr)
 			return false;
-		const std::size_t needed = WASM::valueKindSize(
+		resultSize = WASM::valueKindSize(
 				WASM::valueKindOf(functionType.results[0].val.opcode));
-		if (result == nullptr || resultCapacity < needed)
+		if (result == nullptr || resultCapacity < resultSize)
 			return false;
 	}
 
@@ -201,11 +205,23 @@ bool Session::invoke(const WASM::ModuleInstance& instance,
 
 	trapped = false;
 	{
+		// libffi may write a full machine word for a narrow integer return.
+		// Never let that word overlap the caller's shorter result slot; marshal
+		// through an aligned scratch buffer and copy only the declared size.
+		alignas(16) std::array<std::uint8_t, 16> returnStorage{};
+		void* returnBuffer = result;
+		if (returnType != &ffi_type_void) {
+			if (returnType->size > returnStorage.size())
+				return false;
+			returnBuffer = returnStorage.data();
+		}
 		// The scope marks this as a host boundary so a trap is collected here
 		// rather than thrown through a generated frame.
 		WASM::CallDepthScope depth;
 		ffi_call(&interface, reinterpret_cast<void (*)()>(callable.fnPtr),
-				returnType == &ffi_type_void ? nullptr : result, argumentValues.data());
+				returnBuffer, argumentValues.data());
+		if (returnBuffer != result)
+			std::memcpy(result, returnStorage.data(), resultSize);
 	}
 
 	const WASM::TrapInfo info = WASM::takePendingTrap();
