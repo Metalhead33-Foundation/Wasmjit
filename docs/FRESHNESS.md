@@ -426,7 +426,7 @@ test cases**; `[docs]` 1013/2,
 exported symbols. **These are a snapshot, not a promise** — they are here to show
 what the output looks like, and to make a reader notice when it does not.
 
-**Current (2026-11-03, resource-handle-table working tree):** **17,403 assertions in 583 test
+**Current (2026-11-03, resource-handle-table working tree):** **17,415 assertions in 585 test
 cases**; `[component-corpus]`/`[component-subtyping]` 520/1,
 `[component-execution]` 23/3 (140 accepted artifacts constructed plus the
 upstream primitive-return/trap sweep, including JSON string/flags rows), `[component-async]` 94/8,

@@ -243,6 +243,10 @@ private:
 		bool live = false; //!< True while the slot describes a live handle.
 		bool own = true; //!< True for an owning handle, false for a borrow.
 		uint32_t borrowScope = 0; //!< The borrow scope that owns a borrowed handle.
+		//! The defining runtime's destructor, if the resource declares one. A
+		//! transferred slot keeps this callable so dropping it in another instance
+		//! runs the destructor in the instance that defined the resource.
+		std::function<void(uint64_t)> destructor;
 	};
 
 	//! A core instance in the component graph: either an instantiated core
@@ -301,8 +305,12 @@ private:
 		//! Core-module index space of the instance that exported this component.
 		//! Empty for a definition owned by this runtime.
 		std::vector<const WASM::Module*> outerCoreModules;
+		//! Component index space of the instance that exported this component.
+		const std::vector<ComponentDefinitionHandle>* outerComponents = nullptr;
 	};
 	std::vector<ComponentDefinitionHandle> componentSpace_; //!< The component index space, in definition order.
+	//! Ancestor component index spaces for `alias outer`; nearest first.
+	std::vector<const std::vector<ComponentDefinitionHandle>*> outerComponentSpaces_;
 	//! One executable component instance: a nested runtime (Instantiate) or an
 	//! export bag (InlineExports / a host instance import). The vector mirrors the
 	//! component-instance index space, including aliases, so `alias.instanceIndex`
@@ -395,6 +403,17 @@ private:
 	void processThreadCanon(const WASM::Canon& canon);
 	//! Binds one component-level import.
 	void processImport(const WASM::ImportDecl& importDecl);
+	//! Internal constructor carrying ancestor component-index spaces.
+	ComponentRuntime(ModuleInstantiator& instantiator,
+			const Component& component, ComponentImports imports,
+			std::unordered_map<std::string, const WASM::Module*> coreModuleImports,
+			std::vector<std::vector<const WASM::Module*>> outerCoreModuleSpaces,
+			std::unordered_map<std::string,
+					std::unordered_map<std::string, const WASM::Module*>>
+					instanceCoreModules,
+			const ComponentInstanceOptions& options,
+			std::vector<const std::vector<ComponentDefinitionHandle>*>
+					outerComponentSpaces);
 	//! Publishes one component-level export.
 	void processExport(const WASM::ComponentExport& exportDecl);
 	//! Runs the component's start definition.
@@ -405,6 +424,9 @@ private:
 	uint32_t addHandle();
 	//! Marks a handle free (its slot is reused by the next `addHandle`).
 	void freeHandle(uint32_t handle);
+	//! Calls a resource destructor in the runtime that defined the resource.
+	void invokeResourceDestructor(uint32_t destructor, WASM::AbiCoreType rep,
+			uint64_t representation);
 	//! Resolves an imported/aliased resource type identity to the concrete one.
 	WASM::TypeId canonicalTypeId(WASM::TypeId id) const;
 	//! Records that a local alias type denotes an imported concrete type.

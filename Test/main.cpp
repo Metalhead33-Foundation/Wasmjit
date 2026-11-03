@@ -1974,6 +1974,23 @@ TEST_CASE("component runtime lifts a flat core function")
 	REQUIRE(results[0].i32 == 42);
 }
 
+TEST_CASE("component outer component aliases instantiate")
+{
+	auto artifact = loadTestArtifact("component_outer_component");
+	REQUIRE(artifact != nullptr);
+	auto* component = artifact->asComponent();
+	REQUIRE(component != nullptr);
+	auto backend = TestBackend::create();
+	WASM::ComponentRuntime runtime(backend->instantiator(), *component);
+	auto function = runtime.exportedFunction("run");
+	REQUIRE(function.has_value());
+	WASM::ComponentValue result;
+	function->callValues(std::span<const WASM::ComponentValue>(),
+			{&result, 1});
+	REQUIRE(result.kind == WASM::ComponentValue::Kind::U32);
+	REQUIRE(result.u64 == 7);
+}
+
 TEST_CASE("component runtime lifts a canonical string")
 {
 	auto artifact = loadTestArtifact("component_runtime_string");
@@ -2380,6 +2397,31 @@ TEST_CASE("component resource borrows transfer between runtimes")
 			std::runtime_error);
 	source.validateResourceHandle(owned, resourceType);
 	source.dropResourceHandle(owned);
+}
+
+TEST_CASE("component resource destructor runs in the defining runtime")
+{
+	auto artifact = loadTestArtifact("component_resource_destructor");
+	REQUIRE(artifact != nullptr);
+	auto* component = artifact->asComponent();
+	REQUIRE(component != nullptr);
+	auto backend = TestBackend::create();
+	WASM::ModuleInstantiator& compiler = backend->instantiator();
+	WASM::ComponentRuntime source(compiler, *component);
+	WASM::ComponentRuntime target(compiler, *component);
+	const WASM::TypeId resourceType = component->typeId(0);
+	REQUIRE_FALSE(resourceType.isNone());
+	const int32_t handle = WASM::callCallable<int32_t>(
+			source.coreFunction(1), int32_t(77));
+	REQUIRE(handle > 0);
+	const uint32_t adopted = target.adoptResourceHandle(source, uint32_t(handle),
+			resourceType);
+	WASM::callCallable<void>(target.coreFunction(2), int32_t(adopted));
+	const auto drops = source.coreGlobal(0);
+	REQUIRE(drops.has_value());
+	REQUIRE(drops->first->i32 == 1);
+	REQUIRE_THROWS_AS(target.validateResourceHandle(adopted, resourceType),
+			std::runtime_error);
 }
 
 TEST_CASE("component resource handle table budget rejects exhaustion")

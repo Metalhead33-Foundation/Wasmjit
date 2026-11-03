@@ -2265,11 +2265,28 @@ ComponentRuntime::ComponentRuntime(ModuleInstantiator& instantiator,
 				std::unordered_map<std::string, const WASM::Module*>>
 				instanceCoreModules,
 		const ComponentInstanceOptions& options)
+	: ComponentRuntime(instantiator, component, std::move(imports),
+			std::move(coreModuleImports), std::move(outerCoreModuleSpaces),
+			std::move(instanceCoreModules), options, {})
+{
+}
+
+ComponentRuntime::ComponentRuntime(ModuleInstantiator& instantiator,
+		const WASM::Component& component, ComponentImports imports,
+		std::unordered_map<std::string, const WASM::Module*> coreModuleImports,
+		std::vector<std::vector<const WASM::Module*>> outerCoreModuleSpaces,
+		std::unordered_map<std::string,
+				std::unordered_map<std::string, const WASM::Module*>>
+				instanceCoreModules,
+		const ComponentInstanceOptions& options,
+		std::vector<const std::vector<ComponentDefinitionHandle>*>
+				outerComponentSpaces)
 	: instantiator_(instantiator), component_(component),
 	  imports_(std::move(imports)),
 	  coreModuleImports_(std::move(coreModuleImports)),
 	  instanceCoreModules_(std::move(instanceCoreModules)),
 	  outerCoreModuleSpaces_(std::move(outerCoreModuleSpaces)),
+	  outerComponentSpaces_(std::move(outerComponentSpaces)),
 	  options_(options),
 	  async_([this] { return addHandle(); },
 			  [this](uint32_t handle) { freeHandle(handle); }),
@@ -2571,7 +2588,8 @@ void ComponentRuntime::processComponent(uint32_t index)
 	if (index >= component_.components.size())
 		throw std::runtime_error(
 				"component runtime: nested component index out of bounds");
-	componentSpace_.push_back({component_.components[index].get(), {}});
+	componentSpace_.push_back({component_.components[index].get(), {}, {},
+			nullptr});
 }
 
 std::shared_ptr<ComponentRuntime::ComponentInstanceHandle>
@@ -2805,6 +2823,8 @@ void ComponentRuntime::processComponentInstance(
 	auto handle = std::make_shared<ComponentInstanceHandle>();
 	std::vector<std::vector<const WASM::Module*>> childOuterModuleSpaces =
 			outerCoreModuleSpaces_;
+	std::vector<const std::vector<ComponentDefinitionHandle>*> childOuterComponents =
+			outerComponentSpaces_;
 	const ComponentDefinitionHandle& target =
 			componentSpace_[instance.componentIndex];
 	if (!target.outerCoreModules.empty())
@@ -2813,10 +2833,14 @@ void ComponentRuntime::processComponentInstance(
 	else
 		childOuterModuleSpaces.insert(childOuterModuleSpaces.begin(),
 				coreModuleSpace_);
-	handle->nested = std::make_unique<ComponentRuntime>(instantiator_,
+	childOuterComponents.insert(childOuterComponents.begin(),
+			target.outerComponents != nullptr ? target.outerComponents
+					: &componentSpace_);
+	handle->nested = std::unique_ptr<ComponentRuntime>(new ComponentRuntime(instantiator_,
 			*target.definition, std::move(childImports), std::move(childCoreModules),
 			std::move(childOuterModuleSpaces),
-			std::move(childInstanceCoreModules), options_);
+			std::move(childInstanceCoreModules), options_,
+			std::move(childOuterComponents)));
 	handle->exports = handle->nested->exportSnapshot();
 	handle->coreModules = handle->nested->exportedCoreModules_;
 	componentInstances_.push_back(std::move(handle));
@@ -2879,10 +2903,12 @@ void ComponentRuntime::processAlias(const WASM::Alias& alias, uint32_t typeIndex
 				throw std::runtime_error(
 						"component runtime: component export is not a component");
 			ComponentDefinitionHandle handle{
-					it->second->componentDefinition(), it->second, {}};
+					it->second->componentDefinition(), it->second, {}, nullptr};
 			const auto source = componentInstances_[alias.instanceIndex];
-			if (source && source->nested)
+			if (source && source->nested) {
 				handle.outerCoreModules = source->nested->coreModuleSpace_;
+				handle.outerComponents = &source->nested->componentSpace_;
+			}
 			componentSpace_.push_back(std::move(handle));
 			return;
 		}
@@ -2906,6 +2932,23 @@ void ComponentRuntime::processAlias(const WASM::Alias& alias, uint32_t typeIndex
 		}
 	}
 	if (alias.kind == WASM::Alias::Kind::Outer) {
+		if (alias.sort.sort == WASM::ComponentSort::Type)
+			return; // compile-time identity; no runtime object
+		if (alias.sort.sort == WASM::ComponentSort::Component) {
+			const std::vector<ComponentDefinitionHandle>* space = &componentSpace_;
+			if (alias.outerCount != 0) {
+				if (alias.outerCount > outerComponentSpaces_.size())
+					throw std::runtime_error(
+							"component runtime: outer component alias depth is out of bounds");
+				space = outerComponentSpaces_[alias.outerCount - 1];
+			}
+			if (space == nullptr || alias.index >= space->size()
+					|| (*space)[alias.index].definition == nullptr)
+				throw std::runtime_error(
+						"component runtime: outer component alias is out of bounds");
+			componentSpace_.push_back((*space)[alias.index]);
+			return;
+		}
 		if (alias.sort.sort != WASM::ComponentSort::Core || !alias.sort.core
 				|| alias.sort.core->sort != WASM::CoreSort::Module)
 			return;
@@ -3398,6 +3441,36 @@ uint32_t ComponentRuntime::adoptStreamFutureHandle(ComponentRuntime& source,
 	return async_.adoptEndpointFrom(source.async_, handle, future);
 }
 
+void ComponentRuntime::invokeResourceDestructor(uint32_t destructor,
+		WASM::AbiCoreType rep, uint64_t representation)
+{
+	if (destructor >= coreFuncs_.size())
+		throw std::runtime_error(
+				"component runtime: resource destructor index is out of bounds");
+	ComponentFunction drop;
+	drop.params = {rep};
+	WASM::Value value{};
+	value.kind = rep == WASM::AbiCoreType::I32
+			? WASM::ValueTypeCode::I32
+			: rep == WASM::AbiCoreType::I64
+					? WASM::ValueTypeCode::I64
+					: rep == WASM::AbiCoreType::F32
+							? WASM::ValueTypeCode::F32
+							: WASM::ValueTypeCode::F64;
+	if (rep == WASM::AbiCoreType::I32)
+		value.u32 = uint32_t(representation);
+	else if (rep == WASM::AbiCoreType::I64)
+		value.ui64 = representation;
+	else if (rep == WASM::AbiCoreType::F32) {
+		const uint32_t bits = uint32_t(representation);
+		std::memcpy(&value.f32, &bits, 4);
+	} else {
+		std::memcpy(&value.f64, &representation, 8);
+	}
+	invokeCore(coreFuncs_[destructor], drop,
+			std::span<const WASM::Value>(&value, 1), {});
+}
+
 WASM::TypeId ComponentRuntime::canonicalTypeId(WASM::TypeId id) const
 {
 	// Follow at most one alias hop: an imported type maps to a concrete type,
@@ -3469,8 +3542,11 @@ void ComponentRuntime::processResourceCanon(const WASM::Canon& canon)
 		case WASM::AbiCoreType::F64: std::memcpy(destination, &value, 8); break;
 		}
 	};
+	const bool hasDestructor = view.resource().hasDestructor;
+	const uint32_t destructor = view.resource().destructor;
 	if (canon.kind == WASM::Canon::Kind::ResourceNew) {
-		data->handler = [this, readRep, typeId](void* result, void** args) {
+		data->handler = [this, readRep, typeId, rep, hasDestructor,
+				destructor](void* result, void** args) {
 			const uint64_t representation = readRep(args[1]);
 			uint32_t handle;
 			if (!freeResourceSlots_.empty()) {
@@ -3483,6 +3559,12 @@ void ComponentRuntime::processResourceCanon(const WASM::Canon& canon)
 				resourceSlots_.push_back(ResourceSlot{representation, typeId,
 						true, true, 0});
 			}
+			if (hasDestructor && destructor < coreFuncs_.size()) {
+				resourceSlots_[handle].destructor =
+						[this, destructor, rep](uint64_t value) {
+							invokeResourceDestructor(destructor, rep, value);
+						};
+			}
 			*static_cast<int32_t*>(result) = int32_t(handle);
 		};
 	} else if (canon.kind == WASM::Canon::Kind::ResourceRep) {
@@ -3494,9 +3576,7 @@ void ComponentRuntime::processResourceCanon(const WASM::Canon& canon)
 			writeRep(result, resourceSlots_[handle].representation);
 		};
 	} else {
-		const bool hasDestructor = view.resource().hasDestructor;
-		const uint32_t destructor = view.resource().destructor;
-		data->handler = [this, rep, hasDestructor, destructor, typeId](void*, void** args) {
+		data->handler = [this, typeId](void*, void** args) {
 			const uint32_t handle = uint32_t(*static_cast<int32_t*>(args[1]));
 			if (handle == 0 || handle >= resourceSlots_.size()
 					|| !resourceSlots_[handle].live
@@ -3504,31 +3584,9 @@ void ComponentRuntime::processResourceCanon(const WASM::Canon& canon)
 				throw std::runtime_error("component runtime: invalid resource handle");
 			if (!resourceSlots_[handle].own)
 				throw std::runtime_error("component runtime: cannot drop a borrowed handle");
-			const uint64_t representation = resourceSlots_[handle].representation;
-			if (hasDestructor && destructor < coreFuncs_.size()) {
-				ComponentFunction drop;
-				drop.params = {rep};
-				WASM::Value value{};
-				value.kind = rep == WASM::AbiCoreType::I32
-						? WASM::ValueTypeCode::I32
-						: rep == WASM::AbiCoreType::I64
-								? WASM::ValueTypeCode::I64
-								: rep == WASM::AbiCoreType::F32
-										? WASM::ValueTypeCode::F32
-										: WASM::ValueTypeCode::F64;
-				if (rep == WASM::AbiCoreType::I32)
-					value.u32 = uint32_t(representation);
-				else if (rep == WASM::AbiCoreType::I64)
-					value.ui64 = representation;
-				else if (rep == WASM::AbiCoreType::F32) {
-					const uint32_t bits = uint32_t(representation);
-					std::memcpy(&value.f32, &bits, 4);
-				} else {
-					std::memcpy(&value.f64, &representation, 8);
-				}
-				invokeCore(coreFuncs_[destructor], drop,
-						std::span<const WASM::Value>(&value, 1), {});
-			}
+			const ResourceSlot slot = resourceSlots_[handle];
+			if (slot.destructor)
+				slot.destructor(slot.representation);
 			resourceSlots_[handle] = ResourceSlot{};
 			freeResourceSlots_.push_back(handle);
 		};
@@ -4107,7 +4165,8 @@ void ComponentRuntime::processImport(const WASM::ImportDecl& importDecl)
 			throw std::runtime_error(
 					"component runtime: host component import is empty");
 		componentSpace_.push_back(
-				{import->component->componentDefinition(), import->component});
+				{import->component->componentDefinition(), import->component, {},
+				 nullptr});
 		return;
 	}
 	case WASM::ExternType::Kind::Func:

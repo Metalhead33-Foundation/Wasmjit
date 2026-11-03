@@ -1243,7 +1243,8 @@ The component feature/API tests are:
   rows from `execution.tsv`, including JSON-encoded string/flags expectations and
   the resource-handle-table groups with per-instance transfer. Structured
   invocations the extractor cannot represent are marked `unsupported`. The
-  component runtime tests also cover borrowed-resource transfer, stream/future
+  component runtime tests also cover borrowed-resource transfer, destructor
+  ownership across instances, outer component aliases, stream/future
   endpoint transfer, and handle-table budget exhaustion.
 - `[component-async]` — task cancellation/subtask states, stream/future copies and
   the async lift/lower calling convention.
