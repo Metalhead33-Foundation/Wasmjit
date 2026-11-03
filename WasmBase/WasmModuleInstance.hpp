@@ -118,6 +118,9 @@ struct ModuleInstanceInternals {
 	std::vector<void*> compiledFunctions;
 	//! Per-local-type backend translation handles, filled by `translateTypes`.
 	std::vector<void*> translatedTypes;
+	//! True when this instance was compiled with step-budget checks (CFG-8).
+	//! The budget itself is per agent; this flag only selects the lowering.
+	bool fuelMetering = false;
 
 	//! Materialized string literals from section 14 (STRINGREF.md STR-2),
 	//! parallel to Module::stringLiterals. Store-owned pointers are stable.
@@ -573,6 +576,15 @@ public:
 	/** \brief Returns the configured host stack reserve. \return Reserve in bytes, or zero for the default. */
 	std::uint64_t stackReserveBytes() const noexcept { return stackReserve; }
 
+	//! \\par Step budget (docs/proposals/CONFIGURATION.md `CFG-8`)
+	//! A non-zero value enables the backend's fuel checks for subsequently
+	//! compiled instances. The budget is charged per agent at run time; this
+	//! only decides whether the lowering is emitted.
+	/** \brief Enables step-budget lowering for subsequently compiled instances. \param fuel Non-zero to emit checks; zero keeps the default (unmetered). */
+	void setFuelBudget(std::uint64_t fuel) noexcept { fuelBudget_ = fuel; }
+	/** \brief Returns the configured step budget. \return Non-zero when metering is enabled. */
+	std::uint64_t fuelBudget() const noexcept { return fuelBudget_; }
+
 protected:
 	//! Evaluates a constant expression against this instance's state.
 	Value evalConstantExpr(const std::span<const std::byte>& expr, ModuleInstance& instance);
@@ -610,6 +622,8 @@ private:
 	CompilationPolicy requestedPolicy{};
 	//! Host stack reserve for created instances; `0` = `kDefaultStackReserveBytes`.
 	std::uint64_t stackReserve = 0;
+	//! Step-budget lowering switch; `0` = unmetered (CFG-8).
+	std::uint64_t fuelBudget_ = 0;
 };
 
 }

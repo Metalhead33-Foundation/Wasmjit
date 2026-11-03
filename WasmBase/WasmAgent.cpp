@@ -34,6 +34,8 @@ Agent::Agent(const ExecutionLimits& limits) noexcept
 	state_.owner = this;
 	if (limits.diagnosticRingCapacity != 0)
 		state_.diagnostics.setCapacity(limits.diagnosticRingCapacity);
+	if (limits.fuel != 0)
+		state_.resetFuel(limits.fuel);
 }
 
 Agent::~Agent() = default;
@@ -58,6 +60,21 @@ void setCurrentExecutionState(ExecutionState* state) noexcept
 Agent* currentAgent() noexcept
 {
 	return currentExecutionState().owner;
+}
+
+extern "C" void wasm_fuel_consume(std::uint64_t cost) noexcept
+{
+	ExecutionState& state = currentExecutionState();
+	if (state.fuelLimit == 0)
+		return;
+	if (state.trapSlot.pending != 0)
+		return;
+	if (cost > state.fuelRemaining) {
+		state.fuelRemaining = 0;
+		reportTrap(TrapKind::OutOfFuel, "execution step budget exhausted");
+		return;
+	}
+	state.fuelRemaining -= cost;
 }
 
 ExecutionStateScope::ExecutionStateScope(ExecutionState& state) noexcept

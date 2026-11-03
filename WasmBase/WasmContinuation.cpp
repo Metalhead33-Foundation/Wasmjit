@@ -1774,6 +1774,13 @@ void* wasm_cont_new_ex(void* callable, void* context, ContinuationInvokeFn invok
 		}
 		worker->invoke = invoke;
 		worker->resultCount = resultCount;
+		// A continuation runs on its own ExecutionState. Carry the caller's
+		// remaining step budget into it so a finite CFG-8 budget cannot be
+		// bypassed by moving the loop into a continuation; the new handle shares
+		// that worker and therefore the same remaining counter.
+		const ExecutionState& creator = currentExecutionState();
+		if (creator.fuelLimit != 0)
+			worker->execution.resetFuel(creator.fuelRemaining);
 		if (paramKinds != nullptr)
 			worker->paramKinds.assign(paramKinds, paramKinds + paramCount);
 		if (resultKinds != nullptr)

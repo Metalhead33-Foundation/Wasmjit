@@ -21,7 +21,8 @@ which party is responsible for each — see [`THREADSAFETY.md`](THREADSAFETY.md)
   it is deliberately conservative — an unmodelled opcode taints the rest of the
   body instead of rejecting it (§3.1 S2) — so decoding and instantiation still
   have to survive bytes the validator let through.
-- **The engine is not a sandbox.** There is no instruction budget, no watchdog
+- **The engine is not a sandbox by default.** There is no instruction budget
+  unless a runtime opts into the per-agent fuel budget (`CFG-8`), no watchdog
   and no memory isolation between a module and the host process. A module that
   loops forever will wedge the calling thread; the test harness handles that by
   running each script in a **forked child with a wall-clock timeout**
@@ -312,7 +313,7 @@ is `Test/wasm_wat/stack_exhaustion.wat` plus the
 
 | # | Limitation | Why / mitigation |
 |---|---|---|
-| S1 | **No instruction/step budget.** A trap-free `loop` runs forever. | Out of scope; the harness kills the child after a wall-clock timeout, and an embedder running hostile code should do the same. |
+| S1 | **No instruction/step budget by default.** A trap-free `loop` runs forever unless the runtime sets `RuntimeConfig::execution.fuel`; the LibJIT lowering charges function entries and loop back-edges and traps with `OutOfFuel`. | Opt-in. The harness kills the child after a wall-clock timeout; an embedder running hostile code should set fuel where the backend supports it or use a wall-clock watchdog. |
 | S2 | **Negative-module coverage is opt-in, and the validator is conservative.** `assert_invalid` / `assert_unlinkable` / `assert_uninstantiable` are skipped in the default run and only executed with `WASM_SPEC_VALIDATE=1`; an opcode with no rule taints the rest of its body rather than being rejected, and text-format modules are not decoded at all (947 commands). | `Module::validate()` covers all 3,275 of 3,277 binary negative commands ([`VALIDATION.md`](VALIDATION.md)); the remaining holes are coverage, not acceptance. It is why §2.2 is about *resource safety*, not spec conformance. |
 | S3 | **GC reclamation is not a leak-free guarantee.** Reference counting + cycle collection reclaim acyclic and cyclic garbage at safepoints, but an uncounted borrow, a wrong count or a type outside the instance can leak until instance teardown; ordinary recycled blocks also do not refund their region's budget charge. | RC-1/1b/2/3 and the reclamation tests ([`proposals/GC.md`](proposals/GC.md) §6/§7); `GcHeap::releaseSet` at teardown is the backstop, and the allocation budget still bounds total host memory. |
 | S4 | **Budgets are per store, not per instance.** Instances sharing a store (they only can if they come from the same runtime) share one budget, so one greedy module can starve its siblings. | The budget lives in the `Store`, and `ES-2` made stores runtime-scoped: two runtimes are isolated. Per-instance accounting remains a possible refinement. |

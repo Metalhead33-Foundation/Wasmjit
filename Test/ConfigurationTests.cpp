@@ -344,6 +344,35 @@ TEST_CASE("an agent honours the configured execution limits", "[config]")
 	REQUIRE(clamped.execution().deferCapacity() == WASM::ExecutionState::kDeferCapacity);
 }
 
+TEST_CASE("a per-agent step budget traps a runaway loop", "[config]")
+{
+	// CFG-8: metering is selected when the runtime compiles the instance and
+	// charged per agent. A loop back-edge and a function entry each cost one
+	// unit, so the bound is deterministic for this fixture.
+	WASM::RuntimeConfig config;
+	config.execution.fuel = 64;
+	auto runtime = WASM::Runtime::create("libjit", config);
+	auto module = loadFixture(*runtime, "runtime_spin.wasm");
+	WASM::RegistryImportResolver imports;
+	WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+	auto agent = runtime->createAgent();
+	WASM::AgentScope scope(*agent);
+
+	try {
+		(void)runtime->callExport<std::int32_t>(instance, "spin", 1000000);
+		FAIL("the step budget did not stop the loop");
+	} catch (const WASM::Trap& trap) {
+		REQUIRE(trap.kind() == WASM::TrapKind::OutOfFuel);
+	}
+	REQUIRE(agent->fuelRemaining() == 0);
+
+	// A backend that has not implemented the CFG-8 lowering refuses the
+	// configuration instead of silently running unmetered.
+	WASM::RuntimeConfig unsupported;
+	unsupported.execution.fuel = 1;
+	REQUIRE_THROWS(WASM::Runtime::create("sljit", unsupported));
+}
+
 TEST_CASE("continuation limits and provider are per runtime", "[config]")
 {
 	// CFG-4: the process-wide free functions stay the *default*, and a runtime

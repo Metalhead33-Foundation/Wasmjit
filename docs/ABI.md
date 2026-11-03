@@ -420,7 +420,7 @@ inside them:
 
 | Limit | What it means for the embedder | Decided in |
 |---|---|---|
-| **No step or instruction budget** (`S1`) | A module can loop forever. Time limits belong to the embedder — kill the thread or the process — exactly as in the QVM model. | [`SAFETY.md`](SAFETY.md) `S1` |
+| **No step budget by default** (`S1`) | The engine ships an opt-in per-agent fuel budget (`RuntimeConfig::execution.fuel`, `TrapKind::OutOfFuel`) lowered by the LibJIT backend; a runtime that leaves it at zero still has no step limit. Time limits for the unmetered case belong to the embedder — kill the thread or the process — exactly as in the QVM model. | [`SAFETY.md`](SAFETY.md) `S1`, [`proposals/CONFIGURATION.md`](proposals/CONFIGURATION.md) `CFG-8` |
 | **Budgets are process-wide** (`S4`) | The allocation budget is not per instance, so one greedy module can starve another. Isolation is a process boundary, not an instance boundary. | [`SAFETY.md`](SAFETY.md) `S4` |
 | **Reclamation is reference counting, not a leak-free guarantee** (`S3`) | A reference the embedder never drops keeps its object alive; `gcCollect()` collects cycles at a safepoint, so call it where no Wasm frame is live and hold no un-counted references. | [`SAFETY.md`](SAFETY.md) `S3` |
 | **A small-stack thread runs unguarded** (`S7`) | The boundary installs the calling thread's own guard (`WasmStack.hpp`), but a stack without headroom for the reserve is left unguarded. Give every thread that executes Wasm a normal stack; a small one faults instead of trapping. | [`SAFETY.md`](SAFETY.md) `S7` |

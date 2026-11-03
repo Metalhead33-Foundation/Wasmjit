@@ -91,6 +91,7 @@ std::string_view trapDiagnosticId(TrapKind kind) noexcept
 	case TrapKind::CastFailure:                return "WASM.EXECUTE.TRAP.CAST_FAILURE";
 	case TrapKind::OutOfMemory:                return "WASM.EXECUTE.TRAP.OUT_OF_MEMORY";
 	case TrapKind::CallStackExhausted:         return "WASM.EXECUTE.TRAP.CALL_STACK_EXHAUSTED";
+	case TrapKind::OutOfFuel:                   return "WASM.EXECUTE.TRAP.OUT_OF_FUEL";
 	case TrapKind::Internal:                   return "WASM.EXECUTE.TRAP.INTERNAL";
 	}
 	return "WASM.EXECUTE.TRAP.INTERNAL";

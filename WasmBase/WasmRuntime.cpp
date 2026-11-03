@@ -48,6 +48,11 @@ void rejectUnsupportedConfig(const RuntimeConfig& config, const BackendInstance&
 	if (backend.instantiator) {
 		const BackendCompilationCapabilities capabilities =
 				backend.instantiator->compilationCapabilities();
+		if (config.execution.fuel != 0 && !capabilities.fuelMetering) {
+			throw std::runtime_error(
+					"RuntimeConfig::execution.fuel is set, but the selected backend "
+					"does not lower the CFG-8 fuel check");
+		}
 		if (!supportsCompilationPolicy(capabilities, config.compilation)) {
 			std::string message = "RuntimeConfig::compilation cannot be honoured:";
 			bool first = true;
@@ -130,6 +135,7 @@ Runtime::Runtime(std::string backendName, BackendInstance backend, RuntimeConfig
 	if (backend_.instantiator) {
 		backend_.instantiator->setCompilationPolicy(config_.compilation);
 		backend_.instantiator->setStackReserveBytes(config_.execution.stackReserveBytes);
+		backend_.instantiator->setFuelBudget(config_.execution.fuel);
 	}
 	// How to build the next backend instance: by name for a compiled-in backend,
 	// by the recorded path for a plugin. Re-resolving a plugin by name would read
@@ -263,6 +269,7 @@ ComponentInstanceHandle& Runtime::instantiateComponent(const LoadedComponent& co
 	componentBackend.instantiator->setCompilationPolicy(options.compilation);
 	componentBackend.instantiator->setStackReserveBytes(
 			options.stackReserveBytes);
+	componentBackend.instantiator->setFuelBudget(config_.execution.fuel);
 	auto instance = makeComponentInstance(std::move(loaded),
 			std::move(componentBackend), std::move(imports),
 			std::move(executor), options);
@@ -337,6 +344,7 @@ ModuleInstance& Runtime::adoptInstance(const Module& module, ImportResolver& imp
 		throw std::runtime_error("the backend refused to create an instantiator");
 	backend.instantiator->setCompilationPolicy(policy);
 	backend.instantiator->setStackReserveBytes(config_.execution.stackReserveBytes);
+	backend.instantiator->setFuelBudget(config_.execution.fuel);
 
 	std::unique_ptr<ModuleInstance> failed;
 	std::unique_ptr<ModuleInstance> instance;

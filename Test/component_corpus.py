@@ -20,10 +20,8 @@ import argparse
 import ast
 import json
 import os
-import re
 import subprocess
 import sys
-from urllib.parse import quote
 
 
 def scan(text):
@@ -137,70 +135,229 @@ def first_component(text, start, end):
     return None
 
 
+def _skip_space(text, index):
+    """Skip whitespace and comments, returning the next significant index."""
+    n = len(text)
+    while index < n:
+        if text[index].isspace():
+            index += 1
+            continue
+        if text.startswith(';;', index):
+            newline = text.find('\n', index)
+            index = n if newline < 0 else newline + 1
+            continue
+        if text.startswith('(;', index):
+            level = 1
+            index += 2
+            while index < n and level:
+                if text.startswith('(;', index):
+                    level += 1
+                    index += 2
+                elif text.startswith(';)', index):
+                    level -= 1
+                    index += 2
+                else:
+                    index += 1
+            continue
+        break
+    return index
+
+
+def parse_node(text, start):
+    """Parse one s-expression from `start` into nested lists and atoms."""
+    index = _skip_space(text, start)
+    if index >= len(text) or text[index] != '(':
+        raise ValueError('expected an s-expression')
+    index += 1
+    node = []
+    n = len(text)
+    while True:
+        index = _skip_space(text, index)
+        if index >= n:
+            raise ValueError('unterminated s-expression')
+        if text[index] == ')':
+            return node, index + 1
+        if text[index] == '(':
+            child, index = parse_node(text, index)
+            node.append(child)
+            continue
+        if text[index] == '"':
+            begin = index
+            index += 1
+            while index < n:
+                if text[index] == '\\':
+                    index += 2
+                    continue
+                if text[index] == '"':
+                    index += 1
+                    break
+                index += 1
+            try:
+                node.append(ast.literal_eval(text[begin:index]))
+            except (SyntaxError, ValueError):
+                node.append(text[begin:index].strip('"'))
+            continue
+        begin = index
+        while index < n and not text[index].isspace() and text[index] not in '()':
+            index += 1
+        node.append(text[begin:index])
+
+
+_SCALARS = ('bool', 'u8', 's8', 'u16', 's16', 'u32', 'i32', 'u64', 'i64',
+            'f32', 'f64', 'char')
+
+
+
+def const_json(node):
+    """Return the JSON representation of one component value constant."""
+    if not isinstance(node, list) or not node or not isinstance(node[0], str):
+        return None
+    head = node[0]
+    if head.endswith('.const') and head[:-6] in _SCALARS:
+        kind = head[:-6]
+        if len(node) < 2 or not isinstance(node[1], str):
+            return None
+        value = node[1]
+        if kind == 'bool':
+            value = '1' if value == 'true' else '0'
+        return {'kind': kind, 'value': value}
+    if head == 'str.const':
+        if len(node) < 2 or not isinstance(node[1], str):
+            return None
+        return {'kind': 'str', 'value': node[1]}
+    if head == 'flags.const':
+        return {'kind': 'flags',
+                'values': [item for item in node[1:]
+                           if isinstance(item, str)]}
+    if head in ('list.const', 'fixed-list.const', 'tuple.const'):
+        values = []
+        for item in node[1:]:
+            value = const_json(item)
+            if value is None:
+                return None
+            values.append(value)
+        return {'kind': head[:-6], 'elements': values}
+    if head == 'record.const':
+        fields = []
+        for item in node[1:]:
+            if (not isinstance(item, list) or len(item) < 3
+                    or item[0] != 'field'):
+                return None
+            if isinstance(item[2], list):
+                value = const_json(item[2])
+            elif len(item) >= 4:
+                value = const_json([item[2], item[3]])
+            else:
+                return None
+            if value is None:
+                return None
+            name = item[1] if isinstance(item[1], str) else ''
+            fields.append({'name': name, 'value': value})
+        return {'kind': 'record', 'fields': fields}
+    if head == 'variant.const':
+        if len(node) < 2 or not isinstance(node[1], str):
+            return None
+        out = {'kind': 'variant', 'case': node[1], 'hasValue': len(node) > 2}
+        if len(node) > 2:
+            value = const_json(node[2])
+            if value is None:
+                return None
+            out['value'] = value
+        return out
+    if head == 'enum.const':
+        if len(node) < 2 or not isinstance(node[1], str):
+            return None
+        return {'kind': 'enum', 'case': node[1]}
+    if head in ('option.none', 'option.some'):
+        out = {'kind': 'option', 'hasValue': head == 'option.some'}
+        if out['hasValue']:
+            if len(node) < 2:
+                return None
+            value = const_json(node[1])
+            if value is None:
+                return None
+            out['value'] = value
+        return out
+    if head in ('result.ok', 'result.err'):
+        out = {'kind': 'result', 'isError': head == 'result.err',
+               'hasValue': len(node) > 1}
+        if out['hasValue']:
+            value = const_json(node[1])
+            if value is None:
+                return None
+            out['value'] = value
+        return out
+    if head == 'map.const':
+        entries = []
+        for item in node[1:]:
+            if (not isinstance(item, list) or len(item) != 3
+                    or item[0] != 'entry'):
+                return None
+            key = const_json(item[1])
+            value = const_json(item[2])
+            if key is None or value is None:
+                return None
+            entries.append([key, value])
+        return {'kind': 'map', 'entries': entries}
+    return None
+
+
 def parse_invoke(form):
-    """Return (name, args, structured) for one no-nested-command invoke."""
+    """Return (name, arg JSON values, structured) for an invoke form."""
     at = form.find('(invoke')
     if at < 0:
         return None
-    stop = balanced(form, at)
-    if stop is None:
+    try:
+        node, _ = parse_node(form, at)
+    except (ValueError, IndexError):
         return None
-    text = form[at:stop]
-    name = re.search(r'\(invoke\s+"([^"]+)"', text)
-    if not name:
+    if len(node) < 2 or not isinstance(node[1], str):
         return None
-    structured = re.search(
-            r'\((list|fixed-list|record|tuple|variant|option|result|map|flags)\.const',
-            text) is not None
-    args = []
-    for kind, value in re.findall(
-            r'\((bool|u8|s8|u16|s16|u32|i32|u64|i64|f32|f64|char)\.const\s+'
-            r'("(?:[^"\\]|\\.)*"|[^()\s]+)\)', text):
-        if kind == 'char':
-            try:
-                args.append(('char', '0x%x' % ord(ast.literal_eval(value))))
-            except (SyntaxError, ValueError, TypeError):
-                continue
-        elif kind == 'bool':
-            args.append(('bool', '1' if value == 'true' else '0'))
-        else:
-            args.append((kind, value))
-    for value in re.findall(r'\(str\.const\s+("(?:[^"\\]|\\.)*")\)', text):
-        try:
-            args.append(('str', quote(ast.literal_eval(value), safe='')))
-        except (SyntaxError, ValueError, TypeError):
-            continue
-    return name.group(1), args, structured
+    values = []
+    for item in node[2:]:
+        value = const_json(item)
+        if value is None:
+            # A non-constant argument (instance/ref/etc.) is still not
+            # representable by this extractor; the caller records it as
+            # unsupported rather than silently dropping it.
+            return None
+        values.append(value)
+    structured = any(value['kind'] not in _SCALARS + ('str',)
+                     for value in values)
+    return node[1], values, structured
 
 
-def parse_expected(tail):
-    """Return a list of typed expected values, or a reason for a skip."""
-    if re.search(
-            r'\((list|fixed-list|record|tuple|variant|option|result|map)\.const',
-            tail):
-        return None, 'structured result is not representable yet'
+def parse_expected(form):
+    """Return the expected values after an invoke form, or None on a gap."""
+    at = form.find('(assert_return')
+    if at < 0:
+        return []
+    try:
+        node, _ = parse_node(form, at)
+    except (ValueError, IndexError):
+        return None
+    invoke_index = -1
+    for i, item in enumerate(node):
+        if isinstance(item, list) and item and item[0] == 'invoke':
+            invoke_index = i
+            break
+    if invoke_index < 0:
+        return None
     expected = []
-    for kind, value in re.findall(
-            r'\((bool|u8|s8|u16|s16|u32|i32|u64|i64|f32|f64|char)\.const\s+'
-            r'("(?:[^"\\]|\\.)*"|[^()\s]+)\)', tail):
-        if kind == 'bool':
-            value = '1' if value == 'true' else '0'
-        elif kind == 'char':
-            try:
-                value = '0x%x' % ord(ast.literal_eval(value))
-            except (SyntaxError, ValueError, TypeError):
-                continue
-        expected.append({'kind': kind, 'value': value})
-    for value in re.findall(r'\(str\.const\s+("(?:[^"\\]|\\.)*")\)', tail):
-        try:
-            expected.append({'kind': 'str',
-                             'value': ast.literal_eval(value)})
-        except (SyntaxError, ValueError, TypeError):
-            continue
-    for labels in re.findall(r'\(flags\.const((?:\s+"[^"]*")*)\)', tail):
-        expected.append({'kind': 'flags',
-                         'values': re.findall(r'"([^"]*)"', labels)})
-    return expected, None
+    for item in node[invoke_index + 1:]:
+        value = const_json(item)
+        if value is None:
+            return None
+        expected.append(value)
+    return expected
+
+
+def args_text(values, structured):
+    """Encode invocation arguments for execution.tsv."""
+    if structured:
+        return 'json:' + json.dumps(values, separators=(',', ':'))
+    return ','.join('%s:%s' % (value['kind'], value['value'])
+                    for value in values)
 
 
 def main():
@@ -264,42 +421,26 @@ def main():
                 if form_head in ('invoke', 'action') and current_artifact:
                     parsed = parse_invoke(form)
                     if parsed:
-                        name, parsed_args, structured_args = parsed
-                        arg_text = ','.join('%s:%s' % item
-                                            for item in parsed_args)
-                        execution.append((current_artifact, name,
-                                          'unsupported' if structured_args else 'action',
-                                          'structured arguments'
-                                          if structured_args else '',
-                                          '%s:%d' % (relative, start), arg_text))
+                        name, parsed_args, structured = parsed
+                        execution.append((current_artifact, name, 'action',
+                                          '',
+                                          '%s:%d' % (relative, start),
+                                          args_text(parsed_args, structured)))
                 elif form_head == 'assert_return' and current_artifact:
                     parsed = parse_invoke(form)
-                    # Only constants after the invoke form are expected
-                    # results; constants inside the invoke are arguments.
-                    invoke_at = form.find('(invoke')
-                    invoke_end = balanced(form, invoke_at) if invoke_at >= 0 else -1
                     if parsed:
-                        name, parsed_args, structured_args = parsed
-                        arg_text = ','.join('%s:%s' % item
-                                            for item in parsed_args)
-                        if structured_args:
+                        name, parsed_args, structured = parsed
+                        arg_text = args_text(parsed_args, structured)
+                        expected = parse_expected(form)
+                        if expected is None:
                             execution.append((current_artifact, name,
                                               'unsupported',
-                                              'structured arguments',
-                                              '%s:%d' % (relative, start),
-                                              arg_text))
-                            continue
-                        expected, reason = parse_expected(
-                                form[invoke_end:] if invoke_end >= 0 else '')
-                        if reason is not None:
-                            execution.append((current_artifact, name,
-                                              'unsupported', reason,
+                                              'structured value is not representable',
                                               '%s:%d' % (relative, start),
                                               arg_text))
                         elif expected:
                             if (len(expected) == 1
-                                    and expected[0]['kind'] != 'str'
-                                    and expected[0]['kind'] != 'flags'):
+                                    and expected[0]['kind'] in _SCALARS + ('str',)):
                                 execution.append((
                                     current_artifact, name,
                                     expected[0]['kind'], expected[0]['value'],
@@ -320,16 +461,11 @@ def main():
                 elif form_head == 'assert_trap' and current_artifact:
                     parsed = parse_invoke(form)
                     if parsed:
-                        name, parsed_args, structured_args = parsed
-                        arg_text = ','.join('%s:%s' % item
-                                            for item in parsed_args)
-                        execution.append((current_artifact, name,
-                                          'unsupported' if structured_args
-                                          else 'trap',
-                                          'structured arguments'
-                                          if structured_args else '',
+                        name, parsed_args, structured = parsed
+                        execution.append((current_artifact, name, 'trap',
+                                          '',
                                           '%s:%d' % (relative, start),
-                                          arg_text))
+                                          args_text(parsed_args, structured)))
                 continue
             index += 1
             stem = os.path.splitext(os.path.basename(script))[0]

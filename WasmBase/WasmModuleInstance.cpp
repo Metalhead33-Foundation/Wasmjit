@@ -103,6 +103,7 @@ std::unique_ptr<ModuleInstance> ModuleInstantiator::instantiate(const Module& mo
 
 	// Two-pass compilation: first declare all functions (so mutual
 	// recursion works), then compile all bodies.
+	instance->internals.fuelMetering = fuelBudget() != 0;
 	translateTypes(*instance, module, instance->internals);
 	declareFunctions(*instance, module, instance->internals);
 	compileFunctions(*instance, module, instance->internals);

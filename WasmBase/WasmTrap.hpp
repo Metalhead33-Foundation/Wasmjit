@@ -75,6 +75,7 @@ enum class TrapKind : uint8_t {
 	//! Not a spec trap: a defensive check inside the engine, or a lowering that
 	//! cannot run. The detail text is the only description.
 	Internal, //!< An engine-internal trap; the detail text describes it.
+	OutOfFuel, //!< "out of fuel" (CFG-8 execution budget; appended for ABI stability)
 };
 
 //! The spec's text for a trap kind ("unreachable", "null reference", …). For

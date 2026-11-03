@@ -7,7 +7,7 @@ compile-time bounds, and priced the change. **Since revision 2 the work is
 implemented**: `CFG-1`…`CFG-7`, `CFG-9` **and `CFG-4`** shipped (a per-runtime memory budget
 with a 4 GiB default, opt-in category caps, an opt-in address-space counter,
 release paths for memories and tables, resolved-budget introspection, the store
-and execution limits, the `WASM.MEMORY.BUDGET_EXCEEDED` record, and continuation limits and the continuation provider chosen per runtime rather than per process). **Revision 3** completed the category set — strings, exception objects and continuation stacks now have their own counters and caps too — and marks `CFG12`/`CFG13` as explicit boundaries: the note has no open gap left that it can close. `CFG-8` (an execution-time budget) remains a separate, deferred study, and those two boundaries are what a budget does *not* cover. §7 records what
+and execution limits, the `WASM.MEMORY.BUDGET_EXCEEDED` record, and continuation limits and the continuation provider chosen per runtime rather than per process). **Revision 3** completed the category set — strings, exception objects and continuation stacks now have their own counters and caps too — and marks `CFG12`/`CFG13` as explicit boundaries: the note has no open gap left that it can close. `CFG-8` (an opt-in per-agent execution budget) now ships for LibJIT; those two boundaries are what that budget does *not* cover. §7 records what
 landed per milestone, including the places the implementation differs from
 the sketch in §10.
 
@@ -126,11 +126,12 @@ host down is the engine's reason, not the host's; it stays hardcoded (`CFGD2`).
   quota "invites an embedder to think it is a security boundary". Every knob this
   note adds inherits that disclaimer, and §10.4 records it for the reopened
   `MP-4`.
-- **No instruction/fuel budget in this milestone.** An execution-time budget
-  (metering every loop back-edge) is a *code generation* obligation, not a
-  counter in the `Store`: each backend would have to emit the check, and the
-  ABI would grow a per-call budget slot. It stays out of `CFG-1`…`CFG-7` and is
-  named as the largest open item in §5 (`CFG12`) so it is not silently dropped.
+- **Fuel is opt-in and backend-lowered.** An execution-time budget is a *code
+  generation* obligation, not a counter in the `Store`: the backend must emit
+  the check. `CFG-8` therefore adds only a per-agent counter
+  (`ExecutionLimits::fuel`) and the LibJIT entry/back-edge lowering; a runtime
+  that leaves the budget at zero keeps the historical unmetered behaviour, and
+  a backend that cannot lower it refuses the configuration.
 - **No configuration file format.** The engine has no `.toml`/`.json` config
   reader and does not grow one; the embedder builds a struct in code. The
   environment variables stay a convenience for a process that has no embedder
@@ -260,7 +261,7 @@ concrete reason and a test), **bound** (leave it).
 | continuation value capacity / stride | `WasmContinuation.hpp` | 64 / 16 | **bound** — part of the value-slot layout |
 | 32-bit table index ceiling | `WasmModuleInstance.cpp` | 2³²−1 | **bound** — the spec's index space |
 | 32-bit memory byte ceiling | `WasmModuleInstance.cpp` | 2³² bytes | **bound** — same |
-| instruction / fuel budget | — | **absent** | **knob, later** — `CFG12`; needs a code-generation obligation, not a counter |
+| instruction / fuel budget | `RuntimeConfig::execution.fuel` | **opt-in** | **knob, shipped (CFG-8)** — a backend-lowered per-agent counter; zero keeps the historical unmetered behaviour |
 | compilation degree / strictness / interpreter fallback | see [`COMPILER_POLICY.md`](COMPILER_POLICY.md) | env var only | **knob** — the sibling note |
 
 **Every "knob" verdict above is shipped** — the current surface is §4.1/§4.2, the
@@ -378,7 +379,7 @@ Two reasons it was kept rather than deleted:
 | ~~`CFG9`~~ ✅ (CFG-1) | `0` is overloaded: "unset, use the default" for `allocationBudgetBytes`, and "unlimited" for `WASMJIT_MAX_TOTAL_BYTES` | `WasmStore.cpp` parses `"0"` to `UINT64_MAX`; `WasmRuntime.hpp` documents `0` as "the engine's default" | **Medium** — the same value means opposite things at two layers |
 | `CFG10` | A 4 GiB total cannot hold one full wasm32 memory *and* anything else, so the requested default is a ceiling a legal module can hit | 32-bit memory maximum 2³² bytes (`WasmModuleInstance.cpp`); shared-memory cap `MAX_SHARED_BYTES` | **Medium** — a default, not a correctness question; §10.5 prices it |
 | ~~`CFG11`~~ ✅ (CFG-7) | A budget refusal has no stable diagnostic id: a failed `grow` is deliberately silent (`MP3`), and an oversized *initial* size throws prose | `WasmStore.cpp` messages; `WasmDiagnostics.hpp` has `WASM.COMPILE.*`, `WASM.EXECUTE.*`, `WASM.DECODE.*` but no `WASM.MEMORY.*` | **Low** — an embedder can only parse a string |
-| `CFG12` | No execution-time budget at all (fuel/instruction metering) | [`../SAFETY.md`](../SAFETY.md) §1: "no instruction budget, no watchdog" | **High for hostile-module hosts, out of scope here** — it is a code-generation obligation for every backend, not a `Store` counter |
+| ~~`CFG12`~~ ✅ (CFG-8) | No execution-time budget at all (fuel/instruction metering) | `ExecutionLimits::fuel`, `ExecutionState::fuelRemaining`, `wasm_fuel_consume`, and the LibJIT entry/back-edge lowering; `TrapKind::OutOfFuel` | **High for hostile-module hosts** — shipped as an opt-in per-agent budget; AsmJit/SLJIT still need the same lowering before they may claim it |
 | `CFG13` | The budget covers store-owned *runtime* bytes only: a module's decoded form, the code a backend generates, and host-side import state are charged to nothing | no `reserveBytes` call in `WasmModule.cpp`'s section decode beyond the input bounds, none in `LibJit/`; `../SAFETY.md` §2.2's caps are the only bound on a body | **Medium, triaged not-now** — decoding is bounded by the *input size* itself (a 1 GiB `.wasm` file costs about 1 GiB to parse, which is the embedder's own decision to pass it) and code size is bounded by the function-body count and each backend's own limits; a code-size budget is a backend-contract item, not a `Store` counter |
 | ~~`CFG14`~~ ✅ (CFG-9) | **Memories and tables are never released.** `Store` has no `releaseMemory`/`releaseTable`, and `ModuleInstance::~ModuleInstance` credits only the GC regions — so an instance destroyed while its `Store` lives keeps its memories' and tables' bytes charged forever | `grep` finds no removal path (no `memories.erase`/`tables.erase` in `WasmBase/`), and the destructor's own comment says "embedders may destroy instances while the Store lives on". Strings and exceptions are also held until teardown, but that is *documented intent* (an `exnref` or a string can outlive the call); a memory is supposed to die with its instance | **High** — a long-lived runtime that instantiates and drops modules leaks budget monotonically, and any retry that discards an instance (`COMPILER_POLICY.md` `CP-3`) pays for the discarded attempt as well as the new one |
 
@@ -387,9 +388,9 @@ Reading: **every gap this note can close is closed.** `CFG1`–`CFG9`, `CFG11` a
 three remaining categories (strings, exceptions, continuation stacks) by
 revision 3. `CFG10` is answered by decision
 (the default is the total, and a maximal memory needs an explicit budget —
-§10.6 Q1); `CFG12` and `CFG13` are named boundaries rather than work items: one
-is a code-generation obligation for every backend (`CFG-8`, a separate deferred
-study), the other a backend-contract item, and neither belongs in `Store`.
+§10.6 Q1); `CFG12` is now `CFG-8` (a backend-lowered opt-in counter, not a `Store`
+counter), and `CFG13` remains a backend-contract boundary: code size belongs in a
+backend, not in the store budget.
 
 
 ## 6. Where we can and should play fast and loose
@@ -442,7 +443,7 @@ bump, not a patch.
 | **CFG-7 — Diagnostics for a refusal** | `WASM.MEMORY.BUDGET_EXCEEDED` emitted where a refusal is *already* reported: an oversized initial size (Error + exception); a refused `grow` stays `-1` and silent. | `CFG11` | A | ✅ **Shipped.** One id (not one per category); the guest still observes exactly `-1`. |
 | **CFG-9 — Give the bytes back** | `Store::releaseMemory(LinearMemory*)` / `releaseTable(TableInstance*)`, called from `ModuleInstance`'s destructor for the entities the instance *created*; imported ones are not found in this store and are left alone. | `CFG14` | A | ✅ **Shipped.** Matched by the view the instance already holds, so no id bookkeeping was needed. |
 | **CFG-4 — Continuation settings per runtime** | `ContinuationSettings {maxLive, stackBytes, provider}` in `RuntimeConfig`; the store holds them and resolves `0`/`Inherit` against the live process default; the per-store live counter enforces the store ceiling while the process gauge stays whole. | `CFG5` | A + minor | ✅ **Shipped** (revision 3). `Store::setContinuationSettings`/`continuationBudget()`/`continuationProvider()`, `Runtime::continuationBudget()`/`continuationProvider()`, `ContinuationProvider::Inherit`; 5 exported symbols added. |
-| **CFG-8 — Execution budget (deferred)** | A design note for fuel/instruction metering: where the counter lives in `ExecutionState`, which backends can emit the check, what it costs per loop. | — (names `CFG12`) | likely **E** for a backend set | Not started; this row exists so the deferral is explicit. |
+| **CFG-8 — Execution budget** | An opt-in per-agent fuel counter in `ExecutionState` (`ExecutionLimits::fuel`), charged by the LibJIT backend at function entry and every loop back-edge; exhaustion reports `TrapKind::OutOfFuel`. `ComponentInstanceOptions`/`RuntimeConfig` share the budget; `Agent::setFuelBudget`/`fuelRemaining` expose it. | `CFG12` | A + backend lowering | ✅ **Shipped** (2026-11-03) for the LibJIT backend; AsmJit/SLJIT must emit the same check before claiming the slice. `[config]` covers a runaway loop. |
 | **CP-1…CP-6** | The compilation knobs, in [`COMPILER_POLICY.md`](COMPILER_POLICY.md) §7. | that note's `CP1`–`CP11` | A / B | see that note (CP-1, CP-2, CP-3, CP-5 shipped) |
 
 ### 7.1 What landed, and where it differs from the §10 sketch
@@ -497,7 +498,8 @@ Ordering, and why:
    contradict `MP-1`'s "the reservation costs nothing" row.
 4. `CFG-4`/`CFG-5` are consistency work and can run in parallel with `CFG-2`/`CFG-3`
    (different files).
-5. `CFG-6`/`CFG-7` are small and last; `CFG-8` is a separate study.
+5. `CFG-6`/`CFG-7` are small and last; `CFG-8` shipped with the LibJIT fuel
+   lowering and remains a per-backend obligation for AsmJit/SLJIT.
 6. `COMPILER_POLICY.md`'s `CP-1` is deliberately independent of all of the above
    (it touches `ModuleInstantiator`, not `Store`), so it can start at any point —
    but `CP-3` (the regression ladder) needs `CFG-5`'s provenance idea, because a

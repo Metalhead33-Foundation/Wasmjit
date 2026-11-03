@@ -1,11 +1,9 @@
 # Writing a backend — the checklist and the walkthrough {#doc_writing_a_backend}
 
-Status: how-to note, revision 2 (2026-11-01: **absorbs the former
-`BACKEND_WORK_ORDER.md`**, which was the requirement
-checklist this note walks through — one document now carries both, so a backend
-author reads one file and a reviewer checks the same file. Revision 1 was written
-2026-10-30, when `Sljit/` stopped being an empty subproject.) It contains no
-engine behaviour of its own.
+Status: how-to note, revision 3 (2026-11-03: adds §14, the production plan
+for the AsmJit and SLJIT backends, the mandatory post-mortem they must produce,
+and the candidate list for a fourth backend. Revision 2 absorbed the former
+`BACKEND_WORK_ORDER.md`.) It contains no engine behaviour of its own.
 
 This note is the **checklist** (what a code generator must provide) *and* the
 **walkthrough** (which class to subclass, which method to implement, in what
@@ -14,7 +12,8 @@ this note states what it **must provide** and how to provide it.
 
 **If you only read one section**, read §3 (the four hooks), §6 (the ABI you emit —
 including reference ownership) and §11 (what the SLJIT scaffold does and
-deliberately does not do).
+deliberately does not do). A backend author continuing one of the two partial
+implementations should also read §14 before planning a slice.
 
 ## 1. Document map
 
@@ -32,6 +31,7 @@ deliberately does not do).
 | §11 | What does the SLJIT scaffold contain, and what does it not do yet? |
 | §12 | How do I test it, and what counts as done? |
 | §13 | References |
+| §14 | What is the production plan for AsmJit and SLJIT, and what must their post-mortem contain? |
 
 ## 2. What is a backend, and what is not mine to write?
 
@@ -479,3 +479,139 @@ shape — not a silent wrong answer (§11's limitations table is the worked exam
   `declareFunctions`), `WasmBase/WasmBackendAbi.hpp` (the executable tuple
   rule), `LibJit/LibjitModuleCompiler.cpp` (complete), `Sljit/` (provisional),
   `Test/TestBackend.cpp` (the harness).
+## 14. Production plan: AsmJit and SLJIT, implemented together
+
+This section is a **plan**, not a claim about the tree. It extends the checklist
+above with the order in which the two existing partial backends become
+production backends, and with the post-mortem they must leave behind for the
+next author. LibJIT remains the reference implementation and the oracle for
+every semantic question unless a row below explicitly says otherwise.
+
+### 14.1 Dated starting point
+
+**Snapshot (2026-11-03, `877e716`):**
+
+- `LibJit/` is the complete backend: all lowered opcodes, references/GC,
+  exceptions, continuations, SIMD helpers and the full test corpus.
+- `Asmjit/` executes an i32/i64 integer and memory slice, structured
+  control flow for scalar results, direct/indirect calls and part of bulk
+  memory/table. Floating point, references/GC, exceptions, continuations and
+  Wasm SIMD lowering remain unsupported and are refused at the call boundary.
+- `Sljit/` executes a straight-line i32/i64 subset only. Calls, control flow,
+  memory access, floating point, references, exceptions and SIMD are refused.
+- Both partial backends pass `[backendabi]`, their own `[asmjit]`/`[sljit]`
+  cases, and the install/plugin checks where applicable. Neither is a
+  replacement for LibJIT.
+
+### 14.2 Why they ship together
+
+Two code generators that share one ABI must be exercised by one conformance
+matrix. Shipping a feature in one and leaving the other to "catch up later" is
+how backend-specific dialects appear: a trap path that throws here, a reference
+that is borrowed there, a tuple offset that disagrees by four bytes. Therefore:
+
+1. Every slice below has the **same entry and exit criteria** for both
+   backends, unless a row names a deliberate, documented refusal.
+2. A feature is called complete only when it passes the **same fixtures** on
+   both backends and on LibJIT where LibJIT defines the semantics.
+3. The two implementations are reviewed together; a change to one that needs a
+   shared-core change reopens the other's review, not just its build.
+4. If one backend cannot support a feature (an ISA/register allocator limit),
+   it must expose a `WASMJIT_CAP_*` refusal and a named test — never silently
+   lower it differently.
+
+### 14.3 The slices, in implementation order
+
+| Slice | Deliverable | Exit criterion | Deliberate refusal if any |
+|---|---|---|---|
+| **P0 — baseline** | Both backends build, register and instantiate a module; direct calls, returns, trap slot and stack guard work. | `[backendabi]`, `[asmjit]`, `[sljit]`, install check and plugin metadata pass. | none |
+| **P1 — control and stack** | `block`/`loop`/`if`/`else`, `br`/`br_if`/`br_table`, `select`, multi-value results, block parameters, unreachable polymorphism. | The scalar control fixtures and the matching spec scripts pass; branch/slot ownership has no ASan leak. | none |
+| **P2 — memory, tables, globals** | memory32 then memory64, all integer loads/stores, `memory.size`/`grow`, bulk memory/table, globals, table growth and bounds traps. | `[memory]`, `[bulk]`, `[table]` and the selected spec scripts pass; out-of-bounds is the spec trap kind. | atomics may remain refused until P6 |
+| **P3 — floating point and conversions** | f32/f64 arithmetic, comparisons, conversions, canonical NaN policy, `v128` load/store and native SIMD where the toolkit exposes vector registers. | float/SIMD fixtures and `[profile-nan]` pass; scalar helper fallback is allowed only where documented. | relaxed SIMD may stay refused |
+| **P4 — references, GC and exceptions** | The §6 reference-ownership model, `refClone`/`refDrop`/`refStore`, GC barriers, `ref.test`/`ref.cast`, exception tags and `try_table`. | The initialiser-shape test from §6, `[gc]` reclaim, `[exceptions]` and the ASan leak gate pass. | continuations remain P5 |
+| **P5 — calls, tail calls, continuations** | `call_ref`, cross-instance imports, `return_call*` where applicable, the continuation invoker and the stack-switching fixtures. | `[continuation]`, tail-call fixtures, TSan narrowed runs and the unload/re-instantiate test pass. | tail-call elimination may be call+return if documented |
+| **P6 — hardening and performance** | ASan/TSan, unload/release, plugin ABI, W^X, benchmark parity, refusal inventory, documentation. | The full §12 definition-of-done table is green for both; every remaining refusal is named in the backend README and a test. | none |
+
+Each slice is a **review gate**, not a calendar promise. P1 and P2 are the
+largest gaps in SLJIT; P3 is the largest in AsmJit. Work on AsmJit's control and
+memory slices first so it can act as the second oracle while SLJIT catches up,
+but do not merge the "complete" label for either until its row is green on both.
+
+### 14.4 Tests that are part of every slice
+
+- `[backendabi]` — tuple/layout and calling-convention conformance.
+- `Test/install-check.sh` — installed headers plus the selected backend.
+- `[runtime]` unload/re-instantiate — executable memory is returned.
+- `[plugin]` — the backend behind the C descriptor, if the plugin build is
+  enabled.
+- ASan `detect_leaks=1` with `Test/asan.supp`; TSan `[multiagent]` and
+  `[concurrency]` for anything touching agents, GC or continuations.
+- A **backend-specific refusal test** for every row above that is not green.
+  A refusal is a testable feature: "no compiled body" must be the observed
+  result, not a crash, a silent zero or a host `abort()`.
+
+### 14.5 The mandatory post-mortem
+
+At the end of each slice, and again when the backend is declared complete, the
+author writes a post-mortem **for both backends, in one document**, under
+`docs/backends/` (or as a section of the backend README until that directory is
+created). The post-mortem is part of the definition of done; a backend without
+it is still provisional. It must contain:
+
+1. **What the shared ABI forced.** Which rules from §6 and [`ABI.md`](ABI.md)
+   were ambiguous, and how the implementation resolved them. A rule that had to
+   be interpreted twice is a documentation bug.
+2. **What broke, with the failing fixture.** Every miscompile, wrong trap kind,
+   reference under/over-count, tuple offset, stack-switch or unload bug. Link
+   the test that pins it; do not summarize it away.
+3. **What the toolkit could not express.** Register-pressure limits, missing
+   branch/call primitives, relocation or W^X constraints, SIMD gaps. State the
+   workaround and whether it is an accepted limitation or a temporary refusal.
+4. **What the tests did not catch.** Name the gap and the new test it produced.
+   This is the most valuable section for the fourth backend.
+5. **What was slower, and by how much.** A measured comparison on the SIMD
+   benchmark or a scalar loop; no unqualified performance claim.
+6. **What a fourth backend should copy, and what it must not.** Turn the
+   experience into additions or corrections to §3–§12 of this note.
+7. **Residual refusals.** A table mapping each unsupported opcode family to the
+   capability flag, the test and the user-visible error.
+8. **Sign-off.** The slice, the commit, the commands run and their counts.
+
+The post-mortem is written by the implementer, reviewed by the backend
+reviewer, and kept current: when a later slice invalidates a paragraph, update
+the paragraph rather than appending a correction footnote.
+
+### 14.6 Candidate backends for a fourth implementation
+
+These are candidates for **after** AsmJit and SLJIT reach the same P6 gate. The
+ordering is a recommendation, not a commitment; each candidate must first pass
+the §2 layering test and the §12 baseline.
+
+| Candidate | Why it fits | Main risk | Suggested role |
+|---|---|---|---|
+| **LLVM** (MCJIT/ORC) | Mature optimizer, native floating point/SIMD, broad target support; the closest path to competitive code. | Large dependency, long compile latency, ORC lifetime/threading, W^X and target initialization. | Production-quality second compiler, not a CI default. |
+| **libgccjit** | GCC's optimizer behind a small C API; simpler embedding than LLVM; good scalar/float code. | Less mature JIT ABI, GCC-version coupling, limited control over codegen and latency. | A lighter optimized backend for embedders already using GCC. |
+| **GNU Lightning** | Tiny, portable, fast to emit; a natural next step after SLJIT's RISC-like model. | Small opcode set, weaker optimization, limited SIMD/reference support. | Fast-start embeddable backend with a documented feature ceiling. |
+| **DynASM** | Very low overhead, LuaJIT-proven, excellent for trace/loop-shaped code. | Hand-written assembler per target, no register allocator or optimizer, high maintenance. | A specialized hot-loop backend, not a general module compiler. |
+| **Cranelift** | Rust, SSA-based, designed for Wasm; good optimization/latency balance. | Rust/C++ ABI and build integration, additional toolchain, less familiar debugging. | A third production candidate if a Rust component is acceptable. |
+| **MIR** | Lightweight C, SSA, simple embedding, good for a compact backend. | Smaller ecosystem and target coverage; fewer Wasm-specific precedents. | A compact alternative to libgccjit. |
+
+The first three are the realistic near-term list. LLVM and libgccjit are
+"optimizing" backends; Lightning is "small and portable"; DynASM is "hot-loop
+specialist". None may be added to `WasmBase/`: the core continues to name only
+`ModuleInstantiator` and `BackendSession`.
+
+### 14.7 Entry checklist for the fourth backend author
+
+Before writing a line of code, read §3, §6 and §12; then produce:
+
+- a backend directory whose `.pro` links the one shared `libWasmBase.so`;
+- a `ModuleInstantiator` with the four hooks and no core changes;
+- a `BackendSession` with `invoke`, `aggregateLayout` and `createLaneWiseOp`;
+- the refusal inventory (which opcode families are not lowered yet);
+- the P0 baseline tests and a first `[<name>]` test case;
+- the post-mortem template above, opened on day one rather than at the end.
+
+The measure of success is not "it runs the benchmark". It is that another
+author can read this note, the new backend's README and its post-mortem, and
+write the next backend without rediscovering the same ABI or ownership failure.

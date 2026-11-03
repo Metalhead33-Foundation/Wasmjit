@@ -544,7 +544,8 @@ for a merge to `master` — so that "green" means the same thing to every review
 | Run | Command | Evidence it produces | Last measured |
 | --- | --- | --- | --- |
 | Strict validator sweep | `WASM_SPEC_VALIDATE=1 ./WasmJit` (curated) and `WASM_SPEC_VALIDATE=1 ./WasmJit '[spec]'` (all) | every curated binary negative module is rejected; the all-scripts sweep exercises the hidden decoder/validator/linker cases too | **curated 3,275 / 3,277** (`tag` is the two-entry known failure), **all-scripts 257 / 257**, 2026-11-03 |
-| AddressSanitizer build + suite | configure a second shadow build (below), then run the default suite with `ASAN_OPTIONS=detect_leaks=1:abort_on_error=1` and `LSAN_OPTIONS=suppressions=Test/asan.supp` | no use-after-free, overflow or engine leak; only LibJIT's uninstrumented process-wide caches are suppressed | **397 cases / 17,099 assertions passed, no ASan memory error, LeakSanitizer clean after 1.78 MB of LibJIT cache suppressions, 2026-11-03** (exit 0); `[compilation-policy]` is excluded because LibJIT's CFG optimizer under ASan exceeds the runtime budget |
+| AddressSanitizer build + suite | configure a second shadow build (below), then run the default suite with `ASAN_OPTIONS=detect_leaks=1:abort_on_error=1` and `LSAN_OPTIONS=suppressions=Test/asan.supp` | no use-after-free, overflow or engine leak; only LibJIT's uninstrumented process-wide caches are suppressed | **400 cases / 17,131 assertions passed, no ASan memory error, LeakSanitizer clean after 1.78 MB of LibJIT cache suppressions, 2026-11-03** (exit 0); `[compilation-policy]` is excluded because LibJIT's CFG optimizer under ASan exceeds the runtime budget |
+| Execution-budget run | `./WasmJit '*per-agent step budget*'` (part of `[config]`) | a finite fuel budget stops a runaway loop with `TrapKind::OutOfFuel` and leaves `fuelRemaining()` at zero | **64-unit budget**, `[config]` green, 2026-11-03 |
 | ThreadSanitizer concurrency run | configure a third shadow build (below), then `./WasmJit '[multiagent]'` | no data race on the multi-agent path (waiter table, entry counter, GC queue/counters, shared-global atomics) | `[multiagent]` **51 assertions / 6 cases** and `[concurrency]` **80 / 13**, **no TSan report**, 2026-11-03 |
 | ABI check | `./Test/abi-check.sh build/<config>` | no exported symbol disappeared since the baseline (the additive-only rule of `API_ABI_STABILITY.md` G2); `--update` records an intentional addition | **3,093 dynamic / 1,992 strong symbols, 0 removed**, 2026-11-03 |
 
@@ -1226,11 +1227,10 @@ form through `wasm-tools parse` (which *does* understand components), and emits
 `wasm_testsuite/component-corpus/manifest.tsv` with one line per artifact:
 `accept | reject | skip`, the origin (`file:offset`) and, for a skip, the reason.
 The same pass emits `execution.tsv`: primitive/action `invoke`,
-`assert_return` and `assert_trap` rows, with scalar/string arguments in the last
-column and JSON-encoded typed arrays for multi-value or string/flags
-expectations; structured invocations the extractor cannot represent are marked
-`unsupported`. A form `wasm-tools` itself
-refuses becomes a `skip`, never a build failure.
+`assert_return` and `assert_trap` rows. Scalar/string arguments use the compact
+`kind:value` column; nested values use a JSON array (`json:` prefix) with the
+same value schema as the runtime. A form `wasm-tools` itself refuses becomes a
+`skip`, never a build failure.
 2. **CM-9b — `Test/ComponentCorpusTests.cpp` (`[component-corpus]`).** Loads each
 artifact and compares our validator's verdict with the corpus's. The corpus is
 green in both directions since `CM15`, so **either** disagreement is a hard
@@ -1264,10 +1264,13 @@ The component feature/API tests are:
   assertion or sanitizer report is a failure.
 - `[component-execution]` — parses every accepted artifact, constructs the
   140 components that need no host imports (start definitions run during
-  construction), then executes the upstream primitive `assert_return`/`assert_trap`
-  rows from `execution.tsv`, including JSON-encoded string/flags expectations and
-  the resource-handle-table groups with per-instance transfer. Structured
-  invocations the extractor cannot represent are marked `unsupported`. The
+  construction), then executes the upstream primitive and structured
+  `assert_return`/`assert_trap` rows from `execution.tsv`. Primitive arguments
+  use the compact `kind:value` form; nested component values (record, tuple,
+  list, fixed-list, variant, enum, flags, option, result and map) use a JSON
+  encoding and are rebuilt against the export's `ComponentValueType` before the
+  call. The harness compares the returned structured values recursively. The
+  resource-handle-table groups with per-instance transfer are covered too. The
   component runtime tests also cover borrowed-resource transfer, destructor
   ownership across instances, outer component aliases, stream/future
   endpoint transfer, and handle-table budget exhaustion.

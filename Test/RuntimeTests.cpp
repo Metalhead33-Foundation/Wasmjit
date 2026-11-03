@@ -121,6 +121,31 @@ TEST_CASE("runtime: component async call returns a future", "[runtime][component
 	REQUIRE(results[0].u64 == 42);
 }
 
+TEST_CASE("runtime: component async call carries structured values", "[runtime][component-api]")
+{
+	auto runtime = WASM::Runtime::create("libjit");
+	REQUIRE(runtime != nullptr);
+	auto loaded = runtime->loadComponentBytes(
+			readComponentFixture("component_structured_breadth"));
+	REQUIRE(loaded != nullptr);
+	WASM::ComponentInstanceHandle& instance =
+			runtime->instantiateComponent(*loaded);
+
+	WASM::ComponentValue record;
+	record.kind = WASM::ComponentValue::Kind::Record;
+	record.elements.resize(1);
+	record.elements[0].kind = WASM::ComponentValue::Kind::U32;
+	record.elements[0].u64 = 31;
+	auto future = instance.callAsync("record-id", { record });
+	REQUIRE(future.wait_for(std::chrono::seconds(0))
+			== std::future_status::ready);
+	auto results = future.get();
+	REQUIRE(results.size() == 1);
+	REQUIRE(results[0].kind == WASM::ComponentValue::Kind::Record);
+	REQUIRE(results[0].elements.size() == 1);
+	REQUIRE(results[0].elements[0].u64 == 31);
+}
+
 TEST_CASE("runtime: a component host callback sees the caller context",
 		"[runtime][component-api]")
 {

@@ -142,6 +142,7 @@ WASM::BackendCompilationCapabilities ModuleCompiler::compilationCapabilities() c
 	WASM::BackendCompilationCapabilities capabilities;
 	capabilities.maxLevel = WASM::OptimizationLevel::Full;
 	capabilities.interprets = false;
+	capabilities.fuelMetering = true;
 	return capabilities;
 }
 

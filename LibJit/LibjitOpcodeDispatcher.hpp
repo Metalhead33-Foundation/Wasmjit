@@ -515,6 +515,11 @@ public:
  */
 	void emitFunctionEntry();
 
+	//! Charges one fuel unit and turns exhaustion into a pending-trap return
+	//! (CFG-8). Emitted at function entry and on every loop back-edge when the
+	//! instance was compiled with a non-zero step budget.
+	void emitFuelCharge();
+
 	//! Retains each reference-typed parameter into its own local slot.
 	//!
 	//! A parameter arrives as the caller's *borrow*, but the backend's model is

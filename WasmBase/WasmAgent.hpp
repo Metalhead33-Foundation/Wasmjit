@@ -43,6 +43,10 @@ struct ExecutionLimits {
 	std::uint32_t deferStackCapacity = 0;
 	//! Diagnostic ring capacity for the agent's state; `0` = the ring default.
 	std::uint32_t diagnosticRingCapacity = 0;
+	//! Step/fuel budget for this agent; `0` = unlimited (CFG-8). The backend
+	//! charges function entries and loop back-edges, not individual Wasm
+	//! instructions, so this is a deterministic coarse execution budget.
+	std::uint64_t fuel = 0;
 };
 
 //! \brief The state one execution context owns.
@@ -110,6 +114,20 @@ struct ExecutionState {
 	//! for that thread (WasmStack.hpp, `ensureCurrentThreadStackLimit`).
 	std::thread::id stackThread{};
 
+	//! Total step budget and what remains. `fuelLimit == 0` means unlimited, so
+	//! a zero-initialised state keeps the historical behaviour (CFG-8).
+	std::uint64_t fuelLimit = 0;
+	std::uint64_t fuelRemaining = 0;
+
+	/** \brief Installs a fresh step budget. \param limit Total units, or zero for unlimited. */
+	void resetFuel(std::uint64_t limit) noexcept
+	{
+		fuelLimit = limit;
+		fuelRemaining = limit;
+	}
+	/** \brief Returns the remaining step budget, or zero when unlimited/finished. \return Remaining fuel units. */
+	std::uint64_t remainingFuel() const noexcept { return fuelRemaining; }
+
 	//! Fixed-capacity cleanup stack, inline so registering cannot allocate.
 	Elv::Util::DeferStack::Record deferRecords[kDeferCapacity];
 	//! The bounded defer stack built on `deferRecords`.
@@ -173,6 +191,10 @@ public:
 	ExecutionState& execution() noexcept { return state_; }
 	/** \brief Returns read-only access to the owned execution state. \return Const reference to this agent's state. */
 	const ExecutionState& execution() const noexcept { return state_; }
+	/** \brief Installs a fresh step budget on this agent. \param limit Total fuel units, or zero for unlimited. */
+	void setFuelBudget(std::uint64_t limit) noexcept { state_.resetFuel(limit); }
+	/** \brief Returns the agent's remaining step budget. \return Remaining fuel units. */
+	std::uint64_t fuelRemaining() const noexcept { return state_.remainingFuel(); }
 
 private:
 	ExecutionState state_; //!< The agent's execution state.
@@ -211,6 +233,12 @@ void setCurrentExecutionState(ExecutionState* state) noexcept;
  * \return Owning agent, or nullptr when a bare execution state is installed.
  */
 Agent* currentAgent() noexcept;
+
+//! Charges `cost` fuel against the current execution state's budget (CFG-8).
+//! A zero `fuelLimit` is unlimited. Exhaustion reports TrapKind::OutOfFuel and
+//! leaves the slot pending; generated code must check it and return.
+/** \brief Charges a step budget against the current execution state. \param cost Fuel units to consume. */
+extern "C" void wasm_fuel_consume(std::uint64_t cost) noexcept;
 
 //! Installs an execution state for the duration of the scope. Nested scopes
 //! save and restore the previous state.

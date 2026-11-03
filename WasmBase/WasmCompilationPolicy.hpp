@@ -117,6 +117,8 @@ struct BackendCompilationCapabilities {
 	OptimizationLevel maxLevel = OptimizationLevel::Basic;
 	//! True when the backend can interpret a function instead of compiling it.
 	bool interprets = false;
+	//! True when the backend lowers the per-agent fuel check (CFG-8).
+	bool fuelMetering = false;
 };
 
 /*!

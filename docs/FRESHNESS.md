@@ -60,7 +60,7 @@ hardcoded values that were considered".
 A kind-2 statement is only allowed in this shape:
 
 > **Snapshot (2026-11-03, working tree on `4d52031`):** the default suite is
-> 17,545 assertions in 608 cases. Reproduce with `./Test/WasmJit`.
+> 17,577 assertions in 611 cases. Reproduce with `./Test/WasmJit`.
 
 or, inside a table, with the same three pieces in the caption or the column
 header. A bare number with none of them is the failure mode this note exists to
@@ -427,14 +427,14 @@ test cases**; `[docs]` 1015/2,
 exported symbols. **These are a snapshot, not a promise** — they are here to show
 what the output looks like, and to make a reader notice when it does not.
 
-**Current (2026-11-03, FP16/M8/promoted-spec working tree on `4d52031`):** **17,545
-assertions in 608 test cases**; **77** `.hpp`/`.h` files under the five backend
+**Current (2026-11-03, FP16/M8/promoted-spec working tree on `4d52031`):** **17,577
+assertions in 611 test cases**; **77** `.hpp`/`.h` files under the five backend
 directories; **3,093 dynamic / 1,992 strong** exported `libWasmBase` symbols;
 `[component-corpus]`/`[component-subtyping]` 520/1,
-`[component-execution]` 23/3 (140 accepted artifacts constructed plus the
-upstream primitive-return/trap sweep, including JSON string/flags rows), `[component-async]` 94/8,
+`[component-execution]` 44/4 (140 accepted artifacts constructed plus the
+upstream primitive/structured-return sweep, including JSON nested-value rows), `[component-async]` 94/8,
 `[component-name]` 7/1, `[component-fuzz]` 4/1,
-`[component-api]` 58/7, `[component-features]` 19/1; `[docs]` 1015/2,
+`[component-api]` 66/8, `[component-features]` 19/1; `[docs]` 1015/2,
 `[headerdoc]` 6/3, `[runtime]` 122/16, `[concurrency]` 80/13, `[multiagent]`
 51/6, `[backendabi]` 36/4, `[plugin]` 50/9, `[tiers]` 245/3,
 `[compilation-policy]` 30/3, `[config]` 4,190/13, `[mem-provider]` 122/7,

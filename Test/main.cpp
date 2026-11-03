@@ -2155,6 +2155,68 @@ TEST_CASE("component execution handles primitive result breadth", "[component-ex
 	REQUIRE(u64Result.u64 == 0x1122334455667788ull);
 }
 
+TEST_CASE("component execution handles structured result breadth", "[component-execution]")
+{
+	auto artifact = loadTestArtifact("component_structured_breadth");
+	REQUIRE(artifact != nullptr);
+	auto* component = artifact->asComponent();
+	REQUIRE(component != nullptr);
+	auto backend = TestBackend::create();
+	WASM::ComponentRuntime runtime(backend->instantiator(), *component);
+
+	const auto roundTrip = [&runtime](const char* name,
+			const WASM::ComponentValue& input) {
+		auto function = runtime.exportedFunction(name);
+		REQUIRE(function.has_value());
+		WASM::ComponentValue output;
+		function->callValues({&input, 1}, {&output, 1});
+		return output;
+	};
+
+	WASM::ComponentValue record;
+	record.kind = WASM::ComponentValue::Kind::Record;
+	record.elements.resize(1);
+	record.elements[0].kind = WASM::ComponentValue::Kind::U32;
+	record.elements[0].u64 = 7;
+	const WASM::ComponentValue recordOut = roundTrip("record-id", record);
+	REQUIRE(recordOut.kind == WASM::ComponentValue::Kind::Record);
+	REQUIRE(recordOut.elements.size() == 1);
+	REQUIRE(recordOut.elements[0].u64 == 7);
+
+	WASM::ComponentValue tuple;
+	tuple.kind = WASM::ComponentValue::Kind::Tuple;
+	tuple.elements = record.elements;
+	const WASM::ComponentValue tupleOut = roundTrip("tuple-id", tuple);
+	REQUIRE(tupleOut.kind == WASM::ComponentValue::Kind::Tuple);
+	REQUIRE(tupleOut.elements.size() == 1);
+	REQUIRE(tupleOut.elements[0].u64 == 7);
+
+	WASM::ComponentValue enumeration;
+	enumeration.kind = WASM::ComponentValue::Kind::Enum;
+	enumeration.discriminant = 1;
+	const WASM::ComponentValue enumOut = roundTrip("enum-id", enumeration);
+	REQUIRE(enumOut.kind == WASM::ComponentValue::Kind::Enum);
+	REQUIRE(enumOut.discriminant == 1);
+
+	WASM::ComponentValue flags;
+	flags.kind = WASM::ComponentValue::Kind::Flags;
+	flags.discriminant = 0b101;
+	flags.flags = {true, false, true};
+	const WASM::ComponentValue flagsOut = roundTrip("flags-id", flags);
+	REQUIRE(flagsOut.kind == WASM::ComponentValue::Kind::Flags);
+	REQUIRE(flagsOut.flags == std::vector<bool>({true, false, true}));
+
+	WASM::ComponentValue variant;
+	variant.kind = WASM::ComponentValue::Kind::Variant;
+	variant.discriminant = 1;
+	variant.hasValue = false;
+	const WASM::ComponentValue variantOut = roundTrip("variant-id", variant);
+	REQUIRE(variantOut.kind == WASM::ComponentValue::Kind::Variant);
+	REQUIRE(variantOut.discriminant == 1);
+	REQUIRE_FALSE(variantOut.hasValue);
+	REQUIRE(variantOut.elements.empty());
+}
+
 TEST_CASE("component runtime joins variant payloads")
 {
 	auto artifact = loadTestArtifact("component_runtime_variant");
@@ -5546,6 +5608,189 @@ TEST_CASE("component execution: upstream primitive returns and traps", "[compone
 			return expected;
 		};
 		const WASM::TypeStore& typeStoreView = typeStore();
+		const auto buildValue = [&typeStoreView](
+				const nlohmann::json& json, const WASM::ComponentValueType& type,
+				auto&& self) -> WASM::ComponentValue {
+			using K = WASM::ComponentValue::Kind;
+			WASM::ComponentValue out;
+			const std::string kind = json.at("kind").get<std::string>();
+			if (kind == "str") {
+				out.kind = K::String;
+				out.string = json.at("value").get<std::string>();
+				return out;
+			}
+			if (kind == "flags") {
+				out.kind = K::Flags;
+				const auto labels = typeStoreView.componentType(
+						WASM::TypeId{type.typeIndex}).labels();
+				out.flags.assign(labels.size(), false);
+				for (const auto& label : json.at("values")) {
+					const std::string name = label.get<std::string>();
+					for (std::size_t i = 0; i < labels.size(); ++i) {
+						if (typeStoreView.string(labels[i]) == name) {
+							out.flags[i] = true;
+							if (i < 32)
+								out.discriminant |= (uint32_t{1} << i);
+							break;
+						}
+					}
+				}
+				return out;
+			}
+			if (kind == "record" || kind == "tuple" || kind == "list"
+					|| kind == "fixed-list" || kind == "enum"
+					|| kind == "variant" || kind == "option"
+					|| kind == "result" || kind == "map") {
+				if (type.kind != WASM::ComponentValueType::Kind::TypeId)
+					throw std::runtime_error("structured test value has no component type");
+				const WASM::ComponentTypeView view = typeStoreView.componentType(
+						WASM::TypeId{type.typeIndex});
+				if (kind == "record") {
+					out.kind = K::Record;
+					const auto fields = view.fields();
+					for (std::size_t i = 0; i < fields.size(); ++i)
+						out.elements.push_back(self(json.at("fields").at(i).at("value"),
+								fields[i].type, self));
+					return out;
+				}
+				if (kind == "tuple") {
+					out.kind = K::Tuple;
+					for (std::size_t i = 0; i < view.tuple().size(); ++i)
+						out.elements.push_back(self(json.at("elements").at(i),
+								view.tuple()[i], self));
+					return out;
+				}
+				if (kind == "list" || kind == "fixed-list") {
+					out.kind = kind == "list" ? K::List : K::FixedList;
+					for (const auto& item : json.at("elements"))
+						out.elements.push_back(self(item, view.element(), self));
+					return out;
+				}
+				if (kind == "enum") {
+					out.kind = K::Enum;
+					const std::string name = json.at("case").get<std::string>();
+					const auto labels = view.labels();
+					for (std::size_t i = 0; i < labels.size(); ++i)
+						if (typeStoreView.string(labels[i]) == name)
+							out.discriminant = static_cast<uint32_t>(i);
+					return out;
+				}
+				if (kind == "variant") {
+					out.kind = K::Variant;
+					const std::string name = json.at("case").get<std::string>();
+					const auto cases = view.cases();
+					for (std::size_t i = 0; i < cases.size(); ++i) {
+						if (typeStoreView.string(cases[i].label) != name)
+							continue;
+						out.discriminant = static_cast<uint32_t>(i);
+						out.hasValue = cases[i].hasType;
+						if (out.hasValue)
+							out.elements.push_back(self(json.at("value"),
+									cases[i].type, self));
+						break;
+					}
+					return out;
+				}
+				if (kind == "option") {
+					out.kind = K::Option;
+					out.hasValue = json.value("hasValue", false);
+					out.discriminant = out.hasValue ? 1u : 0u;
+					if (out.hasValue)
+						out.elements.push_back(self(json.at("value"),
+								view.element(), self));
+					return out;
+				}
+				if (kind == "map") {
+					out.kind = K::Map;
+					for (const auto& entry : json.at("entries")) {
+						WASM::ComponentValue pair;
+						pair.kind = K::Tuple;
+						pair.elements.push_back(self(entry.at(0), view.mapKey(), self));
+						pair.elements.push_back(self(entry.at(1), view.mapValue(), self));
+						out.elements.push_back(std::move(pair));
+					}
+					return out;
+				}
+				out.kind = K::Result;
+				const bool isError = json.value("isError", false);
+				out.discriminant = isError ? 1u : 0u;
+				out.hasValue = json.value("hasValue", false);
+				if (out.hasValue) {
+					const WASM::ComponentValueType payload = isError
+							? view.resultError() : view.resultOk();
+					out.elements.push_back(self(json.at("value"), payload, self));
+				}
+				return out;
+			}
+			const std::string text = json.at("value").is_string()
+					? json.at("value").get<std::string>()
+					: json.at("value").dump();
+			if (kind == "bool") { out.kind = K::Bool; out.u64 = text == "1" || text == "true"; }
+			else if (kind == "u8") { out.kind = K::U8; out.u64 = std::stoull(text, nullptr, 0); }
+			else if (kind == "s8") { out.kind = K::S8; out.s64 = std::stoll(text, nullptr, 0); }
+			else if (kind == "u16") { out.kind = K::U16; out.u64 = std::stoull(text, nullptr, 0); }
+			else if (kind == "s16") { out.kind = K::S16; out.s64 = std::stoll(text, nullptr, 0); }
+			else if (kind == "u32") { out.kind = K::U32; out.u64 = std::stoull(text, nullptr, 0); }
+			else if (kind == "i32") { out.kind = K::S32; out.s64 = std::stoll(text, nullptr, 0); }
+			else if (kind == "u64") { out.kind = K::U64; out.u64 = std::stoull(text, nullptr, 0); }
+			else if (kind == "i64") { out.kind = K::S64; out.s64 = std::stoll(text, nullptr, 0); }
+			else if (kind == "f32") { out.kind = K::F32; out.f64 = float(std::stod(text)); }
+			else if (kind == "f64") { out.kind = K::F64; out.f64 = std::stod(text); }
+			else if (kind == "char") {
+				out.kind = K::Char;
+				out.discriminant = text.empty() ? 0
+						: static_cast<uint32_t>(static_cast<unsigned char>(text[0]));
+			}
+			return out;
+		};
+
+
+		const auto valuesEqual = [](const WASM::ComponentValue& actual,
+				const WASM::ComponentValue& expected, auto&& self) -> bool {
+			using K = WASM::ComponentValue::Kind;
+			if (actual.kind != expected.kind || actual.hasValue != expected.hasValue
+					|| (actual.kind != K::Flags
+							&& actual.discriminant != expected.discriminant)
+					|| actual.flags != expected.flags
+					|| actual.elements.size() != expected.elements.size())
+				return false;
+			switch (actual.kind) {
+			case K::Bool: case K::U8: case K::U16: case K::U32: case K::U64:
+				return actual.u64 == expected.u64;
+			case K::S8: case K::S16: case K::S32: case K::S64:
+				return actual.s64 == expected.s64;
+			case K::F32: case K::F64:
+				return actual.f64 == expected.f64;
+			case K::String:
+				return actual.string == expected.string;
+			case K::Char: case K::Enum:
+				return actual.discriminant == expected.discriminant;
+			default:
+				break;
+			}
+			for (std::size_t i = 0; i < actual.elements.size(); ++i)
+				if (!self(actual.elements[i], expected.elements[i], self))
+					return false;
+			return true;
+		};
+
+		const auto buildArgs = [&](const std::string& spec,
+				const WASM::ComponentFunction& function)
+				-> std::optional<std::vector<WASM::ComponentValue>> {
+			if (spec.rfind("json:", 0) == 0) {
+				const nlohmann::json values = nlohmann::json::parse(spec.substr(5));
+				if (!values.is_array() || values.size() != function.paramTypes.size())
+					return std::nullopt;
+				std::vector<WASM::ComponentValue> args;
+				for (std::size_t i = 0; i < values.size(); ++i)
+					args.push_back(buildValue(values[i], function.paramTypes[i],
+							buildValue));
+				return args;
+			}
+			return parseArgs(spec);
+		};
+
+
 		const auto matches = [&typeStoreView](
 				const WASM::ComponentValue& actual, const ExpectedValue& expected,
 				const WASM::ComponentValueType& type, bool& supported) {
@@ -5628,9 +5873,19 @@ TEST_CASE("component execution: upstream primitive returns and traps", "[compone
 				++checked;
 				std::vector<WASM::ComponentValue> ignored(
 						function->resultTypes.size());
-				const auto args = parseArgs(row.args);
+				std::optional<std::vector<WASM::ComponentValue>> args;
 				try {
-					function->callValues(args, ignored);
+					args = buildArgs(row.args, *function);
+				} catch (const std::exception&) {
+					++skipped;
+					continue;
+				}
+				if (!args) {
+					++skipped;
+					continue;
+				}
+				try {
+					function->callValues(*args, ignored);
 				} catch (const std::exception& error) {
 					++failures;
 					if (firstFailure.empty())
@@ -5643,10 +5898,20 @@ TEST_CASE("component execution: upstream primitive returns and traps", "[compone
 				++checked;
 				std::vector<WASM::ComponentValue> ignored(
 						function->resultTypes.size());
-				const auto args = parseArgs(row.args);
+				std::optional<std::vector<WASM::ComponentValue>> args;
+				try {
+					args = buildArgs(row.args, *function);
+				} catch (const std::exception&) {
+					++skipped;
+					continue;
+				}
+				if (!args) {
+					++skipped;
+					continue;
+				}
 				bool trapped = false;
 				try {
-					function->callValues(args, ignored);
+					function->callValues(*args, ignored);
 				} catch (const std::exception&) {
 					trapped = true;
 				}
@@ -5659,43 +5924,83 @@ TEST_CASE("component execution: upstream primitive returns and traps", "[compone
 				continue;
 			}
 			std::optional<std::vector<ExpectedValue>> expected;
+			std::vector<WASM::ComponentValue> structuredExpected;
+			const bool structured = row.kind == "json";
+			if (structured) {
+				try {
+					const nlohmann::json values = nlohmann::json::parse(row.value);
+					if (!values.is_array()
+							|| values.size() != function->resultTypes.size()) {
+						++skipped;
+						continue;
+					}
+					for (std::size_t i = 0; i < values.size(); ++i)
+						structuredExpected.push_back(buildValue(values[i],
+								function->resultTypes[i], buildValue));
+				} catch (const std::exception&) {
+					++skipped;
+					continue;
+				}
+			} else {
+				try {
+					expected = expectedFor(row);
+				} catch (const std::exception&) {
+					++skipped;
+					continue;
+				}
+				if (!expected.has_value()) {
+					++skipped;
+					continue;
+				}
+			}
+			++checked;
+			std::optional<std::vector<WASM::ComponentValue>> args;
 			try {
-				expected = expectedFor(row);
+				args = buildArgs(row.args, *function);
 			} catch (const std::exception&) {
 				++skipped;
 				continue;
 			}
-			if (!expected.has_value()) {
+			if (!args) {
 				++skipped;
 				continue;
 			}
-			++checked;
 			std::vector<WASM::ComponentValue> results(function->resultTypes.size());
-			const auto args = parseArgs(row.args);
 			try {
-				function->callValues(args, results);
+				function->callValues(*args, results);
 			} catch (const std::exception& error) {
 				++failures;
 				if (firstFailure.empty())
 					firstFailure = row.origin + ": " + error.what();
 				continue;
 			}
-			if (results.size() != expected->size()) {
+			const std::size_t expectedCount = structured
+					? structuredExpected.size() : expected->size();
+			if (results.size() != expectedCount) {
 				++failures;
 				if (firstFailure.empty())
 					firstFailure = row.origin + ": `" + row.invoke +
 							"` returned " + std::to_string(results.size()) +
-							" values, expected " + std::to_string(expected->size());
+							" values, expected " + std::to_string(expectedCount);
 				continue;
 			}
 			bool supported = true;
 			bool matched = true;
-			for (std::size_t i = 0; i < results.size(); ++i) {
-				if (!matches(results[i], (*expected)[i],
-						function->resultTypes[i], supported)) {
-					matched = false;
-					if (!supported)
+			if (structured) {
+				for (std::size_t i = 0; i < results.size(); ++i)
+					if (!valuesEqual(results[i], structuredExpected[i],
+							valuesEqual)) {
+						matched = false;
 						break;
+					}
+			} else {
+				for (std::size_t i = 0; i < results.size(); ++i) {
+					if (!matches(results[i], (*expected)[i],
+							function->resultTypes[i], supported)) {
+						matched = false;
+						if (!supported)
+							break;
+					}
 				}
 			}
 			if (!supported) {

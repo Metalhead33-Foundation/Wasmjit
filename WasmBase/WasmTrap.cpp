@@ -31,6 +31,7 @@ const char* trapKindName(TrapKind kind)
 	case TrapKind::CastFailure:                return "cast failure";
 	case TrapKind::OutOfMemory:                return "out of memory";
 	case TrapKind::CallStackExhausted:         return "call stack exhausted";
+	case TrapKind::OutOfFuel:                  return "out of fuel";
 	case TrapKind::Internal:                   return "internal error";
 	}
 	return "internal error";

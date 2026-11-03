@@ -1,6 +1,7 @@
 #include "LibjitOpcodeDispatcher.hpp"
 #include "../WasmBase/WasmDeterminism.hpp"
 #include "../WasmBase/WasmContinuation.hpp"
+#include "../WasmBase/WasmAgent.hpp"
 #include "../WasmBase/WasmSafety.hpp"
 #include "../WasmBase/WasmStack.hpp"
 #include "../WasmBase/WasmStore.hpp"
@@ -2486,6 +2487,27 @@ void OpcodeDispatcher::emitFunctionEntry()
 	jit_insn_store(function, exceptionSlot, exnSlot);
 
 	emitPendingTrapCheck();
+
+	if (internals.fuelMetering)
+		emitFuelCharge();
+}
+
+void OpcodeDispatcher::emitFuelCharge()
+{
+	// CFG-8: the step budget is a per-agent counter, not a process-wide one.
+	// `wasm_fuel_consume` returns immediately when the agent has no budget, so
+	// the emission is selected by the instance's compile-time metering flag and
+	// the run-time cost stays one call plus the pending-trap branch.
+	jit_type_t param = jit_type_ulong;
+	jit_type_t signature = jit_type_create_signature(jit_abi_cdecl,
+			jit_type_void, &param, 1, 1);
+	jit_value_t cost = jit_value_create_long_constant(function,
+			jit_type_ulong, 1);
+	jit_value_t args[1] = {cost};
+	jit_insn_call_native(function, "wasm_fuel_consume",
+			reinterpret_cast<void*>(&WASM::wasm_fuel_consume),
+			signature, args, 1, 0);
+	emitPendingTrapCheck();
 }
 
 void OpcodeDispatcher::emitReferenceParameterRetains()
@@ -2905,6 +2927,8 @@ void OpcodeDispatcher::emitBranchToTarget(ControlBlock& target)
 	const auto& types = branchTypesForTarget(target);
 	const auto& slots = branchSlotsForTarget(target);
 	assert(types.size() == slots.size());
+	if (target.kind == ControlBlock::Loop && internals.fuelMetering)
+		emitFuelCharge();
 	storeStackTopToSlots(slots);
 	jit_insn_branch(function, &target.label);
 }
