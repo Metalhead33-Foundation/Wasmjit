@@ -236,11 +236,11 @@ each with its state, what pinned it, and what a triage row may cite. States are
 | Row | Surface | State | Pinned by | Exercise |
 |---|---|---|---|---|
 | `RG1` | Calling convention and ABI | **Pinned** | `ABI.md` (arg0 rule, `Multiple Results`, `The result tuple layout`, `v128` by Value, `Reference and Global Representation`, `Limits an Embedder Must Know`) | `[backendabi]`, `[surface]`, the `simd_abi.wat` fixtures, `install-check.sh`'s `i32`/`f64`/tuple/`v128` calls |
-| `RG2` | Core proposal support | **Pinned** | Each proposal note's §7 plus `README.md`'s completeness table | `[spec]` (189 cases), the 2,382 / 2,382 curated negative commands |
+| `RG2` | Core proposal support | **Pinned** | Each proposal note's §7 plus `README.md`'s completeness table | `[spec]` (208 visible cases), the 3,275 / 3,277 curated negative commands |
 | `RG3` | Hook/dispatch mechanism | **Pinned** | `ABI.md` "Native (host) function imports" / "External host adapter", `WasmHostBridge.hpp`, `WasmNativeImport.hpp`, `proposals/JS_INTEGRATION.md` | `[runtime]` host-import fixtures, `[spec]` native-import scripts, the `HostBridge` probe in `Test/main.cpp` |
 | `RG4` | Memory model | **Pinned** (one recorded limitation, §5.4) | `proposals/MULTI_MEMORY.md`, `proposals/THREADS.md`, `SAFETY.md` §2.3, `ABI.md` "Linear memory ownership" | multi-memory and shared-memory spec scripts, `[concurrency]` |
 | `RG5` | Embedding API | **Pinned** | `EMBEDDING_SURFACE.md` (`ES-1…ES-7` all done), `WasmJit.hpp` umbrella, `WasmVersion.hpp` | `[runtime]`, `[surface]`, `install-check.sh`, `Test/consumer/` |
-| `RG6` | Breaking-change detection | **Pinned** | `Test/abi-check.sh` baseline, `install-check.sh`, `[tiers]` (41 compile TUs), `[layering]`, `[docs]`, `[headerdoc]` | all of the above, green today |
+| `RG6` | Breaking-change detection | **Pinned** | `Test/abi-check.sh` baseline, `install-check.sh`, `[tiers]` (48 compile TUs), `[layering]`, `[docs]`, `[headerdoc]` | all of the above, green today |
 
 ### 5.1 `RG1` — calling convention and ABI
 
@@ -408,7 +408,7 @@ reader mistakes these for checked:
 And two things that are *in* the engine but were **not re-run for this audit**,
 stated so they are not read as green:
 
-- the strict negative-module sweep (`WASM_SPEC_VALIDATE=1`, 2,382 commands) —
+- the strict negative-module sweep (`WASM_SPEC_VALIDATE=1`, 3,275 / 3,277 commands) —
   documented required run, last recorded green in [`VALIDATION.md`](VALIDATION.md);
 - the ASan/TSan configurations — documented required runs
   ([`TESTING.md`](TESTING.md)), not exercised today.

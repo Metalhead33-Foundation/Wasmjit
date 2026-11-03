@@ -126,15 +126,15 @@ content here.
 ## Measured coverage
 
 `WASM_SPEC_VALIDATE=1` on the curated set (**snapshot 2026-11-03, working tree
-on `bca0d87`**):
+on `79034c0`**):
 
 | Kind | Binary cases | Handled | Accepted |
 | --- | ---: | ---: | ---: |
-| `assert_invalid` | 2211 | **2209** rejected | 2 (`tag.wast` known failure) |
-| `assert_malformed` | 17 | **17** rejected | 0 |
-| `assert_unlinkable` | 127 | **127** rejected | 0 |
-| `assert_uninstantiable` | 27 | **27** (26 rejected + 1 start trap) | 0 |
-| **total** | **2382** | **2380** | **2 known** |
+| `assert_invalid` | 2354 | **2352** rejected | 2 (`tag.wast` known failure) |
+| `assert_malformed` | 711 | **711** rejected | 0 |
+| `assert_unlinkable` | 172 | **172** rejected | 0 |
+| `assert_uninstantiable` | 40 | **40** (37 rejected + 3 trapped) | 0 |
+| **total** | **3277** | **3275** | **2 known** |
 
 The two accepted modules are `tag.wast`'s `(tag (result i32))` cases. They are
 the exception proposal's stricter rule; the engine accepts result-bearing tags
@@ -145,17 +145,18 @@ than hidden.
 The **all-scripts** sweep is the wider measure, because `[spec]` also runs the
 hidden scripts. At the same snapshot it reports **257 of 257 scripts green**
 (`test cases: 257 | 257 passed | 0 failed`, 514 assertions). The decoder,
-validator and linker cases the sweep used to expose are green: `binary` (127
-malformed cases), the three `utf8-*` scripts (176 each), `binary-gc`,
-`binary-leb128`, `struct`/`array`/`array_*` (16 invalid modules),
-`unreached-invalid` (121 cases) and the hidden `linking`/`linking0`/`linking3`
-linker suite. The three `linking*` scripts exercise failed-instantiation
+validator and linker cases the sweep used to expose are green: `binary` (20
+default-positive assertions, 127 strict cases), the three binary `utf8-*`
+scripts (176 malformed cases each; `utf8-invalid-encoding` stays text-format),
+`binary-gc`, `binary-leb128`, `struct`/`array`/`array_*` (18 invalid modules),
+`unreached-invalid` (121 cases) and the `linking`/`linking0`/`linking3`
+linker suite. The `linking*` scripts exercise failed-instantiation
 persistence: a module that traps after its element segments have written
 `ref.func` values into an imported table is retained, together with the backend
 keep-alive that owns its code, until Store teardown (`Store::retainFailedInstance`;
 `ABI.md` "Failed instantiation retention"). `comments` (text format) and
-`instance` (module-linking) skip their dependent commands; 946 text-format
-commands remain skipped because the loader is binary-only.
+`instance` (module-linking) skip their dependent commands; the remaining
+text-format commands stay skipped because the loader is binary-only.
 
 The default suite is green; its *current* tally is owned by
 [`TESTING.md`](TESTING.md) (and [`FRESHNESS.md`](FRESHNESS.md) §8 prints it), not

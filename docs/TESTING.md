@@ -494,19 +494,20 @@ binary case (`[validate] <kind> <accepted|rejected|trapped> <file>`). The
 validator itself is documented in [`VALIDATION.md`](VALIDATION.md).
 
 Measured against the curated set (**snapshot 2026-11-03, working tree on
-`bca0d87`**):
+`79034c0`**):
 
-| Kind | Binary cases | Rejected (pass) | Accepted (fail) | Reading |
+| Kind | Binary cases | Handled (pass) | Accepted (fail) | Reading |
 | --- | ---: | ---: | ---: | --- |
-| `assert_invalid` | 2211 | **2209** | 2 known | every curated invalid module is rejected except `tag.wast`'s two result-signature cases, recorded in `Test/spec_known_failures.txt` |
-| `assert_malformed` | 17 | **17** | 0 | decoder strictness, including strict LEB128 byte-width and final-byte fit. The **946** text-format commands across all kinds cannot run without a text parser |
-| `assert_unlinkable` | 127 | **127** | 0 | the linker rejects all of them, including import type identity (function re-exports, global/table invariance), `memory64-imports` index types and table limits |
-| `assert_uninstantiable` | 27 | **27** | 0 | one trapping start (`start.wast`) and 26 instantiation errors from out-of-bounds `elem`/`data` segments |
-| **total** | **2382** | **2380** | **2 known** | 100 % of the curated binary negative cases are handled |
+| `assert_invalid` | 2354 | **2352** rejected | 2 known | every curated invalid module is rejected except `tag.wast`'s two result-signature cases, recorded in `Test/spec_known_failures.txt` |
+| `assert_malformed` | 711 | **711** rejected | 0 | decoder strictness, including strict LEB128 byte-width and final-byte fit. The remaining text-format commands across all kinds cannot run without a text parser |
+| `assert_unlinkable` | 172 | **172** rejected | 0 | the linker rejects all of them, including import type identity (function re-exports, global/table invariance), `memory64-imports` index types and table limits |
+| `assert_uninstantiable` | 40 | **40** (37 rejected + 3 trapped) | 0 | one trapping start (`start.8`) and the `linking`/`linking3` post-segment trap cases, plus out-of-bounds `elem`/`data` segments |
+| **total** | **3277** | **3275** | **2 known** | 100 % of the curated binary negative cases are handled |
 
-Even in strict mode 946 text-format commands stay skipped: the loader is
-binary-only. (The 61 core scripts re-curated after the validator landed are
-listed in `Test/wast_supported.txt` with their own notes.)
+Even in strict mode the text-format commands stay skipped: the loader is
+binary-only. (The 208 curated scripts are listed in `Test/wast_supported.txt`
+with their own notes; the promoted `binary`, `utf8-*`, `struct`, `array*` and
+`linking*` scripts account for the larger negative set.)
 The exercise paid for itself three times: it showed that the decoder and linker
 already cover a useful fraction; it exposed a real engine bug — the exception
 classes in `WasmBase/WasmException.hpp` inherited `std::exception` **privately**,
@@ -542,7 +543,7 @@ for a merge to `master` — so that "green" means the same thing to every review
 
 | Run | Command | Evidence it produces | Last measured |
 | --- | --- | --- | --- |
-| Strict validator sweep | `WASM_SPEC_VALIDATE=1 ./WasmJit` (curated) and `WASM_SPEC_VALIDATE=1 ./WasmJit '[spec]'` (all) | every curated binary negative module is rejected; the all-scripts sweep exercises the hidden decoder/validator/linker cases too | **curated 2,380 / 2,382** (`tag` is the two-entry known failure), **all-scripts 257 / 257**, 2026-11-03 |
+| Strict validator sweep | `WASM_SPEC_VALIDATE=1 ./WasmJit` (curated) and `WASM_SPEC_VALIDATE=1 ./WasmJit '[spec]'` (all) | every curated binary negative module is rejected; the all-scripts sweep exercises the hidden decoder/validator/linker cases too | **curated 3,275 / 3,277** (`tag` is the two-entry known failure), **all-scripts 257 / 257**, 2026-11-03 |
 | AddressSanitizer build + suite | configure a second shadow build (below), then run the default suite | no use-after-free, overflow or leak report on the hand-written path | **397 cases / 17,098 assertions passed, no ASan memory error, 2026-11-03** (`ASAN_OPTIONS=detect_leaks=0`, exit 0); with LeakSanitizer on, the only reports are **1,432,070 bytes in 16,911 allocations in LibJIT's uninstrumented context/type caches** (first frames `jit-type.c`, `LibJitTypeTranslator`, `dispatchSIMDF16x8` signature caches), not the core or helper path; `[compilation-policy]` is excluded because LibJIT's CFG optimizer under ASan exceeds the runtime budget |
 | ThreadSanitizer concurrency run | configure a third shadow build (below), then `./WasmJit '[multiagent]'` | no data race on the multi-agent path (waiter table, entry counter, GC queue/counters, shared-global atomics) | `[multiagent]` 51 assertions / 6 cases, **no TSan report**, 2026-10-29 |
 | ABI check | `./Test/abi-check.sh build/<config>` | no exported symbol disappeared since the baseline (the additive-only rule of `API_ABI_STABILITY.md` G2); `--update` records an intentional addition | **1,804 + 830 symbols, 0 removed**, 2026-10-29 |

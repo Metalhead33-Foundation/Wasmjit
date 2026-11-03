@@ -218,6 +218,33 @@ table_fill
 tag
 throw
 throw_ref
+
+# Promoted on 2026-11-03 after the FP16/M8 slice. `binary`/`binary-leb128`,
+# `struct`, `array*` and `linking*` have positive default assertions and also
+# pass under WASM_SPEC_VALIDATE=1. The three binary UTF-8 scripts,
+# `binary-gc` and `unreached-invalid` are negative-only: their default run is
+# all skips, while the strict run executes every malformed/invalid module.
+# `utf8-invalid-encoding` is deliberately absent: its modules are text-format
+# only (every command skips as a `.wat` module).
+binary
+binary-leb128
+binary-gc
+utf8-custom-section-id
+utf8-import-field
+utf8-import-module
+unreached-invalid
+struct
+array
+array_copy
+array_fill
+array_init_data
+array_init_elem
+array_new_elem
+linking
+linking0
+linking1
+linking2
+linking3
 traps
 try_table
 type
