@@ -1149,7 +1149,6 @@ Canon parseCanon(Reader& r)
 		break;
 	case 0x42:
 		canon.kind = Canon::Kind::ThreadAvailableParallelism;
-		canon.shared = parseSharedFlag(r);
 		break;
 	default:
 		throw std::runtime_error("component parse: invalid canonical builtin " +

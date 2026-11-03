@@ -70,10 +70,12 @@ public:
 				static_cast<std::uint32_t>(ComponentFeature::Baseline)
 				| static_cast<std::uint32_t>(ComponentFeature::Values)
 				| static_cast<std::uint32_t>(ComponentFeature::Async)
+				| static_cast<std::uint32_t>(ComponentFeature::Threads)
 				| static_cast<std::uint32_t>(ComponentFeature::ComponentImports)
+				| static_cast<std::uint32_t>(ComponentFeature::Memory64)
 				| static_cast<std::uint32_t>(ComponentFeature::ErrorContext));
 	}
-	/** \brief Every feature the parser understands, including ones not yet executable. \return All features. */
+	/** \brief Every feature the parser understands. \return All features; currently the same set as implemented(). */
 	static constexpr ComponentFeatures all() noexcept
 	{
 		return ComponentFeatures(
@@ -125,9 +127,9 @@ private:
 
 /** \brief Per-load Component Model policy. */
 struct ComponentOptions {
-	//! The features this load may use. The default is `all()` so the internal
-	//! parser/validator keeps its historical acceptance; the public
-	//! `WASM::Runtime::loadComponent*` surface defaults to `baseline()` instead.
+	//! The features this load may use. The default is `all()` for the internal
+	//! parser/validator; the public `WASM::Runtime::loadComponent*` surface
+	//! defaults to `implemented()` instead.
 	ComponentFeatures features = ComponentFeatures::all();
 };
 

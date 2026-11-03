@@ -144,12 +144,12 @@ public:
 	std::shared_ptr<const LoadedComponent> loadComponentBytes(
 			std::span<const std::byte> bytes,
 			const ComponentOptions& options = ComponentOptions{
-					ComponentFeatures::baseline()});
+					ComponentFeatures::implemented()});
 	/** \brief Loads, validates and retains a component from a path. \param path Path to the component file. \param options Component Model feature policy. \return Shared pointer to the loaded definition. \throws std::exception if file access, parsing, validation, or a disabled feature fails. */
 	std::shared_ptr<const LoadedComponent> loadComponentFile(
 			const std::filesystem::path& path,
 			const ComponentOptions& options = ComponentOptions{
-					ComponentFeatures::baseline()});
+					ComponentFeatures::implemented()});
 	/** \brief Instantiates a loaded component. \param component Definition loaded by this runtime. \param imports Component-level host imports. \param executor Optional embedder executor; null means single-agent. \return Reference to the runtime-owned instance. \throws std::exception if the definition is foreign, imports are missing/mismatched, or instantiation fails. */
 	ComponentInstanceHandle& instantiateComponent(const LoadedComponent& component,
 			ComponentHostImports imports = {},

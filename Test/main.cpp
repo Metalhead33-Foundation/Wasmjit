@@ -36,6 +36,7 @@
 #include "WasmBase/WasmAgent.hpp"
 #include "WasmBase/WasmContinuation.hpp"
 #include "WasmBase/WasmArtifact.hpp"
+#include "WasmBase/WasmRuntime.hpp"
 #include "WasmBase/WasmDiagnostics.hpp"
 #include "WasmBase/WasmStack.hpp"
 #include "WasmBase/WasmVMContext.hpp"
@@ -5237,6 +5238,8 @@ TEST_CASE("component features gate post-1.0 surfaces", "[component-features]")
 	REQUIRE_FALSE(baseline.contains(ComponentFeature::Async));
 	REQUIRE(implemented.contains(ComponentFeature::Async));
 	REQUIRE(implemented.contains(ComponentFeature::Values));
+	REQUIRE(implemented.contains(ComponentFeature::Threads));
+	REQUIRE(implemented.contains(ComponentFeature::Memory64));
 	REQUIRE(all.contains(ComponentFeature::Threads));
 	REQUIRE(all.contains(ComponentFeature::ComponentImports));
 	REQUIRE(all.contains(ComponentFeature::Memory64));
@@ -5262,25 +5265,55 @@ TEST_CASE("component features gate post-1.0 surfaces", "[component-features]")
 		(void)loadTestComponentWithFeatures("component_component_import", all);
 	}());
 
-	// Thread built-in.
-	REQUIRE_THROWS(loadTestComponentWithFeatures("component_thread_index", implemented));
+	// Thread built-in. `implemented()` now includes it because the canon
+	// lowering and the executor-owned answer are both present.
 	REQUIRE_NOTHROW([&] {
-		(void)loadTestComponentWithFeatures("component_thread_index", all);
-	}());
-
-	// 64-bit memory in a canonopt.
-	REQUIRE_THROWS(loadTestComponentWithFeatures("component_memory64_abi", implemented));
-	REQUIRE_NOTHROW([&] {
-		(void)loadTestComponentWithFeatures("component_memory64_abi", all);
+		(void)loadTestComponentWithFeatures("component_thread_index", implemented);
 	}());
 	{
-		auto component = loadTestComponentWithFeatures("component_memory64_abi", all);
+		auto component = loadTestComponentWithFeatures("component_thread_index",
+				implemented);
 		auto backend = TestBackend::create();
-		REQUIRE_NOTHROW([&] {
-			WASM::ComponentRuntime runtime(backend->instantiator(), *component);
-			(void)runtime;
-		}());
+		WASM::ComponentRuntime runtime(backend->instantiator(), *component);
+		runtime.setExecutor(std::make_unique<CountingExecutor>());
+		auto function = runtime.exportedFunction("thread-index");
+		REQUIRE(function.has_value());
+		WASM::ComponentValue result;
+		function->callValues({}, {&result, 1});
+		REQUIRE(result.kind == WASM::ComponentValue::Kind::U32);
+		REQUIRE(result.u64 == 0);
+
+		auto parallelism = runtime.exportedFunction("thread-parallelism");
+		REQUIRE(parallelism.has_value());
+		WASM::ComponentValue parallelResult;
+		parallelism->callValues({}, {&parallelResult, 1});
+		REQUIRE(parallelResult.kind == WASM::ComponentValue::Kind::U32);
+		REQUIRE(parallelResult.u64 == 4);
 	}
+
+	// 64-bit memory in a canonopt and through a call.
+	REQUIRE_NOTHROW([&] {
+		(void)loadTestComponentWithFeatures("component_memory64_abi", implemented);
+	}());
+	{
+		auto component = loadTestComponentWithFeatures("component_memory64_abi",
+				implemented);
+		auto backend = TestBackend::create();
+		WASM::ComponentRuntime runtime(backend->instantiator(), *component);
+		auto function = runtime.exportedFunction("memory64-f");
+		REQUIRE(function.has_value());
+		WASM::ComponentValue result;
+		function->callValues({}, {&result, 1});
+		REQUIRE(result.kind == WASM::ComponentValue::Kind::U32);
+		REQUIRE(result.u64 == 0);
+	}
+
+	// The public Runtime default is `implemented()`, not baseline-only: a
+	// thread-using component loads without an explicit options overrides.
+	auto runtime = WASM::Runtime::create("libjit");
+	auto defaultLoaded = runtime->loadComponentFile(
+			std::string(WASM_TEST_DIR) + "component_thread_index.wasm");
+	REQUIRE(defaultLoaded != nullptr);
 }
 
 TEST_CASE("component parser survives truncated and mutated input", "[component-fuzz]")

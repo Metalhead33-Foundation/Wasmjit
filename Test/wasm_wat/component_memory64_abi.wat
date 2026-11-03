@@ -8,6 +8,7 @@
   (alias core export $fi "f" (core func $f))
   (type $ft (func (result u32)))
   (canon lift (core func $f) (memory $mem) (func $lifted (type $ft)))
+  (export "memory64-f" (func $lifted))
 
   ;; Memory64 pointer width reaches the flattening of pointer-shaped values:
   ;; a string parameter is (i64 pointer, i32 length), not (i32, i32).

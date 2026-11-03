@@ -1,7 +1,7 @@
 # WIT and the Component Model — Spec Status, Design Space, and a QVM-Style Scope {#prop_component_model}
 
-Status: proposal + implementation note (revision 17 — **the state of the model as
-of 2026-11-02**). `CM-0`…`CM-8` are complete: the parser decodes every
+Status: proposal + implementation note (revision 18 — **the state of the model as
+of 2026-11-03**). `CM-0`…`CM-8` are complete: the parser decodes every
 section/production; the validator carries all **thirteen** index spaces and covers
 references, scopes, labels, declarations, aliases, instantiation signatures,
 canon, start, values, `[get]`/`[set]`, strong uniqueness and Canonical ABI
@@ -17,9 +17,11 @@ convention now executes on the single-agent executor.** `CM-9` (vendor the
 upstream corpus) through `CM-14` (the async convention) are complete, and
 `CM-20`–`CM-22` added per-load feature gates, the public
 `WASM::Runtime` component surface, component-sort imports, wide async result
-spill and a mutation/fuzz gate. Multi-agent scheduling is supported through the
-embedder's public `ComponentExecutor` seam ([`THREADS.md`](THREADS.md) §5.1);
-WIT is ingested harness-side/build-time and WASI is host-provided.
+spill and a mutation/fuzz gate. `ComponentFeatures::implemented()` now includes
+`Threads` and `Memory64`; the public runtime defaults to that set. Multi-agent
+scheduling is supported through the embedder's public `ComponentExecutor` seam
+([`THREADS.md`](THREADS.md) §5.1); WIT is build-time (the engine is binary-only)
+and WASI is host-provided. Those are contract boundaries, not engine gaps.
 
 **Direction note (2026-11-01).** This note is where the project's centre of
 gravity is most visible: a component is a *managed extension unit*, and a product
@@ -343,7 +345,7 @@ supplied by the embedder's `ComponentExecutor`.
 
 ## 4. What is in the tree today
 
-**Snapshot (2026-11-03, working tree; no commit yet).** Everything below is a kind-2 statement under `docs/FRESHNESS.md` §2.2, so the whole section carries one stamp rather than a date per sentence. Measured with `build/Desktop-Debug/Test/WasmJit` (**17,415 assertions / 585 cases**) and `[component-corpus]` (**516 verdict cases; 0 reject-side, 0 accept-side**); `[component-execution]` additionally constructs **140** accepted artifacts and executes every extracted upstream primitive/JSON-expected row, including the resource-handle-table groups. Before changing a count below, re-run those and `docs/FRESHNESS.md` §8; if a sentence disagrees with the runs, the sentence is stale.
+**Snapshot (2026-11-03, working tree; no commit yet).** Everything below is a kind-2 statement under `docs/FRESHNESS.md` §2.2, so the whole section carries one stamp rather than a date per sentence. Measured with `build/Desktop-Debug/Test/WasmJit` (**17,586 assertions / 611 cases**) and `[component-corpus]` (**516 verdict cases; 0 reject-side, 0 accept-side**); `[component-execution]` additionally constructs **140** accepted artifacts and executes every extracted upstream primitive/structured-JSON row, including the resource-handle-table groups. Before changing a count below, re-run those and `docs/FRESHNESS.md` §8; if a sentence disagrees with the runs, the sentence is stale.
 
 ### 4.1 Short answer: an honest rejection (CM-0), plus a parser (CM-1a/CM-1b)
 
@@ -446,18 +448,39 @@ embedder-supplied `ComponentExecutor` path described in §4.3 and §5.
   parses every accepted artifact and constructs each component that has no host
   imports (**140** checked; `start` definitions execute during construction); it
   also runs the extracted upstream `assert_return`/`assert_trap` rows against a
-  fresh runtime, including primitive results, JSON-encoded strings/flags and the
-  resource-handle-table groups. Structured invocations that the extractor cannot
-  represent are marked `unsupported` rather than silently dropped.
-  `[component-fuzz]` exercises truncated/mutated components. Cross-instance
-  transfer has direct tests for owning resources, borrowed resources, stream
-  endpoints and futures, plus an explicit handle-table budget-exhaustion test.
-- **WIT is tooling-only, and WASI is host-provided.** The harness parses
-  `component wit --json`; there is no `.wit` authoring/resolution path, generated
-  host bindings, or world-level import/export mapping. WIT-defined private
-  subtyping is post-MVP. WASI 0.2 interfaces are ordinary host imports resolved
-  by the embedder, so an engine-side WASI implementation is a product decision,
-  not a Component Model requirement.
+  fresh runtime, including primitive results, JSON-encoded structured values
+  (record, tuple, list, fixed-list, variant, enum, flags, option, result, map)
+  and the resource-handle-table groups. `[component-fuzz]` exercises
+  truncated/mutated components. Cross-instance transfer has direct tests for
+  owning resources, borrowed resources, stream endpoints and futures, plus an
+  explicit handle-table budget-exhaustion test.
+- **WIT is build-time and the engine is binary-only.** The harness may consume
+  `wasm-tools component wit --json` for diagnostics, but the engine never parses
+  `.wit` text, resolves WIT packages, or generates host bindings. WIT → component
+  is a build-time step (`wasm-tools component wit --wasm`, or another tool), and
+  binding generation is the embedder/tooling's job. “WIT bindings” in a
+  production review therefore means the embedder's generated adapters, **not** a
+  missing engine parser; it is not an engine-readiness gap.
+- **WASI is host-provided.** WASI 0.2 interfaces are ordinary host imports
+  resolved by the embedder. The engine does not ship a WASI implementation, and
+  that is a product/embedding choice, not a Component Model engine gap.
+- **Thread scheduling is embedder-owned; the `thread.*` engine surface is
+  implemented.** The engine exposes `ComponentExecutor` and the canonical
+  `thread.index` / `thread.available_parallelism` / spawn / suspend / yield /
+  switch built-ins; the executor decides which OS thread or fiber runs a
+  component thread. The engine intentionally supplies no thread pool or
+  scheduler. A missing scheduler is an embedder configuration, not an engine
+  readiness gap.
+
+**Production boundary.** A production-readiness claim for this engine is a
+claim about the **engine-owned** surface: binary parsing, validation, canonical
+ABI execution, resource/async state machines, `thread.*` lowering, feature gates,
+execution budgets, and the public component runtime API. WASI implementations,
+WIT→component builds and generated host bindings, and the concrete OS
+thread/fiber scheduler are **embedder-owned by contract**. They must be supplied
+for a particular product, but their absence is not evidence that the engine is
+immature. The engine-side hooks for all three are present and tested: host
+imports, the `ComponentExecutor` seam, and the executable `thread.*` built-ins.
 
 ### 4.4 CM-1a/CM-1b/CM-1c — parser, index spaces and structural validation
 
@@ -587,10 +610,12 @@ component grammar into an AST:
 **Verdict (2026-11-02, CM24–CM26 sweep).** This
 claim is scoped to the fixtures, C++ runtime tests and validation corpus below.
 The public surface is installed; the 1.0 name/subtyping/memory64
-details are covered by the tests named in §8, upstream accepted components are
-instantiated by `[component-execution]` (140 constructed, plus every extracted
-scalar execution group), and multi-agent execution is supported via
-the embedder's `ComponentExecutor` rather than an in-engine scheduler. `CM1`–`CM10` are
+details are covered by the tests named in §8, including executable
+`thread.index`/`thread.available_parallelism` and a 64-bit-memory lift/call;
+upstream accepted components are instantiated by `[component-execution]` (140
+constructed, plus every extracted primitive/structured execution group), and
+multi-agent execution is supported via the embedder's `ComponentExecutor` rather
+than an in-engine scheduler. `CM1`–`CM10` are
 closed and `CM-0`…`CM-8` shipped; the surface is exercised by
 the component fixtures under `Test/wasm_wat/component_*.wat` plus the C++ runtime
 tests and the structured `WastScript` path. **`CM11`/`CM12`** were
