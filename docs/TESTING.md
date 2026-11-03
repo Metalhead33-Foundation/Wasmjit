@@ -597,9 +597,14 @@ LibJIT itself is an uninstrumented external library, so a report is expected to
 point at this project's code (or at a real race), not at LibJIT's internals.
 
 The documented TSan gate is the narrowed multi-agent/concurrency run above. A
-full `./WasmJit '~[spec]'` TSan run currently SIGSEGVs before producing a report
-and is **not** presented as green; that remains a separate sanitizer-scope
-follow-up.
+full `./WasmJit '~[spec]'` run reaches the native-stack continuation migration
+test (`Test/main.cpp`, `native-stack continuation can migrate between host
+threads`, `worker.join()`), where `makecontext`/`swapcontext` moves execution to
+a different host thread; TSan cannot instrument that stack switch and the
+worker SIGSEGVs, after which its signal path deadlocks. That is a sanitizer-scope
+limitation of the native-stack provider, not a reported data race:
+`[multiagent]` and `[concurrency]` remain the TSan evidence, and a full TSan run
+is **not** presented as green.
 
 ### Traps
 

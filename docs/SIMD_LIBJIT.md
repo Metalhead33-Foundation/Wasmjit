@@ -563,6 +563,13 @@ Readings, in order of how much they change the picture:
    needs by-value signatures plumbed through the helper layer, which is a change
    to §6.3 rather than a probe. D4 (batched run) remains gated and unbuilt.
 
+**D4 decision (2026-11-03): leave the batched run helper unbuilt.** The D5
+peepholes removed half the calls in the measured workload (4.10 → 3.47 ns/op).
+D4 would need a new run-script/bank ABI and a dispatcher lookahead over several
+instructions; no workload in the tree asks for it beyond the diagnostic
+benchmark. Reopen D4 only when a real workload shows the remaining per-op calls
+dominating after D5, as §8.3 requires.
+
 **The gate (§8.3), applied as far as the built variants allow.** The condition is
 call + slot traffic > 50 % of loop time *after* the peepholes. Before them the
 measured share was **97.6 %**; after the D5 `load`+op / const peepholes it is
