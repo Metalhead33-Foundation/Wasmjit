@@ -5387,6 +5387,9 @@ TEST_CASE("component execution: accepted corpus instantiates", "[component-execu
 	std::ifstream stream(manifest);
 	REQUIRE(stream);
 	std::size_t checked = 0;
+	std::size_t accepted = 0;
+	std::size_t skippedImports = 0;
+	std::size_t skippedStarts = 0;
 	std::size_t failures = 0;
 	std::string firstFailure;
 	std::string line;
@@ -5396,6 +5399,7 @@ TEST_CASE("component execution: accepted corpus instantiates", "[component-execu
 		const std::size_t tab1 = line.find('\t');
 		if (tab1 == std::string::npos || line.substr(0, tab1) != "accept")
 			continue;
+		++accepted;
 		const std::size_t tab2 = line.find('\t', tab1 + 1);
 		if (tab2 == std::string::npos)
 			continue;
@@ -5427,8 +5431,14 @@ TEST_CASE("component execution: accepted corpus instantiates", "[component-execu
 				firstFailure = origin + ": accepted artifact is not a component";
 			continue;
 		}
-		if (!component->imports.empty() || !component->starts.empty())
+		if (!component->imports.empty()) {
+			// Host imports are embedder-owned. Keep the skip explicit so the
+			// execution count is never mistaken for validation conformance.
+			++skippedImports;
 			continue;
+		}
+		if (!component->starts.empty())
+			++skippedStarts;
 		++checked;
 		auto backend = TestBackend::create();
 		try {
@@ -5442,7 +5452,11 @@ TEST_CASE("component execution: accepted corpus instantiates", "[component-execu
 		}
 	}
 	INFO("first failure: " << firstFailure);
-	REQUIRE(checked >= 140);
+	INFO("accepted " << accepted << ", constructed " << checked
+			<< ", skipped imports " << skippedImports
+			<< ", starts executed " << skippedStarts);
+	REQUIRE(accepted >= 140);
+	REQUIRE(checked + skippedImports == accepted);
 	REQUIRE(failures == 0);
 }
 
