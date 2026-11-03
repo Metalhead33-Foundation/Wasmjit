@@ -586,6 +586,13 @@ uninstrumented optimizer needs minutes under ASan. That is an evidence-scope
 exclusion, not a passing result for that case — it is green in the ordinary
 builds above.
 
+> Build shadow configurations **one at a time**. Three simultaneous
+> `make -j16` runs (Debug, Release, ASan) create ~48 compiler processes and
+> exhausted this host's memory during the 2026-11-03 validation; the compilers
+> were interrupted, not a source file. Use a serial `make -j8` per
+> configuration, and lower it further if `/proc/meminfo` shows the host close
+> to its limit.
+
 The **ThreadSanitizer** configuration is the same idea, but use qmake's
 sanitizer feature (`CONFIG+=sanitizer` loads `sanitizer.prf`; `sanitize_thread`
 alone is parsed but applies no flags). The run is what makes the multi-agent
