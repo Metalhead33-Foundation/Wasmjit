@@ -172,6 +172,9 @@ public:
 	void endBorrowScope(uint32_t scope);
 	/** \brief Checks that a resource handle is live and has the expected type. \param handle Resource handle. \param expected Expected canonical resource type. \throws std::runtime_error when the handle is invalid or has the wrong type. */
 	void validateResourceHandle(uint32_t handle, WASM::TypeId expected) const;
+	/** \brief Moves an owning resource handle from another runtime into this one. \param source Runtime that owns the handle. \param handle Handle in the source table. \param expected Expected canonical resource type. \return The corresponding handle in this runtime's table. \throws std::runtime_error when the source handle is invalid, borrowed, or mistyped. */
+	uint32_t adoptResourceHandle(ComponentRuntime& source, uint32_t handle,
+			WASM::TypeId expected);
 	/** \brief Looks up an exported value by name. \param name Export name. \return Value copy, or nullopt when absent. */
 	std::optional<ComponentValue> exportedValue(std::string_view name) const;
 	/** \brief Looks up an exported instance and copies its export bag. \param name Export name. \return Bag copy, or nullopt when absent. */
@@ -325,6 +328,10 @@ private:
 			false, true, 0}};
 	//! Indices of released resource slots, reused before growing the table.
 	std::vector<uint32_t> freeResourceSlots_; //!< Indices of released resource slots.
+	//! Local alias TypeId -> concrete imported TypeId for resource identity.
+	std::unordered_map<uint32_t, WASM::TypeId> typeAliases_;
+	//! Cursor over the component-local type index space during build().
+	uint32_t nextTypeIndex_ = 0;
 	//! Single-agent async state. The allocator/releaser keep async handles in the
 	//! same index space as resources (docs/proposals/THREADS.md TD9).
 	WASM::ComponentAsyncState async_;
@@ -356,6 +363,8 @@ private:
 	void processComponentInstance(const WASM::ComponentInstance& instance);
 	//! Processes one `alias` definition.
 	void processAlias(const WASM::Alias& alias);
+	//! Processes one `alias` definition with its component-local type index.
+	void processAlias(const WASM::Alias& alias, uint32_t typeIndex);
 	//! Decodes one component `value` definition into the value index space.
 	void processValue(uint32_t index);
 	//! Wraps a host/child export bag in an executable handle.
@@ -390,6 +399,10 @@ private:
 	uint32_t addHandle();
 	//! Marks a handle free (its slot is reused by the next `addHandle`).
 	void freeHandle(uint32_t handle);
+	//! Resolves an imported/aliased resource type identity to the concrete one.
+	WASM::TypeId canonicalTypeId(WASM::TypeId id) const;
+	//! Records that a local alias type denotes an imported concrete type.
+	void recordTypeAlias(WASM::TypeId local, WASM::TypeId actual);
 
 	//! The memory/realloc/post-return callables the options select.
 	AbiMemory memoryFor(const WASM::CanonicalAbiOptions& options) const;

@@ -21,7 +21,6 @@
 #include <limits>
 #include <map>
 #include <memory>
-#include <set>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -5065,13 +5064,6 @@ TEST_CASE("component execution: upstream scalar returns and traps", "[component-
 	std::size_t skipped = 0;
 	std::size_t failures = 0;
 	std::string firstFailure;
-	// These accepted upstream groups exercise resource-handle-table behaviour
-	// that requires per-instance handle transfer across component boundaries.
-	// They are named here rather than silently skipped; the accepted-instantiation
-	// sweep above counts the same residuals.
-	const std::set<std::string> knownUnsupported = {
-		"handle-table_002.wasm", "handle-table_011.wasm",
-		"handle-table_012.wasm"};
 	const auto parseArgs = [](std::string_view spec) {
 		std::vector<WASM::ComponentValue> args;
 		std::size_t start = 0;
@@ -5111,10 +5103,6 @@ TEST_CASE("component execution: upstream scalar returns and traps", "[component-
 		return args;
 	};
 	for (const auto& [artifact, rows] : groups) {
-		if (knownUnsupported.count(artifact) != 0) {
-			skipped += rows.size();
-			continue;
-		}
 		std::ifstream input(root / artifact, std::ios::binary);
 		if (!input) {
 			skipped += rows.size();

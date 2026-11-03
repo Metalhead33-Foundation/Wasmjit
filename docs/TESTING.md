@@ -1237,9 +1237,8 @@ The component feature/API tests are:
   assertion or sanitizer report is a failure.
 - `[component-execution]` — parses every accepted artifact, constructs the
   140 components that need no host imports/start, then executes the upstream
-  scalar `assert_return`/`assert_trap` rows from `execution.tsv`. Three accepted resource-handle-table groups whose expectations need
-  per-instance resource-handle transfer are named in `Test/main.cpp`, not
-  silently skipped.
+  scalar `assert_return`/`assert_trap` rows from `execution.tsv`, including the
+  resource-handle-table groups with per-instance transfer.
 - `[component-async]` — task cancellation/subtask states, stream/future copies and
   the async lift/lower calling convention.
 - `[component-name]` — the lenient `component-name` parser: a malformed name is

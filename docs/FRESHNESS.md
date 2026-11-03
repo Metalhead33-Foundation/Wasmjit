@@ -426,10 +426,10 @@ test cases**; `[docs]` 1013/2,
 exported symbols. **These are a snapshot, not a promise** — they are here to show
 what the output looks like, and to make a reader notice when it does not.
 
-**Current (2026-11-02, CM24–CM26 working tree):** **17,355 assertions in 578 test
+**Current (2026-11-03, resource-handle-table working tree):** **17,355 assertions in 578 test
 cases**; `[component-corpus]`/`[component-subtyping]` 520/1,
 `[component-execution]` 6/2 (140 accepted artifacts constructed plus the
-upstream scalar-return/trap sweep; 3 residual groups), `[component-async]` 94/8,
+upstream scalar-return/trap sweep; all extracted groups execute), `[component-async]` 94/8,
 `[component-name]` 7/1, `[component-fuzz]` 4/1,
 `[component-api]` 58/7, `[component-features]` 19/1. Re-run the probe; these are
 a dated snapshot, not a promise.

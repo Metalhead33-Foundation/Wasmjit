@@ -18,6 +18,24 @@ namespace {
 //! The VM context of the innermost component host callback on this thread.
 thread_local const VMContext* g_componentHostContext = nullptr;
 
+//! Depth of nested component-function entries on this thread. A trap may only
+//! be thrown once the outermost component call has left generated code.
+thread_local uint32_t g_componentCallDepth = 0;
+
+//! RAII depth guard for one component-function entry.
+class ComponentCallDepthGuard {
+public:
+	ComponentCallDepthGuard() : previous_(g_componentCallDepth)
+	{
+		++g_componentCallDepth;
+	}
+	~ComponentCallDepthGuard() { g_componentCallDepth = previous_; }
+	//! True when this is the outer host entry, not a nested component call.
+	bool outermost() const { return previous_ == 0; }
+private:
+	uint32_t previous_;
+};
+
 //! Installs a VM context for the duration of one host callback.
 class ComponentHostContextGuard {
 public:
@@ -1537,6 +1555,100 @@ struct LowerData {
 	std::vector<WASM::AbiCoreType> coreResults;
 };
 
+//! Moves every owning resource handle reachable from `value` from `source`'s
+//! table into `target`'s table. A canonical lift/lower crossing a component
+//! boundary changes the handle table that gives the payload its meaning, so the
+//! value must be rebased before the receiving side validates it.
+void transferComponentHandles(const WASM::TypeStore& store,
+		const WASM::ComponentValueType& type, ComponentValue& value,
+		ComponentRuntime& source, ComponentRuntime& target, unsigned depth)
+{
+	if (&source == &target)
+		return;
+	if (depth > 64)
+		throw std::runtime_error(
+				"component runtime: canonical value nesting too deep");
+	if (type.kind == WASM::ComponentValueType::Kind::Primitive)
+		return;
+	if (type.kind != WASM::ComponentValueType::Kind::TypeId)
+		throw std::runtime_error(
+				"component runtime: unresolved component value type");
+	const WASM::ComponentTypeView view =
+			store.componentType(WASM::TypeId{type.typeIndex});
+	switch (view.kind()) {
+	case WASM::TypeKind::ComponentRecord:
+		for (std::size_t i = 0; i < view.fields().size()
+				&& i < value.elements.size(); ++i)
+			transferComponentHandles(store, view.fields()[i].type,
+					value.elements[i], source, target, depth + 1);
+		return;
+	case WASM::TypeKind::ComponentTuple:
+		for (std::size_t i = 0; i < view.tuple().size()
+				&& i < value.elements.size(); ++i)
+			transferComponentHandles(store, view.tuple()[i],
+					value.elements[i], source, target, depth + 1);
+		return;
+	case WASM::TypeKind::ComponentFixedList:
+		for (ComponentValue& element : value.elements)
+			transferComponentHandles(store, view.element(), element,
+					source, target, depth + 1);
+		return;
+	case WASM::TypeKind::ComponentList:
+		for (ComponentValue& element : value.elements)
+			transferComponentHandles(store, view.element(), element,
+					source, target, depth + 1);
+		return;
+	case WASM::TypeKind::ComponentOption:
+		if (value.hasValue && !value.elements.empty())
+			transferComponentHandles(store, view.element(),
+					value.elements.front(), source, target, depth + 1);
+		return;
+	case WASM::TypeKind::ComponentResult: {
+		const WASM::ComponentValueType* payload = value.discriminant != 0
+				? (view.hasResultError() ? &view.resultError() : nullptr)
+				: (view.hasResultOk() ? &view.resultOk() : nullptr);
+		if (payload != nullptr && value.hasValue && !value.elements.empty())
+			transferComponentHandles(store, *payload, value.elements.front(),
+					source, target, depth + 1);
+		return;
+	}
+	case WASM::TypeKind::ComponentVariant: {
+		if (value.discriminant >= view.cases().size())
+			return;
+		const WASM::ComponentCase& item = view.cases()[value.discriminant];
+		if (item.hasType && value.hasValue && !value.elements.empty())
+			transferComponentHandles(store, item.type, value.elements.front(),
+					source, target, depth + 1);
+		return;
+	}
+	case WASM::TypeKind::ComponentMap:
+		for (ComponentValue& entry : value.elements) {
+			if (entry.elements.size() != 2)
+				continue;
+			transferComponentHandles(store, view.mapKey(), entry.elements[0],
+					source, target, depth + 1);
+			transferComponentHandles(store, view.mapValue(), entry.elements[1],
+					source, target, depth + 1);
+		}
+		return;
+	case WASM::TypeKind::ComponentOwn: {
+		const WASM::TypeId resource{view.typeRef()};
+		value.discriminant = target.adoptResourceHandle(source,
+				value.discriminant, resource);
+		return;
+	}
+	case WASM::TypeKind::ComponentBorrow:
+		// A borrowed handle is owned by the caller; it is not transferred.
+		return;
+	case WASM::TypeKind::ComponentStream:
+	case WASM::TypeKind::ComponentFuture:
+		// Async endpoints use their own per-runtime endpoint table.
+		return;
+	default:
+		return;
+	}
+}
+
 void lowerCallback(ffi_cif*, void* result, void** args, void* userData)
 {
 	try {
@@ -1553,6 +1665,18 @@ void lowerCallback(ffi_cif*, void* result, void** args, void* userData)
 	const VMContext* callerContext = args[0] != nullptr
 			? *static_cast<VMContext* const*>(args[0]) : nullptr;
 	ComponentHostContextGuard contextGuard(callerContext);
+	ComponentRuntime* const owner = data->function.ownerRuntime;
+	ComponentRuntime* const caller = data->memory.runtime;
+	const auto transferHandles = [&](std::vector<ComponentValue>& values,
+			const std::vector<WASM::ComponentValueType>& types,
+			bool intoOwner) {
+		if (owner == nullptr || caller == nullptr || owner == caller)
+			return;
+		for (std::size_t i = 0; i < values.size() && i < types.size(); ++i)
+			transferComponentHandles(store, types[i], values[i],
+					intoOwner ? *caller : *owner,
+					intoOwner ? *owner : *caller, 0);
+	};
 	if (data->function.options.async) {
 		// CM19: async lower. The core signature uses MAX_FLAT_ASYNC_PARAMS (4),
 		// always writes results through an appended pointer, and returns the
@@ -1607,6 +1731,7 @@ void lowerCallback(ffi_cif*, void* result, void** args, void* userData)
 				liftValue(store, data->function.paramTypes[i], input, index,
 						data->memory, structuredInput[i], 0);
 		}
+		transferHandles(structuredInput, data->function.paramTypes, true);
 		std::vector<ComponentValue> structuredOutput(
 				data->function.resultTypes.size());
 		uint64_t buffer = 0;
@@ -1639,11 +1764,18 @@ void lowerCallback(ffi_cif*, void* result, void** args, void* userData)
 			*handle = data->memory.runtime->beginPendingSubtask(
 					[data, structuredInput = std::move(structuredInput),
 					 structuredOutput = std::move(structuredOutput),
-					 writeOutput, handle, callerContext]() mutable {
+					 writeOutput, handle, callerContext, &store, owner, caller]() mutable {
 				ComponentHostContextGuard deferredGuard(callerContext);
 				if (data->memory.runtime->subtaskCancelled(*handle))
 					return;
 				data->function.callValues(structuredInput, structuredOutput);
+				if (WASM::trapPending())
+					return;
+				for (std::size_t i = 0; i < structuredOutput.size()
+						&& i < data->function.resultTypes.size(); ++i)
+					transferComponentHandles(store,
+							data->function.resultTypes[i], structuredOutput[i],
+							*owner, *caller, 0);
 				writeOutput(structuredOutput);
 			});
 			if (result)
@@ -1654,6 +1786,9 @@ void lowerCallback(ffi_cif*, void* result, void** args, void* userData)
 			return;
 		}
 		data->function.callValues(structuredInput, structuredOutput);
+		if (WASM::trapPending())
+			return;
+		transferHandles(structuredOutput, data->function.resultTypes, false);
 		writeOutput(structuredOutput);
 		if (result)
 			*static_cast<int32_t*>(result) =
@@ -1708,8 +1843,12 @@ void lowerCallback(ffi_cif*, void* result, void** args, void* userData)
 				liftValue(store, data->function.paramTypes[i], input, index,
 						data->memory, structuredInput[i], 0);
 		}
+		transferHandles(structuredInput, data->function.paramTypes, true);
 		structuredOutput.resize(data->function.resultTypes.size());
 		data->function.callValues(structuredInput, structuredOutput);
+		if (WASM::trapPending())
+			return;
+		transferHandles(structuredOutput, data->function.resultTypes, false);
 		output.clear();
 		for (std::size_t i = 0; i < structuredOutput.size(); ++i)
 			lowerValue(store, data->function.resultTypes[i], structuredOutput[i],
@@ -2152,6 +2291,8 @@ void ComponentRuntime::build()
 	coreModuleSpace_.reserve(component_.coreModules.size());
 	componentValues_.clear();
 	componentValues_.reserve(component_.values.size());
+	typeAliases_.clear();
+	nextTypeIndex_ = 0;
 	for (const WASM::ComponentDefinition& definition : component_.definitions) {
 		switch (definition.kind) {
 		case WASM::ComponentDefinitionKind::CoreModule:
@@ -2170,17 +2311,38 @@ void ComponentRuntime::build()
 		case WASM::ComponentDefinitionKind::Instance:
 			processComponentInstance(component_.instances[definition.index]);
 			break;
-		case WASM::ComponentDefinitionKind::Alias:
-			processAlias(component_.aliases[definition.index]);
+		case WASM::ComponentDefinitionKind::Alias: {
+			const WASM::Alias& alias = component_.aliases[definition.index];
+			const bool typeAlias = alias.sort.sort == WASM::ComponentSort::Type;
+			const uint32_t typeIndex = nextTypeIndex_;
+			if (typeAlias)
+				++nextTypeIndex_;
+			processAlias(alias, typeAlias ? typeIndex : UINT32_MAX);
 			break;
+		}
 		case WASM::ComponentDefinitionKind::Canon:
 			processCanon(component_.canons[definition.index]);
 			break;
-		case WASM::ComponentDefinitionKind::Import:
-			processImport(component_.imports[definition.index]);
+		case WASM::ComponentDefinitionKind::Import: {
+			const WASM::ImportDecl& import = component_.imports[definition.index];
+			const bool typeImport = import.type.kind == WASM::ExternType::Kind::Type;
+			processImport(import);
+			if (typeImport)
+				++nextTypeIndex_;
 			break;
-		case WASM::ComponentDefinitionKind::Export:
-			processExport(component_.exports[definition.index]);
+		}
+		case WASM::ComponentDefinitionKind::Export: {
+			const WASM::ComponentExport& exportDecl =
+					component_.exports[definition.index];
+			const bool typeExport =
+					exportDecl.sortIndex.sort == WASM::ComponentSort::Type;
+			processExport(exportDecl);
+			if (typeExport)
+				++nextTypeIndex_;
+			break;
+		}
+		case WASM::ComponentDefinitionKind::Type:
+			++nextTypeIndex_;
 			break;
 		case WASM::ComponentDefinitionKind::Start:
 			processStart(component_.starts[definition.index]);
@@ -2629,6 +2791,11 @@ void ComponentRuntime::processComponentInstance(
 
 void ComponentRuntime::processAlias(const WASM::Alias& alias)
 {
+	processAlias(alias, UINT32_MAX);
+}
+
+void ComponentRuntime::processAlias(const WASM::Alias& alias, uint32_t typeIndex)
+{
 	if (alias.kind == WASM::Alias::Kind::Export) {
 		// CM17: resolve from the component-instance handle indexed by the
 		// validator's instance index space (definitions, aliases and imports).
@@ -2654,9 +2821,17 @@ void ComponentRuntime::processAlias(const WASM::Alias& alias)
 			componentValues_.push_back(it->second);
 			return;
 		}
-		case WASM::ComponentSort::Type:
-			// Compile-time identity; the validator published its TypeId.
+		case WASM::ComponentSort::Type: {
+			// Compile-time identity, but an alias of an exported resource type
+			// denotes the exporting instance's concrete resource identity, not
+			// the fresh abstract identity the validator used locally.
+			if (typeIndex != UINT32_MAX) {
+				const auto it = exports.types.find(alias.name);
+				if (it != exports.types.end())
+					recordTypeAlias(component_.typeId(typeIndex), it->second);
+			}
 			return;
+		}
 		case WASM::ComponentSort::Instance: {
 			const auto it = exports.instances.find(alias.name);
 			if (it == exports.instances.end())
@@ -3122,10 +3297,55 @@ void ComponentRuntime::freeHandle(uint32_t handle)
 	freeResourceSlots_.push_back(handle);
 }
 
+uint32_t ComponentRuntime::adoptResourceHandle(ComponentRuntime& source,
+		uint32_t handle, WASM::TypeId expected)
+{
+	if (&source == this) {
+		validateResourceHandle(handle, expected);
+		return handle;
+	}
+	if (handle == 0 || handle >= source.resourceSlots_.size()
+			|| !source.resourceSlots_[handle].live)
+		throw std::runtime_error("component runtime: invalid resource handle");
+	const WASM::TypeId targetType = canonicalTypeId(expected);
+	const WASM::TypeId sourceType =
+			source.canonicalTypeId(source.resourceSlots_[handle].typeId);
+	if (expected != WASM::TypeId{WASM::TypeId::kNone}
+			&& targetType != sourceType)
+		throw std::runtime_error("component runtime: resource handle type mismatch");
+	if (!source.resourceSlots_[handle].own)
+		throw std::runtime_error(
+				"component runtime: cannot transfer a borrowed resource handle");
+	const ResourceSlot moved = source.resourceSlots_[handle];
+	const uint32_t adopted = addHandle();
+	resourceSlots_[adopted] = moved;
+	if (targetType != WASM::TypeId{WASM::TypeId::kNone})
+		resourceSlots_[adopted].typeId = targetType;
+	source.resourceSlots_[handle] = ResourceSlot{};
+	source.freeResourceSlots_.push_back(handle);
+	return adopted;
+}
+
+WASM::TypeId ComponentRuntime::canonicalTypeId(WASM::TypeId id) const
+{
+	// Follow at most one alias hop: an imported type maps to a concrete type,
+	// and a concrete type never maps onward.
+	const auto found = typeAliases_.find(id.value);
+	return found == typeAliases_.end() ? id : found->second;
+}
+
+void ComponentRuntime::recordTypeAlias(WASM::TypeId local,
+		WASM::TypeId actual)
+{
+	if (local.isNone() || actual.isNone() || local == actual)
+		return;
+	typeAliases_.insert_or_assign(local.value, actual);
+}
+
 
 void ComponentRuntime::processResourceCanon(const WASM::Canon& canon)
 {
-	const WASM::TypeId typeId = component_.typeId(canon.typeIndex);
+	const WASM::TypeId typeId = canonicalTypeId(component_.typeId(canon.typeIndex));
 	if (typeId.isNone())
 		throw std::runtime_error("component runtime: resource type has no identity");
 	const WASM::ComponentTypeView view =
@@ -3197,7 +3417,7 @@ void ComponentRuntime::processResourceCanon(const WASM::Canon& canon)
 		data->handler = [this, writeRep, typeId](void* result, void** args) {
 			const uint32_t handle = uint32_t(*static_cast<int32_t*>(args[1]));
 			if (handle >= resourceSlots_.size() || !resourceSlots_[handle].live
-					|| resourceSlots_[handle].typeId != typeId)
+					|| canonicalTypeId(resourceSlots_[handle].typeId) != typeId)
 				throw std::runtime_error("component runtime: invalid resource handle");
 			writeRep(result, resourceSlots_[handle].representation);
 		};
@@ -3208,7 +3428,7 @@ void ComponentRuntime::processResourceCanon(const WASM::Canon& canon)
 			const uint32_t handle = uint32_t(*static_cast<int32_t*>(args[1]));
 			if (handle == 0 || handle >= resourceSlots_.size()
 					|| !resourceSlots_[handle].live
-					|| resourceSlots_[handle].typeId != typeId)
+					|| canonicalTypeId(resourceSlots_[handle].typeId) != typeId)
 				throw std::runtime_error("component runtime: invalid resource handle");
 			if (!resourceSlots_[handle].own)
 				throw std::runtime_error("component runtime: cannot drop a borrowed handle");
@@ -3393,7 +3613,7 @@ void ComponentRuntime::processCanon(const WASM::Canon& canon)
 	if (canon.coreFuncIndex >= coreFuncs_.size())
 		throw std::runtime_error(
 				"component runtime: canon lift core function index out of bounds");
-	const WASM::TypeId typeId = component_.typeId(canon.typeIndex);
+	const WASM::TypeId typeId = canonicalTypeId(component_.typeId(canon.typeIndex));
 	if (typeId.isNone())
 		throw std::runtime_error(
 				"component runtime: canon lift type has no closed identity");
@@ -3419,20 +3639,25 @@ void ComponentRuntime::processCanon(const WASM::Canon& canon)
 		function.paramTypes.push_back(param.type);
 	for (const WASM::ComponentValueType& result : functionType.results())
 		function.resultTypes.push_back(result);
+	function.ownerRuntime = this;
 	const WASM::Callable callable = coreFuncs_[canon.coreFuncIndex];
 	function.call = [this, callable, function](std::span<const WASM::Value> args,
 			std::span<WASM::Value> results) {
+		ComponentCallDepthGuard callGuard;
 		auto entry = enterCall();
 		if (function.options.async)
 			throw std::runtime_error(
 					"component runtime: an async lift has no flat entry point; "
 					"use the structured invocation");
 		invokeCore(callable, function, args, results);
+		if (callGuard.outermost())
+			WASM::checkTrap();
 	};
 	function.callValues = [this, callable, function, coreParams = abi->coreParams,
 			coreResults = abi->coreResults](
 			std::span<const ComponentValue> args,
 			std::span<ComponentValue> results) {
+		ComponentCallDepthGuard callGuard;
 		auto entry = enterCall();
 		const AbiMemory memory = memoryFor(function.options);
 		const WASM::TypeStore& store = component_.store().types().store();
@@ -3548,6 +3773,8 @@ void ComponentRuntime::processCanon(const WASM::Canon& canon)
 			}
 		}
 		endBorrowScope(borrowScope);
+		if (callGuard.outermost())
+			WASM::checkTrap();
 	};
 	componentFuncs_.push_back(std::move(function));
 }
@@ -3773,6 +4000,25 @@ void ComponentRuntime::processImport(const WASM::ImportDecl& importDecl)
 			throw std::runtime_error(
 					"component runtime: host instance import is empty");
 		componentInstances_.push_back(makeInstanceHandle(*import->instance));
+		const WASM::TypeId instanceType =
+				component_.typeId(importDecl.type.typeIndex);
+		if (!instanceType.isNone()) {
+			const WASM::TypeStore& store =
+					component_.store().types().store();
+			const WASM::ComponentTypeView view =
+					store.componentType(instanceType);
+			for (const WASM::ComponentDeclRecord& declaration :
+					view.declarations()) {
+				if (declaration.sort
+							!= static_cast<uint16_t>(WASM::ComponentSort::Type)
+						|| declaration.type.isNone())
+					continue;
+				const auto exported = import->instance->types.find(
+						std::string(store.string(declaration.name)));
+				if (exported != import->instance->types.end())
+					recordTypeAlias(declaration.type, exported->second);
+			}
+		}
 		for (const auto& [name, module] : import->instance->coreModules)
 			if (module)
 				componentInstances_.back()->coreModules[name] = module.get();
@@ -4117,7 +4363,8 @@ void ComponentRuntime::validateResourceHandle(uint32_t handle,
 			|| !resourceSlots_[handle].live)
 		throw std::runtime_error("component runtime: invalid resource handle");
 	if (expected != WASM::TypeId{WASM::TypeId::kNone}
-			&& resourceSlots_[handle].typeId != expected)
+			&& canonicalTypeId(resourceSlots_[handle].typeId)
+					!= canonicalTypeId(expected))
 		throw std::runtime_error("component runtime: resource handle type mismatch");
 }
 
@@ -4143,7 +4390,7 @@ uint32_t ComponentRuntime::useResourceHandle(uint32_t handle,
 	}
 	ResourceSlot& slot = resourceSlots_[borrowed];
 	slot.representation = original.representation;
-	slot.typeId = original.typeId;
+	slot.typeId = canonicalTypeId(original.typeId);
 	slot.live = true;
 	slot.own = false;
 	slot.borrowScope = scope;

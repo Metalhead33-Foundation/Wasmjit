@@ -30,6 +30,7 @@ namespace WASM {
 
 class LoadedComponent;
 class Module;
+class ComponentRuntime;
 
 /** \brief The VM context of the current component host callback, or null.
  *
@@ -176,6 +177,9 @@ struct ComponentValue {
 struct ComponentFunction {
 	//! The canonical identity of the component function type.
 	WASM::TypeId typeId{WASM::TypeId::kNone};
+	//! The runtime that owns this function's resource handle table. Null for a
+	//! host-supplied function; a cross-runtime lower moves handles through it.
+	class ComponentRuntime* ownerRuntime = nullptr;
 	//! The flattened core parameter types.
 	std::vector<WASM::AbiCoreType> params;
 	std::vector<WASM::AbiCoreType> results; //!< The flattened core result types.
