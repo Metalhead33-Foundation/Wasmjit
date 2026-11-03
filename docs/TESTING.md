@@ -545,8 +545,8 @@ for a merge to `master` — so that "green" means the same thing to every review
 | --- | --- | --- | --- |
 | Strict validator sweep | `WASM_SPEC_VALIDATE=1 ./WasmJit` (curated) and `WASM_SPEC_VALIDATE=1 ./WasmJit '[spec]'` (all) | every curated binary negative module is rejected; the all-scripts sweep exercises the hidden decoder/validator/linker cases too | **curated 3,275 / 3,277** (`tag` is the two-entry known failure), **all-scripts 257 / 257**, 2026-11-03 |
 | AddressSanitizer build + suite | configure a second shadow build (below), then run the default suite | no use-after-free, overflow or leak report on the hand-written path | **397 cases / 17,099 assertions passed, no ASan memory error, 2026-11-03** (`ASAN_OPTIONS=detect_leaks=0`, exit 0); with LeakSanitizer on, the only reports are **1,432,070 bytes in 16,911 allocations in LibJIT's uninstrumented context/type caches** (first frames `jit-type.c`, `LibJitTypeTranslator`, `dispatchSIMDF16x8` signature caches), not the core or helper path; `[compilation-policy]` is excluded because LibJIT's CFG optimizer under ASan exceeds the runtime budget |
-| ThreadSanitizer concurrency run | configure a third shadow build (below), then `./WasmJit '[multiagent]'` | no data race on the multi-agent path (waiter table, entry counter, GC queue/counters, shared-global atomics) | `[multiagent]` 51 assertions / 6 cases, **no TSan report**, 2026-10-29 |
-| ABI check | `./Test/abi-check.sh build/<config>` | no exported symbol disappeared since the baseline (the additive-only rule of `API_ABI_STABILITY.md` G2); `--update` records an intentional addition | **1,804 + 830 symbols, 0 removed**, 2026-10-29 |
+| ThreadSanitizer concurrency run | configure a third shadow build (below), then `./WasmJit '[multiagent]'` | no data race on the multi-agent path (waiter table, entry counter, GC queue/counters, shared-global atomics) | `[multiagent]` **51 assertions / 6 cases** and `[concurrency]` **80 / 13**, **no TSan report**, 2026-11-03 |
+| ABI check | `./Test/abi-check.sh build/<config>` | no exported symbol disappeared since the baseline (the additive-only rule of `API_ABI_STABILITY.md` G2); `--update` records an intentional addition | **3,093 dynamic / 1,992 strong symbols, 0 removed**, 2026-11-03 |
 
 `Test/spec_known_failures.txt` is the only place a spec failure may be
 subtracted from the gate. It is not an exemption: the named line must still
@@ -595,6 +595,11 @@ A build directory that was configured without the sanitizer needs
 `make clean` first — qmake changes the flags but not the object dependencies.
 LibJIT itself is an uninstrumented external library, so a report is expected to
 point at this project's code (or at a real race), not at LibJIT's internals.
+
+The documented TSan gate is the narrowed multi-agent/concurrency run above. A
+full `./WasmJit '~[spec]'` TSan run currently SIGSEGVs before producing a report
+and is **not** presented as green; that remains a separate sanitizer-scope
+follow-up.
 
 ### Traps
 
