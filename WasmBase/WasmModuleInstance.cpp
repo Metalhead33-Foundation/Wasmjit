@@ -168,7 +168,12 @@ Callable* ModuleInstance::callableFromSegmentRef(const Value& ref)
 
 void ModuleInstantiator::applyActiveSegments(ModuleInstance& instance, const Module& module, ModuleInstanceInternals& internals)
 {
-	// ── Data Segments ───────────────────────────────────────────────────────
+	// ── Data Segments (applied after the element segments) ─────────────────
+	// The spec applies active element segments before active data segments, so
+	// an out-of-bounds data segment traps only after the element writes have
+	// happened. Keep the data pass in a callable and invoke it after the
+	// element loop below, which makes the order explicit.
+	const auto applyDataSegments = [&]() {
 	// Each active data segment copies raw bytes into linear memory. Active and
 	// declarative segments are *dropped* once instantiation is done: the spec
 	// makes them behave as empty for a later memory.init/data.drop, which is
@@ -221,6 +226,7 @@ void ModuleInstantiator::applyActiveSegments(ModuleInstance& instance, const Mod
 	// host threads before the instance is published or its start function runs.
 	// The copies above are the specified non-atomic writes.
 	__atomic_thread_fence(__ATOMIC_SEQ_CST);
+	};
 
 	// ── Element segment references ─────────────────────────────────────────
 	// An expression-form segment holds *references*: evaluate each entry once
@@ -328,6 +334,9 @@ void ModuleInstantiator::applyActiveSegments(ModuleInstance& instance, const Mod
 		// An applied active segment is dropped (see the loop comment above).
 		instance.internals.elementSegmentDropped[elemIdx].store(true, std::memory_order_release);
 	}
+
+	// Element writes are complete; run the data pass now, in spec order.
+	applyDataSegments();
 }
 ModuleInstance::ModuleInstance(const Module& module, ImportResolver& resolver,
 		const HostBridge* hostBridge)
@@ -419,8 +428,13 @@ ModuleInstance::~ModuleInstance()
 		ctx.hostBridge->instanceDestroying(ctx.hostBridge->userData, &ctx);
 
 	// Withdraw the range before the storage is freed (embedders may destroy
-	// instances while the process-wide Store lives on).
+	// instances while the process-wide Store lives on). Both arrays are
+	// registered by the instantiator: imports during construction and defined
+	// callables in the backend's declareFunctions(). Withdrawing only the
+	// import range would leave Store::callableAt able to return a pointer into
+	// freed storage after the instance is gone (GC.md G2).
 	store().unregisterCallableRange(internals.importStorage.data());
+	store().unregisterCallableRange(internals.internalCallables.data());
 
 	// Bulk reclamation: every region this instance used is unmapped and the
 	// budget credited, independent of the reference counts (the RC leak

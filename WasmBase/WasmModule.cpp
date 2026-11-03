@@ -6,6 +6,7 @@
 #include "WasmString.hpp"
 #include "WasmValidator.hpp"
 #include <Euphemy/Io/EuphConstBufferDevice.hpp>
+#include <utf8cpp/utf8.h>
 #include <cstddef>
 #include <cstdio>
 #include <iostream>
@@ -18,6 +19,16 @@ namespace WASM {
 typedef Elv::Io::DataStream<Elv::Util::Endian::Little> DWasmStream;
 
 namespace {
+
+// Every core name is a UTF-8 string (`name ::= utf8*`). The readers below
+// only know the length and bytes, so the check lives at the single choke point
+// they all use rather than at each call site (docs/SAFETY.md §2: malformed
+// input is rejected before it is used).
+void requireValidUtf8Name(const std::string& name)
+{
+	if (!utf8::is_valid(name.begin(), name.end()))
+		throw std::runtime_error("malformed UTF-8 encoding");
+}
 
 // A section-scoped view of the module device. The section scanner checks that a
 // declared section fits inside the module, but each section reader also has to
@@ -139,6 +150,64 @@ void validateTypeGroupMember(const Subtype& subtype, uint32_t selfIndex, uint32_
 
 void Module::processSecetions(Elv::Io::Device& file)
 {
+	// Sections are ordered and unique, except custom sections, which may appear
+	// anywhere and any number of times. Enforce that before decoding a single
+	// payload: a duplicate or out-of-order section is malformed even if its
+	// bytes happen to decode (binary.wast's "unexpected content after last
+	// section" cases).
+	const auto sectionRank = [](SectionType type) -> int {
+		switch (type) {
+		case SectionType::Type:      return 1;
+		case SectionType::Import:    return 2;
+		case SectionType::Function:  return 3;
+		case SectionType::Table:     return 4;
+		case SectionType::Memory:    return 5;
+		case SectionType::Tag:       return 6;
+		case SectionType::String:    return 6; // immediately before Global
+		case SectionType::Global:    return 7;
+		case SectionType::Export:    return 8;
+		case SectionType::Start:     return 9;
+		case SectionType::Element:   return 10;
+		case SectionType::DataCount: return 11;
+		case SectionType::Code:      return 12;
+		case SectionType::Data:      return 13;
+		case SectionType::Custom:    return 0;
+		case SectionType::Invalid:   return 0;
+		}
+		return 0;
+	};
+	bool seenSection[15] = {};
+	bool typeSectionExists = false;
+	for (const Section& section : sections)
+		if (section.type == SectionType::Type) {
+			typeSectionExists = true;
+			break;
+		}
+	bool seenType = false;
+	int lastRank = 0;
+	for (const Section& section : sections) {
+		if (section.type == SectionType::Custom)
+			continue;
+		const uint8_t id = static_cast<uint8_t>(section.type);
+		if (id >= 15)
+			continue; // parseBody already rejected an invalid id
+		if (seenSection[id])
+			throw std::runtime_error("unexpected content after last section");
+		seenSection[id] = true;
+		// The type-imports proposal allows one import section *before* the type
+		// section, and it may contain type imports only. Treat that section as
+		// sharing the type section's slot; processImportSection enforces the
+		// "type imports only" half.
+		const bool preTypeImport = section.type == SectionType::Import
+				&& typeSectionExists && !seenType;
+		const int rank = preTypeImport ? 1 : sectionRank(section.type);
+		if (rank < lastRank)
+			throw std::runtime_error("unexpected content after last section");
+		lastRank = rank;
+		if (section.type == SectionType::Type)
+			seenType = true;
+	}
+
 	// Section 14 is positional: at most one, immediately before the global
 	// section or in the slot the global section would occupy. Custom sections
 	// do not participate (docs/proposals/STRINGREF.md STR-2).
@@ -177,6 +246,7 @@ void Module::processSecetions(Elv::Io::Device& file)
 		}
 	}
 
+	bool seenTypeForImport = false;
 	for(const auto& it : sections)
 	{
 		file.seek(it.offset, Elv::Io::SeekOrigin::SET);
@@ -184,8 +254,12 @@ void Module::processSecetions(Elv::Io::Device& file)
 				static_cast<uint64_t>(it.offset) + it.size);
 		switch (it.type) {
 			case SectionType::Custom: processCustomSection(limited, it); break;
-			case SectionType::Type: processTypeSection(limited, it); break;
-			case SectionType::Import: processImportSection(limited, it); break;
+			case SectionType::Type: processTypeSection(limited, it);
+				seenTypeForImport = true; break;
+			case SectionType::Import:
+				processImportSection(limited, it,
+						typeSectionExists && !seenTypeForImport);
+				break;
 			case SectionType::Function: processFunctionSection(limited, it); break;
 			case SectionType::Table: processTableSection(limited, it); break;
 			case SectionType::Memory: processMemorySection(limited, it); break;
@@ -200,6 +274,16 @@ void Module::processSecetions(Elv::Io::Device& file)
 			case SectionType::String: processStringSection(limited, it); break;
 			case SectionType::Invalid: break;
 			default: break;
+		}
+		// A non-custom section's payload is exactly the bytes its decoder
+		// consumes. Extra bytes mean the declared section size was a lie;
+		// reading them as the next section is how a malformed module
+		// desynchronises the decoder (binary.wast's "section size mismatch").
+		if (it.type != SectionType::Custom) {
+			const long expected = static_cast<long>(it.offset)
+					+ static_cast<long>(it.size);
+			if (file.tell() != expected)
+				throw std::runtime_error("section size mismatch");
 		}
 	}
 }
@@ -254,9 +338,20 @@ void Module::processTypeSection(Elv::Io::Device& file, const Section& section)
 
 void Module::processImportSection(Elv::Io::Device& file, const Section& section)
 {
+	processImportSection(file, section, false);
+}
+
+void Module::processImportSection(Elv::Io::Device& file, const Section& section,
+		bool preTypeOnly)
+{
 	DWasmStream wasmStream(file);
 	uint32_t numImports;
 	wasmStream >> Elv::Io::Leb(numImports);
+
+	// An empty import section before the type section is still out of order;
+	// the pre-type slot exists only to carry type imports (TI-1).
+	if (preTypeOnly && numImports == 0)
+		throw std::runtime_error("unexpected content after last section");
 
 	for(uint32_t i = 0; i < numImports; ++i) {
 		// 1. Strings are: [LEB128 length][UTF-8 bytes]
@@ -266,6 +361,12 @@ void Module::processImportSection(Elv::Io::Device& file, const Section& section)
 		// 2. The Kind
 		uint8_t kind;
 		wasmStream >> kind;
+
+		// The one sanctioned ordering relaxation: an import section before the
+		// type section may contain type imports only (TYPE_IMPORTS.md TI-1).
+		if (preTypeOnly && kind != static_cast<uint8_t>(ExternalKind::Type))
+			throw std::runtime_error(
+					"the pre-type import section may contain only type imports");
 
 		// 3. The Type index or Descriptor
 		if (kind == (uint8_t)ExternalKind::Function || kind == 0x20) {
@@ -283,6 +384,7 @@ void Module::processImportSection(Elv::Io::Device& file, const Section& section)
 			TableType table;
 			table.elementType.decode(wasmStream); // Reusing your RefType logic
 			table.limits.decode(wasmStream);
+			table.limits.requireFlagsWithin(0x07u);
 			table.isShared = (table.limits.flags & 0x02) != 0;
 			importOrder.push_back({ExternalKind::Table,
 					static_cast<uint32_t>(importTables.size())});
@@ -414,6 +516,7 @@ void Module::processTableSection(Elv::Io::Device& file, const Section& section)
 			table.elementType.decodeAfterFirstByte(wasmStream, firstByte);
 		}
 		table.limits.decode(wasmStream);      // Reads flags + initial + max
+		table.limits.requireFlagsWithin(0x07u);
 		table.isShared = (table.limits.flags & 0x02) != 0;
 		if (hasInitExpr)
 			table.initExpr = parseInitExpr(wasmStream);
@@ -731,6 +834,7 @@ void Module::processCustomSection(Elv::Io::Device& file, const Section& section)
 		throw std::runtime_error("custom section name out of bounds");
 	std::string customName(nameLength, '\0');
 	file.read(customName.data(), 1, nameLength);
+	requireValidUtf8Name(customName);
 
 	if (customName == "name") {
 		processNameSection(file, section);
@@ -786,6 +890,7 @@ void Module::processNameSection(Elv::Io::Device& file, const Section& section)
 		std::string str(length, '\0');
 		if (length != 0 && stream.device.read(str.data(), 1, length) != length)
 			throw std::runtime_error("malformed module: truncated name");
+		requireValidUtf8Name(str);
 		return str;
 	};
 
@@ -1089,6 +1194,8 @@ void Module::processSubtypes(DWasmStream& stream, uint32_t typeNum, uint32_t num
 				f.storageType.decode(stream);
 				uint8_t mut;
 				stream >> mut;
+				if (mut > 1)
+					throw std::runtime_error("malformed mutability");
 				f.isMutable = (mut == 0x01);
 				s.fields.push_back(f);
 			}
@@ -1098,6 +1205,8 @@ void Module::processSubtypes(DWasmStream& stream, uint32_t typeNum, uint32_t num
 			a.elementType.storageType.decode(stream);
 			uint8_t mut;
 			stream >> mut;
+			if (mut > 1)
+				throw std::runtime_error("malformed mutability");
 			a.elementType.isMutable = (mut == 0x01);
 			st.composite = a;
 		}
@@ -1879,6 +1988,7 @@ std::string Module::readLEB128String(DWasmStream& stream)
 	requireAvailable(stream.device, length, "a name");
 	std::string str(length, '\0');
 	stream.device.read(str.data(),1,length);
+	requireValidUtf8Name(str);
 	return str;
 }
 

@@ -161,9 +161,9 @@ per-milestone done markers, is the authoritative per-item status.
 | [`ABI.md`](docs/ABI.md) | The `VMContext*`-as-arg0 calling convention, the `Callable` layout, store-owned entities, the optional `HostBridge` host boundary, and the embedder guide | Reference (describes shipped behaviour) | `████████████████████` current |
 | [`TYPE_IDENTITY.md`](docs/TYPE_IDENTITY.md) | Module-local type indices → store-scoped `TypeId`: canonicalisation, interning, `rec` groups, the `match` relation | Design note + implementation reference | `███████████████████░` 95% — M0–M7 shipped; M8 (footprint measurement) pending |
 | [`TESTING.md`](docs/TESTING.md) | Building/running the Catch2 suite, the `wasm-tools` spec-suite conversion, the curated `wast_supported.txt` workflow, reading the output | Guide (process) | `████████████████████` current |
-| [`DOCUMENTATION.md`](docs/DOCUMENTATION.md) | Why every header comment is a Doxygen comment, the Qt-style forms (`//!`, `/*!`, `\file`, `\brief`, `\par`), the prose that breaks a Doxygen run, and how the Markdown notes are nested into a tree (`docs/index.md` → `docs/proposals/index.md`, `docs/languages/index.md`) rather than flattened | Policy + guide (process) | `████████████████████` current — every header outside `extern/` converted, 21 + 39 + 16 notes in the tree, `doxygen Doxyfile` warning-free |
+| [`DOCUMENTATION.md`](docs/DOCUMENTATION.md) | Why every header comment is a Doxygen comment, the Qt-style forms (`//!`, `/*!`, `\file`, `\brief`, `\par`), the prose that breaks a Doxygen run, and how the Markdown notes are nested into a tree (`docs/index.md` → `docs/proposals/index.md`, `docs/languages/index.md`) rather than flattened | Policy + guide (process) | `████████████████████` current — every header outside `extern/` converted, 22 + 39 + 16 notes in the tree, `doxygen Doxyfile` warning-free |
 | [`FRESHNESS.md`](docs/FRESHNESS.md) | Keeping the notes in step with the tree: the three kinds of state claim (contract, dated snapshot, history), the one home of each measured fact, the triggers that re-open a §4 when a milestone lands, and the probe that re-measures every number the notes cite | Policy + guide (process) | `████████████████████` current — revision 1 (2026-11-01) re-cut the two engine-seam §4 snapshots and gave every drifted total a date |
-| [`VALIDATION.md`](docs/VALIDATION.md) | The validating front end: what `Module::validate()` checks, the conservative taint policy, measured `assert_invalid` coverage, and the remaining rules | Design + status | `████████████████████` 100 % of negative modules |
+| [`VALIDATION.md`](docs/VALIDATION.md) | The validating front end: what `Module::validate()` checks, the conservative taint policy, measured `assert_invalid` coverage, and the remaining rules | Design + status | `████████████████████` 2,380 / 2,382 curated (the two `tag` known failures); all-scripts strict green except `linking*` |
 | [`WRITING_A_BACKEND.md`](docs/WRITING_A_BACKEND.md) | **The checklist and the walkthrough** for a new code generator: the two seams (`ModuleInstantiator`, `BackendSession`), the four hooks, the twelve ABI obligations (including reference ownership), memory/GC ownership, which helpers to call and which to bring, packaging/registration/capabilities/selection, the SLJIT scaffold as the worked example, and the definition of done | Contract + how-to | `████████████████████` current — revision 2 absorbs the former `BACKEND_WORK_ORDER.md` |
 | [`SAFETY.md`](docs/SAFETY.md) | The safety policies: artifact detection, input-derived allocation bounds, the allocation budget, traps vs `abort`, RAII for locks, and the pitfalls that produced them | Policy + pitfalls | `████████████████████` current |
 | [`THREADSAFETY.md`](docs/THREADSAFETY.md) | Guest-side vs host-side thread safety, the one-instance-per-module target, import/export overlap, C++ mutex/trap caveats, and the responsibilities of the engine, module author and embedder | Policy + reference | `████████████████████` current |
@@ -172,6 +172,7 @@ per-milestone done markers, is the authoritative per-item status.
 | [`SIMD_LIBJIT.md`](docs/SIMD_LIBJIT.md) | The LibJIT-only SIMD decision: `v128` in 16-byte-aligned frame slots, pointer-arg native helpers, Highway 1.4.0 (with the GLM/SLEEF/xsimd/psimd/SIMDe verdicts), the wasm semantics hazards, the four test layers and `SIMD-L0…SIMD-L8` | Design decision | `████████████████████` decided |
 | [`LAYERING.md`](docs/LAYERING.md) | The backend-agnosticism rule for `WasmBase/`: what the core may not name, the contracts it owns that a backend must honour, the vocabulary to use instead, and the check to run | Policy note | `████████████████████` current |
 | [`API_ABI_STABILITY.md`](docs/API_ABI_STABILITY.md) | **The current milestone.** The four gates that declare API/ABI stability, the ten surfaces they freeze, the gap classes (additive / per-backend / upstream-blocked / deferred / heavy-refactor), the "no heavy refactoring" audit, the `LibjitDispatcher` → `master` merge readiness, and the measured verdict per gate | Milestone + proximity study | `████████████████████` **met 2026-10-29** — all four gates pass; `G3` re-checked 2026-10-30 by [`READINESS_AUDIT.md`](docs/READINESS_AUDIT.md) |
+| [`SCOPE.md`](docs/SCOPE.md) | **The canonical gap-versus-boundary record.** The triage rule; the embedder-owned, build-time/text, encoding-blocked and deliberate-deviation tables; the experimental surfaces; and the re-open conditions | Policy note | `████████████████████` current — the three boundary categories the project refuses to conflate with engine gaps |
 | [`EMBEDDING_SURFACE.md`](docs/EMBEDDING_SURFACE.md) | The embedder-facing surface: `WASM::Runtime` (what it owns, and the store-scoping migration, complete), the three header tiers and the umbrella header, the version/soname/symbol-visibility policy, the install layout, and a salvage review of an earlier `JitRuntime`/`JitContext` sketch | Design note + plan | `████████████████████` 100% — `ES-1…ES-7` all done; closes `AAS1`/`AAS2` |
 | [`BACKEND_PLUGIN_ABI.md`](docs/BACKEND_PLUGIN_ABI.md) | Loading code generators from shared libraries behind a narrow C ABI (the Unreal-renderer analogy): the query/descriptor, what may cross the boundary, the twelve plugin rules (including serialized compilation and a re-entrant invoke), the nine hard problems, and why the seam stays C++ for now | Interface + implementation | `████████████████████` 100% — `BP-0…BP-5` done; a real plugin loads by name and every refusal path is tested |
 | [`MULTI_AGENT_FEASIBILITY.md`](docs/MULTI_AGENT_FEASIBILITY.md) | Whether the class-E multi-agent blocker can be demoted: the one-instance-per-module rule and the concurrency scenarios (GPU-style, thread-per-export, async/await, intra-Wasm threads; concurrent compilation rejected), the per-agent state, the `MA-1…MA-9` re-classification (E → B + A), multithreading on LibJIT/SLJIT/AsmJit, and the opt-in embedder hooks mirroring the JS-integration seam | Study + implementation record | `████████████████████` 100% — `MF-1…MF-8` done; `ConcurrencyModel::Agents` is opt-in, `Single` stays the default |
@@ -236,19 +237,24 @@ Reading the estimates:
   design (a JS engine, a Promise/event loop, an ESM loader). The meter shows the
   part the engine can own; it is not a claim that a JavaScript runtime ships.
 
-Most rows that end in "validation" share one blocker, and it is now measured
-rather than assumed: `WASM_SPEC_VALIDATE=1` executes the four negative-module
-families instead of skipping them, and the validator (`docs/VALIDATION.md`)
-rejects **all 2,211** curated `assert_invalid` cases plus all 127
-`assert_unlinkable` ones and all 27 `assert_uninstantiable` ones — **2,382 of
-2,382** binary negative commands. The strict run is fully green; the default
-suite measured **17,090 assertions in 551 test cases** on 2026-11-01 (`8c87f5f`,
-`build/Desktop-Debug`) — re-run `./Test/WasmJit` for the current line. All 17
-curated `assert_malformed` cases are rejected too, including the strict LEB128
-cases;
-the remaining malformed cases are *text-format* (946 commands across all kinds)
-and need a text parser, not a validator. See
-[`docs/TESTING.md`](docs/TESTING.md#measuring-the-negative-module-commands).
+Most rows that end in "validation" share one measurable front end:
+`WASM_SPEC_VALIDATE=1` executes the four negative-module families instead of
+skipping them. **Snapshot (2026-11-03, working tree on `cf2c6cf`):** the
+**curated** strict run rejects **2,380 of 2,382** binary negative commands; the
+two misses are `tag.wast`'s non-empty tag result cases, recorded in
+[`Test/spec_known_failures.txt`](Test/spec_known_failures.txt) because they
+conflict with the stack-switching control-tag rule
+([`SCOPE.md`](docs/SCOPE.md) §6). The default suite measured **17,417
+assertions in 585 test cases** — re-run `./Test/WasmJit` for the current line.
+
+The all-scripts strict sweep (`WASM_SPEC_VALIDATE=1 ./Test/WasmJit '[spec]'`)
+now reports **254 of 257 scripts green**. The three remaining scripts are
+`linking`, `linking0` and `linking3`: they require a failed instantiation to
+retain the failed module's function instances, which is the
+`StoreOwnedFunction` boundary recorded in [`SCOPE.md`](docs/SCOPE.md) §6, not a
+decoder or validator gap. `comments` (text format) and `instance`
+(module-linking) now skip their dependent commands instead of failing them, and
+`tag`'s two cases are the recorded conflict above.
 
 To refresh a number, re-run the row's script from `build/Desktop-Debug/Test`:
 
@@ -278,7 +284,7 @@ library per backend plus the test executable.
 | `extern/` | Submodules: `MhLib` (`Elvavena` I/O + `Euphemy`) and the upstream `WasmTestsuite` |
 | `build/` | Shadow build output — **all build artefacts go here, never in the source tree** |
 
-## Status (snapshot 2026-11-01)
+## Status (snapshot 2026-11-03)
 
 The repository builds a set of shared libraries plus a console test executable
 through qmake:
@@ -420,6 +426,9 @@ work in progress:
   [`backend walkthrough`](docs/WRITING_A_BACKEND.md)); Asmjit has an initial i32 execution slice, and SLJIT is not started
 - the Catch2 executable is still a test harness, not the embedding interface;
   the supported embedding interface is the installed `wasmjit/wasmjit.hpp`
+- before reporting a missing feature as an engine gap, check
+  [`docs/SCOPE.md`](docs/SCOPE.md): the embedder-owned, build-time/text and
+  upstream-encoding-blocked surfaces are boundaries, not gaps
 
 ## Intent
 

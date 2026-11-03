@@ -20,6 +20,14 @@ Preamble Artifact::readPreamble(Elv::Io::Device& file)
 	stream >> magic >> versionLow >> layer;
 	if (magic != 0x6D736100)
 		throw std::runtime_error("Invalid WASM module!\nMismatch in the magic number!");
+	// The core-module binary version is 1. Component preambles reuse the same
+	// eight bytes with layer 1 and their own version; Artifact::parse checks
+	// that version separately. A core module with any other version is a
+	// malformed artifact, not a module this engine can decode
+	// (docs/SCOPE.md §2: binary-encoded engine-owned input is a gap when it is
+	// accepted without being understood).
+	if (layer == 0 && versionLow != 1)
+		throw std::runtime_error("unknown binary version " + std::to_string(versionLow));
 	return Preamble{versionLow, layer};
 }
 

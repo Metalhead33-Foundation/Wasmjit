@@ -304,6 +304,18 @@ private:
 	void dispatchArrayNewMemory(TypeIdx dst, MemIdx src) override; //!< Validate the stack effect of this opcode.
 	void dispatchArrayNewTable(TypeIdx dst, TableIdx src) override; //!< Validate the stack effect of this opcode.
 	//! Custom Descriptors (0xFB 32..38).
+	void dispatchStructGet(TypeIdx arg1, uint32_t arg2) override;
+	void dispatchStructGetS(TypeIdx arg1, uint32_t arg2) override; //!< Validate the stack effect of this opcode.
+	void dispatchStructGetU(TypeIdx arg1, uint32_t arg2) override; //!< Validate the stack effect of this opcode.
+	void dispatchStructSet(TypeIdx arg1, uint32_t arg2) override; //!< Validate the stack effect of this opcode.
+	void dispatchArrayGet(TypeIdx arg) override; //!< Validate the stack effect of this opcode.
+	void dispatchArrayGetS(TypeIdx arg) override; //!< Validate the stack effect of this opcode.
+	void dispatchArrayGetU(TypeIdx arg) override; //!< Validate the stack effect of this opcode.
+	void dispatchArraySet(TypeIdx arg) override; //!< Validate the stack effect of this opcode.
+	void dispatchArrayFill(TypeIdx arg) override; //!< Validate the stack effect of this opcode.
+	void dispatchArrayCopy(TypeIdx arg1, TypeIdx arg2) override; //!< Validate the stack effect of this opcode.
+	void dispatchArrayInitData(TypeIdx arg1, uint32_t arg2) override; //!< Validate the stack effect of this opcode.
+	void dispatchArrayInitElem(TypeIdx arg1, uint32_t arg2) override; //!< Validate the stack effect of this opcode.
 	void dispatchStructNew(TypeIdx arg) override;
 	void dispatchStructNewDefault(TypeIdx arg) override; //!< Validate the stack effect of this opcode.
 	void dispatchStructNewDesc(TypeIdx arg) override; //!< Validate the stack effect of this opcode.

@@ -639,12 +639,17 @@ std::optional<ValueType> Validator::popAny()
 void Validator::popExpect(ValueTypeCode code)
 {
 	const auto actual = popAny();
-	if (actual && actual->opcode != code)
+	if (actual && actual->opcode != code && actual->opcode != ValueTypeCode::Void)
 		fail("type mismatch: unexpected operand type");
 }
 
 bool Validator::assignable(const ValueType& actual, const ValueType& expected) const
 {
+	// `Void` is the validator's bottom marker for a value produced after
+	// `unreachable`; it is assignable to every type. Real block results never
+	// put `Void` on the operand stack, so this cannot mask a live mismatch.
+	if (actual.opcode == ValueTypeCode::Void)
+		return true;
 	if (actual.opcode == expected.opcode && actual.heapType == expected.heapType
 			&& actual.isExact == expected.isExact)
 		return true;
@@ -1497,7 +1502,7 @@ void Validator::validateGlobalInit(const Global& global, std::size_t index)
 				push(ValueTypeCode::StringRef);
 				break;
 			}
-			case 0: case 1: case 6: case 7: case 8: case 9: case 10:
+			case 0: case 1: case 6: case 7: case 8:
 			case 26: case 27: case 28:
 			case 32: case 33: case 34: // Custom Descriptors constant forms
 				return; // modelled by evalConstantExpr; conservatively accepted
@@ -1628,7 +1633,7 @@ std::optional<ValueType> Validator::validateConstExpr(const std::vector<uint8_t>
 				push(ValueType{ValueTypeCode::StringRef, -1});
 				break;
 			}
-			case 0: case 1: case 6: case 7: case 8: case 9: case 10:
+			case 0: case 1: case 6: case 7: case 8:
 			case 26: case 27: case 28:
 			case 32: case 33: case 34: // Custom Descriptors constant forms
 				return std::nullopt;
@@ -1760,6 +1765,12 @@ void Validator::validateFunctionBody(const FunctionBody& body, std::size_t index
 	} catch (const std::exception& error) {
 		fail(error.what());
 	}
+	// A valid body ends with the `end` that closes its function frame. A body
+	// that simply runs out of bytes leaves that frame on the stack; accepting
+	// it would make a truncated body look like a complete function
+	// (binary.wast's "END opcode expected" cases).
+	if (!controlStack.empty())
+		fail("END opcode expected");
 	currentBody = kNoBody;
 }
 
@@ -2780,23 +2791,37 @@ void Validator::dispatchBrTable(std::vector<LabelIdx>&& labels, LabelIdx default
 	popExpect(ValueTypeCode::I32);
 	if (defaultLabel >= controlStack.size())
 		fail("unknown label " + std::to_string(defaultLabel));
-	if (frame().unreachable || typeTainted) {
-		// The operand stack is polymorphic after `unreachable`, so the target
-		// result types need not agree (unreached-valid.wast's `meet-bottom`).
-		// Label indices are still checked.
-		for (LabelIdx label : labels) {
-			if (label >= controlStack.size())
-				fail("unknown label " + std::to_string(label));
-		}
-		setUnreachable();
-		return;
-	}
 	const auto typesFor = [this](LabelIdx label) -> const std::vector<ValueType>& {
 		const ControlFrame& target = controlStack[controlStack.size() - 1 - label];
 		return target.isLoop ? target.startTypes : target.endTypes;
 	};
 	const std::vector<ValueType> defaultTypes = typesFor(defaultLabel);
 	const std::size_t arity = defaultTypes.size();
+	if (frame().unreachable || typeTainted) {
+		// The operand stack is polymorphic after `unreachable`, so the target
+		// result *types* need not agree (unreached-valid.wast's `meet-bottom`).
+		// The arities must still agree, and a value that was concretely pushed
+		// above the frame height must fit the default target
+		// (unreached-invalid.wast's two br_table cases).
+		const std::size_t height = frame().height;
+		const std::size_t available = typeStack.size() > height
+				? typeStack.size() - height : 0;
+		for (LabelIdx label : labels) {
+			if (label >= controlStack.size())
+				fail("unknown label " + std::to_string(label));
+			if (typesFor(label).size() != arity)
+				fail("type mismatch: br_table target arity differs");
+		}
+		for (std::size_t i = 0; i < arity && i < available; ++i) {
+			const std::size_t checked = std::min(available, arity);
+			const std::size_t valueBase = height + (available - checked);
+			const std::size_t typeBase = arity - checked;
+			if (!assignable(typeStack[valueBase + i], defaultTypes[typeBase + i]))
+				fail("type mismatch: br_table target type differs");
+		}
+		setUnreachable();
+		return;
+	}
 	if (typeStack.size() < arity)
 		fail("type mismatch: not enough operands for br_table");
 	// The values on the stack must be assignable to *every* target type. The
@@ -2832,8 +2857,13 @@ void Validator::dispatchSelect()
 {
 	popExpect(ValueTypeCode::I32);
 	const auto type = popAny();
-	if (!type)
+	if (!type || type->opcode == ValueTypeCode::Void) {
+		// The operands are bottom (dead code). `select` still has a result, so
+		// record one bottom value; leaving it unconsumed is then caught by the
+		// frame-height check (unreached-invalid.wast's `select` cases).
+		pushValue(ValueType{ValueTypeCode::Void, -1});
 		return;
+	}
 	// The untyped form is only defined for numeric/vector operands; a reference
 	// needs the explicit `(result t)` form.
 	switch (type->opcode) {
@@ -2975,6 +3005,15 @@ ValueType sharedStorageValueType(const CanonStorageType& storage)
 	if (storage.isPacked)
 		return ValueType{ValueTypeCode::I32, -1};
 	return ValueType{storage.value.opcode, -1};
+}
+
+// The operand type for a struct field or array element: packed storage is
+// carried as i32, and a reference preserves its heap type and nullability.
+ValueType storageOperandType(const Module& module, const CanonStorageType& storage)
+{
+	if (storage.isPacked)
+		return ValueType{ValueTypeCode::I32, -1};
+	return module.storageTypeFromCanon(storage).val;
 }
 } // namespace
 
@@ -3196,6 +3235,153 @@ void Validator::dispatchArrayAtomicRmwCmpxchg(uint8_t ordering, TypeIdx arg)
 	pushValue(t);
 }
 
+
+// ── GC aggregate typing (docs/VALIDATION.md "Next") ────────────────────────
+// The non-atomic aggregate instructions used to set `typeTainted` and accept
+// the rest of the body. These rules type the operand stack and enforce the
+// mutability and element-type constraints the spec checks.
+
+void Validator::dispatchStructGet(TypeIdx type, uint32_t fieldIndex)
+{
+	const CanonFieldType& field = requireStructField(type, fieldIndex);
+	if (field.storage.isPacked)
+		fail("struct.get requires struct.get_s or struct.get_u for a packed field");
+	popExpect(ValueType{ValueTypeCode::RefNull, static_cast<int32_t>(type)});
+	pushValue(storageOperandType(module, field.storage));
+}
+
+void Validator::dispatchStructGetS(TypeIdx type, uint32_t fieldIndex)
+{
+	const CanonFieldType& field = requireStructField(type, fieldIndex);
+	if (!field.storage.isPacked)
+		fail("struct.get_s requires a packed field");
+	popExpect(ValueType{ValueTypeCode::RefNull, static_cast<int32_t>(type)});
+	pushValue(ValueType{ValueTypeCode::I32, -1});
+}
+
+void Validator::dispatchStructGetU(TypeIdx type, uint32_t fieldIndex)
+{
+	const CanonFieldType& field = requireStructField(type, fieldIndex);
+	if (!field.storage.isPacked)
+		fail("struct.get_u requires a packed field");
+	popExpect(ValueType{ValueTypeCode::RefNull, static_cast<int32_t>(type)});
+	pushValue(ValueType{ValueTypeCode::I32, -1});
+}
+
+void Validator::dispatchStructSet(TypeIdx type, uint32_t fieldIndex)
+{
+	const CanonFieldType& field = requireStructField(type, fieldIndex);
+	if (!field.isMutable)
+		fail("struct.set of an immutable field");
+	popExpect(storageOperandType(module, field.storage));
+	popExpect(ValueType{ValueTypeCode::RefNull, static_cast<int32_t>(type)});
+}
+
+void Validator::dispatchArrayGet(TypeIdx arg)
+{
+	const CoreTypeView view = requireArrayType(arg, "array.get");
+	const CanonFieldType& element = view.arrayElement();
+	if (element.storage.isPacked)
+		fail("array.get requires array.get_s or array.get_u for a packed array");
+	popExpect(ValueTypeCode::I32);
+	popExpect(ValueType{ValueTypeCode::RefNull, static_cast<int32_t>(arg)});
+	pushValue(storageOperandType(module, element.storage));
+}
+
+void Validator::dispatchArrayGetS(TypeIdx arg)
+{
+	const CoreTypeView view = requireArrayType(arg, "array.get_s");
+	if (!view.arrayElement().storage.isPacked)
+		fail("array.get_s requires a packed array");
+	popExpect(ValueTypeCode::I32);
+	popExpect(ValueType{ValueTypeCode::RefNull, static_cast<int32_t>(arg)});
+	pushValue(ValueType{ValueTypeCode::I32, -1});
+}
+
+void Validator::dispatchArrayGetU(TypeIdx arg)
+{
+	const CoreTypeView view = requireArrayType(arg, "array.get_u");
+	if (!view.arrayElement().storage.isPacked)
+		fail("array.get_u requires a packed array");
+	popExpect(ValueTypeCode::I32);
+	popExpect(ValueType{ValueTypeCode::RefNull, static_cast<int32_t>(arg)});
+	pushValue(ValueType{ValueTypeCode::I32, -1});
+}
+
+void Validator::dispatchArraySet(TypeIdx arg)
+{
+	const CoreTypeView view = requireArrayType(arg, "array.set");
+	const CanonFieldType& element = view.arrayElement();
+	if (!element.isMutable)
+		fail("array.set of an immutable array");
+	popExpect(storageOperandType(module, element.storage));
+	popExpect(ValueTypeCode::I32);
+	popExpect(ValueType{ValueTypeCode::RefNull, static_cast<int32_t>(arg)});
+}
+
+void Validator::dispatchArrayFill(TypeIdx arg)
+{
+	const CoreTypeView view = requireArrayType(arg, "array.fill");
+	const CanonFieldType& element = view.arrayElement();
+	if (!element.isMutable)
+		fail("array.fill of an immutable array");
+	popExpect(ValueTypeCode::I32); // length
+	popExpect(storageOperandType(module, element.storage));
+	popExpect(ValueTypeCode::I32); // offset
+	popExpect(ValueType{ValueTypeCode::RefNull, static_cast<int32_t>(arg)});
+}
+
+void Validator::dispatchArrayCopy(TypeIdx dst, TypeIdx src)
+{
+	const CoreTypeView dstView = requireArrayType(dst, "array.copy");
+	const CoreTypeView srcView = requireArrayType(src, "array.copy");
+	if (!dstView.arrayElement().isMutable)
+		fail("array.copy into an immutable array");
+	if (!storageAssignable(srcView.arrayElement().storage,
+			dstView.arrayElement().storage))
+		fail("array.copy: source element type is not a subtype of the destination");
+	popExpect(ValueTypeCode::I32); // length
+	popExpect(ValueTypeCode::I32); // source offset
+	popExpect(ValueType{ValueTypeCode::RefNull, static_cast<int32_t>(src)});
+	popExpect(ValueTypeCode::I32); // destination offset
+	popExpect(ValueType{ValueTypeCode::RefNull, static_cast<int32_t>(dst)});
+}
+
+void Validator::dispatchArrayInitData(TypeIdx arg, uint32_t dataIdx)
+{
+	const CoreTypeView view = requireArrayType(arg, "array.init_data");
+	const CanonFieldType& element = view.arrayElement();
+	if (!element.isMutable)
+		fail("array.init_data into an immutable array");
+	requireDataIndex(dataIdx);
+	if (!element.storage.isPacked
+			&& isReferenceType(element.storage.value.opcode))
+		fail("array.init_data requires a numeric array");
+	popExpect(ValueTypeCode::I32); // length
+	popExpect(ValueTypeCode::I32); // source offset
+	popExpect(ValueTypeCode::I32); // destination offset
+	popExpect(ValueType{ValueTypeCode::RefNull, static_cast<int32_t>(arg)});
+}
+
+void Validator::dispatchArrayInitElem(TypeIdx arg, uint32_t elemIdx)
+{
+	const CoreTypeView view = requireArrayType(arg, "array.init_elem");
+	const CanonFieldType& element = view.arrayElement();
+	if (!element.isMutable)
+		fail("array.init_elem into an immutable array");
+	requireElementIndex(elemIdx);
+	if (element.storage.isPacked
+			|| !isReferenceType(element.storage.value.opcode))
+		fail("array.init_elem requires a reference array");
+	const ElementSegment& segment = module.elementSegments[elemIdx];
+	const StorageType arrayElement = module.storageTypeFromCanon(element.storage);
+	if (!assignable(segment.elemType, arrayElement.val))
+		fail("array.init_elem: element type mismatch");
+	popExpect(ValueTypeCode::I32); // length
+	popExpect(ValueTypeCode::I32); // source offset
+	popExpect(ValueTypeCode::I32); // destination offset
+	popExpect(ValueType{ValueTypeCode::RefNull, static_cast<int32_t>(arg)});
+}
 
 // SIMD bitwise / const / bitmask / splat typing.
 void Validator::dispatchV128Const(std::span<uint8_t>) { pushValue(ValueType{ValueTypeCode::V128, -1}); }

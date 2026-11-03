@@ -300,7 +300,7 @@ a flat tree is. The hierarchy is therefore built by three index pages:
 
 | Index page | Id | Children |
 |---|---|---|
-| [`index.md`](index.md) | `docs_index` | the 21 notes in `docs/`, `proposals` **and** `languages` |
+| [`index.md`](index.md) | `docs_index` | the 22 notes in `docs/`, `proposals` **and** `languages` |
 | [`proposals/index.md`](proposals/index.md) | `proposals_index` | the 38 proposal notes |
 | [`languages/index.md`](languages/index.md) | `languages_index` | the 16 language notes (the `LF-1` set and the `LF-2` reports) |
 
@@ -318,7 +318,7 @@ which produces:
 WasmJit            (README.md, the main page)
 ├── Direction, Feature completeness, …   (the README's own sections)
 └── docs                                 (docs/index.md)
-    ├── ABI, API/ABI stability, …        (21 notes, each with its own sections)
+    ├── ABI, API/ABI stability, …        (22 notes, each with its own sections)
     ├── languages                        (docs/languages/index.md)
     │   └── Triage, Clustering, Charters, Evidence, LF-2 …   (16 study notes)
     └── proposals                        (docs/proposals/index.md)

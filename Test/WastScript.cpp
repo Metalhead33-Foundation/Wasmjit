@@ -13,6 +13,7 @@
 #include <sstream>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -170,6 +171,12 @@ ScriptCommand commandFromJson(const Json& json)
 	command.moduleType = stringOr(json, "module_type");
 	command.text = stringOr(json, "text");
 	command.as = stringOr(json, "as");
+	// The module-linking `module_instance` command names its instance and its
+	// definition with different keys than an action does.
+	if (command.type == "module_instance") {
+		command.name = stringOr(json, "instance");
+		command.action.module = stringOr(json, "module");
+	}
 
 	if (json.is_object()) {
 		const auto actionIt = json.find("action");
@@ -577,6 +584,14 @@ private:
 	WASM::ModuleInstance* lastInstance = nullptr;
 	WASM::ComponentRuntime* lastComponent = nullptr;
 	bool lastWasComponent = false;
+	// A text-format module, or a module that depends on an unsupported command,
+	// leaves the last module unavailable. Dependent actions then skip with the
+	// same reason instead of failing as if the engine had mis-executed them.
+	bool lastModuleUnavailable = false;
+	std::string lastModuleUnavailableReason;
+	// Instances named by an unsupported `module_instance` command. A later
+	// `register`/`invoke` that names one is a skip, not an unknown module.
+	std::unordered_set<std::string> unavailableInstances;
 
 	ScriptReport report;
 
@@ -824,6 +839,10 @@ void ScriptRunner::skip(const std::string& reason)
 WASM::ModuleInstance* ScriptRunner::instanceFor(const std::string& name, int line)
 {
 	if (!name.empty()) {
+		if (unavailableInstances.count(name) != 0) {
+			skip("module-linking proposal: module_instance");
+			return nullptr;
+		}
 		const auto it = namedInstances.find(name);
 		if (it == namedInstances.end()) {
 			fail(line, "action refers to unknown module '" + name + "'");
@@ -832,6 +851,10 @@ WASM::ModuleInstance* ScriptRunner::instanceFor(const std::string& name, int lin
 		return it->second;
 	}
 
+	if (lastModuleUnavailable) {
+		skip(lastModuleUnavailableReason);
+		return nullptr;
+	}
 	if (lastInstance == nullptr) {
 		fail(line, "no module has been instantiated yet");
 		return nullptr;
@@ -953,6 +976,10 @@ void ScriptRunner::runCommand(const ScriptCommand& command)
 		return;
 	}
 	if (command.type == "module_instance") {
+		if (!command.name.empty())
+			unavailableInstances.insert(command.name);
+		if (!command.action.module.empty())
+			unavailableInstances.insert(command.action.module);
 		skip("module-linking proposal: module_instance");
 		return;
 	}
@@ -967,7 +994,10 @@ void ScriptRunner::runCommand(const ScriptCommand& command)
 void ScriptRunner::onModule(const ScriptCommand& command)
 {
 	if (command.moduleType != "binary") {
-		skip("text-format module '" + command.filename + "' (only binary modules can be loaded)");
+		lastModuleUnavailable = true;
+		lastModuleUnavailableReason = "text-format module '" + command.filename
+				+ "' (only binary modules can be loaded)";
+		skip(lastModuleUnavailableReason);
 		return;
 	}
 
@@ -1029,6 +1059,17 @@ void ScriptRunner::onModule(const ScriptCommand& command)
 	try {
 		instance = moduleCompiler.instantiate(*modules.back(), registry);
 	} catch (const std::exception& error) {
+		// A module that imports an instance named by an unsupported
+		// `module_instance` command is dependent on that unsupported command,
+		// not evidence of an engine failure. Skip it and the actions after it.
+		if (!unavailableInstances.empty()
+				&& std::string(error.what()).find("Unresolved import") != std::string::npos) {
+			lastModuleUnavailable = true;
+			lastModuleUnavailableReason =
+					"module depends on an unsupported module_instance";
+			skip(lastModuleUnavailableReason);
+			return;
+		}
 		fail(command.line, "instantiation of '" + command.filename + "' failed: " + error.what());
 		return;
 	} catch (...) {
@@ -1045,6 +1086,8 @@ void ScriptRunner::onModule(const ScriptCommand& command)
 	instances.push_back(std::move(instance));
 	lastInstance = raw;
 	lastWasComponent = false;
+	lastModuleUnavailable = false;
+	lastModuleUnavailableReason.clear();
 
 	if (!command.name.empty())
 		namedInstances[command.name] = raw;
@@ -1553,7 +1596,26 @@ void ScriptRunner::onAssertTrap(const ScriptCommand& command)
 		// for the wrong reason can no longer satisfy assert_trap. The engine's
 		// free-text message is reported on a mismatch to help diagnose it.
 		const std::string got = WASM::trapKindName(lastTrapKind);
-		if (command.text.empty() || command.text == got) {
+		// The spec's expected text may carry a numeric suffix the kind does
+		// not: `uninitialized element 2` versus the kind's
+		// `uninitialized element`. Accept that exact shape, but not a
+		// different kind that merely shares a prefix (SAFETY.md §2.4: the
+		// *reason* is what is checked).
+		const auto matchesKindWithIndex = [](const std::string& expected,
+				const std::string& kind) {
+			if (expected.size() <= kind.size()
+					|| expected.compare(0, kind.size(), kind) != 0)
+				return false;
+			const std::string suffix = expected.substr(kind.size());
+			if (suffix.empty() || suffix[0] != ' ')
+				return false;
+			for (std::size_t i = 1; i < suffix.size(); ++i)
+				if (suffix[i] < '0' || suffix[i] > '9')
+					return false;
+			return true;
+		};
+		if (command.text.empty() || command.text == got
+				|| matchesKindWithIndex(command.text, got)) {
 			pass();
 			return;
 		}

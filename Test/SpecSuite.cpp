@@ -40,6 +40,10 @@ namespace {
 // without being part of the default run. See docs/TESTING.md for how to refresh
 // the list.
 const char* const kSupportedScriptsFile = "wast_supported.txt";
+// Irreducible proposal conflicts recorded per script/line. A known failure is
+// still printed by reportOutcome(); it simply does not fail the gate. See
+// docs/SCOPE.md §6 for the reasons a line may be here.
+const char* const kKnownFailuresFile = "spec_known_failures.txt";
 
 std::string readFile(const std::filesystem::path& path)
 {
@@ -78,6 +82,54 @@ std::vector<std::string> readNameList(const std::filesystem::path& path)
 			names.push_back(line);
 	}
 	return names;
+}
+
+// A known-failure entry is `<script>: <line>`. Blank lines and `#` comments are
+// ignored. The line is the source line of the failing command, exactly as the
+// child reports it.
+struct KnownFailure {
+	std::string script;
+	int line = 0;
+};
+
+std::vector<KnownFailure> loadKnownFailures()
+{
+	std::vector<KnownFailure> entries;
+	std::ifstream stream(std::filesystem::path(WASM_TESTSUITE_SOURCE_DIR)
+			/ kKnownFailuresFile);
+	if (!stream)
+		return entries;
+
+	std::string line;
+	while (std::getline(stream, line)) {
+		const std::size_t comment = line.find('#');
+		if (comment != std::string::npos)
+			line.erase(comment);
+
+		const std::size_t colon = line.find(':');
+		if (colon == std::string::npos)
+			continue;
+
+		std::string script = line.substr(0, colon);
+		while (!script.empty() && std::isspace(static_cast<unsigned char>(script.back())))
+			script.pop_back();
+		while (!script.empty() && std::isspace(static_cast<unsigned char>(script.front())))
+			script.erase(script.begin());
+
+		const int number = std::atoi(line.c_str() + colon + 1);
+		if (!script.empty() && number > 0)
+			entries.push_back(KnownFailure{script, number});
+	}
+	return entries;
+}
+
+bool isKnownFailure(const std::string& script, int line,
+		const std::vector<KnownFailure>& entries)
+{
+	return std::any_of(entries.begin(), entries.end(),
+			[&](const KnownFailure& entry) {
+				return entry.script == script && entry.line == line;
+			});
 }
 
 std::vector<std::string> scriptsFromEnvironment()
@@ -388,6 +440,7 @@ void runOneScript(const std::string& name)
 	REQUIRE_NOTHROW(script = Spec::Script::parse(json));
 
 	const IsolatedRun outcome = runIsolated(script, directory, scriptTimeout());
+	const std::vector<KnownFailure> known = loadKnownFailures();
 
 	// The detailed report always goes to stderr; the Catch2 result below is what
 	// makes a bad outcome show up in the run summary.
@@ -406,7 +459,28 @@ void runOneScript(const std::string& name)
 	} else if (!outcome.reported) {
 		FAIL("produced no report (exit code " + std::to_string(outcome.exitCode) + ")");
 	} else if (outcome.report.failed != 0) {
-		std::string message = std::to_string(outcome.report.failed) + " command(s) failed";
+		// A failure recorded in `spec_known_failures.txt` is an accepted
+		// proposal conflict, not a regression. It must still occur (matched !=
+		// 0) and every other failure must be unexplained; a script whose
+		// failure list is capped cannot be fully excused.
+		std::size_t unexplained = outcome.report.failed;
+		std::size_t matched = 0;
+		for (const std::string& failure : outcome.report.failures) {
+			if (failure.rfind("line ", 0) != 0)
+				continue;
+			const int line = std::atoi(failure.c_str() + 5);
+			if (isKnownFailure(name, line, known)) {
+				++matched;
+				--unexplained;
+			}
+		}
+		if (unexplained == 0 && matched != 0) {
+			std::fprintf(stderr,
+					"[spec] %s: %zu known failure(s) ignored (Test/spec_known_failures.txt)\n",
+					name.c_str(), matched);
+			return;
+		}
+		std::string message = std::to_string(unexplained) + " command(s) failed";
 		if (!outcome.report.failures.empty())
 			message += "; first: " + outcome.report.failures.front();
 		FAIL(message);

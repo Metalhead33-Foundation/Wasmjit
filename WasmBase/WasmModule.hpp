@@ -148,7 +148,12 @@ private:
 	//! Parses the type section and interns its recursive groups.
 	void processTypeSection(Elv::Io::Device& file, const Section& section);
 	//! Parses the import section into the per-kind import vectors.
+	//! The original two-argument entry point is kept as an exported symbol (the
+	//! class is part of the frozen ABI); it forwards to the pre-type-aware form
+	//! with `preTypeOnly = false`.
 	void processImportSection(Elv::Io::Device& file, const Section& section);
+	void processImportSection(Elv::Io::Device& file, const Section& section,
+			bool preTypeOnly);
 	//! Parses the function section (the type index of each defined function).
 	void processFunctionSection(Elv::Io::Device& file, const Section& section);
 	//! Parses the table section.

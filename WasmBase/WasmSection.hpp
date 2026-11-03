@@ -44,7 +44,15 @@ const char* getSectionTypeName(SectionType sectType);
 template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& operator>>(Elv::Io::DataStream<E,I>& left, SectionType& right) {
 	uint8_t tmp;
 	left >> tmp;
-	right = static_cast<SectionType>(tmp);
+	//! Ids 0..14 are the ones this engine knows: the core sections, the tag and
+	//! data-count sections, and section 14 which STRINGREF reserves. Anything
+	//! else is a malformed section id, not an unknown section to skip: the
+	//! scanner must not invent a length for bytes it cannot name
+	//! (docs/SCOPE.md §2; STRINGREF.md STR1 records the 14 collision).
+	if (tmp > static_cast<uint8_t>(SectionType::String))
+		right = SectionType::Invalid;
+	else
+		right = static_cast<SectionType>(tmp);
 	return left;
 }
 /** \brief Writes a one-byte section identifier to a data stream. \tparam E Stream byte order. \tparam I Device type. \param left Stream to write to. \param right Section identifier to encode. \return Reference to the output stream. */

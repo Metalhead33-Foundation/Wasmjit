@@ -1,8 +1,12 @@
 # Validation {#doc_validation}
 
-Status: design + status note, revision 2 (2026-11-01: **absorbs
-`UNMODELLED_VALUE_TYPES.md`** — the rule it established is a validation rule, so
-it now lives here; the full crash investigation is preserved in git history).
+Status: design + status note, revision 3 (2026-11-03: the decoder sweep added
+UTF-8 names, the core version check, section order/size, limits flags and
+mutability; the GC aggregate and unreachable `select`/`br_table` rules landed,
+and the all-scripts sweep now fails only the `linking*` store-lifetime cases).
+Revision 2 (2026-11-01) absorbed `UNMODELLED_VALUE_TYPES.md` — the rule it
+established is a validation rule, so it now lives here; the full crash
+investigation is preserved in git history.
 Audience: anyone touching the validating front end, or adding a value type.
 
 `WasmBase/WasmValidator.cpp` is the validating front end. `Module::fromFile`
@@ -118,26 +122,39 @@ content here.
 
 ## Measured coverage
 
-`WASM_SPEC_VALIDATE=1` on the curated set (2026-10-18):
+`WASM_SPEC_VALIDATE=1` on the curated set (**snapshot 2026-11-03, working tree
+on `cf2c6cf`**):
 
 | Kind | Binary cases | Handled | Accepted |
 | --- | ---: | ---: | ---: |
-| `assert_invalid` | 2211 | **2211** rejected | 0 |
+| `assert_invalid` | 2211 | **2209** rejected | 2 (`tag.wast` known failure) |
 | `assert_malformed` | 17 | **17** rejected | 0 |
 | `assert_unlinkable` | 127 | **127** rejected | 0 |
 | `assert_uninstantiable` | 27 | **27** (26 rejected + 1 start trap) | 0 |
-| **total** | **2382** | **2382** | **0** |
+| **total** | **2382** | **2380** | **2 known** |
+
+The two accepted modules are `tag.wast`'s `(tag (result i32))` cases. They are
+the exception proposal's stricter rule; the engine accepts result-bearing tags
+as stack-switching control tags (`STACK_SWITCHING.md` SS-2), so the conflict is
+recorded in `Test/spec_known_failures.txt` and [`SCOPE.md`](SCOPE.md) §6 rather
+than hidden.
+
+The **all-scripts** sweep is the wider measure, because `[spec]` also runs the
+hidden scripts. At the same snapshot it reports **254 of 257 scripts green**
+(`test cases: 257 | 254 passed | 3 failed`). The three failures are `linking`,
+`linking0` and `linking3`: they require a failed instantiation to retain the
+failed module's function instances, the `StoreOwnedFunction` boundary in
+[`SCOPE.md`](SCOPE.md) §6. The decoder/validator cases the sweep used to expose
+are green: `binary` (127 malformed cases), the three `utf8-*` scripts (176 each),
+`binary-gc`, `binary-leb128`, `struct`/`array`/`array_*` (16 invalid modules) and
+`unreached-invalid` (121 cases). `comments` (text format) and `instance`
+(module-linking) skip their dependent commands; 946 text-format commands remain
+skipped because the loader is binary-only.
 
 The default suite is green; its *current* tally is owned by
 [`TESTING.md`](TESTING.md) (and [`FRESHNESS.md`](FRESHNESS.md) §8 prints it), not
-repeated here. The curated list holds 193 of the 257 scripts, 61 of them
-re-curated when the validator landed, plus `start.wast`. The
-strict run is **fully green** as well: every one of the 2,382 binary negative
-commands is handled, including all 17 `assert_malformed` cases and the strict
-LEB128 width/overflow cases. All 27 `assert_uninstantiable` cases pass: one
-traps in a start function (`start.wast`), the other 26 fail instantiation with
-a caught error (`elem`/`data` out-of-bounds segments). 946 text-format commands
-remain skipped because the loader is binary-only.
+repeated here. The curated list holds 189 of the 257 scripts, 61 of them
+re-curated when the validator landed, plus `start.wast`.
 
 The `atomic.wait`-on-unshared check is deliberately **not** enforced: the
 curated `atomic.wast` treats it as valid (`atomic.notify` likewise), so `T5`
@@ -158,15 +175,28 @@ ones), and the bounds check subtracts instead of adding.
 
 ## Next
 
-- Type the remaining GC aggregate/array forms (the one-element `array.*` and
-  `struct.*` ops, which still set `typeTainted`; the multibyte memarg and the
-  three More Array Constructors are typed).
-- Adopt and test the relaxed dead-code algorithm described in
-  [`proposals/PARSER_PROPOSALS.md`](proposals/PARSER_PROPOSALS.md); the current
-  unreachable stack is close but not claimed as the proposal's algorithm.
+- ~~Type the remaining GC aggregate/array forms~~ — done (2026-11-03):
+  `struct.get/set`, `array.get/set/fill/copy/init_data/init_elem` type their
+  operands, enforce mutability and element-type agreement, and preserve a
+  reference's heap type; `array.new_data`/`array.new_elem` are no longer
+  const-eligible. `struct`, `array` and the five `array_*` scripts are green.
+- ~~The unreachable `select`/`br_table` holes~~ — done (2026-11-03): a
+  `Void` bottom marker keeps the stack height honest, `select` records its
+  bottom result, and `br_table` checks target arity and concrete values above
+  the frame height. `unreached-invalid` is 121/0 and `unreached-valid` is green.
+  The proposal's full relaxed-dead-code algorithm remains an opt-in
+  (`ValidationOptions::relaxedDeadCode`), not the default.
 - ~~The “declared function reference” rule~~ — done: `dispatchRefFunc` checks the
   module's `C.refs` set (exports, globals, tables and element segments).
-- ~~The remaining strict failures~~ — done: strict LEB128 width/overflow
-  checking in the shared decoder rejects all 17 curated malformed modules.
+- ~~The remaining strict failures~~ — done: the 2026-11-03 decoder sweep added
+  UTF-8 name validation, the core version check, the section-id range,
+  section order/duplicate/exact-size checks, the pre-type import section,
+  single-byte limits flags and strict field/element mutability. The only
+  remaining all-scripts failures are `linking*`, which are the store-lifetime
+  boundary, not decoder rules.
 - ~~Add curated `assert_uninstantiable` coverage~~ — done: `start.wast` and the
   `elem`/`data` segment cases are verified under `WASM_SPEC_VALIDATE=1`.
+- The `tag.wast` result-signature conflict is recorded in
+  `Test/spec_known_failures.txt`; it re-opens if upstream provides a
+  discriminator between control tags and exception tags (or the engine drops
+  the SS-2 form).

@@ -110,6 +110,10 @@ completing WebAssembly. In particular:
 - **No text format, ever.** [`proposals/ANNOTATIONS.md`](proposals/ANNOTATIONS.md)
   `ANN-0` makes WAT parsing a permanent non-goal; its 0% is a decision, not a
   gap.
+- **No permanent in-engine JS, WASI, scheduler or linker surface.** The
+  canonical record of those boundaries, and of the upstream-encoding-blocked
+  proposals, is [`SCOPE.md`](SCOPE.md). This note and that one must agree: a
+  surface listed there is not a gap here either.
 - **No JavaScript integration.** [`proposals/JS_INTEGRATION.md`](proposals/JS_INTEGRATION.md)
   keeps every JS engine, Promise and ESM concern on the embedder's side of
   `ImportResolver` / `Callable` / `HostBridge`. Its 0% row means "nothing

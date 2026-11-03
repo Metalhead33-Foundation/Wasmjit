@@ -4295,11 +4295,6 @@ TEST_CASE("string.new_utf8/wtf16 and encode round-trip through memory")
 	module.functions(2);
 	// One page, "Hello" at 0 and UTF-16LE "Hi" at 8.
 	module.section(0x05, {0x01, 0x00, 0x01});
-	module.section(0x0b, {
-		0x01, 0x00, 0x41, 0x00, 0x0b, 0x0c,
-		0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x00, 0x00, 0x00,
-		0x48, 0x00, 0x69, 0x00
-	});
 	module.exports({{"u", 0}, {"w", 1}});
 	module.code({
 		// "u": new_utf8(0, 5) then encode_wtf8 at 32 -> 5.
@@ -4308,6 +4303,12 @@ TEST_CASE("string.new_utf8/wtf16 and encode round-trip through memory")
 		// "w": new_wtf16(8, 2) then encode_utf8 at 32 -> 2.
 		{0x00, 0x41, 0x08, 0x41, 0x02, 0xfb, 0x81, 0x01, 0x00,
 		 0x41, 0x20, 0xfb, 0x86, 0x01, 0x00, 0x0b}
+	});
+	// Active data segments follow the code section, as the binary order requires.
+	module.section(0x0b, {
+		0x01, 0x00, 0x41, 0x00, 0x0b, 0x0c,
+		0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x00, 0x00, 0x00,
+		0x48, 0x00, 0x69, 0x00
 	});
 
 	std::span<const std::byte> span(
@@ -4350,8 +4351,6 @@ TEST_CASE("string.new_utf8 is strict while new_lossy_utf8 replaces bad bytes")
 	module.section(0x05, {0x01, 0x00, 0x01});
 	// Section 14: one isolated surrogate U+D800 (WTF-8 ED A0 80).
 	module.section(0x0e, {0x00, 0x01, 0x03, 0xed, 0xa0, 0x80});
-	// One invalid byte (0xFF) at offset 0.
-	module.section(0x0b, {0x01, 0x00, 0x41, 0x00, 0x0b, 0x01, 0xff});
 	module.exports({{"lossy", 0}, {"strict", 1}, {"encode", 2}});
 	module.code({
 		// measure_wtf8(new_lossy_utf8(0, 1)) = 3 (U+FFFD is three bytes).
@@ -4363,6 +4362,8 @@ TEST_CASE("string.new_utf8 is strict while new_lossy_utf8 replaces bad bytes")
 		// encode_utf8(const 0, 32) traps: the literal is an isolated surrogate.
 		{0x00, 0xfb, 0x82, 0x01, 0x00, 0x41, 0x20, 0xfb, 0x86, 0x01, 0x00, 0x0b}
 	});
+	// One invalid byte (0xFF) at offset 0. Data follows code in binary order.
+	module.section(0x0b, {0x01, 0x00, 0x41, 0x00, 0x0b, 0x01, 0xff});
 
 	std::span<const std::byte> span(
 			reinterpret_cast<const std::byte*>(module.bytes.data()), module.bytes.size());
@@ -5999,7 +6000,7 @@ TEST_CASE("GC heap: region allocation, alignment and recycling")
 // collector is allowed to rely on, through the counters added for RC-2/RC-3.
 namespace {
 
-// `$pair` in gc_refcount.wat is `(struct (field i32) (field (ref null any)))`:
+// `$pair` in gc_refcount.wat is `(struct (field i32) (field (mut (ref null any))))`:
 // struct header 16 bytes (TypeId + refcount + descriptor), i32 at 16, reference
 // field at 24 — the same layout the JIT and structFieldOffsets use (H1).
 constexpr size_t kPairBytes = 32;

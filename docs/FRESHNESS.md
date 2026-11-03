@@ -59,8 +59,8 @@ hardcoded values that were considered".
 
 A kind-2 statement is only allowed in this shape:
 
-> **Snapshot (2026-11-01, `8c87f5f`):** the default suite is 17,090 assertions in
-> 551 cases. Reproduce with `./Test/WasmJit`.
+> **Snapshot (2026-11-03, working tree on `cf2c6cf`):** the default suite is
+> 17,417 assertions in 585 cases. Reproduce with `./Test/WasmJit`.
 
 or, inside a table, with the same three pieces in the caption or the column
 header. A bare number with none of them is the failure mode this note exists to
@@ -160,6 +160,7 @@ needs to be true *of the day it names*.
 | Diagnostic ids and severities | [`DIAGNOSTICS.md`](DIAGNOSTICS.md) §1 | grep the `k*` constants in `WasmDiagnostics.hpp` |
 | Milestone status | Each note's own §7 plan table (`PROPOSALS.md` §2.3) | the note; `README.md` summarises, it does not own |
 | ABI/API break class | [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §4.1 | the class definitions in that section |
+| Gap-versus-boundary classification | [`SCOPE.md`](SCOPE.md) §2 and the boundary tables | the triage checklist in its §8; `./Test/WasmJit '[docs]'` keeps the note in the tree |
 
 Reading: **the document that defines a fact owns it; every other document links.**
 `README.md`'s completeness table is a summary of the per-note §7 plans, not a
@@ -416,8 +417,8 @@ that tolerated drift would pin nothing. The probe is the compromise — it makes
 re-measuring cheap, which is the only part of this problem that can be automated.
 
 The values it printed on 2026-11-01, in the working tree on `39170be` (a
-`build/Desktop-Debug` qmake build — re-run it, do not trust these), are: 22 / 40 /
-17 `.md` files (21 / 39 / 16 notes); 72 header files; **17,090 assertions in 549
+`build/Desktop-Debug` qmake build — re-run it, do not trust these), are: 23 / 40 /
+17 `.md` files (22 / 39 / 16 notes); 72 header files; **17,417 assertions in 585
 test cases**; `[docs]` 1013/2,
 `[headerdoc]` 6/3, `[runtime]` 122/16, `[concurrency]` 80/13, `[multiagent]`
 51/6, `[backendabi]` 36/4, `[plugin]` 41/8, `[tiers]` 222/3,
@@ -426,7 +427,7 @@ test cases**; `[docs]` 1013/2,
 exported symbols. **These are a snapshot, not a promise** — they are here to show
 what the output looks like, and to make a reader notice when it does not.
 
-**Current (2026-11-03, resource-handle-table working tree):** **17,415 assertions in 585 test
+**Current (2026-11-03, decoder/validator sweep working tree on `cf2c6cf`):** **17,417 assertions in 585 test
 cases**; `[component-corpus]`/`[component-subtyping]` 520/1,
 `[component-execution]` 23/3 (140 accepted artifacts constructed plus the
 upstream primitive-return/trap sweep, including JSON string/flags rows), `[component-async]` 94/8,

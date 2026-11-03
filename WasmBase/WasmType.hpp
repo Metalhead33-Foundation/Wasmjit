@@ -402,7 +402,13 @@ struct Limits {
 
 	//! Decodes the flags, initial size and (when flagged) the maximum.
 	template <Elv::Util::Endian E, Elv::Io::DeviceLike I> void decode(Elv::Io::DataStream<E,I>& stream) {
-		stream >> Elv::Io::Leb(flags);
+		//! The limits flag is one byte, not a LEB128. Reading it as a LEB made
+		//! `81 00` (an overlong encoding of 1) look like a valid flag; the spec
+		//! treats the leading 0x81 as an unknown flag bit and rejects it
+		//! (binary.wast's "malformed limits flags").
+		uint8_t flagByte;
+		stream >> flagByte;
+		flags = flagByte;
 		stream >> Elv::Io::Leb(initial);
 		if (flags & 0x01) {
 			uint64_t tmpMaximum;
@@ -411,6 +417,14 @@ struct Limits {
 		} else {
 			maximum.reset();
 		}
+	}
+	//! Rejects flag bits the entity kind does not define. A memory knows
+	//! `0x0F` (max, shared, 64-bit, custom page size); a table knows `0x07`
+	//! (max, shared, 64-bit). An unknown bit is malformed input, not a
+	//! forward-compatible extension (CUSTOM_PAGE_SIZES.md CPS-1).
+	void requireFlagsWithin(uint32_t allowed) const {
+		if ((flags & ~allowed) != 0)
+			throw std::runtime_error("malformed limits flags");
 	}
 };
 //! Reads a `Limits` record (flags, initial, and the maximum when flagged).
@@ -437,6 +451,7 @@ struct MemoryType {
 	template <Elv::Util::Endian E, Elv::Io::DeviceLike I> void decode(Elv::Io::DataStream<E,I>& stream)
 	{
 		limits.decode(stream);
+		limits.requireFlagsWithin(0x0Fu);
 		if (limits.flags & 0x04)
 			indexType = MemoryIndexType::I64;
 		else

@@ -35,7 +35,8 @@ enum class ArtifactKind : uint8_t {
 	Component  //!< Component Model component.
 };
 
-//! Component Model preamble values (the core module version is not checked).
+//! Component Model preamble values (the core module version is 1; see
+//! Artifact::readPreamble).
 inline constexpr uint16_t kComponentVersion = 0x000D;
 //! Component-layer version; identifies a component preamble, not a module one.
 inline constexpr uint16_t kComponentLayer = 0x0001;

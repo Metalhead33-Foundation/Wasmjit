@@ -1,0 +1,175 @@
+# Scope — What Is an Engine Gap, and What Is a Boundary {#doc_scope}
+
+Status: policy note, revision 1 (2026-11-03, written on `cf2c6cf` after the
+strict all-scripts sweep showed that the decoder and validator, not the feature
+matrix, are where the remaining engine work is). It is the canonical record of
+the surfaces WasmJit deliberately does **not** own and of the deviations it has
+chosen, so that none of them is counted as an implementation gap.
+
+Audience: anyone triaging a missing feature, filling in a completeness meter,
+writing a proposal note, or asking "is this engine mature yet?".
+
+## 1. Document map
+
+| Section | Question it answers |
+|---|---|
+| §2 | What is the rule that separates a gap from a boundary? |
+| §3 | Which surfaces belong to the embedder? |
+| §4 | Which surfaces are build-time or text-format only? |
+| §5 | Which proposals are blocked on a binary encoding that does not exist yet? |
+| §6 | Which limitations are deliberate design deviations rather than gaps? |
+| §7 | Which backends and packaging surfaces are experimental and not claimed? |
+| §8 | How is this note used, and what re-opens a boundary? |
+| §9 | References |
+
+## 2. The rule
+
+A **gap** is:
+
+1. **engine-owned** — it is part of `WasmBase/` or a supported backend, not the
+   embedder's adapter or a build-time tool;
+2. **binary-encoded** — the upstream proposal has a stable binary form, or the
+   behaviour is already part of the core binary format; and
+3. **specified** — a note claims the behaviour as engine work.
+
+Anything else is a **boundary**. Boundaries are of four kinds: embedder-owned
+(§3), build-time/text (§4), encoding-blocked (§5) and deliberate deviation (§6).
+A boundary is not a debt, is not counted in a completeness meter, and must not
+be described as "not implemented" in a way that implies the engine is missing
+its own work.
+
+The converse is the important half: **a binary-encoded, engine-owned, specified
+surface that is missing or wrong is a gap even if the proposal is not in the
+current milestone.** The strict sweep is what makes that distinction real: a
+positive feature can be 100% and the decoder that guards it can still be
+permissive.
+
+## 3. Embedder-owned surfaces
+
+These are outside the engine by contract. The engine supplies the seam; the
+embedder supplies the policy, engine or event loop.
+
+| Surface | Who owns it | What the engine provides | Evidence |
+|---|---|---|---|
+| Multi-agent scheduling and thread pools | The embedder | `ConcurrencyModel::Agents`, per-agent `ExecutionState`, the waiter table, the `ComponentExecutor` hook | `THREADSAFETY.md` §9–§10; `MULTI_AGENT_FEASIBILITY.md`; `COMPONENT_MODEL.md` `CMD3` |
+| JavaScript engine, JS API and JS object model | The embedder | `ImportResolver`, `Callable`, `HostBridge`, `Module::importDescriptors()` / `exportDescriptors()` | `JS_INTEGRATION.md` `JSD1`–`JSD6` |
+| Promise / event-loop integration, JSPI `WebAssembly.Suspending` / `promising` | The embedder | `HostContinuation`, `HostContinuationScheduler`, `submit*`/`onSuspended*`/`onCompleted*` | `JS_INTEGRATION.md` `JS5`; `STACK_SWITCHING.md` §4/§10.12 |
+| ESM loader, URL resolution and import maps | The embedder | Binary module loading and `(module, field)` import resolution | `JS_INTEGRATION.md` `JS6` |
+| `js-prototypes` configuration | The embedder | The descriptor/RTT/JS-Types metadata surface | `JS_INTEGRATION.md` `JS8` |
+| WASI function exports and host imports | The embedder | `ImportResolver`, native imports, `VMContext::hostData` | `WasmImport.hpp`; `WasmNativeImport.hpp` |
+| Host reference lifetime and per-call arenas | The embedder | The optional `HostBridge` callbacks and opaque `externref` values | `JS_INTEGRATION.md` `JSD3`; `ABI.md` "Host boundary" |
+| Module lifetime across callers | The embedder | The `VMContext*`-as-arg0 ABI; a module must outlive every module that calls it | `ABI.md:26-34`, `:404-407` |
+| Linear-memory layout between modules | The embedder / build | Memory aliasing through imported memories; no partition or allocator policy | `SHARING_LINEAR_MEMORY.md` `SLM-1`…`SLM-4`; `L3` |
+| vcpkg/Conan recipes | The embedder / packager | Installed headers, soname and `wasmjit.pc` | `EMBEDDING_SURFACE.md` `ES-5` |
+| The Catch2 executable as an embedding API | The project | It is a development sandbox; the supported surface is installed `wasmjit/wasmjit.hpp` | `README.md` "Near-Term Expectations" |
+
+## 4. Build-time and text-format surfaces — binary-only, permanently
+
+The engine consumes **binary** modules and components. It does not parse WAT,
+`.wast`, annotations or WIT source, and it never will.
+
+| Surface | Where it happens instead | Evidence |
+|---|---|---|
+| WAT / `.wast` parsing | `wasm-tools` converts at build/test time | `Test/Test.pro`; `docs/TESTING.md` Part 2 |
+| `@name` / `@custom` / annotation grammar | The producer (`wasm-tools`) | `ANNOTATIONS.md` `ANN-0`, `ANND1`–`ANND5` |
+| WIT | A build-time format; the engine consumes the compiled binary component | `COMPONENT_MODEL.md` `CMD8` |
+| `comments.wast` and any text-format module | Skipped by design; dependent assertions should skip, not fail | `Test/WastScript.cpp` text-module path |
+
+A missing text parser is therefore **not** a gap, even when a spec script
+contains text-format modules. The correct result for such a script is a skip,
+not a failure.
+
+## 5. Encoding-blocked proposals — out of scope until a stable binary form exists
+
+These have no correct binary surface to implement yet. Guessing an encoding is
+worse than refusing it; the engine keeps only the explicitly documented
+provisional forms where it already has one.
+
+| Proposal | Blocked items | Upstream blocker | Re-open condition |
+|---|---|---|---|
+| Shared-everything threads | `SET-4` managed `waitqueue` type, thread-local globals; `SET-5` component thread lifecycle | The draft assigns no stable binary form; `0x68` collides with `cont` | A stable encoding plus testsuite cases |
+| Call tags | `CTA1`, `CTA2`, `CTA4`, `CTA5` — opcodes, tag heap type, `func_switch`, fallback table | The overview names instructions but assigns no bytes or section discriminants | A pinned opcode/section encoding |
+| Constant time | `CT1`–`CT5` — secret types, secret memory, operations, validation, timing contract | No value-type or memory encoding | A pinned secret-type encoding |
+| Flexible vectors | `FV1`–`FV4` — `vlen`, mask/tail model | Lane prefixes `0x7A`–`0x75` collide with core opcodes | A new non-colliding encoding |
+| Stringref | `STR1` — alignment with the proposal's value-type bytes | Proposal `0x64`/`0x63` collide with GC `ref` / `ref null`; the engine keeps reserved `0x67`/`0x66`/`0x65`/`0x62` | The proposal resolves the collision |
+| Instrument tracing | `IT1` — the upstream opcode and immediate | The overview specifies semantics only; the engine's `0xFC 0x100` is a documented provisional extension | An upstream encoding |
+| GC extensions | `GX4` — frozen values | Upstream deferred the `freezable`/`freeze`/`ref.freeze` model | An upstream phase and encoding |
+| Memory control | `MC4`, `MC5` — protection/mappable/virtual, BYOB | Sub-proposals are design space / web-API surface | A concrete binary or host-API proposal |
+| Module linking | `module_instance` / generative instances in the test format | Superseded by the component model; the engine's one-instance-per-`Module` rule is §6 | A decision to adopt the superseded proposal |
+
+The last row is deliberately separated: module linking is not merely
+encoding-blocked, it is also superseded by the component model and conflicts
+with the one-instance-per-`Module` design rule.
+
+## 6. Deliberate deviations and design limits
+
+These are shipped choices, not unfinished work. Each is recorded in its owning
+note and must be revisited as a decision, not "fixed" as a bug.
+
+| Deviation | What it means | Owner |
+|---|---|---|
+| One instance per `Module` | A second instantiation is refused; isolation comes from loading the module twice | `ABI.md` "Limits an Embedder Must Know"; `THREADSAFETY.md` §3.1 |
+| Failed instantiation and store writes | A failed instantiation does not retain the failed module's function instances; `linking*.wast`'s store-persistence cases are therefore not claimed. They are the only three all-scripts strict failures at the 2026-11-03 snapshot | `WasmStore.hpp` `StoreOwnedFunction` TODO; `ABI.md` lifetime rule |
+| Control tags vs exception tags | A tag with a non-empty result signature is accepted as a stack-switching control tag; `tag.wast`'s two "non-empty tag result type" cases are the exception proposal's stricter rule | `STACK_SWITCHING.md` `SS-2`; `Test/spec_known_failures.txt` |
+| Shared memory maximum | A shared reservation rewrites the maximum to 4 GiB | `MEMORY_PROVIDER.md` `MP3` |
+| No fuel / instruction budget | A module can loop forever; time limits belong to the embedder | `SAFETY.md` `S1`; `CONFIGURATION.md` `CFG-8` |
+| Reclamation is RC + cycle collection | It is not a leak-free guarantee for unreferenced host values | `SAFETY.md` `S3`; `GC.md` |
+| Small-stack threads | A thread without headroom runs unguarded and faults rather than trapping | `SAFETY.md` `S7` |
+| Serial continuations | One resumption at a time per continuation; cross-provider switching is rejected | `SAFETY.md` `S8`; `STACK_SWITCHING.md` `SSD3` |
+| `atomic.wait` on unshared memory | Accepted, matching the curated suite | `THREADS.md` `T5` |
+| Branch hints are non-semantic | A backend may use them or not; no block reordering is required | `SMALL_PROPOSALS.md` `SP-2` |
+| LibJIT interpreter fallback | `InterpreterFallback::Always` / `FallbackOnly` are refused because this LibJIT build has no interpreter | `COMPILER_POLICY.md` `CP-4` |
+
+## 7. Experimental or unclaimed surfaces
+
+These are in the tree but are not part of the current maturity claim.
+
+| Surface | State |
+|---|---|
+| `Asmjit/` | Experimental i32/i64 subset; not installed, not selectable through the runtime registry |
+| `Sljit/` | Provisional straight-line `i32`/`i64` subset; every other opcode leaves the function uncallable |
+| `WasmStub/` | A non-compiling pretty-printer, not an execution backend |
+| Language support | No language is supported; `LF-1`/`LF-2` are studies and `LF-3` has not started |
+| Packaging recipes | Optional; the install/`pkg-config` path is the supported one |
+
+## 8. How to use this note
+
+When a missing behaviour is reported, run this checklist in order:
+
+1. **Is it engine-owned?** If it is a JS engine, Promise, ESM loader, WASI
+   implementation, scheduler or linker layout, it is §3 — not a gap.
+2. **Is there a binary encoding?** If the upstream proposal has no stable
+   encoding, it is §5 — not a gap.
+3. **Is it text or WIT?** If so, it is §4 — not a gap.
+4. **Is it a recorded deviation or an experimental backend?** If so, it is §6
+   or §7 — not a gap.
+5. **Otherwise it is a gap.** Add it to the owning note's §5/§7, measure it with
+   the strict sweep, and fix it as ordinary additive work.
+
+A boundary re-opens only when its condition in §5 changes (a stable encoding is
+published), or when a §6 decision is deliberately revisited. "It would be nice"
+is not a re-open condition.
+
+## 9. References
+
+- [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §3–§4 — the milestone's own
+  "does not demand" list and the gap classes (`A`–`E`) this note is consistent
+  with.
+- [`FRESHNESS.md`](FRESHNESS.md) §2 and §4 — the three kinds of state claim, and
+  the one-home rule this note becomes the owner of for scope claims.
+- [`ABI.md`](ABI.md) — the calling convention, module lifetime, one instance per
+  module, and the limits an embedder must know.
+- [`SAFETY.md`](SAFETY.md) §3 — the deliberate safety limitations.
+- [`proposals/JS_INTEGRATION.md`](proposals/JS_INTEGRATION.md) — the engine-seam
+  versus JavaScript-side split.
+- [`proposals/COMPONENT_MODEL.md`](proposals/COMPONENT_MODEL.md) `CMD3`, `CMD6`,
+  `CMD8` — the component executor seam and the build-time WIT rule.
+- [`proposals/SHARING_LINEAR_MEMORY.md`](proposals/SHARING_LINEAR_MEMORY.md) —
+  aliasing versus layout, and why the linker-shaped rungs are out of scope.
+- [`proposals/STACK_SWITCHING.md`](proposals/STACK_SWITCHING.md) `SS-2` — the
+  control-tag result signature and its conflict with `tag.wast`.
+- [`LANGUAGE_FEASIBILITY.md`](LANGUAGE_FEASIBILITY.md) and
+  [`languages/index.md`](languages/index.md) — the study process; no language is
+  supported by it.
+
+

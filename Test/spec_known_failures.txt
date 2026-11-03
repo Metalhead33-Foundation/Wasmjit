@@ -1,0 +1,14 @@
+# Spec-suite known failures — accepted proposal conflicts, not regressions.
+#
+# One entry per line, `<script>: <line>` (the .wast source line the child
+# reports). A `#` starts a comment. The entry must still occur: a missing
+# failure does not make the run green, and every other failure in the script is
+# unexplained. See docs/SCOPE.md §6 for why each line is here.
+#
+# tag.wast's two invalid modules use `(tag (result i32))`. The exception
+# proposal says a tag result must be empty, but the stack-switching proposal's
+# control tags carry a result signature and the engine accepts them for SS-2.
+# Without an upstream discriminator the two rules cannot both hold; the engine
+# chooses SS-2 and records the two exception cases here.
+tag: 19
+tag: 23

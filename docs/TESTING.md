@@ -342,10 +342,10 @@ selection is explicit — which is why `./WasmJit '[spec]'` runs everything.
 | Command | What runs |
 | --- | --- |
 | `./WasmJit` | the manual tests + the curated spec scripts |
-| `./WasmJit '[spec]'` | all 257 spec scripts (~2 min in the debug build; 251 pass, 6 known failures) |
+| `./WasmJit '[spec]'` | all 257 spec scripts (~2 min in the debug build; 254 pass, 3 known failures — the `linking*` store-lifetime boundary) |
 | `./WasmJit 'spec: address'` | just that script |
 | `./WasmJit '*float*'` | scripts whose name matches |
-| `./WasmJit --list-tests` | the default view (551 test cases on 2026-11-01) |
+| `./WasmJit --list-tests` | the default view (585 test cases on 2026-11-03) |
 | `./WasmJit --list-tests '[spec]'` | every script, one line each (257) |
 | `./WasmJit -# --list-tags` | all tags, including `[#main]` and `[#SpecSuite]` |
 
@@ -372,15 +372,16 @@ local_set
 Scripts listed there are the visible ones; everything else is hidden. The file is read when the test
 binary starts, so **editing it does not require a rebuild**.
 
-It holds **193 of the 257** scripts, and the default run is green:
+It holds **189 of the 257** scripts, and the default run is green:
 
 ```
 $ ./WasmJit
-All tests passed (17090 assertions in 551 test cases)
+All tests passed (17417 assertions in 585 test cases)
 ```
 
-**Snapshot (2026-11-01, `8c87f5f`):** the list length and the transcript above
-are from that run. The list is a checked-in file, so its length changes only when
+**Snapshot (2026-11-03, working tree on `cf2c6cf`):** the list length and the
+transcript above are from that run. The list is a checked-in file, so its length
+changes only when
 the refresh below is run; the suite's numbers change with every test added, so
 re-run `./WasmJit` rather than trusting the figure.
 
@@ -538,10 +539,17 @@ for a merge to `master` — so that "green" means the same thing to every review
 
 | Run | Command | Evidence it produces | Last measured |
 | --- | --- | --- | --- |
-| Strict validator sweep | `WASM_SPEC_VALIDATE=1 ./WasmJit '[spec]'` | every curated binary negative module is rejected (the 2,382 cases above) | **2,382 / 2,382**, 2026-10-18 |
+| Strict validator sweep | `WASM_SPEC_VALIDATE=1 ./WasmJit` (curated) and `WASM_SPEC_VALIDATE=1 ./WasmJit '[spec]'` (all) | every curated binary negative module is rejected; the all-scripts sweep exercises the hidden decoder/validator cases too | **curated 2,380 / 2,382** (`tag` is the two-entry known failure), **all-scripts 254 / 257** (only `linking*`), 2026-11-03 |
 | AddressSanitizer build + suite | configure a second shadow build (below), then run the default suite | no use-after-free, overflow or leak report on the hand-written path | configuration exists; the run is **not yet recorded** in this note |
 | ThreadSanitizer concurrency run | configure a third shadow build (below), then `./WasmJit '[multiagent]'` | no data race on the multi-agent path (waiter table, entry counter, GC queue/counters, shared-global atomics) | `[multiagent]` 51 assertions / 6 cases, **no TSan report**, 2026-10-29 |
 | ABI check | `./Test/abi-check.sh build/<config>` | no exported symbol disappeared since the baseline (the additive-only rule of `API_ABI_STABILITY.md` G2); `--update` records an intentional addition | **1,804 + 830 symbols, 0 removed**, 2026-10-29 |
+
+`Test/spec_known_failures.txt` is the only place a spec failure may be
+subtracted from the gate. It is not an exemption: the named line must still
+fail, every other failure in the script is unexplained, and the reason is
+recorded in [`SCOPE.md`](SCOPE.md) §6. Today it holds only `tag.wast` lines 19
+and 23, the exception-proposal result-signature rule that conflicts with the
+stack-switching control tag.
 
 The ASan configuration is a separate shadow build, so the ordinary build keeps
 its flags:
@@ -652,17 +660,17 @@ from module input.
 
 ### Current status (for orientation)
 
-The default run is the curated list (193 scripts) plus the manual and component
+The default run is the curated list (189 scripts) plus the manual and component
 tests, and it is green:
 
 ```
 $ ./WasmJit
-All tests passed (17090 assertions in 551 test cases)
+All tests passed (17417 assertions in 585 test cases)
 ```
 
-A full sweep is deliberately loud, because most of the suite is still beyond the
-runtime. `WASM_SPEC_TOLERANT=1` downgrades it to a survey (it always "passes", so
-read the **per-script** lines):
+A full sweep is still informational, because the three `linking*` scripts are
+the store-lifetime boundary rather than a decoder gap. `WASM_SPEC_TOLERANT=1`
+downgrades it to a survey (it always "passes", so read the **per-script** lines):
 
 ```bash
 WASM_SPEC_TOLERANT=1 WASM_SPEC_TIMEOUT=8 WASM_SPEC_SCRIPTS=all ./WasmJit -r compact > sweep.log
@@ -672,35 +680,29 @@ Per-script outcomes from the last sweep (2026-10-24, 257 scripts, debug build):
 
 | Outcome | Scripts | Reading |
 |---|---:|---|
-| clean (`passed > 0`, `failed = 0`) | 242 | the runtime handled every command the harness can marshal |
-| wrong results (`failed > 0`) | 6 | real mismatches — see below |
-| terminated by signal | 0 | — |
-| produced no report | 0 | the shared trap sink removed these |
-| timed out | 0 | — |
-| nothing executed (all commands skipped) | 9 | not real coverage |
+**Snapshot (2026-11-03, working tree on `cf2c6cf`):** `./WasmJit '[spec]'`
+reports `test cases: 257 | 254 passed | 3 failed` and
+`assertions: 517 | 514 passed | 3 failed`. The three failures are:
 
-The same sweep reports `test cases: 257 | 251 passed | 6 failed`, which is what
-the `[spec]` row in the command table above quotes.
+- `linking` (99/6), `linking0` (3/1), `linking3` (6/4) — a failed instantiation
+  destroys the instance whose `ref.func` was already written into an imported
+  table, so the next `call_indirect` reads freed storage. This is the
+  `StoreOwnedFunction` boundary recorded in [`SCOPE.md`](SCOPE.md) §6, not a
+  decoder or validator gap; the strict all-scripts run is otherwise green.
+- `tag`'s two cases are the known failure in `Test/spec_known_failures.txt`; the
+  script still passes its other eight commands.
 
-Traps are **executed** now, so a *missing* trap is a failure rather than a silent
+The text-format `comments` script and the module-linking `instance` script now
+skip their dependent commands: a text module is a binary-only boundary
+([`SCOPE.md`](SCOPE.md) §4), and `module_instance` is a superseded proposal
+([`SCOPE.md`](SCOPE.md) §5). `bulk` is green; the trap-kind prefix match accepts
+the spec's `uninitialized element 2` against the engine's kind text.
+
+Traps are **executed**, so a *missing* trap is a failure rather than a silent
 skip. The harness marshals scalar, `v128` and reference values, runs
-`assert_exception`, and decodes `module_definition` declarations; what it still
-cannot do is text-format modules and the `module_instance` linking command. The
-only other skips are the negative-module families, which run under
-`WASM_SPEC_VALIDATE=1` (above, and [`VALIDATION.md`](VALIDATION.md)).
-
-The six scripts that still fail, and why (`passed`/`failed` per script):
-
-- `instance` (2/18) — each failure is `action refers to unknown module ...`: the
-  module-linking `module_instance` command the harness does not execute
-- `linking0` (3/1), `linking` (99/6), `linking3` (6/4) — the same proposal from
-  the other side: instances registered by `register` are not visible to each
-  other, so `call` traps on `uninitialized element` and a `load` reads `0`
-- `comments` (4/3) — its modules are text-format, so the module is never loaded
-  and the following assertions report `no exported function named 'f1'`
-- `bulk` (116/1) — line 221 expects the trap text `uninitialized element 2`;
-  the engine reports the kind `uninitialized element` (the index is in the free
-  text, not the kind). A trap-kind granularity difference, not a missing trap
+`assert_exception`, and decodes `module_definition` declarations. The
+negative-module families run under `WASM_SPEC_VALIDATE=1` (above, and
+[`VALIDATION.md`](VALIDATION.md)).
 
 `WJ_TRACE=1` prints every command before it runs; because each script executes in
 a forked child that only writes its report at the end, that is how you find the
@@ -849,7 +851,7 @@ Measured after SIMD-5:
 
 ```bash
 ./WasmJit 'simd*'      # 24 cases, 6152 assertions, all passing (includes the hidden [.simdbench] case)
-./WasmJit              # 551 cases, 17090 assertions, all passing
+./WasmJit              # 585 cases, 17417 assertions, all passing
 ```
 
 A new `.wat` module is also worth checking by hand before it is run — a malformed

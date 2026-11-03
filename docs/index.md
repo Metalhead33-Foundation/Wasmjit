@@ -36,6 +36,7 @@ row here. A note missing from this table builds as a *sibling* and fails the
 | write a sentence about "what is in the tree" | \subpage doc_freshness | the three kinds of state claim, the one home of each fact, the re-measurement probe |
 | plan or assess language support | \subpage doc_language_feasibility | the two study definitions, the evaluation criteria, the `LF-*` process |
 | check whether a second code generator may begin | \subpage doc_readiness_audit | `G3` and `LF-0a` in one sweep, the seam inventory, the pinned snapshot |
+| decide whether something is an engine gap or an out-of-scope boundary | \subpage doc_scope | the triage rule, the embedder/text/encoding-blocked tables, the recorded deviations |
 | find a per-proposal note | \subpage proposals_index | the per-proposal notes: spec demands → shipped state → gaps → deviations → plan → tests |
 | find a language study | \subpage languages_index | the `LF-1` triage, the `LF-2` arms, the verdicts and engine findings |
 

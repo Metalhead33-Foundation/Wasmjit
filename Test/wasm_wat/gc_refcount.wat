@@ -7,7 +7,7 @@
 ;; through the `wasm_ref_store` write barrier (retain the new value, release the
 ;; overwritten one) rather than a raw pointer store.
 (module
-  (type $pair (struct (field i32) (field (ref null any))))
+  (type $pair (struct (field i32) (field (mut (ref null any)))))
   (type $arr (array (mut i32)))
 
   (func (export "make") (result i32)
