@@ -60,7 +60,7 @@ const std::set<std::string>& backendHeaders()
 		"WasmBackendRegistry.hpp", "WasmBackendSession.hpp",
 		"WasmNullInstantiator.hpp",
 		"wasmjit_backend.h", "wasm_atomic.hpp", "wasm_simd_scalar.hpp",
-		"wasm_simd_vector.hpp", "wasm_simd_ops.inc",
+		"wasm_simd_vector.hpp", "wasm_simd_ops.inc", "wasm_f16.hpp",
 	};
 	return headers;
 }
@@ -177,5 +177,5 @@ TEST_CASE("every public header has a compile-only translation unit", "[tiers]")
 			++checked;
 		}
 	}
-	REQUIRE(checked == 47); // one TU per public header; bump when a header lands
+	REQUIRE(checked == 48); // one TU per public header; bump when a header lands
 }

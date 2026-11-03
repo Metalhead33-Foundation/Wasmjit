@@ -398,11 +398,11 @@ No tolerance mode is planned.
 Order: M0 -> M1 -> M2 -> M3, then M4 -> M5 -> M6, with M7 in parallel after M3.
 Each milestone leaves the engine working.
 
-**Status: M0–M7 shipped; M8 is the only outstanding milestone.** What each one
-left behind is recorded in §10 rather than in this list, which stays as written so
-the order and the "done when" clauses remain readable. M8 is a *measurement*
-(dedup ratio and registry footprint, plus the §12 `Subtype` decision), not
-unfinished behaviour.
+**Status: M0–M8 shipped.** What each one left behind is recorded in §10 rather
+than in this list, which stays as written so the order and the "done when"
+clauses remain readable. M8 measured the dedup ratio and registry footprint
+(§12) and decided against the `Subtype` shrink: `Subtype` is parser scratch, not
+the long-lived store record.
 
 **M0 — Invariants and strong types.**
 - Introduce `LocalTypeIdx`, `TypeId`, `RecGroupId` as distinct types and
@@ -467,9 +467,12 @@ unfinished behaviour.
 **M8 — Measure, decide on layout, update docs.**
 - Report the dedup ratio (types parsed versus interned) and registry memory on
   representative workloads.
-- Decide whether the `Subtype` shrink in §11 is worth doing.
+- Decide whether the `Subtype` shrink in §12 is worth doing.
 - Update §7 of this note's predecessor ("Current state and gaps", now §10) to
   match the new reality.
+- *Done:* `TYPE_IDENTITY M8` reports 250:1 on repeated signatures and 3.9:1 on a
+  growing-arity stress workload, with 16-byte store records; the parser-side
+  `Subtype` shrink is not scheduled because it is transient (§12).
 
 ## 9. Test plan
 
@@ -569,21 +572,24 @@ dedicated suite:
   `typeIds`/`typeGroups`, and the JIT/validator/runtime use `CoreTypeView`.
   `Subtype` remains the component parser's `CoreRecType` scratch type.
 
-## 12. Type storage footprint (`Subtype`) and future optimization
+## 12. Type storage footprint (`Subtype` and the compact store)
 
-The registry no longer stores a module's types as a `std::vector<Subtype>`
-block: `internModule` consumes a temporary parser vector and keeps compact
-Store records. The parser/component `Subtype` cost below therefore applies to
-the temporary type section and to component `CoreRecType`, not to the
-long-lived core `Module`.
+The registry does not store a module's types as a `std::vector<Subtype>` block:
+`internModule` consumes a temporary parser vector and keeps compact Store
+records. The parser/component `Subtype` cost below therefore applies to the
+temporary type section and to component `CoreRecType`, not to the long-lived
+core `Module`.
 
 ### 12.1 Measured size
 
-Measured on the current toolchain (x86-64, libstdc++) with `sizeof`:
+Measured on the current toolchain (x86-64, libstdc++, 2026-11-03,
+`79034c0`) with `sizeof`:
 
 | type | bytes |
 |------|------:|
-| `Subtype` | **88** |
+| `TypeRecord` (long-lived store record) | **16** |
+| `TypeId` | **4** |
+| `Subtype` (parser scratch) | **104** |
 | `std::vector<uint32_t> supertypeIndices` | 24 |
 | `CompositeDefinition` (`std::variant`) | 56 |
 | `FuncType` | 48 (two `std::vector`s) |
@@ -593,67 +599,76 @@ Measured on the current toolchain (x86-64, libstdc++) with `sizeof`:
 | `StorageType` | 12 |
 | `ValueType` | 8 |
 
-The 88 bytes of `Subtype` break down as:
+The 104 bytes of the parser-side `Subtype` break down as:
 
-    bool isFinal                            1  (+ 7 padding)
-    std::vector<uint32_t> supertypeIndices 24
-    CompositeDefinition (variant)          56
-                                          ---
-                                           88
+    bool isFinal                             1
+    bool isShared                            1
+    padding                                  6
+    std::vector<uint32_t> supertypeIndices  24
+    std::optional<uint32_t> descriptorIndex  8
+    std::optional<uint32_t> describesIndex   8
+    CompositeDefinition (variant)           56
+                                           ---
+                                           104
 
 The variant is `max(FuncType 48, StructType 24, ArrayType 16)` plus a 1-byte
-discriminant padded to 8, i.e. 56. Consequently **every** type — including a
-struct or an array — reserves the 48-byte `FuncType` payload (two
+discriminant padded to 8, i.e. 56. Consequently **every** parser `Subtype` —
+including a struct or an array — reserves the 48-byte `FuncType` payload (two
 `std::vector`s), and every type pays 24 bytes for `supertypeIndices` even when it
-has none.
+has none. That cost is transient: the parser vector is discarded after
+interning, and a loaded `Module` retains only `typeIds`/`typeGroups`.
 
-### 12.2 Expected footprint for a module
+### 12.2 Measured registry footprint
 
-The block contributes `88 x N` bytes for `N` types, plus heap for the nested
-vectors (`params`, `results`, `fields`, `supertypeIndices`) whenever they are
-non-empty. Those vectors are filled with `push_back` (capacity grows in steps)
-and each non-empty allocation carries allocator overhead, so budget up to ~2x
-the raw element bytes plus ~16 B per non-empty vector:
+The long-lived cost is the Store's compact records plus their shared payload
+pools. The M8 measurement (`TYPE_IDENTITY M8: dedup ratio and registry
+footprint`, `Test/main.cpp`) uses two synthetic workloads shaped like real
+repeated signatures:
 
-| types | registry block | heap (rough) | total |
-|------:|---------------:|-------------:|------:|
-| 10 | ~0.9 KB | ~1–2 KB | ~2 KB |
-| 100 | ~8.8 KB | ~10–20 KB | ~20 KB |
-| 1,000 | ~88 KB | ~100–200 KB | ~0.2 MB |
-| 10,000 | ~0.9 MB | ~1–2 MB | ~2 MB |
+| Workload | parsed | interned | groups | `payloadBytes()` | allocations | dedup |
+|---|---:|---:|---:|---:|---:|---:|
+| A: 250 modules × the same 4 signatures | 1,000 | 4 | 1 | 400 B | 4 | **250:1** |
+| B: 100 modules × (6 common + 2 growing-arity unique) | 800 | 206 | 101 | 735,680 B | 4 | **≈3.9:1** |
 
-Because the registry never unregisters (§6.6), this is cumulative over the
-process lifetime: the total is `88 x (types across all modules ever parsed)`, not
-just the live modules. A transient 1,000-type module leaves ~0.2 MB behind.
+Workload A is the representative case: real modules repeat function
+signatures, and interning collapses them to one record each. Workload B is a
+stress probe: its unique signatures grow from 1 to 200 parameters, so the
+payload pools — not the 16-byte records — dominate (about 20,000 storage entries
+in 735 KB). The measurement therefore pins two facts:
 
-This is the **current** footprint, not the target. TM-6 removes the per-module
-`Subtype` blocks; after it, the `88 x N` term is replaced by the Store's compact
-records and each module retains only `LocalTypeIdx -> TypeId` references.
+- The fixed term is tiny: 16 bytes per interned record plus 4 bytes per
+  `TypeId`, not the parser `Subtype`'s 104 bytes.
+- Pool size follows the **width** of the signatures that survive interning, not
+  the number of modules that repeated them.
+
+Because the registry never unregisters (§6.6), the records are cumulative over
+the process lifetime, but the parser `Subtype` blocks are not: they are freed at
+the end of each module's type section.
 
 ### 12.3 Relationship to the rest of this document
 
-- **Partly related (to interning).** The canonicalization in §6 changes how many
-  types are stored: structurally identical `rec` groups are stored once, so
-  repeated function signatures — the bulk of types in real modules — stop
-  multiplying the `88 x N` term. The target is stronger: `TypeId` is the only
-  canonical identity, there is exactly one `TypeRecord` per canonical type, and
-  per-module `Subtype` blocks disappear entirely. A module keeps only its
-  `LocalTypeIdx -> TypeId` map and views into the Store. That removes the
-  `88 x N` term rather than merely deduplicating it; see
+- **Related (to interning).** The canonicalization in §6 changes how many types
+  are stored: structurally identical `rec` groups are stored once, so repeated
+  function signatures — the bulk of types in real modules — stop multiplying the
+  store population. `TypeId` is the only canonical identity, there is exactly
+  one `TypeRecord` per canonical type, and per-module `Subtype` blocks do not
+  exist (TM-6). A module keeps only its `LocalTypeIdx -> TypeId` map and views
+  into the Store; see
   [`proposals/TYPE_MODEL.md`](proposals/TYPE_MODEL.md) §7.10.1–§7.10.2.
-  Until that migration, the current `Subtype` blocks remain a compatibility
-  copy and must not be treated as a second identity.
-- **Mostly separate (layout vs. identity).** The 88-byte figure is a property of
-  the current in-memory layout (`std::variant` + owning `std::vector`s), not of
-  type identity or `match`. Shrinking it is an independent optimization, in the
-  same category as the GC heap (§11) rather than a prerequisite for interning;
-  neither requires the other.
+- **Mostly separate (layout vs. identity).** The 104-byte parser figure is a
+  property of the scratch layout (`std::variant` + owning `std::vector`s), not
+  of type identity or `match`. Shrinking it would optimize a temporary rather
+  than the registry; the measured long-lived record is already 16 bytes.
+
 
 ### 12.4 Possible future optimizations (planned separately)
 
 The layout work below is specified and sequenced in
 [`proposals/TYPE_MODEL.md`](proposals/TYPE_MODEL.md); this section remains the
-footprint rationale.
+footprint rationale. **M8 decision:** none of it is scheduled. The long-lived
+record is already 16 bytes, and the 104-byte `Subtype` is parser scratch that is
+freed after the type section, so shrinking it would not reduce registry memory
+or steady-state module cost.
 
 - **Drop the `std::variant`.** Replace `CompositeDefinition` with a manually
   tagged union, or a structure-of-arrays registry (parallel `kind` / `isFinal` /
@@ -673,9 +688,10 @@ footprint rationale.
   parser temporary instead of a per-module stored block. This is the TM-6
   ownership/dedup target in
   [`proposals/TYPE_MODEL.md`](proposals/TYPE_MODEL.md) §7.10.1–§7.10.2.
-- **Measure the dedup ratio first.** Before investing in layout work, measure how
-  many types interning collapses (M8); it may already remove most of the
-  pressure.
+- **The dedup ratio is measured.** M8 found 250:1 on repeated signatures and
+  3.9:1 on a growing-arity stress workload; interning already removes most of
+  the pressure that motivated the layout work. The remaining cost is the width
+  of the signatures that survive, which the shrink below does not address.
 
 A compact representation on the order of 8–16 bytes per type for the common
 function-signature case (plus shared component storage) looks achievable — a
@@ -685,7 +701,9 @@ roughly 5–10x cut in the fixed term. That is the target of
 Reproduce the figures with:
 
     #include "WasmType.hpp"
-    printf("%zu\n", sizeof(WASM::Subtype));   // 88 on x86-64 / libstdc++
+    printf("%zu\n", sizeof(WASM::Subtype));    // 104 on x86-64 / libstdc++
+    #include "WasmTypeStore.hpp"
+    printf("%zu\n", sizeof(WASM::TypeRecord)); // 16 on x86-64 / libstdc++
 
 ## 13. References
 

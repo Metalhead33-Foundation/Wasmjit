@@ -608,6 +608,9 @@ protected:
 	void dispatchI32Load(WASM::MemArg addr) override; //!< Lower this opcode into the backend IR.
 	void dispatchI64Load(WASM::MemArg addr) override; //!< Lower this opcode into the backend IR.
 	void dispatchF32Load(WASM::MemArg addr) override; //!< Lower this opcode into the backend IR.
+	//! \brief Lowers `f32.load_f16` through the f16 helper.
+	//! \param addr Effective address and natural alignment.
+	void dispatchF32LoadF16(WASM::MemArg addr) override;
 	void dispatchF64Load(WASM::MemArg addr) override; //!< Lower this opcode into the backend IR.
 	void dispatchI32Load8S(WASM::MemArg addr) override; //!< Lower this opcode into the backend IR.
 	void dispatchI32Load8U(WASM::MemArg addr) override; //!< Lower this opcode into the backend IR.
@@ -622,6 +625,9 @@ protected:
 	void dispatchI32Store(WASM::MemArg addr) override; //!< Lower this opcode into the backend IR.
 	void dispatchI64Store(WASM::MemArg addr) override; //!< Lower this opcode into the backend IR.
 	void dispatchF32Store(WASM::MemArg addr) override; //!< Lower this opcode into the backend IR.
+	//! \brief Lowers `f32.store_f16` through the f16 helper.
+	//! \param addr Effective address and natural alignment.
+	void dispatchF32StoreF16(WASM::MemArg addr) override;
 	void dispatchF64Store(WASM::MemArg addr) override; //!< Lower this opcode into the backend IR.
 	void dispatchI32Store8(WASM::MemArg addr) override; //!< Lower this opcode into the backend IR.
 	void dispatchI32Store16(WASM::MemArg addr) override; //!< Lower this opcode into the backend IR.
@@ -2175,6 +2181,10 @@ protected:
  * \brief Dispatches the F64x2PMax WebAssembly instruction to this LibJIT implementation.
  */
 	void dispatchF64x2PMax() override; //!< Lower this opcode into the backend IR.
+	//! \brief Lowers one half-precision SIMD instruction through the f16 helpers.
+	//! \param opcode The 0xFD sub-opcode.
+	//! \param lane The lane immediate, or zero for instructions without one.
+	void dispatchSIMDF16x8(WASM::SIMDOpcode opcode, uint8_t lane) override;
 /**
  * \brief Dispatches the I32x4TruncSatF32x4S WebAssembly instruction to this LibJIT implementation.
  */

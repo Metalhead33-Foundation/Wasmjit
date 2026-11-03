@@ -74,6 +74,7 @@ SOURCES += \
         WasmValidator.cpp \
         WasmVersion.cpp \
         wasm_atomic.cpp \
+        wasm_f16.cpp \
         wasm_simd_scalar.cpp \
         wasm_simd_vector.cpp
 
@@ -135,6 +136,7 @@ HEADERS += \
     WasmValue.hpp \
     wasmjit_backend.h \
     wasm_atomic.hpp \
+    wasm_f16.hpp \
     wasm_simd_scalar.hpp \
     wasm_simd_vector.hpp \
     wasm_simd_ops.inc \

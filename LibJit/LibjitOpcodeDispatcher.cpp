@@ -11,6 +11,7 @@
 #include "../WasmBase/WasmString.hpp"
 #include "../WasmBase/WasmTracing.hpp"
 #include "../WasmBase/wasm_atomic.hpp"
+#include "../WasmBase/wasm_f16.hpp"
 #include "../WasmBase/wasm_simd_scalar.hpp"
 #include <algorithm>
 #include <cassert>
@@ -4786,6 +4787,15 @@ void OpcodeDispatcher::dispatchF32Load(WASM::MemArg addr)
 	pushValue(jit_insn_load_relative(function, ptr, 0, jit_type_float32));
 }
 
+void OpcodeDispatcher::dispatchF32LoadF16(WASM::MemArg addr)
+{
+	// The helper performs the binary16 -> f32 conversion; only the 2-byte
+	// address arithmetic and bounds check belong to the lowering.
+	jit_value_t ptr = effectiveMemoryAddress(addr, 2);
+	pushValue(callNativeUnary(function, reinterpret_cast<void*>(wasm_f32_load_f16),
+			jit_type_float32, jit_type_void_ptr, ptr));
+}
+
 void OpcodeDispatcher::dispatchF64Load(WASM::MemArg addr)
 {
 	jit_value_t ptr = effectiveMemoryAddress(addr, 8);
@@ -4882,6 +4892,17 @@ void OpcodeDispatcher::dispatchF32Store(WASM::MemArg addr)
 	jit_value_t val = canonicalizeFloat(popValue(), false);
 	jit_value_t ptr = effectiveMemoryAddress(addr, 4);
 	jit_insn_store_relative(function, ptr, 0, val);
+}
+
+void OpcodeDispatcher::dispatchF32StoreF16(WASM::MemArg addr)
+{
+	// Convert through the same canonicalising helper the SIMD lane forms use;
+	// it produces the canonical binary16 NaN in deterministic mode by itself.
+	jit_value_t val = popValue();
+	jit_value_t ptr = effectiveMemoryAddress(addr, 2);
+	const jit_type_t types[2] = {jit_type_void_ptr, jit_type_float32};
+	jit_value_t args[2] = {ptr, val};
+	callSimdHelper(reinterpret_cast<void*>(wasm_f32_store_f16), jit_type_void, types, args);
 }
 
 void OpcodeDispatcher::dispatchF64Store(WASM::MemArg addr)
@@ -8265,6 +8286,98 @@ void OpcodeDispatcher::dispatchF64x2Min() { emitSimdBinaryHelper(reinterpret_cas
 void OpcodeDispatcher::dispatchF64x2Max() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_f64x2_max)); }
 void OpcodeDispatcher::dispatchF64x2PMin() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_f64x2_pmin)); }
 void OpcodeDispatcher::dispatchF64x2PMax() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_f64x2_pmax)); }
+
+// Half precision (docs/proposals/NUMERIC_PROPOSALS.md NUM-3). `f16x8` is a
+// lane shape, so every result is a `v128` slot and the helper receives the
+// 0xFD sub-opcode as an immediate selecting the operation. The scalar helpers
+// own the binary16 conversion and arithmetic; the lowering only decides the
+// operand shape.
+void OpcodeDispatcher::dispatchSIMDF16x8(WASM::SIMDOpcode opcode, uint8_t lane)
+{
+	const uint32_t op = static_cast<uint32_t>(opcode);
+
+	switch (opcode) {
+	case WASM::SIMDOpcode::F16x8Splat: {
+		if (unreachableCode) { popValue(); return; }
+		jit_value_t x = popValue();
+		jit_value_t out = newV128Slot();
+		const jit_type_t types[1] = {jit_type_float32};
+		jit_value_t args[1] = {x};
+		callSimdOutHelper(reinterpret_cast<void*>(wasm_f16x8_splat), out, types, args);
+		pushValue(out);
+		return;
+	}
+	case WASM::SIMDOpcode::F16x8ExtractLane: {
+		if (unreachableCode) { popValue(); return; }
+		jit_value_t a = popValue();
+		const jit_type_t types[2] = {jit_type_void_ptr, jit_type_uint};
+		jit_value_t args[2] = {jit_insn_address_of(function, a),
+				jit_value_create_nint_constant(function, jit_type_uint, lane)};
+		pushValue(callSimdHelper(reinterpret_cast<void*>(wasm_f16x8_extract_lane),
+				jit_type_float32, types, args));
+		return;
+	}
+	case WASM::SIMDOpcode::F16x8ReplaceLane: {
+		if (unreachableCode) { popValue(); popValue(); return; }
+		jit_value_t x = popValue();
+		jit_value_t a = popValue();
+		jit_value_t out = newV128Slot();
+		const jit_type_t types[3] = {jit_type_void_ptr, jit_type_uint, jit_type_float32};
+		jit_value_t args[3] = {jit_insn_address_of(function, a),
+				jit_value_create_nint_constant(function, jit_type_uint, lane), x};
+		callSimdOutHelper(reinterpret_cast<void*>(wasm_f16x8_replace_lane), out, types, args);
+		pushValue(out);
+		return;
+	}
+	default:
+		break;
+	}
+
+	if ((op >= 0x130u && op <= 0x136u) || (op >= 0x145u && op <= 0x14Du)) {
+		if (unreachableCode) { popValue(); return; }
+		jit_value_t a = popValue();
+		jit_value_t out = newV128Slot();
+		const jit_type_t types[2] = {jit_type_int, jit_type_void_ptr};
+		jit_value_t args[2] = {jit_value_create_nint_constant(function, jit_type_int,
+				static_cast<jit_nint>(op)), jit_insn_address_of(function, a)};
+		callSimdOutHelper(reinterpret_cast<void*>(wasm_f16x8_unary), out, types, args);
+		pushValue(out);
+		return;
+	}
+
+	if (op >= 0x137u && op <= 0x144u) {
+		if (unreachableCode) { popValue(); popValue(); return; }
+		jit_value_t b = popValue();
+		jit_value_t a = popValue();
+		jit_value_t out = newV128Slot();
+		const jit_type_t types[3] = {jit_type_int, jit_type_void_ptr, jit_type_void_ptr};
+		jit_value_t args[3] = {jit_value_create_nint_constant(function, jit_type_int,
+				static_cast<jit_nint>(op)), jit_insn_address_of(function, a),
+				jit_insn_address_of(function, b)};
+		callSimdOutHelper(reinterpret_cast<void*>(wasm_f16x8_binary), out, types, args);
+		pushValue(out);
+		return;
+	}
+
+	if (op == 0x14Eu || op == 0x14Fu) {
+		if (unreachableCode) { popValue(); popValue(); popValue(); return; }
+		jit_value_t c = popValue();
+		jit_value_t b = popValue();
+		jit_value_t a = popValue();
+		jit_value_t out = newV128Slot();
+		const jit_type_t types[4] = {jit_type_int, jit_type_void_ptr,
+				jit_type_void_ptr, jit_type_void_ptr};
+		jit_value_t args[4] = {jit_value_create_nint_constant(function, jit_type_int,
+				static_cast<jit_nint>(op)), jit_insn_address_of(function, a),
+				jit_insn_address_of(function, b), jit_insn_address_of(function, c)};
+		callSimdOutHelper(reinterpret_cast<void*>(wasm_f16x8_ternary), out, types, args);
+		pushValue(out);
+		return;
+	}
+
+	onUnhandledOpcode("dispatchSIMDF16x8");
+}
+
 void OpcodeDispatcher::dispatchI32x4TruncSatF32x4S() { emitSimdUnaryHelper(reinterpret_cast<void*>(wasm_i32x4_trunc_sat_f32x4_s)); }
 void OpcodeDispatcher::dispatchI32x4TruncSatF32x4U() { emitSimdUnaryHelper(reinterpret_cast<void*>(wasm_i32x4_trunc_sat_f32x4_u)); }
 void OpcodeDispatcher::dispatchF32x4ConvertI32x4S() { emitSimdUnaryHelper(reinterpret_cast<void*>(wasm_f32x4_convert_i32x4_s)); }

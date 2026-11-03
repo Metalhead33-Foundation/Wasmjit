@@ -478,6 +478,11 @@ enum class MiscOpcode : uint32_t {
 	//! assigns no encoding, so this is the engine's documented provisional
 	//! encoding (docs/proposals/INSTRUMENT_TRACING.md IT-2).
 	I32Itt = 0x100, //!< Binary opcode mnemonic `I32Itt`.
+
+	//! Half precision (docs/proposals/NUMERIC_PROPOSALS.md NUM-3): the two
+	//! f16 memory operations live in the 0xFC space and convert through f32.
+	F32LoadF16  = 0x30, //!< f32.load_f16 memarg
+	F32StoreF16 = 0x31, //!< f32.store_f16 memarg
 };
 //! Writes a `MiscOpcode` to a `DataStream` using the stream encoding.
 template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& operator<<(Elv::Io::DataStream<E,I>& left, MiscOpcode right) {
@@ -491,8 +496,9 @@ template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& 
 
 //! ---------------------------------------------------------------------------
 //! 0xFD sub-opcodes  – SIMD / vector instructions
-//! These are the u32 values that follow the 0xFD prefix byte.
-//! There are 256 defined entries (0–255); the full set is listed here.
+//! These are the u32 LEB128 values that follow the 0xFD prefix byte.
+//! The fixed-width set occupies 0–0xFF, relaxed SIMD occupies 0x100–0x113,
+//! and half precision occupies 0x120–0x14F. The full set is listed here.
 //! ---------------------------------------------------------------------------
 enum class SIMDOpcode : uint32_t {
 	//! Memory loads
@@ -789,13 +795,64 @@ enum class SIMDOpcode : uint32_t {
 	I16x8RelaxedQ15MulRS = 273, //!< Binary opcode mnemonic `I16x8RelaxedQ15MulRS`.
 	I16x8RelaxedDotI8x16I7x16S = 274, //!< Binary opcode mnemonic `I16x8RelaxedDotI8x16I7x16S`.
 	I32x4RelaxedDotI8x16I7x16AddS = 275, //!< Binary opcode mnemonic `I32x4RelaxedDotI8x16I7x16AddS`.
+
+	//! Half-precision SIMD (docs/proposals/NUMERIC_PROPOSALS.md NUM-3). The
+	//! 0x120–0x14F range is beyond the one-byte SIMD space; these are still
+	//! ordinary u32 LEB128 sub-opcodes of the 0xFD prefix. `f16x8` is a lane
+	//! shape of `v128`, not a first-class value type.
+	F16x8Splat = 0x120, //!< f16x8.splat
+	F16x8ExtractLane = 0x121, //!< f16x8.extract_lane laneidx
+	F16x8ReplaceLane = 0x122, //!< f16x8.replace_lane laneidx
+	F16x8Abs = 0x130, //!< f16x8.abs
+	F16x8Neg = 0x131, //!< f16x8.neg
+	F16x8Sqrt = 0x132, //!< f16x8.sqrt
+	F16x8Ceil = 0x133, //!< f16x8.ceil
+	F16x8Floor = 0x134, //!< f16x8.floor
+	F16x8Trunc = 0x135, //!< f16x8.trunc
+	F16x8Nearest = 0x136, //!< f16x8.nearest
+	F16x8Eq = 0x137, //!< f16x8.eq
+	F16x8Ne = 0x138, //!< f16x8.ne
+	F16x8Lt = 0x139, //!< f16x8.lt
+	F16x8Gt = 0x13A, //!< f16x8.gt
+	F16x8Le = 0x13B, //!< f16x8.le
+	F16x8Ge = 0x13C, //!< f16x8.ge
+	F16x8Add = 0x13D, //!< f16x8.add
+	F16x8Sub = 0x13E, //!< f16x8.sub
+	F16x8Mul = 0x13F, //!< f16x8.mul
+	F16x8Div = 0x140, //!< f16x8.div
+	F16x8Min = 0x141, //!< f16x8.min
+	F16x8Max = 0x142, //!< f16x8.max
+	F16x8PMin = 0x143, //!< f16x8.pmin
+	F16x8PMax = 0x144, //!< f16x8.pmax
+	I16x8TruncSatF16x8S = 0x145, //!< i16x8.trunc_sat_f16x8_s
+	I16x8TruncSatF16x8U = 0x146, //!< i16x8.trunc_sat_f16x8_u
+	F16x8ConvertI16x8S = 0x147, //!< f16x8.convert_i16x8_s
+	F16x8ConvertI16x8U = 0x148, //!< f16x8.convert_i16x8_u
+	F16x8DemoteF32x4Zero = 0x149, //!< f16x8.demote_f32x4_zero
+	F16x8DemoteF64x2Zero = 0x14A, //!< f16x8.demote_f64x2_zero
+	F32x4PromoteLowF16x8 = 0x14B, //!< f32x4.promote_low_f16x8
+	I16x8TruncF16x8S = 0x14C, //!< i16x8.trunc_f16x8_s
+	I16x8TruncF16x8U = 0x14D, //!< i16x8.trunc_f16x8_u
+	F16x8Madd = 0x14E, //!< f16x8.madd
+	F16x8Nmadd = 0x14F, //!< f16x8.nmadd
 };
 
-//! The relaxed-SIMD sub-opcodes occupy one contiguous tail range (0x100–0x113).
+//! The relaxed-SIMD sub-opcodes occupy one contiguous range (0x100–0x113).
 //! A profile that excludes the `N` marker (non-determinism) must reject them.
+//! The half-precision range (0x120–0x14F) is *not* relaxed; the old ">= 256"
+//! test would have swallowed it.
 inline constexpr bool isRelaxedSimdOpcode(SIMDOpcode opcode) noexcept
 {
-	return static_cast<uint32_t>(opcode) >= 256;
+	const uint32_t value = static_cast<uint32_t>(opcode);
+	return value >= 0x100u && value <= 0x113u;
+}
+
+//! True for the half-precision SIMD sub-opcodes (0x120–0x14F).
+inline constexpr bool isF16x8Opcode(SIMDOpcode opcode) noexcept
+{
+	const uint32_t value = static_cast<uint32_t>(opcode);
+	return (value >= 0x120u && value <= 0x122u)
+		|| (value >= 0x130u && value <= 0x14Fu);
 }
 //! Writes a `SIMDOpcode` to a `DataStream` using the stream encoding.
 template <Elv::Util::Endian E, Elv::Io::DeviceLike I> Elv::Io::DataStream<E,I>& operator<<(Elv::Io::DataStream<E,I>& left, SIMDOpcode right) {

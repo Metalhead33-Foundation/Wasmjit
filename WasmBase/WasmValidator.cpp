@@ -2695,6 +2695,91 @@ WJ_SIMD_STORE(V128Store, 4)
 #undef WJ_SIMD_LOAD
 #undef WJ_SIMD_STORE
 
+// Half precision (docs/proposals/NUMERIC_PROPOSALS.md NUM-3). The memory
+// operations are 2 bytes wide and convert through f32; the SIMD family is all
+// `v128` in and out, with six lane-typed exceptions.
+void Validator::dispatchF32LoadF16(MemArg arg)
+{
+	requireMemoryAccess(arg, 1);
+	popMemoryAddress(arg);
+	pushValue(ValueType{ValueTypeCode::F32, -1});
+}
+
+void Validator::dispatchF32StoreF16(MemArg arg)
+{
+	requireMemoryAccess(arg, 1);
+	requireArrayMutable(arg);
+	popExpect(ValueTypeCode::F32);
+	popMemoryAddress(arg);
+}
+
+void Validator::dispatchSIMDF16x8(SIMDOpcode opcode, uint8_t lane)
+{
+	switch (opcode) {
+	case SIMDOpcode::F16x8Splat:
+		popExpect(ValueTypeCode::F32);
+		pushValue(ValueType{ValueTypeCode::V128, -1});
+		return;
+	case SIMDOpcode::F16x8ExtractLane:
+		requireLane(lane, 8, "f16x8.extract_lane");
+		popExpect(ValueTypeCode::V128);
+		pushValue(ValueType{ValueTypeCode::F32, -1});
+		return;
+	case SIMDOpcode::F16x8ReplaceLane:
+		requireLane(lane, 8, "f16x8.replace_lane");
+		popExpect(ValueTypeCode::F32);
+		popExpect(ValueTypeCode::V128);
+		pushValue(ValueType{ValueTypeCode::V128, -1});
+		return;
+	case SIMDOpcode::F16x8Abs:
+	case SIMDOpcode::F16x8Neg:
+	case SIMDOpcode::F16x8Sqrt:
+	case SIMDOpcode::F16x8Ceil:
+	case SIMDOpcode::F16x8Floor:
+	case SIMDOpcode::F16x8Trunc:
+	case SIMDOpcode::F16x8Nearest:
+	case SIMDOpcode::I16x8TruncSatF16x8S:
+	case SIMDOpcode::I16x8TruncSatF16x8U:
+	case SIMDOpcode::F16x8ConvertI16x8S:
+	case SIMDOpcode::F16x8ConvertI16x8U:
+	case SIMDOpcode::F16x8DemoteF32x4Zero:
+	case SIMDOpcode::F16x8DemoteF64x2Zero:
+	case SIMDOpcode::F32x4PromoteLowF16x8:
+	case SIMDOpcode::I16x8TruncF16x8S:
+	case SIMDOpcode::I16x8TruncF16x8U:
+		popExpect(ValueTypeCode::V128);
+		pushValue(ValueType{ValueTypeCode::V128, -1});
+		return;
+	case SIMDOpcode::F16x8Eq:
+	case SIMDOpcode::F16x8Ne:
+	case SIMDOpcode::F16x8Lt:
+	case SIMDOpcode::F16x8Gt:
+	case SIMDOpcode::F16x8Le:
+	case SIMDOpcode::F16x8Ge:
+	case SIMDOpcode::F16x8Add:
+	case SIMDOpcode::F16x8Sub:
+	case SIMDOpcode::F16x8Mul:
+	case SIMDOpcode::F16x8Div:
+	case SIMDOpcode::F16x8Min:
+	case SIMDOpcode::F16x8Max:
+	case SIMDOpcode::F16x8PMin:
+	case SIMDOpcode::F16x8PMax:
+		popExpect(ValueTypeCode::V128);
+		popExpect(ValueTypeCode::V128);
+		pushValue(ValueType{ValueTypeCode::V128, -1});
+		return;
+	case SIMDOpcode::F16x8Madd:
+	case SIMDOpcode::F16x8Nmadd:
+		popExpect(ValueTypeCode::V128);
+		popExpect(ValueTypeCode::V128);
+		popExpect(ValueTypeCode::V128);
+		pushValue(ValueType{ValueTypeCode::V128, -1});
+		return;
+	default:
+		fail("unknown f16x8 SIMD instruction");
+	}
+}
+
 #define WJ_SIMD_LANE_LOAD(name, count, naturalLog2, text) \
 	void Validator::dispatch##name(MemArg arg, uint8_t lane) { \
 		requireMemoryAccess(arg, naturalLog2); \

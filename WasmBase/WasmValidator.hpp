@@ -463,6 +463,9 @@ private:
 	void dispatchI32Load(MemArg arg) override;
 	void dispatchI64Load(MemArg arg) override; //!< Validate the stack effect of this opcode.
 	void dispatchF32Load(MemArg arg) override; //!< Validate the stack effect of this opcode.
+	//! \brief Validates `f32.load_f16`.
+	//! \param arg Effective address and natural alignment.
+	void dispatchF32LoadF16(MemArg arg) override;
 	void dispatchF64Load(MemArg arg) override; //!< Validate the stack effect of this opcode.
 	void dispatchI32Load8S(MemArg arg) override; //!< Validate the stack effect of this opcode.
 	void dispatchI32Load8U(MemArg arg) override; //!< Validate the stack effect of this opcode.
@@ -477,6 +480,9 @@ private:
 	void dispatchI32Store(MemArg arg) override; //!< Validate the stack effect of this opcode.
 	void dispatchI64Store(MemArg arg) override; //!< Validate the stack effect of this opcode.
 	void dispatchF32Store(MemArg arg) override; //!< Validate the stack effect of this opcode.
+	//! \brief Validates `f32.store_f16`.
+	//! \param arg Effective address and natural alignment.
+	void dispatchF32StoreF16(MemArg arg) override;
 	void dispatchF64Store(MemArg arg) override; //!< Validate the stack effect of this opcode.
 	void dispatchI32Store8(MemArg arg) override; //!< Validate the stack effect of this opcode.
 	void dispatchI32Store16(MemArg arg) override; //!< Validate the stack effect of this opcode.
@@ -802,6 +808,10 @@ private:
 	void dispatchF64x2Max() override; //!< Validate the stack effect of this opcode.
 	void dispatchF64x2PMin() override; //!< Validate the stack effect of this opcode.
 	void dispatchF64x2PMax() override; //!< Validate the stack effect of this opcode.
+	//! \brief Validates one half-precision SIMD instruction.
+	//! \param opcode The 0xFD sub-opcode.
+	//! \param lane The lane immediate, or zero for instructions without one.
+	void dispatchSIMDF16x8(SIMDOpcode opcode, uint8_t lane) override;
 	void dispatchI32x4TruncSatF32x4S() override; //!< Validate the stack effect of this opcode.
 	void dispatchI32x4TruncSatF32x4U() override; //!< Validate the stack effect of this opcode.
 	void dispatchF32x4ConvertI32x4S() override; //!< Validate the stack effect of this opcode.

@@ -368,6 +368,12 @@ void WASM::OpcodeDispatcher::dispatchPrefixMisc(FastMemReader& stream, MiscOpcod
 		case MiscOpcode::I64TruncSatF64U: { dispatchI64TruncSatF64U(); break; }
 
 		// ----------------------------------------------------------------
+		// Half-precision memory (f32-mediated; docs/proposals/NUMERIC_PROPOSALS.md)
+		// ----------------------------------------------------------------
+		case MiscOpcode::F32LoadF16:  { MemArg m = stream.read<MemArg>(); dispatchF32LoadF16(m);  break; }
+		case MiscOpcode::F32StoreF16: { MemArg m = stream.read<MemArg>(); dispatchF32StoreF16(m); break; }
+
+		// ----------------------------------------------------------------
 		// Bulk memory
 		// ----------------------------------------------------------------
 		case MiscOpcode::MemoryInit: {
@@ -803,6 +809,18 @@ void WASM::OpcodeDispatcher::dispatchPrefixSIMD(FastMemReader& stream, SIMDOpcod
 		case SIMDOpcode::I32x4RelaxedDotI8x16I7x16AddS: { dispatchI32x4RelaxedDotI8x16I7x16AddS(); break; }
 
 		default:
+			// Half precision uses a u32 sub-opcode range beyond the one-byte
+			// space. The two lane instructions carry the same raw-byte
+			// immediate as the other lane forms; everything else is
+			// immediate-free.
+			if (isF16x8Opcode(opcode)) {
+				uint8_t lane = 0;
+				if (opcode == SIMDOpcode::F16x8ExtractLane
+						|| opcode == SIMDOpcode::F16x8ReplaceLane)
+					lane = stream.read<uint8_t>();
+				dispatchSIMDF16x8(opcode, lane);
+				break;
+			}
 			throw std::runtime_error("Invalid or unsupported 0xFD SIMD sub-opcode");
 	}
 }

@@ -61,7 +61,7 @@ without a deliberate version bump**. For this milestone the frozen set is:
 | S3 | GC object layout: header words, per-type size/alignment, array data offset | [`WasmGcHeader.hpp`](../WasmBase/WasmGcHeader.hpp); [`proposals/GC.md`](proposals/GC.md) invariant H1 |
 | S4 | The trap entry point and its kind/message convention (a pending status, not `longjmp`) | [`SAFETY.md`](SAFETY.md) §2.6; [`TRAP_CLEANUP.md`](TRAP_CLEANUP.md) §12 |
 | S5 | The continuation provider ABI (`wasm_cont_*`, status codes, one-shot, wide 16-byte slots) | [`ABI.md`](ABI.md) "Continuations"; [`proposals/STACK_SWITCHING.md`](proposals/STACK_SWITCHING.md) §10.6 |
-| S6 | The SIMD helper ABI (`const void*` / `void* out`, immediates as scalars) | [`wasm_simd_scalar.hpp`](../WasmBase/wasm_simd_scalar.hpp); [`SIMD_LIBJIT.md`](SIMD_LIBJIT.md) §5–§6 |
+| S6 | The SIMD helper ABI (`const void*` / `void* out`, immediates as scalars) and the f16 helper ABI (`f32` scalars, binary16 lanes) | [`wasm_simd_scalar.hpp`](../WasmBase/wasm_simd_scalar.hpp), [`wasm_f16.hpp`](../WasmBase/wasm_f16.hpp); [`SIMD_LIBJIT.md`](SIMD_LIBJIT.md) §5–§6 |
 | S7 | The backend seam: `ModuleInstantiator` (the four hooks a code generator implements) and `BackendSession` (the façade an embedder drives without a backend header) | [`WasmModuleInstance.hpp`](../WasmBase/WasmModuleInstance.hpp); [`WasmBackendSession.hpp`](../WasmBase/WasmBackendSession.hpp); [`WRITING_A_BACKEND.md`](WRITING_A_BACKEND.md) |
 | S8 | The embedder's invocation path: `WASM::callCallable` / `callCallableWithResults`, `HostBridge`, `nativeImport<&fn>()` | [`ABI.md`](ABI.md) "Embedder Guide"; [`WasmValue.hpp`](../WasmBase/WasmValue.hpp) |
 | S9 | The diagnostic record/id/schema contract (`wasmjit.diagnostic.v1`) | [`DIAGNOSTICS.md`](DIAGNOSTICS.md) §1 |
@@ -357,7 +357,7 @@ feasibility/embedding notes written since
 are also **39 notes in `docs/proposals/`** (34 at `5c3d194`). The
 `README.md` proposal table's completeness meter is a *summary*, and the
 sub-100 rows are concentrated exactly where this study expects them: threads
-(80%, 85%, 55%), stack switching (85%), numeric/FP16 (70%), the upstream-blocked
+(80%, 85%, 55%), stack switching (85%), the upstream-blocked
 proposals (0–10%), and JS integration (whose row now reads "engine seam 100% ·
 JS engine external" — the engine-side obligations are complete and the JS engine
 is the embedder's, by decision). Each note's §7 plan remains
@@ -371,7 +371,7 @@ the authoritative per-item status.
 
 | Area | State |
 |---|---|
-| Proposal surface | 22 of 34 proposal rows at 100%; GC, exceptions, function references, multi-memory, memory64, custom page sizes, bulk memory, extended const, profiles all complete; SIMD 66/66 scripts with all 236 fixed-width handlers. |
+| Proposal surface | 23 of 34 proposal rows at 100%; GC, exceptions, function references, multi-memory, memory64, custom page sizes, bulk memory, extended const, profiles, numeric/FP16 all complete; SIMD 66/66 scripts with all 236 fixed-width handlers. |
 | Validation | 2,382 / 2,382 curated binary negative commands (2,211 `assert_invalid`, 127 `assert_unlinkable`, 17 `assert_malformed`, 27 `assert_uninstantiable`). |
 | Traps | The trap is a per-agent pending status; the host boundary converts it to `WASM::Trap`; `TRAP-1…TRAP-7` shipped; no `longjmp`, no `abort` on a module-caused failure. |
 | Memory safety policy | `SAFETY.md`'s allocation budget, artifact discrimination, input-derived bounds and stack guard are policy *and* implemented; the only remaining `std::abort()` calls are invariant guards (a trap reported below generated code, a resumption of a completed continuation, a null `Callable::fnPtr`). |
@@ -401,12 +401,12 @@ The audit in §5 finds **no in-scope Class E gap**. Concretely:
 
 - The two refactor-shaped changes the tree needed (type identity, per-agent
   state) are shipped; they are foundations, not debt (§5.2).
-- Of the open §5 rows across the 34 proposal notes, every remaining one is A (FP16
-  is a value type plus opcodes; `SET4` is a new storage location; `ENS7` is a
-  message string; `JS7` is an optional new entry point), B (native SIMD per
-  backend, a backend's own lowering), C (call tags, constant-time, flexible
-  vectors, stringref encodings, `GX4`, `IT1`), or D (text format, JS engine,
-  multi-agent, WASI, BYOB, `MC4`/`MC5`).
+- Of the open §5 rows across the 34 proposal notes, every remaining one is A
+  (`SET4` is a new storage location; `ENS7` is a message string; `JS7` is an
+  optional new entry point), B (native SIMD per backend, a backend's own
+  lowering), C (call tags, constant-time, flexible vectors, stringref encodings,
+  `GX4`, `IT1`), or D (text format, JS engine, multi-agent, WASI, BYOB,
+  `MC4`/`MC5`).
 - The only family whose honest fix is a heavy refactor — multi-agent /
   multi-mutator execution — is deferred by explicit decision and pinned as out of
   this milestone's scope (§5.3). Reversing that decision is a new milestone.
@@ -523,7 +523,7 @@ are omitted; this is deliberately not a second copy of those tables.
 | `proposals/TYPE_MODEL.md` §7 `TM-0…TM-5`; AAS6 | Plan rows lack `✅` while §5/§7.11 say closed | A | G2 | Bookkeeping only — but an unmarked closed refactor reads like an open one. |
 | `proposals/GC.md` `H1` | Dual layout logic: runtime and backend layout must agree | B | G2/G3 | Already the contract row (S3); the risk is drift, not refactoring. |
 | `proposals/GC.md` `C7`, `H3`, `H4`, `H7` | Budget refusal, O(n) cast matching, `i31` reinterpretation, ad-hoc `Value::kind` | A/B | G2 | Contained follow-ups. |
-| `proposals/NUMERIC_PROPOSALS.md` `NUM3`, `NUM4`, `NUM7` | No `f16` type, opcodes or fixtures | A (+B for the lane shape) | G2 | The textbook "new type + new opcodes" addition G2 permits. |
+| `proposals/NUMERIC_PROPOSALS.md` `NUM3`, `NUM4`, `NUM7` | ~~No `f16` type, opcodes or fixtures~~ **Closed 2026-11-03 (NUM-3/NUM-4):** `f16x8` is modelled as a `v128` lane shape, every `0xFC 30/31` and `0xFD 120–14F` opcode decodes/validates/lowers, and both a helper suite and two binary modules cover the surface. | A (+B for the lane shape) | G2 | The textbook "new type + new opcodes" addition G2 permits, delivered without a `ValueTypeCode` change. |
 | `proposals/SHARED_EVERYTHING_THREADS.md` `SET3`, `SET4`, `SET5` | No managed waitqueue (`0x68` collides with `cont`), no thread-local globals, no lifecycle builtins | C | G2 | **Encoding-blocked:** the draft assigns no stable binary form. Not implementable without guessing, so tolerated by the completeness rule. |
 | `proposals/SHARED_EVERYTHING_THREADS.md` `SET1` | Shared-to-shared restriction checks incomplete | A | G2 | **Closed 2026-10-29:** a shared type/global/table must name a shared reference (`shared annotations are validated against every referenced type`); shared tags wait on an encoding. |
 | `proposals/SHARED_EVERYTHING_THREADS.md` `SET2`, `SET6`; `THREADS.md` `T9`; `ARA5` | Multi-mutator GC, agent API, two-agent tests | A (demoted) | G2 | **Closed 2026-10-29:** `Agents`, the write barrier, the waiter table and `[multiagent]`; `Single` stays the default. |
@@ -656,6 +656,22 @@ from `build/Desktop-Debug`, for the combined readiness audit
 | `./Test/install-check.sh build/Desktop-Debug` | **OK** — `i32`, `f64`, `i32+i32`, `v128`, `i32+v128` | `ES-5`/`ES-7` still hold after the documentation sweep. |
 | `doxygen Doxyfile` | **0 warnings**; the strict pass reports **0 undocumented declarations** | The `DOCUMENTATION.md` milestone: every one of the 69 headers is documented. |
 | `WASM_SPEC_VALIDATE=1`, ASan/TSan (not run today) | documented required runs | Unchanged from the note above; the readiness audit states the same and does not present them as green. |
+
+
+Re-measured on 2026-11-03 for the FP16/M8 slice (`79034c0` plus the working
+tree), from `build/Desktop-Debug` and `build/Desktop-ASan`:
+
+| Command | Result | Reading |
+|---|---|---|
+| `env MAKE=/usr/bin/make /usr/bin/make -j16` | **exit 0** | The tree builds with the f16 helper TU and the new header. |
+| `./Test/WasmJit` | **17,506 assertions / 589 test cases, all passed** | FP16 adds 71 assertions / 3 cases; M8 adds 15 / 1; the header-tier and header-doc gates stay green. |
+| `./Test/WasmJit '~[spec]'` | **17,128 assertions / 400 test cases, all passed** | The hand-written half is green on its own. |
+| `WASM_SPEC_VALIDATE=1 ./Test/WasmJit` | **17,506 assertions / 589 cases, all passed**; curated negatives **2,380 / 2,382** with the two known `tag` entries | No regression in the strict decoder/validator/linker sweep. |
+| `ASAN_OPTIONS=detect_leaks=0 ./build/Desktop-ASan/Test/WasmJit '~[spec]~[compilation-policy]'` | **17,098 assertions / 397 cases, exit 0**; no ASan memory error | The missing ASan evidence is recorded. LeakSanitizer's reports are confined to LibJIT's uninstrumented context/type caches (1,432,070 bytes / 16,911 allocations); `[compilation-policy]` is excluded because LibJIT's CFG optimizer is impractically slow under ASan. |
+| `./Test/WasmJit '[docs]'` / `'[headerdoc]'` / `'[tiers]'` | **1015 / 2**, **6 / 3**, **245 / 3** | The note shape, header comments and 66-header tier classification hold (including `wasm_f16.hpp`). |
+| `./Test/abi-check.sh build/Desktop-Debug` | **OK** — `libWasmBase` 0 removed / 119 added, `libLibJit` 0 removed / 3 added | The additive-only rule (`G2`) holds; the additions are the f16 helper exports and the two dispatcher overrides. |
+| `./Test/install-check.sh build/Desktop-Debug` | **OK** — `i32`, `f64`, `i32+i32`, `v128`, `i32+v128` | The installed surface still links and runs. |
+| `doxygen Doxyfile` | **0 warnings** | The new helper header follows the Doxygen shape. |
 
 
 ## 12. References

@@ -59,8 +59,8 @@ hardcoded values that were considered".
 
 A kind-2 statement is only allowed in this shape:
 
-> **Snapshot (2026-11-03, working tree on `bca0d87`):** the default suite is
-> 17,417 assertions in 585 cases. Reproduce with `./Test/WasmJit`.
+> **Snapshot (2026-11-03, working tree on `79034c0`):** the default suite is
+> 17,506 assertions in 589 cases. Reproduce with `./Test/WasmJit`.
 
 or, inside a table, with the same three pieces in the caption or the column
 header. A bare number with none of them is the failure mode this note exists to
@@ -427,12 +427,18 @@ test cases**; `[docs]` 1015/2,
 exported symbols. **These are a snapshot, not a promise** — they are here to show
 what the output looks like, and to make a reader notice when it does not.
 
-**Current (2026-11-03, decoder/validator sweep working tree on `bca0d87`):** **17,417 assertions in 585 test
-cases**; `[component-corpus]`/`[component-subtyping]` 520/1,
+**Current (2026-11-03, FP16/M8 working tree on `79034c0`):** **17,506
+assertions in 589 test cases**; **77** `.hpp`/`.h` files under the five backend
+directories; **3,089 dynamic / 1,988 strong** exported `libWasmBase` symbols;
+`[component-corpus]`/`[component-subtyping]` 520/1,
 `[component-execution]` 23/3 (140 accepted artifacts constructed plus the
 upstream primitive-return/trap sweep, including JSON string/flags rows), `[component-async]` 94/8,
 `[component-name]` 7/1, `[component-fuzz]` 4/1,
-`[component-api]` 58/7, `[component-features]` 19/1. Re-run the probe; these are
+`[component-api]` 58/7, `[component-features]` 19/1; `[docs]` 1015/2,
+`[headerdoc]` 6/3, `[runtime]` 122/16, `[concurrency]` 80/13, `[multiagent]`
+51/6, `[backendabi]` 36/4, `[plugin]` 50/9, `[tiers]` 245/3,
+`[compilation-policy]` 30/3, `[config]` 4,190/13, `[mem-provider]` 122/7,
+`[abi]` 24/6, `[surface]` 4/1, `[layering]` 4/1. Re-run the probe; these are
 a dated snapshot, not a promise.
 
 Three things moved those numbers while this note was being written, which is the

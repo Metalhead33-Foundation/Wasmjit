@@ -268,15 +268,18 @@ There are two independent representations, and neither is a unified type store.
 ```text
 Subtype
   bool isFinal
+bool isShared
+std::optional<uint32_t> descriptorIndex
+std::optional<uint32_t> describesIndex
   std::vector<uint32_t> supertypeIndices
   CompositeDefinition composite
-    = std::variant<FuncType, StructType, ArrayType>
+    = std::variant<FuncType, StructType, ArrayType, ContType>
 ```
 
 `FuncType` owns two `std::vector<StorageType>` members; `StructType` owns a
 `std::vector<FieldType>`; `ArrayType` owns a `FieldType`. `Subtype` is now a
 **parser/component scratch type**: `Module::processTypeSection` builds it only
-while parsing and discards it after interning. It is **88 bytes** on the current
+while parsing and discards it after interning. It is **104 bytes** on the current
 x86-64/libstdc++ toolchain, plus heap allocations for each non-empty list
 (`docs/TYPE_IDENTITY.md` §12.1); no core module retains one.
 
@@ -625,7 +628,7 @@ baseline with `sizeof` and allocation counters; the last compares against it.
 
 | Current object | Current fixed cost | Target |
 |---|---:|---|
-| `Subtype` | 88 B + per-list heap | 16-byte `TypeRecord` + pooled payload + 8-byte spans |
+| `Subtype` | 104 B + per-list heap | 16-byte `TypeRecord` + pooled payload + 8-byte spans |
 | `CanonicalType` | ~144 B + four vectors | The same record/view; no second payload copy |
 | `DefinedValueType` | ~216 B | 8-byte value reference + small payload |
 | `ComponentTypeDef` | ~344 B | 16-byte record + payload |

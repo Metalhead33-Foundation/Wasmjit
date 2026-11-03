@@ -97,7 +97,7 @@ private:
 									   const TypeGroup& group,
 									   std::vector<TypeId>& localToGlobal);
 
-	size_t parsedTypes = 0; //!< How many types the last parse interned.
+	size_t parsedTypes = 0; //!< Cumulative local type declarations seen by `internModule`.
 
 	//! Compact canonical records, indexed by TypeId.value; entries are appended
 	//! in group order, so a group's members are contiguous: ids [first, first + count).

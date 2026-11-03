@@ -543,7 +543,7 @@ for a merge to `master` — so that "green" means the same thing to every review
 | Run | Command | Evidence it produces | Last measured |
 | --- | --- | --- | --- |
 | Strict validator sweep | `WASM_SPEC_VALIDATE=1 ./WasmJit` (curated) and `WASM_SPEC_VALIDATE=1 ./WasmJit '[spec]'` (all) | every curated binary negative module is rejected; the all-scripts sweep exercises the hidden decoder/validator/linker cases too | **curated 2,380 / 2,382** (`tag` is the two-entry known failure), **all-scripts 257 / 257**, 2026-11-03 |
-| AddressSanitizer build + suite | configure a second shadow build (below), then run the default suite | no use-after-free, overflow or leak report on the hand-written path | configuration exists; the run is **not yet recorded** in this note |
+| AddressSanitizer build + suite | configure a second shadow build (below), then run the default suite | no use-after-free, overflow or leak report on the hand-written path | **397 cases / 17,098 assertions passed, no ASan memory error, 2026-11-03** (`ASAN_OPTIONS=detect_leaks=0`, exit 0); with LeakSanitizer on, the only reports are **1,432,070 bytes in 16,911 allocations in LibJIT's uninstrumented context/type caches** (first frames `jit-type.c`, `LibJitTypeTranslator`, `dispatchSIMDF16x8` signature caches), not the core or helper path; `[compilation-policy]` is excluded because LibJIT's CFG optimizer under ASan exceeds the runtime budget |
 | ThreadSanitizer concurrency run | configure a third shadow build (below), then `./WasmJit '[multiagent]'` | no data race on the multi-agent path (waiter table, entry counter, GC queue/counters, shared-global atomics) | `[multiagent]` 51 assertions / 6 cases, **no TSan report**, 2026-10-29 |
 | ABI check | `./Test/abi-check.sh build/<config>` | no exported symbol disappeared since the baseline (the additive-only rule of `API_ABI_STABILITY.md` G2); `--update` records an intentional addition | **1,804 + 830 symbols, 0 removed**, 2026-10-29 |
 
@@ -569,6 +569,12 @@ cd Test && ./WasmJit '~[spec]'
 > Add `QMAKE=/usr/bin/qmake6` to the `make` command line: the shell on this
 > machine rewrites `argv[0]`, so a recursive `qmake` recorded as the editor
 > binary never produces a Makefile. See the environment notes below.
+
+The recorded 2026-11-03 ASan run used `'~[spec]~[compilation-policy]'`: the
+`[compilation-policy]` fixture builds a deliberately large CFG, and LibJIT's
+uninstrumented optimizer needs minutes under ASan. That is an evidence-scope
+exclusion, not a passing result for that case — it is green in the ordinary
+builds above.
 
 The **ThreadSanitizer** configuration is the same idea, but use qmake's
 sanitizer feature (`CONFIG+=sanitizer` loads `sanitizer.prf`; `sanitize_thread`

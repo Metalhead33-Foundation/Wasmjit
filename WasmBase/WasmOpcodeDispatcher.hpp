@@ -154,6 +154,9 @@ protected:
 	virtual void dispatchI32Load(MemArg addr) { onUnhandledOpcode("dispatchI32Load"); } //!< Default: unhandled.
 	virtual void dispatchI64Load(MemArg addr) { onUnhandledOpcode("dispatchI64Load"); } //!< Default: unhandled.
 	virtual void dispatchF32Load(MemArg addr) { onUnhandledOpcode("dispatchF32Load"); } //!< Default: unhandled.
+	//! \brief Lower `f32.load_f16`: a 2-byte memory read converted to f32.
+	//! \param addr Effective address and natural alignment.
+	virtual void dispatchF32LoadF16(MemArg addr) { onUnhandledOpcode("dispatchF32LoadF16"); }
 	virtual void dispatchF64Load(MemArg addr) { onUnhandledOpcode("dispatchF64Load"); } //!< Default: unhandled.
 	virtual void dispatchI32Load8S(MemArg addr) { onUnhandledOpcode("dispatchI32Load8S"); } //!< Default: unhandled.
 	virtual void dispatchI32Load8U(MemArg addr) { onUnhandledOpcode("dispatchI32Load8U"); } //!< Default: unhandled.
@@ -168,6 +171,9 @@ protected:
 	virtual void dispatchI32Store(MemArg addr) { onUnhandledOpcode("dispatchI32Store"); } //!< Default: unhandled.
 	virtual void dispatchI64Store(MemArg addr) { onUnhandledOpcode("dispatchI64Store"); } //!< Default: unhandled.
 	virtual void dispatchF32Store(MemArg addr) { onUnhandledOpcode("dispatchF32Store"); } //!< Default: unhandled.
+	//! \brief Lower `f32.store_f16`: an f32 converted to a 2-byte memory write.
+	//! \param addr Effective address and natural alignment.
+	virtual void dispatchF32StoreF16(MemArg addr) { onUnhandledOpcode("dispatchF32StoreF16"); }
 	virtual void dispatchF64Store(MemArg addr) { onUnhandledOpcode("dispatchF64Store"); } //!< Default: unhandled.
 	virtual void dispatchI32Store8(MemArg addr) { onUnhandledOpcode("dispatchI32Store8"); } //!< Default: unhandled.
 	virtual void dispatchI32Store16(MemArg addr) { onUnhandledOpcode("dispatchI32Store16"); } //!< Default: unhandled.
@@ -659,6 +665,20 @@ protected:
 	virtual void dispatchF64x2Max() { onUnhandledOpcode("dispatchF64x2Max"); } //!< Default: unhandled.
 	virtual void dispatchF64x2PMin() { onUnhandledOpcode("dispatchF64x2PMin"); } //!< Default: unhandled.
 	virtual void dispatchF64x2PMax() { onUnhandledOpcode("dispatchF64x2PMax"); } //!< Default: unhandled.
+	//! \brief One hook for the half-precision SIMD instruction family.
+	//!
+	//! `f16x8` is a lane shape of `v128`, not a new value type, so the whole
+	//! 0xFD 0x120–0x14F range shares one dispatch entry. The implementation
+	//! switches on \a opcode; \a lane is the raw lane immediate for
+	//! `f16x8.extract_lane` / `f16x8.replace_lane` and zero otherwise.
+	//! \param opcode The 0xFD sub-opcode.
+	//! \param lane The lane immediate, or zero for instructions without one.
+	virtual void dispatchSIMDF16x8(SIMDOpcode opcode, uint8_t lane)
+	{
+		(void)opcode;
+		(void)lane;
+		onUnhandledOpcode("dispatchSIMDF16x8");
+	}
 	virtual void dispatchI32x4TruncSatF32x4S() { onUnhandledOpcode("dispatchI32x4TruncSatF32x4S"); } //!< Default: unhandled.
 	virtual void dispatchI32x4TruncSatF32x4U() { onUnhandledOpcode("dispatchI32x4TruncSatF32x4U"); } //!< Default: unhandled.
 	virtual void dispatchF32x4ConvertI32x4S() { onUnhandledOpcode("dispatchF32x4ConvertI32x4S"); } //!< Default: unhandled.

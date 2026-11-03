@@ -48,11 +48,13 @@
 #include "WasmBase/WasmOpcode.hpp"
 #include "WasmBase/WasmProfile.hpp"
 #include "WasmBase/WasmStore.hpp"
+#include "WasmBase/WasmTypeRegistry.hpp"
 #include "WasmBase/WasmString.hpp"
 #include "WasmBase/WasmTracing.hpp"
 #include "TestBackend.hpp"
 #include "WasmBase/WasmTrap.hpp"
 #include "WasmBase/wasm_simd_scalar.hpp"
+#include "WasmBase/wasm_f16.hpp"
 #include "WasmBase/WasmComponentRuntime.hpp"
 #include "WasmStub/StubOpcodeDispatcher.hpp"
 #include "WastScript.hpp"
@@ -1570,6 +1572,83 @@ TEST_CASE("type interning dedups identical rec groups across modules")
 	REQUIRE(first.typeCount() == second.typeCount());
 	for (uint32_t i = 0; i < first.typeCount(); ++i)
 		REQUIRE(first.typeId(WASM::LocalTypeIdx{i}) == second.typeId(WASM::LocalTypeIdx{i}));
+}
+
+// M8 (docs/TYPE_IDENTITY.md §8): measure the dedup ratio and the compact
+// registry footprint on two representative workloads, and pin the decision
+// that the parser-side `Subtype` does not need shrinking.
+TEST_CASE("TYPE_IDENTITY M8: dedup ratio and registry footprint", "[type-identity][m8]")
+{
+	const auto storage = [](WASM::ValueTypeCode code) {
+		return WASM::StorageType{false, WASM::ValueType{code, -1}};
+	};
+	const auto funcType = [&storage](uint32_t paramCount) {
+		WASM::Subtype subtype{};
+		subtype.isFinal = true;
+		WASM::FuncType function;
+		function.params.assign(paramCount, storage(WASM::ValueTypeCode::I32));
+		function.results.push_back(storage(WASM::ValueTypeCode::I32));
+		subtype.composite = std::move(function);
+		return subtype;
+	};
+
+	// Workload A: 250 modules, each with the same four function signatures.
+	// Exactly the shape real modules repeat: `(i32)->i32`, `(i64)->i64`, ...
+	{
+		WASM::TypeRegistry registry;
+		std::vector<WASM::Subtype> types = {
+			funcType(1), funcType(1), funcType(1), funcType(1)
+		};
+		types[0].composite = WASM::FuncType{{storage(WASM::ValueTypeCode::I32)}, {storage(WASM::ValueTypeCode::I32)}};
+		types[1].composite = WASM::FuncType{{storage(WASM::ValueTypeCode::I64)}, {storage(WASM::ValueTypeCode::I64)}};
+		types[2].composite = WASM::FuncType{{storage(WASM::ValueTypeCode::F32)}, {storage(WASM::ValueTypeCode::F32)}};
+		types[3].composite = WASM::FuncType{{storage(WASM::ValueTypeCode::F64)}, {storage(WASM::ValueTypeCode::F64)}};
+		const std::array<WASM::TypeGroup, 1> groups = {
+			WASM::TypeGroup{WASM::LocalTypeIdx{0}, 4}
+		};
+		for (uint32_t module = 0; module < 250; ++module)
+			registry.internModule(types, groups);
+
+		REQUIRE(registry.parsedTypeCount() == 1000);
+		REQUIRE(registry.internedTypeCount() == 4);
+		REQUIRE(registry.canonicalGroupCount() == 1);
+		REQUIRE(registry.parsedTypeCount() / registry.internedTypeCount() == 250);
+		REQUIRE(registry.store().payloadBytes() < 1024);
+		REQUIRE(registry.store().allocationCount() < 16);
+	}
+
+	// Workload B: 100 modules, each with six common signatures and two
+	// module-specific ones. The common group dedups; the unique group does not.
+	{
+		WASM::TypeRegistry registry;
+		for (uint32_t module = 0; module < 100; ++module) {
+			std::vector<WASM::Subtype> types;
+			types.reserve(8);
+			for (uint32_t common = 1; common <= 6; ++common)
+				types.push_back(funcType(common));
+			types.push_back(funcType(1 + module * 2));
+			types.push_back(funcType(2 + module * 2));
+			const std::array<WASM::TypeGroup, 2> groups = {
+				WASM::TypeGroup{WASM::LocalTypeIdx{0}, 6},
+				WASM::TypeGroup{WASM::LocalTypeIdx{6}, 2}
+			};
+			registry.internModule(types, groups);
+		}
+
+		REQUIRE(registry.parsedTypeCount() == 800);
+		REQUIRE(registry.internedTypeCount() == 206); // 6 common + 200 unique
+		REQUIRE(registry.canonicalGroupCount() == 101); // 1 common + 100 unique
+		REQUIRE(registry.parsedTypeCount() / registry.internedTypeCount() == 3);
+		REQUIRE(registry.store().payloadBytes() < 1024 * 1024);
+		REQUIRE(registry.store().allocationCount() < 32);
+	}
+
+	// The long-lived record is fixed-size and much smaller than the parser-side
+	// Subtype; TM-6 already removed the per-module Subtype block, so shrinking
+	// Subtype would optimize a temporary, not the registry. Decision: keep it.
+	REQUIRE(sizeof(WASM::TypeRecord) <= 32);
+	REQUIRE(sizeof(WASM::TypeId) <= 8);
+	REQUIRE(sizeof(WASM::Subtype) >= sizeof(WASM::TypeRecord));
 }
 
 namespace {
@@ -8558,6 +8637,422 @@ TEST_CASE("rounding variants: ceil/floor/trunc are selected by the sub-opcode")
 	REQUIRE(WASM::callCallable<float>(exported("add_trunc"), 16777216.0f, 1.0f) == 16777216.0f);
 	REQUIRE(WASM::callCallable<float>(exported("convert_ceil"), int32_t(16777217)) == 16777218.0f);
 	REQUIRE(WASM::callCallable<float>(exported("convert_trunc"), int32_t(16777217)) == 16777216.0f);
+}
+
+// ── Half precision helpers (docs/proposals/NUMERIC_PROPOSALS.md NUM-3) ──────
+TEST_CASE("f16 helpers: rounding, arithmetic and lane operations")
+{
+	using Op = WASM::SIMDOpcode;
+	std::array<uint8_t, 16> a{};
+	std::array<uint8_t, 16> b{};
+	std::array<uint8_t, 16> out{};
+
+	const auto splat = [](float x) {
+		std::array<uint8_t, 16> v{};
+		wasm_f16x8_splat(x, v.data());
+		return v;
+	};
+	const auto extract = [](const std::array<uint8_t, 16>& v, uint32_t lane) {
+		return wasm_f16x8_extract_lane(v.data(), lane);
+	};
+	const auto roundTrip = [&](float x) { return extract(splat(x), 0); };
+	const auto setLane16 = [](std::array<uint8_t, 16>& v, uint32_t lane, uint16_t bits) {
+		v[lane * 2] = static_cast<uint8_t>(bits & 0xFFu);
+		v[lane * 2 + 1] = static_cast<uint8_t>(bits >> 8);
+	};
+	const auto lane16 = [](const std::array<uint8_t, 16>& v, uint32_t lane) {
+		return static_cast<uint16_t>(v[lane * 2])
+			| static_cast<uint16_t>(static_cast<uint16_t>(v[lane * 2 + 1]) << 8);
+	};
+
+	// Exact representable values and the two binary16 exponent edges.
+	REQUIRE(roundTrip(1.5f) == 1.5f);
+	REQUIRE(lane16(splat(1.5f), 0) == 0x3E00);
+	REQUIRE(roundTrip(65504.0f) == 65504.0f);
+	REQUIRE(std::isinf(roundTrip(65520.0f)));
+	REQUIRE(roundTrip(std::ldexp(1.0f, -24)) == std::ldexp(1.0f, -24));
+	REQUIRE(roundTrip(std::ldexp(1.0f, -25)) == 0.0f);
+	// A tie at the 10-bit mantissa boundary rounds to even (down here).
+	REQUIRE(roundTrip(1.0f + std::ldexp(1.0f, -11)) == 1.0f);
+	REQUIRE(std::signbit(roundTrip(-0.0f)));
+	REQUIRE(std::isnan(roundTrip(std::numeric_limits<float>::quiet_NaN())));
+
+	// Lane access preserves the selected lane and writes the converted scalar.
+	wasm_f16x8_splat(1.5f, a.data());
+	wasm_f16x8_replace_lane(a.data(), 3, -2.0f, out.data());
+	REQUIRE(extract(out, 3) == -2.0f);
+	REQUIRE(extract(out, 2) == 1.5f);
+	REQUIRE(extract(out, 7) == 1.5f);
+
+	// Arithmetic and comparisons.
+	wasm_f16x8_splat(1.5f, a.data());
+	wasm_f16x8_splat(2.25f, b.data());
+	wasm_f16x8_binary(static_cast<uint32_t>(Op::F16x8Add), a.data(), b.data(), out.data());
+	REQUIRE(extract(out, 0) == 3.75f);
+	wasm_f16x8_binary(static_cast<uint32_t>(Op::F16x8Sub), b.data(), a.data(), out.data());
+	REQUIRE(extract(out, 0) == 0.75f);
+	wasm_f16x8_binary(static_cast<uint32_t>(Op::F16x8Mul), a.data(), b.data(), out.data());
+	REQUIRE(extract(out, 0) == 3.375f);
+	wasm_f16x8_binary(static_cast<uint32_t>(Op::F16x8Div), b.data(), a.data(), out.data());
+	REQUIRE(extract(out, 0) == 1.5f);
+
+	wasm_f16x8_binary(static_cast<uint32_t>(Op::F16x8Eq), a.data(), a.data(), out.data());
+	REQUIRE(lane16(out, 0) == 0xFFFF);
+	wasm_f16x8_binary(static_cast<uint32_t>(Op::F16x8Ne), a.data(), a.data(), out.data());
+	REQUIRE(lane16(out, 0) == 0x0000);
+	wasm_f16x8_binary(static_cast<uint32_t>(Op::F16x8Lt), a.data(), b.data(), out.data());
+	REQUIRE(lane16(out, 0) == 0xFFFF);
+	wasm_f16x8_binary(static_cast<uint32_t>(Op::F16x8Ge), a.data(), a.data(), out.data());
+	REQUIRE(lane16(out, 0) == 0xFFFF);
+
+	// min/max prefer -0/+0; pmin/pmax do not propagate NaN.
+	wasm_f16x8_splat(-0.0f, a.data());
+	wasm_f16x8_splat(0.0f, b.data());
+	wasm_f16x8_binary(static_cast<uint32_t>(Op::F16x8Min), a.data(), b.data(), out.data());
+	REQUIRE(std::signbit(extract(out, 0)));
+	wasm_f16x8_binary(static_cast<uint32_t>(Op::F16x8Max), a.data(), b.data(), out.data());
+	REQUIRE(!std::signbit(extract(out, 0)));
+	wasm_f16x8_splat(std::numeric_limits<float>::quiet_NaN(), a.data());
+	wasm_f16x8_binary(static_cast<uint32_t>(Op::F16x8PMin), a.data(), b.data(), out.data());
+	REQUIRE(std::isnan(extract(out, 0)));
+
+	// Unary arithmetic.
+	wasm_f16x8_splat(-1.5f, a.data());
+	wasm_f16x8_unary(static_cast<uint32_t>(Op::F16x8Abs), a.data(), out.data());
+	REQUIRE(extract(out, 0) == 1.5f);
+	wasm_f16x8_splat(-1.5f, a.data());
+	wasm_f16x8_unary(static_cast<uint32_t>(Op::F16x8Neg), a.data(), out.data());
+	REQUIRE(extract(out, 0) == 1.5f);
+	wasm_f16x8_splat(4.0f, a.data());
+	wasm_f16x8_unary(static_cast<uint32_t>(Op::F16x8Sqrt), a.data(), out.data());
+	REQUIRE(extract(out, 0) == 2.0f);
+	wasm_f16x8_splat(1.1f, a.data());
+	wasm_f16x8_unary(static_cast<uint32_t>(Op::F16x8Ceil), a.data(), out.data());
+	REQUIRE(extract(out, 0) == 2.0f);
+	wasm_f16x8_unary(static_cast<uint32_t>(Op::F16x8Floor), a.data(), out.data());
+	REQUIRE(extract(out, 0) == 1.0f);
+	wasm_f16x8_splat(-1.9f, a.data());
+	wasm_f16x8_unary(static_cast<uint32_t>(Op::F16x8Trunc), a.data(), out.data());
+	REQUIRE(extract(out, 0) == -1.0f);
+	wasm_f16x8_splat(2.5f, a.data());
+	wasm_f16x8_unary(static_cast<uint32_t>(Op::F16x8Nearest), a.data(), out.data());
+	REQUIRE(extract(out, 0) == 2.0f);
+
+	// Conversions: saturating, signed/unsigned, and the two zero-extending demotes.
+	wasm_f16x8_splat(1.9f, a.data());
+	wasm_f16x8_unary(static_cast<uint32_t>(Op::I16x8TruncSatF16x8S), a.data(), out.data());
+	REQUIRE(static_cast<int16_t>(lane16(out, 0)) == 1);
+	wasm_f16x8_splat(-40000.0f, a.data());
+	wasm_f16x8_unary(static_cast<uint32_t>(Op::I16x8TruncSatF16x8S), a.data(), out.data());
+	REQUIRE(static_cast<int16_t>(lane16(out, 0)) == -32768);
+	wasm_f16x8_splat(40000.0f, a.data());
+	wasm_f16x8_unary(static_cast<uint32_t>(Op::I16x8TruncSatF16x8U), a.data(), out.data());
+	REQUIRE(lane16(out, 0) == 40000);
+	wasm_f16x8_splat(-1.0f, a.data());
+	wasm_f16x8_unary(static_cast<uint32_t>(Op::I16x8TruncSatF16x8U), a.data(), out.data());
+	REQUIRE(lane16(out, 0) == 0);
+
+	std::memset(a.data(), 0, a.size());
+	setLane16(a, 0, static_cast<uint16_t>(2));
+	wasm_f16x8_unary(static_cast<uint32_t>(Op::F16x8ConvertI16x8S), a.data(), out.data());
+	REQUIRE(extract(out, 0) == 2.0f);
+
+	std::array<uint8_t, 16> f32s{};
+	const float four[] = {1.5f, 2.5f, 3.5f, 4.5f};
+	std::memcpy(f32s.data(), four, sizeof(four));
+	wasm_f16x8_unary(static_cast<uint32_t>(Op::F16x8DemoteF32x4Zero), f32s.data(), out.data());
+	REQUIRE(extract(out, 0) == 1.5f);
+	REQUIRE(extract(out, 3) == 4.5f);
+	REQUIRE(extract(out, 4) == 0.0f);
+
+	std::array<uint8_t, 16> f64s{};
+	const double two[] = {2.5, -3.5};
+	std::memcpy(f64s.data(), two, sizeof(two));
+	wasm_f16x8_unary(static_cast<uint32_t>(Op::F16x8DemoteF64x2Zero), f64s.data(), out.data());
+	REQUIRE(extract(out, 0) == 2.5f);
+	REQUIRE(extract(out, 1) == -3.5f);
+	REQUIRE(extract(out, 2) == 0.0f);
+
+	wasm_f16x8_splat(1.5f, a.data());
+	wasm_f16x8_unary(static_cast<uint32_t>(Op::F32x4PromoteLowF16x8), a.data(), out.data());
+	float promoted[4];
+	std::memcpy(promoted, out.data(), sizeof(promoted));
+	REQUIRE(promoted[0] == 1.5f);
+	REQUIRE(promoted[3] == 1.5f);
+
+	// Fused multiply-add and negated multiply-add.
+	wasm_f16x8_splat(2.0f, a.data());
+	wasm_f16x8_splat(3.0f, b.data());
+	wasm_f16x8_splat(4.0f, out.data());
+	wasm_f16x8_ternary(static_cast<uint32_t>(Op::F16x8Madd), a.data(), b.data(), out.data(), a.data());
+	REQUIRE(extract(a, 0) == 10.0f);
+	wasm_f16x8_splat(2.0f, a.data());
+	wasm_f16x8_splat(3.0f, b.data());
+	wasm_f16x8_splat(4.0f, out.data());
+	wasm_f16x8_ternary(static_cast<uint32_t>(Op::F16x8Nmadd), a.data(), b.data(), out.data(), a.data());
+	REQUIRE(extract(a, 0) == -2.0f);
+
+	// The f32-mediated memory conversion round-trips and canonicalises NaN.
+	uint8_t memory[4] = {};
+	wasm_f32_store_f16(memory, 1.5f);
+	REQUIRE(wasm_f32_load_f16(memory) == 1.5f);
+	REQUIRE(memory[0] == 0x00);
+	REQUIRE(memory[1] == 0x3E);
+	wasm_f32_store_f16(memory, std::numeric_limits<float>::quiet_NaN());
+	REQUIRE(std::isnan(wasm_f32_load_f16(memory)));
+	REQUIRE(memory[0] == 0x00);
+	REQUIRE(memory[1] == 0x7E);
+	wasm_f32_store_f16(memory, std::copysign(
+			std::numeric_limits<float>::quiet_NaN(), -1.0f));
+	REQUIRE(memory[0] == 0x00);
+	REQUIRE(memory[1] == 0x7E); // the canonical NaN is positive
+
+	// The trapping forms report an invalid conversion for NaN/out-of-range,
+	// rather than silently saturating.
+	WASM::clearPendingTrap();
+	wasm_f16x8_splat(std::numeric_limits<float>::quiet_NaN(), a.data());
+	wasm_f16x8_unary(static_cast<uint32_t>(Op::I16x8TruncF16x8S), a.data(), out.data());
+	REQUIRE(WASM::wasm_trap_slot()->pending != 0);
+	REQUIRE(WASM::wasm_trap_slot()->kind
+			== static_cast<int>(WASM::TrapKind::InvalidConversionToInteger));
+	WASM::clearPendingTrap();
+	wasm_f16x8_splat(40000.0f, a.data());
+	wasm_f16x8_unary(static_cast<uint32_t>(Op::I16x8TruncF16x8S), a.data(), out.data());
+	REQUIRE(WASM::wasm_trap_slot()->kind
+			== static_cast<int>(WASM::TrapKind::IntegerOverflow));
+	WASM::clearPendingTrap();
+}
+
+// ── Half precision through the decoder, validator and LibJIT ────────────────
+TEST_CASE("f16 binary module: every opcode decodes, validates and lowers")
+{
+	// wasm-tools in the pinned snapshot has no f16 text spelling, so this is a
+	// hand-built binary module (the same pattern as the rounding-variant test).
+	std::vector<uint8_t> bytes = {0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00};
+	const auto leb = [](std::vector<uint8_t>& out, uint32_t value) {
+		do {
+			uint8_t byte = static_cast<uint8_t>(value & 0x7Fu);
+			value >>= 7;
+			if (value != 0)
+				byte |= 0x80u;
+			out.push_back(byte);
+		} while (value != 0);
+	};
+	const auto section = [&bytes, &leb](uint8_t id, const std::vector<uint8_t>& payload) {
+		bytes.push_back(id);
+		leb(bytes, static_cast<uint32_t>(payload.size()));
+		bytes.insert(bytes.end(), payload.begin(), payload.end());
+	};
+	const auto f16 = [&leb](std::vector<uint8_t>& body, uint32_t opcode) {
+		body.push_back(0xFD);
+		leb(body, opcode);
+	};
+	const auto v128Zero = [&f16](std::vector<uint8_t>& body) {
+		f16(body, 0x0C); // v128.const
+		body.insert(body.end(), 16, 0x00);
+	};
+	const auto f32Zero = [](std::vector<uint8_t>& body) {
+		body.push_back(0x43); // f32.const
+		body.insert(body.end(), 4, 0x00);
+	};
+
+	// type 0: [] -> []; functions: one; memory: one page.
+	section(0x01, {0x01, 0x60, 0x00, 0x00});
+	section(0x03, {0x01, 0x00});
+	section(0x05, {0x01, 0x00, 0x01});
+
+	std::vector<uint8_t> body;
+	// Unary arithmetic, comparisons/arithmetic, conversions, trapping forms, FMA.
+	for (uint32_t op = 0x130; op <= 0x136; ++op) {
+		v128Zero(body);
+		f16(body, op);
+		body.push_back(0x1A); // drop
+	}
+	for (uint32_t op = 0x137; op <= 0x144; ++op) {
+		v128Zero(body);
+		v128Zero(body);
+		f16(body, op);
+		body.push_back(0x1A);
+	}
+	for (uint32_t op = 0x145; op <= 0x14D; ++op) {
+		v128Zero(body);
+		f16(body, op);
+		body.push_back(0x1A);
+	}
+	for (uint32_t op = 0x14E; op <= 0x14F; ++op) {
+		v128Zero(body);
+		v128Zero(body);
+		v128Zero(body);
+		f16(body, op);
+		body.push_back(0x1A);
+	}
+	// Lane instructions.
+	f32Zero(body);
+	f16(body, 0x120); // splat
+	body.push_back(0x1A);
+	v128Zero(body);
+	f16(body, 0x121); // extract_lane
+	body.push_back(0x00);
+	body.push_back(0x1A);
+	v128Zero(body);
+	f32Zero(body);
+	f16(body, 0x122); // replace_lane
+	body.push_back(0x00);
+	body.push_back(0x1A);
+	// f32.load_f16 / f32.store_f16, with their natural 2-byte alignment.
+	body.push_back(0x41); // i32.const 0
+	body.push_back(0x00);
+	body.push_back(0xFC);
+	body.push_back(0x30);
+	body.push_back(0x01); // align = log2(2)
+	body.push_back(0x00); // offset 0
+	body.push_back(0x1A);
+	body.push_back(0x41);
+	body.push_back(0x00);
+	f32Zero(body);
+	body.push_back(0xFC);
+	body.push_back(0x31);
+	body.push_back(0x01);
+	body.push_back(0x00);
+	body.push_back(0x0B); // end
+
+	{
+		std::vector<uint8_t> payload;
+		leb(payload, 1);
+		leb(payload, 3);
+		payload.insert(payload.end(), {'a', 'l', 'l'});
+		payload.push_back(0x00);
+		leb(payload, 0);
+		section(0x07, payload);
+	}
+	{
+		std::vector<uint8_t> payload;
+		leb(payload, 1); // one body
+		leb(payload, static_cast<uint32_t>(1 + body.size())); // locals vec + body
+		payload.push_back(0x00); // no locals
+		payload.insert(payload.end(), body.begin(), body.end());
+		section(0x0A, payload);
+	}
+
+	std::span<const std::byte> span(
+		reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
+	Euph::Io::ConstBufferDevice device(span);
+	auto artifact = WASM::Artifact::parse(device, testStore());
+	REQUIRE(artifact != nullptr);
+	WASM::Module* parsed = artifact->asCoreModule();
+	REQUIRE(parsed != nullptr);
+	WASM::RegistryImportResolver imports;
+	auto backend = TestBackend::create();
+	auto instance = backend->instantiator().instantiate(*parsed, imports);
+	REQUIRE(instance.get() != nullptr);
+	auto all = instance->exportedFunction("all");
+	REQUIRE(all.has_value());
+	WASM::callCallable<void>(*all);
+}
+
+
+TEST_CASE("f16 binary module: load, store and arithmetic traverse the JIT")
+{
+	std::vector<uint8_t> bytes = {0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00};
+	const auto leb = [](std::vector<uint8_t>& out, uint32_t value) {
+		do {
+			uint8_t byte = static_cast<uint8_t>(value & 0x7Fu);
+			value >>= 7;
+			if (value != 0)
+				byte |= 0x80u;
+			out.push_back(byte);
+		} while (value != 0);
+	};
+	const auto section = [&bytes, &leb](uint8_t id, const std::vector<uint8_t>& payload) {
+		bytes.push_back(id);
+		leb(bytes, static_cast<uint32_t>(payload.size()));
+		bytes.insert(bytes.end(), payload.begin(), payload.end());
+	};
+	const auto exportEntry = [&leb](std::vector<uint8_t>& payload, const char* name, uint32_t index) {
+		const auto length = static_cast<uint32_t>(std::strlen(name));
+		leb(payload, length);
+		payload.insert(payload.end(), name, name + length);
+		payload.push_back(0x00);
+		leb(payload, index);
+	};
+
+	// type 0: (f32, f32) -> f32; type 1: (i32, f32) -> (); type 2: (i32) -> f32.
+	section(0x01, {0x03,
+		0x60, 0x02, 0x7D, 0x7D, 0x01, 0x7D,
+		0x60, 0x02, 0x7F, 0x7D, 0x00,
+		0x60, 0x01, 0x7F, 0x01, 0x7D});
+	section(0x03, {0x03, 0x00, 0x01, 0x02});
+	section(0x05, {0x01, 0x00, 0x01});
+	{
+		std::vector<uint8_t> payload;
+		leb(payload, 3);
+		exportEntry(payload, "add", 0);
+		exportEntry(payload, "store", 1);
+		exportEntry(payload, "load", 2);
+		section(0x07, payload);
+	}
+	{
+		// add: splat both f32 parameters, add, extract lane 0.
+		const std::vector<uint8_t> addBody = {
+			0x00, // no locals
+			0x20, 0x00, 0xFD, 0xA0, 0x02, // local.get 0; f16x8.splat
+			0x20, 0x01, 0xFD, 0xA0, 0x02, // local.get 1; f16x8.splat
+			0xFD, 0xBD, 0x02,             // f16x8.add (0x13D)
+			0xFD, 0xA1, 0x02, 0x00,       // f16x8.extract_lane 0
+			0x0B
+		};
+		// store: f32.store_f16 at the i32 parameter.
+		const std::vector<uint8_t> storeBody = {
+			0x00,
+			0x20, 0x00, 0x20, 0x01,
+			0xFC, 0x31, 0x01, 0x00,
+			0x0B
+		};
+		// load: f32.load_f16 at the i32 parameter.
+		const std::vector<uint8_t> loadBody = {
+			0x00,
+			0x20, 0x00,
+			0xFC, 0x30, 0x01, 0x00,
+			0x0B
+		};
+		std::vector<uint8_t> payload;
+		leb(payload, 3);
+		for (const auto* body : {&addBody, &storeBody, &loadBody}) {
+			leb(payload, static_cast<uint32_t>(body->size()));
+			payload.insert(payload.end(), body->begin(), body->end());
+		}
+		section(0x0A, payload);
+	}
+
+	std::span<const std::byte> span(
+		reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
+	Euph::Io::ConstBufferDevice device(span);
+	auto artifact = WASM::Artifact::parse(device, testStore());
+	REQUIRE(artifact != nullptr);
+	WASM::Module* parsed = artifact->asCoreModule();
+	REQUIRE(parsed != nullptr);
+	WASM::RegistryImportResolver imports;
+	auto backend = TestBackend::create();
+	auto instance = backend->instantiator().instantiate(*parsed, imports);
+	REQUIRE(instance.get() != nullptr);
+
+	auto add = instance->exportedFunction("add");
+	auto store = instance->exportedFunction("store");
+	auto load = instance->exportedFunction("load");
+	REQUIRE(add.has_value());
+	REQUIRE(store.has_value());
+	REQUIRE(load.has_value());
+
+	REQUIRE(WASM::callCallable<float>(*add, 1.5f, 2.25f) == 3.75f);
+	WASM::callCallable<void>(*store, int32_t(0), 1.5f);
+	REQUIRE(WASM::callCallable<float>(*load, int32_t(0)) == 1.5f);
+	WASM::callCallable<void>(*store, int32_t(2), 65520.0f);
+	REQUIRE(std::isinf(WASM::callCallable<float>(*load, int32_t(2))));
+	WASM::callCallable<void>(*store, int32_t(4), -0.0f);
+	REQUIRE(std::signbit(WASM::callCallable<float>(*load, int32_t(4))));
+	WASM::callCallable<void>(*store, int32_t(6),
+			std::numeric_limits<float>::quiet_NaN());
+	REQUIRE(std::isnan(WASM::callCallable<float>(*load, int32_t(6))));
 }
 
 

@@ -91,6 +91,7 @@ live, because every backend and the runtime both depend on them:
 | The continuation provider contract: `wasm_cont_new` / `resume` / `suspend`, status codes, one-shot and trap/exception transfer | `WasmContinuation.hpp` ([`proposals/STACK_SWITCHING.md`](proposals/STACK_SWITCHING.md) §10.6) | emit the calls and branch on the documented status; do not implement a provider in the backend or change the status layout |
 | Core-module instantiation: component execution instantiates embedded modules only through `ModuleInstantiator` | `WasmModuleInstance.hpp`, `WasmComponentRuntime.hpp` | implement the `ModuleInstantiator` hooks; `ComponentRuntime` must not be made to depend on one code generator |
 | The SIMD helper ABI (`const void*` / `void* out`, immediates as scalars) | `wasm_simd_scalar.hpp` | lower `v128` ops onto those entry points, or provide its own but keep the same semantics |
+| The half-precision helper ABI (`f32` scalars, `v128` bytes, the 0xFD sub-opcode as an immediate) | `wasm_f16.hpp` | lower `f16x8` operations through these entry points, or provide its own binary16 implementation with the same NaN, zero-sign, rounding and trap rules |
 | Unmodelled value types are rejected at load, so no backend is ever handed one | `WasmType.hpp`, `WasmModule.cpp` | nothing — this is the core protecting it |
 
 **No interpreter fallback.** The core must not grow a Wasm interpreter. In this
