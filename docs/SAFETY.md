@@ -191,6 +191,14 @@ by returning, so `std::lock_guard`, `std::unique_ptr` and `std::string` are vali
 across a trap-capable call. The one remaining rule is that a *helper called from
 generated code* must report and return rather than throw (§2.6).
 
+**Construction failure is a resource boundary too.** A `ModuleInstance`
+constructor creates its GC region set and may create memories and tables before
+a link-time error throws. A throwing constructor never runs `~ModuleInstance`,
+so the constructor catches, calls `releaseOwnedStorage()` (the same bulk
+release the destructor uses) and rethrows. A failed instantiation therefore must
+not strand store-owned regions or budget, and that path is covered by the ASan
+LeakSanitizer run (§4 of [`TESTING.md`](TESTING.md)).
+
 ### 2.6 A helper called from generated code reports; it never throws or jumps
 
 The generated frames have no unwind tables, so an exception leaving a helper

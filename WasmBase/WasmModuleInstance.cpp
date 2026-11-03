@@ -358,77 +358,92 @@ ModuleInstance::ModuleInstance(const Module& module, ImportResolver& resolver,
 		const HostBridge* hostBridge)
 	: module(&module)
 {
-	ctx = {};
-	ctx.module = &module;
-	// Install the optional host boundary before any import, initialiser or
-	// segment is evaluated. It is borrowed; the embedder owns its lifetime.
-	ctx.hostBridge = hostBridge;
-	// Arm the guest call-stack guard for this thread. Generated code checks it
-	// on entry, so unbounded Wasm recursion becomes the spec's
-	// "call stack exhausted" trap instead of a host SIGSEGV (WasmStack.hpp,
-	// docs/SAFETY.md §2.8). A failure here leaves the guard disarmed, which is
-	// the documented behaviour on platforms that cannot report stack bounds.
-	installStackLimit(ctx);
+	bool importRangeRegistered = false;
+	try
+	{
+		ctx = {};
+		ctx.module = &module;
+		// Install the optional host boundary before any import, initialiser or
+		// segment is evaluated. It is borrowed; the embedder owns its lifetime.
+		ctx.hostBridge = hostBridge;
+		// Arm the guest call-stack guard for this thread. Generated code checks it
+		// on entry, so unbounded Wasm recursion becomes the spec's
+		// "call stack exhausted" trap instead of a host SIGSEGV (WasmStack.hpp,
+		// docs/SAFETY.md §2.8). A failure here leaves the guard disarmed, which is
+		// the documented behaviour on platforms that cannot report stack bounds.
+		installStackLimit(ctx);
 
-	// ── Step 0: The GC heap region set this instance allocates from ─
-	// Created first, because constant expressions evaluated below
-	// (initializeGlobals) can allocate GC objects. Teardown releases the whole
-	// set in bulk, whether or not the reference counts balanced (GC-2).
-	internals.gcSet = store().gc().createSet();
+		// ── Step 0: The GC heap region set this instance allocates from ─
+		// Created first, because constant expressions evaluated below
+		// (initializeGlobals) can allocate GC objects. Teardown releases the whole
+		// set in bulk, whether or not the reference counts balanced (GC-2).
+		internals.gcSet = store().gc().createSet();
 
-	// ── Step 1: Resolve and store all imports ───────────────────────
-	// Imports must come first because they occupy the low indices in
-	// each index space. We need importedFunctions populated before we
-	// can evaluate any initializer expressions (which might call imports).
-	resolveImports(resolver);
+		// ── Step 1: Resolve and store all imports ───────────────────────
+		// Imports must come first because they occupy the low indices in
+		// each index space. We need importedFunctions populated before we
+		// can evaluate any initializer expressions (which might call imports).
+		resolveImports(resolver);
 
-	if (!module.importTypes.empty())
-		resolveTypeImports(resolver);
+		if (!module.importTypes.empty())
+			resolveTypeImports(resolver);
 
-	// ── Step 2: Set up the memory index space ──────────────────────
-	// Imported memories were resolved by resolveImports(); locally-defined
-	// ones are allocated in the Store here. Either way the instance only
-	// borrows the resulting LinearMemory*.
-	initializeMemories();
+		// ── Step 2: Set up the memory index space ──────────────────────
+		// Imported memories were resolved by resolveImports(); locally-defined
+		// ones are allocated in the Store here. Either way the instance only
+		// borrows the resulting LinearMemory*.
+		initializeMemories();
 
-	// ── Step 2.5: Materialize string literals ──────────────────────
-	// `string.const` is const-eligible, so the literals must exist before
-	// initializeGlobals() evaluates any initializer expression.
-	initializeStringLiterals();
+		// ── Step 2.5: Materialize string literals ──────────────────────
+		// `string.const` is const-eligible, so the literals must exist before
+		// initializeGlobals() evaluates any initializer expression.
+		initializeStringLiterals();
 
-	// ── Step 3: Initialize globals ──────────────────────────────────
-	// Global initializer expressions are constant-only in MVP Wasm,
-	// so we can evaluate them right now without needing compiled functions.
-	initializeGlobals();
+		// ── Step 3: Initialize globals ──────────────────────────────────
+		// Global initializer expressions are constant-only in MVP Wasm,
+		// so we can evaluate them right now without needing compiled functions.
+		initializeGlobals();
 
-	// ── Step 4: Allocate and pre-populate the table ─────────────────
-	initializeTable();
+		// ── Step 4: Allocate and pre-populate the table ─────────────────
+		initializeTable();
 
-	// ── Step 5: Reserve space for compiled function handles ─────────
-	// We don't compile yet — that's the ModuleInstantiator's job.
-	// But we size the vector now so the instantiator can index into it
-	// directly without worrying about bounds.
-	internals.compiledFunctions.resize(module.internalFunctionTypeIndices.size(), nullptr);
-	internals.dataSegmentDropped = std::vector<std::atomic<bool>>(module.dataSegments.size());
-	internals.elementSegmentDropped = std::vector<std::atomic<bool>>(module.elementSegments.size());
-	internals.elementSegmentRefs.resize(module.elementSegments.size());
+		// ── Step 5: Reserve space for compiled function handles ─────────
+		// We don't compile yet — that's the ModuleInstantiator's job.
+		// But we size the vector now so the instantiator can index into it
+		// directly without worrying about bounds.
+		internals.compiledFunctions.resize(module.internalFunctionTypeIndices.size(), nullptr);
+		internals.dataSegmentDropped = std::vector<std::atomic<bool>>(module.dataSegments.size());
+		internals.elementSegmentDropped = std::vector<std::atomic<bool>>(module.elementSegments.size());
+		internals.elementSegmentRefs.resize(module.elementSegments.size());
 
-	// Publish the imported callables only after every step above succeeded, so
-	// a constructor that throws leaves no range pointing at freed storage.
-	// The range is what lets the Store map a cross-module `funcref` back to its
-	// owning `Callable` (docs/proposals/GC.md G2).
-	if (!internals.importStorage.empty())
-		store().registerCallableRange(
-				internals.importStorage.data(), internals.importStorage.size());
+		// Publish the imported callables only after every step above succeeded, so
+		// a constructor that throws leaves no range pointing at freed storage.
+		// The range is what lets the Store map a cross-module `funcref` back to its
+		// owning `Callable` (docs/proposals/GC.md G2).
+		if (!internals.importStorage.empty()) {
+			store().registerCallableRange(
+					internals.importStorage.data(), internals.importStorage.size());
+			importRangeRegistered = true;
+		}
 
-	// Publish the instance to the optional host boundary. This is deliberately
-	// after import resolution and initialisation (so `VMContext` is complete)
-	// and before the start function (so imports called from `start` can find
-	// per-instance host state through `hostData`). The callback must not throw.
-	if (hostBridge != nullptr) {
-		if (hostBridge->instanceCreated != nullptr)
-			hostBridge->instanceCreated(hostBridge->userData, &ctx);
-		internals.hostBridgeActive = true;
+		// Publish the instance to the optional host boundary. This is deliberately
+		// after import resolution and initialisation (so `VMContext` is complete)
+		// and before the start function (so imports called from `start` can find
+		// per-instance host state through `hostData`). The callback must not throw.
+		if (hostBridge != nullptr) {
+			if (hostBridge->instanceCreated != nullptr)
+				hostBridge->instanceCreated(hostBridge->userData, &ctx);
+			internals.hostBridgeActive = true;
+		}
+	}
+	catch (...)
+	{
+		// A throwing constructor leaves `~ModuleInstance` unrun. Give back the
+		// resources it has already acquired before propagating the failure.
+		if (importRangeRegistered)
+			store().unregisterCallableRange(internals.importStorage.data());
+		releaseOwnedStorage();
+		throw;
 	}
 }
 
@@ -452,6 +467,11 @@ ModuleInstance::~ModuleInstance()
 	store().unregisterCallableRange(internals.importStorage.data());
 	store().unregisterCallableRange(internals.internalCallables.data());
 
+	releaseOwnedStorage();
+}
+
+void ModuleInstance::releaseOwnedStorage() noexcept
+{
 	// Bulk reclamation: every region this instance used is unmapped and the
 	// budget credited, independent of the reference counts (the RC leak
 	// backstop, docs/proposals/GC.md §6.1/GC-2).

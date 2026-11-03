@@ -1733,6 +1733,22 @@ void OpcodeDispatcher::emitDropValue(jit_value_t v)
 		emitRefDrop(v);
 }
 
+void OpcodeDispatcher::emitDropContinuation(jit_value_t v)
+{
+	// A continuation is a refcounted handle. Do not gate this on
+	// isRefJitValue: the value can carry a tagged reference type, while
+	// `cont.bind`/`resume` consume the handle unconditionally.
+	emitRefDrop(refAsVoidPtr(v));
+}
+
+void OpcodeDispatcher::emitDropRefSlots(const std::vector<jit_value_t>& slots)
+{
+	for (jit_value_t slot : slots) {
+		if (isRefJitValue(slot))
+			emitRefDrop(slot);
+	}
+}
+
 void OpcodeDispatcher::emitDropRefLocals()
 {
 	// At function exit, every reference-typed local releases the count it owns.
@@ -2839,7 +2855,14 @@ void OpcodeDispatcher::storeStackTopToSlots(const std::vector<jit_value_t>& slot
 		// A deferred SIMD load must be emitted before its slot is copied into
 		// a branch/block result slot; this is the non-`popValue` path.
 		materializePendingSimdLoad(value);
-		jit_insn_store(function, slots[slotBase + i], value);
+		const jit_value_t slot = slots[slotBase + i];
+		if (isRefJitValue(slot)) {
+			// The slot owns the previous value (it starts zeroed). Releasing it
+			// here keeps a loop back-edge or a repeated branch store from
+			// overwriting a live reference without dropping it.
+			emitRefDrop(jit_insn_load(function, slot));
+		}
+		jit_insn_store(function, slot, value);
 	}
 }
 
@@ -3541,7 +3564,7 @@ void OpcodeDispatcher::dispatchContBind(WASM::TypeIdx arg1, WASM::TypeIdx arg2)
 	};
 	jit_value_t next = jit_insn_call_native(function, "wasm_cont_bind_ex",
 			reinterpret_cast<void*>(&WASM::wasm_cont_bind_ex), signature, args, 3, 0);
-	emitDropValue(continuation);
+	emitDropContinuation(continuation);
 	emitPendingTrapCheck();
 
 	WASM::HeapType heap;
@@ -3884,7 +3907,7 @@ void OpcodeDispatcher::dispatchResume(WASM::TypeIdx arg,
 	jit_insn_call_native(function, "wasm_cont_resume_ex",
 			reinterpret_cast<void*>(&WASM::wasm_cont_resume_ex), signature, args, 8, 0);
 
-	emitDropValue(continuation);
+	emitDropContinuation(continuation);
 	emitPendingExceptionCheck();
 	if (unreachableCode)
 		return;
@@ -4036,7 +4059,7 @@ void OpcodeDispatcher::dispatchResumeThrow(WASM::TypeIdx arg1, WASM::TagIdx arg2
 	jit_insn_call_native(function, "wasm_cont_resume_throw_ex",
 			reinterpret_cast<void*>(&WASM::wasm_cont_resume_throw_ex),
 			signature, args, 7, 0);
-	emitDropValue(continuation);
+	emitDropContinuation(continuation);
 	emitPendingExceptionCheck();
 	if (unreachableCode)
 		return;
@@ -4088,7 +4111,7 @@ void OpcodeDispatcher::dispatchResumeThrowRef(WASM::TypeIdx arg,
 	jit_insn_call_native(function, "wasm_cont_resume_throw_ex",
 			reinterpret_cast<void*>(&WASM::wasm_cont_resume_throw_ex),
 			signature, args, 7, 0);
-	emitDropValue(continuation);
+	emitDropContinuation(continuation);
 	emitPendingExceptionCheck();
 	if (unreachableCode)
 		return;
@@ -4121,12 +4144,19 @@ void OpcodeDispatcher::dispatchEnd()
 		jit_insn_label(function, &block.elseLabel);
 		unreachableCode = false;
 		const size_t copies = std::min(block.resultSlots.size(), block.paramSlots.size());
-		for (size_t i = 0; i < copies; ++i)
-			jit_insn_store(function, block.resultSlots[i],
-				jit_insn_load(function, block.paramSlots[i]));
+		for (size_t i = 0; i < copies; ++i) {
+			jit_value_t copy = jit_insn_load(function, block.paramSlots[i]);
+			// The else path copies the parameter slot; a reference needs its own
+			// count because both slots are released at the merge point below.
+			if (isRefJitValue(copy))
+				copy = castRefValue(emitRefClone(copy), jit_value_get_type(block.resultSlots[i]));
+			jit_insn_store(function, block.resultSlots[i], copy);
+		}
 		jit_insn_label(function, &block.label);
 		resizeValueStack(block.stackDepth);
 		restoreValuesFromSlots(block.resultSlots);
+		emitDropRefSlots(block.paramSlots);
+		emitDropRefSlots(block.resultSlots);
 		return;
 	}
 
@@ -4141,6 +4171,8 @@ void OpcodeDispatcher::dispatchEnd()
 	// The block's end label is a merge point: code after it is reachable again.
 	unreachableCode = false;
 	restoreValuesFromSlots(block.resultSlots);
+	emitDropRefSlots(block.paramSlots);
+	emitDropRefSlots(block.resultSlots);
 }
 
 void OpcodeDispatcher::dispatchBr(WASM::LabelIdx arg)

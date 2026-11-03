@@ -544,7 +544,7 @@ for a merge to `master` — so that "green" means the same thing to every review
 | Run | Command | Evidence it produces | Last measured |
 | --- | --- | --- | --- |
 | Strict validator sweep | `WASM_SPEC_VALIDATE=1 ./WasmJit` (curated) and `WASM_SPEC_VALIDATE=1 ./WasmJit '[spec]'` (all) | every curated binary negative module is rejected; the all-scripts sweep exercises the hidden decoder/validator/linker cases too | **curated 3,275 / 3,277** (`tag` is the two-entry known failure), **all-scripts 257 / 257**, 2026-11-03 |
-| AddressSanitizer build + suite | configure a second shadow build (below), then run the default suite | no use-after-free, overflow or leak report on the hand-written path | **397 cases / 17,099 assertions passed, no ASan memory error, 2026-11-03** (`ASAN_OPTIONS=detect_leaks=0`, exit 0); with LeakSanitizer on, the only reports are **1,432,070 bytes in 16,911 allocations in LibJIT's uninstrumented context/type caches** (first frames `jit-type.c`, `LibJitTypeTranslator`, `dispatchSIMDF16x8` signature caches), not the core or helper path; `[compilation-policy]` is excluded because LibJIT's CFG optimizer under ASan exceeds the runtime budget |
+| AddressSanitizer build + suite | configure a second shadow build (below), then run the default suite with `ASAN_OPTIONS=detect_leaks=1:abort_on_error=1` and `LSAN_OPTIONS=suppressions=Test/asan.supp` | no use-after-free, overflow or engine leak; only LibJIT's uninstrumented process-wide caches are suppressed | **397 cases / 17,099 assertions passed, no ASan memory error, LeakSanitizer clean after 1.78 MB of LibJIT cache suppressions, 2026-11-03** (exit 0); `[compilation-policy]` is excluded because LibJIT's CFG optimizer under ASan exceeds the runtime budget |
 | ThreadSanitizer concurrency run | configure a third shadow build (below), then `./WasmJit '[multiagent]'` | no data race on the multi-agent path (waiter table, entry counter, GC queue/counters, shared-global atomics) | `[multiagent]` **51 assertions / 6 cases** and `[concurrency]` **80 / 13**, **no TSan report**, 2026-11-03 |
 | ABI check | `./Test/abi-check.sh build/<config>` | no exported symbol disappeared since the baseline (the additive-only rule of `API_ABI_STABILITY.md` G2); `--update` records an intentional addition | **3,093 dynamic / 1,992 strong symbols, 0 removed**, 2026-11-03 |
 
@@ -565,7 +565,15 @@ mkdir -p build/Desktop-ASan && cd build/Desktop-ASan
     QMAKE_LFLAGS+=-fsanitize=address QMAKE_LFLAGS_SHLIB+=-fsanitize=address
 env MAKE=/usr/bin/make /usr/bin/make -j"$(nproc)" QMAKE=/usr/bin/qmake6
 cd Test && ./WasmJit '~[spec]'
+cd ../../..
+ASAN_OPTIONS=detect_leaks=1:abort_on_error=1 \
+    LSAN_OPTIONS=suppressions=Test/asan.supp \
+    ./build/Desktop-ASan/Test/WasmJit '~[spec]~[compilation-policy]'
 ```
+
+`Test/asan.supp` suppresses only `leak:libjit`: GNU LibJIT's process-wide
+context/type caches are freed at process teardown, not per test. No WasmBase,
+`LibJit/` or helper allocation is suppressed.
 
 > Add `QMAKE=/usr/bin/qmake6` to the `make` command line: the shell on this
 > machine rewrites `argv[0]`, so a recursive `qmake` recorded as the editor

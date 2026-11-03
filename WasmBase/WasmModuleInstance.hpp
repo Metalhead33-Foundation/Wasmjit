@@ -177,6 +177,10 @@ private:
 	void initializeStringLiterals();
 	//! Creates the tables' `Callable*` slot arrays.
 	void initializeTable();
+	//! Releases the GC region set and the memories/tables this instance created.
+	//! Called by the destructor and by the constructor's failure path, where the
+	//! destructor does not run for the partially constructed object.
+	void releaseOwnedStorage() noexcept;
 	//! Rewrites `ref.func` sentinels left in globalsStorage by evalConstantExpr
 	//! into real Callable pointers. Must run after declareFunctions() /
 	//! compileFunctions(), because those callable tables do not exist yet when

@@ -97,6 +97,10 @@ private:
 	void pushOwnedValue(jit_value_t v);
 	//! Release the operand stack's ownership of a popped reference.
 	void emitDropValue(jit_value_t v);
+	/** \brief Releases a continuation operand consumed by `cont.bind`/`resume`. \param v Continuation value. */
+	void emitDropContinuation(jit_value_t v);
+	/** \brief Releases reference-typed block slots after they are restored. \param slots Block parameter/result slots. */
+	void emitDropRefSlots(const std::vector<jit_value_t>& slots);
 	//! Release every reference-typed non-parameter local (function exit).
 /**
  * \brief Emits LibJIT IR for DropRefLocals.

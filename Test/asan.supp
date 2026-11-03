@@ -1,0 +1,7 @@
+# LeakSanitizer suppressions for the third-party JIT.
+#
+# GNU LibJIT is an uninstrumented dependency. Its process-wide context/type
+# caches are intentionally freed only by process teardown, so they are the one
+# allocation family the ASan gate suppresses. Nothing in WasmBase, LibJit/ or
+# the helper layer is suppressed: an engine leak must fail this run.
+leak:libjit
