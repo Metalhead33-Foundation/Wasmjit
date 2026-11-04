@@ -139,10 +139,11 @@ std::string emitCHeader(const nlohmann::ordered_json& schema);
 /*!
  * \brief Emits a Rust module from a binding schema.
  *
- * Exports become `unsafe extern "C"` function-pointer aliases; imports become
- * `extern "C"` declarations. Reference types are opaque zero-sized structs, and
- * reference parameters/results carry the same ownership comments as the C
- * header.
+ * Exports become `unsafe extern "C"` function-pointer aliases plus compilable
+ * `#[export_name]` skeletons; imports become `#[link(wasm_import_module)]`
+ * `extern "C"` blocks with `#[link_name]` declarations. Reference types are
+ * opaque zero-sized structs, and reference parameters/results carry the same
+ * ownership comments as the C header.
  *
  * \param schema The schema produced by `moduleSchema()`.
  * \return The Rust source text.

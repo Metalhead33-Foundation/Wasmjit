@@ -4,6 +4,7 @@
 #include <cctype>
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <set>
 #include <sstream>
 #include <string>
@@ -296,6 +297,41 @@ std::string sanitize(std::string_view text)
 	return out;
 }
 
+//! Quotes a schema name for a C or Rust string literal. Wasm import names are
+//! arbitrary UTF-8, so they cannot be interpolated into an annotation raw.
+std::string quoteName(std::string_view text, bool rust)
+{
+	std::string out = "\"";
+	for (const char raw : text) {
+		const unsigned char c = static_cast<unsigned char>(raw);
+		switch (c) {
+		case '\\': out += "\\\\"; break;
+		case '"': out += "\\\""; break;
+		case '\n': out += "\\n"; break;
+		case '\r': out += "\\r"; break;
+		case '\t': out += "\\t"; break;
+		default:
+			if (c < 0x20 || c == 0x7f) {
+				static const char* const hex = "0123456789abcdef";
+				out += rust ? "\\u{" : "\\x";
+				if (rust) {
+					out.push_back(hex[(c >> 4) & 0xf]);
+					out.push_back(hex[c & 0xf]);
+					out.push_back('}');
+				} else {
+					out.push_back(hex[(c >> 4) & 0xf]);
+					out.push_back(hex[c & 0xf]);
+				}
+			} else {
+				out.push_back(raw);
+			}
+			break;
+		}
+	}
+	out.push_back('"');
+	return out;
+}
+
 bool isReference(const Json& type)
 {
 	if (!type.is_object() || !type.contains("type") || !type.at("type").is_string())
@@ -426,7 +462,7 @@ const Json& signatureResults(const Json& entry)
 }
 
 void emitFunction(std::ostringstream& out, const Json& entry, const std::string& name,
-		const char* side)
+		const char* side, const std::string& attribute = {})
 {
 	std::string display = entry.value("module", "");
 	if (!display.empty())
@@ -434,6 +470,8 @@ void emitFunction(std::ostringstream& out, const Json& entry, const std::string&
 	display += entry.at("name").get<std::string>();
 
 	out << "/* " << side << ": " << display << " */\n";
+	if (!attribute.empty())
+		out << attribute << "\n";
 	const Json& results = signatureResults(entry);
 	const bool multiValue = results.size() > 1u;
 	if (multiValue) {
@@ -487,6 +525,12 @@ std::string emitCHeaderImpl(const Json& schema)
 	out << "#define " << guard << "\n\n";
 	out << "#include <stdint.h>\n";
 	out << "#include <stddef.h>\n\n";
+	out << "#if defined(__wasm__) && (defined(__clang__) || defined(__GNUC__))\n";
+	out << "#  define WASMJIT_WASM_IMPORT(module, name) \\\n"
+		   "       __attribute__((import_module(module), import_name(name)))\n";
+	out << "#else\n";
+	out << "#  define WASMJIT_WASM_IMPORT(module, name)\n";
+	out << "#endif\n\n";
 	out << "#ifdef __cplusplus\nextern \"C\" {\n#endif\n\n";
 	out << "typedef struct wasm_v128 { uint8_t bytes[16]; } wasm_v128;\n";
 	for (const std::string& ref : refs)
@@ -505,9 +549,12 @@ std::string emitCHeaderImpl(const Json& schema)
 	for (const Json& entry : schema.at("imports")) {
 		if (entry.value("kind", "") != "function")
 			continue;
+		const std::string attribute = "WASMJIT_WASM_IMPORT("
+				+ quoteName(importModule(entry), false) + ", "
+				+ quoteName(entry.at("name").get<std::string>(), false) + ")";
 		emitFunction(out, entry,
 				importName(entry),
-				"G2H import");
+				"G2H import", attribute);
 	}
 
 	out << nonFunctionNotes(schema);
@@ -1154,31 +1201,53 @@ std::string emitRustModule(const nlohmann::ordered_json& schema)
 	for (const Json& entry : schema.at("exports")) {
 		if (entry.value("kind", "") != "function")
 			continue;
-		const std::string name = "wasmjit_" + sanitize(entry.at("name").get<std::string>());
-		out << "// H2G export: " << entry.at("name").get<std::string>() << "\n";
+		const std::string exportName = entry.at("name").get<std::string>();
+		const std::string name = "wasmjit_" + sanitize(exportName);
+		out << "// H2G export: " << exportName << "\n";
 		out << "pub type " << name << "_t = unsafe extern \"C\" fn(";
 		emitRustParams(out, signatureParams(entry), signatureResults(entry).size() > 1u);
 		out << ")";
 		emitRustReturn(out, signatureResults(entry));
 		out << ";\n\n";
+
+		// A type alias alone cannot be implemented as a Wasm export. Emit a
+		// compilable skeleton under the real export name; the developer fills
+		// in the body.
+		out << "#[export_name = " << quoteName(exportName, true) << "]\n";
+		out << "pub extern \"C\" fn " << name << "_impl(";
+		emitRustParams(out, signatureParams(entry), signatureResults(entry).size() > 1u);
+		out << ")";
+		emitRustReturn(out, signatureResults(entry));
+		out << " {\n    todo!("
+			<< quoteName("implement " + exportName, true) << ");\n}\n\n";
 	}
 
-	if (!schema.at("imports").empty()) {
+	// Group imports by Wasm import module: Rust requires the module annotation
+	// on the extern block and the field name on each declaration.
+	std::map<std::string, std::vector<const Json*>> importsByModule;
+	for (const Json& entry : schema.at("imports")) {
+		if (entry.value("kind", "") != "function")
+			continue;
+		importsByModule[importModule(entry)].push_back(&entry);
+	}
+	for (const auto& [module, entries] : importsByModule) {
+		out << "#[link(wasm_import_module = " << quoteName(module, true) << ")]\n";
 		out << "extern \"C\" {\n";
-		for (const Json& entry : schema.at("imports")) {
-			if (entry.value("kind", "") != "function")
-				continue;
+		for (const Json* entry : entries) {
 			const std::string name = "wasmjit_"
-					+ sanitize(importModule(entry)) + "_"
-					+ sanitize(entry.at("name").get<std::string>());
-			out << "    // G2H import: " << importComment(entry) << "\n";
+					+ sanitize(module) + "_"
+					+ sanitize(entry->at("name").get<std::string>());
+			out << "    // G2H import: " << importComment(*entry) << "\n";
+			out << "    #[link_name = "
+				<< quoteName(entry->at("name").get<std::string>(), true) << "]\n";
 			out << "    pub fn " << name << "(";
-			emitRustParams(out, signatureParams(entry), signatureResults(entry).size() > 1u);
+			emitRustParams(out, signatureParams(*entry),
+					signatureResults(*entry).size() > 1u);
 			out << ")";
-			emitRustReturn(out, signatureResults(entry));
+			emitRustReturn(out, signatureResults(*entry));
 			out << ";\n";
 		}
-		out << "}\n";
+		out << "}\n\n";
 	}
 	out << nonFunctionNotes(schema);
 	return out.str();
@@ -1312,9 +1381,9 @@ std::string emitZigImpl(const Json& schema)
 	out << "\n";
 
 	forEachFunction(schema, "exports", [&](const Json& entry) {
-		out << "// H2G export: " << entry.at("name").get<std::string>() << "\n";
-		out << "pub const wasmjit_" << sanitize(entry.at("name").get<std::string>())
-			<< "_t = *const fn (";
+		const std::string exportName = entry.at("name").get<std::string>();
+		out << "// H2G export: " << exportName << "\n";
+		out << "pub const wasmjit_" << sanitize(exportName) << "_t = *const fn (";
 		const Json& params = signatureParams(entry);
 		for (std::size_t i = 0; i < params.size(); ++i) {
 			if (i != 0) out << ", ";
@@ -1331,13 +1400,42 @@ std::string emitZigImpl(const Json& schema)
 		else
 			out << zigType(signatureResults(entry)[0]);
 		out << ";\n\n";
+
+		// A type alias is useful to a host loader, but a Zig guest needs the
+		// actual exported definition. Keep it compilable with a trap body.
+		out << "pub fn wasmjit_" << sanitize(exportName) << "_impl(";
+		for (std::size_t i = 0; i < params.size(); ++i) {
+			if (i != 0) out << ", ";
+			out << "arg" << i << ": " << zigType(params[i]);
+		}
+		if (multi) {
+			if (!params.empty()) out << ", ";
+			out << "result: *anyopaque";
+		}
+		out << ") callconv(.c) ";
+		if (multi || signatureResults(entry).empty())
+			out << "void";
+		else
+			out << zigType(signatureResults(entry)[0]);
+		out << " {\n";
+		for (std::size_t i = 0; i < params.size(); ++i)
+			out << "    _ = arg" << i << ";\n";
+		if (multi)
+			out << "    _ = result;\n";
+		out << "    @panic(" << quoteName("implement " + exportName, false)
+			<< ");\n}\n";
+		out << "comptime {\n    @export(&wasmjit_" << sanitize(exportName)
+			<< "_impl, .{ .name = " << quoteName(exportName, false)
+			<< " });\n}\n\n";
 	});
 
 	forEachFunction(schema, "imports", [&](const Json& entry) {
 		out << "// G2H import: " << importComment(entry) << "\n";
-		out << "pub extern \"" << importModule(entry) << "\" fn wasmjit_"
-			<< sanitize(importModule(entry)) << "_"
-			<< sanitize(entry.at("name").get<std::string>()) << "(";
+		// `@extern` keeps the local Zig name namespaced while mapping the
+		// declaration to the actual Wasm import module and field.
+		out << "pub const wasmjit_" << sanitize(importModule(entry)) << "_"
+			<< sanitize(entry.at("name").get<std::string>())
+			<< " = @extern(*const fn (";
 		const Json& params = signatureParams(entry);
 		for (std::size_t i = 0; i < params.size(); ++i) {
 			if (i != 0) out << ", ";
@@ -1353,7 +1451,9 @@ std::string emitZigImpl(const Json& schema)
 			out << "void";
 		else
 			out << zigType(signatureResults(entry)[0]);
-		out << ";\n\n";
+		out << ", .{ .name = " << quoteName(entry.at("name").get<std::string>(), false)
+			<< ", .library_name = " << quoteName(importModule(entry), false)
+			<< " });\n\n";
 	});
 	out << nonFunctionNotes(schema);
 	return out.str();

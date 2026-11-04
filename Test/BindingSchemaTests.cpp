@@ -239,6 +239,7 @@ TEST_CASE("the binding schema spells reference types opaquely", "[bindings]")
 
 	const std::string header = WASM::Bindings::emitCHeader(schema);
 	REQUIRE(header.find("typedef struct wasm_externref wasm_externref;") != std::string::npos);
+	REQUIRE(header.find("WASMJIT_WASM_IMPORT") != std::string::npos);
 	REQUIRE(header.find("wasm_externref* arg0 /* borrowed */") != std::string::npos);
 	REQUIRE(header.find("/* ownership: explicit */") != std::string::npos);
 	REQUIRE(header.find("typeId") == std::string::npos);
@@ -249,6 +250,40 @@ TEST_CASE("the binding schema spells reference types opaquely", "[bindings]")
 	REQUIRE(rust.find("pub type wasmjit_identity_t") != std::string::npos);
 	REQUIRE(rust.find("pub fn wasmjit_wasm_js_string_length") != std::string::npos);
 	REQUIRE(rust.find("extern \"C\"") != std::string::npos);
+	REQUIRE(rust.find("#[link(wasm_import_module = \"wasm:js-string\")]")
+			!= std::string::npos);
+	REQUIRE(rust.find("#[link_name = \"length\"]") != std::string::npos);
+}
+
+TEST_CASE("g2h Rust emits Wasm import declarations", "[bindings]")
+{
+	const WASM::Module module = loadTestModule("asmjit_i32_import");
+	const Json schema = WASM::Bindings::moduleSchema(module, testStore().types(),
+			WASM::Bindings::Direction::GuestToHost, "asmjit_i32_import");
+	const std::string rust = WASM::Bindings::emitRustModule(schema);
+
+	REQUIRE(rust.find("#[link(wasm_import_module = \"host\")]") != std::string::npos);
+	REQUIRE(rust.find("#[link_name = \"double\"]") != std::string::npos);
+	REQUIRE(rust.find("pub fn wasmjit_host_double(arg0: i32) -> i32;")
+			!= std::string::npos);
+
+	if (haveTool("rustc --version > /dev/null 2>&1")) {
+		const std::filesystem::path dir = bindingsDir();
+		const std::filesystem::path source = dir / "asmjit_i32_import.rs";
+		const std::filesystem::path library = dir / "asmjit_i32_import.rlib";
+		const std::filesystem::path log = dir / "rustc-g2h.log";
+		{
+			std::ofstream out(source, std::ios::binary);
+			out << rust;
+		}
+		const std::string command = "rustc --crate-type lib --edition 2021 \""
+				+ source.string() + "\" -o \"" + library.string() + "\" > \""
+				+ log.string() + "\" 2>&1";
+		INFO(readText(log));
+		REQUIRE(std::system(command.c_str()) == 0);
+	} else {
+		WARN("rustc not found; skipped the g2h Rust compile check");
+	}
 }
 
 TEST_CASE("defined references use a kind name, not a numeric TypeId, in the header", "[bindings]")
@@ -522,7 +557,9 @@ TEST_CASE("the remaining language emitters produce declarations", "[bindings]")
 	}
 
 	const std::string zig = WASM::Bindings::emit(schema, WASM::Bindings::Language::Zig);
-	REQUIRE(zig.find("pub extern \"wasm:js-string\" fn") != std::string::npos);
+	REQUIRE(zig.find("= @extern(") != std::string::npos);
+	REQUIRE(zig.find(".name = \"length\"") != std::string::npos);
+	REQUIRE(zig.find(".library_name = \"wasm:js-string\"") != std::string::npos);
 	REQUIRE(zig.find("pub const wasm_externref = opaque {};") != std::string::npos);
 	if (haveTool("command -v zig > /dev/null 2>&1")) {
 		const auto path = write("lang.zig", zig);
@@ -736,7 +773,7 @@ TEST_CASE("component schemas feed the language emitters", "[bindings]")
 	}
 
 	const std::string zig = WASM::Bindings::emit(schema, WASM::Bindings::Language::Zig);
-	REQUIRE(zig.find("pub extern \"component\" fn") != std::string::npos);
+	REQUIRE(zig.find(".library_name = \"component\"") != std::string::npos);
 	if (haveTool("command -v zig > /dev/null 2>&1")) {
 		const auto path = write("component.zig", zig);
 		const auto log = dir / "zig-component.log";
