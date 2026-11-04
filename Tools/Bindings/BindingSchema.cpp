@@ -1616,9 +1616,9 @@ void emitCppPointerTypedef(std::ostringstream &out, const Json &entry,
 }
 
 void emitCppImportDeclaration(std::ostringstream &out, const Json &entry) {
-	const std::string name = importName(entry);
-	emitCppPointerTypedef(out, entry, name + "_fn");
-	out << "extern " << cppReturnType(entry) << " " << name << "(";
+	// A G2H import is a function the host implements; no function-pointer
+	// typedef is needed for the declaration.
+	out << cppReturnType(entry) << " " << importName(entry) << "(";
 	emitCppParams(out, entry);
 	out << ");\n";
 }

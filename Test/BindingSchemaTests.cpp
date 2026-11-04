@@ -1224,11 +1224,10 @@ TEST_CASE("host-side callable typedefs follow the engine ABI", "[bindings]")
 			WASM::Bindings::Direction::GuestToHost, "wasm_js_string_length");
 	const std::string importHeader = WASM::Bindings::emit(g2h,
 			WASM::Bindings::Language::CppTypedefs);
-	REQUIRE(importHeader.find("using wasmjit_wasm_js_string_length_fn = "
-			"int32_t (*)(WASM::VMContext* context, wasm_externref* arg0);")
+	REQUIRE(importHeader.find("int32_t wasmjit_wasm_js_string_length(")
 			!= std::string::npos);
-	REQUIRE(importHeader.find("extern int32_t wasmjit_wasm_js_string_length(")
-			!= std::string::npos);
+	REQUIRE(importHeader.find("using wasmjit_wasm_js_string_length_fn")
+			== std::string::npos);
 	const std::string importSource = WASM::Bindings::emit(g2h,
 			WASM::Bindings::Language::CppSource);
 	REQUIRE(importSource.find("int32_t wasmjit_wasm_js_string_length(")

@@ -1091,8 +1091,9 @@ explicit `refClone`/`refDrop` ownership of a GC reference result.
 `cpp-typedefs` is direction-aware. For **h2g** it emits host-side `Callable`
 typedefs and `extern` function-pointer declarations for module/component
 exports, always with `WASM::VMContext*` first and a trailing `void*` for
-multi-value results. For **g2h** it emits host import typedefs and `extern`
-function declarations the host must implement. `cpp-source` completes both:
+multi-value results. For **g2h** it emits plain function declarations the host
+must implement (no function-pointer typedef is needed there). `cpp-source`
+completes both:
 h2g gets pointer definitions plus `wasmjit_<module>_load_callables(
 WASM::ModuleInstance*)`, which resolves each export through
 `exportedFunction()`; g2h gets TODO implementation stubs. C++ forbids
