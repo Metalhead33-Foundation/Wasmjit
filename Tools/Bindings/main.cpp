@@ -29,6 +29,8 @@ void usage(std::ostream& out)
 		   "  --module-name NAME       name in the schema envelope\n"
 		   "  --candidates HEADER      SWIG-parse a C++ header and validate its\n"
 		   "                           candidate signatures against the schema\n"
+		   "  --glue-candidates SRC    compile a Glue registration source and\n"
+		   "                           validate its printed declarations\n"
 		   "  --output FILE            write to FILE instead of stdout\n";
 }
 
@@ -57,6 +59,7 @@ int main(int argc, char** argv)
 	std::string moduleName;
 	std::string outputPath;
 	std::string candidatesPath;
+	std::string glueCandidatesPath;
 	std::string emit = "schema";
 	WASM::Bindings::Direction direction = WASM::Bindings::Direction::GuestToHost;
 
@@ -79,6 +82,8 @@ int main(int argc, char** argv)
 			outputPath = argv[++i];
 		} else if (arg == "--candidates" && i + 1 < argc) {
 			candidatesPath = argv[++i];
+		} else if (arg == "--glue-candidates" && i + 1 < argc) {
+			glueCandidatesPath = argv[++i];
 		} else if (!arg.empty() && arg.front() == '-') {
 			std::cerr << "unknown option: " << arg << "\n";
 			return 2;
@@ -120,16 +125,23 @@ int main(int argc, char** argv)
 			schema = WASM::Bindings::componentSchema(*component, store.types(),
 					direction, moduleName);
 		}
-		if (!candidatesPath.empty()) {
+		if (!candidatesPath.empty() && !glueCandidatesPath.empty()) {
+			std::cerr << "wasmjit-bindings: choose --candidates or "
+						 "--glue-candidates, not both\n";
+			return 2;
+		}
+		if (!candidatesPath.empty() || !glueCandidatesPath.empty()) {
 			std::string error;
-			const auto candidates =
-					WASM::Bindings::swigCandidates(candidatesPath, error);
+			const bool glue = !glueCandidatesPath.empty();
+			const auto candidates = glue
+					? WASM::Bindings::glueCandidates(glueCandidatesPath, error)
+					: WASM::Bindings::swigCandidates(candidatesPath, error);
 			if (!error.empty()) {
 				std::cerr << "wasmjit-bindings: " << error << "\n";
 				return 1;
 			}
-			text = WASM::Bindings::crossCheckCandidates(schema, candidates).dump(2)
-					+ "\n";
+			text = WASM::Bindings::crossCheckCandidates(schema, candidates,
+					glue ? "glue" : "swig").dump(2) + "\n";
 		} else {
 			text = wantSchema ? schema.dump(2) + "\n"
 					  : WASM::Bindings::emit(schema, language);

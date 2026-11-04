@@ -465,6 +465,8 @@ void emitFunction(std::ostringstream& out, const Json& entry, const std::string&
 }
 
 
+std::string nonFunctionNotes(const Json& schema);
+
 std::string emitCHeaderImpl(const Json& schema)
 {
 	std::set<std::string> refs;
@@ -503,6 +505,7 @@ std::string emitCHeaderImpl(const Json& schema)
 				"H2G import");
 	}
 
+	out << nonFunctionNotes(schema);
 	out << "#ifdef __cplusplus\n}\n#endif\n\n";
 	out << "#endif /* " << guard << " */\n";
 	return out.str();
@@ -725,6 +728,46 @@ void forEachFunction(const Json& schema, const char* key, Fn fn)
 			continue;
 		fn(entry);
 	}
+}
+
+// Non-function entries cannot be expressed as a core callable. They are kept
+// visible in every generated file as comments so a binding generator does not
+// silently drop a value/instance/type/global/memory/table declaration.
+std::string nonFunctionNotes(const Json& schema)
+{
+	std::ostringstream out;
+	bool started = false;
+	for (const char* section : { "exports", "imports" }) {
+		for (const Json& entry : schema.at(section)) {
+			const std::string kind = entry.value("kind", "");
+			if (kind == "function")
+				continue;
+			if (!started) {
+				out << "\n// Non-function entries (host access is outside the "
+					   "generated callable ABI):\n";
+				started = true;
+			}
+			out << "// " << (std::string_view(section) == "exports" ? "export"
+					: "import") << ": ";
+			if (!kind.empty())
+				out << kind << " ";
+			out << '"' << entry.value("name", "") << '"';
+			const auto type = entry.find("type");
+			if (type != entry.end() && type->is_object()) {
+				if (type->contains("kind"))
+					out << " (" << type->at("kind").get<std::string>() << ")";
+				else if (type->contains("type"))
+					out << " (" << type->at("type").get<std::string>() << ")";
+			} else if (entry.contains("typeIndex")) {
+				out << " (type index "
+					<< entry.at("typeIndex").get<std::size_t>() << ")";
+			}
+			out << "\n";
+		}
+	}
+	if (started)
+		out << "\n";
+	return out.str();
 }
 
 } // namespace
@@ -1127,6 +1170,7 @@ std::string emitRustModule(const nlohmann::ordered_json& schema)
 		}
 		out << "}\n";
 	}
+	out << nonFunctionNotes(schema);
 	return out.str();
 }
 
@@ -1199,6 +1243,7 @@ std::string emitTypeScriptImpl(const Json& schema)
 			out << ": void";
 		out << ";\n\n";
 	});
+	out << nonFunctionNotes(schema);
 	return out.str();
 }
 
@@ -1239,6 +1284,7 @@ std::string emitAssemblyScriptImpl(const Json& schema)
 		out << (results.size() == 1 ? ": " + asType(results[0]) : ": void");
 		out << ";\n\n";
 	});
+	out << nonFunctionNotes(schema);
 	return out.str();
 }
 
@@ -1299,6 +1345,7 @@ std::string emitZigImpl(const Json& schema)
 			out << zigType(signatureResults(entry)[0]);
 		out << ";\n\n";
 	});
+	out << nonFunctionNotes(schema);
 	return out.str();
 }
 
@@ -1345,6 +1392,7 @@ std::string emitKotlinImpl(const Json& schema)
 											   : "Unit");
 		out << "\n\n";
 	});
+	out << nonFunctionNotes(schema);
 	return out.str();
 }
 
@@ -1396,6 +1444,7 @@ std::string emitMoonBitImpl(const Json& schema)
 											   : "Unit")
 			<< "\n";
 	});
+	out << nonFunctionNotes(schema);
 	return out.str();
 }
 
@@ -1449,6 +1498,7 @@ std::string emitGoImpl(const Json& schema)
 			out << " " << goType(signatureResults(entry)[0]);
 		out << "\n\n";
 	});
+	out << nonFunctionNotes(schema);
 	return out.str();
 }
 
@@ -1519,6 +1569,7 @@ std::string emitDartImpl(const Json& schema)
 				importName(entry),
 				"H2G import");
 	});
+	out << nonFunctionNotes(schema);
 	return out.str();
 }
 
@@ -1628,6 +1679,7 @@ std::string emitCppAdapterImpl(const Json& schema)
 		out << "}\n";
 	});
 	out << "\n} // extern \"C\"\n";
+	out << nonFunctionNotes(schema);
 	return out.str();
 }
 

@@ -1,5 +1,7 @@
 #include "CppFrontend.hpp"
 
+#include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cstdlib>
 #include <fstream>
@@ -10,6 +12,23 @@
 namespace WASM::Bindings {
 
 namespace {
+
+std::string readTextFile(const std::filesystem::path& path)
+{
+	std::ifstream input(path);
+	std::ostringstream text;
+	text << input.rdbuf();
+	return text.str();
+}
+
+std::string trim(std::string text)
+{
+	const auto notSpace = [](unsigned char c) { return !std::isspace(c); };
+	text.erase(text.begin(), std::find_if(text.begin(), text.end(), notSpace));
+	text.erase(std::find_if(text.rbegin(), text.rend(), notSpace).base(),
+			text.end());
+	return text;
+}
 
 std::string decodeXml(std::string text)
 {
@@ -72,7 +91,15 @@ bool typeMatches(const std::string& candidateType, const nlohmann::json& wasmTyp
 			|| candidateType.find('&') != std::string::npos;
 	if (kind.find("ref") != std::string::npos || kind == "any"
 			|| kind == "extern" || kind == "exn" || kind == "cont")
-		return pointer;
+		return pointer || candidateType == "string";
+
+	// Glue's DeclarationPrinter writes TypeScript spellings.
+	if (candidateType == "number")
+		return kind == "i32" || kind == "i64" || kind == "f32" || kind == "f64";
+	if (candidateType == "bigint")
+		return kind == "i64";
+	if (candidateType == "boolean")
+		return kind == "i32" || kind == "i64";
 
 	const std::string type = normalizeCppType(candidateType);
 	if (kind == "i32")
@@ -101,6 +128,55 @@ nlohmann::ordered_json describeCandidate(const CandidateSignature& candidate)
 	for (const CandidateParameter& param : candidate.params)
 		entry["params"].push_back({ { "type", param.type }, { "name", param.name } });
 	return entry;
+}
+
+std::vector<CandidateSignature> parseGlueDeclarations(const std::string& text)
+{
+	std::vector<CandidateSignature> candidates;
+	std::istringstream input(text);
+	std::string line;
+	const std::string prefix = "declare const ";
+	while (std::getline(input, line)) {
+		line = trim(line);
+		if (line.rfind(prefix, 0) != 0)
+			continue;
+		const std::size_t colon = line.find(':', prefix.size());
+		const std::size_t arrow = line.find("=>", colon == std::string::npos
+				? prefix.size() : colon);
+		const std::size_t open = line.find('(', prefix.size());
+		const std::size_t close = arrow == std::string::npos ? std::string::npos
+				: line.rfind(')', arrow);
+		if (colon == std::string::npos || arrow == std::string::npos
+				|| open == std::string::npos || close == std::string::npos
+				|| open > close)
+			continue;
+		CandidateSignature candidate;
+		candidate.name = trim(line.substr(prefix.size(),
+				colon - prefix.size()));
+		candidate.returnType = trim(line.substr(arrow + 2));
+		const std::string params = line.substr(open + 1, close - open - 1);
+		std::istringstream paramStream(params);
+		std::string param;
+		std::size_t index = 0;
+		while (std::getline(paramStream, param, ',')) {
+			param = trim(param);
+			if (param.empty() || param.rfind("this:", 0) == 0)
+				continue;
+			const std::size_t separator = param.find(':');
+			if (separator == std::string::npos)
+				continue;
+			CandidateParameter parsed;
+			parsed.name = trim(param.substr(0, separator));
+			parsed.type = trim(param.substr(separator + 1));
+			if (parsed.name.empty())
+				parsed.name = "arg" + std::to_string(index);
+			++index;
+			candidate.params.push_back(std::move(parsed));
+		}
+		if (!candidate.name.empty())
+			candidates.push_back(std::move(candidate));
+	}
+	return candidates;
 }
 
 } // namespace
@@ -243,11 +319,83 @@ std::vector<CandidateSignature> swigCandidates(const std::filesystem::path& head
 	return candidates;
 }
 
+std::vector<CandidateSignature> glueCandidates(const std::filesystem::path& source,
+		std::string& error)
+{
+	error.clear();
+	if (!std::filesystem::is_regular_file(source)) {
+		error = "not a regular file: " + source.string();
+		return {};
+	}
+	const char* configured = std::getenv("GLUE_PREFIX");
+	const std::filesystem::path prefix = configured == nullptr
+			? std::filesystem::path("/usr/local") : std::filesystem::path(configured);
+	const std::filesystem::path library = prefix / "lib" / "Glue-1.5" / "libGlue.a";
+	if (!std::filesystem::is_regular_file(library)) {
+		error = "Glue library not found: " + library.string();
+		return {};
+	}
+
+	const auto stamp = std::to_string(
+			std::chrono::steady_clock::now().time_since_epoch().count());
+	const std::filesystem::path dir = std::filesystem::temp_directory_path()
+			/ ("wasmjit-glue-" + stamp);
+	std::filesystem::create_directories(dir);
+	const std::filesystem::path driver = dir / "driver.cpp";
+	const std::filesystem::path executable = dir / "driver";
+	const std::filesystem::path declarations = dir / "declarations.txt";
+	const std::filesystem::path compileLog = dir / "compile.log";
+	const std::filesystem::path runLog = dir / "run.log";
+	{
+		std::ofstream out(driver, std::ios::binary);
+		out << "#include <glue/declarations.h>\n"
+			   "#include <glue/context.h>\n"
+			   "#include <iostream>\n\n"
+			   "glue::MapValue wasmjit_bindings();\n\n"
+			   "int main()\n"
+			   "{\n"
+			   "\tauto map = wasmjit_bindings();\n"
+			   "\tglue::Context context;\n"
+			   "\tcontext.addRootMap(map);\n"
+			   "\tglue::DeclarationPrinter printer;\n"
+			   "\tprinter.init();\n"
+			   "\tprinter.print(std::cout, map, &context);\n"
+			   "}\n";
+	}
+
+	std::string compile = "g++ -std=c++2a";
+	for (const char* directory : { "Glue-1.5", "Revisited-2.3",
+			"StaticTypeInfo-1.2", "EasyIterator-1.4" })
+		compile += " -I\"" + (prefix / "include" / directory).string() + "\"";
+	compile += " -I\"" + std::filesystem::absolute(source).parent_path().string()
+			+ "\" \"" + driver.string() + "\" \""
+			+ std::filesystem::absolute(source).string() + "\" -L\""
+			+ library.parent_path().string() + "\" -lGlue -o \""
+			+ executable.string() + "\" > \"" + compileLog.string() + "\" 2>&1";
+	if (std::system(compile.c_str()) != 0) {
+		error = "Glue driver compile failed: " + readTextFile(compileLog);
+		std::filesystem::remove_all(dir);
+		return {};
+	}
+
+	const std::string run = "\"" + executable.string() + "\" > \""
+			+ declarations.string() + "\" 2> \"" + runLog.string() + "\"";
+	if (std::system(run.c_str()) != 0) {
+		error = "Glue driver failed: " + readTextFile(runLog);
+		std::filesystem::remove_all(dir);
+		return {};
+	}
+	const std::string text = readTextFile(declarations);
+	std::filesystem::remove_all(dir);
+	return parseGlueDeclarations(text);
+}
+
+
 nlohmann::ordered_json crossCheckCandidates(const nlohmann::ordered_json& schema,
-		const std::vector<CandidateSignature>& candidates)
+		const std::vector<CandidateSignature>& candidates, std::string_view frontend)
 {
 	nlohmann::ordered_json report;
-	report["frontend"] = "swig";
+	report["frontend"] = std::string(frontend);
 	report["schema"] = schema.value("schema", std::string());
 	report["candidates"] = nlohmann::ordered_json::array();
 	std::size_t matchedCount = 0;

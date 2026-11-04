@@ -424,6 +424,35 @@ TEST_CASE("an optimized module keeps the same binding signatures", "[bindings]")
 }
 
 
+TEST_CASE("producer toolchain evidence is recorded", "[bindings]")
+{
+	if (!haveTool("wasm-opt --version > /dev/null 2>&1")
+			|| !haveTool("wasm-tools --version > /dev/null 2>&1")) {
+		WARN("wasm-opt or wasm-tools not found; skipped the toolchain evidence");
+		return;
+	}
+
+	const std::filesystem::path path = bindingsDir() / "toolchain.txt";
+	{
+		std::ofstream out(path, std::ios::binary);
+		out << "# Binding producer evidence, 2026-11-04 host.\n"
+			   "# wasm-opt flags used by [bindings]: --all-features -O2\n";
+	}
+	for (const char* command : { "wasm-opt --version", "wasm-tools --version",
+			"wat2wasm --version", "clang --version", "rustc --version",
+			"go version" }) {
+		const std::string run = std::string(command) + " >> \"" + path.string()
+				+ "\" 2>&1";
+		const int status = std::system(run.c_str());
+		(void)status;
+	}
+	const std::string evidence = readText(path);
+	REQUIRE(evidence.find("wasm-opt version") != std::string::npos);
+	REQUIRE(evidence.find("wasm-tools") != std::string::npos);
+	REQUIRE(evidence.find("--all-features -O2") != std::string::npos);
+	INFO(evidence);
+}
+
 TEST_CASE("the remaining language emitters produce declarations", "[bindings]")
 {
 	const WASM::Module module = loadTestModule("wasm_js_string_length");
@@ -707,6 +736,34 @@ TEST_CASE("component schemas feed the language emitters", "[bindings]")
 }
 
 
+TEST_CASE("non-function entries stay visible in emitted bindings", "[bindings]")
+{
+	WASM::Component component;
+	loadTestComponent("component_typeimports", component);
+	const Json schema = WASM::Bindings::componentSchema(component, testStore().types(),
+			WASM::Bindings::Direction::GuestToHost, "component_typeimports");
+	const std::string c = WASM::Bindings::emit(schema,
+			WASM::Bindings::Language::CHeader);
+	REQUIRE(c.find("Non-function entries") != std::string::npos);
+	REQUIRE(c.find("// export: type \"t\" (record)") != std::string::npos);
+
+	WASM::Component values;
+	loadTestComponent("component_instance_args", values);
+	const Json valueSchema = WASM::Bindings::componentSchema(values,
+			testStore().types(), WASM::Bindings::Direction::HostToGuest,
+			"component_instance_args");
+	const std::string ts = WASM::Bindings::emit(valueSchema,
+			WASM::Bindings::Language::TypeScript);
+	REQUIRE(ts.find("// import: value \"hostv\" (u32)") != std::string::npos);
+
+	const Json core = WASM::Bindings::moduleSchema(loadTestModule("asmjit_i32_basic"),
+			testStore().types(), WASM::Bindings::Direction::GuestToHost,
+			"asmjit_i32_basic");
+	const std::string header = WASM::Bindings::emit(core,
+			WASM::Bindings::Language::CHeader);
+	REQUIRE(header.find("// export: global \"g\" (i32)") != std::string::npos);
+}
+
 TEST_CASE("component canonical ABI flattening feeds the emitters", "[bindings]")
 {
 	WASM::Component component;
@@ -986,6 +1043,62 @@ TEST_CASE("SWIG candidates are validated against the engine schema", "[bindings]
 			!= std::string::npos);
 }
 
+
+TEST_CASE("Glue candidates are validated against the engine schema", "[bindings]")
+{
+	if (!haveTool("command -v g++ > /dev/null 2>&1")
+			|| !std::filesystem::is_regular_file(
+					"/usr/local/lib/Glue-1.5/libGlue.a")) {
+		WARN("Glue or g++ not found; skipped the Glue front-end check");
+		return;
+	}
+
+	const std::filesystem::path dir = bindingsDir() / "frontend-cpp";
+	std::filesystem::create_directories(dir);
+	const std::filesystem::path source = dir / "glue_bindings.cpp";
+	{
+		std::ofstream out(source, std::ios::binary);
+		out << "#include <glue/value.h>\n"
+			   "#include <cstdint>\n"
+			   "namespace {\n"
+			   "int32_t add(int32_t a, int32_t b) { return a + b; }\n"
+			   "int32_t div_s(int32_t a, int32_t b) { return a / b; }\n"
+			   "int32_t sub(int32_t a) { return a; }\n"
+			   "}\n"
+			   "glue::MapValue wasmjit_bindings()\n"
+			   "{\n"
+			   "\tauto map = glue::createAnyMap();\n"
+			   "\tmap[\"add\"] = glue::AnyFunction(add);\n"
+			   "\tmap[\"div_s\"] = glue::AnyFunction(div_s);\n"
+			   "\tmap[\"sub\"] = glue::AnyFunction(sub);\n"
+			   "\treturn map;\n"
+			   "}\n";
+	}
+
+	const WASM::Module module = loadTestModule("asmjit_i32_basic");
+	const Json schema = WASM::Bindings::moduleSchema(module, testStore().types(),
+			WASM::Bindings::Direction::GuestToHost, "asmjit_i32_basic");
+
+	std::string error;
+	const auto candidates = WASM::Bindings::glueCandidates(source, error);
+	REQUIRE(error.empty());
+	REQUIRE(candidates.size() == 3u);
+
+	const Json report = WASM::Bindings::crossCheckCandidates(schema, candidates,
+			"glue");
+	REQUIRE(report.at("frontend") == "glue");
+	REQUIRE(report.at("matched") == 2);
+	REQUIRE(report.at("unmatched") == 1);
+	const Json* mismatch = nullptr;
+	for (const Json& entry : report.at("candidates")) {
+		if (entry.value("name", "") == "sub")
+			mismatch = &entry;
+	}
+	REQUIRE(mismatch != nullptr);
+	REQUIRE(mismatch->at("matched") == false);
+	REQUIRE(mismatch->at("reason").get<std::string>().find("parameter count")
+			!= std::string::npos);
+}
 
 TEST_CASE("WIT JSON names agree with the component schema", "[bindings]")
 {
