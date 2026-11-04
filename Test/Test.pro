@@ -152,6 +152,7 @@ SOURCES += main.cpp \
     ConfigurationTests.cpp \
     BranchHintTests.cpp \
     ../Tools/Bindings/BindingSchema.cpp \
+    ../Tools/Bindings/frontend/cpp/CppFrontend.cpp \
     BindingSchemaTests.cpp
 HEADERS +=  \
     helper.hpp \

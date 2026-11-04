@@ -16,6 +16,7 @@
 #include <Euphemy/Io/EuphFile.hpp>
 
 #include "BindingSchema.hpp"
+#include "frontend/cpp/CppFrontend.hpp"
 #include "helper.hpp"
 #include "TestStore.hpp"
 #include "WasmBase/WasmArtifact.hpp"
@@ -62,6 +63,23 @@ const Json* findByName(const Json& array, std::string_view name)
 			return &entry;
 	}
 	return nullptr;
+}
+
+// A `typeId` is tooling metadata scoped to one Store, so two parses of the
+// same module assign different numbers. Structural comparison ignores it.
+Json withoutTypeIds(Json value)
+{
+	if (value.is_object()) {
+		value.erase("typeId");
+		for (auto& [key, item] : value.items()) {
+			(void)key;
+			item = withoutTypeIds(item);
+		}
+	} else if (value.is_array()) {
+		for (auto& item : value)
+			item = withoutTypeIds(item);
+	}
+	return value;
 }
 
 void loadTestComponent(const char* name, WASM::Component& component)
@@ -348,38 +366,60 @@ TEST_CASE("an optimized module keeps the same binding signatures", "[bindings]")
 	}
 
 	// TB-6/TB-7: pin the optimizer invocation. `--all-features` is required
-	// because the fixture uses tail calls, bulk memory and reference types;
-	// wasm-opt 124 was the host version when this check was added (2026-11-04).
-	const std::filesystem::path input =
-			std::filesystem::path(WASM_TEST_DIR) / "asmjit_i32_basic.wasm";
-	const std::filesystem::path output = bindingsDir() / "asmjit_i32_basic.opt.wasm";
-	const std::filesystem::path log = bindingsDir() / "wasm-opt.log";
-	const std::string command = "wasm-opt --all-features -O2 \"" + input.string()
-			+ "\" -o \"" + output.string() + "\" > \"" + log.string() + "\" 2>&1";
-	INFO(readText(log));
-	REQUIRE(std::system(command.c_str()) == 0);
+	// because the fixtures use tail calls, bulk memory, reference types and
+	// multi-value; wasm-opt 124 was the host version when this check was added
+	// (2026-11-04).
+	const std::vector<std::string> fixtures = {
+		"asmjit_i32_basic",
+		"multi_value",
+		"gc_refcount",
+		"bindings_ref_ownership",
+		"wasm_js_string_length"
+	};
+	for (const std::string& fixture : fixtures) {
+		INFO(fixture);
+		const std::filesystem::path input =
+				std::filesystem::path(WASM_TEST_DIR) / (fixture + ".wasm");
+		const std::filesystem::path output =
+				bindingsDir() / (fixture + ".opt.wasm");
+		const std::filesystem::path log =
+				bindingsDir() / ("wasm-opt-" + fixture + ".log");
+		const std::string command = "wasm-opt --all-features -O2 \"" + input.string()
+				+ "\" -o \"" + output.string() + "\" > \"" + log.string() + "\" 2>&1";
+		INFO(readText(log));
+		REQUIRE(std::system(command.c_str()) == 0);
 
-	const Json baseline = WASM::Bindings::moduleSchema(loadTestModule("asmjit_i32_basic"),
-			testStore().types(), WASM::Bindings::Direction::GuestToHost,
-			"asmjit_i32_basic");
+		const Json baseline = WASM::Bindings::moduleSchema(loadTestModule(fixture.c_str()),
+				testStore().types(), WASM::Bindings::Direction::GuestToHost, fixture);
 
-	WASM::Store optimizedStore;
-	WASM::Module optimizedModule;
-	Euph::Io::File file(output.c_str(), Elv::Io::Mode::READ);
-	optimizedModule.fromFile(file, optimizedStore);
-	const Json optimized = WASM::Bindings::moduleSchema(optimizedModule,
-			optimizedStore.types(), WASM::Bindings::Direction::GuestToHost,
-			"asmjit_i32_basic");
+		WASM::Store optimizedStore;
+		WASM::Module optimizedModule;
+		Euph::Io::File file(output.c_str(), Elv::Io::Mode::READ);
+		optimizedModule.fromFile(file, optimizedStore);
+		const Json optimized = WASM::Bindings::moduleSchema(optimizedModule,
+				optimizedStore.types(), WASM::Bindings::Direction::GuestToHost,
+				fixture);
 
-	for (const Json& original : baseline.at("exports")) {
-		if (original.value("kind", "") != "function")
-			continue;
-		const std::string name = original.at("name").get<std::string>();
-		const Json* match = findExport(optimized, name);
-		REQUIRE(match != nullptr);
-		REQUIRE(match->at("kind") == original.at("kind"));
-		REQUIRE(match->at("type").at("params") == original.at("type").at("params"));
-		REQUIRE(match->at("type").at("results") == original.at("type").at("results"));
+		for (const char* section : { "exports", "imports" }) {
+			for (const Json& original : baseline.at(section)) {
+				if (original.value("kind", "") != "function")
+					continue;
+				const std::string name = original.at("name").get<std::string>();
+				const Json* match = nullptr;
+				if (std::string_view(section) == "exports") {
+					match = findExport(optimized, name);
+				} else {
+					match = findImport(optimized,
+							original.value("module", ""), name);
+				}
+				REQUIRE(match != nullptr);
+				REQUIRE(match->at("kind") == original.at("kind"));
+				REQUIRE(withoutTypeIds(match->at("type").at("params"))
+						== withoutTypeIds(original.at("type").at("params")));
+				REQUIRE(withoutTypeIds(match->at("type").at("results"))
+						== withoutTypeIds(original.at("type").at("results")));
+			}
+		}
 	}
 }
 
@@ -826,6 +866,124 @@ int main(int argc, char** argv)
     return 0;
 }
 )cpp", "adapter-ref");
+}
+
+TEST_CASE("a generated C++ adapter calls a multi-value export", "[bindings]")
+{
+	runCppAdapterConformance("multi_value", R"cpp(
+#include "adapter.h"
+#include <WasmBase/WasmRuntime.hpp>
+#include <WasmBase/WasmRegistryImportResolver.hpp>
+#include <Euphemy/Config/GlobalConfig.hpp>
+#include <cstdint>
+
+Euph::Conf::Configuration GLOBAL_CONFIGURATION;
+extern WASM::ModuleInstance* wasmjit_adapter_instance;
+
+namespace {
+struct Pair {
+    int32_t first;
+    int32_t second;
+};
+}
+
+int main(int argc, char** argv)
+{
+    auto runtime = WASM::Runtime::create("libjit");
+    auto module = runtime->loadFile(argv[1]);
+    WASM::RegistryImportResolver imports;
+    auto& instance = runtime->instantiate(*module, imports);
+    wasmjit_adapter_instance = &instance;
+    Pair pair{};
+    wasmjit_swap_export(3, 4, &pair);
+    if (pair.first != 4 || pair.second != 3)
+        return 1;
+    return 0;
+}
+)cpp", "adapter-multi");
+}
+
+TEST_CASE("a generated C++ adapter owns and releases a reference result", "[bindings]")
+{
+	runCppAdapterConformance("bindings_ref_ownership", R"cpp(
+#include "adapter.h"
+#include <WasmBase/WasmRuntime.hpp>
+#include <WasmBase/WasmRegistryImportResolver.hpp>
+#include <Euphemy/Config/GlobalConfig.hpp>
+
+Euph::Conf::Configuration GLOBAL_CONFIGURATION;
+extern WASM::ModuleInstance* wasmjit_adapter_instance;
+
+int main(int argc, char** argv)
+{
+    auto runtime = WASM::Runtime::create("libjit");
+    auto module = runtime->loadFile(argv[1]);
+    WASM::RegistryImportResolver imports;
+    auto& instance = runtime->instantiate(*module, imports);
+    wasmjit_adapter_instance = &instance;
+    wasm_structref* node = wasmjit_make();
+    if (node == nullptr)
+        return 1;
+    if (wasmjit_get(node) != 42)
+        return 2;
+    wasm_structref* retained =
+        static_cast<wasm_structref*>(instance.refClone(node));
+    instance.refDrop(retained);
+    instance.refDrop(node);
+    return 0;
+}
+)cpp", "adapter-ownership");
+}
+
+TEST_CASE("SWIG candidates are validated against the engine schema", "[bindings]")
+{
+	if (!haveTool("command -v swig > /dev/null 2>&1")) {
+		WARN("swig not found; skipped the C++ candidate front-end check");
+		return;
+	}
+
+	const std::filesystem::path dir = bindingsDir() / "frontend-cpp";
+	std::filesystem::create_directories(dir);
+	const std::filesystem::path header = dir / "candidates.h";
+	{
+		std::ofstream out(header, std::ios::binary);
+		out << "#include <cstdint>\n"
+			   "int32_t add(int32_t a, int32_t b);\n"
+			   "int32_t div_s(int32_t a, int32_t b);\n"
+			   "int32_t sub(int32_t a);\n";
+	}
+
+	const WASM::Module module = loadTestModule("asmjit_i32_basic");
+	const Json schema = WASM::Bindings::moduleSchema(module, testStore().types(),
+			WASM::Bindings::Direction::GuestToHost, "asmjit_i32_basic");
+
+	std::string error;
+	const auto candidates = WASM::Bindings::swigCandidates(header, error);
+	REQUIRE(error.empty());
+	REQUIRE(candidates.size() == 3u);
+
+	const Json report = WASM::Bindings::crossCheckCandidates(schema, candidates);
+	REQUIRE(report.at("matched") == 2);
+	REQUIRE(report.at("unmatched") == 1);
+	const Json* add = nullptr;
+	const Json* divide = nullptr;
+	const Json* mismatch = nullptr;
+	for (const Json& entry : report.at("candidates")) {
+		if (entry.value("name", "") == "add")
+			add = &entry;
+		else if (entry.value("name", "") == "div_s")
+			divide = &entry;
+		else if (entry.value("name", "") == "sub")
+			mismatch = &entry;
+	}
+	REQUIRE(add != nullptr);
+	REQUIRE(divide != nullptr);
+	REQUIRE(mismatch != nullptr);
+	REQUIRE(add->at("matched") == true);
+	REQUIRE(divide->at("matched") == true);
+	REQUIRE(mismatch->at("matched") == false);
+	REQUIRE(mismatch->at("reason").get<std::string>().find("parameter count")
+			!= std::string::npos);
 }
 
 

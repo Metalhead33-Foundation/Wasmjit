@@ -1,4 +1,5 @@
 #include "BindingSchema.hpp"
+#include "frontend/cpp/CppFrontend.hpp"
 
 #include <Euphemy/Config/GlobalConfig.hpp>
 #include <Euphemy/Io/EuphFile.hpp>
@@ -26,6 +27,8 @@ void usage(std::ostream& out)
 		   "  --emit schema|c-header|rust|typescript|assemblyscript|zig|kotlin|\n"
 		   "         moonbit|go|dart|cpp-adapter (default: schema)\n"
 		   "  --module-name NAME       name in the schema envelope\n"
+		   "  --candidates HEADER      SWIG-parse a C++ header and validate its\n"
+		   "                           candidate signatures against the schema\n"
 		   "  --output FILE            write to FILE instead of stdout\n";
 }
 
@@ -53,6 +56,7 @@ int main(int argc, char** argv)
 	std::string input;
 	std::string moduleName;
 	std::string outputPath;
+	std::string candidatesPath;
 	std::string emit = "schema";
 	WASM::Bindings::Direction direction = WASM::Bindings::Direction::GuestToHost;
 
@@ -73,6 +77,8 @@ int main(int argc, char** argv)
 			moduleName = argv[++i];
 		} else if (arg == "--output" && i + 1 < argc) {
 			outputPath = argv[++i];
+		} else if (arg == "--candidates" && i + 1 < argc) {
+			candidatesPath = argv[++i];
 		} else if (!arg.empty() && arg.front() == '-') {
 			std::cerr << "unknown option: " << arg << "\n";
 			return 2;
@@ -114,8 +120,20 @@ int main(int argc, char** argv)
 			schema = WASM::Bindings::componentSchema(*component, store.types(),
 					direction, moduleName);
 		}
-		text = wantSchema ? schema.dump(2) + "\n"
-						  : WASM::Bindings::emit(schema, language);
+		if (!candidatesPath.empty()) {
+			std::string error;
+			const auto candidates =
+					WASM::Bindings::swigCandidates(candidatesPath, error);
+			if (!error.empty()) {
+				std::cerr << "wasmjit-bindings: " << error << "\n";
+				return 1;
+			}
+			text = WASM::Bindings::crossCheckCandidates(schema, candidates).dump(2)
+					+ "\n";
+		} else {
+			text = wantSchema ? schema.dump(2) + "\n"
+					  : WASM::Bindings::emit(schema, language);
+		}
 	} catch (const std::exception& error) {
 		std::cerr << "wasmjit-bindings: " << error.what() << "\n";
 		return 1;

@@ -11,10 +11,12 @@ INCLUDEPATH += $$PWD
 
 SOURCES += \
     main.cpp \
-    BindingSchema.cpp
+    BindingSchema.cpp \
+    frontend/cpp/CppFrontend.cpp
 
 HEADERS += \
-    BindingSchema.hpp
+    BindingSchema.hpp \
+    frontend/cpp/CppFrontend.hpp
 
 LIBS += -L$$OUT_PWD/../../WasmBase -lWasmBase
 QMAKE_LFLAGS += -Wl,-rpath,\'\$$ORIGIN/../../WasmBase\'

@@ -2,9 +2,16 @@
 
 *`WASM::Runtime`, the Umbrella Header, Versioning, and the Include Set*
 
-Status: design note + plan (revision 14 — 2026-11-04: adds a WIT-name
-cross-check against `wasm-tools component wit --json`, and extends `[bindings]`
-to 428 assertions. Revision 13 — 2026-11-04: adds a `cpp-adapter` emitter that
+Status: design note + plan (revision 18 — 2026-11-04: records the TB-9 install
+re-run and the TB-12/TB-13 evidence; `[bindings]` remains at 503 assertions.
+Revision 17 — 2026-11-04: broadens the post-optimization schema comparison to
+five fixtures and import signatures. Revision 16 — 2026-11-04: wires the
+optional SWIG C++ candidate front-end and validates its signatures against the
+schema. Revision 15 — 2026-11-04: extends the generated adapter to multi-value
+calls and explicit reference retain/drop.
+Revision 14 — 2026-11-04: adds a WIT-name cross-check against
+`wasm-tools component wit --json`. Revision 13 — 2026-11-04:
+adds a `cpp-adapter` emitter that
 dispatches through `WASM::callCallable`, plus compiled conformance tests for a
 call, a trap, an import and a reference pass-through. Revision 12 — 2026-11-04:
 adds a hand-built
@@ -782,7 +789,7 @@ check. The embedding surface is what the installed `wasmjit/wasmjit.hpp` exposes
 |---|---|---|
 | Default suite (**2026-11-01**, `8c87f5f`) | **17,090 assertions in 551 cases, green** | The `ES-*`, `BP-*`, `CP-*`, `CFG-*` and multi-agent additions are additive: every earlier assertion still passes. The 2026-10-29 run (11,454 / 481) in the milestone notes is the dated baseline. |
 | `[docs]` lint | **1013 assertions / 2 cases, green** | Note shape for `docs/proposals/` **and** the note tree for all three folders (§9 of `DOCUMENTATION.md`), so this note's index row is checked too |
-| `[bindings]` (**2026-11-04**) | **428 assertions / 16 cases, green** | The §12.8 tool: descriptor→schema, opaque reference spelling, `stringref` through every emitter, C header, Rust, TypeScript, AssemblyScript, Zig, Kotlin, MoonBit, Go and Dart emission, a compiled C++ adapter (call/trap/import/reference), defined-reference kind naming, exact-reference flags, GC struct/array definitions, per-toolchain compile checks, and a `wasm-opt --all-features -O2` signature comparison. |
+| `[bindings]` (**2026-11-04**) | **503 assertions / 19 cases, green** | The §12.8 tool: descriptor→schema, opaque reference spelling, `stringref` through every emitter, C header, Rust, TypeScript, AssemblyScript, Zig, Kotlin, MoonBit, Go and Dart emission, a compiled C++ adapter (call/trap/import/reference/multi-value/retain-drop), SWIG candidate validation, defined-reference kind naming, exact-reference flags, GC struct/array definitions, per-toolchain compile checks, and a `wasm-opt --all-features -O2` signature comparison on five fixtures. |
 | `[runtime]` | 64 assertions / 9 cases, green | Load → instantiate → call, idempotence, named errors, the `MF-2` guard, agents, the store-scoping proof (two stores, two heaps, an artifact records its store), and the unloader (one instance destroyed, the module re-instantiated, a provisional backend's code freed twice over). |
 | `[concurrency]` | 80 assertions / 13 cases, green | The model claim, the `Single` refusal, re-entrant invocation across threads, the `MF-2` guard, the `MF-3`/`MF-4` safepoint rules and the multi-agent suite. |
 | `[multiagent]` | 51 assertions / 6 cases, green | Two agents on one instance: acquire-release, wait/notify, shared-global RMW, traps, GC stress, reference barrier. |
@@ -912,7 +919,7 @@ three directions — guest-to-host, host-to-guest and guest-to-guest — defined
 | **Hand-written guide + per-language templates** | Language-specific declarations and adapter skeletons from the documented ABI | **Do first.** Low risk, useful immediately, no new engine surface. |
 | **Descriptor-driven schema + emitters** | A neutral JSON schema from `Module`/`Component` metadata, then C/C++, Rust, Zig, TS/AssemblyScript, Kotlin, MoonBit, Go, Dart emitters | **Do second, in this repository.** The generator belongs outside `WasmBase/` (§12.8), but it is first-party tooling, not an external dependency; the engine only guarantees the metadata. |
 | **WIT as the IDL** | Component-level interfaces and skeleton adapters for component exports/imports | **Reuse it for components, not for raw core modules.** WIT cannot describe a core module’s memory/table/global imports or its raw `Callable` ABI; do not build a second WIT. |
-| **SWIG** | C++ bindings driven by parsed C++ declarations | **Optional front-end only.** Parsing C++ does not tell you the Wasm Canonical ABI, ownership, traps or component resources; it may propose candidate signatures (`TB-4a`, §12.8). |
+| **SWIG** | C++ bindings driven by parsed C++ declarations | **Optional front-end only.** Parsing C++ does not tell you the Wasm Canonical ABI, ownership, traps or component resources; `wasmjit-bindings --candidates` uses its XML output to propose candidate signatures (`TB-4a`, §12.8). |
 | **Glue** | Clang-AST-based C++ binding helpers for a C++ host | **Optional front-end only.** Same limitation; useful as an implementation detail, not the interface definition. |
 | **Automatic scan of existing C/C++ headers** | Guessed declarations | **Do not make this the source of truth.** The literal form is rejected (`TB-4`); a header is only a candidate front-end, and its output must still be validated against the engine descriptors. |
 | **Embedder-owned adapters** | Any language/runtime-specific binding | **Always valid.** This is the correct default when the target runtime is not one the project can support. |
@@ -999,9 +1006,11 @@ The realistic sequence is:
    C++ adapter that dispatches through `WASM::callCallable`. The emitters are
    where `TB-8`’s opaque reference spelling and `TB-11`’s generated-adapter
    conformance checks land.
-4. **Later:** wire Glue/SWIG as optional candidate-signature front-ends
-   (`TB-3`/`TB-4a`); use WIT JSON for component-level G2G documentation.
-   Neither becomes an engine or build dependency.
+4. **Now:** SWIG is the optional candidate-signature front-end behind
+   `wasmjit-bindings --candidates` (`TB-3`/`TB-4a`); Glue remains an optional
+   second front-end behind the same validation step. Use WIT JSON for
+   component-level G2G documentation. Neither becomes an engine or build
+   dependency.
 5. **Always:** an embedder may ignore all of this and write adapters by hand;
    that remains a supported contract, not a failure to generate.
 
@@ -1076,7 +1085,7 @@ designed, and this note does not propose one.
 |---|---|---|
 | `Tools/Bindings/BindingSchema.hpp/.cpp` | core-module and component descriptor → JSON schema, plus the C/C++, Rust, TypeScript, AssemblyScript, Zig, Kotlin, MoonBit, Go and Dart emitters and the C++ adapter (`TB-1`, `TB-2`, `TB-8`, `TB-14`) | first-party; reads `WasmBase` headers, is not part of the installed SDK |
 | `Tools/Bindings/main.cpp` | the `wasmjit-bindings` CLI | build-time tool; never linked into the engine |
-| `Tools/Bindings/frontend/cpp/` | optional Glue/SWIG candidate-signature front-end (`TB-3`, `TB-4a`) | not implemented yet; build-time only, output validated before emission |
+| `Tools/Bindings/frontend/cpp/` | optional SWIG candidate-signature front-end (`TB-3`, `TB-4a`) | implemented; build-time only, output validated against the schema and never emitted into it. Glue can sit behind the same validation. |
 | `Test/BindingSchemaTests.cpp` (`[bindings]`) | schema/emitter conformance tests (`TB-11`) | compiles the generated C header and Rust module when gcc/rustc are present |
 | `WasmBase/`, `LibJit/`, `Sljit/`, `Asmjit/` | engine and backends | must never include a tool header or link a generator |
 
@@ -1092,17 +1101,22 @@ its imports/exports are projected. The invocation is:
 
 `--emit` accepts `schema`, `c-header`, `rust`, `typescript`, `assemblyscript`,
 `zig`, `kotlin`, `moonbit`, `go`, `dart` or `cpp-adapter`; `--module-name` sets
-the name in the envelope and `--output` writes a file instead of stdout. The
+the name in the envelope and `--output` writes a file instead of stdout.
+`--candidates HEADER` instead parses a C++ header through SWIG and prints a
+per-candidate match report against the schema; it never changes the schema. The
 `[bindings]` tests prove the same paths from `Test/BindingSchemaTests.cpp`: they
 emit the schema and every target, compile the C, Rust, TypeScript,
 AssemblyScript, Zig, Kotlin, MoonBit and Go output with the available toolchains
-(Dart is textual on this host), and compare the schema of a
-`wasm-opt --all-features -O2` module with the original.
+(Dart is textual on this host), and compare the schema of five
+`wasm-opt --all-features -O2` modules with the originals, covering imported and
+exported signatures.
 
 The `cpp-adapter` output is compiled together with a small host program and
 exercised against the real engine: it calls an export through
-`WASM::callCallable`, propagates a trap, satisfies a host import, and passes an
-opaque reference through unchanged.
+`WASM::callCallable`, propagates a trap, satisfies a host import, passes an
+opaque reference through unchanged, calls a multi-value export into a
+caller-owned result buffer through `WASM::callCallableWithResults`, and covers
+explicit `refClone`/`refDrop` ownership of a GC reference result.
 
 Core modules and Component Model components are both input sets now. The
 component projection covers function, value, type, instance, component and
@@ -1121,8 +1135,11 @@ documentation.
 `Glue` and `SWIG` are **not** the schema. They are optional C++ discovery
 front-ends for the loose `TB-4` gloss recorded as `TB-4a` in §16.5: they may
 produce candidate signatures from native headers, but a candidate enters the
-schema only after it matches an engine descriptor. The schema remains the
-contract.
+schema only after it matches an engine descriptor. `wasmjit-bindings
+--candidates HEADER` runs SWIG's XML front-end (`swigCandidates()`) and reports
+each proposal as matched or rejected by name, arity, result shape and scalar
+type (`crossCheckCandidates()`); the schema itself is unchanged. The schema
+remains the contract, and Glue can be added behind the same check.
 
 
 ## 13. Native C++ objects, C structs, and the GC boundary
@@ -2283,9 +2300,10 @@ If SWIG or Glue is used, it is a **build-time tool**, not a runtime dependency:
 `/usr/local/lib/Glue-1.5/libGlue.a`, with headers under
 `/usr/local/include/Glue-1.5/glue` and its dependencies
 `/usr/local/include/StaticTypeInfo-1.2`, `/usr/local/include/Revisited-2.3` and
-`/usr/local/include/EasyIterator-1.4`. SWIG is `/usr/bin/swig`, with the 4.5
-manual at <https://www.swig.org/Doc4.5/SWIGDocumentation.html>. Neither is a
-build dependency; the paths are evidence for the optional front-end, not a new
+`/usr/local/include/EasyIterator-1.4`. SWIG is `/usr/bin/swig` (4.4.1 on this
+host), with the 4.5 manual at
+<https://www.swig.org/Doc4.5/SWIGDocumentation.html>. Neither is a build
+dependency; the paths are evidence for the optional front-end, not a new
 requirement.
 
 
@@ -2468,19 +2486,19 @@ and the producer rows are toolchain constraints recorded in this repository.
 |---|---|---|---|---|
 | **TB-1** | No neutral schema emitter from `Module`/`Component` descriptors | §12.2, §12.7, §12.8 | **Verify** | The first-party `Tools/Bindings/` emitter and `wasmjit-bindings` CLI project both core modules and components, with the Canonical ABI flat signature on component functions; WIT JSON is optional and `[bindings]` cross-checks its names against the schema. Reads descriptors, never a C++ header. |
 | **TB-2** | No C/C++, Rust, Zig, AS, Kotlin, MoonBit, Go or Dart emitter | §12.6–§12.8 | **Verify** | C/C++, Rust, TypeScript/AssemblyScript, Zig, Kotlin, MoonBit, Go and Dart emitters exist, plus a C++ adapter; `[bindings]` compiles all but Dart (no Dart toolchain on the host). Consume the schema, not C++ headers. |
-| **TB-3** | SWIG/Glue integration | §12.3, §15.5 | **Open** | Optional build-time front-end only; local snapshot in §15.5; never link into the engine. |
+| **TB-3** | SWIG/Glue integration | §12.3, §15.5 | **Verify** | Optional build-time front-end only: `wasmjit-bindings --candidates` runs SWIG's XML front-end; Glue remains an optional second front-end behind the same validation. Local snapshot in §15.5; never link into the engine. |
 | **TB-4** | Automatic scan of existing C/C++ headers as truth | §12.3 | **Rejected** | A C++ header is not a Wasm ABI; the literal form stays rejected. |
-| **TB-4a** | C++ header discovery as a *candidate* front-end | §12.3, §12.8, §15.5 | **Accepted** | Glue/SWIG may propose signatures; validate them against the engine descriptors before they enter the schema. |
+| **TB-4a** | C++ header discovery as a *candidate* front-end | §12.3, §12.8, §15.5 | **Verify** | SWIG proposals are checked against the schema by name, arity, result shape and scalar type before use; `[bindings]` covers a match and a mismatch. Glue can use the same check. |
 | **TB-5** | WIT as an IDL for core modules | §12.3–§12.4 | **Accepted** | WIT is component-level G2G only; the schema reads component descriptors directly and treats WIT JSON as optional; core modules use descriptors/`Callable`; no second WIT. |
-| **TB-6** | Binaryen/`wasm-opt` rewrites/optimizations | §12, §14 | **Verify** | Keep them in the producer pipeline; the `[bindings]` test now runs `wasm-opt --all-features -O2` on a fixture and compares exported signatures. Extend it to more modules. |
+| **TB-6** | Binaryen/`wasm-opt` rewrites/optimizations | §12, §14 | **Verify** | Keep them in the producer pipeline; `[bindings]` runs `wasm-opt --all-features -O2` on five fixtures (scalars, multi-value, GC struct/array, reference ownership and an externref import) and compares both imported and exported function signatures, ignoring the store-scoped `typeId`. |
 | **TB-7** | Compiler flags/versions that emit or omit GC refs, `externref`, EH, stringref | §12, §14 | **Open** | Pin toolchain versions/flags; the `[bindings]` test pins `wasm-opt 124 --all-features -O2` on the 2026-11-04 host. Record the produced module shape in the evidence log. |
 | **TB-8** | Generated headers for GC/string references | §14.4–§14.8 | **Verify** | Emitter rule, not an engine gap: opaque per-kind types, no layout/`TypeId` constants, explicit ownership comments. All emitters spell `stringref` as opaque `wasm_stringref`; `[bindings]` covers it with a hand-built reserved-encoding fixture. |
-| **TB-9** | Install/pkg-config/out-of-tree consumer | §7, §8 | **Verify** | `ES-5`/`ES-7` exist; re-run on the target toolchain when packaging changes. |
+| **TB-9** | Install/pkg-config/out-of-tree consumer | §7, §8 | **Verify** | Re-run 2026-11-04: `Test/install-check.sh build/Desktop-Release` installed into a scratch prefix, linked the consumer through `wasmjit.pc`, and ran the i32/f64/multi-result/v128/mixed-tuple checks (`install-check: OK`). Re-run when packaging changes. |
 | **TB-10** | Cross-vendor C++ ABI stability | §9 | **Accepted** | Soname discipline only; deferred unless a pimpl firewall is designed. |
-| **TB-11** | Generated-adapter conformance tests | §12.5, §12.8, §15.6 | **Verify** | In-repo `[bindings]` tests compile every generated target, compare a `wasm-opt` module, and run a generated C++ adapter through an export call, a trap, an import and an opaque-reference pass-through (16 cases / 428 assertions). Multi-value and retain/drop coverage remain. |
-| **TB-12** | Compiler/tool output whose encoding collides with the engine’s reserved forms | §14.7, `STRINGREF.md` | **Verify** | Keep the reserved-encoding note in the producer/toolchain checklist; do not patch the engine around a tool bug. |
-| **TB-13** | Legacy/alternative exception encoding from a producer (e.g. Kotlin/Wasm) | §12, `LEGACY_EXCEPTIONS.md` | **Verify** | Fix in the producer or parser policy; this is a tool encoding issue, not a source-language type rule. |
-| **TB-14** | Language-specific host import/export ABI emission | §12.6, §12.8, §14.4 | **Open** | The in-repo emitters produce the target ABI for all nine targets; the engine only sees the resulting Wasm signature. |
+| **TB-11** | Generated-adapter conformance tests | §12.5, §12.8, §15.6 | **Verify** | In-repo `[bindings]` tests compile every generated target, compare five `wasm-opt` modules, and run a generated C++ adapter through an export call, a trap, an import, an opaque-reference pass-through, a multi-value export and explicit retain/drop of a GC reference result (19 cases / 503 assertions across the suite). |
+| **TB-12** | Compiler/tool output whose encoding collides with the engine’s reserved forms | §14.7, `STRINGREF.md` | **Verify** | The reserved `stringref` encoding (`0x67`) is covered by the hand-built `[bindings]` fixture (TB-8) and stays opaque through every emitter. Keep the producer/toolchain checklist note; do not patch the engine around a tool bug. |
+| **TB-13** | Legacy/alternative exception encoding from a producer (e.g. Kotlin/Wasm) | §12, `LEGACY_EXCEPTIONS.md` | **Verify** | `[legacy-eh]` covers strict refusal, default recovery, opt-in rewrite, rethrow/delegate cases and agreement with Binaryen (110 assertions / 12 cases, green 2026-11-04). The policy stays producer/parser-side, not a source-language type rule. |
+| **TB-14** | Language-specific host import/export ABI emission | §12.6, §12.8, §14.4 | **Open** | The in-repo emitters produce the target ABI for all nine targets; component value/instance/type/component/core-module entries remain schema-only because no host accessor contract is defined for them yet. The engine only sees the resulting Wasm function signature. |
 
 **“Outside the engine” is not “outside the project.”** `TB-1`, `TB-2` and
 `TB-8` are **TOOL**: they must not add a header to `WasmBase/` or a link

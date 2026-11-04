@@ -1564,6 +1564,17 @@ std::string emitCppAdapterImpl(const Json& schema)
 	out << "\t\tthrow std::runtime_error(std::string(\"wasmjit adapter: missing export \") "
 		   "+ name);\n";
 	out << "\tWASM::callCallable<void>(*callable, args...);\n";
+	out << "}\n\n";
+	out << "template <typename... Args>\n";
+	out << "void callExportWithResults(const char* name, void* results, Args... args)\n";
+	out << "{\n";
+	out << "\tif (wasmjit_adapter_instance == nullptr)\n";
+	out << "\t\tthrow std::runtime_error(\"wasmjit adapter: no instance\");\n";
+	out << "\tauto callable = wasmjit_adapter_instance->exportedFunction(name);\n";
+	out << "\tif (!callable)\n";
+	out << "\t\tthrow std::runtime_error(std::string(\"wasmjit adapter: missing export \") "
+		   "+ name);\n";
+	out << "\tWASM::callCallableWithResults(*callable, results, args...);\n";
 	out << "}\n";
 	out << "} // namespace\n\n";
 	out << "extern \"C\" {\n";
@@ -1574,17 +1585,18 @@ std::string emitCppAdapterImpl(const Json& schema)
 		const std::string exportName = entry.at("name").get<std::string>();
 		const std::string name = "wasmjit_" + sanitize(exportName);
 		out << "\n// G2H export: " << exportName << "\n";
-		if (results.size() > 1u) {
-			out << "// multi-value export: use WASM::callCallableWithResults in the adapter\n";
-			return;
-		}
+		const bool multiValue = results.size() > 1u;
 		const std::string ret = results.size() == 1 ? cType(results[0]) : "void";
 		out << ret << " " << name << "(";
-		if (params.empty())
+		if (params.empty() && !multiValue)
 			out << "void";
 		for (std::size_t i = 0; i < params.size(); ++i) {
 			if (i != 0) out << ", ";
 			out << cType(params[i]) << " arg" << i;
+		}
+		if (multiValue) {
+			if (!params.empty()) out << ", ";
+			out << "void* result";
 		}
 		out << ")\n{\n";
 		std::string callArgs;
@@ -1595,7 +1607,11 @@ std::string emitCppAdapterImpl(const Json& schema)
 			else
 				callArgs += "arg" + std::to_string(i);
 		}
-		if (results.empty()) {
+		if (multiValue) {
+			out << "\tcallExportWithResults(\"" << exportName << "\", result";
+			if (!callArgs.empty()) out << ", " << callArgs;
+			out << ");\n";
+		} else if (results.empty()) {
 			out << "\tcallExportVoid(\"" << exportName << "\"";
 			if (!callArgs.empty()) out << ", " << callArgs;
 			out << ");\n";
