@@ -1074,7 +1074,8 @@ sed -e 's/^EXTRACT_ALL .*/EXTRACT_ALL = NO/' \
 
 ## Runtime, backend-ABI and plugin tests
 
-Four tagged families cover the embedding surface and the backend seam:
+Tagged families cover the embedding surface, the backend seam and the binding
+schema:
 
 | Tag | File | What it pins |
 | --- | --- | --- |
@@ -1088,6 +1089,7 @@ Four tagged families cover the embedding surface and the backend seam:
 | `[compilation-policy]` | `Test/ConfigurationTests.cpp` | The compilation policy (`COMPILER_POLICY.md` `CP-1`…`CP-5`): the vocabulary, the capability refusal, `Strict` vs `Lax` on the `F1` shape, the regression record and the achieved level |
 | `[branch-hint]` | `Test/BranchHintTests.cpp` | The branch-hinting seam (`SMALL_PROPOSALS.md` §4): the backend-neutral lookup (`setBranchHints`/`branchHintAt` — exact hit, between, unknown byte, cleared) and that a hinted module still computes the same results |
 | `[mem-provider]` | `Test/MemoryProviderTests.cpp` | The host-chosen allocation policy for linear memory (`MEMORY_PROVIDER.md` MP-1): the default policy's growth and budget behaviour, a reserved memory's stable base and verbatim maximum, its named refusal of an unbounded memory, a shared memory ignoring the policy, and the store policy reaching the memories a module declares |
+| `[bindings]` | `Test/BindingSchemaTests.cpp` | The test-only `EMBEDDING_SURFACE.md` §12.8 slice: descriptor→schema for G2H/H2G/G2G, opaque reference spelling, a C header with no layout/`TypeId`, and GC struct/array definitions |
 
 The plugin fixture is `Test/ExampleBackend/ExampleBackend.pro`, a shared library
 built in its own directory (`libwasmjit-backend-example.so`) so the test proves the
@@ -1102,6 +1104,7 @@ made to fail through `WASMJIT_EXAMPLE_BACKEND_MODE` (`descriptor-abi`,
 ./Test/WasmJit '[concurrency]'
 ./Test/WasmJit '[plugin]'
 ./Test/WasmJit '[legacy-eh]'
+./Test/WasmJit '[bindings]'
 ```
 
 ### The superseded exception form (`[legacy-eh]`)

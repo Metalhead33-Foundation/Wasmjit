@@ -149,7 +149,8 @@ SOURCES += main.cpp \
     LegacyEhTests.cpp \
     MemoryProviderTests.cpp \
     ConfigurationTests.cpp \
-    BranchHintTests.cpp
+    BranchHintTests.cpp \
+    BindingSchemaTests.cpp
 HEADERS +=  \
     helper.hpp \
     Diagnose.hpp \
