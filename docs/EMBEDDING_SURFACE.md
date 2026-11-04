@@ -1,10 +1,15 @@
 # The Embedding Surface — `WASM::Runtime`, the Umbrella Header, Versioning, and the Include Set {#doc_embedding_surface}
 
-Status: design note + plan (revision 3 — 2026-10-29: disambiguates the five roles
-called "context" or "runtime" (§3.1–§3.2), adds the profile/config layer (§4.6) and
-the header skeleton `ES-1` fills (§4.7). Revision 2 landed the umbrella, the
-version identity and the per-header compile units; revision 1, 2026-10-25, measured
-`LibjitDispatcher` at `ea4fb30`). This note answers `AAS1`/`AAS2` of
+Status: design note + plan (revision 5 — 2026-11-04: adds §14, GC references
+across module boundaries and the generated-header rules, and §15, host-to-guest
+templates, class-size registration and SWIG/Glue integration. Revision 4 added
+§13, the host-side native C++ object/C struct and GC-boundary decision.
+Revision 3, 2026-10-29,
+disambiguated the five roles called "context" or "runtime" (§3.1–§3.2), added
+the profile/config layer (§4.6) and the header skeleton `ES-1` fills (§4.7).
+Revision 2 landed the umbrella, the version identity and the per-header compile
+units; revision 1, 2026-10-25, measured `LibjitDispatcher` at `ea4fb30`). This
+note answers `AAS1`/`AAS2` of
 [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) and decides the fate of two empty
 placeholder headers.
 Audience: anyone who will freeze the public surface, package the library, write
@@ -49,6 +54,9 @@ provenance and the reason its two names do not survive here are in §3.
 | §10 | Test survey |
 | §11 | References |
 | §12 | What can and should generate host bindings — and what stays the embedder's job? |
+| §13 | How does a guest see a native C++ object or C struct, and where is the GC boundary? |
+| §14 | What do importing modules and generated headers see when a GC module exports struct, array or string references? |
+| §15 | Can host-to-guest templates, class bridges, SWIG or Glue replace an engine reflection system? |
 
 ## 2. What the embedder has today
 
@@ -775,14 +783,34 @@ check. The embedding surface is what the installed `wasmjit/wasmjit.hpp` exposes
   `PR-3`/`PRD6`).
 - [`DIAGNOSTICS.md`](DIAGNOSTICS.md) — the bounded sink and the per-execution-state
   `DiagnosticState` that `RuntimeConfig` seeds.
-- [`TYPE_IDENTITY.md`](TYPE_IDENTITY.md) — the "process-wide" `TypeId` statement
-  §4.4 would revise.
+- [`TYPE_IDENTITY.md`](TYPE_IDENTITY.md) §6.1 — Store-scoped `TypeId`,
+  canonical interning and cross-module matching.
 - [`LAYERING.md`](LAYERING.md) §2/§4/§6 — the rule the public headers must keep,
   the contract rows, and the grep.
 - [`SAFETY.md`](SAFETY.md) §2.2/§2.3/§2.8 — the bounds, budget and stack policies
   that make three of the sketch's config options unshippable (§5).
 - [`proposals/JS_INTEGRATION.md`](proposals/JS_INTEGRATION.md) — why a JS engine
   is not in the core, which is what keeps the "realm" mapping (§3) honest.
+- [`proposals/SHARING_LINEAR_MEMORY.md`](proposals/SHARING_LINEAR_MEMORY.md) —
+  the layout-negotiation problem that rules out putting arbitrary C++ object
+  images in linear memory (§13.7.1).
+- Source anchors for §13: `WasmBase/WasmHostBridge.hpp` (the opaque-reference
+  contract), `WasmBase/WasmGcHeap.hpp` (guest-only GC regions),
+  `WasmBase/WasmComponentRuntime.hpp` / `WasmBase/WasmComponentValue.hpp`
+  (component resource slots and `uint64_t` representations), and
+  `extern/MhLib/Elvavena/Util/ElvAllocatorBasic.hpp` /
+  `extern/MhLib/Elvavena/Util/ElvIntrusiveArray.hpp` (host-side allocator and
+  slab helpers, not a guest ABI).
+- [`proposals/GC.md`](proposals/GC.md) and
+  [`proposals/STRINGREF.md`](proposals/STRINGREF.md) — the GC object header,
+  `ref.test`/`ref.cast` identity, and the Store-owned `StringObject` bridge.
+- Source anchors for §14/§15: `WasmBase/WasmTypeIdentity.hpp` and
+  `WasmBase/WasmTypeRegistry.hpp` (Store-scoped `TypeId`, interning and
+  `matches`), `WasmBase/WasmModule.hpp` (descriptors and `typeView`),
+  `WasmBase/WasmModuleInstance.hpp` (`tryGetGcTypeId`, `refMatchesHeapType`,
+  `refClone`/`refDrop`), `WasmBase/WasmValue.hpp` (`Value::ref` and `Callable`),
+  `WasmBase/WasmNativeImport.hpp` (`nativeImport`), and
+  `WasmBase/WasmString.hpp` (`StringStore`).
 - Source anchors: `WasmBase/WasmStore.hpp` (the store, and why there is no global one),
   `WasmBase/WasmRuntime.hpp` (the `ES-1` placeholder), `WasmBase/WasmJit.hpp`
   (the umbrella), `WasmBase/WasmVersion.hpp`, `WasmBase/WasmProfile.hpp`,
@@ -944,4 +972,1196 @@ The per-language application of this section is
 [`languages/LF2_ABI_INTEROP.md`](languages/LF2_ABI_INTEROP.md): the two call
 directions, synthetic host modules, and the scalar-to-GC/reference difficulty
 matrix for the studied languages.
+
+## 13. Native C++ objects, C structs, and the GC boundary
+
+### 13.1 The question this section answers
+
+[`languages/LF2_ABI_INTEROP.md`](languages/LF2_ABI_INTEROP.md) maps a guest’s
+scalars, strings, lists and references onto WIT and the Canonical ABI. It leaves
+a host-side question open: an embedder has a real C++ object
+(`std::string`, `std::shared_ptr<Thing>`, `Thing` with virtual functions,
+`YourBespoke512BytesLargeStruct`) and wants a guest to use it. What does the
+guest actually see?
+
+There are only a few honest answers:
+
+1. **An opaque handle plus functions** — the OpenGL model. The guest never sees
+   layout, only an integer it passes back to host or component functions.
+2. **A typed handle table plus generated wrappers** — the same ABI as (1), with
+   type tags, generation checks and ergonomic declarations generated from the
+   engine’s descriptors or from a separate IDL.
+3. **A host-runtime object bridge** — a JavaScript/GC object owns a private
+   pointer or `externref`, and the host runtime’s finalizer releases it. This is
+   the SpiderMonkey/[`JsUtil`](https://github.com/Metalhead33-Foundation/GuiTest/blob/master/JS/JsUtil.hpp) model and it is not language-neutral.
+4. **The object image placed in linear memory** — rejected as a general
+   mechanism in §13.7.1. It works only for explicitly serialised POD data.
+5. **The engine GC owning native objects** — rejected as an engine feature in
+   §13.7.2. It is not what `GcHeap` is, and `std::pmr::memory_resource` is not a
+   general object lifetime system.
+6. **A C++ reflection system in the engine** — rejected in §13.7.3. It would be
+   a new subsystem, not a binding mechanism.
+
+The recommendation in §13.8 is deliberately narrower than “make everything
+work”: the engine owns the **opaque boundary** (`externref`, `HostBridge`,
+component resource handles), while the embedder or a host-side adapter library
+owns the **typed object model**. This is the same split already chosen for WASI,
+JavaScript integration and OS threads: the engine supplies the contract, not a
+particular host runtime.
+
+### 13.2 What the engine already guarantees
+
+These facts matter because they bound what a future design may claim without
+changing the engine:
+
+- **`externref` is opaque.** Its payload is a `void*` plus null, exactly one
+  pointer-sized value. The engine does not know what the pointer points at, does
+  not dereference it, and does not call a C++ destructor. A guest may store it,
+  pass it to a host import that compares it, or pass it back to a host import;
+  it may not inspect the pointee.
+- **`HostBridge` is the only host-reference hook.** When a balanced
+  `references.retain`/`references.release` pair is installed, the engine’s
+  `refClone`/`refStore`/`refDrop` barriers call them for payloads identified as
+  host references. `isHostReference` classifies; without it the engine uses a
+  conservative fallback. The callbacks may run during instance construction,
+  must not throw or trap, and `instanceDestroying` is the embedder’s chance to
+  drop per-instance roots. The engine does not walk a dying object graph.
+- **`GcHeap` is for guest Wasm GC.** It allocates `struct` and `array` objects
+  in mmap-backed regions and recycles them through the engine’s reference
+  counting. It has no API for allocating a C++ object and no type metadata for
+  one. Its `RegionSet` teardown is a bulk memory backstop, not a destructor
+  walk.
+- **Component resources are guest/component resources.** A resource value has a
+  `uint64_t` representation and a handle in the component runtime’s slot table;
+  a component-defined resource can attach a guest core function as its
+  destructor. That is a resource contract, not a mechanism for handing the
+  engine a `std::string` or `std::shared_ptr`.
+- **Metadata is the generator input.** `Module::importDescriptors()`/
+  `exportDescriptors()`, `ComponentFunction::paramTypes`/`resultTypes`,
+  `ComponentValueType` and `ComponentImport` describe the wire shape. They do
+  not describe C++ classes, constructors, member functions or ownership.
+
+So “the engine could just expose the object” is not true today, and making it
+true would not be a small extension to `externref`. It would be a new object
+model with a new ownership contract.
+
+### 13.3 The three practical difficulties
+
+The A/B/C labels used by `LF2_ABI_INTEROP.md` §6 describe how hard it is to
+carry a reference between the two sides. On the host side they correspond to
+three different *implementation* problems:
+
+| Class | Guest-side shape | Host-side implementation | Languages that can use it without a runtime-specific bridge |
+|---|---|---|---|
+| **A** | scalar/string/list only | pure functions; no object identity | all studied languages |
+| **B** | opaque handle (`u32`/`u64`) plus functions; optionally `externref` | handle table with type tag, generation, retain/release and an explicit destroy | C, C++, Rust, Zig, Go, TinyGo, AssemblyScript, Kotlin/Wasm, MoonBit, Dart |
+| **C** | a GC/JS object owns an opaque host reference; finalizer releases it | host runtime object with a private slot/field and a finalizer, or a WasmGC object holding `externref` | only where a host or guest runtime provides finalization; not C/Rust/Zig/Go |
+
+For completeness, the true scalar-only case (LF2 **A**) has no host object at
+all: a `demo_point` record or three separate `i32` arguments is the whole
+example. There is no create/destroy and no identity. Anything that needs a
+persistent host object starts at the next row and needs at least a handle.
+
+The distinction is not “A is primitive, C is advanced”. **C is a different
+ownership universe.** A and B can be specified as an ABI; C is a policy of one
+host runtime. The engine must not encode C, because doing so would privilege
+JavaScript or one GC language and would make the same C++ object behave
+differently depending on who wrapped it.
+
+The letters are reused from `LF2_ABI_INTEROP.md` §6, but the correspondence is
+not one-to-one. There, **A** is a scalar-only crossing, **B** adds a
+guest-memory representation, and **C** is runtime identity. A native object has
+no scalar-only form, so the minimum realizable host option is “an opaque
+integer plus functions”. That is **A-shaped on the wire** and **B-shaped as an
+adapter**: the guest sees a scalar, while the host owns a table and generated
+stubs. Option C below is the runtime-identity case. The labels below therefore
+describe **host implementation difficulty**, not a second definition of the
+LF2 scale.
+
+### 13.4 Option A — opaque IDs, OpenGL-style
+
+This is the lowest common denominator and the default that always works. The
+host owns a table; the guest receives an integer and never learns anything
+about the pointee. The API is a set of free functions:
+
+```cpp
+// Host adapter, exported with a C ABI. The guest imports these functions.
+extern "C" uint32_t demo_widget_create(uint32_t kind, int32_t width);
+extern "C" int32_t  demo_widget_width(uint32_t widget);
+extern "C" void     demo_widget_set_width(uint32_t widget, int32_t width);
+extern "C" void     demo_widget_destroy(uint32_t widget);
+```
+
+The host table adds the two things a raw OpenGL-style ID usually lacks:
+**generation** (a stale handle must not silently address a recycled slot) and
+a **type tag** — either a field in the slot or, as in this sketch, a separate
+table per type so a `widget` handle cannot be passed to `document_focus`.
+
+```cpp
+struct WidgetSlot {
+    uint32_t generation = 0;
+    std::shared_ptr<Widget> object; // or unique_ptr<T> with a custom deleter
+};
+
+std::vector<WidgetSlot> widgets;   // index 0 is reserved / never live
+std::vector<uint32_t>   freeWidgets;
+std::mutex              widgetsMutex;
+```
+
+```cpp
+// Sketch only: every public entry validates the handle before touching the slot.
+static Widget* resolveWidget(uint32_t handle)
+{
+    const uint32_t index = handle & 0xffffu;
+    const uint32_t gen   = handle >> 16;
+    if (index == 0 || index >= widgets.size()) return nullptr;
+    WidgetSlot& slot = widgets[index];
+    if (slot.generation != gen) return nullptr; // stale/recycled handle
+    return slot.object.get();
+}
+```
+
+The guest side is ordinary Wasm, with no reference types at all:
+
+```wat
+(import "host" "demo_widget_create" (func $widget_create (param i32 i32) (result i32)))
+(import "host" "demo_widget_width"  (func $widget_width  (param i32) (result i32)))
+(import "host" "demo_widget_destroy"(func $widget_destroy (param i32)))
+
+(func $example (result i32)
+  (local $w i32)
+  (local.set $w (call $widget_create (i32.const 1) (i32.const 640)))
+  (call $widget_width (local.get $w))
+  ;; ...use $w only by passing it back to the host...
+  (call $widget_destroy (local.get $w)))
+```
+
+Properties:
+
+- works in every studied language, including C, Rust, Zig, Go and TinyGo;
+- no C++ layout, RTTI, exceptions or smart pointers cross the boundary;
+- the guest can copy the integer, so the host must define ownership. Either the
+  handle is a borrowed token valid until `destroy`, or the table holds a
+  reference count and the guest calls explicit `retain`/`release`;
+- the wrapper layer is repetitive. That is a tooling problem, not an ABI
+  problem, and is exactly what option B automates;
+- a handle is **not** a pointer. The guest must never add an offset, read
+  memory at it, or interpret it as a `sizeof(T)`-sized object. Raw pointers in
+  `i32`/`i64` are not a substitute: the host cannot validate them, the guest
+  can forge them, and they expose the process address space.
+
+### 13.5 Option B — typed handle table and generated stubs
+
+Option B keeps A’s ABI but makes the table explicit and gives the generator
+enough information to produce ergonomic wrappers. It is the recommended target
+for a C++-facing host adapter because it addresses the “tedious, brittle,
+massive pain to maintain” objection without smuggling layout across the
+boundary.
+
+```cpp
+enum class NativeTag : uint32_t { Widget = 1, Document = 2, Config = 3 };
+
+struct NativeSlot {
+    uint32_t generation = 0;
+    NativeTag tag = NativeTag::Widget;
+    std::shared_ptr<void> object; // deleter retains the concrete type
+};
+
+struct NativeHandle {
+    uint32_t index = 0;
+    uint32_t generation = 0;
+    NativeTag tag = NativeTag::Widget;
+};
+
+class NativeTable {
+public:
+    NativeHandle adopt(std::shared_ptr<void> object, NativeTag tag);
+    std::shared_ptr<void> borrow(NativeHandle handle, NativeTag expected) const;
+    void destroy(NativeHandle handle);
+    // Optional: retain/release for a guest that wants shared ownership.
+    void retain(NativeHandle handle);
+    void release(NativeHandle handle);
+};
+```
+
+`std::shared_ptr<void>` is not a public ABI type and does not cross the
+boundary; it is the host’s storage policy. A `unique_ptr<T>` can be adopted by
+moving it into a `shared_ptr<void>` whose deleter destroys `T`; a `weak_ptr<T>`
+is a host-side check before use, not a second guest handle. This is the part
+[`JsUtil`](https://github.com/Metalhead33-Foundation/GuiTest/blob/master/JS/JsUtil.hpp) got right in principle (type-erased storage) and wrong in contract (it
+fixed the policy to `std::shared_ptr` and exposed only that).
+
+The ABI still carries only scalars:
+
+```cpp
+// Generated from a small IDL, or hand-written once. Not engine metadata:
+// the engine knows the Wasm signature, not Widget's C++ methods.
+extern "C" uint64_t demo_document_open(const char* path, uint32_t pathLen);
+extern "C" int32_t  demo_document_title(uint64_t document,
+                                         uint8_t* out, uint32_t outCap);
+extern "C" void     demo_document_close(uint64_t document);
+```
+
+The generated caller keeps the two layers honest:
+
+```cpp
+// Guest-facing wrapper (generated or hand-written).
+class Document {
+public:
+    explicit Document(std::uint64_t handle) : handle_(handle) {}
+    ~Document() { if (handle_) demo_document_close(handle_); }
+    Document(const Document&) = delete;
+    Document& operator=(const Document&) = delete;
+    std::string title() const; // calls demo_document_title with a result buffer
+private:
+    std::uint64_t handle_ = 0;
+};
+```
+
+For a GC guest, the same slot can be delivered as an **opaque `externref`**
+instead of an integer. The engine still only sees the pointer payload; the
+host box and its `retain`/`release` callbacks are the adapter’s business. This
+is the bridge between B and C:
+
+```cpp
+// Host side: box the table entry so the engine can retain/release an opaque ref.
+struct ExternBox {
+    NativeTable* table;
+    NativeHandle handle;
+    std::atomic<uint32_t> refs{1};
+};
+
+void* box_new(NativeTable& table, NativeHandle handle)
+{
+    return new ExternBox{&table, handle, 1};
+}
+```
+
+```wat
+;; WasmGC guest: the field is opaque. It may be stored, cloned and dropped,
+;; but the guest cannot read the widget's fields through it.
+(type $holder (struct (field $widget (mut externref))))
+```
+
+The important separation is: **B is the table and the ABI; C is who owns the
+box and when the finalizer runs.** Mixing them is what makes the JS precedent
+hard to reuse.
+
+### 13.6 Option C — a host/guest GC owns the reference
+
+The JavaScript model is: put a private pointer in a GC object, register a
+finalizer that releases it, and expose properties/methods through native
+callbacks. A WasmGC guest can do the analogue with an `externref` field:
+
+```cpp
+// Host adapter. `Native` is the embedder's C++ type.
+struct HostBox {
+    std::shared_ptr<Native> native;
+    std::atomic<std::uint32_t> refs{1}; // 1 for the value the guest receives
+};
+
+static void retainHostRef(void*, WASM::VMContext*, void* ref)
+{
+    static_cast<HostBox*>(ref)->refs.fetch_add(1, std::memory_order_relaxed);
+}
+
+static void releaseHostRef(void*, WASM::VMContext*, void* ref)
+{
+    HostBox* box = static_cast<HostBox*>(ref);
+    if (box->refs.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+        removeLiveHostBox(box); // before the address can be reused
+        delete box;             // shared_ptr releases Native; custom deleter is fine
+    }
+}
+```
+
+```cpp
+WASM::HostBridge bridge;
+bridge.references.retain  = &retainHostRef;
+bridge.references.release = &releaseHostRef;
+bridge.references.isHostReference = &isLiveHostBox; // registry/range check
+bridge.instanceDestroying = &dropPerInstanceRoots; // drop roots, not every object
+bridge.userData = &hostTables; // retain/release can run before instanceCreated
+```
+
+The guest stores and drops the reference; the engine’s barriers call the two
+callbacks; the host deletes the box when the last engine-visible count goes
+away. The guest never dereferences the pointer and the engine never learns what
+`Native` is.
+
+`isLiveHostBox` must **not** be `return true`. The same hook sees funcref,
+continuation and other opaque pointers; returning true for those would make the
+engine call `HostBox` logic on an unrelated object. Use a registry of live box
+addresses, a reserved address range, or a side table — a lookup that is safe for
+an arbitrary pointer, not a dereference of it.
+
+That is the entire legitimate “GC manages a native object” story on the guest
+side. The precise ownership chain is: **guest GC → opaque reference → host box
+→ native object**. The engine’s `GcHeap` still owns only the guest object; it
+does not scan the host box or trace the native object. What the host runtime
+does *around* the box is runtime-specific:
+
+- a JS host can put the `HostBox` in a private slot and register its own
+  finalizer; the finalizer calls the same release path;
+- a WasmGC guest can put an `externref` in a `struct`/`array` field; the
+  engine’s `refStore`/`refDrop` supply the retain/release calls;
+- a C, C++, Rust, Zig, Go or TinyGo guest has no **GC** finalizer for a foreign
+  pointer. It must use option A/B and call `destroy` explicitly. C++ can wrap a
+  handle in an RAII object whose destructor calls `destroy`, and Rust can do the
+  same with `Drop`, but that is still the explicit A/B contract, not an engine
+  finalizer. C can carry an `externref` only if its toolchain supports the
+  reference type, and it still has no automatic finalizer.
+
+This is why C cannot be the universal replacement for A/B. It is a **host-runtime
+integration policy**, and it only works where a runtime owns the object graph
+on the other side.
+
+The [`JsUtil`](https://github.com/Metalhead33-Foundation/GuiTest/blob/master/JS/JsUtil.hpp) precedent is the cautionary example. Its table is keyed by a
+sequential `uintptr_t`, values are always `std::shared_ptr<void>`, and
+`js_finalizer_shared` erases the slot when the JS object dies. Useful
+conveniences — the `ReturnValueWrapper` specialisations and the member-function
+trampolines — sit next to assumptions that do not generalise:
+
+- it cannot represent `std::unique_ptr<T>` or `std::weak_ptr<T>` as first-class
+  guest-visible policies;
+- the finalizer is tied to one runtime’s object lifecycle, so the same native
+  object cannot be handed to a non-JS host without a second mechanism;
+- the pointer is stored in a private slot, which is not available in Wasm
+  linear memory or in a C guest;
+- the table is global and mutex-protected, which is a thread-affinity decision
+  disguised as an implementation detail.
+
+Do not repeat that contract in the engine. If a JS adapter wants it, the
+adapter owns it. The engine’s contribution is the opaque `externref` and the
+`HostBridge` hooks, not a universal `shared_ptr` table.
+
+### 13.7 Non-options, and why they are non-options
+
+#### 13.7.1 Putting the object image in guest linear memory
+
+A C++ object cannot be copied into linear memory as an opaque byte blob. The
+guest compiler does not know `sizeof(T)` for a host-only `T`, and even if the
+host exports a size query, the following are still true:
+
+- the host and guest may use different ABIs, alignments, endianness assumptions
+  and standard-library layouts;
+- `std::string`, `std::vector`, `std::shared_ptr` and virtual classes contain
+  pointers, allocator state and vtable addresses that are meaningless in the
+  guest address space;
+- a host pointer inside the image is a capability leak. The guest can corrupt
+  it, and the host cannot validate it without a side table;
+- nested objects need a layout negotiation and a relocation story. That is
+  precisely the problem [`proposals/SHARING_LINEAR_MEMORY.md`](proposals/SHARING_LINEAR_MEMORY.md)
+  is about, and it is not solved by an allocator;
+- a guest can write anywhere in its own memory, so “read-only” is not
+  enforceable inside the same linear memory unless the guest runtime provides
+  protection.
+
+The legitimate subset is **plain data with an explicit schema**: integers,
+floats, fixed-width fields, fixed-size arrays, and strings/lists represented by
+offset+length pairs under the Canonical ABI. A C `struct` containing only such
+fields can cross as a `record`, and a `std::array`/fixed-size buffer can cross
+as a `list` with a canonical copy. A `std::string` cannot; copy its bytes and
+let the host own the native string.
+
+```c
+/* Crosses as a WIT record: no pointers, no host addresses. */
+typedef struct {
+    int32_t x;
+    int32_t y;
+    uint32_t flags;
+} demo_point;
+
+/* Does not cross as a record: the pointer and the char* are host addresses. */
+typedef struct {
+    const char* name;
+    void*       owner;
+    size_t      nameLen;
+} demo_bad_record;
+```
+
+The second struct is still usable, but only through option A/B: copy `name`
+into a canonical string, replace `owner` with a handle, and keep the struct
+itself on the host.
+
+A size query (`host_sizeof_widget()`) is not enough. It tells the guest a
+number, not a contract. The contract would still need field offsets, alignment,
+lifetime, ownership, mutation rules and a versioning story — the layout
+negotiation this engine deliberately does not own.
+
+#### 13.7.2 A `std::pmr::memory_resource` for engine GC
+
+`Elv::Util::PolyMorphicSmartPointerFactory<T>` and
+`Elv::Util::SmartPointerWrappersForAlloc<T, Alloc>` are useful host-side
+allocator helpers: they can build `unique_ptr`, `shared_ptr` and `weak_ptr` with
+a custom allocator/deleter, and `GenericDeleter` gives a type-erased
+destroy-and-deallocate callback. `Elv::Util::IntrusiveArray<Element, Meta>` is a
+single-slab, reference-counted array with a header and an `ElementSpan`; it is a
+good way to store a homogeneous block of host objects behind a handle.
+
+None of these is an engine GC interface:
+
+- `std::pmr::memory_resource` allocates and deallocates **bytes**. It does not
+  know `T`, does not run `T`’s destructor, and does not know which references
+  inside `T` need tracing or dropping;
+- a GC that only knows `allocate`/`deallocate` cannot reclaim a `shared_ptr`
+  graph correctly, cannot distinguish a `weak_ptr` from an owning reference,
+  and cannot run an arbitrary destructor with the right type;
+- `IntrusiveArray` is reference-counted host memory, not a Wasm GC object. Its
+  `ElementSpan` is a host pointer and cannot be handed to a guest as a linear
+  memory address;
+- if the host wants the engine to drop a native object, it must supply a
+  **type-erased releaser** (`GenericDeleter` is one) and invoke it from the
+  host’s own finalizer/box. That is option C, not “GC owns native objects”.
+
+An embedder may use `pmr` to back a handle table or a slab of same-type
+objects. It may not ask `GcHeap` to allocate a `std::string` and expect the
+engine to destroy it. Adding that would make the engine a C++ runtime, not a
+Wasm runtime.
+
+#### 13.7.3 A C++ reflection system in the engine
+
+A reflection layer would register classes, fields, member functions, constructors
+and ownership policies, then expose them to every guest language. It is
+technically possible to build such a thing, but not in `WasmBase/`:
+
+- it would need RTTI or generated metadata for every registered class, and C and
+  Rust have no compatible RTTI;
+- it would have to choose a single ownership model (`shared_ptr`? `unique_ptr`?
+  intrusive? GC?) — the exact mistake [`JsUtil`](https://github.com/Metalhead33-Foundation/GuiTest/blob/master/JS/JsUtil.hpp) made;
+- it would have to define object identity, thread affinity, exceptions, virtual
+  dispatch, overload resolution and lifetime across a boundary where the guest
+  can forge handles;
+- it would duplicate, badly, what SWIG, Glue, `pybind11`-style tools and
+  language-specific bindings already do;
+- it would turn a security boundary into an object-capability system that the
+  engine cannot validate. That belongs to the embedder, which knows which
+  classes are safe to expose.
+
+The engine already has a reflection-like surface for **Wasm**, not C++: type
+descriptors, canonical types and component metadata. Those describe the Wasm
+wire shape. A C++ reflection system would be a second, unrelated model. The
+“duplicate, badly” sentence above is not a plan to make SWIG or Glue an engine
+dependency; §15.5 draws the build-time-only boundary.
+
+### 13.8 The boundary and the decision
+
+The split is:
+
+| Concern | Engine | Embedder / host adapter | Guest |
+|---|---|---|---|
+| Opaque reference representation | **owns** (`externref` is a `void*` payload) | supplies/consumes it | may store and pass it, never dereference it |
+| Reference retain/release | calls `HostBridge` hooks | implements them, or uses A/B handles | must use the host’s ownership rules |
+| Native object allocation | does not allocate | allocates with `new`, `pmr`, a slab, `IntrusiveArray`, etc. | does not allocate host memory |
+| Native object destruction | does not run C++ destructors | runs the deleter, explicitly or from a finalizer | calls `destroy` when the ABI says so |
+| Type identity of a native object | does not know it | table tag + generated wrapper | sees an ID or opaque ref, not a C++ type |
+| Guest GC objects | **owns** `GcHeap` / reference counting | may hold a handle in a guest object | owns the guest object graph |
+| Component resources | owns the handle/slot table and ABI | chooses the `uint64_t` representation and destructor policy | uses the component resource type |
+| Reflection / methods | none for C++ | generated or hand-written | calls the declared functions |
+| Thread affinity | instance/agent execution contract | must keep host objects on the allowed thread or synchronise | follows the host API |
+
+The direct answers to the questions that prompted this section:
+
+- **Is the GC exclusively for guest-side objects?** The engine’s `GcHeap` is.
+  It allocates Wasm `struct`/`array` objects and reclaims them by the engine’s
+  reference counting. It is not a general C++ object heap. Component resource
+  slots are a separate guest/component mechanism. The only host-object lifetime
+  hook is `HostBridge`, and it is embedder-implemented.
+- **What does `externref` do?** It carries one opaque pointer-sized payload
+  across calls, tables, globals and WasmGC fields. The engine retains/releases
+  it through `HostBridge` when the bridge is installed, can compare it through
+  the host’s identity callback, and never dereferences or destroys the pointee.
+  Without a bridge it is just an opaque `void*` with no host callbacks.
+- **What is the engine’s responsibility?** The representation, barriers,
+  instance lifecycle callback, component resource ABI, validation and metadata.
+  Not the C++ object model, not a finalizer, not a reflection registry.
+- **What is the guest’s responsibility?** Treat handles and `externref` values
+  as opaque; call the declared functions; follow the documented ownership
+  (`own`/`borrow`, explicit `destroy`, or the GC field’s lifetime); never
+  perform pointer arithmetic or assume layout.
+- **Should the engine grow a reflection system?** No. It would be a second
+  object model, it cannot be language-neutral, and it is not required for
+  production readiness. If a product needs one, put it in an optional host-side
+  adapter library built on the handle table and `HostBridge`; do not add it to
+  `WasmBase/` or make it part of the frozen embedder surface.
+- **Does this require violating “no native exports in the engine”?** No. The
+  host adapter exports the native functions. The engine exports only the
+  generic bridge and metadata. A reflection system would be the violation; the
+  handle table is not.
+- **Is “embedder responsibility” the right answer?** Yes for the native object
+  model, for the same reason it is right for WASI, JS integration and OS
+  threads: there is no single correct C++ object policy, and the engine cannot
+  police one. It is **not** an excuse to leave the boundary undocumented. The
+  engine must provide the opaque primitive and the contract; the guide and
+  adapter recipes are the deliverables that make the answer usable.
+
+### 13.9 Per-language consequences
+
+| Target | What crosses | Recommended native-object model | Limit |
+|---|---|---|---|
+| **C** | scalar params/results, canonical records/lists, integer handles | A or B; C `struct` only if it is plain data with a canonical layout | no C++ object, no `externref` finalizer, explicit `destroy` |
+| **C++** | same as C; generated `extern "C"` host functions | B, with generated RAII wrappers over handles; A for small surfaces | the C++ class itself never crosses; no RTTI, no exceptions, no `shared_ptr` in the ABI |
+| **Rust** | `extern "C"`, `#[repr(C)]` plain structs, handles | B; an RAII guard whose `Drop` calls `destroy` | no Rust `Drop` across the boundary; no `std::string`/`Vec` layout |
+| **Zig** | C ABI, handles | B | explicit deinit; no guest finalizer |
+| **Go / TinyGo** | `//go:wasmimport` / `//go:wasmexport`, handles | A or B; a Go wrapper with explicit `Close` | Go GC does not own the host object; no pointer into Go heap crosses |
+| **AssemblyScript** | `externref` and/or integer handles | B; C only if the JS host owns the box | AS GC cannot finalize a host C++ object by itself |
+| **Kotlin/Wasm** | WasmGC `externref` field, generated adapter | C on a WasmGC host, or B with integer handles | host must supply the box and release hook; no direct field access |
+| **MoonBit** | WasmGC references, external declarations | C or B | same as Kotlin; runtime-specific finalizer |
+| **Dart** | Dart FFI/Wasm interop | B, or C under a Dart host adapter | host runtime owns the native lifetime |
+| **JS/TS, Lua, Python, etc.** | host runtime’s own bridge | C, implemented by the host adapter | not engine types; not a core dependency |
+
+The ordering is intentional:
+
+1. **A is the minimum guarantee.** Any embedder can use it, even with a
+   compiler that has no reference types.
+2. **B is the recommended production shape.** It adds type tags, generation
+   checks and generated ergonomics without changing the ABI or the engine.
+3. **C is opt-in per host runtime.** It is valuable for JS and GC guests, but it
+   is not a portable contract and must not be presented as one.
+4. **No language gets a raw C++ pointer in linear memory.** Plain shared-memory
+   structs are a separate, explicitly serialised feature.
+
+For C++ specifically, the working policy is:
+
+- `std::unique_ptr<T>` when the host owns the object exclusively; `std::shared_ptr<T>`
+  only when sharing is real; `std::weak_ptr<T>` is a host-side validity check,
+  never a guest-visible handle;
+- a `shared_ptr` graph can contain cycles. Use `weak_ptr` for back edges and
+  treat `instanceDestroying` as the per-instance arena backstop, not as a
+  garbage collector;
+- a `HostBox` shared across instances needs a host-level count; an instance’s
+  `instanceDestroying` must drop only that instance’s root, never delete storage
+  that another live instance still uses;
+- `Elv::Util::SmartPointerWrappersForAlloc` / `PolyMorphicSmartPointerFactory`
+  are reasonable host-side allocation helpers; `Elv::Util::IntrusiveArray` is a
+  reasonable slab for homogeneous objects. Neither changes the guest ABI;
+- `std::string`/`std::vector` are copied through canonical string/list
+  representations, not exposed by address;
+- the adapter catches C++ exceptions at the boundary and reports a trap or a
+  result code; no exception crosses the C ABI;
+- the host table’s mutex/thread affinity is documented. A native object is not
+  automatically safe for concurrent calls just because the engine can run
+  multiple agents.
+
+### 13.10 What would make this a tested claim
+
+The section is a design decision, not a claim that every language has been
+exercised. The following tests would turn it into evidence, in increasing cost:
+
+1. **A handle-lifetime test in C and C++.** Create, use, destroy, reuse the
+   slot, then use the stale handle. It must be rejected, not silently succeed.
+2. **A type-tag test.** Pass a `widget` handle to a document function. It must
+   be rejected before the host dereferences anything.
+3. **A generated-wrapper test.** Generate the C/C++ header and adapter for one
+   synthetic module, compile it, and call the exported function through the
+   generated wrapper rather than the raw descriptor.
+4. **A `HostBridge` retain/release test.** An `externref` is stored in a
+   global/table/WasmGC field, cloned and dropped; the host box reaches zero
+   exactly once, including on `instanceDestroying`.
+5. **A WasmGC `externref` field test.** Store a host box in a struct, force the
+   struct to be recycled, and assert the host release runs; the engine must
+   never inspect the box.
+6. **A plain-data test.** A `#[repr(C)]`/C struct of integers crosses as a
+   canonical record; a `std::string` does not cross by layout and is copied as
+   bytes.
+7. **A negative test.** A guest attempts to pass a raw pointer or a forged
+   handle; the adapter rejects it. Document that this is adapter validation,
+   not a sandbox guarantee of linear memory.
+
+Until (1)–(5) exist, the correct statement is: **the engine provides the opaque
+boundary; the A/B/C recipes are documented adapter patterns, and the C adapter
+is explicitly untested.** That is narrower than “native C++ interop works”, and
+it is honest.
+
+The final recommendation for the guide and the descriptor-driven generator is
+therefore:
+
+- generate **A/B** stubs and a **handle-table skeleton** for C/C++, Rust, Zig,
+  Go/TinyGo and AssemblyScript;
+- generate **C-style opaque `externref` + box/finalizer** adapters only for
+  host runtimes that actually provide finalization (JS, Kotlin/Wasm, MoonBit,
+  Dart where available);
+- generate **no reflection registry** and **no linear-memory object image**;
+- keep `WasmBase/` free of C++ class metadata, smart-pointer policy and host
+  runtime dependencies.
+
+That closes the host-side question without turning the engine into a C++
+runtime, and it keeps the production-readiness boundary consistent with the
+one already recorded for WASI, JS integration and OS threads.
+
+## 14. GC references across modules and generated headers
+
+### 14.1 The short answer: `void*` is the representation, not the type
+
+When a GC language exports a function that takes or returns a struct or array
+reference, four layers see different things:
+
+| Layer | What it sees |
+|---|---|
+| Wasm validation / linking | the declared reference type: `(ref $T)`, `(ref null $T)`, `anyref`, `externref`, `stringref`, etc.; the function type is canonicalized and matched |
+| `Callable` / generated code ABI | one pointer-sized word per reference; this is the backend contract (`Value::ref`), and the implemented backends use that word (LibJIT uses `jit_type_void_ptr`, AsmJit uses its unsigned-pointer type) |
+| C++ embedder | `WASM::Value::ref`, a `void*`; or a `void*` parameter/result through `callCallable` |
+| GC object | a Store-owned object whose `GcHeader` carries the canonical `TypeId`; that is what `ref.test`/`ref.cast` read |
+
+So the C++ answer really is “an opaque pointer-sized value”. The Wasm answer
+is **not** “an untyped pointer”: the function signature is typed, the validator
+checks it, the linker matches it by canonical type identity, and the object
+header carries the identity needed for casts. `void*` is only the transport
+spelling at the C ABI.
+
+A Wasm GC struct/array is also not a linear-memory address. It lives in the
+Store-owned `GcHeap`; `i32.load`/`i32.store` cannot reach its fields, and a
+host must use the typed operations or the exported accessors. That is another
+reason a C header cannot expose `struct T*` plus field offsets.
+
+That distinction is what makes the following dangerous and wrong:
+
+```c
+/* WRONG: pretends the guest reference is a C++ object. */
+struct Widget* widget = (struct Widget*)ref;
+widget->width = 10;
+```
+
+The reference may point at a GC object whose layout is a Wasm `struct`, not a
+C++ `Widget`; the pointer may be an `externref` owned by the host; it may be an
+i31 immediate; and nothing guarantees the pointee is readable in the host
+process. A C header must carry it as an opaque token, with accessor functions
+if the API really wants to expose fields.
+
+This is also why a backend must not “decide” to make GC references into C++
+pointers. The backend contract is one machine word of representation plus the
+engine’s type identity; a backend that invents its own layout breaks the
+`Callable` ABI and cross-module calls.
+
+### 14.2 Same-Store type identity is what makes the typed case work
+
+The authoritative identity rules are:
+
+- **`TypeId` is Store-scoped, not process-global.** `TYPE_IDENTITY.md` §6.1 and
+  [`EMBEDDING_SURFACE.md`](EMBEDDING_SURFACE.md) §4.4 are the rule; the
+  “process-wide” spelling in some historical comments is not the current
+  contract. Two runtimes have independent id spaces.
+- **One runtime owns one `Store`.** `Runtime::store()` is the only store
+  accessor; there is no `Store::global()` or `Store::current()`.
+- **Cross-module linking happens inside that Store.** `Module::typeIds` maps
+  each module-local type to a canonical `TypeId`; `TypeRegistry::internModule`
+  hash-conses structurally equal `rec` groups, and
+  `TypeRegistry::matches`/`matchesHeap` do the import match, including GC
+  subtyping.
+- **A function import is matched by its canonical function `TypeId`.** The
+  reference types inside the signature are part of that type. A
+  `(ref $T)`-typed parameter is not interchangeable with `externref` or with a
+  structurally different struct.
+- **The GC object’s header stores the canonical `TypeId` at allocation.**
+  `ModuleInstance::tryGetGcTypeId` reads it, and
+  `ModuleInstance::refMatchesHeapType` uses it for `ref.test`, `ref.cast` and
+  `br_on_cast`. That is what makes a reference produced by module A usable by
+  module B in the same Store.
+
+Consequently, two modules in the same Store that declare structurally
+identical GC types are talking about the **same Wasm type**. The importing
+module can declare `(ref $T)` and receive a reference that satisfies it; the
+engine does not need a C++ type name, a `void*` class tag or an RPC schema.
+
+What the importer does **not** get is the exporter’s language-level class
+semantics. Two structurally identical Wasm structs can still be “a Kotlin
+object” in one module and “a MoonBit object” in another; the fields match, but
+the runtimes’ methods, invariants and class metadata do not. Wasm GC unifies
+the object layout/type, not the language runtime.
+
+### 14.3 The four useful combinations
+
+“GC language” below means a language that emits Wasm GC struct/array types
+(Kotlin/Wasm, MoonBit, Dart, AssemblyScript’s managed objects, etc.). “Non-GC
+language” means C, C++, Rust, Zig, Go or TinyGo in the ordinary core-module
+sense.
+
+| Producer → consumer | What can cross | What the consumer must do |
+|---|---|---|
+| **GC → GC, same Store, matching canonical type** | typed `(ref $T)` / `(ref null $T)`; casts and field access are legal | use the target language’s reference type; do not serialize or copy the object |
+| **GC → GC, same Store, only `anyref`/`externref`** | an opaque reference, no field access | call exported accessor functions; cast only through the engine’s typed APIs if the target type is known |
+| **GC → non-GC (C/Rust/Zig/Go)** | only an opaque `externref`/handle handshake; a typed struct ref is not expressible | pass it back to the producer or a host adapter; never dereference, never assume `sizeof(T)` |
+| **non-GC → GC** | an opaque `externref`/handle, if the toolchain supports reference types at all; no typed GC struct creation | the GC module must provide a constructor/factory wrapper that takes the opaque value, or a host adapter must mediate |
+| **GC → GC, different Store/runtime** | **not supported** as a shared reference | copy/serialize, or move the work behind a host adapter; do not pass the pointer across |
+| **stringref → any language** | an opaque Store-owned string reference in the same Store, where the toolchain can spell `stringref` or a host adapter mediates | copy via `StringStore` helpers or call string functions; no native string layout |
+
+The third and fourth rows are where most “why can’t C just use it?” questions
+land. C can hold the token, but the Wasm type system does not let a C module
+declare a `(ref $T)` parameter unless its toolchain emits GC reference types.
+Passing an i32 handle that the host maps to a GC reference is a valid
+**adapter**, not a direct GC ABI: the handle table is host-owned, and the host
+performs the type check.
+
+For a `(ref $T)` producer, the usual non-GC façade is a pair of exports that
+use `externref`: `extern.convert_any` on the way out and `any.convert_extern`
+on the way in, with the actual field/method access staying inside the GC
+module. The C side then holds an opaque `externref` and calls the façade; it
+still does not see the struct layout.
+
+On the `LF2` A/B/C scale these are **C** cases even when the machine word is a
+pointer: the value has runtime identity and needs a GC/runtime-aware adapter.
+The C header can make the token look like `B` (one word), but it cannot make
+the type relation `A` or `B`. Treating a pointer to a GC object as an `i32`
+handle is only the adapter boundary, not a downgrade of the Wasm type.
+
+The “both GC” case is not automatic either. Two GC languages share a reference
+only if they agree on the Wasm-level type. If Kotlin exports a struct whose
+fields are `(i32, externref)` and MoonBit declares `(i32, i32)`, the function
+type does not match and linking fails — correctly. If the fields do match, the
+reference can cross, but each runtime still interprets its own class metadata;
+the safe cross-language surface is the exported function set, not a shared
+“object model”.
+
+### 14.4 What generated headers should contain
+
+There are two tiers, and mixing them is the source of most bad C headers:
+
+1. **The raw engine ABI** uses `void*`/`Value::ref` and `Callable`. It is
+   untyped at the C level and must not be handed to application code as if it
+   described a class.
+2. **The generated host header** gives the pointer a *kind* and an
+   *ownership contract*, while still exposing no layout. The application sees
+   `wasm_externref`, `wasm_structref_demo_point`, `wasm_arrayref_demo_row`,
+   `wasm_stringref`, etc. — never `struct DemoPoint*` or `std::string*`.
+
+Do not confuse a **host adapter header** with a **C source file compiled to a
+Wasm module**. The former wraps a `Callable`/`ModuleInstance` export on the
+host. The latter is a Wasm import declaration and only exists if the C
+toolchain supports the reference type in question; a header that spells the
+reference as `void*` cannot make a C guest type-check a `(ref $T)` import.
+
+A reasonable C shape is:
+
+```c
+/* Incomplete, opaque, never dereferenced by the application. */
+typedef struct wasm_externref  wasm_externref;
+typedef struct wasm_anyref     wasm_anyref;
+typedef struct wasm_structref_demo_point wasm_structref_demo_point;
+typedef struct wasm_arrayref_demo_row    wasm_arrayref_demo_row;
+typedef struct wasm_stringref  wasm_stringref;
+
+/* Field access is a function, not an offset. */
+int32_t demo_point_x(wasm_structref_demo_point* self);
+void    demo_point_set_x(wasm_structref_demo_point* self, int32_t x);
+
+/* Ownership is stated in the API, not inferred from the C type. */
+void demo_point_drop(wasm_structref_demo_point* self);
+```
+
+The implementation casts these to `void*` at the `Callable` boundary and
+checks the expected kind/type before use. The header may additionally carry a
+**stable WIT/interface name** for the type, but it must not hard-code a numeric
+`TypeId`: `TypeId` values are assigned by the Store at load time and are not a
+stable cross-run ABI.
+
+C++ can do the same with a non-dereferenceable wrapper:
+
+```cpp
+class GcRef {
+public:
+    GcRef() = default;
+    explicit GcRef(void* opaque) : opaque_(opaque) {}
+    void* opaque() const { return opaque_; }
+    // no operator*, no operator->, no sizeof, no class layout
+private:
+    void* opaque_ = nullptr;
+};
+```
+
+The wrapper may delete its copy constructor, or carry an ownership flag and a
+drop function. It must not turn into a typed `T*`; if the API needs fields,
+generate `get_`/`set_` functions that perform the GC field access in the
+producing module or in a typed adapter.
+
+Per-language spelling:
+
+| Target | Header spelling | Rule |
+|---|---|---|
+| **C host** | incomplete `wasm_*ref` types, passed as pointers | no dereference, no field access; explicit `drop`/retain contract |
+| **C++ host** | `wasm::GcRef` / `wasm::ExternRef` with a private `void*` | no `operator*`/`operator->`, no `sizeof(T)`, no C++ class layout |
+| **Rust host** | `#[repr(transparent)] pub struct GcRef(*mut c_void);` | no `Deref`, no `as_ref`, no field access; `Drop` only if the API says owned |
+| **Zig host** | `*anyopaque` | opaque token only; explicit deinit |
+| **Go/TinyGo host** | `uintptr`/`unsafe.Pointer` only at the raw adapter; prefer a `uint64_t` table handle | Go’s GC does not trace the host object; never dereference |
+| **AssemblyScript** | `externref` for foreign references; `usize` only as an opaque raw token | AS managed objects are not engine GC structs automatically |
+| **Kotlin/Wasm, MoonBit** | target `externref` or typed `(ref $T)` when the compiler emits the matching canonical type | the generated declaration must match the Wasm type, not a same-named language class |
+| **Dart** | `externref`/JS-interop reference | host runtime owns the native side; no direct struct field access |
+
+The header is a **compile-time interface plus a runtime type check**, not a
+layout description. For a `structref`, the only legal operations are the
+exported functions for that type; for an `arrayref`, length/get/set functions
+must be exported by the producing module or a typed adapter.
+
+### 14.5 Kind, identity and ownership in the generated wrapper
+
+A generated wrapper needs three checks that a raw `void*` cannot express:
+
+1. **Kind.** `externref`, `anyref`, a concrete `structref`/`arrayref`,
+   `stringref` and `funcref` are different Wasm types even though the machine
+   word is the same. The host must set `Value::kind` correctly when calling a
+   `Callable`, and the wrapper must reject an `externref` where a concrete
+   struct type is expected.
+2. **Identity.** A concrete reference must satisfy the expected canonical
+   `HeapType`. On the host side, `ModuleInstance::tryGetGcTypeId` reads the
+   object header and `refMatchesHeapType` performs the same check the JIT uses;
+   `Store::types().matches` handles subtyping. This is a runtime check, not a
+   hard-coded type number in the generated header.
+3. **Ownership.** A reference crossing the host boundary may carry a count:
+   an `externref` goes through `HostBridge` retain/release, a GC object through
+   `refClone`/`refDrop`, and a `stringref` through the `StringStore` count.
+   A host that stores a reference in its own table must retain it and drop it
+   later; a result returned by `callCallable` is not automatically rooted by
+   the caller’s table.
+
+`extern.convert_any`/`any.convert_extern` are not an escape hatch for a C
+header: they are Wasm instructions that box/unbox internal references. A host
+that receives the resulting `externref` still has only an opaque `void*`; it
+must pass it back to the module that knows how to unbox it.
+
+The same rule applies to `i31ref`: it is a tagged immediate, not a dereferenceable
+pointer. A generated header that uses one `void*` typedef for every reference
+kind has already lost this distinction; generate kind-specific opaque types, or
+carry a kind tag alongside the value.
+
+### 14.6 Both GC languages, and cross-language objects
+
+Two GC languages can exchange a typed reference only when **all** of these are
+true:
+
+- the modules are instantiated in the same `Store`;
+- both declare the same canonical Wasm type (same fields, mutability,
+  nullability, supertypes and identity rules after interning);
+- the consumer’s compiler emits that type, not merely a same-named language
+  class;
+- the consumer does not require its own hidden object header, vtable or class
+  metadata beyond what the declared Wasm struct contains.
+
+When those hold, the reference is a shared Wasm object: `ref.cast` and field
+access work according to the Wasm type, and the engine’s `GcHeader` type id is
+the authority. When they do not, the correct boundary is:
+`externref` + exported accessor/factory functions, or a host adapter. Do not
+copy the raw struct bytes between runtimes and pretend that is an object.
+
+“Both GC” does not mean “the class libraries interoperate”. Kotlin’s object
+model, MoonBit’s runtime, Dart’s runtime and AssemblyScript’s managed objects
+each have their own construction, dispatch and exception semantics. Wasm GC
+gives them a common *object representation and type system*; it does not give
+them a common `Object` class. Cross-language APIs must be expressed as exported
+functions over the common Wasm types, not as a shared native class hierarchy.
+
+### 14.7 Stringref
+
+`stringref` is a separate post-3.0 reference type, not a GC `struct` or
+`array`:
+
+- the engine represents it as a Store-owned `StringObject*`
+  (`WasmString.hpp`), with UTF-8/WTF-8/WTF-16 derived on demand;
+- strings, views and iterators are reference-counted in `StringStore`, and
+  `refClone`/`refDrop` drive that count;
+- a `stringref` is not an `externref`, not a JS string and not a C
+  `std::string`; the JS-string proposal’s host imports operate on `externref`,
+  not on `stringref`;
+- the embedder bridge is `StringStore::createFromUtf8`/`createFromWtf8`/
+  `createFromWtf16` and `copyToUtf8`/`copyToWtf8`/`copyToWtf16`; a successful
+  `createFrom*` result is owned (count 1) and the host releases it;
+- a `stringref` pointer belongs to one Store. Passing it to another Store is
+  not a supported cross-runtime operation, even though the machine word is a
+  pointer;
+- `stringref` is an abstract reference type, so it has no concrete `TypeId` to
+  match; the object is identified by the Store-owned pointer and the string
+  operations, not by a struct/array type record.
+
+Generated headers therefore treat `stringref` as its own opaque type
+(`wasm_stringref`), not as `char*` or `std::string*`. If the host language wants
+a native string, the adapter copies through UTF-8/WTF-8/WTF-16; if the guest
+language wants its native string, the guest-side adapter performs the same copy
+or calls the module’s string operations. There is no universal string layout
+and no automatic “this pointer is a Kotlin/Dart/AS string” conversion.
+
+### 14.8 Generator rules for import and export headers
+
+For every function import/export descriptor:
+
+1. **Take the signature from the engine, not from a C++ header.** Use
+   `Module::importDescriptors()`/`exportDescriptors()` for the kind and the
+   canonical function `TypeId`, then `Module::typeView()` (or
+   `TypeRegistry::canonicalType()`) for the parameter/result structure and
+   reference kinds.
+2. **Emit one opaque host type per reference kind**, not one `void*` for all.
+   A concrete `(ref $T)` gets a name derived from its interface/type name;
+   `externref`, `anyref` and `stringref` get their own names.
+3. **Emit accessor/factory functions for fields, arrays and strings.** Never
+   emit field offsets, `sizeof(T)`, a C++ class definition or a C struct with
+   the guest object's layout.
+4. **Do not bake a numeric `TypeId` into the header.** `TypeId` is Store-scoped
+   and load-order-dependent. If the adapter needs a runtime check, obtain the
+   expected `TypeId` from the loaded `Module` and compare through the Store.
+5. **State ownership on every reference result and parameter.** Is the caller
+   borrowing, owning one count, or receiving a host `externref` managed by
+   `HostBridge`? The generated comment is part of the contract.
+6. **Mark C/C++/Rust/Zig/Go guest imports of typed GC refs as “adapter only”.**
+   A C guest cannot declare `(ref $T)` just because the generated host header
+   can pass a `void*`; it needs a GC-capable adapter module or an `externref`
+   façade.
+7. **Keep `stringref` separate.** Its conversion functions are Store methods,
+   not `std::string` casts.
+
+This also answers the “robust type identity” intuition: the engine has the
+identity, but it is **runtime metadata**, not a C type name. The generator’s
+job is to preserve the distinction between “this is a struct of type T” and
+“this is an opaque word that happens to be pointer-sized”.
+
+## 15. Host-to-guest templates, class-size registration and tooling
+
+### 15.1 What already exists
+
+The engine has the two directions but only one is templated:
+
+- **guest → host:** `WASM::nativeImport<&Fn>()` in `WasmNativeImport.hpp`. It
+  wraps a function with the exact import signature, catches exceptions and
+  reports a trap; it has no capture and no reflection.
+- **host → guest:** `WASM::callCallable<Ret>(callable, args...)` and
+  `ModuleInstance::exportedFunction()`. `Callable` carries the `VMContext*`,
+  entry point and canonical `typeId`; the embedder supplies the typed C++
+  arguments.
+- **host reference lifetime:** `HostBridge` and `ModuleInstance::refClone`/
+  `refDrop` for `externref`/StringStore/GC counts.
+- **host object storage:** the §13 `NativeTable` pattern. It is deliberately
+  not an engine type.
+
+There is no engine-side C++ class registry, so a convenience layer has to be
+either a host-side header/library or generated code.
+
+### 15.2 A host-to-guest function wrapper
+
+A small host-side template can make `Callable` less error-prone without
+changing the engine:
+
+```cpp
+template <class Signature>
+struct GuestFunction;
+
+template <class Ret, class... Args>
+struct GuestFunction<Ret(Args...)> {
+    WASM::Callable callable;
+    WASM::TypeId expected = WASM::TypeId{WASM::TypeId::kNone};
+
+    Ret operator()(Args... args) const
+    {
+        // Optional: check the signature against the generated type. This is
+        // not a Store check; see the paragraph after the snippet.
+        if (!expected.isNone() && callable.typeId != expected)
+            throw std::invalid_argument("guest function type mismatch");
+        return WASM::callCallable<Ret>(callable, std::forward<Args>(args)...);
+    }
+};
+```
+
+`TypeId` equality is not a cross-Store validator. A `Callable` carries the
+numeric `typeId` but not the `Store` that assigned it; two stores can assign the
+same number. A wrapper must be built from `ModuleInstance::exportedFunction()`
+and keep the instance/Store alive; a bare `Callable` copied from another runtime
+must be rejected outside the wrapper.
+
+The template is instantiated on the **raw ABI types**: `Ret`/`Args` are `void*`
+for references and the scalar types for numbers, not `GcRef`, `std::string` or a
+C++ class. A generated wrapper converts those values to/from the opaque types
+before and after the call; changing the `callCallable` template argument to a
+class wrapper would change the C ABI of the call.
+
+For reference parameters, `Args` is the opaque host spelling from §14
+(`GcRef`, `ExternRef`, `StringRef`, or `void*` at the raw layer). The wrapper
+does not dereference them and does not invent a C++ type. It can additionally
+carry the `ModuleInstance*` needed for `refClone`/`refDrop`, but ownership must
+stay an explicit part of the generated API.
+
+If the interface accepts a subtype rather than an exact type, replace the
+equality check with `Store::types().matches(callable.typeId, expected)`; an
+explicit exact check is the safer default for a generated host wrapper.
+
+This is the inverse of `nativeImport` in ergonomics only: `nativeImport` wraps
+a host body for generated code, while `GuestFunction` wraps a `Callable` for
+host code. Neither requires reflection.
+
+### 15.3 A class bridge without `sizeof`
+
+The useful host-side shape for a C++ class is a table-backed create/destroy/
+method bridge. `NativeTable`/`NativeHandle` are the §13.5 sketches; `encode()`/
+`decode()` are the obvious u64 bridge.
+
+```cpp
+template <class T, class Tag, class... CtorArgs>
+struct HostClass {
+    static std::uint64_t create(WASM::VMContext* ctx, CtorArgs... args)
+    {
+        auto* table = static_cast<NativeTable*>(ctx->hostData);
+        auto object = std::make_unique<T>(std::forward<CtorArgs>(args)...);
+        return table->adopt(std::move(object), Tag{}).encode();
+    }
+
+    static void destroy(WASM::VMContext* ctx, std::uint64_t handle)
+    {
+        static_cast<NativeTable*>(ctx->hostData)->destroy(
+                NativeHandle::decode(handle));
+    }
+
+    template <auto Method, class Ret, class... Args>
+    static Ret invoke(WASM::VMContext* ctx, std::uint64_t handle, Args... args)
+    {
+        auto* table = static_cast<NativeTable*>(ctx->hostData);
+        T* object = table->borrow<T>(NativeHandle::decode(handle), Tag{});
+        return (object->*Method)(std::forward<Args>(args)...);
+    }
+};
+```
+
+`invoke` is only for scalar/raw-handle results. A member returning
+`std::string`, `std::vector` or another non-trivial host type needs a generated
+result-buffer thunk (the same rule as the C ABI); do not pretend it is a
+by-value C++ return.
+
+The registration is ordinary `nativeImport`, not magic:
+
+```cpp
+resolver.registerFunction("host", "widget_create",
+        WASM::nativeImport<&HostClass<Widget, WidgetTag, int32_t>::create>());
+resolver.registerFunction("host", "widget_destroy",
+        WASM::nativeImport<&HostClass<Widget, WidgetTag>::destroy>());
+resolver.registerFunction("host", "widget_set_width",
+        WASM::nativeImport<&HostClass<Widget, WidgetTag>::invoke<
+                &Widget::setWidth, void, int32_t>>());
+```
+
+The guest sees only `i32`/`i64` handles (or an opaque `externref` box) and the
+imported functions. The host side chooses `unique_ptr`, `shared_ptr`, a
+`pmr` allocator or a custom deleter in `NativeTable`; the template does not
+lock the policy.
+
+If an import can run during instantiation, use `ctx->hostBridge->userData` for
+the table, or install `hostData` before the start function. `nativeImport`
+bodies may run before `instanceCreated`, so a table reached only through
+`ctx->hostData` must tolerate a null early in construction.
+
+What this layer deliberately does **not** provide:
+
+- a reflection registry or automatic discovery of methods;
+- overload resolution (a member pointer plus explicit argument types is the
+  declaration);
+- a layout description of `T`;
+- an ownership policy hidden inside the template;
+- a way for a C/Rust guest to call a C++ method through a `(ref $T)` unless the
+  guest has a compatible Wasm-level type and an adapter.
+
+### 15.4 Do not register a class size
+
+A “register `sizeof(T)`” step is tempting because it sounds like the missing
+piece for a guest-side allocator. It should not be part of the bridge:
+
+- the guest cannot use `sizeof(T)` to read a host object. A host object is not
+  in guest linear memory, and copying its bytes is the rejected object-image
+  model (§13.7.1);
+- `sizeof(T)` differs between the host and the guest compiler: ABI, packing,
+  virtual tables, allocator state and standard-library layout are not shared;
+- a size without field offsets, alignment, lifetime and ownership is not a
+  usable contract; it is the layout negotiation `SHARING_LINEAR_MEMORY.md` is
+  about;
+- if the guest needs a wrapper that holds a handle, its own compiler knows the
+  wrapper’s size. The wrapper is a guest struct containing the handle/opaque
+  reference, not a copy of `T`;
+- if the host wants to allocate an object in a **guest-owned** arena, that is a
+  host/guest allocator protocol, not a class registration; it needs an
+  explicit ABI and lifetime contract, and remains item 2 of §13.
+
+Constructor, destructor and member-function trampolines are different: they are
+ordinary host functions over a handle, and §15.3 shows the shape. They do not
+need a size, a field layout or reflection. The `JsUtil` `ReturnValueWrapper`
+specialisations and member-function trampolines are the right *shape* for the
+scalar conversion and dispatch parts; their global `shared_ptr<void>` table and
+mandatory host finalizer are the parts not to copy.
+
+For a plain C struct with a canonical schema, a size may be part of an
+explicitly generated record/list ABI. That is a POD copy, not a native C++ object
+bridge, and the schema must state every field and its encoding.
+
+### 15.5 SWIG, Glue and the reflection boundary
+
+The sentence “a reflection system would duplicate, badly, what SWIG, Glue and
+`pybind11`-style tools already do” is a criticism of building reflection into
+the engine. It is **not** a decision to link those tools into `WasmBase`.
+
+| Tool | What it actually does | Where it can sit | What it cannot solve |
+|---|---|---|---|
+| **SWIG** | parses C/C++ declarations and generates bindings for many host languages | optional build-time generator for a host adapter, outside the engine | Wasm GC types, `externref`, the Canonical ABI, component resources, `Callable` context/traps |
+| **Glue** | Clang-AST-based C++ binding generator | optional build-time front-end for discovering C++ classes/methods | the same Wasm/ABI gap; it does not know a `Store`, `TypeId` or `GcHeader` |
+| **pybind11** | Python-specific C++ binding library | a Python host adapter only | all other languages and the engine ABI; not a generic answer |
+| **descriptor-driven emitter** | reads `importDescriptors()`/`exportDescriptors()` and emits target declarations | the preferred first-party generator (§12) | C++ class discovery; it needs a separate C++ front-end if that is wanted |
+
+Even a successful SWIG/Glue invocation would produce a **native host adapter**,
+not Wasm bindings. Its generated code still has to be connected to `Callable`,
+`Value`, `TypeId`, `HostBridge` and the handle table; neither tool has a
+director or type rule for `externref`, `(ref $T)`, component resources or
+`stringref`. That is why “integrate it as a dependency” is the wrong framing:
+the tool can generate a piece of the adapter, but it cannot own the ABI.
+
+If SWIG or Glue is used, it is a **build-time tool**, not a runtime dependency:
+
+- no header from either appears in `WasmBase/`;
+- no library from either is linked into `libWasmBase` or a backend;
+- generated code consumes the engine schema and the host handle table;
+- the generated wrapper still has to translate `Callable`, references,
+  resources, traps and ownership itself;
+- the output is optional: an embedder may write A/B adapters by hand.
+
+A build-system integration, if one is ever added, is an optional
+`add_custom_command`-style code-generation step. It must be off by default and
+must not be required to build, test, install or use the engine.
+
+The clean division is:
+
+```
+engine descriptors + host handle table
+        │
+        ├── first-party schema emitter (preferred)
+        ├── SWIG / Glue (optional C++ discovery front-end)
+        └── hand-written adapter
+                │
+                ▼
+        host adapter source (C++/Rust/…)
+```
+
+A runtime “reflection system” in the engine would be a third path that every
+embedder must use and every backend must understand. The arrows above keep it
+out of the core.
+
+### 15.6 Recommendation
+
+1. **Keep `nativeImport` where it is.** It is a small, generic,
+   exception-to-trap trampoline with no object model.
+2. **Put `GuestFunction`, `HostClass` and the handle table in an optional
+   host-side library/header**, not in `WasmBase/`. They depend on C++ types and
+   an ownership policy; they are not backend or engine contract.
+3. **Generate the bridge, do not reflect at runtime.** The generator consumes
+   `Module::importDescriptors()`/`exportDescriptors()` and `CoreTypeView`, and
+   emits the opaque reference types from §14 plus the handle/method stubs from
+   §15.3.
+4. **Do not register `sizeof(T)`.** Expose create/destroy/accessors; keep the
+   object on the host or in an `externref` box.
+5. **Keep SWIG/Glue optional and out-of-tree.** They can discover C++ method
+   surfaces; they cannot define the Wasm ABI.
+6. **Start with C++ and Rust adapters**, then AssemblyScript/GC-language
+   front-ends. C and Rust are the useful test that the A/B path works without
+   a language runtime; Kotlin/MoonBit are the useful test that typed GC refs
+   survive a two-GC-language link.
+
+Tests that would validate the layer:
+
+- a C++ `HostClass<T>` round-trip through `nativeImport<&create>`/`destroy` and
+  one member method, with a stale handle rejected;
+- a host `GuestFunction` call that rejects a mismatched `TypeId`;
+- a two-module same-Store GC struct pass-through, including a
+  `ref.test`/`ref.cast` in the consumer;
+- a two-module type mismatch rejected at link time;
+- a GC → C host `externref` handle that never dereferences the object;
+- a `stringref` host round-trip through `createFromUtf8`/`copyToUtf8` and a
+  cross-module string pass-through;
+- a cross-Store reference rejected, not silently accepted.
 

@@ -1,11 +1,15 @@
 # `LF2-ABI` — Cross-language ABI and host-binding amendment {#lf2_abi}
 
-Status: cross-cutting `LF-2` amendment, revision 1 (2026-11-03). It adds the
-ABI/interop dimension the cluster reports did not treat as one subject: how a
-language **sees WasmJit’s exports and synthetic host modules**, how the C/C++
-runtime and a JavaScript bridge **see the language’s exports**, and where each
-language sits on the scalar-to-GC/reference difficulty scale. It does **not**
-change any `LF-2` verdict; those remain in the cluster reports.
+Status: cross-cutting `LF-2` amendment, revision 3 (2026-11-04). Revision 1
+(2026-11-03) added the ABI/interop dimension the cluster reports did not treat
+as one subject: how a language **sees WasmJit’s exports and synthetic host
+modules**, how the C/C++ runtime and a JavaScript bridge **see the language’s
+exports**, and where each language sits on the scalar-to-GC/reference difficulty
+scale. Revision 2 added the host-side counterpart: native C++ objects and C
+structs in [`EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) §13. Revision 3
+points at §14 (GC references across modules and generated headers) and §15
+(host-to-guest templates and SWIG/Glue). It does **not** change any `LF-2`
+verdict; those remain in the cluster reports.
 
 This is deliberately an amendment to the language-feasibility set, not a new
 language charter. The host-binding contract it elaborates is
@@ -212,6 +216,11 @@ language-runtime/GC/JS/async bridge, and `?` means the study did not measure it
 
 The pattern is stable:
 
+- The `C` verdict in the C/C++ column means “the guest-side adapter is
+  runtime-specific”, not “a C host cannot hold the value”. A C **host** can
+  carry an opaque `externref`/GC pointer; a C **guest** cannot declare a typed
+  `(ref $T)` import without a GC-capable toolchain. See
+  [`EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) §14.
 - **A** ends at scalars and at pointers the host already owns.
 - **B** begins when the value has a **guest-memory representation**: strings,
   lists, records, tuples, result buffers, `v128`, and language-specific object
@@ -227,13 +236,18 @@ This is the same line as
 descriptor-and-template generator’s territory; `C` is where the embedder’s
 runtime adapter is unavoidable.
 
+`stringref` is a separate post-3.0 reference type, not a C string or a GC
+`struct`; its host spelling is an opaque Store-owned reference and its
+conversion rules are in [`EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md)
+§14.7.
+
 ## 7. Per-language notes
 
 - **C/C++ (`S1`)** — A clean scalar/pointer arm; `extern "C"` exports and
-  imports, one guest memory, C++ objects only behind opaque pointers. GC refs
-  and `exnref` are C, not the C++ ABI; C++ exceptions and `std::string` do not
-  cross. The synthetic-module direction is the easiest in the set: a
-  `nativeImport` with `VMContext*` first.
+  imports, one guest memory, C++ objects only behind opaque pointers or
+  validated handles. GC refs and `exnref` are C, not the C++ ABI; C++
+  exceptions and `std::string` do not cross. The synthetic-module direction is
+  the easiest in the set: a `nativeImport` with `VMContext*` first.
 - **Rust (`S2`)** — Scalar and pointer shapes are A/B; `extern "C"` plus
   explicit ownership. Rust’s allocator is guest-side. `wasm-bindgen` is a JS
   adapter, not this engine’s ABI. GC references and exceptions are C; a Rust
@@ -277,6 +291,15 @@ The engine can carry the opaque reference; it cannot make two runtimes agree on
 what the object means. That agreement is the binding adapter's job, and is the
 main reason a binding **guide/generator** is more realistic than a universal
 automatic bridge.
+
+The host-side counterpart is [`EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md)
+§13: opaque handles (A), typed handle tables with generated stubs (B), and
+host-runtime `externref`/finalizer boxes (C), including the reasons a native
+C++ object image in linear memory, a `std::pmr`-backed GC, and an engine
+reflection registry are non-options. For GC references specifically, §14 covers
+what an importing module and its generated C/Rust/Zig/Go header see, the
+same-Store `TypeId` rules, mixed GC/non-GC links and `stringref`; §15 covers
+host-to-guest templates and the SWIG/Glue boundary.
 
 ## 9. Consequences for the guide and generator plan
 
@@ -326,7 +349,11 @@ verdicts.
 ## 11. References
 
 - [`EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) §12 — host-binding guide,
-  descriptor-driven generation, per-language limits and the embedder fallback.
+  descriptor-driven generation, per-language limits and the embedder fallback;
+  §13 — native C++ objects/C structs, opaque handles, typed handle tables,
+  `externref`/finalizer boxes, and the engine-vs-embedder boundary; §14 — GC
+  struct/array references across modules and generated headers; §15 — host-to-
+  guest templates, class-size registration and SWIG/Glue.
 - [`ABI.md`](../ABI.md) — `VMContext*`, multi-result buffers, `v128`, references,
   traps, host imports and module metadata descriptors.
 - [`WasmBase/WasmValue.hpp`](../../WasmBase/WasmValue.hpp) — `Callable` and

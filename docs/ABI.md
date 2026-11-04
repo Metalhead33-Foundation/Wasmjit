@@ -187,6 +187,12 @@ left is treated as an opaque host reference, which matches only the top abstract
 types. That is why `ref.test externref` is true for a pointer the engine has
 never seen — which is exactly what the harness relies on for `(ref.extern N)`.
 
+The pointer word is a **representation**, not a C type. A generated C/Rust/Zig/
+Go header must keep `externref`, concrete `(ref $T)`, `stringref` and `i31ref`
+distinct as opaque host types; it must not turn them into `struct T*`, a field
+layout or a `sizeof(T)` contract. The cross-module `TypeId` rules and the
+header guidance are in [`EMBEDDING_SURFACE.md`](EMBEDDING_SURFACE.md) §14.
+
 ### Considered and not taken: a tagged reference word
 
 The original decision was **one 64-bit tagged reference word** for every
@@ -384,6 +390,13 @@ This is a generic host-boundary contract, not an implementation of any JS API
 proposal: BigInt conversion, `wasm:js-*` builtins, JS Types wrappers and ESM
 loading stay in the external adapter. See
 [`proposals/JS_INTEGRATION.md`](proposals/JS_INTEGRATION.md) §4.3.
+
+The bridge makes a host `externref` participate in barriers; it does **not**
+expose arbitrary C++ objects or decide their lifetime. Opaque handles, typed
+handle tables and host-runtime finalizer boxes are embedder-side patterns;
+[`EMBEDDING_SURFACE.md`](EMBEDDING_SURFACE.md) §13 records the options, the
+non-options, and the boundary between `GcHeap` (guest Wasm GC objects) and
+native host objects.
 
 Instance lifetime and call lifetime are separate. `instanceDestroying` is the
 backstop for a per-instance host arena, not a per-call cleanup hook. If an
@@ -596,7 +609,7 @@ struct ExportDescriptor { std::string name; ExternTypeDescriptor type; };
 ```
 
 Import descriptors follow **import-section order** (`Module::importOrder`), not
-per-kind grouping. Names are copied; `typeId` is the canonical process-wide
+per-kind grouping. Names are copied; `typeId` is the canonical Store-scoped
 identity and remains the authority for function/tag/type matching. Globals,
 tables and memories carry their structural declaration by value. The API is a
 view over the decoded module and does not expose parser scratch storage.
@@ -777,7 +790,7 @@ Universal function reference stored in tables and import storage.
 | `fnPtr`    | `void*`       | Function pointer (signature: `ret fn(VMContext*, ...)`)   |
 | `context`  | `VMContext*`  | `nullptr` → JIT passes caller's ctx; non-null → baked constant |
 | `localTypeIdx` | `uint32_t` | Module-local type index in the defining module        |
-| `typeId`       | `TypeId`   | Canonical process-wide type identity; `kNone` for native imports. Used for cross-module type matching (`call_indirect`, `call_ref`, function imports). |
+| `typeId`       | `TypeId`   | Canonical Store-scoped type identity; `kNone` for native imports. Used for same-Store cross-module type matching (`call_indirect`, `call_ref`, function imports). |
 | `rawFnPtr`     | `void*`    | For a compiled function: the raw entry point behind the driver that `fnPtr` names. Null for native imports. |
 | `tailEntry`    | `void*`    | Per-function-type tail-dispatch thunk `void(VMContext*, void* fn, uint64_t* args, uint64_t* results, void* resultBuffer)` ([`proposals/TAILCALLS.md`](proposals/TAILCALLS.md) TC-5). Null means "no trampoline; fall back to `call` + `return`". |
 
