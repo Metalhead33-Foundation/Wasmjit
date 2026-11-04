@@ -22,8 +22,8 @@ namespace WASM::Bindings {
 
 /*! \brief The direction a generated adapter faces. */
 enum class Direction {
-	GuestToHost, //!< A native host calls a module/component export.
-	HostToGuest, //!< A Wasm guest imports a host function.
+	GuestToHost, //!< A Wasm guest calls a host function (host-side imports).
+	HostToGuest, //!< A native host calls a module/component export.
 	GuestToGuest //!< One module/component calls another.
 };
 

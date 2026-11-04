@@ -266,17 +266,21 @@ Json moduleSchemaImpl(const WASM::Module& module, const WASM::TypeRegistry& type
 		schema["types"].push_back(type);
 	}
 	schema["imports"] = Json::array();
-	for (const WASM::ImportDescriptor& descriptor : module.importDescriptors()) {
-		Json import = descriptorJson(descriptor.type, types);
-		import["module"] = descriptor.moduleName;
-		import["name"] = descriptor.fieldName;
-		schema["imports"].push_back(import);
+	if (direction != Direction::HostToGuest) {
+		for (const WASM::ImportDescriptor& descriptor : module.importDescriptors()) {
+			Json import = descriptorJson(descriptor.type, types);
+			import["module"] = descriptor.moduleName;
+			import["name"] = descriptor.fieldName;
+			schema["imports"].push_back(import);
+		}
 	}
 	schema["exports"] = Json::array();
-	for (const WASM::ExportDescriptor& descriptor : module.exportDescriptors()) {
-		Json exportEntry = descriptorJson(descriptor.type, types);
-		exportEntry["name"] = descriptor.name;
-		schema["exports"].push_back(exportEntry);
+	if (direction != Direction::GuestToHost) {
+		for (const WASM::ExportDescriptor& descriptor : module.exportDescriptors()) {
+			Json exportEntry = descriptorJson(descriptor.type, types);
+			exportEntry["name"] = descriptor.name;
+			schema["exports"].push_back(exportEntry);
+		}
 	}
 	return schema;
 }
@@ -496,14 +500,14 @@ std::string emitCHeaderImpl(const Json& schema)
 		if (entry.value("kind", "") != "function")
 			continue;
 		emitFunction(out, entry, "wasmjit_" + sanitize(entry.at("name").get<std::string>()),
-				"G2H export");
+				"H2G export");
 	}
 	for (const Json& entry : schema.at("imports")) {
 		if (entry.value("kind", "") != "function")
 			continue;
 		emitFunction(out, entry,
 				importName(entry),
-				"H2G import");
+				"G2H import");
 	}
 
 	out << nonFunctionNotes(schema);
@@ -1110,13 +1114,13 @@ Json componentSchema(const WASM::Component& component, const WASM::TypeRegistry&
 	schema["module"] = componentName;
 	schema["componentName"] = component.componentName();
 	schema["imports"] = Json::array();
-	if (direction != Direction::GuestToHost) {
+	if (direction != Direction::HostToGuest) {
 		for (const WASM::ImportDecl& importDecl : component.imports)
 			schema["imports"].push_back(
 					componentImportJson(importDecl, component, store));
 	}
 	schema["exports"] = Json::array();
-	if (direction != Direction::HostToGuest) {
+	if (direction != Direction::GuestToHost) {
 		for (const WASM::ComponentExport& exportDecl : component.exports)
 			schema["exports"].push_back(
 					componentExportJson(exportDecl, component, spaces, store));
@@ -1151,7 +1155,7 @@ std::string emitRustModule(const nlohmann::ordered_json& schema)
 		if (entry.value("kind", "") != "function")
 			continue;
 		const std::string name = "wasmjit_" + sanitize(entry.at("name").get<std::string>());
-		out << "// G2H export: " << entry.at("name").get<std::string>() << "\n";
+		out << "// H2G export: " << entry.at("name").get<std::string>() << "\n";
 		out << "pub type " << name << "_t = unsafe extern \"C\" fn(";
 		emitRustParams(out, signatureParams(entry), signatureResults(entry).size() > 1u);
 		out << ")";
@@ -1167,7 +1171,7 @@ std::string emitRustModule(const nlohmann::ordered_json& schema)
 			const std::string name = "wasmjit_"
 					+ sanitize(importModule(entry)) + "_"
 					+ sanitize(entry.at("name").get<std::string>());
-			out << "    // H2G import: " << importComment(entry) << "\n";
+			out << "    // G2H import: " << importComment(entry) << "\n";
 			out << "    pub fn " << name << "(";
 			emitRustParams(out, signatureParams(entry), signatureResults(entry).size() > 1u);
 			out << ")";
@@ -1199,7 +1203,7 @@ std::string emitTypeScriptImpl(const Json& schema)
 		   "// ownership note.\n\n";
 
 	forEachFunction(schema, "exports", [&](const Json& entry) {
-		out << "// G2H export: " << entry.at("name").get<std::string>() << "\n";
+		out << "// H2G export: " << entry.at("name").get<std::string>() << "\n";
 		out << "export declare function wasmjit_"
 			<< sanitize(entry.at("name").get<std::string>()) << "(";
 		const Json& params = signatureParams(entry);
@@ -1228,7 +1232,7 @@ std::string emitTypeScriptImpl(const Json& schema)
 	});
 
 	forEachFunction(schema, "imports", [&](const Json& entry) {
-		out << "// H2G import: " << importComment(entry) << "\n";
+		out << "// G2H import: " << importComment(entry) << "\n";
 		out << "export declare function wasmjit_"
 			<< sanitize(importModule(entry)) << "_"
 			<< sanitize(entry.at("name").get<std::string>()) << "(";
@@ -1277,7 +1281,7 @@ std::string emitAssemblyScriptImpl(const Json& schema)
 	});
 
 	forEachFunction(schema, "exports", [&](const Json& entry) {
-		out << "// G2H export: " << entry.at("name").get<std::string>() << "\n";
+		out << "// H2G export: " << entry.at("name").get<std::string>() << "\n";
 		out << "export declare function wasmjit_"
 			<< sanitize(entry.at("name").get<std::string>()) << "(";
 		const Json& params = signatureParams(entry);
@@ -1308,7 +1312,7 @@ std::string emitZigImpl(const Json& schema)
 	out << "\n";
 
 	forEachFunction(schema, "exports", [&](const Json& entry) {
-		out << "// G2H export: " << entry.at("name").get<std::string>() << "\n";
+		out << "// H2G export: " << entry.at("name").get<std::string>() << "\n";
 		out << "pub const wasmjit_" << sanitize(entry.at("name").get<std::string>())
 			<< "_t = *const fn (";
 		const Json& params = signatureParams(entry);
@@ -1330,7 +1334,7 @@ std::string emitZigImpl(const Json& schema)
 	});
 
 	forEachFunction(schema, "imports", [&](const Json& entry) {
-		out << "// H2G import: " << importComment(entry) << "\n";
+		out << "// G2H import: " << importComment(entry) << "\n";
 		out << "pub extern \"" << importModule(entry) << "\" fn wasmjit_"
 			<< sanitize(importModule(entry)) << "_"
 			<< sanitize(entry.at("name").get<std::string>()) << "(";
@@ -1369,7 +1373,7 @@ std::string emitKotlinImpl(const Json& schema)
 	out << "\n";
 
 	forEachFunction(schema, "exports", [&](const Json& entry) {
-		out << "// G2H export: " << entry.at("name").get<std::string>() << "\n";
+		out << "// H2G export: " << entry.at("name").get<std::string>() << "\n";
 		out << "typealias wasmjit_" << sanitize(entry.at("name").get<std::string>())
 			<< "_t = (";
 		const Json& params = signatureParams(entry);
@@ -1384,7 +1388,7 @@ std::string emitKotlinImpl(const Json& schema)
 	});
 
 	forEachFunction(schema, "imports", [&](const Json& entry) {
-		out << "// H2G import: " << importComment(entry) << "\n";
+		out << "// G2H import: " << importComment(entry) << "\n";
 		out << "external fun wasmjit_"
 			<< sanitize(importModule(entry)) << "_"
 			<< sanitize(entry.at("name").get<std::string>()) << "(";
@@ -1415,7 +1419,7 @@ std::string emitMoonBitImpl(const Json& schema)
 	out << "\n";
 
 	forEachFunction(schema, "imports", [&](const Json& entry) {
-		out << "// H2G import: " << importComment(entry) << "\n";
+		out << "// G2H import: " << importComment(entry) << "\n";
 		std::string borrow;
 		for (std::size_t i = 0; i < signatureParams(entry).size(); ++i) {
 			if (isReference(signatureParams(entry)[i])) {
@@ -1440,7 +1444,7 @@ std::string emitMoonBitImpl(const Json& schema)
 	});
 
 	forEachFunction(schema, "exports", [&](const Json& entry) {
-		out << "// G2H export: " << entry.at("name").get<std::string>() << "(";
+		out << "// H2G export: " << entry.at("name").get<std::string>() << "(";
 		for (std::size_t i = 0; i < signatureParams(entry).size(); ++i) {
 			if (i != 0) out << ", ";
 			out << moonbitType(signatureParams(entry)[i]);
@@ -1568,99 +1572,177 @@ std::string emitDartImpl(const Json& schema)
 
 	forEachFunction(schema, "exports", [&](const Json& entry) {
 		emitNative(entry,
-				"wasmjit_" + sanitize(entry.at("name").get<std::string>()), "G2H export");
+				"wasmjit_" + sanitize(entry.at("name").get<std::string>()), "H2G export");
 	});
 	forEachFunction(schema, "imports", [&](const Json& entry) {
 		emitNative(entry,
 				importName(entry),
-				"H2G import");
+				"G2H import");
 	});
 	out << nonFunctionNotes(schema);
 	return out.str();
 }
 
-std::string cppTypedefName(const Json& entry)
-{
+std::string cppTypedefName(const Json &entry) {
 	return "wasmjit_" + sanitize(entry.at("name").get<std::string>()) + "_fn";
 }
 
-void emitCppFunctionPointer(std::ostringstream& out, const Json& entry)
-{
-	const Json& params = signatureParams(entry);
-	const Json& results = signatureResults(entry);
-	out << "using " << cppTypedefName(entry) << " = ";
-	out << (results.size() == 1 ? cType(results[0]) : "void") << " (*)(";
-	out << "WASM::VMContext*";
-	for (const Json& param : params)
-		out << ", " << cType(param);
-	if (results.size() > 1u)
-		out << ", void*";
+std::string cppCallableName(const Json &entry) {
+	return "wasmjit_" + sanitize(entry.at("name").get<std::string>());
+}
+
+std::string cppReturnType(const Json &entry) {
+	const Json &results = signatureResults(entry);
+	return results.size() == 1 ? cType(results[0]) : "void";
+}
+
+void emitCppParams(std::ostringstream &out, const Json &entry) {
+	const Json &params = signatureParams(entry);
+	out << "WASM::VMContext* context";
+	for (std::size_t i = 0; i < params.size(); ++i)
+		out << ", " << cType(params[i]) << " arg" << i;
+	if (signatureResults(entry).size() > 1u)
+		out << ", void* result";
+}
+
+void emitCppPointerTypedef(std::ostringstream &out, const Json &entry,
+			   const std::string &typedefName) {
+	out << "using " << typedefName << " = " << cppReturnType(entry) << " (*)(";
+	emitCppParams(out, entry);
 	out << ");";
-	const bool hasResultRef = results.size() == 1 && isReference(results[0]);
-	const bool hasParamRef = std::any_of(params.begin(), params.end(),
-			[](const Json& param) { return isReference(param); });
-	if (hasResultRef)
+	if (signatureResults(entry).size() == 1 && isReference(signatureResults(entry)[0]))
 		out << " // result ownership: explicit";
-	if (hasParamRef)
-		out << " // reference parameters are borrowed";
 	out << "\n";
+}
+
+void emitCppImportDeclaration(std::ostringstream &out, const Json &entry) {
+	const std::string name = importName(entry);
+	emitCppPointerTypedef(out, entry, name + "_fn");
+	out << "extern " << cppReturnType(entry) << " " << name << "(";
+	emitCppParams(out, entry);
+	out << ");\n";
+}
+
+void emitCppExportDeclaration(std::ostringstream &out, const Json &entry) {
+	emitCppPointerTypedef(out, entry, cppTypedefName(entry));
+	out << "extern " << cppTypedefName(entry) << " " << cppCallableName(entry) << ";\n";
+}
+
+void emitCppImportStub(std::ostringstream &out, const Json &entry) {
+	const Json &results = signatureResults(entry);
+	const std::string name = importName(entry);
+	out << "// host import: " << importComment(entry) << "\n";
+	out << cppReturnType(entry) << " " << name << "(";
+	emitCppParams(out, entry);
+	out << ")\n{\n";
+	out << "\t(void)context;\n";
+	for (std::size_t i = 0; i < signatureParams(entry).size(); ++i)
+		out << "\t(void)arg" << i << ";\n";
+	if (results.size() > 1u)
+		out << "\t(void)result;\n";
+	out << "\t// TODO: implement this host import.\n";
+	if (results.size() == 1 && isReference(results[0]))
+		out << "\treturn nullptr;\n";
+	else if (results.size() == 1)
+		out << "\treturn {};\n";
+	out << "}\n\n";
 }
 
 std::string emitCppTypedefsImpl(const Json& schema)
 {
 	std::set<std::string> refs;
 	collectSchemaRefs(schema, refs);
+	const std::string direction = schema.value("direction", "g2h");
+	const bool emitImports = direction != "h2g";
+	const bool emitExports = direction != "g2h";
 	std::ostringstream out;
-	out << "// Generated host-side Callable typedefs from the "
-		<< schema.at("schema").get<std::string>() << " "
-		<< schema.at("direction").get<std::string>() << " schema. Do not edit.\n";
+	out << "// Generated C++ binding surface from the "
+		<< schema.at("schema").get<std::string>() << " " << direction
+		<< " schema. Do not edit.\n";
 	out << "#ifndef WASMJIT_GENERATED_" << sanitize(schema.value("module", "module"))
 		<< "_CALLABLES_HPP\n#define WASMJIT_GENERATED_"
 		<< sanitize(schema.value("module", "module")) << "_CALLABLES_HPP\n\n";
 	out << "#include <cstdint>\n\n";
-	out << "namespace WASM { struct VMContext; }\n";
+	out << "namespace WASM { struct VMContext; struct ModuleInstance; }\n";
 	out << "typedef struct wasm_v128 { uint8_t bytes[16]; } wasm_v128;\n";
 	for (const std::string& ref : refs)
 		out << "struct " << ref << ";\n";
 	out << "\n// A Callable's fnPtr is `ret f(VMContext*, params...)`; multi-value\n"
 		   "// results use a trailing result buffer.\n";
-	forEachFunction(schema, "exports", [&](const Json& entry) {
-		out << "// export: " << entry.at("name").get<std::string>() << "\n";
-		emitCppFunctionPointer(out, entry);
-	});
+	if (emitImports) {
+		out << "\n// Host imports the guest expects you to implement (G2H).\n";
+		forEachFunction(schema, "imports", [&](const Json& entry) {
+			emitCppImportDeclaration(out, entry);
+		});
+	}
+	if (emitExports) {
+		out << "\n// Guest exports the host can resolve (H2G).\n";
+		forEachFunction(schema, "exports", [&](const Json& entry) {
+			out << "// export: " << entry.at("name").get<std::string>() << "\n";
+			emitCppExportDeclaration(out, entry);
+		});
+		out << "\n// Resolve the pointers above from a loaded module instance.\n";
+		out << "bool wasmjit_" << sanitize(schema.value("module", "module"))
+			<< "_load_callables(WASM::ModuleInstance* instance);\n";
+	}
 	out << nonFunctionNotes(schema);
 	out << "\n#endif // WASMJIT_GENERATED_"
 		<< sanitize(schema.value("module", "module")) << "_CALLABLES_HPP\n";
 	return out.str();
 }
 
+
 std::string emitCppSourceImpl(const Json& schema)
 {
+	const std::string direction = schema.value("direction", "g2h");
+	const bool emitImports = direction != "h2g";
+	const bool emitExports = direction != "g2h";
+	const std::string module = sanitize(schema.value("module", "module"));
 	std::ostringstream out;
-	out << "// Generated Callable cast helpers from the "
-		<< schema.at("schema").get<std::string>() << " "
-		<< schema.at("direction").get<std::string>() << " schema. Do not edit.\n";
-	out << "#include \"wasmjit_" << sanitize(schema.value("module", "module"))
-		<< "_callables.hpp\"\n";
-	out << "#include <WasmBase/WasmValue.hpp>\n";
-	out << "#include <stdexcept>\n\n";
-	out << "// C++ forbids static_cast from void* to a function pointer; the\n"
-		   "// Callable ABI boundary uses reinterpret_cast.\n\n";
-	forEachFunction(schema, "exports", [&](const Json& entry) {
-		const std::string name = entry.at("name").get<std::string>();
-		const std::string fn = cppTypedefName(entry);
-		out << "// export: " << name << "\n";
-		out << fn << " wasmjit_" << sanitize(name) << "_from(const WASM::Callable& callable)\n";
-		out << "{\n";
-		out << "\tif (callable.fnPtr == nullptr)\n";
-		out << "\t\tthrow std::runtime_error(\"wasmjit callable: null fnPtr for "
-			<< name << "\");\n";
-		out << "\treturn reinterpret_cast<" << fn << ">(callable.fnPtr);\n";
-		out << "}\n\n";
-	});
+	out << "// Generated C++ binding implementation from the "
+		<< schema.at("schema").get<std::string>() << " " << direction
+		<< " schema. Do not edit.\n";
+	out << "#include \"wasmjit_" << module << "_callables.hpp\"\n";
+	if (emitExports)
+		out << "#include <WasmBase/WasmModuleInstance.hpp>\n";
+	out << "\n";
+	if (emitImports) {
+		forEachFunction(schema, "imports", [&](const Json& entry) {
+			emitCppImportStub(out, entry);
+		});
+	}
+	if (emitExports) {
+		out << "// Definitions of the resolveable guest export pointers.\n";
+		forEachFunction(schema, "exports", [&](const Json& entry) {
+			out << cppTypedefName(entry) << " " << cppCallableName(entry)
+				<< " = nullptr;\n";
+		});
+		out << "\n// Resolve every guest export from a module instance.\n";
+		out << "// C++ forbids static_cast from void* to a function pointer; the\n"
+			   "// Callable ABI boundary uses reinterpret_cast.\n";
+		out << "bool wasmjit_" << module
+			<< "_load_callables(WASM::ModuleInstance* instance)\n{\n";
+		out << "\tif (instance == nullptr)\n\t\treturn false;\n";
+		out << "\tbool ok = true;\n";
+		forEachFunction(schema, "exports", [&](const Json& entry) {
+			const std::string name = entry.at("name").get<std::string>();
+			out << "\t{\n";
+			out << "\t\tconst auto callable = instance->exportedFunction(\""
+				<< name << "\");\n";
+			out << "\t\tif (!callable) {\n";
+			out << "\t\t\t" << cppCallableName(entry) << " = nullptr;\n";
+			out << "\t\t\tok = false;\n";
+			out << "\t\t} else {\n";
+			out << "\t\t\t" << cppCallableName(entry) << " = reinterpret_cast<"
+				<< cppTypedefName(entry) << ">(callable->fnPtr);\n";
+			out << "\t\t}\n\t}\n";
+		});
+		out << "\treturn ok;\n}\n";
+	}
 	out << nonFunctionNotes(schema);
 	return out.str();
 }
+
 
 std::string emitCppAdapterImpl(const Json& schema)
 {
@@ -1724,7 +1806,7 @@ std::string emitCppAdapterImpl(const Json& schema)
 		const Json& results = signatureResults(entry);
 		const std::string exportName = entry.at("name").get<std::string>();
 		const std::string name = "wasmjit_" + sanitize(exportName);
-		out << "\n// G2H export: " << exportName << "\n";
+		out << "\n// H2G export: " << exportName << "\n";
 		const bool multiValue = results.size() > 1u;
 		const std::string ret = results.size() == 1 ? cType(results[0]) : "void";
 		out << ret << " " << name << "(";
