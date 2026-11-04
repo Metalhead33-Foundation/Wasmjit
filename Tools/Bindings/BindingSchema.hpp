@@ -37,7 +37,8 @@ enum class Language {
 	Kotlin, //!< Kotlin/Wasm declarations.
 	MoonBit, //!< MoonBit declarations.
 	Go, //!< Go Wasm declarations.
-	Dart //!< Dart FFI declarations.
+	Dart, //!< Dart FFI declarations.
+	CppAdapter //!< A C++ adapter that dispatches through `WASM::callCallable`.
 };
 
 /*!

@@ -1,17 +1,24 @@
 #include <catch2/catch_all.hpp>
 
+#include <cstddef>
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <memory>
+#include <span>
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <vector>
 
+#include <Euphemy/Io/EuphConstBufferDevice.hpp>
 #include <Euphemy/Io/EuphFile.hpp>
 
 #include "BindingSchema.hpp"
 #include "helper.hpp"
 #include "TestStore.hpp"
+#include "WasmBase/WasmArtifact.hpp"
 #include "WasmBase/WasmStore.hpp"
 
 #ifndef WASM_TEST_DIR
@@ -63,6 +70,79 @@ void loadTestComponent(const char* name, WASM::Component& component)
 	Euph::Io::File file(path.c_str(), Elv::Io::Mode::READ);
 	component.fromFile(file, testStore());
 	component.validate();
+}
+
+// A hand-built `(func (export "echo") (param stringref) (result stringref))`
+// using the engine's reserved stringref value-type byte 0x67
+// (docs/proposals/STRINGREF.md STR-1). WAT cannot be used here because the
+// upstream proposal's current encoding collides with GC `ref`/`ref null`.
+std::vector<uint8_t> stringRefModuleBytes()
+{
+	return {
+		0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+		0x01, 0x06, 0x01, 0x60, 0x01, 0x67, 0x01, 0x67,
+		0x03, 0x02, 0x01, 0x00,
+		0x07, 0x08, 0x01, 0x04, 'e', 'c', 'h', 'o', 0x00, 0x00,
+		0x0a, 0x06, 0x01, 0x04, 0x00, 0x20, 0x00, 0x0b
+	};
+}
+
+std::string readText(const std::filesystem::path& path);
+bool haveTool(const char* probe);
+std::filesystem::path bindingsDir();
+
+void runCppAdapterConformance(const char* moduleName, const std::string& mainSource,
+		const char* directoryName)
+{
+	if (!haveTool("command -v g++ > /dev/null 2>&1")) {
+		WARN("g++ not found; skipped the generated C++ adapter conformance check");
+		return;
+	}
+
+	const std::filesystem::path dir = bindingsDir() / directoryName;
+	std::filesystem::create_directories(dir);
+	const WASM::Module module = loadTestModule(moduleName);
+	const Json schema = WASM::Bindings::moduleSchema(module, testStore().types(),
+			WASM::Bindings::Direction::GuestToHost, moduleName);
+
+	const auto write = [&](std::string_view name, const std::string& text) {
+		const std::filesystem::path path = dir / std::string(name);
+		std::ofstream out(path, std::ios::binary);
+		out << text;
+		return path;
+	};
+	write("adapter.h", WASM::Bindings::emit(schema, WASM::Bindings::Language::CHeader));
+	write("adapter.cpp",
+			WASM::Bindings::emit(schema, WASM::Bindings::Language::CppAdapter));
+	write("main.cpp", mainSource);
+
+	const std::filesystem::path sourceRoot =
+			std::filesystem::path(WASM_TESTSUITE_SOURCE_DIR).parent_path().parent_path();
+	const std::filesystem::path buildRoot = std::filesystem::path(WASM_TEST_DIR)
+			.parent_path().parent_path().parent_path();
+	const std::string compile = "g++ -std=c++2a -I\"" + dir.string() + "\" -I\""
+			+ sourceRoot.string() + "\" -I\"" + (sourceRoot / "extern" / "MhLib").string()
+			+ "\" \"" + (dir / "main.cpp").string() + "\" \""
+			+ (dir / "adapter.cpp").string() + "\" -L\""
+			+ (buildRoot / "WasmBase").string() + "\" -L\""
+			+ (buildRoot / "LibJit").string() + "\" -L\""
+			+ (buildRoot / "extern" / "MhLib" / "Elvavena").string() + "\" -L\""
+			+ (buildRoot / "extern" / "MhLib" / "Euphemy").string()
+			+ "\" -lWasmBase -lLibJit -lEuphemy -lElvavena -ljit -Wl,-rpath,\""
+			+ (buildRoot / "WasmBase").string() + ":" + (buildRoot / "LibJit").string()
+			+ ":" + (buildRoot / "extern" / "MhLib" / "Elvavena").string() + ":"
+			+ (buildRoot / "extern" / "MhLib" / "Euphemy").string() + "\" -o \""
+			+ (dir / "conformance").string() + "\" > \"" + (dir / "compile.log").string()
+			+ "\" 2>&1";
+	INFO(readText(dir / "compile.log"));
+	REQUIRE(std::system(compile.c_str()) == 0);
+
+	const std::string run = "\"" + (dir / "conformance").string() + "\" \""
+			+ (std::filesystem::path(WASM_TEST_DIR)
+							/ (std::string(moduleName) + ".wasm")).string()
+			+ "\" > \"" + (dir / "run.log").string() + "\" 2>&1";
+	INFO(readText(dir / "run.log"));
+	REQUIRE(std::system(run.c_str()) == 0);
 }
 
 std::string readText(const std::filesystem::path& path)
@@ -615,5 +695,184 @@ TEST_CASE("component canonical ABI flattening feeds the emitters", "[bindings]")
 	const std::string go = WASM::Bindings::emit(schema, WASM::Bindings::Language::Go);
 	REQUIRE(go.find("func wasmjit_echo(arg0 int32, arg1 int32) int32")
 			!= std::string::npos);
+}
+
+
+TEST_CASE("stringref uses the opaque reference spelling in every emitter", "[bindings]")
+{
+	const std::vector<uint8_t> bytes = stringRefModuleBytes();
+	const std::span<const std::byte> span(
+			reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
+	Euph::Io::ConstBufferDevice device(span);
+	const std::unique_ptr<WASM::Artifact> artifact =
+			WASM::Artifact::parse(device, testStore());
+	REQUIRE(artifact != nullptr);
+	REQUIRE(artifact->isCoreModule());
+	const WASM::Module& module = *artifact->asCoreModule();
+
+	const Json schema = WASM::Bindings::moduleSchema(module, testStore().types(),
+			WASM::Bindings::Direction::GuestToHost, "stringref_echo");
+	const Json* echo = findExport(schema, "echo");
+	REQUIRE(echo != nullptr);
+	REQUIRE(echo->at("type").at("params")[0].at("type") == "stringref");
+	REQUIRE(echo->at("type").at("results")[0].at("type") == "stringref");
+
+	const std::string c = WASM::Bindings::emit(schema, WASM::Bindings::Language::CHeader);
+	REQUIRE(c.find("typedef struct wasm_stringref wasm_stringref;") != std::string::npos);
+	REQUIRE(c.find("wasm_stringref* arg0") != std::string::npos);
+
+	const std::string rust = WASM::Bindings::emit(schema, WASM::Bindings::Language::Rust);
+	REQUIRE(rust.find("pub struct wasm_stringref") != std::string::npos);
+	REQUIRE(rust.find("*mut wasm_stringref") != std::string::npos);
+
+	const std::string ts = WASM::Bindings::emit(schema,
+			WASM::Bindings::Language::TypeScript);
+	REQUIRE(ts.find("interface WasmStringref") != std::string::npos);
+	REQUIRE(ts.find("arg0: WasmStringref") != std::string::npos);
+
+	const std::string as = WASM::Bindings::emit(schema,
+			WASM::Bindings::Language::AssemblyScript);
+	REQUIRE(as.find("externref") != std::string::npos);
+
+	const std::string zig = WASM::Bindings::emit(schema, WASM::Bindings::Language::Zig);
+	REQUIRE(zig.find("pub const wasm_stringref = opaque {};") != std::string::npos);
+	REQUIRE(zig.find("*wasm_stringref") != std::string::npos);
+
+	const std::string kotlin = WASM::Bindings::emit(schema,
+			WASM::Bindings::Language::Kotlin);
+	REQUIRE(kotlin.find("class WasmStringref private constructor()")
+			!= std::string::npos);
+	REQUIRE(kotlin.find("typealias wasmjit_echo_t = (WasmStringref) -> WasmStringref")
+			!= std::string::npos);
+
+	const std::string moonbit = WASM::Bindings::emit(schema,
+			WASM::Bindings::Language::MoonBit);
+	REQUIRE(moonbit.find("#external\ntype WasmStringref") != std::string::npos);
+	REQUIRE(moonbit.find("// G2H export: echo(WasmStringref) -> WasmStringref")
+			!= std::string::npos);
+
+	const std::string go = WASM::Bindings::emit(schema, WASM::Bindings::Language::Go);
+	REQUIRE(go.find("type WasmStringref struct") != std::string::npos);
+	REQUIRE(go.find("arg0 uintptr") != std::string::npos);
+
+	const std::string dart = WASM::Bindings::emit(schema, WASM::Bindings::Language::Dart);
+	REQUIRE(dart.find("typedef WasmStringref = Pointer<Void>;") != std::string::npos);
+	REQUIRE(dart.find("Pointer<Void> arg0") != std::string::npos);
+}
+
+
+TEST_CASE("a generated C++ adapter calls an export and reports a trap", "[bindings]")
+{
+	runCppAdapterConformance("asmjit_i32_basic", R"cpp(
+#include "adapter.h"
+#include <WasmBase/WasmRuntime.hpp>
+#include <WasmBase/WasmTrap.hpp>
+#include <WasmBase/WasmRegistryImportResolver.hpp>
+#include <Euphemy/Config/GlobalConfig.hpp>
+
+Euph::Conf::Configuration GLOBAL_CONFIGURATION;
+extern WASM::ModuleInstance* wasmjit_adapter_instance;
+
+int main(int argc, char** argv)
+{
+    auto runtime = WASM::Runtime::create("libjit");
+    auto module = runtime->loadFile(argv[1]);
+    WASM::RegistryImportResolver imports;
+    auto& instance = runtime->instantiate(*module, imports);
+    wasmjit_adapter_instance = &instance;
+    if (wasmjit_add(2, 3) != 5)
+        return 1;
+    try {
+        (void)wasmjit_div_s(1, 0);
+        return 2;
+    } catch (const WASM::Trap&) {
+    }
+    return 0;
+}
+)cpp", "adapter-call");
+}
+
+TEST_CASE("a generated C++ adapter satisfies an import and passes a reference", "[bindings]")
+{
+	runCppAdapterConformance("wasm_js_string_length", R"cpp(
+#include "adapter.h"
+#include <WasmBase/WasmRuntime.hpp>
+#include <WasmBase/WasmRegistryImportResolver.hpp>
+#include <Euphemy/Config/GlobalConfig.hpp>
+#include <cstdint>
+
+Euph::Conf::Configuration GLOBAL_CONFIGURATION;
+extern WASM::ModuleInstance* wasmjit_adapter_instance;
+
+namespace {
+int32_t hostLength(void*) { return 7; }
+}
+
+int main(int argc, char** argv)
+{
+    auto runtime = WASM::Runtime::create("libjit");
+    auto module = runtime->loadFile(argv[1]);
+    WASM::RegistryImportResolver imports;
+    imports.registerFunction("wasm:js-string", "length",
+        WASM::Callable{reinterpret_cast<void*>(hostLength), nullptr, 0});
+    auto& instance = runtime->instantiate(*module, imports);
+    wasmjit_adapter_instance = &instance;
+    int token = 0;
+    auto* ref = reinterpret_cast<wasm_externref*>(&token);
+    if (wasmjit_len(ref) != 7)
+        return 1;
+    if (wasmjit_identity(ref) != ref)
+        return 2;
+    return 0;
+}
+)cpp", "adapter-ref");
+}
+
+
+TEST_CASE("WIT JSON names agree with the component schema", "[bindings]")
+{
+	if (!haveTool("command -v wasm-tools > /dev/null 2>&1")) {
+		WARN("wasm-tools not found; skipped the WIT-name cross-check");
+		return;
+	}
+
+	WASM::Component component;
+	loadTestComponent("component_runtime_import", component);
+	const Json schema = WASM::Bindings::componentSchema(component, testStore().types(),
+			WASM::Bindings::Direction::GuestToHost, "component_runtime_import");
+
+	const std::filesystem::path dir = bindingsDir();
+	const std::filesystem::path witPath = dir / "component_runtime_import.wit.json";
+	const std::filesystem::path log = dir / "wasm-tools-wit.log";
+	const std::string command = "wasm-tools component wit \""
+			+ (std::filesystem::path(WASM_TEST_DIR) / "component_runtime_import.wasm").string()
+			+ "\" --json > \"" + witPath.string() + "\" 2> \"" + log.string() + "\"";
+	INFO(readText(log));
+	REQUIRE(std::system(command.c_str()) == 0);
+
+	const Json wit = Json::parse(readText(witPath));
+	const Json& world = wit.at("worlds").at(0);
+	const Json& witExport = world.at("exports").at("host-add").at("function");
+	const Json* schemaExport = findByName(schema.at("exports"), "host-add");
+	REQUIRE(schemaExport != nullptr);
+	REQUIRE(witExport.at("name").get<std::string>() == "host-add");
+	REQUIRE(witExport.at("params").size()
+			== schemaExport->at("type").at("params").size());
+	for (std::size_t i = 0; i < witExport.at("params").size(); ++i) {
+		REQUIRE(witExport.at("params")[i].at("name").get<std::string>()
+				== schemaExport->at("type").at("params")[i].at("name").get<std::string>());
+		REQUIRE(witExport.at("params")[i].at("type").get<std::string>()
+				== schemaExport->at("type").at("params")[i].at("type").get<std::string>());
+	}
+	REQUIRE(witExport.at("result").get<std::string>()
+			== schemaExport->at("type").at("results")[0].at("type").get<std::string>());
+
+	const Json& witImport = world.at("imports").at("host-add").at("function");
+	const Json* schemaImport = findByName(schema.at("imports"), "host-add");
+	REQUIRE(schemaImport != nullptr);
+	REQUIRE(witImport.at("params").size()
+			== schemaImport->at("type").at("params").size());
+	REQUIRE(witImport.at("result").get<std::string>()
+			== schemaImport->at("type").at("results")[0].at("type").get<std::string>());
 }
 

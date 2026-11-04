@@ -24,7 +24,7 @@ void usage(std::ostream& out)
 	out << "usage: wasmjit-bindings <module.wasm> [options]\n"
 		   "  --direction g2h|h2g|g2g   adapter direction (default: g2h)\n"
 		   "  --emit schema|c-header|rust|typescript|assemblyscript|zig|kotlin|\n"
-		   "         moonbit|go|dart (default: schema)\n"
+		   "         moonbit|go|dart|cpp-adapter (default: schema)\n"
 		   "  --module-name NAME       name in the schema envelope\n"
 		   "  --output FILE            write to FILE instead of stdout\n";
 }

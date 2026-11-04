@@ -1522,6 +1522,99 @@ std::string emitDartImpl(const Json& schema)
 	return out.str();
 }
 
+std::string emitCppAdapterImpl(const Json& schema)
+{
+	if (schema.value("kind", "module") == "component")
+		return "// Component adapters are not generated yet; use the C header and "
+			   "ComponentFunction.\n";
+
+	std::set<std::string> refs;
+	collectSchemaRefs(schema, refs);
+
+	std::ostringstream out;
+	out << "// Generated adapter from the " << schema.at("schema").get<std::string>()
+		<< " " << schema.at("direction").get<std::string>() << " schema. Do not edit.\n";
+	out << "#include <WasmBase/WasmRuntime.hpp>\n";
+	out << "#include <cstdint>\n";
+	out << "#include <stdexcept>\n";
+	out << "#include <string>\n\n";
+	out << "typedef struct wasm_v128 { uint8_t bytes[16]; } wasm_v128;\n";
+	for (const std::string& ref : refs)
+		out << "struct " << ref << ";\n";
+	out << "\nWASM::ModuleInstance* wasmjit_adapter_instance = nullptr;\n\n";
+	out << "namespace {\n";
+	out << "template <typename Ret, typename... Args>\n";
+	out << "Ret callExport(const char* name, Args... args)\n";
+	out << "{\n";
+	out << "\tif (wasmjit_adapter_instance == nullptr)\n";
+	out << "\t\tthrow std::runtime_error(\"wasmjit adapter: no instance\");\n";
+	out << "\tauto callable = wasmjit_adapter_instance->exportedFunction(name);\n";
+	out << "\tif (!callable)\n";
+	out << "\t\tthrow std::runtime_error(std::string(\"wasmjit adapter: missing export \") "
+		   "+ name);\n";
+	out << "\treturn WASM::callCallable<Ret>(*callable, args...);\n";
+	out << "}\n\n";
+	out << "template <typename... Args>\n";
+	out << "void callExportVoid(const char* name, Args... args)\n";
+	out << "{\n";
+	out << "\tif (wasmjit_adapter_instance == nullptr)\n";
+	out << "\t\tthrow std::runtime_error(\"wasmjit adapter: no instance\");\n";
+	out << "\tauto callable = wasmjit_adapter_instance->exportedFunction(name);\n";
+	out << "\tif (!callable)\n";
+	out << "\t\tthrow std::runtime_error(std::string(\"wasmjit adapter: missing export \") "
+		   "+ name);\n";
+	out << "\tWASM::callCallable<void>(*callable, args...);\n";
+	out << "}\n";
+	out << "} // namespace\n\n";
+	out << "extern \"C\" {\n";
+
+	forEachFunction(schema, "exports", [&](const Json& entry) {
+		const Json& params = signatureParams(entry);
+		const Json& results = signatureResults(entry);
+		const std::string exportName = entry.at("name").get<std::string>();
+		const std::string name = "wasmjit_" + sanitize(exportName);
+		out << "\n// G2H export: " << exportName << "\n";
+		if (results.size() > 1u) {
+			out << "// multi-value export: use WASM::callCallableWithResults in the adapter\n";
+			return;
+		}
+		const std::string ret = results.size() == 1 ? cType(results[0]) : "void";
+		out << ret << " " << name << "(";
+		if (params.empty())
+			out << "void";
+		for (std::size_t i = 0; i < params.size(); ++i) {
+			if (i != 0) out << ", ";
+			out << cType(params[i]) << " arg" << i;
+		}
+		out << ")\n{\n";
+		std::string callArgs;
+		for (std::size_t i = 0; i < params.size(); ++i) {
+			if (i != 0) callArgs += ", ";
+			if (isReference(params[i]))
+				callArgs += "reinterpret_cast<void*>(arg" + std::to_string(i) + ")";
+			else
+				callArgs += "arg" + std::to_string(i);
+		}
+		if (results.empty()) {
+			out << "\tcallExportVoid(\"" << exportName << "\"";
+			if (!callArgs.empty()) out << ", " << callArgs;
+			out << ");\n";
+		} else if (isReference(results[0])) {
+			out << "\treturn reinterpret_cast<" << ret << ">(callExport<void*>(\""
+				<< exportName << "\"";
+			if (!callArgs.empty()) out << ", " << callArgs;
+			out << "));\n";
+		} else {
+			out << "\treturn callExport<" << ret << ">(\"" << exportName << "\"";
+			if (!callArgs.empty()) out << ", " << callArgs;
+			out << ");\n";
+		}
+		out << "}\n";
+	});
+	out << "\n} // extern \"C\"\n";
+	return out.str();
+}
+
 } // namespace
 
 const char* languageName(Language language) noexcept
@@ -1536,6 +1629,7 @@ const char* languageName(Language language) noexcept
 	case Language::MoonBit: return "moonbit";
 	case Language::Go: return "go";
 	case Language::Dart: return "dart";
+	case Language::CppAdapter: return "cpp-adapter";
 	}
 	return "c-header";
 }
@@ -1544,7 +1638,8 @@ bool parseLanguage(std::string_view name, Language& language) noexcept
 {
 	for (const Language candidate : { Language::CHeader, Language::Rust,
 				 Language::TypeScript, Language::AssemblyScript, Language::Zig,
-				 Language::Kotlin, Language::MoonBit, Language::Go, Language::Dart }) {
+				 Language::Kotlin, Language::MoonBit, Language::Go, Language::Dart,
+				 Language::CppAdapter }) {
 		if (name == languageName(candidate)) {
 			language = candidate;
 			return true;
@@ -1565,6 +1660,7 @@ std::string emit(const nlohmann::ordered_json& schema, Language language)
 	case Language::MoonBit: return emitMoonBitImpl(schema);
 	case Language::Go: return emitGoImpl(schema);
 	case Language::Dart: return emitDartImpl(schema);
+	case Language::CppAdapter: return emitCppAdapterImpl(schema);
 	}
 	return {};
 }
