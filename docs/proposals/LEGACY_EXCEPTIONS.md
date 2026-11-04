@@ -2,21 +2,11 @@
 
 *Compatibility Notes, Encodings, and the Cost of Admission*
 
-Status: design note / compatibility study (revision 5 — 2026-10-30: `LE-8` is
-**implemented**, so the rewrite now translates every shape of the superseded
-form, including a `delegate` whose target skips an intervening catch; revision 4
-gave `LE-6` three policies — **recovery is the default**, with strict and
-unconditional rewriting as opt-ins — and reported the recovery as
-`WASM.DECODE.LEGACY_EXCEPTIONS_REWRITTEN`; revision 3 shipped `LE-1`…`LE-6` and
-`LE-9` behind a strict default; revision 1 was the study, revision 2 the shipped
-adapter). It analyses the **superseded Phase-3
-("legacy") exception-handling binary form**, what it cost to accept, and how it
-was accepted — and it answers the six questions it was commissioned with in §10.
-**Accepting the form is not a support claim**: it is a load-time compatibility
-adapter, the engine still executes only the final encoding, and a recovery is
-reported rather than silent. It ships no interpreter, no second exception
-runtime and no engine change to the backend contract.
-
+Status: design note / compatibility study (revision 5 — 2026-10-30). The
+superseded Phase-3 exception form is accepted through a load-time compatibility
+adapter: `LE-1`…`LE-9` cover the final-encoding rewrite, recovery is the default
+policy (strict and unconditional rewriting are opt-ins), and a recovery ise executes only
+the final encoding; accepting the form is not a support claim.
 Audience: anyone touching the exception front end
 (`WasmBase/WasmOpcode.hpp`, `WasmOpcodeDispatcher`, `WasmLegacyEh`,
 `WasmValidator`, LibJit's `try_table` lowering), the language-feasibility

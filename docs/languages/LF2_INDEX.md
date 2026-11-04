@@ -3,14 +3,13 @@
 *Full Feasibility Studies*
 
 Status: full-study report set (revision 2 — 2026-11-03: adds the cross-language
-ABI/interop amendment `LF2_ABI_INTEROP.md`; revision 1 was 2026-10-30). This
-folder holds the
-`LF-2` studies that [`LANGUAGE_FEASIBILITY.md`](../LANGUAGE_FEASIBILITY.md) §8
-defines, run against the five charter clusters of
-[`CHARTERS.md`](CHARTERS.md) plus a documented-only sweep of the clusters that
-have no charter. It **does carry colour verdicts** — that is what separates it
-from [`TRIAGE.md`](TRIAGE.md) — and every verdict is scoped to the toolchain
-version, flags and engine commit named in [`LF2_EVIDENCE.md`](LF2_EVIDENCE.md).
+ABI/interop amendment `LF2_ABI_INTEROP.md`). This folder holds the `LF-2` studies
+that [`LANGUAGE_FEASIBILITY.md`](../LANGUAGE_FEASIBILITY.md) §8 defines, run
+against the five charter clusters of [`CHARTERS.md`](CHARTERS.md) plus a
+documented-only sweep of the clusters that have no charter. It **does carry
+colour verdicts** — that is what separates it from [`TRIAGE.md`](TRIAGE.md) —
+and every verdict is scoped to the toolchain version, flags and engine commit
+named in [`LF2_EVIDENCE.md`](LF2_EVIDENCE.md).
 
 **Commissioning.** `LF-2` requires a charter, a named requester (`T3`) and a
 budget ([`LANGUAGE_FEASIBILITY.md`](../LANGUAGE_FEASIBILITY.md) §8.1). All three

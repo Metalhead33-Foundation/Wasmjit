@@ -3,21 +3,12 @@
 *Escaping the POD-Only Trap Path*
 
 Status: design note / implementation reference (revision 4 — **implemented**).
-The trap path is a per-agent pending status that unwinds by *returning*:
-generated code and engine helpers report and return a benign value, every caller
-checks the slot, and the host boundary throws `WASM::Trap` once the generated
-frames are gone. `longjmp` and `TrapScope` have been removed, the POD-only rule
-is gone, and the optional deferred-cleanup stack ships as `WASM::defer`. §10
-remains the feasibility study that selected this direction; §12 records what
+The trap path is a per-agent pending status that unwinds by returning: generated
+code and engine helpers report and return a benign value, callers check the
+slot, and the host boundary throws `WASM::Trap` once the generated frames are
+gone. `longjmp`, `TrapScope` and the POD-only rule are gone; the deferred-cleanup
+stack is `WASM::defer`. §10 remains the feasibility study; §12 records what
 shipped and what is still open.
-
-**Revision 4:** TRAP-6 is implemented. The trap slot, pending exception,
-tail-call state, deferred-cleanup stack, both depth counters and the stack limit
-now live in `WASM::ExecutionState`, owned by an `Agent`
-(`WasmBase/WasmAgent.hpp`); a host thread only holds the current-state pointer.
-Where the historical sections below say "thread-local", read "the current
-execution state" for the shipped tree.
-
 Audience: anyone touching `WasmBase/WasmTrap.*`,
 `WasmBase/WasmModuleInstance.*`, backend trap emission, native imports, or the
 optional [`HostBridge`](ABI.md#external-host-adapter-optional-hostbridge) host

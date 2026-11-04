@@ -2,52 +2,11 @@
 
 *Current Surface, Gaps, and Plan*
 
-Status: design note / implementation plan. **Revision 6** implements DG-0…DG-8
-and the terminal-facing extension of DG-3:
-
-- DG-0 — every validator message classifies into a documented rule family
-  (`validationRuleId()`); explicit ids still win at the index rules.
-- DG-1 — the structured record and the validator/decode boundaries.
-- DG-2 — runtime traps, uncaught exceptions and the four guest log imports.
-  The harness's own trap boundary (`TestBackend::invoke`) now calls
-  `emitTrapDiagnostic`, so a trap recorded through `backend.invoke` exists too.
-- DG-3 — the bounded per-execution-state ring, the sink and the text/JSON forms,
-  with a per-record `std::time_t` and a `{schema, startedAt, records}` envelope.
-- DG-4 — continuation and scheduler records: reason leaf, provider, generation,
-  state, tag, value/result counts and root presence, including the scheduler's
-  invalid-handle, unhandled-suspension, rejected and trapped records.
-- DG-5 — validation/decode records and directly emitted runtime traps carry the
-  function index/name and opcode-stream offset; helper-raised traps keep the
-  message only (no compile-time site).
-- DG-6 — the harness's `--diagnose=PATH [--invoke=EXPORT] [--args=…]` mode: load,
-  print the module shape, optionally call one export, and print the structured
-  diagnostics of a failure — no Catch2 case required.
-- DG-7 — `--diagnostics=text|json|none`, `--diagnostics-file` and
-  `--diagnostics-limit`, plus spec-suite failures that attach the command's
-  structured reason (`line N: … [error WASM.EXECUTE.TRAP.…: …]`).
-- DG-8 — the ring bound, the pointer-redaction gate and the hot-path benchmark
-  are tested; `[.diagbench]` shows a non-emitting loop is unchanged with the
-  ring on or a sink installed (Release ratio between 0.94 and 1.02 across runs,
-  0 records emitted).
-- **Pretty terminal form** — an opt-in emoji + ANSI line for host-log records,
-  rendered with `ctime`. The core default is off; the unit-test harness enables
-  it by default (`--diagnostics=none` silences it).
-
-DG-0 is incremental: the index rules, all trap/continuation status mappings, the
-continuation reasons and the log imports have ids; `validationRuleId()` now
-classifies the remaining validator messages into documented rule families
-(§4.2). DG-5 covers validation/decode records and the traps the backend emits
-directly: the backend carries its compile-time function/instruction site through
-the trap slot. Traps raised inside a runtime helper (division, bulk memory,
-string, GC) keep their message only, because the helper has no compile-time
-site.
-
-Before this work, WasmJit had good *local* diagnostics: named validation
-errors, `TrapKind` + copied trap messages, pending exceptions, provider status
-values, `Module::describeIndex`, and a test harness that fixes the expected
-outcome. It had no structured diagnostic record, no machine-readable stream and
-no embedder sink. `WasmBase/WasmDiagnostics.{hpp,cpp}` now provides them.
-
+Status: design note / implementation plan (revision 6). DG-0…DG-8 and the
+terminal-facing extension of DG-3 are implemented: rule ids, the structured
+record, runtime/continuation/scheduler diagnostics, the bounded ring, text/JSON
+sinks and the harness's diagnose/options modes. The pretty terminal form is
+opt-in; the core default is off.
 Audience: WasmJit developers, Wasm module authors, embedders (host applications
 and language adapters), and AI agents or other automated maintainers that need
 to reproduce and localize a failure without guessing.

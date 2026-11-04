@@ -2,35 +2,13 @@
 
 *Implementation Notes, Spec Conformance, and Deliberate Deviations*
 
-Status: design note / implementation reference (revision 13 — GC's own
-conformance surface is **complete**, including GC reference validation and the
-`GC-8` extern interop: `G9`'s `ref.test`/`ref.cast` typing, the element-segment
-type and `ref.eq` rules, and the extern boxes are all in place. The strict run
-rejects every curated negative module; only optional/perf rows stay open.
-Revision 11 recorded the last runtime gap, `br_on_cast` / `br_on_cast_fail`
-(`G7`/`GC-4`), a *decoder* bug — a typed-reference block type (`0x64 ht`) left
-its heap-type immediate in the byte stream, so the rest of the function was
-decoded from the
-wrong offset — plus missing label-value modelling, now fixed for all four
-`br_on_*` instructions; table imports are type-checked (`R1`).
-Revision 10's collector is
-**complete**: reference counting (`RC-1`/`RC-1b`), trap-safe refcount ops with an
-iterative safepoint walk (`RC-3`) and Bacon–Rajan cycle collection (`RC-2`) all
-landed at the `gcCollect()` safepoint. The typed-`assert_trap` check then turned up
-three conformance bugs, now fixed: `array.new_data`/`array.new_elem` validate the
-source range *before* allocating (they used to report "out of memory" where the
-spec wants an out-of-bounds trap), `array.init_data`'s source offset counts bytes
-rather than elements, and `i31.get_*` null-checks its reference.
-Revision 8 turned on operand-stack
-ownership: `kStackOwnsRefs` makes the operand stack own a count for every
-pushed reference, so references held only transiently are reclaimed too. It was
-blocked by a module that pushed a null `jit_value_t`; such a module is now rejected
-at load ([`VALIDATION.md`](../VALIDATION.md) "Unmodelled value types are rejected at load").
-Revision 7 made objects *unowned* at birth, reference-typed slots (heap slots,
-locals, globals, segment copies) retain, and `gcCollect()` recycles queued
-zero-count objects at a safepoint. Revision 6 made arrays inline; revision 5 moved
-the GC heap into a Store-owned mmap arena; revisions 3–4 chose reference counting
-and added the refcount header and write barriers.)
+Status: design note / implementation reference (revision 13 — GC's conformance
+surface is complete, including GC reference validation and `GC-8` extern
+interop; the strict run rejects every curated negative module and only
+optional/perf rows remain open). The collector is complete: reference counting
+(`RC-1`/`RC-1b`), trap-safe refcount ops (`RC-3`), Bacon–Rajan cycle collection
+(`RC-2`), operand-stack ownership, inline arrays, typed `br_on_cast`/
+`br_on_cast_fail`, and the Data/Elem validation fixes are in place.
 Audience: anyone touching `WasmType`, `WasmTypeRegistry`, `WasmModuleInstance`,
 `LibJitTypeTranslator`, `LibjitOpcodeDispatcher`, or the test suite.
 

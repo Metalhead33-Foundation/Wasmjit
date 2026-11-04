@@ -2,52 +2,10 @@
 
 *`WASM::Runtime`, the Umbrella Header, Versioning, and the Include Set*
 
-Status: design note + plan (revision 21 — 2026-11-04: records the producer
-toolchain evidence and flags for TB-7, extending `[bindings]` to 518 assertions.
-Revision 20 — 2026-11-04: keeps non-function component/core entries visible in
-every emitter. Revision 19 — 2026-11-04: adds the Glue-backed candidate provider
-(`--glue-candidates`) behind the same schema validation. Revision 18 —
-2026-11-04: records the TB-9 install re-run and the TB-12/TB-13 evidence.
-Revision 17 — 2026-11-04: broadens the post-optimization schema comparison to
-five fixtures and import signatures. Revision 16 — 2026-11-04: wires the
-optional SWIG C++ candidate front-end. Revision 15 — 2026-11-04: extends the
-generated adapter to multi-value calls and explicit reference retain/drop.
-Revision 14 — 2026-11-04: adds a WIT-name cross-check against
-`wasm-tools component wit --json`. Revision 13 — 2026-11-04:
-adds a `cpp-adapter` emitter that
-dispatches through `WASM::callCallable`, plus compiled conformance tests for a
-call, a trap, an import and a reference pass-through. Revision 12 — 2026-11-04:
-adds a hand-built
-`stringref` fixture using the engine's reserved encoding and proves the opaque
-`wasm_stringref` spelling across every emitter. Revision 11 — 2026-11-04: adds
-the Canonical ABI flat core signature
-to component function entries and makes the emitters prefer it, so
-strings/lists/records emit their real core cells. Revision 10 — 2026-11-04:
-projects Component Model imports,
-exports and structured component types into the binding schema, so the CLI
-auto-detects core modules and components. Revision 9 — 2026-11-04: adds the
-TypeScript, AssemblyScript, Zig,
-Kotlin, MoonBit, Go and Dart emitters to `Tools/Bindings/` and extends
-`[bindings]` to 340 assertions with per-toolchain checks. Revision 8 —
-2026-11-04: promotes the test-only schema slice to the first-party
-`Tools/Bindings/` tool, adds the `wasmjit-bindings` CLI and a Rust emitter, and
-adds gcc/rustc compile checks and a `wasm-opt` signature comparison. Revision 7
-— 2026-11-04:
-reclassifies `TB-1`…`TB-14` as first-party in-repo tooling, external tools or
-producer changes; records the local Glue/SWIG availability; defines the three
-binding-schema directions and the WIT boundary; accepts a schema-first gloss of
-`TB-4` while keeping the literal “header as truth” form rejected. Revision 6
-added §16, the
-engine/embedder/tooling/language ownership register, and applied it to the open
-items in §12–15. Revision 5 added §14, GC references across module boundaries
-and the generated-header rules, and §15, host-to-guest templates, class-size
-registration and SWIG/Glue integration. Revision 4 added §13, the host-side
-native C++ object/C struct and GC-boundary decision. Revision 3, 2026-10-29,
-disambiguated the five roles called "context" or "runtime" (§3.1–§3.2), added
-the profile/config layer (§4.6) and the header skeleton `ES-1` fills (§4.7).
-Revision 2 landed the umbrella, the version identity and the per-header compile
-units; revision 1, 2026-10-25, measured `LibjitDispatcher` at `ea4fb30`). This
-note answers `AAS1`/`AAS2` of
+Status: design note + plan (revision 21 — 2026-11-04). `Tools/Bindings/`
+projects core modules and components into the binding schema, emits nine target
+languages plus a C++ adapter, and validates SWIG/Glue candidates; `[bindings]`
+is at 518 assertions. This note answers `AAS1`/`AAS2` of
 [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) and decides the fate of two empty
 placeholder headers.
 Audience: anyone who will freeze the public surface, package the library, write

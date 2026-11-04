@@ -2,12 +2,10 @@
 
 *Five Proposed Commissions*
 
-Status: charters and their reports (revision 2 — 2026-10-30: all five were
-**approved in one batch** by the repository owner's commission, which is the
-recorded requester (`T3`), and were **run**; the reports are
-[`LF2_INDEX.md`](LF2_INDEX.md) and its cluster reports. Revision 1 proposed the
-five commissions and recorded that no requester existed). Approving one is a
-milestone decision, not a commit, and `LF-3` may still reject every verdict.
+Status: charters and their reports (revision 2 — 2026-10-30). All five charters
+were approved in one batch by the repository owner's commission and were run;
+the reports are [`LF2_INDEX.md`](LF2_INDEX.md) and its cluster reports. Approval
+is a milestone decision, not a commit, and `LF-3` may still reject every verdict.
 
 Each charter carries the eight fields of
 [`LANGUAGE_FEASIBILITY.md`](../LANGUAGE_FEASIBILITY.md) §7.8 and the shared

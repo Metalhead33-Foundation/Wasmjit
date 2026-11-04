@@ -2,20 +2,12 @@
 
 *Implementation Notes, Spec Status, and Deliberate Deviations*
 
-Status: design note / implementation reference (revision 12 — **TH-1…TH-6 are
-implemented**; TH-5 (real agents) is built as an opt-in
-`ConcurrencyModel::Agents` with a guest-address-keyed waiter table, concurrent
-entry into the one instance, per-agent trap state and a multi-mutator-safe GC
-path. `Single` stays the default and is bit-identical to the previous revision.
-**At most one instance per module; multiple instances are ruled out**, and
-concurrent compilation is rejected as a feature
-([`../THREADSAFETY.md`](../THREADSAFETY.md) §3.1–§3.2).
-The per-agent state groundwork is implemented: `Agent` owns an
-`ExecutionState` (trap, exception, tail-call, defer, counters and stack limit).
-The stack-switching A/B providers are continuation execution contexts, not
-agents, and do not change the multi-agent model. §3 records the project's
-execution model: **`Single` by default, `Agents` opt-in**; §4.3.1 records how
-each former blocker was closed.)
+Status: design note / implementation reference (revision 12 — TH-1…TH-6 are
+implemented). TH-5 (real agents) is an opt-in `ConcurrencyModel::Agents` with a
+guest-address-keyed waiter table, concurrent entry into the one instance,
+per-agent trap state and a multi-mutator-safe GC path. `Single` stays the default
+and is bit-identical to the previous revision; at most one instance per module
+is allowed, and concurrent compilation is rejected as a feature.
 Audience: anyone touching `WasmMemory`, `WasmStore`, `WasmOpcode`,
 `WasmOpcodeDispatcher`, `LibjitOpcodeDispatcher`, or the test harness.
 

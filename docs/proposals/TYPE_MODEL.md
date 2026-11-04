@@ -2,18 +2,16 @@
 
 *Implementation Notes, Spec Status, and Deliberate Deviations*
 
-Status: design note / implementation reference (revision 13 — the type model is
-complete. Core modules, component core types and validated component
-declarations are Store-owned; closed component types intern with canonical
-`TypeId` payloads, schemes/resources/substitution have first-class identities,
-`[get]`/`[set]`/strong-uniqueness and Canonical ABI flattenability are
-validated, the parser type AST is released after validation, and each component
-runtime owns a `ComponentAbiInstance` signature table. Core Type imports/exports
-link through the Store by abstract bound. Multi-agent async scheduling is
-supported through the embedder's `ComponentExecutor`; the engine owns the
-state machine and the hooks, not the scheduler. Revision 14 marks the TM-0…TM-5 plan rows closed — the
-TM-6…TM-11 sequence completed them — so a finished refactor no longer reads as an
-open one.)
+Status: design note / implementation reference (revision 14 — the type model is
+complete; the TM-0…TM-11 plan rows are closed). Core modules, component core
+types and validated component declarations are Store-owned; closed component
+types intern with canonical `TypeId` payloads; schemes/resources/substitution
+have first-class identities; `[get]`/`[set]`/strong-uniqueness and Canonical ABI
+flattenability are validated. The parser type AST is released after validation,
+and each component runtime owns a `ComponentAbiInstance` signature table.
+Multi-agent async scheduling is supported through the embedder's
+`ComponentExecutor`; the engine owns the state machine and hooks, not the
+scheduler.
 Audience: anyone touching `WasmBase/WasmType.hpp`, `WasmBase/WasmCanonicalType.hpp`,
 `WasmBase/WasmTypeRegistry.{hpp,cpp}`, `WasmBase/WasmComponentModel.hpp`,
 `WasmBase/WasmComponentParser.inc`, `WasmBase/WasmComponentValidation.cpp`, or the

@@ -2,19 +2,12 @@
 
 *Pre-Feasibility, Full Feasibility, and the Entry-Gate Readiness Audit*
 
-Status: process definition / study charter (revision 5 — 2026-10-30: `LF-2` has
-been **run** and its reports are the `LF2_*` notes in
-[`languages/`](languages/index.md); revision 4 — 2026-10-30: `LF-1` has been
-run, and its output is the [`languages/`](languages/index.md) set; revision 3 —
-2026-10-30: the entry-gate audit `LF-0a` has been **run**, and its result lives in
-[`READINESS_AUDIT.md`](READINESS_AUDIT.md); revision 2 — 2026-10-29 — added the
-entry-gate readiness audit and the engine/embedder distinction). **This note
-defines two studies and the audit that gates them; it runs none of them.** No
-language is evaluated here, no candidate is screened, and there are no verdicts.
-`LF-0a` is the one exception, and it is not a language study: it audited the
-engine and its report is a separate document. This note contains **no code** and
-changes no build.
-
+Status: process definition / study charter (revision 5 — 2026-10-30). `LF-0a` has
+been run ([`READINESS_AUDIT.md`](READINESS_AUDIT.md)), `LF-1` produced the
+[`languages/`](languages/index.md) screen, and `LF-2` produced the `LF2_*`
+reports. **This note defines the studies and the audit that gates them; it runs
+none of them.** No language is evaluated here, no candidate is screened, and
+there are no verdicts. It contains **no code** and changes no build.
 Audience: anyone asking "can I write this in language X?", anyone commissioning
 or reviewing a language-support study, and anyone tempted to add a toolchain to
 the project because a blog post said it works.

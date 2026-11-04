@@ -1,16 +1,12 @@
 # `LF2-ABI` — Cross-language ABI and host-binding amendment {#lf2_abi}
 
-Status: cross-cutting `LF-2` amendment, revision 4 (2026-11-04). Revision 1
-(2026-11-03) added the ABI/interop dimension the cluster reports did not treat
-as one subject: how a language **sees WasmJit’s exports and synthetic host
-modules**, how the C/C++ runtime and a JavaScript bridge **see the language’s
-exports**, and where each language sits on the scalar-to-GC/reference difficulty
-scale. Revision 2 added the host-side counterpart: native C++ objects and C
-structs in [`EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) §13. Revision 3
-points at §14 (GC references across modules and generated headers) and §15
-(host-to-guest templates and SWIG/Glue). Revision 4 adds §11, the
-engine/embedder/tooling/language ownership map. It does **not** change any
-`LF-2` verdict; those remain in the cluster reports.
+Status: cross-cutting `LF-2` amendment, revision 4 (2026-11-04). It adds the
+ABI/interop dimension the cluster reports did not treat as one subject: how a
+language sees WasmJit's exports and synthetic host modules, how the C/C++ runtime
+and a JavaScript bridge see the language's exports, and where each language sits
+on the scalar-to-GC/reference difficulty scale. It points at
+`EMBEDDING_SURFACE.md` §13–§15 and adds the §11 ownership map. It does **not**
+change any `LF-2` verdict.
 
 This is deliberately an amendment to the language-feasibility set, not a new
 language charter. The host-binding contract it elaborates is

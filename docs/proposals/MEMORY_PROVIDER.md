@@ -2,28 +2,12 @@
 
 *What Runtimes Demand of the Host, What the Engine Already Offers, and Whether to Open the Seam*
 
-Status: engine-seam study, revision 4 (2026-10-31). Revision 1 was the study; it
-answers the question the language screen parked on `RA4` — *"the memory provider
-is core-chosen, so a runtime that wants to own its allocator, relocate its heap,
-or interpose on `memory.grow` has no seam today"* — by separating the demands
-that sentence bundles, measuring what the tree actually does, and pricing each
-way of changing it. Since revision 2, **`MP-0` and `MP-1` are implemented**: a
-host-chosen allocation policy (`MemoryAllocationPolicy`) that lets a *non-shared*
-memory reserve its maximum and keep its base (`ReservedLinearMemory`), with the
-default keeping every earlier build's behaviour byte for byte. `MP-2` (a provider factory) **shipped in revision 4**, and `MP-3` stays
-rejected; §7 records which is which. §10 answers the six questions the note was
-commissioned with.
-
-**Revision 3** records the arrival of the memory-budget decision in §11, which
-changes this note's verdicts without changing its code:
-[`CONFIGURATION.md`](CONFIGURATION.md) makes the allocation budget **per
-runtime** with a **4 GiB** default and adds **opt-in** category limits — one of
-which is a per-memory maximum, i.e. the feature `MP-4` rejected. `MP-4` is
-therefore **reopened** as an opt-in quota, `MPD4` is amended (the budget is per
-runtime, not per process) while its "not a security boundary" reason survives
-verbatim, and `MP-1`'s behaviour is unchanged: the reservation stays free unless
-a host opts into the new address-space counter.
-
+Status: engine-seam study, revision 4 (2026-10-31). `MP-0`/`MP-1` are
+implemented: a host-chosen allocation policy can reserve a non-shared memory's
+maximum and keep its base, with the old behaviour as the default. `MP-2` (a
+provider factory) shipped; `MP-3` stays rejected; `MP-4` is reopened as an
+opt-in quota by the per-runtime budget in [`CONFIGURATION.md`](CONFIGURATION.md).
+§7 records the verdicts; §10 answers the six commissioning questions.
 Audience: anyone touching linear memory (`WasmBase/WasmMemory.hpp`,
 `WasmMemory.cpp`, `WasmStore.cpp`, `WasmModuleInstance::instantiateMemories`), an
 embedder who holds a `LinearMemory*` across a guest call, and the feasibility

@@ -2,12 +2,11 @@
 
 *Feasibility of Demoting the Class-E Blockers*
 
-Status: feasibility study and implementation record (revision 2 — 2026-10-29;
-the study is revision 1's measurements at `ea4fb30`, and **MF-1…MF-8 are now
-implemented**). The opt-in model is built: `ConcurrencyModel::Agents`,
-`Runtime::createAgent`, the entry discipline, the waiter table, concurrent GC
-and the multi-agent tests. `Single` remains the milestone default, so the
-current [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) gates are unchanged.
+Status: feasibility study and implementation record (revision 2 — 2026-10-29).
+**MF-1…MF-8 are implemented**: `ConcurrencyModel::Agents`, `Runtime::createAgent`,
+the entry discipline, the waiter table, concurrent GC and the multi-agent tests.
+`Single` remains the milestone default, so the current `API_ABI_STABILITY.md`
+gates are unchanged.
 Audience: anyone revisiting `proposals/THREADS.md` `TD9`/`TH-5`, anyone bringing
 up Asmjit or SLJIT, and anyone touching `Agent`, `ExecutionState`,
 `ModuleInstance`, `Store`, `GcHeap`, the continuation providers, or the embedder

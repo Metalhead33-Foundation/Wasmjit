@@ -2,9 +2,9 @@
 
 *Research Note: LibJIT, SLJIT, AsmJit, and the Native-Helper Middle Path*
 
-Status: research note (revision 3 — records that the current implementation path
-is LibJIT only while AsmJit and SLJIT remain deferred-but-planned; the decision
-that follows from this survey now lives in [`SIMD_LIBJIT.md`](SIMD_LIBJIT.md)).
+Status: research note (revision 3). It records that the current implementation
+path is LibJIT only while AsmJit and SLJIT remain deferred-but-planned; the
+decision that follows from this survey lives in [`SIMD_LIBJIT.md`](SIMD_LIBJIT.md).
 Audience: anyone about to start a milestone from
 [`proposals/SIMD.md`](proposals/SIMD.md) §7, or anyone touching the backend
 abstraction (`Project.pro`, the `*OpcodeDispatcher` families, the type

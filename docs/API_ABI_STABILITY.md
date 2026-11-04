@@ -2,12 +2,10 @@
 
 *The Milestone, and How Close We Are*
 
-Status: **milestone met 2026-10-29** (revision 4 — 2026-10-30 — re-measures the
-suite at `5c3d194` and records the `G3` re-check performed by the combined
-readiness audit, [`READINESS_AUDIT.md`](READINESS_AUDIT.md); revision 3 closed
-`AAS1`, `AAS8`, `AAS9` and `AAS11` and flipped G1 and G3 to `✅`; revision 1
-declared the milestone on 2026-10-25, with all measurements taken on
-`LibjitDispatcher` at `ea4fb30` and `master` at `8fb955d`).
+Status: **milestone met 2026-10-29** (revision 4 — 2026-10-30). This note
+re-measures the suite at `5c3d194` and records the `G3` re-check performed by
+[`READINESS_AUDIT.md`](READINESS_AUDIT.md); `AAS1`, `AAS8`, `AAS9` and `AAS11`
+are closed, G1 and G3 are `✅`, and all four milestone gates pass.
 Audience: anyone planning work that changes an embedder-facing surface or the
 backend seam, anyone evaluating the `LibjitDispatcher` → `master` merge, and
 anyone who needs a defensible answer to "is it production ready yet?".

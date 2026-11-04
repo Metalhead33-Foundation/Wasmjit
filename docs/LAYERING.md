@@ -2,10 +2,9 @@
 
 *What `WasmBase/` May Know, and What Only a Backend May*
 
-Status: policy note (revision 2 — 2026-10-29: the last non-empty citation was
-renamed away and the check became an automated test; revision 1 recorded the rule
-that `WasmBase/` is backend-agnostic, the vocabulary for talking about a backend
-in core code, and the state of the tree after the first pass).
+Status: policy note (revision 2 — 2026-10-29). It records that `WasmBase/` is
+backend-agnostic, the vocabulary for talking about a backend in core code, and
+the automated `[layering]` check that enforces the rule.
 Audience: anyone editing `WasmBase/`, adding or filling in a backend, or writing
 a comment anywhere on the loader / instantiator / codegen path.
 

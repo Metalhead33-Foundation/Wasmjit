@@ -2,28 +2,13 @@
 
 *Sharing a Linear Memory Between Instances*
 
-Status: engine-seam study, revision 3 (2026-11-01, `8c87f5f`). It answers one
-question — **can a large, monolithic module and a set of small scripts share one
-linear memory, and what breaks if they do?** — by splitting it into three:
-*aliasing* (can two instances address the same bytes?), *coexistence* (can their
-layouts avoid each other?) and *accounting* (can the engine still bound and
-attribute the bytes per tenant?). The engine answers **yes**, **yes with
-build-side work**, and **no, not today** — in that order, and the order is the
-whole note.
-
-**Revision history.** Revision 2 added §2.4 (the mental model: a long-lived module
-reads as a *dynamic library*, a short-lived one as a *script*) and §13 (what a
-linker is, and what one would buy). **Revision 3** records the decision that came
-out of it: the **unloader shipped** (`Runtime::unload` + the
-`ModuleInstantiator::releaseInstance` hook, §13.3 rung 8), layout and re-binding
-(rungs 5–6) stay **out of scope for the short term**, and two cheaper alternatives
-are written up instead of built — a front-end allocator-injection pass (§14,
-Appendix E) and an embedder-imposed initializer contract (§15, Appendix F).
-
-**Contains no code.** §12's and §13's listings are pseudocode, labelled as such;
-the work is `SLM-1`…`SLM-6` in §7, plus `SLM-7` as a watch item that §13 scopes
-and explicitly does not start.
-
+Status: engine-seam study, revision 3 (2026-11-01, `8c87f5f`). It answers
+whether a large monolithic module and a set of small scripts can share one
+linear memory: aliasing is **yes**, coexistence is **yes with build-side work**,
+and accounting is **no, not today**. `Runtime::unload` and the
+`ModuleInstantiator::releaseInstance` hook shipped; layout and re-binding stay
+out of scope for the short term, with an allocator-injection pass and an
+embedder initializer contract written up instead. Contains no code.
 Audience: anyone writing the embedding host for a product that mixes one big
 module with many small ones (`WASM::Runtime`, `RegistryImportResolver`, the
 `HostBridge` boundary), anyone touching `Store`/`LinearMemory`/`MemoryBudget`, and

@@ -2,28 +2,12 @@
 
 *Spec Status, Design Space, and a QVM-Style Scope*
 
-Status: proposal + implementation note (revision 18 — **the state of the model as
-of 2026-11-03**). `CM-0`…`CM-8` are complete: the parser decodes every
-section/production; the validator carries all **thirteen** index spaces and covers
-references, scopes, labels, declarations, aliases, instantiation signatures,
-canon, start, values, `[get]`/`[set]`, strong uniqueness and Canonical ABI
-flattenability (§5.1 verifies `CM2`); and the runtime executes embedded/nested
-components, inline core instances (`func`/`table`/`memory`/`global`/`tag`/`type`
-export bags), flat/layout
-Canonical ABI values, resources, start/value definitions, structured component
-scripts and the single-agent async surface (streams, futures, tasks, context,
-backpressure, waitables, subtasks, error-context). **`CM11`, `CM12`, `CM14`, `CM15`
-and `CM16`–`CM19` are closed: the reference corpus is green in both directions
-(516 verdict cases, 0 disagreements), and the async lift/lower calling
-convention now executes on the single-agent executor.** `CM-9` (vendor the
-upstream corpus) through `CM-14` (the async convention) are complete, and
-`CM-20`–`CM-22` added per-load feature gates, the public
-`WASM::Runtime` component surface, component-sort imports, wide async result
-spill and a mutation/fuzz gate. `ComponentFeatures::implemented()` now includes
-`Threads` and `Memory64`; the public runtime defaults to that set. Multi-agent
-scheduling is supported through the embedder's public `ComponentExecutor` seam
-([`THREADS.md`](THREADS.md) §5.1); WIT is build-time (the engine is binary-only)
-and WASI is host-provided. Those are contract boundaries, not engine gaps.
+Status: proposal + implementation note (revision 18 — 2026-11-03). `CM-0`…`CM-8`
+are complete: the parser, the thirteen-index-space validator (including Canonical
+ABI flattenability), the component runtime (nested components, resources and the
+single-agent async surface) and the green reference corpus (516 cases, 0
+disagreements) are in place; `Threads` and `Memory64` feature gates ship. WIT is
+build-time and WASI is host-provided: contract boundaries, not engine gaps.
 
 **Direction note (2026-11-01).** This note is where the project's centre of
 gravity is most visible: a component is a *managed extension unit*, and a product

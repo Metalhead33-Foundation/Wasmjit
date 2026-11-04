@@ -2,27 +2,12 @@
 
 *The Hardcoded Values, What Became a Knob, and the Budget Model*
 
-Status: engine-seam study, revision 4 (2026-11-01). Revision 1 was the study:
-it inventoried every value in the tree that a host might want to choose,
-separated the ones that *should* be configurable from the ones that must stay
-compile-time bounds, and priced the change. **Since revision 2 the work is
-implemented**: `CFG-1`…`CFG-7`, `CFG-9` **and `CFG-4`** shipped (a per-runtime memory budget
-with a 4 GiB default, opt-in category caps, an opt-in address-space counter,
-release paths for memories and tables, resolved-budget introspection, the store
-and execution limits, the `WASM.MEMORY.BUDGET_EXCEEDED` record, and continuation limits and the continuation provider chosen per runtime rather than per process). **Revision 3** completed the category set — strings, exception objects and continuation stacks now have their own counters and caps too — and marks `CFG12`/`CFG13` as explicit boundaries: the note has no open gap left that it can close. `CFG-8` (an opt-in per-agent execution budget) now ships for LibJIT; those two boundaries are what that budget does *not* cover. §7 records what
-landed per milestone, including the places the implementation differs from
-the sketch in §10.
-
-**Revision 4 is a freshness pass.** §4 used to describe the tree *before*
-`CFG-1`…`CFG-9` while its own front matter claimed they had shipped: a 2 GiB
-process-wide static, one undivided counter, an `allocationBudgetBytes` that was
-refused, continuation limits that were process-wide, and a compilation degree
-that was "env var only". None of those is true now. §4.1/§4.2/§4.4/§4.5 describe
-the shipped surface and carry a snapshot stamp; §4.3's inventory is kept, but
-labelled as the revision-1 baseline it always was; §4.6 now explains why
-`allocationBudgetBytes` survives as a compatibility form rather than as a
-refusal.
-
+Status: engine-seam study, revision 4 (2026-11-01). The work is implemented:
+`CFG-1`…`CFG-9` and `CFG-4` ship a per-runtime memory budget (4 GiB default),
+opt-in category caps, an address-space counter, release paths, resolved-budget
+introspection, store/execution limits, string/exception/continuation counters,
+and `CFG-8`'s per-agent execution budget for LibJIT. §7 records the landed
+milestones and the places the implementation differs from the sketch in §10.
 Audience: anyone touching `WasmStore` (`WasmBase/WasmStore.{hpp,cpp}`), the
 memory providers (`WasmBase/WasmMemory.{hpp,cpp}`), `WasmRuntime`
 (`WasmBase/WasmRuntime.{hpp,cpp}`), the continuation provider

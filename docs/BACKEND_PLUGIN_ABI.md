@@ -3,10 +3,9 @@
 *Dynamically Loaded Code Generators Behind a Minimal C ABI*
 
 Status: feasibility study + implemented narrow boundary (revision 2 —
-2026-10-29: `BP-1`…`BP-4` landed — the POD views, the name-based registry, the
+2026-10-29). `BP-1`…`BP-4` landed: the POD views, the name-based registry, the
 `dlopen` loader and its refusal tests. The **full C compilation seam is still
-deliberately not taken** (Design 1, §4.3). Revision 1, 2026-10-25, measured
-`LibjitDispatcher` at `ea4fb30`).
+deliberately not taken** (Design 1, §4.3).
 Audience: anyone who will implement a second code generator, freeze the public ABI
 ([`EMBEDDING_SURFACE.md`](EMBEDDING_SURFACE.md)), or package the library.
 

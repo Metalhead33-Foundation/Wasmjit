@@ -1,14 +1,11 @@
 # Validation {#doc_validation}
 
-Status: design + status note, revision 3 (2026-11-03: the decoder sweep added
+Status: design + status note, revision 3 (2026-11-03). The decoder sweep added
 UTF-8 names, the core version check, section order/size, limits flags and
 mutability; the GC aggregate and unreachable `select`/`br_table` rules landed;
 the linker's function/global/table import matching was tightened; and a failed
-instantiation is now retained with its backend keep-alive, so `linking*.wast`
-passes and the all-scripts sweep is 257/257).
-Revision 2 (2026-11-01) absorbed `UNMODELLED_VALUE_TYPES.md` — the rule it
-established is a validation rule, so it now lives here; the full crash
-investigation is preserved in git history.
+instantiation is retained with its backend keep-alive, so `linking*.wast` passes
+and the all-scripts sweep is 257/257.
 Audience: anyone touching the validating front end, or adding a value type.
 
 `WasmBase/WasmValidator.cpp` is the validating front end. `Module::fromFile`

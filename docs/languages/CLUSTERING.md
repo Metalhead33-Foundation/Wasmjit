@@ -2,14 +2,11 @@
 
 *One Study per Blocker*
 
-Status: part of the `LF-1` output (revision 2 — 2026-10-30: re-read against the third
-re-screen of [`TRIAGE.md`](TRIAGE.md) §6.12. Seven rows moved one friction band, in
-`L8`, `L7`, `L2`, `L6` and `L11`; no cluster merged, split, or changed rank, so only
-this line changed. Revision 1 was the first pass.) It groups the 102
-triage rows of [`TRIAGE.md`](TRIAGE.md) into **12 clusters**, decides which of
-them collapse into one study and which do not, applies the charter's trigger
-conditions, names the five clusters worth a full study, and writes the explicit
-"don't study" list.
+Status: part of the `LF-1` output (revision 2 — 2026-10-30). It groups the 102
+triage rows of [`TRIAGE.md`](TRIAGE.md) into 12 clusters, decides which collapse
+into one study, applies the charter's trigger conditions, names the five
+clusters worth a full study, and writes the explicit "don't study" list. It
+assigns no colour and approves no study; the reports are the `LF2_*` notes.
 
 It assigns no colour and approves no study: the charters that follow from it live
 in [`CHARTERS.md`](CHARTERS.md), and they were approved and run on 2026-10-30 —

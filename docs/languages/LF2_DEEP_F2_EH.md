@@ -1,19 +1,10 @@
 # `F2` — Legacy `delegate` (`LE-8`): Workaround and Long-Term Options {#lf2_deep_f2}
 
-Status: deep-study note (revision 2 — 2026-10-30: **`F2` is fixed.** `LE-8` now
+Status: deep-study note (revision 2 — 2026-10-30: **`F2` is fixed**). `LE-8` now
 translates the delegating shape in place, so `T05` (C++ with libc++, default
-flags) is green without a flag and without `wasm-opt`; revision 1 analysed the
-workarounds and concluded the shape needed a translation pass — §4/§4.1 record
-why the earlier analysis read the construct as impossible and which mechanism
-made it a local rewrite after all). It investigates `F2` of
-[`LF2_INDEX.md`](LF2_INDEX.md) §5: a default `clang++` C++ module did not load
-because its legacy exception encoding contains a shape
-`ParseOptions`'s rewrite refused (`LE-8` of
-[`proposals/LEGACY_EXCEPTIONS.md`](../proposals/LEGACY_EXCEPTIONS.md) §4.6). It
-verifies the `wasm-opt --translate-to-exnref` workaround end to end, states the
-toolchain flags that avoid the shape, and records the in-engine translation that
-replaced all of them as the *only* step an embedder needs.
-
+flags) is green without a flag and without `wasm-opt`. The note verifies the
+`wasm-opt --translate-to-exnref` workaround, states the toolchain flags that
+avoid the shape, and records the in-engine translation that replaced them.
 Audience: whoever owns `WasmBase/WasmLegacyEh.cpp`, whoever writes the C/C++ or
 Kotlin embedding recipe, and `LF-3` when it prioritises the EH work.
 

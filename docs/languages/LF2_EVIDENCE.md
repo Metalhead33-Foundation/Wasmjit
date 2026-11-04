@@ -7,7 +7,6 @@ verdict in this folder names a row here: the toolchain with its version and
 flags, the module with its SHA-256, the inspection command, and the transcript.
 The discipline is [`LANGUAGE_FEASIBILITY.md`](../LANGUAGE_FEASIBILITY.md) §8.4:
 *a finding without a reproducible artefact is an opinion.*
-
 Audience: anyone re-running an arm, and whoever picks up `F1`–`F3` in `LF-3`.
 
 **What was actually done.** Every toolchain in §2 was installed in a study

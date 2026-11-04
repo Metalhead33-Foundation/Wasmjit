@@ -2,15 +2,10 @@
 
 *Guest, Host, and the Boundary Between Them*
 
-Status: policy / reference note (revision 4 — records the **one instance per
-module** rule as a *design fact* rather than a target, the accepted concurrency
-scenarios (many agents on that one instance, including GPU-style, classic
-thread-per-function, async/await and intra-Wasm threading), the rejection of
-concurrent compilation as a feature, the host C++ lock caveats, the open
-guest-lock question, the trap/lock ownership questions that a multi-agent build
-must answer, and the Go-style trap-cleanup candidate. It contains **no new code**
-and changes no runtime behaviour.)
-
+Status: policy / reference note (revision 4). It records the one-instance-per-module
+rule as a design fact, the accepted concurrency scenarios, the rejection of
+concurrent compilation, the host C++ lock caveats, the open guest-lock question
+and the trap/lock ownership questions. It contains no new code.
 Audience: embedders, Wasm module/toolchain authors, and anyone changing
 `WasmBase/`, a backend, the GC heap, the trap path, or a native-import helper.
 

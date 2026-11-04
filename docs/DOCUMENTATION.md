@@ -2,17 +2,10 @@
 
 *Doxygen Style in the Headers, and the Note Tree*
 
-Status: policy note (revision 3 — 2026-11-01: a freshness pass. §8's "0
-undocumented declarations" was not true of the strict pass and is replaced by the
-measured 1,810-item breakdown; the §9 tree diagram's 21/15/36 counts are corrected
-to 21/16/39 (docs / languages / proposals), "all 69 headers" becomes the predicate
-"every header outside `extern/`" plus a dated count. Revision 2 — 2026-10-30: the
-Markdown notes are now part of the generated site, so the then-55 notes gain
-stable page ids and two index pages put them into a hierarchy; the escaping list
-in §5 gains the Markdown rows a real run exposed, and §9 is new. Revision 1 —
-2026-10-29: every comment in the project's `.h`/`.hpp` files was converted to
-Qt-style Doxygen comments, `Doxyfile` was added, and `Test/HeaderDocTests.cpp` now
-enforces the rule).
+Status: policy note (revision 3 — 2026-11-01). Every header outside `extern/` is
+covered by the Doxygen rules and the `[headerdoc]` check; the Markdown note tree
+is part of the generated site with stable page ids, and §9 carries the current
+header/note counts. Revision history lives in git.
 Audience: anyone adding or editing a header or a note, or reviewing a change
 that touches one.
 
@@ -331,6 +324,11 @@ WasmJit            (README.md, the main page)
 (or `{#prop_what_it_is}`, or `{#lf_what_it_is}` for the study folder) to its
 `# Title` line; add one row to its folder's index. Moving a note between the
 folders means changing both the id prefix and the row.
+
+**Front matter keeps one revision.** The `Status:` line names only the current
+revision and the current state; earlier revision notes are git history, not a
+growing preface. Do not append a `Revision N — …` chain to the next edit: replace
+the previous summary with the new one.
 
 **A new folder** takes one more: a folder without an index page is not part of
 the tree, so it gets `<folder>/index.md` with its own id, a `\subpage` row in

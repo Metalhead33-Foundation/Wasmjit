@@ -2,20 +2,12 @@
 
 *Screening the Whole Candidate List*
 
-Status: pre-feasibility / scoping study (revision 3 — 2026-10-30: **re-screened
-twice more** after the engine moved — `LE-9` closed the mixed exception-form
-refusal (§6.10), then `MP-1` gave a non-shared memory a reservation policy
-(§6.11–§6.12). Revision 2 recorded the first re-screen after the legacy-EH
-policy landed; revision 1 was the first pass. Each re-screen records what moved
-and what did not.) This note is
-the **screen** `LANGUAGE_FEASIBILITY.md` §7 defines: every entry of the canonical
+Status: pre-feasibility / scoping study (revision 3 — 2026-10-30). This is the
+screen `LANGUAGE_FEASIBILITY.md` §7 defines: every entry of the canonical
 candidate list, one row per *(language, toolchain)* pair, three quick-triage
-axes, an evidence tier, a study cost, a cluster and a trigger. It attempts **no
-green/yellow/red verdict** — colour is a full-study output
-([`LANGUAGE_FEASIBILITY.md`](../LANGUAGE_FEASIBILITY.md) §8.5). The only
-negative markers it may carry are the `K` kill signals of a candidate *study*
-(§5.2 there), and it uses them sparingly and with a tier.
-
+axes, an evidence tier, a study cost, a cluster and a trigger. It attempts no
+green/yellow/red verdict; colour is a full-study output. Only the `K` kill
+signals of a candidate study are used, sparingly and with a tier.
 Audience: anyone asking "can I write this in language X?", anyone about to
 commission an `LF-2` study, and anyone reviewing whether the screen was honest.
 

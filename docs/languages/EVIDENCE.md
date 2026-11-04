@@ -4,9 +4,8 @@ Status: evidence log for the `LF-1` screen (revision 1 — 2026-10-30). One row
 per source, with the retrieval date, the evidence tier it earns, the claims in
 [`TRIAGE.md`](TRIAGE.md) it may be used for, and what it may *not* be used for.
 The tiers and their rules are
-[`LANGUAGE_FEASIBILITY.md`](../LANGUAGE_FEASIBILITY.md) §7.4; the discipline is
-that a claim names its tier, and an `E3` claim is phrased as a hypothesis.
-
+[`LANGUAGE_FEASIBILITY.md`](../LANGUAGE_FEASIBILITY.md) §7.4; a claim names its
+tier, and an `E3` claim is phrased as a hypothesis.
 Audience: anyone about to rely on a triage row, and anyone extending the screen
 when a toolchain or the canonical list moves.
 

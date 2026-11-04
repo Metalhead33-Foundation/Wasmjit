@@ -2,18 +2,14 @@
 
 *Implementation Notes, Spec Status, and Deliberate Deviations*
 
-Status: design note / implementation reference (revision 13 — SS-0/SS-1/SS-2,
-the per-execution-context Agent/ExecutionState refactor (SS-6), the A
-native-stack provider (default), the B host-thread fallback, the
-host-facing `HostContinuation`/`HostContinuationScheduler` seam, multiple/loop
-handler dispatch, `cont.bind`, `resume_throw`/`resume_throw_ref` with handler
-clauses, serial A migration, ASAN fiber annotations, wide
-multi-value/reference/v128 payloads, an explicit suspended-stack root registry
-and symmetric `switch` on both providers are implemented. §10.15 records the
-runtime decision: native stacks (A) are primary, host threads (B) are the opt-in
-fallback, and a bespoke interpreter fallback (C) is permanently rejected. A
-continuation remains a serial execution context; multi-agent scheduling is an
-embedder-owned `Agent`/`ComponentExecutor` choice.)
+Status: design note / implementation reference (revision 13). SS-0/SS-1/SS-2,
+the per-execution-context Agent/ExecutionState refactor, the native-stack
+provider (default), the host-thread fallback, the `HostContinuation` /
+`HostContinuationScheduler` seam, multiple/loop handler dispatch, `cont.bind`,
+`resume_throw`/`resume_throw_ref`, serial A migration, ASAN fiber annotations,
+wide payloads, the suspended-stack root registry and symmetric `switch` are
+implemented. A continuation remains a serial execution context; multi-agent
+scheduling is an embedder-owned `Agent`/`ComponentExecutor` choice.
 Audience: anyone touching `WasmModule` (types), `WasmType` (heap types),
 `WasmOpcode`, `WasmStore`, `WasmModuleInstance`, the JIT compiler, a backend's
 continuation lowering, or the exception-tag machinery.

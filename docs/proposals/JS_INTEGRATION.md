@@ -2,28 +2,15 @@
 
 *Implementation Notes, Spec Status, and Deliberate Non-Integration*
 
-Status: design note / implementation reference (revision 10 — consolidated survey
-of JS-BigInt integration, JS String Builtins, JSPI, custom descriptors, ESM
-integration, JS Primitive Builtins and JS Types, plus the shipped generic
-host-bridge groundwork. **No JavaScript engine or JavaScript semantics is
-implemented inside the engine.** The shipped generic pieces are
-`WasmHostBridge`, `HostContinuation`, the wide `HostContinuationScheduler`
-hooks (including `submitThrow`/`onRejected`), the `Module` import/export
-descriptor views and the core Custom Descriptors instructions/RTT. Revision 8
-made the descriptor API real; revision 9 started the Custom Descriptors core
-type-system layer; revision 10 completes its core instruction/RTT layer and
-adds the `descriptorPrototype` accessor, while the JS `js-prototypes` half
-remains an external adapter concern. No language engine, Promise type or event
-loop is part of WasmJit.)
-
-**Status of the seam: complete (`JS-0`…`JS-5` ✅).** Everything the engine owes a
-JavaScript host exists and is tested — the host-reference bridge, the wide
-continuation/scheduler hooks, the descriptor metadata views, the `wasm:`-as-an-
-ordinary-import proof and the Custom Descriptors core. What remains is named
-"JS" (a JS engine, a Promise/event loop, an ESM loader, the `js-prototypes`
-configuration) and belongs to the embedder by decision, not by omission. The
-README's meter reads the engine side for that reason.
-
+Status: design note / implementation reference (revision 10). It consolidates
+JS-BigInt, JS String Builtins, JSPI, custom descriptors, ESM integration, JS
+Primitive Builtins and JS Types, plus the shipped generic host-bridge
+groundwork. No JavaScript engine or JavaScript semantics is implemented inside
+the engine: `WasmHostBridge`, `HostContinuation`, the wide scheduler hooks, the
+import/export descriptor views and the core Custom Descriptors instructions/RTT
+are the engine side; a JS engine, Promise/event loop, ESM loader and
+`js-prototypes` configuration belong to the embedder. `JS-0`…`JS-5` are
+complete.
 Audience: anyone touching `ImportResolver`, `Callable`, `VMContext`,
 `HostBridge`, `externref`, `Module` metadata, or considering a
 QuickJS/MuJS/other adapter.

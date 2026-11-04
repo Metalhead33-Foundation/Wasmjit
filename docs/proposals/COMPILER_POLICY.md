@@ -2,29 +2,13 @@
 
 *Optimization Degree, Strictness and Interpreter Fallback*
 
-Status: engine-seam study, revision 4 (2026-11-01). Revision 1 was the study:
-the three axes, the tree's actual state, the gaps, the plan. **Since revision 2
-`CP-1`, `CP-2`, `CP-3` and `CP-5` are implemented**: a backend-neutral
-`CompilationPolicy` (`None`/`Basic`/`Full`, `Strict`/`Lax`,
-`Never`/`FallbackOnly`/`Always`) carried by `RuntimeConfig::compilation`, a
-capability query every backend is asked before any code is generated, the strict
-refusal as a named `CompileFailure`, and the lax ladder that discards a poisoned
-backend instance and retries at the next lower degree, booking
-`WASM.COMPILE.REDUCED_OPTIMIZATION`. Since revision 3 `CP-4`'s **core half** is
-also implemented: the ladder's decision is a pure, tested function
-(`nextCompilationAttempt`) that prefers an interpreter over a lower degree, and
-`WASM.COMPILE.INTERPRETED` has an emitter. The **backend half** of `CP-4` is
-blocked by this LibJIT build rather than merely unwritten: `jit_uses_interpreter()`
-returns **0** (measured, §4.7), so the library has no interpreter to call even if
-the trampoline existed. `CP-6` (per-function policy/tiering) remains deferred.
-
-**Revision 4 is a freshness pass, not a new finding:** §4 now describes what the
-headers actually contain instead of the pre-`CP-1` tree (the old §4 is kept as a
-labelled baseline where it is still instructive), §7.1 records the six places the
-implementation differs from the plan — including the one open item, the
-un-bumped plugin `abi_version` — and §8.3 re-cuts the test reading from
-"operated, not asserted" to what `[compilation-policy]` now pins.
-
+Status: engine-seam study, revision 4 (2026-11-01). `CP-1`, `CP-2`, `CP-3` and
+`CP-5` are implemented: a backend-neutral `CompilationPolicy` carried by
+`RuntimeConfig::compilation`, a capability query before code generation, the
+strict refusal as a named `CompileFailure`, and the lax retry ladder. `CP-4`'s
+core half is implemented; its backend half is blocked because this LibJIT build
+returns 0 from `jit_uses_interpreter()`. `CP-6` remains deferred. §4 describes
+the current headers; §7.1 records the implementation deviations.
 Audience: anyone touching the compilation seam (`ModuleInstantiator` in
 `WasmBase/WasmModuleInstance.hpp`, `WASM::Runtime` in
 `WasmBase/WasmRuntime.{hpp,cpp}`), `LibJit/LibjitModuleCompiler.cpp` /

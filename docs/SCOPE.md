@@ -2,13 +2,10 @@
 
 *What Is an Engine Gap, and What Is a Boundary*
 
-Status: policy note, revision 2 (2026-11-03; revision 1 was written on
-`cf2c6cf` and committed as `bca0d87`; revision 2 records the
-failed-instantiation retention, which closes the `linking*` boundary). It is
-the canonical record of the surfaces WasmJit deliberately does **not** own and
-of the deviations it has chosen, so that none of them is counted as an
-implementation gap.
-
+Status: policy note, revision 2 (2026-11-03). It is the canonical record of the
+surfaces WasmJit deliberately does **not** own and of the deviations it has
+chosen, so that none of them is counted as an implementation gap. The
+failed-instantiation retention closes the `linking*` boundary.
 Audience: anyone triaging a missing feature, filling in a completeness meter,
 writing a proposal note, or asking "is this engine mature yet?".
 

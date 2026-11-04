@@ -2,10 +2,10 @@
 
 *The checklist and the walkthrough*
 
-Status: how-to note, revision 3 (2026-11-03: adds §14, the production plan
-for the AsmJit and SLJIT backends, the mandatory post-mortem they must produce,
-and the candidate list for a fourth backend. Revision 2 absorbed the former
-`BACKEND_WORK_ORDER.md`.) It contains no engine behaviour of its own.
+Status: how-to note, revision 3 (2026-11-03). It is both the checklist of what a
+code generator must provide and the walkthrough of how to provide it; §14 is the
+production plan for the AsmJit and SLJIT backends and the post-mortem they must
+produce. It contains no engine behaviour of its own.
 
 This note is the **checklist** (what a code generator must provide) *and* the
 **walkthrough** (which class to subclass, which method to implement, in what

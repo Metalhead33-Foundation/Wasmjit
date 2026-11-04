@@ -2,9 +2,10 @@
 
 Status: `LF-2` cluster report (revision 1 — 2026-10-30). Cluster `L4` of
 [`CLUSTERING.md`](CLUSTERING.md) §3.1; rows `T53` (Kotlin), `T20` (Dart),
-`T86` (MoonBit) and `T70` (Scheme, Guile Hoot). Kotlin was built in **two target
-forms**; Dart in its documented standalone form; MoonBit and Guile Hoot were not
-run.
+`T86` (MoonBit) and `T70` (Scheme, Guile Hoot). Kotlin was built in two target
+forms, Dart in its documented standalone form; MoonBit and Guile Hoot were not
+run. The study found an engine GC type rule rejecting a legal `sub` annotation;
+the five-line repro is §4.
 
 | Row | Arm | Verdict |
 |---|---|---|

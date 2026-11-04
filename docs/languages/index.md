@@ -3,20 +3,13 @@
 *The `LF-1` Screen and the `LF-2` Studies*
 
 Status: study report set (revision 7 — 2026-11-04: adds the §11 ownership map
-and points the ABI amendment at `EMBEDDING_SURFACE.md` §12–16; revision 6
-pointed at §12–15; revision 5, 2026-11-03, added the cross-language ABI/interop
-amendment `LF2_ABI_INTEROP.md`; revision 4 was the `LF-2` report set). Revision
-3 was the third re-screen after `MP-1`
-gave a non-shared memory a reservation policy, which also wrote down what A3
-grades — the Kotlin shape: *load, instantiate, execute; the host import set is
-the embedder's*; revision 2 was the re-screen after the legacy-EH parser policy
-landed). The notes without an `LF2_` prefix are the **output of `LF-1`**, the
-pre-feasibility / scoping study defined in
-[`LANGUAGE_FEASIBILITY.md`](../LANGUAGE_FEASIBILITY.md) §7: they screen the whole
-canonical candidate list on three axes, cluster the candidates by shared
-blocker, record trigger conditions, write one charter per recommended
-cluster, and list what is deliberately **not** studied. The `LF2_*` notes are
-the commissioned full studies of [`CHARTERS.md`](CHARTERS.md).
+and points the ABI amendment at `EMBEDDING_SURFACE.md` §12–16). The notes
+without an `LF2_` prefix are the **output of `LF-1`**, the pre-feasibility /
+scoping study defined in [`LANGUAGE_FEASIBILITY.md`](../LANGUAGE_FEASIBILITY.md)
+§7: they screen the whole canonical candidate list on three axes, cluster the
+candidates by shared blocker, record trigger conditions, write one charter per
+recommended cluster, and list what is deliberately **not** studied. The `LF2_*`
+notes are the commissioned full studies of [`CHARTERS.md`](CHARTERS.md).
 
 **The `LF-1` notes carry no verdict.** No `LF-1` row is green, yellow or red, no
 language is declared supported or unsupported, and nothing in the screen is a

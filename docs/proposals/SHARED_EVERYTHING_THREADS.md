@@ -2,19 +2,14 @@
 
 *Implementation Notes, Spec Status, and Deliberate Deviations*
 
-Status: design note / implementation reference (revision 5 — **SET-1, SET-2,
-SET-3, SET-6 and SET-7 implemented**. The engine has `shared`
-table/global/segment annotations, shared `comptype`/heap-type encoding, and the
-working draft's `0xFE 0x4F–0x71` global/table/struct/array atomics plus
-`ref.i31_shared`; those atomics now run the GC retain/release barrier for
-reference slots (SET2). Agents are built (`THREADS.md` TH-5): an opt-in
-`ConcurrencyModel::Agents` makes the one instance concurrently callable, with a
-real waiter table and a multi-mutator-safe GC path. **SET-4 (TLS/managed
-waitqueues) and SET-5 (thread lifecycle) remain unimplemented because the
-proposal has no stable binary encoding for them** — `waitqueue`'s `0x68`
-collides with `cont` here, `thread_local` has no assigned `globaltype`
-encoding, and the component-model spawn/join builtins are still moving.)
-
+Status: design note / implementation reference (revision 5 — SET-1, SET-2,
+SET-3, SET-6 and SET-7 implemented). The engine has `shared`
+table/global/segment annotations, shared `comptype`/heap-type encoding, the
+working draft's `0xFE 0x4F–0x71` atomics and `ref.i31_shared`; the atomics run
+the GC retain/release barrier for reference slots. Agents are built: opt-in
+`ConcurrencyModel::Agents` makes the one instance concurrently callable with a
+real waiter table and a multi-mutator-safe GC path. SET-4 and SET-5 remain
+unimplemented because the proposal has no stable binary encoding for them.
 Audience: anyone touching `WasmType` (`shared`/`globaltype`), `WasmStore`,
 `WasmModuleInstance`, the GC heap/refcount, `WasmOpcode` (`0xFE` atomics),
 `WasmTrap`, or a multi-agent runtime.
