@@ -169,24 +169,11 @@ Runtime::~Runtime()
 
 std::unique_ptr<Runtime> Runtime::create(std::string_view backend, const RuntimeConfig& config)
 {
-	// The core names no backend: an empty request is only meaningful when the
-	// build has exactly one.
+	// Backend choice belongs to the embedder: refuse an unnamed request rather
+	// than silently selecting whatever happens to be registered.
 	std::string name(backend);
-	if (name.empty()) {
-		const std::vector<std::string> names = backendNames();
-		if (names.size() != 1) {
-			std::string list;
-			for (const std::string& candidate : names) {
-				if (!list.empty())
-					list += ", ";
-				list += candidate;
-			}
-			throw std::runtime_error("no backend name given and the build registers "
-					+ (names.empty() ? std::string("none") : list)
-					+ "; pass a name to Runtime::create");
-		}
-		name = names.front();
-	}
+	if (name.empty())
+		throw std::runtime_error("no backend name given; pass a name to Runtime::create");
 	return std::unique_ptr<Runtime>(new Runtime(name, createBackendByName(name), config));
 }
 

@@ -4334,6 +4334,17 @@ std::optional<ComponentFunction> ComponentRuntime::exportedFunction(
 	return componentFuncs_[found->second];
 }
 
+std::vector<std::string> ComponentRuntime::exportedFunctionNames() const
+{
+	std::vector<std::string> names;
+	names.reserve(exportedFuncs_.size());
+	for (const auto& [name, index] : exportedFuncs_) {
+		(void)index;
+		names.push_back(name);
+	}
+	return names;
+}
+
 WASM::Callable ComponentRuntime::coreFunction(std::size_t index) const
 {
 	if (index >= coreFuncs_.size())

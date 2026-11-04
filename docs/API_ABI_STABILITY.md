@@ -65,8 +65,9 @@ without a deliberate version bump**. For this milestone the frozen set is:
 | S7 | The backend seam: `ModuleInstantiator` (the four hooks a code generator implements) and `BackendSession` (the façade an embedder drives without a backend header) | [`WasmModuleInstance.hpp`](../WasmBase/WasmModuleInstance.hpp); [`WasmBackendSession.hpp`](../WasmBase/WasmBackendSession.hpp); [`WRITING_A_BACKEND.md`](WRITING_A_BACKEND.md) |
 | S8 | The embedder's invocation path: `WASM::callCallable` / `callCallableWithResults`, `HostBridge`, `nativeImport<&fn>()` | [`ABI.md`](ABI.md) "Embedder Guide"; [`WasmValue.hpp`](../WasmBase/WasmValue.hpp) |
 | S9 | The diagnostic record/id/schema contract (`wasmjit.diagnostic.v1`) | [`DIAGNOSTICS.md`](DIAGNOSTICS.md) §1 |
+| S11 | The optional libffi export precache: `ModuleCallCache`, `ComponentCallCache`, their entry records, and `ComponentInstanceHandle::exportedFunctionNames()` | [`WasmCallCache.hpp`](../WasmBase/WasmCallCache.hpp); [`WasmComponentInstance.hpp`](../WasmBase/WasmComponentInstance.hpp) |
 
-Stability here means **source and ABI compatibility for those nine surfaces
+Stability here means **source and ABI compatibility for those ten surfaces
 across one release series**, with three permitted changes: (a) additive fields
 at the end of a POD only if the size is not baked into generated code, (b) a new
 optional hook, (c) a documented deviation recorded in §9 of this note or in the
@@ -553,7 +554,7 @@ the roadmap already describes.
 
 ## 9. Where we deliberately stay loose
 
-The milestone freezes nine surfaces (§2.2); it does not freeze behaviour choices.
+The milestone freezes ten surfaces (§2.2); it does not freeze behaviour choices.
 These deviations are what make the frozen set small enough to keep.
 
 | # | Deviation | Why it is safe | What it buys |
@@ -624,14 +625,14 @@ working-tree changes), from `build/LowHanging/Test`:
 | `./WasmJit` (default suite) | **11,454 assertions / 481 test cases, all passed** | +381 assertions and 32 cases over the 2026-10-25 row: `Runtime`, the POD layout views, the backend registry/null backend, the plugin loader (build-kind and helper-export checks of `BACKEND_PLUGIN_ABI.md` §7.5/§7.7) and the promoted `BackendSession` façade (`AAS8`), the helper-trap site (`ENS7`) and sharedness validation (`SET1`). |
 | `./WasmJit '~[spec]'` | **11,014 assertions / 285 test cases, all passed** | The hand-written half is green on its own. |
 | `./WasmJit '[docs]'` | **720 assertions / 1 test case, all passed** | Unchanged. |
-| `./WasmJit '[layering]'` | **4 assertions / 1 test case, all passed** | `WasmBase/` and `WasmStub/` name no backend; the §6.5 scan is now a gate, not a grep. |
+| `./WasmJit '[layering]'` | **6 assertions / 2 test cases, all passed** | `WasmBase/` and `WasmStub/` name no backend, and the core build/package descriptors link no backend; the §6.5 scan is now a gate, not a grep. |
 | `./WasmJit '[surface]'` | **4 assertions / 1 test case, all passed** | The version macros, `WASM::versionString()` and `WASM::abiVersion()` agree. |
 | `./WasmJit '[runtime]'` | **46 assertions / 7 test cases, all passed** | Load → instantiate → call, idempotence, the named errors, the `MF-2` guard and the two-store isolation proof (`ES-2`). |
 | `./WasmJit '[backendabi]'` | **36 assertions / 4 test cases, all passed** | The POD signature/layout views match `ABI.md`'s tuple rule. |
 | `./WasmJit '[plugin]'` | **41 assertions / 8 test cases, all passed** | A real plugin loads by name; every refusal path is a named error *and* a diagnostic; the exported helper set resolves; a build-kind mismatch is refused. |
 | `./WasmJit '[concurrency]'` | **81 assertions / 14 test cases, all passed** | The model claim, the guard under a real second-thread call, and a re-entrant compiled function across threads. |
-| `./WasmJit '[tiers]'` | **210 assertions / 3 test cases, all passed** | Every header classified once (25 embedder / 17 backend / 16 internal); the umbrella matches the embedder tier; every public header has a TU. |
-| 41 per-header compile TUs (`Test/headers/*.cpp`) | compiled and linked in the same build | Every public header, and `WasmJit.hpp`, compiles standalone. |
+| `./WasmJit '[tiers]'` | **250 assertions / 3 test cases, all passed** | Every header classified once (32 embedder / 18 backend / 17 internal); the umbrella matches the embedder tier; every public header has a TU. |
+| 49 per-header compile TUs (`Test/headers/*.cpp`) | compiled and linked in the same build | Every public header, and `WasmJit.hpp`, compiles standalone. |
 | `./Test/abi-check.sh build/<config>` | **OK** — 1,801 + 829 exported symbols, 0 removed | The additive-only ABI rule (`G2`) is a command now; `Test/abi/README.md` holds the baseline and the `AAS12` superset caveat. |
 | `./Test/install-check.sh build/<config>` | **OK** — the out-of-tree consumer calls `i32`, `f64`, a multi-result tuple and `v128`; the installed backend records `NEEDED libWasmBase.so.1` | `ES-5`/`ES-7`. |
 

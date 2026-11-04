@@ -355,6 +355,10 @@ TEST_CASE("runtime: backends are selected by name", "[runtime]")
 	// A name that is neither compiled in nor loadable is a named error.
 	REQUIRE_THROWS_WITH(WASM::Runtime::create("definitely-not-a-backend"),
 			Catch::Matchers::ContainsSubstring("is unavailable"));
+
+	// Backend choice is explicit: an absent name is not a default.
+	REQUIRE_THROWS_WITH(WASM::Runtime::create(""),
+			Catch::Matchers::ContainsSubstring("pass a name to Runtime::create"));
 }
 
 TEST_CASE("runtime: one agent inside an instance call at a time", "[runtime][concurrency]")

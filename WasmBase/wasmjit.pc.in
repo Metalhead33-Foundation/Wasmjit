@@ -6,6 +6,8 @@ includedir=$${WASMJIT_PREFIX}/include
 Name: wasmjit
 Description: Embeddable WebAssembly runtime with a pluggable code generator
 Version: 1.0.0
-Libs: -L${libdir} -lWasmBase -lLibJit -lElvavena -lEuphemy -ljit
+# The core package names no backend: code generators are separate objects,
+# selected by name or loaded through WASMJIT_BACKEND_PATH.
+Libs: -L${libdir} -lWasmBase -lElvavena -lEuphemy
 Libs.private: -lhwy -ldl
 Cflags: -I${includedir} -I${includedir}/wasmjit -I${includedir}/wasmjit/internal

@@ -141,6 +141,13 @@ std::optional<ComponentFunction> ComponentInstanceHandle::exportedFunction(
 	return impl_->runtime->exportedFunction(name);
 }
 
+std::vector<std::string> ComponentInstanceHandle::exportedFunctionNames() const
+{
+	if (!impl_ || !impl_->runtime)
+		return {};
+	return impl_->runtime->exportedFunctionNames();
+}
+
 std::optional<ComponentValue> ComponentInstanceHandle::exportedValue(
 		std::string_view name) const
 {

@@ -33,6 +33,7 @@ WASMJIT_VISIBLE_BEGIN
 
 #include "WasmAgent.hpp"
 #include "WasmArtifact.hpp"
+#include "WasmCallCache.hpp"
 #include "WasmCompilationPolicy.hpp"
 #include "WasmComponentExecutor.hpp"
 #include "WasmComponentFeature.hpp"

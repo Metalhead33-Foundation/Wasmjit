@@ -2,7 +2,8 @@
 
 *`WASM::Runtime`, the Umbrella Header, Versioning, and the Include Set*
 
-Status: design note + plan (revision 26 — 2026-11-04). `Tools/Bindings/`
+Status: design note + plan (revision 27 — 2026-11-04). `WasmBase/WasmCallCache.hpp`
+adds the optional libffi export precache; `Tools/Bindings/`
 projects descriptors into direction-specific binding schemas, emits the
 documented language families (including JVM, .NET, VM-hosted and native-ABI
 targets) plus C++ adapter/typedef/source output, and derives candidate schemas
@@ -534,7 +535,7 @@ tier load-bearing, so name it now:
 
 | Tier | Purpose | Examples (current path) |
 |---|---|---|
-| **Embedder API** | What a game includes. Self-contained, no backend header, and ideally no `Elvavena`/`Euphemy` type in a signature. | `WasmRuntime.hpp` (new), `WasmArtifact.hpp`, `WasmCompilationPolicy.hpp`, `WasmModule.hpp`, `WasmModuleInstance.hpp`, `WasmValue.hpp`, `WasmTrap.hpp`, `WasmImport.hpp`, `WasmHostBridge.hpp`, `WasmNativeImport.hpp`, `WasmProfile.hpp`, `WasmDiagnostics.hpp`, `WasmAgent.hpp`, `WasmContinuation.hpp`, `WasmMemory.hpp`, `WasmTable.hpp`, `WasmExn.hpp`, `WasmString.hpp` (stringref bridge), `WasmTracing.hpp`, `WasmComponentFeature.hpp`, `WasmComponentValue.hpp`, `WasmComponentExecutor.hpp`, `WasmComponentInstance.hpp` |
+| **Embedder API** | What a game includes. Self-contained, no backend header, and ideally no `Elvavena`/`Euphemy` type in a signature. | `WasmRuntime.hpp` (new), `WasmArtifact.hpp`, `WasmCallCache.hpp`, `WasmCompilationPolicy.hpp`, `WasmModule.hpp`, `WasmModuleInstance.hpp`, `WasmValue.hpp`, `WasmTrap.hpp`, `WasmImport.hpp`, `WasmHostBridge.hpp`, `WasmNativeImport.hpp`, `WasmProfile.hpp`, `WasmDiagnostics.hpp`, `WasmAgent.hpp`, `WasmContinuation.hpp`, `WasmMemory.hpp`, `WasmTable.hpp`, `WasmExn.hpp`, `WasmString.hpp` (stringref bridge), `WasmTracing.hpp`, `WasmComponentFeature.hpp`, `WasmComponentValue.hpp`, `WasmComponentExecutor.hpp`, `WasmComponentInstance.hpp` |
 | **Backend SDK** | What a code generator includes in addition: the contract rows of [`LAYERING.md`](LAYERING.md) §4 plus the helper entry points it may call. | `WasmVMContext.hpp`, `WasmGcHeader.hpp`, `WasmType.hpp`, `WasmTypeIdentity.hpp`, `WasmOpcode.hpp`, `WasmOpcodeDispatcher.hpp`, `WasmStack.hpp`, `WasmSafety.hpp`, `wasm_atomic.hpp`, `wasm_simd_scalar.hpp` (+ `wasm_simd_vector.hpp`, `wasm_simd_ops.inc`), `wasm_f16.hpp`, `WasmBackendAbi.hpp` (the POD views), `WasmBackendRegistry.hpp`, `WasmNullInstantiator.hpp`, `wasmjit_backend.h` (the plugin descriptor) |
 | **Internal** | Not installed; may change at will. | `WasmSection.hpp`, `WasmTypeStore.hpp`, `WasmCanonicalType.hpp`, `WasmTypeRegistry.hpp`, `WasmGcHeap.hpp`, `WasmValidator.hpp`, `WasmComponent.hpp`, `WasmComponentAbi.hpp`, `WasmComponentAsync.hpp`, `WasmComponentModel.hpp`, `WasmComponentRuntime.hpp`, `WasmComponentSection.hpp`, `WasmComponentValidation.hpp`, `WasmComponentParser.inc`, `WasmDeterminism.hpp`, `WasmValidation.hpp` |
 
@@ -543,16 +544,16 @@ tier load-bearing, so name it now:
 Every header under `WasmBase/` now has a tier. The three lists are exhaustive; a
 new header must be added to one of them in the same change, and every header in
 the first two lists has a compile-only translation unit under `Test/headers/`
-(48 TUs, including the C plugin header).
+(49 TUs, including the C plugin header).
 
 | Tier | Count | Headers |
 |---|---|---|
-| **Embedder API** (installed, in `WasmJit.hpp`) | 31 | `WasmApi.hpp`, `WasmJit.hpp`, `WasmRuntime.hpp`, `WasmVersion.hpp`, `WasmArtifact.hpp`, `WasmCompilationPolicy.hpp`, `WasmModule.hpp`, `WasmModuleInstance.hpp`, `WasmValue.hpp`, `WasmTrap.hpp`, `WasmException.hpp`, `WasmImport.hpp`, `WasmHostBridge.hpp`, `WasmNativeImport.hpp`, `WasmProfile.hpp`, `WasmConcurrency.hpp`, `WasmDiagnostics.hpp`, `WasmAgent.hpp`, `WasmContinuation.hpp`, `WasmMemory.hpp`, `WasmTable.hpp`, `WasmExn.hpp`, `WasmString.hpp`, `WasmTracing.hpp`, `WasmRegistryImportResolver.hpp`, `WasmStore.hpp`, `WasmParseOptions.hpp`, `WasmComponentFeature.hpp`, `WasmComponentValue.hpp`, `WasmComponentExecutor.hpp`, `WasmComponentInstance.hpp` |
+| **Embedder API** (installed, in `WasmJit.hpp`) | 32 | `WasmApi.hpp`, `WasmJit.hpp`, `WasmRuntime.hpp`, `WasmVersion.hpp`, `WasmArtifact.hpp`, `WasmCallCache.hpp`, `WasmCompilationPolicy.hpp`, `WasmModule.hpp`, `WasmModuleInstance.hpp`, `WasmValue.hpp`, `WasmTrap.hpp`, `WasmException.hpp`, `WasmImport.hpp`, `WasmHostBridge.hpp`, `WasmNativeImport.hpp`, `WasmProfile.hpp`, `WasmConcurrency.hpp`, `WasmDiagnostics.hpp`, `WasmAgent.hpp`, `WasmContinuation.hpp`, `WasmMemory.hpp`, `WasmTable.hpp`, `WasmExn.hpp`, `WasmString.hpp`, `WasmTracing.hpp`, `WasmRegistryImportResolver.hpp`, `WasmStore.hpp`, `WasmParseOptions.hpp`, `WasmComponentFeature.hpp`, `WasmComponentValue.hpp`, `WasmComponentExecutor.hpp`, `WasmComponentInstance.hpp` |
 | **Backend SDK** (installed, not in the umbrella) | 18 | `WasmVMContext.hpp`, `WasmGcHeader.hpp`, `WasmType.hpp`, `WasmTypeIdentity.hpp`, `WasmOpcode.hpp`, `WasmOpcodeDispatcher.hpp`, `WasmStack.hpp`, `WasmSafety.hpp`, `WasmBackendAbi.hpp`, `WasmBackendRegistry.hpp`, `WasmBackendSession.hpp`, `WasmNullInstantiator.hpp`, `wasmjit_backend.h`, `wasm_atomic.hpp`, `wasm_simd_scalar.hpp`, `wasm_simd_vector.hpp`, `wasm_simd_ops.inc`, `wasm_f16.hpp` |
 | **Internal** (not installed) | 17 | `WasmSection.hpp`, `WasmTypeStore.hpp`, `WasmCanonicalType.hpp`, `WasmTypeRegistry.hpp`, `WasmGcHeap.hpp`, `WasmValidator.hpp`, `WasmValidation.hpp`, `WasmDeterminism.hpp`, `WasmComponent.hpp`, `WasmComponentAbi.hpp`, `WasmComponentAsync.hpp`, `WasmComponentModel.hpp`, `WasmComponentRuntime.hpp`, `WasmComponentSection.hpp`, `WasmComponentValidation.hpp`, `WasmComponentParser.inc`, `WasmLegacyEh.hpp` |
 
-That is **66** header files under `WasmBase/` — 63 `.hpp`, one `.h` and two
-`.inc` — which is what `[tiers]` counts (2026-11-03, `4d52031`). The lists in
+That is **67** header files under `WasmBase/` — 64 `.hpp`, one `.h` and two
+`.inc` — which is what `[tiers]` counts (2026-11-04, `WasmCallCache`). The lists in
 `Test/HeaderTierTests.cpp` are the contract; this table is their readable copy,
 so it is the copy that has to be updated when a header moves.
 
@@ -697,8 +698,9 @@ subset can.
 include/wasmjit/            # embedder tier (umbrella = wasmjit/wasmjit.hpp)
 include/wasmjit/backend/    # backend SDK tier
 lib/libWasmBase.so.<major>  # + .so symlink for the development package
-lib/libLibJit.so.<major>
-lib/pkgconfig/wasmjit.pc
+lib/libLibJit.so.<major>    # optional backend package
+lib/libwasmjit-backend-libjit.so  # dynamic-loader alias for the backend
+lib/pkgconfig/wasmjit.pc    # core only; names no backend
 ```
 
 In qmake terms that is `headers.path`, `target.path`, `QMAKE_PKGCONFIG*` and an
@@ -752,6 +754,7 @@ check. The embedding surface is what the installed `wasmjit/wasmjit.hpp` exposes
 |---|---|---|
 | Default suite (**2026-11-01**, `8c87f5f`) | **17,090 assertions in 551 cases, green** | The `ES-*`, `BP-*`, `CP-*`, `CFG-*` and multi-agent additions are additive: every earlier assertion still passes. The 2026-10-29 run (11,454 / 481) in the milestone notes is the dated baseline. |
 | `[docs]` lint | **1013 assertions / 2 cases, green** | Note shape for `docs/proposals/` **and** the note tree for all three folders (§9 of `DOCUMENTATION.md`), so this note's index row is checked too |
+| `[callcache]` (**2026-11-04**) | **18 assertions / 4 cases, green** | `ModuleCallCache` ffi calls, `v128` by value, multi-result calls and `ComponentCallCache` flat calls. |
 | `[bindings]` (**2026-11-04**) | **603 assertions / 27 cases, green** | The §12.8 tool: descriptor→schema, direction-specific module/component imports/exports (G2H/H2G/G2G), opaque reference spelling, `stringref` through every emitter, C header (compiled as C11 and C++23), Rust, TypeScript, AssemblyScript, Zig, Kotlin, MoonBit, Go, Dart, Java, C#, F#, Python, Ruby, Lua, Swift, D, Nim, Crystal, Ada, Pascal and Haskell emission, a compiled C++ adapter (call/trap/import/reference/multi-value/retain-drop), SWIG and Glue candidate validation, `VMContext*` candidate schemas, direction-aware C++ typedefs/source, non-function entry comments, producer toolchain evidence, defined-reference kind naming, exact-reference flags, GC struct/array definitions, per-toolchain compile checks, and a `wasm-opt --all-features -O2` signature comparison on five fixtures. |
 | `[runtime]` | 64 assertions / 9 cases, green | Load → instantiate → call, idempotence, named errors, the `MF-2` guard, agents, the store-scoping proof (two stores, two heaps, an artifact records its store), and the unloader (one instance destroyed, the module re-instantiated, a provisional backend's code freed twice over). |
 | `[concurrency]` | 80 assertions / 13 cases, green | The model claim, the `Single` refusal, re-entrant invocation across threads, the `MF-2` guard, the `MF-3`/`MF-4` safepoint rules and the multi-agent suite. |
@@ -760,7 +763,7 @@ check. The embedding surface is what the installed `wasmjit/wasmjit.hpp` exposes
 | `[plugin]` | 50 assertions / 9 cases, green | Load by path and by name, a real example plugin, and every refusal path (missing file, no query symbol, unknown name, descriptor ABI, core ABI, failing `create`). |
 | `[compilation-policy]` | 30 assertions / 3 cases, green | The policy vocabulary, the capability query, and the ladder's ordering (`COMPILER_POLICY.md` §8.2). |
 | `[tiers]` | 222 assertions / 3 cases, green | Every header is classified exactly once, the umbrella matches the embedder tier, and every public header has a compile-only TU (`.inc` fragments excepted). |
-| Public-header self-containment test | **Present** (2026-11-01) | **43** TUs under `Test/headers/`, enforced by `[tiers]`. |
+| Public-header self-containment test | **Present** (2026-11-04) | **49** TUs under `Test/headers/`, enforced by `[tiers]`. |
 | Install / out-of-tree consumer test | **Present** (2026-10-29) | `Test/install-check.sh`: `make install INSTALL_ROOT=...`, then a consumer built through `wasmjit.pc` runs. |
 | Symbol-hygiene check | **2,629 exported symbols, 1,859 strong** (2026-11-01, `build/Desktop-Debug`) | `-fvisibility=hidden` + `WASMJIT_API`; the remaining count is the header-declared surface. `Test/abi-check.sh` freezes the **1,859** strong symbols (`Test/abi/libWasmBase.exports`) and fails on a removal. |
 | ABI diff (`abidiff`) | **Optional** | The mandatory check is the `nm -D` symbol baseline (`Test/abi/*.exports`, `Test/abi-check.sh`), which needs no libabigail. `ABI_REFERENCE=<previous .so>` adds `abidiff` when the tool is installed. |
@@ -1162,6 +1165,26 @@ schema itself is unchanged. A `--frontend-schema` result is labelled
 candidate-derived and is not authoritative until checked against a module or
 component. The descriptor schema remains the contract.
 
+
+### 12.9 Optional libffi call cache
+
+`WasmBase/WasmCallCache.hpp` is an optional convenience layer for embedders
+that want name lookup plus libffi invocation instead of writing their own
+`Callable` casts:
+
+- `ModuleCallCache` walks a `ModuleInstance`'s function exports once and stores
+  a prepared `ffi_cif` per export. The argument vector starts with the
+  `VMContext*` cell, followed by the Wasm parameters; a multi-result function
+  gets the trailing result-buffer pointer. Scalar results are first received in
+  an `ffi_arg` word and narrowed into the caller's storage, because libffi
+  stores word-sized results for types smaller than a word.
+- `ComponentCallCache` walks `ComponentInstanceHandle::exportedFunctionNames()`
+  and caches the flat core signature of each component function. Its invocation
+  goes through `ComponentFunction::call` (the component runtime's flat-value
+  entry point) rather than a raw `ffi_call`; indirect-parameter/result functions
+  are left to the structured component API.
+- Both caches borrow the instance, own only metadata, and rethrow a pending trap
+  through `checkTrap()`. They are not required by the runtime or by any backend.
 
 ## 13. Native C++ objects, C structs, and the GC boundary
 

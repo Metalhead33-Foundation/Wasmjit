@@ -46,6 +46,7 @@ SOURCES += \
         WasmBackendRegistry.cpp \
         WasmCompilationPolicy.cpp \
         WasmComponent.cpp \
+        WasmCallCache.cpp \
         WasmComponentInstance.cpp \
         WasmComponentRuntime.cpp \
         WasmComponentValidation.cpp \
@@ -84,6 +85,7 @@ HEADERS += \
     WasmBackendAbi.hpp \
     WasmBackendRegistry.hpp \
     WasmArtifact.hpp \
+    WasmCallCache.hpp \
     WasmComponent.hpp \
     WasmComponentExecutor.hpp \
     WasmComponentFeature.hpp \

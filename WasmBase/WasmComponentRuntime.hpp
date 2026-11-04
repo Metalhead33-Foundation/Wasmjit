@@ -111,6 +111,8 @@ public:
 
 	/** \brief Looks up an exported component function by name. \param name Export name. \return Function descriptor when the export exists and is callable; otherwise nullopt. */
 	std::optional<ComponentFunction> exportedFunction(std::string_view name) const;
+	/** \brief Lists every exported component function name. \return Function export names; order is unspecified. */
+	std::vector<std::string> exportedFunctionNames() const;
 	/** \brief Retrieves an instantiated core function by flattened index. \param index Core function index. \return Callable descriptor for that core function. */
 	WASM::Callable coreFunction(std::size_t index) const;
 	/** \brief Retrieves a core linear memory by flattened index. \param index Core memory index. \return Non-owning memory pointer, or nullptr if unavailable. */

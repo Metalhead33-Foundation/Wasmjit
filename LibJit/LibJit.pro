@@ -28,12 +28,21 @@ QMAKE_LFLAGS += -Wl,--no-undefined
 # Install the code generator next to the core (docs/EMBEDDING_SURFACE.md ES-5).
 isEmpty(PREFIX): PREFIX = /usr/local
 target.path = $$PREFIX/lib
-INSTALLS += target
+
+# `Runtime::create("libjit")` in an embedder that links only the core finds the
+# backend through the plugin ABI. The actual image stays `libLibJit.so.<major>`
+# so in-tree builds and the existing link-time path keep working; this alias is
+# the name the dynamic loader searches for.
+QMAKE_POST_LINK += ln -f -s $(TARGET) $$OUT_PWD/libwasmjit-backend-libjit.so
+plugin.files = $$OUT_PWD/libwasmjit-backend-libjit.so
+plugin.path = $$PREFIX/lib
+INSTALLS += target plugin
 
 # Avoid build errors with no files:
 SOURCES += \
         LibJitContext.cpp \
         LibJitBackend.cpp \
+        LibJitPlugin.cpp \
         LibJitTypeTranslation.cpp \
         LibjitModuleCompiler.cpp \
         LibjitOpcodeDispatcher.cpp

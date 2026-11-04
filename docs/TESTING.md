@@ -1016,7 +1016,8 @@ because the rule is map ↔ headings rather than a fixed section count
 [`LAYERING.md`](LAYERING.md) §2/§6 without relying on a reviewer's grep: it scans
 every `.hpp`/`.cpp`/`.inc` under `WasmBase/` and `WasmStub/` for a backend name,
 header, type or API (`libjit`, `asmjit`, `sljit`, `jit_type`, `jit_value`,
-`\bJIT\b`, …) and fails on the first hit. The expected result is **empty**;
+`\bJIT\b`, …) and fails on the first hit. It also scans `WasmBase.pro` and
+`wasmjit.pc.in` for backend link flags. The expected result is **empty**;
 `LAYERING.md` §8 records the exemption that used to exist and why the note behind
 it was renamed away.
 
@@ -1089,6 +1090,7 @@ schema:
 | `[compilation-policy]` | `Test/ConfigurationTests.cpp` | The compilation policy (`COMPILER_POLICY.md` `CP-1`…`CP-5`): the vocabulary, the capability refusal, `Strict` vs `Lax` on the `F1` shape, the regression record and the achieved level |
 | `[branch-hint]` | `Test/BranchHintTests.cpp` | The branch-hinting seam (`SMALL_PROPOSALS.md` §4): the backend-neutral lookup (`setBranchHints`/`branchHintAt` — exact hit, between, unknown byte, cleared) and that a hinted module still computes the same results |
 | `[mem-provider]` | `Test/MemoryProviderTests.cpp` | The host-chosen allocation policy for linear memory (`MEMORY_PROVIDER.md` MP-1): the default policy's growth and budget behaviour, a reserved memory's stable base and verbatim maximum, its named refusal of an unbounded memory, a shared memory ignoring the policy, and the store policy reaching the memories a module declares |
+| `[callcache]` | `Test/CallCacheTests.cpp` | The optional libffi precache: module export `ffi_cif` calls, multi-result buffers and component flat calls. |
 | `[bindings]` | `Test/BindingSchemaTests.cpp` | The `EMBEDDING_SURFACE.md` §12.8 tool: core-module and component descriptor→schema for G2H/H2G/G2G, component function/record/type projection with direction-specific G2H/H2G/G2G imports/exports and Canonical ABI flat signatures, opaque reference spelling including a hand-built `stringref` fixture, C/C++/Rust/TypeScript/AssemblyScript/Zig/Kotlin/MoonBit/Go/Dart/Java/C#/F#/Python/Ruby/Lua/Swift/D/Nim/Crystal/Ada/Pascal/Haskell emission, a compiled C++ adapter exercising call/trap/import/reference/multi-value/retain-drop, direction-aware C++ typedef/source generation (g2h import stubs, h2g pointer loader), SWIG and Glue candidate-signature validation and `VMContext*` candidate schemas, non-function entry comments, producer toolchain evidence, a `wasm-tools component wit --json` name/type cross-check, GC struct/array definitions, per-toolchain compile checks including C and C++ compilation of the plain C header, and a `wasm-opt` post-optimization signature comparison across five fixtures |
 
 The plugin fixture is `Test/ExampleBackend/ExampleBackend.pro`, a shared library
@@ -1136,7 +1138,8 @@ any tool it cannot find:
 
 ## Installing and the out-of-tree consumer
 
-`WasmBase` and `LibJit` install headers, libraries and `wasmjit.pc`
+`WasmBase` installs the headers, core library and `wasmjit.pc`;
+`LibJit` installs its backend library and loader alias separately
 ([`EMBEDDING_SURFACE.md`](EMBEDDING_SURFACE.md) `ES-5`). `Test/install-check.sh`
 proves it end to end:
 
@@ -1147,9 +1150,10 @@ proves it end to end:
 It runs `make install INSTALL_ROOT=<root> PREFIX=/usr/local`, copies the two
 vendored MhLib libraries into the prefix (they do not install themselves yet),
 then builds `Test/consumer/Consumer.cpp` through
-`pkg-config --cflags --libs wasmjit` and runs it. The consumer includes only
-`<wasmjit/WasmJit.hpp>`, links only through the `.pc`, calls an export and exits
-0.
+`pkg-config --cflags --libs wasmjit` and runs it. The core `.pc` names no
+backend; the script points `WASMJIT_BACKEND_PATH` at the installed backend
+directory, so `Runtime::create("libjit")` loads
+`libwasmjit-backend-libjit.so` at runtime, then calls an export and exits 0.
 
 Two properties of the installed surface are easy to forget:
 

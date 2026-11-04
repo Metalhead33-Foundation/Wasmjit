@@ -116,9 +116,9 @@ struct RuntimeConfig {
 class WASMJIT_API Runtime
 {
 public:
-	//! Selects a backend by name (docs/BACKEND_PLUGIN_ABI.md BP-2/BP-3). An empty
-	//! name is legal only when exactly one backend is registered.
-	/** \brief Creates a runtime using a named registered or loadable backend. \param backend Backend name; empty is allowed only when exactly one backend is registered. \param config Runtime creation settings. \return Owning runtime pointer. \throws std::exception if backend selection or creation fails. */
+	//! Selects a backend by explicit name (docs/BACKEND_PLUGIN_ABI.md BP-2/BP-3).
+	//! The empty name is refused: choosing a backend is the embedder's decision.
+	/** \brief Creates a runtime using a named registered or loadable backend. \param backend Backend name; must be non-empty. \param config Runtime creation settings. \return Owning runtime pointer. \throws std::exception if backend selection or creation fails. */
 	static std::unique_ptr<Runtime> create(std::string_view backend,
 			const RuntimeConfig& config = {});
 

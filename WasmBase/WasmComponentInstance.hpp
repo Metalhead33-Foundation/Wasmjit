@@ -137,6 +137,8 @@ public:
 
 	/** \brief Looks up an exported component function. \param name Export name. \return Callable descriptor, or nullopt when absent. */
 	std::optional<ComponentFunction> exportedFunction(std::string_view name) const;
+	/** \brief Lists every exported component function name. \return Function export names; order is unspecified. */
+	std::vector<std::string> exportedFunctionNames() const;
 	/** \brief Looks up an exported value. \param name Export name. \return Value copy, or nullopt when absent. */
 	std::optional<ComponentValue> exportedValue(std::string_view name) const;
 	/** \brief Looks up an exported instance bag. \param name Export name. \return Bag copy, or nullopt when absent. */

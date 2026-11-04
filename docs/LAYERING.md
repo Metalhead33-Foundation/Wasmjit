@@ -2,9 +2,10 @@
 
 *What `WasmBase/` May Know, and What Only a Backend May*
 
-Status: policy note (revision 2 — 2026-10-29). It records that `WasmBase/` is
+Status: policy note (revision 3 — 2026-11-04). It records that `WasmBase/` is
 backend-agnostic, the vocabulary for talking about a backend in core code, and
-the automated `[layering]` check that enforces the rule.
+the automated `[layering]` check that enforces the rule, including the core
+build/package descriptors and their link flags.
 Audience: anyone editing `WasmBase/`, adding or filling in a backend, or writing
 a comment anywhere on the loader / instantiator / codegen path.
 
@@ -132,7 +133,9 @@ case-insensitive.
 
 The check is enforced by the `[layering]` test (`Test/LayeringTests.cpp`), which
 scans `WasmBase/` for the same vocabulary on every suite run, so drift fails the
-default run instead of waiting for a reviewer's grep.
+default run instead of waiting for a reviewer's grep. The same test also scans
+`WasmBase/WasmBase.pro` and `WasmBase/wasmjit.pc.in` for backend names and
+`-l` flags, so a backend cannot quietly become a core link dependency.
 
 That grep cannot catch the one rule that is not about names: the core must not
 implement an interpreter (§4). A decode-and-execute loop in `WasmBase/` is a
@@ -168,6 +171,12 @@ five citations of a backend-named diagnosis note. The note is now
 check is **empty**; `Test/LayeringTests.cpp` (`[layering]`) enforces it on every
 suite run. The same pass removed the stray `libSljit.so*` files that had been
 sitting in `Sljit/`, outside `build/`.
+
+Layering follow-up, 2026-11-04: `wasmjit.pc` is core-only (`-lWasmBase`,
+`-lElvavena`, `-lEuphemy`), and the executing backend is packaged as
+`libwasmjit-backend-libjit.so`. The out-of-tree consumer links no backend and
+loads it through `WASMJIT_BACKEND_PATH`; the `[layering]` test also guards the
+core `.pro` and `.pc` against reintroducing a `-l` backend dependency.
 
 ## 8. Deliberate tensions and waivers
 

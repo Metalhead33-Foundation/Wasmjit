@@ -69,6 +69,23 @@ std::vector<std::string> findMatches(const std::filesystem::path& directory,
 // citation waiver) without relying on a reviewer's grep. The core must not name,
 // include or describe a backend; `WasmStub/` is a non-compiling backend and must
 // not acquire a code generator's vocabulary either.
+TEST_CASE("the core build and package descriptors name no backend",
+		"[layering]")
+{
+	const std::filesystem::path root = std::filesystem::path(WASM_TESTSUITE_SOURCE_DIR)
+			/ "..";
+	const std::regex backendToken(
+			"\\b(?:LibJit|libjit|Asmjit|asmjit|Sljit|sljit)\\b"
+			"|-(?:lLibJit|lAsmjit|lSljit|ljit)\\b",
+			std::regex::ECMAScript | std::regex::icase);
+
+	for (const char* file : { "WasmBase/WasmBase.pro", "WasmBase/wasmjit.pc.in" }) {
+		INFO("file: " << file);
+		const std::string text = readTextFile(root / file);
+		REQUIRE_FALSE(std::regex_search(text, backendToken));
+	}
+}
+
 TEST_CASE("WasmBase names no backend", "[layering]")
 {
 	const std::filesystem::path root = std::filesystem::path(WASM_TESTSUITE_SOURCE_DIR)

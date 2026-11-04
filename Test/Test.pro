@@ -153,7 +153,8 @@ SOURCES += main.cpp \
     BranchHintTests.cpp \
     ../Tools/Bindings/BindingSchema.cpp \
     ../Tools/Bindings/frontend/cpp/CppFrontend.cpp \
-    BindingSchemaTests.cpp
+    BindingSchemaTests.cpp \
+    CallCacheTests.cpp
 HEADERS +=  \
     helper.hpp \
     Diagnose.hpp \

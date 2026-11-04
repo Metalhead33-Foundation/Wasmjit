@@ -242,7 +242,7 @@ each with its state, what pinned it, and what a triage row may cite. States are
 | `RG3` | Hook/dispatch mechanism | **Pinned** | `ABI.md` "Native (host) function imports" / "External host adapter", `WasmHostBridge.hpp`, `WasmNativeImport.hpp`, `proposals/JS_INTEGRATION.md` | `[runtime]` host-import fixtures, `[spec]` native-import scripts, the `HostBridge` probe in `Test/main.cpp` |
 | `RG4` | Memory model | **Pinned** (one recorded limitation, §5.4) | `proposals/MULTI_MEMORY.md`, `proposals/THREADS.md`, `SAFETY.md` §2.3, `ABI.md` "Linear memory ownership" | multi-memory and shared-memory spec scripts, `[concurrency]` |
 | `RG5` | Embedding API | **Pinned** | `EMBEDDING_SURFACE.md` (`ES-1…ES-7` all done), `WasmJit.hpp` umbrella, `WasmVersion.hpp` | `[runtime]`, `[surface]`, `install-check.sh`, `Test/consumer/` |
-| `RG6` | Breaking-change detection | **Pinned** | `Test/abi-check.sh` baseline, `install-check.sh`, `[tiers]` (48 compile TUs), `[layering]`, `[docs]`, `[headerdoc]` | all of the above, green today |
+| `RG6` | Breaking-change detection | **Pinned** | `Test/abi-check.sh` baseline, `install-check.sh`, `[tiers]` (49 compile TUs), `[layering]`, `[docs]`, `[headerdoc]` | all of the above, green today |
 
 ### 5.1 `RG1` — calling convention and ABI
 
@@ -502,7 +502,7 @@ assertions / 551 cases** on 2026-11-01 (`8c87f5f`).
 | `[runtime]` | `./Test/WasmJit '[runtime]'` | **46 assertions / 7 cases** | create/load/instantiate/call, per-runtime stores, `null` through the seam, name-based selection, one-agent-per-call, diagnostics inheritance |
 | `[surface]` | `./Test/WasmJit '[surface]'` | **4 assertions / 1 case** | the version identity an embedder compiles against agrees with the runtime |
 | `[tiers]` | `./Test/WasmJit '[tiers]'` | **210 assertions / 3 cases** | every public header has one tier and one compile-only TU (25 embedder / 17 backend / 16 internal) |
-| `[layering]` | `./Test/WasmJit '[layering]'` | **4 assertions / 1 case** | the vocabulary check runs in the default suite |
+| `[layering]` | `./Test/WasmJit '[layering]'` | **6 assertions / 2 cases** | the vocabulary check and the core build/package-link check run in the default suite |
 | `[docs]` | `./Test/WasmJit '[docs]'` | **839 assertions / 2 cases** | every proposal note keeps the documented structure, and every note keeps its place in the note tree |
 | `[headerdoc]` | `./Test/WasmJit '[headerdoc]'` | **6 assertions / 3 cases** | the header-comment policy |
 | `[multiagent]` | `./Test/WasmJit '[multiagent]'` | **51 assertions / 6 cases** | the opt-in `Agents` model behind `RG2`'s thread row |

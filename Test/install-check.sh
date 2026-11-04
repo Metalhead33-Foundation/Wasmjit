@@ -18,13 +18,19 @@ rm -rf "$root"
 mkdir -p "$root"
 
 cd "$build"
+# The generated Makefiles can carry an argv[0] rewritten to the editor binary;
+# force qmake's install mode explicitly so the scratch install is not done by
+# launching the editor once per header.
 env MAKE=/usr/bin/make /usr/bin/make install QMAKE=/usr/bin/qmake6 \
+    QINSTALL="/usr/bin/qmake6 -install qinstall" \
+    QINSTALL_PROGRAM="/usr/bin/qmake6 -install qinstall -exe" \
     INSTALL_ROOT="$root" PREFIX="$prefix" > "$root/install.log" 2>&1
 
 installed="$root$prefix"
 test -f "$installed/include/wasmjit/WasmJit.hpp"
 test -f "$installed/include/Elvavena/Io/ElvIoDevice.hpp"
 test -f "$installed/lib/pkgconfig/wasmjit.pc"
+test -f "$installed/lib/libwasmjit-backend-libjit.so"
 
 # ── Exactly one core image (docs/BACKEND_PLUGIN_ABI.md §7) ─────────────────
 # A static archive of the core would let a backend or plugin embed a second
@@ -48,6 +54,9 @@ fi
 cp -a "$build"/extern/MhLib/Elvavena/libElvavena.so* "$installed/lib/"
 cp -a "$build"/extern/MhLib/Euphemy/libEuphemy.so* "$installed/lib/"
 
+# `wasmjit.pc` describes the core only. The consumer links no backend: the
+# `libjit` name is resolved at runtime from the installed plugin alias through
+# `WASMJIT_BACKEND_PATH`.
 PKG_CONFIG_PATH="$installed/lib/pkgconfig" \
 PKG_CONFIG_SYSROOT_DIR="$root" \
     c++ -std=c++2a "$source_dir/Test/consumer/Consumer.cpp" \
@@ -63,9 +72,9 @@ PKG_CONFIG_SYSROOT_DIR="$root" \
 abi_module="$root/consumer_abi.wasm"
 if command -v wat2wasm >/dev/null 2>&1; then
     wat2wasm "$source_dir/Test/consumer/consumer_abi.wat" -o "$abi_module"
-    "$root/consumer" "$abi_module"
+    WASMJIT_BACKEND_PATH="$installed/lib" "$root/consumer" "$abi_module"
 else
     echo "install-check: wat2wasm not found; the ES-7 coverage is skipped" >&2
-    "$root/consumer"
+    WASMJIT_BACKEND_PATH="$installed/lib" "$root/consumer"
 fi
 echo "install-check: OK (out-of-tree consumer linked through wasmjit.pc and ran)"
