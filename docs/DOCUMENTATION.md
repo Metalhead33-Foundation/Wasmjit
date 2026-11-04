@@ -1,4 +1,6 @@
-# Documentation — Doxygen Style in the Headers, and the Note Tree {#doc_documentation}
+# Documentation {#doc_documentation}
+
+*Doxygen Style in the Headers, and the Note Tree*
 
 Status: policy note (revision 3 — 2026-11-01: a freshness pass. §8's "0
 undocumented declarations" was not true of the strict pass and is replaced by the

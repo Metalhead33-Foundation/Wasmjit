@@ -1,4 +1,6 @@
-# API/ABI Stability — The Milestone, and How Close We Are {#doc_api_abi_stability}
+# API/ABI Stability {#doc_api_abi_stability}
+
+*The Milestone, and How Close We Are*
 
 Status: **milestone met 2026-10-29** (revision 4 — 2026-10-30 — re-measures the
 suite at `5c3d194` and records the `G3` re-check performed by the combined

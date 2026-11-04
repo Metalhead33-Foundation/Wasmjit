@@ -1,4 +1,6 @@
-# Function References (Typed Function References) — Implementation Notes, Spec Status, and Deliberate Deviations {#prop_function_references}
+# Function References (Typed Function References) {#prop_function_references}
+
+*Implementation Notes, Spec Status, and Deliberate Deviations*
 
 Status: design note / implementation reference (revision 5 — FR-1…FR-8 are
 closed: typed references are stored in typed tables and globals, `call_ref` /

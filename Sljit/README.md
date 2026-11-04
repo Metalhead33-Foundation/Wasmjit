@@ -1,4 +1,6 @@
-# `Sljit/` — the provisional second backend
+# `Sljit/`
+
+*The provisional second backend*
 
 This directory holds a **working but deliberately provisional** SLJIT-backed
 code generator. It is the second implementation of the compilation seam and the

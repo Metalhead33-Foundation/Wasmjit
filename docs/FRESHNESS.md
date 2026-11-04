@@ -1,4 +1,6 @@
-# Documentation Freshness — Keeping the Notes in Step with the Tree {#doc_freshness}
+# Documentation Freshness {#doc_freshness}
+
+*Keeping the Notes in Step with the Tree*
 
 Status: policy note (revision 1 — 2026-11-01, written on `8c87f5f` after a sweep
 that found the §4 snapshots of the two engine-seam studies still describing the

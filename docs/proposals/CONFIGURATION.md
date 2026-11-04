@@ -1,4 +1,6 @@
-# Engine Configuration and Budgets — The Hardcoded Values, What Became a Knob, and the Budget Model {#prop_configuration}
+# Engine Configuration and Budgets {#prop_configuration}
+
+*The Hardcoded Values, What Became a Knob, and the Budget Model*
 
 Status: engine-seam study, revision 4 (2026-11-01). Revision 1 was the study:
 it inventoried every value in the tree that a host might want to choose,

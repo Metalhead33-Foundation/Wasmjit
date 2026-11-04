@@ -1,4 +1,6 @@
-# The `LF-2` Charters — Five Proposed Commissions {#lf_charters}
+# The `LF-2` Charters {#lf_charters}
+
+*Five Proposed Commissions*
 
 Status: charters and their reports (revision 2 — 2026-10-30: all five were
 **approved in one batch** by the repository owner's commission, which is the

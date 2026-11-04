@@ -1,4 +1,6 @@
-# Flexible Vectors — Implementation Notes, Spec Status, and Deliberate Deviations {#prop_flexible_vectors}
+# Flexible Vectors {#prop_flexible_vectors}
+
+*Implementation Notes, Spec Status, and Deliberate Deviations*
 
 Status: design note / implementation reference (revision 2 — the upstream
 proposal now has a binary draft, but its lane prefixes are already core

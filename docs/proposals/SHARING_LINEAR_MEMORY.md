@@ -1,4 +1,6 @@
-# One Memory, Many Modules — Sharing a Linear Memory Between Instances {#prop_sharing_linear_memory}
+# One Memory, Many Modules {#prop_sharing_linear_memory}
+
+*Sharing a Linear Memory Between Instances*
 
 Status: engine-seam study, revision 3 (2026-11-01, `8c87f5f`). It answers one
 question — **can a large, monolithic module and a set of small scripts share one

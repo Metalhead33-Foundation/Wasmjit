@@ -1,4 +1,6 @@
-# Wasm Language Support — Pre-Feasibility, Full Feasibility, and the Entry-Gate Readiness Audit {#doc_language_feasibility}
+# Wasm Language Support {#doc_language_feasibility}
+
+*Pre-Feasibility, Full Feasibility, and the Entry-Gate Readiness Audit*
 
 Status: process definition / study charter (revision 5 — 2026-10-30: `LF-2` has
 been **run** and its reports are the `LF2_*` notes in

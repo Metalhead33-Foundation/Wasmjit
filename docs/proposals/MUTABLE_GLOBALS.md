@@ -1,4 +1,6 @@
-# Import/Export of Mutable Globals — Implementation Notes, Spec Status, and Deliberate Deviations {#prop_mutable_globals}
+# Import/Export of Mutable Globals {#prop_mutable_globals}
+
+*Implementation Notes, Spec Status, and Deliberate Deviations*
 
 Status: design note / implementation reference (revision 3 — MG-1…MG-5
 implemented: imported globals resolve, mutable imports alias the exporter, and

@@ -1,4 +1,6 @@
-# Readiness Audit — a Second Code Generator, and the Language-Study Entry Gate {#doc_readiness_audit}
+# Readiness Audit {#doc_readiness_audit}
+
+*A Second Code Generator, and the Language-Study Entry Gate*
 
 Status: **audit performed 2026-10-30** (revision 1) on branch `LibjitDispatcher`
 at `5c3d194`; `master` (`8fb955d`) was an ancestor at the time, and the rows in

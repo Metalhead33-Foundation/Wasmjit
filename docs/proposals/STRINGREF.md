@@ -1,4 +1,6 @@
-# Reference-Typed Strings (`stringref`) — Implementation Notes, Spec Status, and Deliberate Deviations {#prop_stringref}
+# Reference-Typed Strings (`stringref`) {#prop_stringref}
+
+*Implementation Notes, Spec Status, and Deliberate Deviations*
 
 Status: design note / implementation reference (revision 7 — the value types,
 section 14, `string.const`, the core string instructions, the full

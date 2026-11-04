@@ -1,4 +1,6 @@
-# The Clustering Map — One Study per Blocker {#lf_clustering}
+# The Clustering Map {#lf_clustering}
+
+*One Study per Blocker*
 
 Status: part of the `LF-1` output (revision 2 — 2026-10-30: re-read against the third
 re-screen of [`TRIAGE.md`](TRIAGE.md) §6.12. Seven rows moved one friction band, in

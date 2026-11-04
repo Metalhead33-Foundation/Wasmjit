@@ -1,4 +1,6 @@
-# Legacy Exception Handling (`try`/`catch`) — Compatibility Notes, Encodings, and the Cost of Admission {#prop_legacy_exceptions}
+# Legacy Exception Handling (`try`/`catch`) {#prop_legacy_exceptions}
+
+*Compatibility Notes, Encodings, and the Cost of Admission*
 
 Status: design note / compatibility study (revision 5 — 2026-10-30: `LE-8` is
 **implemented**, so the rewrite now translates every shape of the superseded

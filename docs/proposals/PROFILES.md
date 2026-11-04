@@ -1,4 +1,6 @@
-# Language Profiles — Implementation Notes, Spec Status, and Deliberate Deviations {#prop_profiles}
+# Language Profiles {#prop_profiles}
+
+*Implementation Notes, Spec Status, and Deliberate Deviations*
 
 Status: design note / implementation reference (revision 3 — PR-1…PR-5 are
 implemented: a marker/configuration model, the scalar gate, and the

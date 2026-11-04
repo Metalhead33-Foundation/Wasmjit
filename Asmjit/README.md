@@ -1,4 +1,6 @@
-# `Asmjit/` — experimental AsmJit backend
+# `Asmjit/`
+
+*Experimental AsmJit backend*
 
 This directory contains an experimental, deliberately limited WebAssembly
 backend. It implements the four `ModuleInstantiator` hooks and executes an

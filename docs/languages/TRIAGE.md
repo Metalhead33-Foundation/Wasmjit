@@ -1,4 +1,6 @@
-# The `LF-1` Triage — Screening the Whole Candidate List {#lf_triage}
+# The `LF-1` Triage {#lf_triage}
+
+*Screening the Whole Candidate List*
 
 Status: pre-feasibility / scoping study (revision 3 — 2026-10-30: **re-screened
 twice more** after the engine moved — `LE-9` closed the mixed exception-form

@@ -1,4 +1,6 @@
-# Tail Calls — Implementation Notes, Spec Status, and Deliberate Deviations {#prop_tailcalls}
+# Tail Calls {#prop_tailcalls}
+
+*Implementation Notes, Spec Status, and Deliberate Deviations*
 
 Status: design note / implementation reference (revision 5 — **TC-1..TC-5
 implemented: Phase A/B, the C2 self-tail-call fast path, the generalized

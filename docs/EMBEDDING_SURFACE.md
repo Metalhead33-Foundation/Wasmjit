@@ -1,4 +1,6 @@
-# The Embedding Surface — `WASM::Runtime`, the Umbrella Header, Versioning, and the Include Set {#doc_embedding_surface}
+# The Embedding Surface {#doc_embedding_surface}
+
+*`WASM::Runtime`, the Umbrella Header, Versioning, and the Include Set*
 
 Status: design note + plan (revision 6 — 2026-11-04: adds §16, the
 engine/embedder/tooling/language ownership register, and applies it to the open

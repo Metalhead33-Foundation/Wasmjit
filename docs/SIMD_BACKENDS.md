@@ -1,4 +1,6 @@
-# SIMD Lowering Across Backends — Research Note: LibJIT, SLJIT, AsmJit, and the Native-Helper Middle Path {#doc_simd_backends}
+# SIMD Lowering Across Backends {#doc_simd_backends}
+
+*Research Note: LibJIT, SLJIT, AsmJit, and the Native-Helper Middle Path*
 
 Status: research note (revision 3 — records that the current implementation path
 is LibJIT only while AsmJit and SLJIT remain deferred-but-planned; the decision

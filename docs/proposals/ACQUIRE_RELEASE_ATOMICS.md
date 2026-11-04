@@ -1,4 +1,6 @@
-# Acquire-Release Atomics — Implementation Notes, Spec Status, and Deliberate Deviations {#prop_acquire_release_atomics}
+# Acquire-Release Atomics {#prop_acquire_release_atomics}
+
+*Implementation Notes, Spec Status, and Deliberate Deviations*
 
 Status: design note / implementation reference (revision 3 — **ARA-1…ARA-3
 implemented, including the two-agent observation**. `MemArg` bit 4 + `u8`

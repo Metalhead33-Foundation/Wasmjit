@@ -1,4 +1,6 @@
-# Thread Safety — Guest, Host, and the Boundary Between Them {#doc_threadsafety}
+# Thread Safety {#doc_threadsafety}
+
+*Guest, Host, and the Boundary Between Them*
 
 Status: policy / reference note (revision 4 — records the **one instance per
 module** rule as a *design fact* rather than a target, the accepted concurrency

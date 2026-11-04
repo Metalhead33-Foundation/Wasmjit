@@ -1,4 +1,6 @@
-# Proposal Notes — Meta-Document: the Shape of `docs/proposals/*.md` {#doc_proposals}
+# Proposal Notes {#doc_proposals}
+
+_Meta-Document: the Shape of `docs/proposals/*.md`_
 
 Status: process guide / structural specification (revision 2 — re-cut to match the
 notes as they actually are, and rewritten in the shape it prescribes).
@@ -35,8 +37,10 @@ gaps → where we deliberately deviate → plan → test survey → references.
 
 ### 2.1 Front matter (before the numbered sections)
 
-- A title `# <Proposal Name> — Implementation Notes, Spec Status, and
-  Deliberate Deviations`.
+- A title `# <Proposal Name> {#prop_<slug>}`, followed on the next line by an
+  italic subtitle — canonically `*Implementation Notes, Spec Status, and
+  Deliberate Deviations*`. The subtitle is ordinary prose, not part of the
+  heading, so the page title stays short in the generated table of contents.
 - `Status: design note / implementation reference (revision N — <what changed>).`
 - `Audience: anyone touching <files/classes>.`
 - One sentence placing the note in the family, e.g. "Follows the same split as

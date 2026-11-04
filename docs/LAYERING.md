@@ -1,4 +1,6 @@
-# Backend Layering — What `WasmBase/` May Know, and What Only a Backend May {#doc_layering}
+# Backend Layering {#doc_layering}
+
+*What `WasmBase/` May Know, and What Only a Backend May*
 
 Status: policy note (revision 2 — 2026-10-29: the last non-empty citation was
 renamed away and the check became an automated test; revision 1 recorded the rule

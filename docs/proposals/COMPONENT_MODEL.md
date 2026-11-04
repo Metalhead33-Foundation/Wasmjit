@@ -1,4 +1,6 @@
-# WIT and the Component Model — Spec Status, Design Space, and a QVM-Style Scope {#prop_component_model}
+# WIT and the Component Model {#prop_component_model}
+
+*Spec Status, Design Space, and a QVM-Style Scope*
 
 Status: proposal + implementation note (revision 18 — **the state of the model as
 of 2026-11-03**). `CM-0`…`CM-8` are complete: the parser decodes every

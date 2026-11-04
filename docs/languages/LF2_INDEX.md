@@ -1,4 +1,6 @@
-# The `LF-2` Report Set — Full Feasibility Studies {#lf2_index}
+# The `LF-2` Report Set {#lf2_index}
+
+*Full Feasibility Studies*
 
 Status: full-study report set (revision 2 — 2026-11-03: adds the cross-language
 ABI/interop amendment `LF2_ABI_INTEROP.md`; revision 1 was 2026-10-30). This

@@ -1,4 +1,6 @@
-# Custom Page Sizes — Implementation Notes, Spec Status, and Deliberate Deviations {#prop_custom_page_sizes}
+# Custom Page Sizes {#prop_custom_page_sizes}
+
+*Implementation Notes, Spec Status, and Deliberate Deviations*
 
 Status: design note / implementation reference (revision 2 — CPS-1…CPS-4 are
 implemented: both page sizes decode, allocation/growth/matching use the per

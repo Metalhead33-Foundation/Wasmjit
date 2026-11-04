@@ -1,4 +1,6 @@
-# The Memory Provider — What Runtimes Demand of the Host, What the Engine Already Offers, and Whether to Open the Seam {#prop_memory_provider}
+# The Memory Provider {#prop_memory_provider}
+
+*What Runtimes Demand of the Host, What the Engine Already Offers, and Whether to Open the Seam*
 
 Status: engine-seam study, revision 4 (2026-10-31). Revision 1 was the study; it
 answers the question the language screen parked on `RA4` — *"the memory provider

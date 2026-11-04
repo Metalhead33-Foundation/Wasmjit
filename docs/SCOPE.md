@@ -1,4 +1,6 @@
-# Scope — What Is an Engine Gap, and What Is a Boundary {#doc_scope}
+# Scope {#doc_scope}
+
+*What Is an Engine Gap, and What Is a Boundary*
 
 Status: policy note, revision 2 (2026-11-03; revision 1 was written on
 `cf2c6cf` and committed as `bca0d87`; revision 2 records the

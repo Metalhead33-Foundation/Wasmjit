@@ -1,4 +1,6 @@
-# Memory64 — Implementation Notes, Spec Status, and Deliberate Deviations {#prop_memory64}
+# Memory64 {#prop_memory64}
+
+*Implementation Notes, Spec Status, and Deliberate Deviations*
 
 Status: design note / implementation reference (revision 3 — M64-1…M64-3 and M2
 implemented: 64-bit `size`/`grow` plumbing, the unsigned address widening, a

@@ -1,4 +1,6 @@
-# `LF-2` Evidence — Toolchains, Modules and Findings {#lf2_evidence}
+# `LF-2` Evidence {#lf2_evidence}
+
+*Toolchains, Modules and Findings*
 
 Status: evidence log for the `LF-2` report set (revision 1 — 2026-10-30). Every
 verdict in this folder names a row here: the toolchain with its version and

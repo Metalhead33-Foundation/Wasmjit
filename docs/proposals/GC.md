@@ -1,4 +1,6 @@
-# Garbage Collection (Wasm 3.0) — Implementation Notes, Spec Conformance, and Deliberate Deviations {#prop_gc}
+# Garbage Collection (Wasm 3.0) {#prop_gc}
+
+*Implementation Notes, Spec Conformance, and Deliberate Deviations*
 
 Status: design note / implementation reference (revision 13 — GC's own
 conformance surface is **complete**, including GC reference validation and the

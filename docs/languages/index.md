@@ -1,4 +1,6 @@
-# Language Support — the `LF-1` Screen and the `LF-2` Studies {#languages_index}
+# Language Support {#languages_index}
+
+*The `LF-1` Screen and the `LF-2` Studies*
 
 Status: study report set (revision 7 — 2026-11-04: adds the §11 ownership map
 and points the ABI amendment at `EMBEDDING_SURFACE.md` §12–16; revision 6

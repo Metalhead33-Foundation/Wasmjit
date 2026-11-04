@@ -1,4 +1,6 @@
-# Constant-Time (`CT-Wasm`) — Implementation Notes, Spec Status, and Deliberate Deviations {#prop_constant_time}
+# Constant-Time (`CT-Wasm`) {#prop_constant_time}
+
+*Implementation Notes, Spec Status, and Deliberate Deviations*
 
 Status: design note / implementation reference (revision 3 — CT-0 safe
 rejection only: the provisional secret *value-type* markers are recognized and

@@ -1,4 +1,6 @@
-# Multi-Agent Execution — Feasibility of Demoting the Class-E Blockers {#doc_multi_agent_feasibility}
+# Multi-Agent Execution {#doc_multi_agent_feasibility}
+
+*Feasibility of Demoting the Class-E Blockers*
 
 Status: feasibility study and implementation record (revision 2 — 2026-10-29;
 the study is revision 1's measurements at `ea4fb30`, and **MF-1…MF-8 are now

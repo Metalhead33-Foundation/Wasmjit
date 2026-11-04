@@ -1,4 +1,6 @@
-# Multibyte Array Access, More Array Constructors, and Frozen Values — Implementation Notes, Spec Status, and Deliberate Deviations {#prop_gc_extensions}
+# Multibyte Array Access, More Array Constructors, and Frozen Values {#prop_gc_extensions}
+
+*Implementation Notes, Spec Status, and Deliberate Deviations*
 
 Status: design note / implementation reference (revision 2 — Multibyte Array
 Access and More Array Constructors are implemented; Frozen Values stays

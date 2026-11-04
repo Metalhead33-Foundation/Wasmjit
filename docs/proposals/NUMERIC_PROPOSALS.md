@@ -1,4 +1,6 @@
-# Wide Arithmetic, Half Precision, and Rounding-Mode Control — Implementation Notes, Spec Status, and Deliberate Deviations {#prop_numeric_proposals}
+# Wide Arithmetic, Half Precision, and Rounding-Mode Control {#prop_numeric_proposals}
+
+*Implementation Notes, Spec Status, and Deliberate Deviations*
 
 Status: design note / implementation reference (revision 4 — Wide Arithmetic,
 Rounding-Mode Control and Half Precision are implemented. `f16x8` is a `v128`

@@ -1,4 +1,6 @@
-# Call Tags — Implementation Notes, Spec Status, and Deliberate Deviations {#prop_call_tags}
+# Call Tags {#prop_call_tags}
+
+*Implementation Notes, Spec Status, and Deliberate Deviations*
 
 Status: design note / implementation reference (revision 2 — CTA-2 canonical
 tag identity is implemented in the Store; the proposal has no binary encoding

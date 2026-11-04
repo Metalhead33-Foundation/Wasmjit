@@ -1,4 +1,6 @@
-# Acquisition Map — Toolchains for the Untested Rows {#lf2_toolchains}
+# Acquisition Map {#lf2_toolchains}
+
+*Toolchains for the Untested Rows*
 
 Status: documentation note (revision 1 — 2026-10-30). It lists, for **every
 non-killed row that `LF-2` did not run**, the producer that would turn that

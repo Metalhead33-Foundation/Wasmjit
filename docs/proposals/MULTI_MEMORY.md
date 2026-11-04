@@ -1,4 +1,6 @@
-# Multiple Memories — Implementation Notes, Spec Status, and Deliberate Deviations {#prop_multi_memory}
+# Multiple Memories {#prop_multi_memory}
+
+*Implementation Notes, Spec Status, and Deliberate Deviations*
 
 Status: design note / implementation reference (revision 3 — MM-1…MM-4
 implemented: `memidx` bounds checks, curated `memory-multi`, cross-memory copy,

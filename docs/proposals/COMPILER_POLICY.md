@@ -1,4 +1,6 @@
-# Compilation Policy — Optimization Degree, Strictness and Interpreter Fallback {#prop_compiler_policy}
+# Compilation Policy {#prop_compiler_policy}
+
+*Optimization Degree, Strictness and Interpreter Fallback*
 
 Status: engine-seam study, revision 4 (2026-11-01). Revision 1 was the study:
 the three axes, the tree's actual state, the gaps, the plan. **Since revision 2

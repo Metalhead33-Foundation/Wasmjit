@@ -1,4 +1,6 @@
-# Writing a backend — the checklist and the walkthrough {#doc_writing_a_backend}
+# Writing a backend {#doc_writing_a_backend}
+
+*The checklist and the walkthrough*
 
 Status: how-to note, revision 3 (2026-11-03: adds §14, the production plan
 for the AsmJit and SLJIT backends, the mandatory post-mortem they must produce,

@@ -1,4 +1,6 @@
-# Custom Annotation Syntax for the Wasm Text Format — Implementation Notes, Spec Status, and Deliberate Deviations {#prop_annotations}
+# Custom Annotation Syntax for the Wasm Text Format {#prop_annotations}
+
+*Implementation Notes, Spec Status, and Deliberate Deviations*
 
 Status: design note / implementation reference (revision 3 — **binary-only is a
 permanent architectural rule. This project will never implement WAT parsing or

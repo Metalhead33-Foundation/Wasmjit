@@ -1,4 +1,6 @@
-# Trap Cleanup — Escaping the POD-Only Trap Path {#doc_trap_cleanup}
+# Trap Cleanup {#doc_trap_cleanup}
+
+*Escaping the POD-Only Trap Path*
 
 Status: design note / implementation reference (revision 4 — **implemented**).
 The trap path is a per-agent pending status that unwinds by *returning*:
