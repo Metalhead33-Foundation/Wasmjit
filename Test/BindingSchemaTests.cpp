@@ -1100,6 +1100,119 @@ TEST_CASE("Glue candidates are validated against the engine schema", "[bindings]
 			!= std::string::npos);
 }
 
+TEST_CASE("C++ host functions with VMContext* produce a G2H schema", "[bindings]")
+{
+	if (!haveTool("command -v swig > /dev/null 2>&1")) {
+		WARN("swig not found; skipped the front-end schema check");
+		return;
+	}
+
+	const std::filesystem::path dir = bindingsDir() / "frontend-cpp";
+	std::filesystem::create_directories(dir);
+	const std::filesystem::path header = dir / "host_functions.h";
+	{
+		std::ofstream out(header, std::ios::binary);
+		out << "#include <cstdint>\n"
+			   "namespace WASM { struct VMContext; }\n"
+			   "int32_t host_add(WASM::VMContext*, int32_t a, int32_t b);\n"
+			   "int32_t not_exposed(int32_t a);\n";
+	}
+
+	std::string error;
+	const auto candidates = WASM::Bindings::swigCandidates(header, error);
+	REQUIRE(error.empty());
+	const Json schema = WASM::Bindings::candidateSchema(candidates, "g2h",
+			"host_functions", "swig");
+	REQUIRE(schema.at("direction") == "g2h");
+	REQUIRE(schema.at("frontend") == "swig");
+	REQUIRE(schema.at("exports").size() == 1u);
+	const Json& exportEntry = schema.at("exports")[0];
+	REQUIRE(exportEntry.at("name") == "host_add");
+	REQUIRE(exportEntry.at("type").at("params").size() == 2u);
+	REQUIRE(exportEntry.at("type").at("params")[0].at("type") == "i32");
+	REQUIRE(exportEntry.at("type").at("results")[0].at("type") == "i32");
+
+	if (std::filesystem::is_regular_file(
+				"/usr/local/lib/Glue-1.5/libGlue.a")) {
+		const std::filesystem::path glueSource = dir / "host_glue.cpp";
+		{
+			std::ofstream out(glueSource, std::ios::binary);
+			out << "#include <glue/value.h>\n"
+				   "#include <cstdint>\n"
+				   "namespace WASM { struct VMContext; }\n"
+				   "int32_t host_add(WASM::VMContext*, int32_t a, int32_t b) "
+				   "{ return a + b; }\n"
+				   "int32_t not_exposed(int32_t a) { return a; }\n"
+				   "glue::MapValue wasmjit_bindings()\n"
+				   "{\n"
+				   "\tauto map = glue::createAnyMap();\n"
+				   "\tmap[\"host_add\"] = glue::AnyFunction(host_add);\n"
+				   "\tmap[\"not_exposed\"] = glue::AnyFunction(not_exposed);\n"
+				   "\treturn map;\n"
+				   "}\n";
+		}
+		std::string glueError;
+		const auto glueCandidates =
+				WASM::Bindings::glueCandidates(glueSource, glueError);
+		REQUIRE(glueError.empty());
+		const Json glueSchema = WASM::Bindings::candidateSchema(glueCandidates,
+				"g2h", "host_glue", "glue");
+		REQUIRE(glueSchema.at("exports").size() == 1u);
+		REQUIRE(glueSchema.at("exports")[0].at("name") == "host_add");
+	}
+}
+
+TEST_CASE("host-side callable typedefs follow the engine ABI", "[bindings]")
+{
+	const Json schema = WASM::Bindings::moduleSchema(
+			loadTestModule("asmjit_i32_basic"), testStore().types(),
+			WASM::Bindings::Direction::GuestToHost, "asmjit_i32_basic");
+	const std::string header = WASM::Bindings::emit(schema,
+			WASM::Bindings::Language::CppTypedefs);
+	REQUIRE(header.find("using wasmjit_add_fn = int32_t (*)(WASM::VMContext*, "
+			"int32_t, int32_t);") != std::string::npos);
+	REQUIRE(header.find("namespace WASM { struct VMContext; }")
+			!= std::string::npos);
+
+	const std::string source = WASM::Bindings::emit(schema,
+			WASM::Bindings::Language::CppSource);
+	REQUIRE(source.find("wasmjit_add_fn wasmjit_add_from("
+			"const WASM::Callable& callable)") != std::string::npos);
+	REQUIRE(source.find("reinterpret_cast<wasmjit_add_fn>(callable.fnPtr)")
+			!= std::string::npos);
+
+	if (haveTool("command -v g++ > /dev/null 2>&1")) {
+		const std::filesystem::path dir = bindingsDir() / "cpp-callables";
+		std::filesystem::create_directories(dir);
+		{
+			std::ofstream out(dir / "wasmjit_asmjit_i32_basic_callables.hpp",
+					std::ios::binary);
+			out << header;
+			std::ofstream sourceOut(dir / "callables.cpp", std::ios::binary);
+			sourceOut << source;
+		}
+		const std::filesystem::path sourceRoot =
+				std::filesystem::path(WASM_TESTSUITE_SOURCE_DIR).parent_path()
+						.parent_path();
+		const std::filesystem::path log = dir / "g++-callables.log";
+		const std::string compile = "g++ -std=c++2a -fsyntax-only -I\"" + dir.string()
+				+ "\" -I\"" + sourceRoot.string() + "\" -I\""
+				+ (sourceRoot / "extern" / "MhLib").string() + "\" \""
+				+ (dir / "callables.cpp").string() + "\" > \"" + log.string()
+				+ "\" 2>&1";
+		INFO(readText(log));
+		REQUIRE(std::system(compile.c_str()) == 0);
+	}
+
+	const Json multi = WASM::Bindings::moduleSchema(loadTestModule("multi_value"),
+			testStore().types(), WASM::Bindings::Direction::GuestToHost,
+			"multi_value");
+	const std::string multiHeader = WASM::Bindings::emit(multi,
+			WASM::Bindings::Language::CppTypedefs);
+	REQUIRE(multiHeader.find("using wasmjit_swap_export_fn = void (*)(WASM::VMContext*, "
+			"int32_t, int32_t, void*);") != std::string::npos);
+}
+
 TEST_CASE("WIT JSON names agree with the component schema", "[bindings]")
 {
 	if (!haveTool("command -v wasm-tools > /dev/null 2>&1")) {

@@ -1,5 +1,6 @@
 #include "BindingSchema.hpp"
 
+#include <algorithm>
 #include <cctype>
 #include <cstddef>
 #include <cstdint>
@@ -1573,6 +1574,89 @@ std::string emitDartImpl(const Json& schema)
 	return out.str();
 }
 
+std::string cppTypedefName(const Json& entry)
+{
+	return "wasmjit_" + sanitize(entry.at("name").get<std::string>()) + "_fn";
+}
+
+void emitCppFunctionPointer(std::ostringstream& out, const Json& entry)
+{
+	const Json& params = signatureParams(entry);
+	const Json& results = signatureResults(entry);
+	out << "using " << cppTypedefName(entry) << " = ";
+	out << (results.size() == 1 ? cType(results[0]) : "void") << " (*)(";
+	out << "WASM::VMContext*";
+	for (const Json& param : params)
+		out << ", " << cType(param);
+	if (results.size() > 1u)
+		out << ", void*";
+	out << ");";
+	const bool hasResultRef = results.size() == 1 && isReference(results[0]);
+	const bool hasParamRef = std::any_of(params.begin(), params.end(),
+			[](const Json& param) { return isReference(param); });
+	if (hasResultRef)
+		out << " // result ownership: explicit";
+	if (hasParamRef)
+		out << " // reference parameters are borrowed";
+	out << "\n";
+}
+
+std::string emitCppTypedefsImpl(const Json& schema)
+{
+	std::set<std::string> refs;
+	collectSchemaRefs(schema, refs);
+	std::ostringstream out;
+	out << "// Generated host-side Callable typedefs from the "
+		<< schema.at("schema").get<std::string>() << " "
+		<< schema.at("direction").get<std::string>() << " schema. Do not edit.\n";
+	out << "#ifndef WASMJIT_GENERATED_" << sanitize(schema.value("module", "module"))
+		<< "_CALLABLES_HPP\n#define WASMJIT_GENERATED_"
+		<< sanitize(schema.value("module", "module")) << "_CALLABLES_HPP\n\n";
+	out << "#include <cstdint>\n\n";
+	out << "namespace WASM { struct VMContext; }\n";
+	out << "typedef struct wasm_v128 { uint8_t bytes[16]; } wasm_v128;\n";
+	for (const std::string& ref : refs)
+		out << "struct " << ref << ";\n";
+	out << "\n// A Callable's fnPtr is `ret f(VMContext*, params...)`; multi-value\n"
+		   "// results use a trailing result buffer.\n";
+	forEachFunction(schema, "exports", [&](const Json& entry) {
+		out << "// export: " << entry.at("name").get<std::string>() << "\n";
+		emitCppFunctionPointer(out, entry);
+	});
+	out << nonFunctionNotes(schema);
+	out << "\n#endif // WASMJIT_GENERATED_"
+		<< sanitize(schema.value("module", "module")) << "_CALLABLES_HPP\n";
+	return out.str();
+}
+
+std::string emitCppSourceImpl(const Json& schema)
+{
+	std::ostringstream out;
+	out << "// Generated Callable cast helpers from the "
+		<< schema.at("schema").get<std::string>() << " "
+		<< schema.at("direction").get<std::string>() << " schema. Do not edit.\n";
+	out << "#include \"wasmjit_" << sanitize(schema.value("module", "module"))
+		<< "_callables.hpp\"\n";
+	out << "#include <WasmBase/WasmValue.hpp>\n";
+	out << "#include <stdexcept>\n\n";
+	out << "// C++ forbids static_cast from void* to a function pointer; the\n"
+		   "// Callable ABI boundary uses reinterpret_cast.\n\n";
+	forEachFunction(schema, "exports", [&](const Json& entry) {
+		const std::string name = entry.at("name").get<std::string>();
+		const std::string fn = cppTypedefName(entry);
+		out << "// export: " << name << "\n";
+		out << fn << " wasmjit_" << sanitize(name) << "_from(const WASM::Callable& callable)\n";
+		out << "{\n";
+		out << "\tif (callable.fnPtr == nullptr)\n";
+		out << "\t\tthrow std::runtime_error(\"wasmjit callable: null fnPtr for "
+			<< name << "\");\n";
+		out << "\treturn reinterpret_cast<" << fn << ">(callable.fnPtr);\n";
+		out << "}\n\n";
+	});
+	out << nonFunctionNotes(schema);
+	return out.str();
+}
+
 std::string emitCppAdapterImpl(const Json& schema)
 {
 	if (schema.value("kind", "module") == "component")
@@ -1698,6 +1782,8 @@ const char* languageName(Language language) noexcept
 	case Language::Go: return "go";
 	case Language::Dart: return "dart";
 	case Language::CppAdapter: return "cpp-adapter";
+	case Language::CppTypedefs: return "cpp-typedefs";
+	case Language::CppSource: return "cpp-source";
 	}
 	return "c-header";
 }
@@ -1707,7 +1793,8 @@ bool parseLanguage(std::string_view name, Language& language) noexcept
 	for (const Language candidate : { Language::CHeader, Language::Rust,
 				 Language::TypeScript, Language::AssemblyScript, Language::Zig,
 				 Language::Kotlin, Language::MoonBit, Language::Go, Language::Dart,
-				 Language::CppAdapter }) {
+				 Language::CppAdapter, Language::CppTypedefs,
+				 Language::CppSource }) {
 		if (name == languageName(candidate)) {
 			language = candidate;
 			return true;
@@ -1729,6 +1816,8 @@ std::string emit(const nlohmann::ordered_json& schema, Language language)
 	case Language::Go: return emitGoImpl(schema);
 	case Language::Dart: return emitDartImpl(schema);
 	case Language::CppAdapter: return emitCppAdapterImpl(schema);
+	case Language::CppTypedefs: return emitCppTypedefsImpl(schema);
+	case Language::CppSource: return emitCppSourceImpl(schema);
 	}
 	return {};
 }

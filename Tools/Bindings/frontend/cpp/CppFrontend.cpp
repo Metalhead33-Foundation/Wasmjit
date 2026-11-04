@@ -391,6 +391,110 @@ std::vector<CandidateSignature> glueCandidates(const std::filesystem::path& sour
 }
 
 
+namespace {
+
+bool isVmContext(const std::string& type)
+{
+	const bool swigPointer = type.rfind("p.", 0) == 0 || type.rfind("r.", 0) == 0;
+	return type.find("VMContext") != std::string::npos
+			&& (swigPointer || type.find('*') != std::string::npos
+					|| type.find('&') != std::string::npos);
+}
+
+std::optional<std::string> coreTypeFor(const std::string& type)
+{
+	std::string base = type;
+	const std::size_t comment = base.find("/*");
+	if (comment != std::string::npos)
+		base.erase(comment);
+	base = trim(base);
+	const bool swigPointer = base.rfind("p.", 0) == 0 || base.rfind("r.", 0) == 0;
+	if (swigPointer)
+		base.erase(0, 2);
+	if (swigPointer)
+		return "externref";
+	const std::string normalized = normalizeCppType(base);
+	if (normalized == "int8_t" || normalized == "uint8_t"
+			|| normalized == "int16_t" || normalized == "uint16_t"
+			|| normalized == "int32_t" || normalized == "uint32_t"
+			|| normalized == "int32" || normalized == "uint32"
+			|| normalized == "int" || normalized == "unsigned"
+			|| normalized == "signed" || normalized == "short"
+			|| normalized == "unsignedshort" || normalized == "char"
+			|| normalized == "signedchar" || normalized == "unsignedchar"
+			|| normalized == "bool" || normalized == "boolean"
+			|| normalized == "number")
+		return "i32";
+	if (normalized == "int64_t" || normalized == "uint64_t"
+			|| normalized == "int64" || normalized == "uint64"
+			|| normalized == "long" || normalized == "unsignedlong"
+			|| normalized == "longlong" || normalized == "unsignedlonglong"
+			|| normalized == "size_t" || normalized == "intptr_t"
+			|| normalized == "uintptr_t" || normalized == "bigint")
+		return "i64";
+	if (normalized == "float")
+		return "f32";
+	if (normalized == "double")
+		return "f64";
+	if (normalized == "v128")
+		return "v128";
+	if (base.find('*') != std::string::npos
+			|| base.find('&') != std::string::npos
+			|| normalized == "unknown" || normalized == "string"
+			|| normalized == "char" || normalized == "void")
+		return "externref";
+	return std::nullopt;
+}
+
+} // namespace
+
+nlohmann::ordered_json candidateSchema(
+		const std::vector<CandidateSignature>& candidates,
+		std::string_view direction, std::string_view moduleName,
+		std::string_view frontend)
+{
+	nlohmann::ordered_json schema;
+	schema["schema"] = "wasmjit.binding/1";
+	schema["kind"] = "module";
+	schema["direction"] = std::string(direction);
+	schema["module"] = std::string(moduleName);
+	schema["frontend"] = std::string(frontend);
+	schema["imports"] = nlohmann::ordered_json::array();
+	schema["exports"] = nlohmann::ordered_json::array();
+
+	for (const CandidateSignature& candidate : candidates) {
+		if (candidate.params.empty() || !isVmContext(candidate.params[0].type))
+			continue;
+		nlohmann::ordered_json params = nlohmann::ordered_json::array();
+		bool fits = true;
+		for (std::size_t i = 1; i < candidate.params.size(); ++i) {
+			const auto type = coreTypeFor(candidate.params[i].type);
+			if (!type) {
+				fits = false;
+				break;
+			}
+			params.push_back({ { "type", *type } });
+		}
+		if (!fits)
+			continue;
+		nlohmann::ordered_json results = nlohmann::ordered_json::array();
+		if (candidate.returnType != "void") {
+			const auto type = coreTypeFor(candidate.returnType);
+			if (!type)
+				continue;
+			results.push_back({ { "type", *type } });
+		}
+		nlohmann::ordered_json type;
+		type["kind"] = "func";
+		type["params"] = std::move(params);
+		type["results"] = std::move(results);
+		schema["exports"].push_back(
+				{ { "kind", "function" }, { "name", candidate.name },
+						{ "type", std::move(type) } });
+	}
+	return schema;
+}
+
 nlohmann::ordered_json crossCheckCandidates(const nlohmann::ordered_json& schema,
 		const std::vector<CandidateSignature>& candidates, std::string_view frontend)
 {

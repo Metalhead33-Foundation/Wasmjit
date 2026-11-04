@@ -38,7 +38,9 @@ enum class Language {
 	MoonBit, //!< MoonBit declarations.
 	Go, //!< Go Wasm declarations.
 	Dart, //!< Dart FFI declarations.
-	CppAdapter //!< A C++ adapter that dispatches through `WASM::callCallable`.
+	CppAdapter, //!< A C++ adapter that dispatches through `WASM::callCallable`.
+	CppTypedefs, //!< Host-side `Callable` function-pointer typedefs.
+	CppSource //!< A C++ source with `Callable::fnPtr` cast helpers.
 };
 
 /*!

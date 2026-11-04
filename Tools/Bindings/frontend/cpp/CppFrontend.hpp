@@ -62,6 +62,26 @@ std::vector<CandidateSignature> glueCandidates(const std::filesystem::path& sour
 		std::string& error);
 
 /*!
+ * \brief Builds a schema for host functions that are exposed to Wasm.
+ *
+ * Only candidates whose first parameter is a `VMContext*`/`VMContext&` are
+ * included; that first parameter is part of the `Callable` ABI, not a Wasm
+ * parameter, so it is removed from the schema. Every remaining parameter and
+ * the result must map to a core Wasm type; a candidate that cannot be mapped is
+ * skipped. This is still a candidate-derived schema, not a C++ header ABI.
+ *
+ * \param candidates The signatures proposed by a C++ front-end.
+ * \param direction The schema direction spelling (`"g2h"`, `"h2g"` or `"g2g"`).
+ * \param moduleName The name recorded in the schema envelope.
+ * \param frontend The front-end name recorded in the schema.
+ * \return An ordered binding schema whose exports are the fitting functions.
+ */
+nlohmann::ordered_json candidateSchema(
+		const std::vector<CandidateSignature>& candidates,
+		std::string_view direction, std::string_view moduleName,
+		std::string_view frontend = "candidate");
+
+/*!
  * \brief Validates candidate signatures against a binding schema.
  *
  * A candidate matches only when its name, arity, result shape and scalar types
