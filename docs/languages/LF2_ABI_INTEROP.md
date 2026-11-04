@@ -1,6 +1,6 @@
 # `LF2-ABI` — Cross-language ABI and host-binding amendment {#lf2_abi}
 
-Status: cross-cutting `LF-2` amendment, revision 3 (2026-11-04). Revision 1
+Status: cross-cutting `LF-2` amendment, revision 4 (2026-11-04). Revision 1
 (2026-11-03) added the ABI/interop dimension the cluster reports did not treat
 as one subject: how a language **sees WasmJit’s exports and synthetic host
 modules**, how the C/C++ runtime and a JavaScript bridge **see the language’s
@@ -8,8 +8,9 @@ exports**, and where each language sits on the scalar-to-GC/reference difficulty
 scale. Revision 2 added the host-side counterpart: native C++ objects and C
 structs in [`EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) §13. Revision 3
 points at §14 (GC references across modules and generated headers) and §15
-(host-to-guest templates and SWIG/Glue). It does **not** change any `LF-2`
-verdict; those remain in the cluster reports.
+(host-to-guest templates and SWIG/Glue). Revision 4 adds §11, the
+engine/embedder/tooling/language ownership map. It does **not** change any
+`LF-2` verdict; those remain in the cluster reports.
 
 This is deliberately an amendment to the language-feasibility set, not a new
 language charter. The host-binding contract it elaborates is
@@ -29,7 +30,8 @@ generator, or embedder?”).
 | §8 | What is easy, what needs an adapter, and what is not an engine gap |
 | §9 | Consequences for the guide/generator plan |
 | §10 | Open questions and tests that would settle them |
-| §11 | References |
+| §11 | Which owner closes each problem: engine, embedder, tooling or language |
+| §12 | References |
 
 ## 2. The two directions, and the synthetic module
 
@@ -346,14 +348,63 @@ The following would turn a `?` in §6 into evidence:
 Until those tests exist, the matrix is a design map, not a new set of language
 verdicts.
 
-## 11. References
+
+## 11. Problem ownership map
+
+The canonical definitions and decision rules are
+[`EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) §16.1–§16.2. This table applies
+them to the language arms. The one-line version:
+
+> **ENG** changes the engine contract; **EMB** changes the host/runtime policy;
+> **TOOL** changes what a compiler/build/generator produces; **LANG** is a
+> source-language limit that no engine or adapter can remove.
+
+A row has one primary owner. Where an adapter and a language limitation are
+both real, they are separate rows; do not hide a `LANG` boundary inside a
+`TOOL` ticket.
+
+| ID | Problem / open question | Where | Primary | Status | Action / boundary |
+|---|---|---|---|---|---|
+| **LF2-1** | C/C++ cannot express typed Wasm GC struct/array refs or a GC finalizer | §6, §7 | **LANG** | **Accepted** | Use `externref`/integer handles + host adapter; C++ objects stay host-side. |
+| **LF2-2** | Rust has no Wasm GC typed reference or foreign-pointer GC finalizer | §6, §7 | **LANG** | **Accepted** | `externref`/handle + RAII `Drop` calling an explicit destroy; no cross-boundary Rust GC. |
+| **LF2-3** | Zig has no Wasm GC typed reference/finalizer model | §6, §7 | **LANG** | **Accepted** | Handle + explicit deinit. |
+| **LF2-4** | AssemblyScript’s managed objects/strings are not WasmGC objects/`stringref` | §6, §7 | **LANG** | **Accepted** | Use `externref`/opaque handles and an AS-side adapter; do not cast AS objects to C++. |
+| **LF2-5** | Kotlin/Wasm runtime, host-import set and class semantics are runtime-specific | §6, §7 | **LANG** | **Accepted** | Use typed Wasm refs only when the emitted canonical type matches; otherwise an adapter. |
+| **LF2-6** | MoonBit runtime/GC/import ABI is runtime-specific | §6, §7 | **LANG** | **Accepted** | Same as Kotlin; target adapter, not a generic C header. |
+| **LF2-7** | Go/TinyGo runtime and `wasmimport`/`wasmexport` ABI differ from C | §6, §7 | **LANG** | **Accepted** | Go-side wrapper and explicit `Close`; no Go pointer into the engine. |
+| **LF2-8** | Dart/dart2wasm’s JS imports and runtime model differ from a C ABI | §6, §7 | **LANG** | **Accepted** | Dart/JS adapter; `externref` boundary. |
+| **LF2-9** | Lua values live in a VM, not in Wasm values | §6, §7 | **LANG** | **Accepted** | Treat VM state as an opaque host pointer; use the VM C API. |
+| **LF2-10** | Synthetic host module and per-language import set | §2, §5, §8 | **EMB** | **Open** | Implement the host adapter/import set; the engine already registers scalar imports. |
+| **LF2-11** | Guest binding declarations/adapters | §4, §8, §9 | **EMB** | **Open** | Hand-written or generated; the target runtime owns the language-side ABI. |
+| **LF2-12** | No neutral schema or per-language emitters | §9 | **TOOL** | **Open** | Descriptor-driven schema then C/C++/Rust/… emitters; see `EMBEDDING_SURFACE` §12. |
+| **LF2-13** | WIT is sometimes assumed to describe a core module | §3 | **TOOL** | **Rejected** | WIT is component-level; core modules use `Callable` + descriptors. |
+| **LF2-14** | JS `wasm:js-string`/Promise/bridge imports | §7 | **EMB** | **Accepted** | A JS host adapter supplies them; not an engine subsystem. |
+| **LF2-15** | Native exceptions/panics versus Wasm exceptions/traps | §7, §10 | **LANG** | **Accepted** | Translate in the generated boundary; a language panic is not `exnref`. |
+| **LF2-16** | Host adapter must map a language error to a trap/result | §10 | **EMB** | **Open** | Decide the per-API error mapping; `WASM::Trap` is the engine boundary. |
+| **LF2-17** | Component structured values/resources across languages | §3, §10 | **ENG** | **Verify** | Canonical ABI/runtime exists; add cross-language execution evidence. |
+| **LF2-18** | Same-Store typed GC reference matching | §6, §10 | **ENG** | **Verify** | `TypeId`/`matches` exist; test two modules and a mismatch. |
+| **LF2-19** | `externref` retain/release through `HostBridge` | §6, §10 | **ENG** | **Verify** | Primitive exists; test the adapter-owned box and instance teardown. |
+| **LF2-20** | Toolchain/version-specific output (GC, EH, stringref, Binaryen) | §7, §10 | **TOOL** | **Open** | Pin versions/flags and record the module shape; see `EMBEDDING_SURFACE` §16.5. |
+| **LF2-21** | The test matrix is a design map, not evidence | §10 | **TOOL** | **Open** | Run the per-language arms; keep the measured verdicts in `LF2_*`. |
+| **LF2-22** | Native string model versus `stringref` | §6, §7 | **LANG** | **Accepted** | Copy through the Store/canonical string ABI; no native string layout crosses. |
+| **LF2-23** | Two GC languages may share a Wasm type but not their class/runtime semantics | §6, §7 | **LANG** | **Accepted** | Export a function API over the common Wasm type; do not assume a shared class library. |
+
+This table does **not** promote any language: every green scalar arm is still
+scalar; every `C` cell is still an adapter problem. It also does not turn
+WASI, JS or the scheduler into engine work — those are `EMB` by the rule in
+`EMBEDDING_SURFACE` §16.2 and are recorded in §16.4. They are not LF2 language
+arms, so they do not get a `LF2-*` row; the same applies to a C++ reflection
+system, which is host-side/tooling, not a language capability.
+
+## 12. References
 
 - [`EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) §12 — host-binding guide,
   descriptor-driven generation, per-language limits and the embedder fallback;
   §13 — native C++ objects/C structs, opaque handles, typed handle tables,
   `externref`/finalizer boxes, and the engine-vs-embedder boundary; §14 — GC
   struct/array references across modules and generated headers; §15 — host-to-
-  guest templates, class-size registration and SWIG/Glue.
+  guest templates, class-size registration and SWIG/Glue; §16 — the shared
+  engine/embedder/tooling/language ownership register.
 - [`ABI.md`](../ABI.md) — `VMContext*`, multi-result buffers, `v128`, references,
   traps, host imports and module metadata descriptors.
 - [`WasmBase/WasmValue.hpp`](../../WasmBase/WasmValue.hpp) — `Callable` and

@@ -1,10 +1,11 @@
 # The Embedding Surface — `WASM::Runtime`, the Umbrella Header, Versioning, and the Include Set {#doc_embedding_surface}
 
-Status: design note + plan (revision 5 — 2026-11-04: adds §14, GC references
-across module boundaries and the generated-header rules, and §15, host-to-guest
-templates, class-size registration and SWIG/Glue integration. Revision 4 added
-§13, the host-side native C++ object/C struct and GC-boundary decision.
-Revision 3, 2026-10-29,
+Status: design note + plan (revision 6 — 2026-11-04: adds §16, the
+engine/embedder/tooling/language ownership register, and applies it to the open
+items in §12–15. Revision 5 added §14, GC references across module boundaries
+and the generated-header rules, and §15, host-to-guest templates, class-size
+registration and SWIG/Glue integration. Revision 4 added §13, the host-side
+native C++ object/C struct and GC-boundary decision. Revision 3, 2026-10-29,
 disambiguated the five roles called "context" or "runtime" (§3.1–§3.2), added
 the profile/config layer (§4.6) and the header skeleton `ES-1` fills (§4.7).
 Revision 2 landed the umbrella, the version identity and the per-header compile
@@ -57,6 +58,7 @@ provenance and the reason its two names do not survive here are in §3.
 | §13 | How does a guest see a native C++ object or C struct, and where is the GC boundary? |
 | §14 | What do importing modules and generated headers see when a GC module exports struct, array or string references? |
 | §15 | Can host-to-guest templates, class bridges, SWIG or Glue replace an engine reflection system? |
+| §16 | Who owns each remaining problem: engine, embedder, tooling or source language? |
 
 ## 2. What the embedder has today
 
@@ -824,6 +826,10 @@ embedder writes so its language can call a module/component, and so a
 module/component can call host functions. It does **not** mean a binary format,
 and it does not mean parsing WIT text in the engine.
 
+Using the §16 ownership labels: the descriptor metadata is **ENG**; the guide,
+schema emitter and language emitters are **TOOL**; a hand-written or
+product-specific adapter is **EMB**.
+
 The engine is binary-only. A realistic binding story therefore has three
 layers:
 
@@ -974,6 +980,11 @@ directions, synthetic host modules, and the scalar-to-GC/reference difficulty
 matrix for the studied languages.
 
 ## 13. Native C++ objects, C structs, and the GC boundary
+
+Owner labels: the opaque `externref`/`GcHeap`/`HostBridge` primitive is **ENG**;
+the A/B/C object policy, handle table, finalizer and class bridge are **EMB**;
+a generated header or SWIG/Glue adapter is **TOOL**. The native class model is
+not an engine feature.
 
 ### 13.1 The question this section answers
 
@@ -1591,6 +1602,11 @@ one already recorded for WASI, JS integration and OS threads.
 
 ## 14. GC references across modules and generated headers
 
+Owner labels: the type identity, `Callable` representation, GC header and
+`stringref` lifetime are **ENG**; the target-language header/emitter is **TOOL**;
+a hand-written host adapter or a GC-language façade is **EMB**; the absence of
+typed GC references in C/Rust/Zig/Go is **LANG**.
+
 ### 14.1 The short answer: `void*` is the representation, not the type
 
 When a GC language exports a function that takes or returns a struct or array
@@ -1912,6 +1928,12 @@ job is to preserve the distinction between “this is a struct of type T” and
 
 ## 15. Host-to-guest templates, class-size registration and tooling
 
+Owner labels: `nativeImport`/`callCallable` are **ENG** primitives; the
+`GuestFunction`/`HostClass` convenience layer and the handle table are **EMB**
+(optional host-side library); SWIG/Glue, the schema emitter and generated
+adapters are **TOOL**. The source-language inability to express a type is
+**LANG** and is not fixed by any of these.
+
 ### 15.1 What already exists
 
 The engine has the two directions but only one is templated:
@@ -2164,4 +2186,187 @@ Tests that would validate the layer:
 - a `stringref` host round-trip through `createFromUtf8`/`copyToUtf8` and a
   cross-module string pass-through;
 - a cross-Store reference rejected, not silently accepted.
+
+
+## 16. Problem ownership: engine, embedder, tooling, language
+
+### 16.1 What counts as a problem
+
+Here “problem” means **anything unresolved**: a gap, a bug, a design question,
+a rejected option, a compatibility limit, or an open test/evidence question.
+A deliberate decision is still recorded, because “we decided not to own this”
+is different from “we did not notice this”.
+
+The four owners are intentionally coarse. The point is to stop using “the
+engine” as a synonym for “the project” and to stop treating an embedder policy
+as engine debt.
+
+| Owner | Meaning | Typical work product |
+|---|---|---|
+| **ENG** — engine | Core, backend seam, public ABI, validation, GC, Canonical ABI, `HostBridge` primitive, metadata | code/design in `WasmBase/` or a backend; a recorded engine decision |
+| **EMB** — embedder | Host application/runtime policy: WASI, JS, scheduler, product object model, host object table, finalizer, event loop | adapter code, host policy, configuration, lifecycle management |
+| **TOOL** — tooling / build-time | Compilers and Wasm tooling (emscripten/LLVM, Binaryen, `wasm-opt`, linkers), generators (SWIG/Glue/schema emitters), build/install | a tool change, flag, generated source, build step or test harness |
+| **LANG** — source language | A source-language semantic/ABI limitation that needs a language or compiler-frontend change, not an engine or host adapter | language proposal, compiler work, or an explicit “not expressible” boundary |
+
+### 16.2 Decision rules
+
+Use these in order:
+
+1. **Can the engine close it without knowing a host runtime, a source language
+   or a product object model?** → **ENG**. Examples: `TypeId` matching, the
+   `Callable` ABI, a trap, a `GcHeap` rule, a `HostBridge` callback contract.
+2. **Does it require a host runtime or a product policy?** → **EMB**. Examples:
+   WASI, a JavaScript engine, an OS thread pool, a C++ object table, a
+   finalizer, a per-game object arena.
+3. **Is the fix in an existing tool, compiler flag/version, Binaryen pass,
+   linker, generator or build step?** → **TOOL**. Examples: a codegen bug in a
+   compiler, a `wasm-opt` rewrite, a SWIG/Glue invocation, a generated header.
+4. **Does the source language/toolchain simply lack the concept, so even a
+   correct adapter cannot express it without a language/frontend change?** →
+   **LANG**. Examples: C has no typed Wasm GC struct references; C/Rust have no
+   GC finalizer for a foreign pointer; AssemblyScript’s managed object is not
+   a Wasm GC object.
+5. **If two owners genuinely have separate work, split the row.** Do not write
+   `ENG+TOOL` or `LANG+EMB`. A missing language feature (`LANG`) plus a generator
+   adapter (`TOOL`) is two rows; a host policy (`EMB`) plus an engine primitive
+   (`ENG`) is two rows.
+6. **Compiler overlap is resolved by what changes.** A compiler bug, flag,
+   version or emitted encoding is **TOOL**. A language rule that would require
+   designing a new source feature or rewriting the frontend is **LANG**. A
+   mismatch between the compiler’s ABI and the engine’s ABI is **TOOL** unless
+   the engine is wrong, in which case it is **ENG**.
+7. **Status is separate from owner.** Use `Open`, `Accepted`, `Rejected` or
+   `Verify`. A rejected option still has an owner (the party that decided not to
+   do it). `Verify` means the implementation exists but the evidence/test is
+   missing.
+
+The old `P1`–`P6` and `ES-*` items are milestone history; §9 remains the
+milestone status. This register covers the open questions introduced by §12–15
+and the constraints they inherit from §4/§13/§14.
+
+
+### 16.3 Engine-owned register
+
+These are things the engine must decide, implement or deliberately refuse. They
+do not name a host runtime or a source language.
+
+| ID | Problem / open question | Where | Status | Decision / next action |
+|---|---|---|---|---|
+| **EN-1** | Reference identity is Store-scoped; cross-Store references are not shareable | §4.4, §14.2 | **Accepted** | One `Store` per runtime; two runtimes reject cross-runtime modules/instances. Do not add a process-global type registry. |
+| **EN-2** | A bare `Callable` carries a numeric `typeId` but not its originating `Store` | §15.2 | **Open** | Decide whether to add provenance or require `ModuleInstance`-owned wrappers; a numeric id alone cannot reject a foreign Store. |
+| **EN-3** | Every reference must lower to one pointer-sized machine word across backends | §14.1 | **Verify** | LibJIT and AsmJit do; any future backend must. Add an ABI check when SLJIT or another backend is promoted. |
+| **EN-4** | `HostBridge` is the only host-reference lifetime primitive; it does not own C++ objects | §13.2, §13.6 | **Accepted** | Keep it as retain/release/equals + lifecycle callbacks. Do not move a C++ object model into it. |
+| **EN-5** | `GcHeap` is guest-Wasm-GC only; it is not a native C++ heap | §13.7.2 | **Accepted** | No `std::pmr`-based native GC. Host objects stay in a host table/arena or an `externref` box. |
+| **EN-6** | Component resource slots are not native C++ object storage | §13.2 | **Accepted** | A `uint64_t` representation is data, not a destructor contract for arbitrary `T`. |
+| **EN-7** | Engine-side C++ reflection/class registry | §13.7.3, §15.5 | **Rejected** | Do not add one to `WasmBase`. Host-side reflection/tooling is allowed (§16.4/§16.5). |
+| **EN-8** | Arbitrary C++ object images in guest linear memory | §13.7.1 | **Rejected** | Only explicit POD/canonical data crosses. Layout negotiation is not an engine feature. |
+| **EN-9** | Class-size registration as an engine API | §15.4 | **Rejected** | No `sizeof(T)` contract. Guest wrapper sizes belong to the guest compiler; host objects stay host-side. |
+| **EN-10** | `stringref` and GC references are Store-owned; cross-Store sharing is unsupported | §14.7 | **Accepted** | Copy/serialize across runtimes; do not pass the pointer. |
+| **EN-11** | A `(ref $T)` import must match the canonical function/type identity, not just a pointer kind | §14.2, §14.8 | **Verify** | The matching machinery exists; add the two-module GC/typed-ref test to the evidence set. |
+| **EN-12** | The public metadata must be sufficient for generated headers | §14.8 | **Verify** | `importDescriptors`/`exportDescriptors` + `typeView` are the schema; prove a C/C++ and Rust emitter consumes them without parsing C++ headers. |
+| **EN-13** | `Elvavena` remains in the public SDK headers | §6.2, §9 | **Accepted** | Deliberate first-freeze tradeoff; removal is a separate public-header/API decision, not an embedding-runtime bug. |
+
+The **ENG** list is deliberately short. Most of the remaining work in §12–15 is
+not a missing engine feature; it is a host adapter or a generator.
+
+
+### 16.4 Embedder-owned register
+
+This is the category that must stay explicit. None of these is an engine gap
+when the engine already supplies the primitive; they are policies, adapters and
+product decisions.
+
+| ID | Problem / open question | Where | Status | Owner-side action |
+|---|---|---|---|---|
+| **EM-1** | How a guest sees a native C++ object or C struct: A/B/C | §13.4–§13.6 | **Open** | Choose/implement the handle table, generated stubs or host box; the engine only supplies `externref`/barriers. |
+| **EM-2** | Host-side C++ reflection/class registration | §13.7.3, §15.3–§15.5 | **Open** | Build it outside `WasmBase` if a product needs it; do not ask the engine to own a class model. |
+| **EM-3** | Native object lifetime and finalization | §13.6, §13.9 | **Open** | Pick `unique_ptr`, `shared_ptr`, arena, custom deleter or `HostBox`; install the `HostBridge` callbacks and drop per-instance roots. |
+| **EM-4** | Host object table storage and thread affinity | §13.5, §13.9 | **Open** | Choose a mutex/thread-local/per-agent table; document that a native object is not automatically thread-safe. |
+| **EM-5** | WASI implementation | §4.2 | **Accepted** | Implement it as host imports; the engine has no WASI subsystem. |
+| **EM-6** | JavaScript engine / JS object model / Promise loop | §12, §15.5 | **Accepted** | Implement behind `HostBridge`/host imports; the core has no JS runtime. |
+| **EM-7** | Multi-agent scheduling and OS thread/fiber policy | §4.2, §9 | **Accepted** | The engine supplies `Agent` and instance rules; the embedder schedules and pins. |
+| **EM-8** | `gcCollect()` safepoint discipline | §2, `ABI.md` | **Accepted** | Call it where no Wasm frame is live and no un-counted references are held; this is a host obligation. |
+| **EM-9** | Host binding declarations/adapters by hand or generator output | §12, §15 | **Open** | Choose hand-written or generated adapters; own the target-language ABI and memory protocol. |
+| **EM-10** | GC → non-GC façade (`extern.convert_any`/`any.convert_extern`) | §14.3 | **Open** | The GC module exports the façade; the non-GC host/guest stays opaque. |
+| **EM-11** | Cross-Store copy/serialize/remote boundary | §14.2–§14.3 | **Open** | Copy or serialize; do not pass a Store-owned reference across runtimes. |
+| **EM-12** | Native string ↔ `stringref`/UTF-8/WTF conversion | §14.7 | **Open** | Use `StringStore` copy methods in the adapter; no native string layout crosses. |
+| **EM-13** | Host object `Tag`/handle validation and stale-handle policy | §13.4–§13.5 | **Open** | Put generation/type tags in the table; reject stale/mistyped handles before dereference. |
+| **EM-14** | Host adapter conformance tests | §13.10, §15.6 | **Open** | Test the generated adapter, not only raw `Callable`; assert ownership and trap paths. |
+| **EM-15** | Host-to-guest template library (`GuestFunction`, `HostClass`) | §15.2–§15.3 | **Open** | Optional host-side header/library, not `WasmBase`; keep the ownership policy in the table. |
+| **EM-16** | Register `sizeof(T)` / host layout in the adapter | §15.4 | **Rejected** | Use a handle or guest wrapper; a size without offsets/lifetime is not a contract. |
+
+**EM-5/EM-6/EM-7/EM-8 are decisions, not engine debt.** They stay in this
+register so a future reader does not “fix” them by adding WASI, a JS engine or a
+scheduler to `WasmBase/`.
+
+
+### 16.5 Tooling / build-time register
+
+This owner covers two things the user question deliberately conflates:
+**Wasm producers/optimizers** and **bindings generators**. Both are outside the
+engine proper; both can be optional integrations.
+
+| ID | Problem / open question | Where | Status | Tool-side action |
+|---|---|---|---|---|
+| **TB-1** | No neutral schema emitter from `Module`/`Component` descriptors | §12.2, §12.7 | **Open** | Build a small descriptor→JSON schema tool first; test-only is acceptable. |
+| **TB-2** | No C/C++, Rust, Zig, AS, Kotlin, MoonBit, Go or Dart emitter | §12.6–§12.7 | **Open** | Start with C/C++ and Rust; consume descriptors, not C++ headers. |
+| **TB-3** | SWIG/Glue integration | §12.3, §15.5 | **Open** | Optional build-time C++ discovery only; never link into the engine. |
+| **TB-4** | Automatic scan of existing C/C++ headers as truth | §12.3 | **Rejected** | A C++ header is not a Wasm ABI; a generator may use it only as an optional front-end after descriptor validation. |
+| **TB-5** | WIT as an IDL for core modules | §12.3–§12.4 | **Accepted** | WIT is component-level; core modules still use descriptors/`Callable`. |
+| **TB-6** | Binaryen/`wasm-opt` rewrites/optimizations | §12, §14 | **Verify** | Keep them in the producer pipeline; test the post-optimization module against the same descriptors. |
+| **TB-7** | Compiler flags/versions that emit or omit GC refs, `externref`, EH, stringref | §12, §14 | **Open** | Pin toolchain versions/flags; record the produced module shape in the evidence log. |
+| **TB-8** | Generated headers for GC/string references | §14.4–§14.8 | **Open** | Emit opaque per-kind types, no layout/`TypeId` constants, explicit ownership comments. |
+| **TB-9** | Install/pkg-config/out-of-tree consumer | §7, §8 | **Verify** | `ES-5`/`ES-7` exist; re-run on the target toolchain when packaging changes. |
+| **TB-10** | Cross-vendor C++ ABI stability | §9 | **Accepted** | Soname discipline only; a stable binary C++ ABI is out of scope unless a pimpl firewall is designed. |
+| **TB-11** | Generated-adapter conformance tests | §12.5, §15.6 | **Open** | Exercise the generated adapter (calls/imports/ownership/traps), not only raw engine APIs. |
+| **TB-12** | Compiler/tool output whose encoding collides with the engine’s reserved forms | §14.7, `STRINGREF.md` | **Verify** | Keep the reserved-encoding note in the producer/toolchain checklist; do not patch the engine around a tool bug. |
+| **TB-13** | Legacy/alternative exception encoding from a producer (e.g. Kotlin/Wasm) | §12, `LEGACY_EXCEPTIONS.md` | **Verify** | Fix in the producer or parser policy; this is a tool encoding issue, not a source-language type rule. |
+| **TB-14** | Language-specific host import/export ABI emission | §12.6, §14.4 | **Open** | The generator/compiler emits the target ABI; the engine only sees the resulting Wasm signature. |
+
+`TB-3` is intentionally **not** “make SWIG a dependency”. It is a build-time
+tool option; the engine’s descriptor-driven emitter is the preferred source of
+truth.
+
+
+### 16.6 Source-language register
+
+These are constraints of the source language/compiler model. They are not
+engine gaps, and an adapter cannot make the language express something it has
+no type or lifetime rule for.
+
+| ID | Problem / open question | Language(s) | Status | Boundary / workaround |
+|---|---|---|---|---|
+| **LG-1** | No typed Wasm GC struct/array reference in the source language | C, C++, Rust, Zig, Go/TinyGo (ordinary ABIs) | **Accepted** | Use `externref`/integer handles plus a host adapter; do not claim a typed direct import. |
+| **LG-2** | No source-language GC finalizer for a foreign pointer | C, C++, Rust, Zig, Go/TinyGo | **Accepted** | Explicit `destroy`, RAII/`Drop` wrappers, or a host-side box; no engine finalizer. |
+| **LG-3** | Runtime-owned object model/GC differs from Wasm GC | AssemblyScript, Kotlin/Wasm, MoonBit, Dart, Go | **Accepted** | Use `externref` + adapter functions, or matching Wasm-level types; never cast language objects to C++ classes. |
+| **LG-4** | Native string model differs from `stringref`/UTF-8/WTF | C/C++, Rust, Kotlin, Dart, AssemblyScript, Lua | **Accepted** | Copy through `StringStore`/canonical string ABI; no native string layout crosses. |
+| **LG-5** | Native exceptions/panics are not Wasm exceptions or traps | C++, Rust, Kotlin, Go, Dart, Lua | **Accepted** | Translate at the generated boundary; a host adapter decides trap vs language error. |
+| **LG-6** | Object/class semantics differ even when Wasm types match | any two GC languages | **Accepted** | Export a function API over the common Wasm types; do not assume a shared class library. |
+| **LG-7** | C++ templates, virtual bases, RTTI and standard-library layout | C++ | **Accepted** | Keep the C++ object on the host; expose an opaque handle/`externref` and generated functions. |
+| **LG-8** | Lua’s typed values live in a VM, not in Wasm values | Lua | **Accepted** | Treat the VM state as an opaque host pointer; use the VM’s C API. |
+
+The **LANG** rows are not “won’t fix”; they are “fixing this means changing the
+source language or its frontend, not `WasmBase`”. The practical adapter choices
+are in §13–§15 and in the per-language notes of
+[`languages/LF2_ABI_INTEROP.md`](languages/LF2_ABI_INTEROP.md).
+
+### 16.7 Using the register in review
+
+For a new issue or design note:
+
+1. State the **observable problem**, not the implementation you prefer.
+2. Assign one **primary owner** using §16.2.
+3. If the fix requires two owners, split the item; do not hide a language
+   limitation inside an engine ticket or a generator ticket.
+4. Mark the status explicitly. “Accepted” is a decision, not a closed bug.
+5. Add the item to the appropriate table and link the section where the design
+   lives.
+6. If an accepted item is reopened, say which owner changed its mind and why;
+   do not silently move it to another column.
+
+The one-line summary is:
+
+> **ENG** changes the contract; **EMB** changes the host policy; **TOOL**
+> changes what the build produces; **LANG** changes what the source language can
+> express.
 

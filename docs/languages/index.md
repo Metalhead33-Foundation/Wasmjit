@@ -1,10 +1,10 @@
 # Language Support — the `LF-1` Screen and the `LF-2` Studies {#languages_index}
 
-Status: study report set (revision 6 — 2026-11-04: points the ABI amendment at
-`EMBEDDING_SURFACE.md` §12–15, including GC references across modules; revision
-5, 2026-11-03, added the cross-language ABI/interop amendment
-`LF2_ABI_INTEROP.md`; revision 4 was the `LF-2` report set). Revision 3 was the
-third re-screen after `MP-1`
+Status: study report set (revision 7 — 2026-11-04: adds the §11 ownership map
+and points the ABI amendment at `EMBEDDING_SURFACE.md` §12–16; revision 6
+pointed at §12–15; revision 5, 2026-11-03, added the cross-language ABI/interop
+amendment `LF2_ABI_INTEROP.md`; revision 4 was the `LF-2` report set). Revision
+3 was the third re-screen after `MP-1`
 gave a non-shared memory a reservation policy, which also wrote down what A3
 grades — the Kotlin shape: *load, instantiate, execute; the host import set is
 the embedder's*; revision 2 was the re-screen after the legacy-EH parser policy
@@ -49,7 +49,7 @@ the next person who is tempted to answer the question from a blog post.
 | \subpage lf_charters | **The commissionable units.** One charter per shortlisted cluster: scope, pinned candidates, questions, the bar for "feasible", the budget cap, the deliverable, the stop conditions, owner and date. |
 | \subpage lf_evidence | **The receipts.** Every external source with its retrieval date and tier, the in-repo evidence it leans on, and — explicitly — what was *not* verified. |
 | \subpage lf2_index | **The `LF-2` set.** The commissioned full studies: the verdict table, the three engine findings, the budget, and the reading order for the reports below. |
-| \subpage lf2_abi | **Cross-language ABI amendment.** The two call directions, synthetic host modules, core `Callable` versus component Canonical ABI, and the scalar-to-GC/reference difficulty matrix per language; it links to `EMBEDDING_SURFACE.md` §12–15 for host bindings, native objects, GC references across modules and host-to-guest templates. |
+| \subpage lf2_abi | **Cross-language ABI amendment.** The two call directions, synthetic host modules, core `Callable` versus component Canonical ABI, the scalar-to-GC/reference difficulty matrix per language, and its §11 engine/embedder/tooling/language ownership map; it links to `EMBEDDING_SURFACE.md` §12–16 for host bindings, native objects, GC references and the shared register. |
 | \subpage lf2_s1 | `S1` — C/C++ toolchain and ABI: five arms, all green (the last one after the `LE-8` translation). |
 | \subpage lf2_s2 | `S2` — the LLVM-family languages: Rust (two targets), TinyGo and Zig, all green. |
 | \subpage lf2_s3 | `S3` — AssemblyScript (and TypeScript by inheritance): green, building on the harness evidence. |
