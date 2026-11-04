@@ -267,16 +267,25 @@ Json moduleSchemaImpl(const WASM::Module& module, const WASM::TypeRegistry& type
 		schema["types"].push_back(type);
 	}
 	schema["imports"] = Json::array();
-	if (direction != Direction::HostToGuest) {
+	if (direction == Direction::GuestToHost) {
 		for (const WASM::ImportDescriptor& descriptor : module.importDescriptors()) {
 			Json import = descriptorJson(descriptor.type, types);
 			import["module"] = descriptor.moduleName;
 			import["name"] = descriptor.fieldName;
 			schema["imports"].push_back(import);
 		}
+	} else if (direction == Direction::GuestToGuest) {
+		// A guest-to-guest consumer imports the *producer's exports*. The
+		// producer's own imports are irrelevant to that consumer.
+		for (const WASM::ExportDescriptor& descriptor : module.exportDescriptors()) {
+			Json import = descriptorJson(descriptor.type, types);
+			import["module"] = moduleName;
+			import["name"] = descriptor.name;
+			schema["imports"].push_back(import);
+		}
 	}
 	schema["exports"] = Json::array();
-	if (direction != Direction::GuestToHost) {
+	if (direction == Direction::HostToGuest) {
 		for (const WASM::ExportDescriptor& descriptor : module.exportDescriptors()) {
 			Json exportEntry = descriptorJson(descriptor.type, types);
 			exportEntry["name"] = descriptor.name;
@@ -1161,13 +1170,21 @@ Json componentSchema(const WASM::Component& component, const WASM::TypeRegistry&
 	schema["module"] = componentName;
 	schema["componentName"] = component.componentName();
 	schema["imports"] = Json::array();
-	if (direction != Direction::HostToGuest) {
+	if (direction == Direction::GuestToHost) {
 		for (const WASM::ImportDecl& importDecl : component.imports)
 			schema["imports"].push_back(
 					componentImportJson(importDecl, component, store));
+	} else if (direction == Direction::GuestToGuest) {
+		// The consumer imports the producer component's exports. Do not project
+		// the producer's own imports into a G2G interface.
+		for (const WASM::ComponentExport& exportDecl : component.exports) {
+			Json import = componentExportJson(exportDecl, component, spaces, store);
+			import["module"] = componentName;
+			schema["imports"].push_back(import);
+		}
 	}
 	schema["exports"] = Json::array();
-	if (direction != Direction::GuestToHost) {
+	if (direction == Direction::HostToGuest) {
 		for (const WASM::ComponentExport& exportDecl : component.exports)
 			schema["exports"].push_back(
 					componentExportJson(exportDecl, component, spaces, store));
@@ -2442,11 +2459,15 @@ void emitCppImportStub(std::ostringstream &out, const Json &entry) {
 
 std::string emitCppTypedefsImpl(const Json& schema)
 {
+	const std::string direction = schema.value("direction", "g2h");
+	if (direction != "h2g")
+		return "// cpp-typedefs is an H2G (host calls guest) surface; no output "
+			   "for " + direction + ".\n";
+
 	std::set<std::string> refs;
 	collectSchemaRefs(schema, refs);
-	const std::string direction = schema.value("direction", "g2h");
-	const bool emitImports = direction != "h2g";
-	const bool emitExports = direction != "g2h";
+	const bool emitImports = false;
+	const bool emitExports = true;
 	std::ostringstream out;
 	out << "// Generated C++ binding surface from the "
 		<< schema.at("schema").get<std::string>() << " " << direction
@@ -2487,8 +2508,12 @@ std::string emitCppTypedefsImpl(const Json& schema)
 std::string emitCppSourceImpl(const Json& schema)
 {
 	const std::string direction = schema.value("direction", "g2h");
-	const bool emitImports = direction != "h2g";
-	const bool emitExports = direction != "g2h";
+	if (direction != "h2g")
+		return "// cpp-source is an H2G (host calls guest) surface; no output "
+			   "for " + direction + ".\n";
+
+	const bool emitImports = false;
+	const bool emitExports = true;
 	const std::string module = sanitize(schema.value("module", "module"));
 	std::ostringstream out;
 	out << "// Generated C++ binding implementation from the "
@@ -2538,6 +2563,10 @@ std::string emitCppSourceImpl(const Json& schema)
 
 std::string emitCppAdapterImpl(const Json& schema)
 {
+	const std::string direction = schema.value("direction", "g2h");
+	if (direction != "h2g")
+		return "// cpp-adapter is an H2G (host calls guest) surface; no output "
+			   "for " + direction + ".\n";
 	if (schema.value("kind", "module") == "component")
 		return "// Component adapters are not generated yet; use the C header and "
 			   "ComponentFunction.\n";

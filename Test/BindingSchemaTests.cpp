@@ -216,10 +216,10 @@ TEST_CASE("the binding schema projects core function and global descriptors", "[
 TEST_CASE("the binding schema spells reference types opaquely", "[bindings]")
 {
 	const WASM::Module module = loadTestModule("wasm_js_string_length");
-	const Json schema = WASM::Bindings::moduleSchema(module, testStore().types(),
-			WASM::Bindings::Direction::GuestToGuest, "wasm_js_string_length");
+	const Json importSchema = WASM::Bindings::moduleSchema(module, testStore().types(),
+			WASM::Bindings::Direction::GuestToHost, "wasm_js_string_length");
 
-	const Json* length = findImport(schema, "wasm:js-string", "length");
+	const Json* length = findImport(importSchema, "wasm:js-string", "length");
 	REQUIRE(length != nullptr);
 	REQUIRE(length->at("kind") == "function");
 	REQUIRE(length->at("type").at("params").size() == 1u);
@@ -228,7 +228,10 @@ TEST_CASE("the binding schema spells reference types opaquely", "[bindings]")
 	REQUIRE(length->at("type").at("params")[0].at("nullable") == true);
 	REQUIRE(length->at("type").at("results")[0].at("type") == "i32");
 
-	const Json* identity = findExport(schema, "identity");
+	const Json exportSchema = WASM::Bindings::moduleSchema(module,
+			testStore().types(), WASM::Bindings::Direction::HostToGuest,
+			"wasm_js_string_length");
+	const Json* identity = findExport(exportSchema, "identity");
 	REQUIRE(identity != nullptr);
 	const std::string paramType =
 			identity->at("type").at("params").at(0).at("type").get<std::string>();
@@ -237,7 +240,7 @@ TEST_CASE("the binding schema spells reference types opaquely", "[bindings]")
 	REQUIRE(paramType == "ref");
 	REQUIRE(resultType == "ref");
 
-	const std::string header = WASM::Bindings::emitCHeader(schema);
+	const std::string header = WASM::Bindings::emitCHeader(exportSchema);
 	REQUIRE(header.find("typedef struct wasm_externref wasm_externref;") != std::string::npos);
 	REQUIRE(header.find("WASMJIT_WASM_IMPORT") != std::string::npos);
 	REQUIRE(header.find("wasm_externref* arg0 /* borrowed */") != std::string::npos);
@@ -245,14 +248,16 @@ TEST_CASE("the binding schema spells reference types opaquely", "[bindings]")
 	REQUIRE(header.find("typeId") == std::string::npos);
 	REQUIRE(header.find("sizeof(") == std::string::npos);
 
-	const std::string rust = WASM::Bindings::emitRustModule(schema);
+	const std::string rust = WASM::Bindings::emitRustModule(exportSchema);
 	REQUIRE(rust.find("pub struct wasm_externref") != std::string::npos);
 	REQUIRE(rust.find("pub type wasmjit_identity_t") != std::string::npos);
-	REQUIRE(rust.find("pub fn wasmjit_wasm_js_string_length") != std::string::npos);
-	REQUIRE(rust.find("extern \"C\"") != std::string::npos);
-	REQUIRE(rust.find("#[link(wasm_import_module = \"wasm:js-string\")]")
+
+	const std::string importRust = WASM::Bindings::emitRustModule(importSchema);
+	REQUIRE(importRust.find("pub fn wasmjit_wasm_js_string_length") != std::string::npos);
+	REQUIRE(importRust.find("extern \"C\"") != std::string::npos);
+	REQUIRE(importRust.find("#[link(wasm_import_module = \"wasm:js-string\")]")
 			!= std::string::npos);
-	REQUIRE(rust.find("#[link_name = \"length\"]") != std::string::npos);
+	REQUIRE(importRust.find("#[link_name = \"length\"]") != std::string::npos);
 }
 
 TEST_CASE("g2h Rust emits Wasm import declarations", "[bindings]")
@@ -270,9 +275,10 @@ TEST_CASE("g2h Rust emits Wasm import declarations", "[bindings]")
 	const Json both = WASM::Bindings::moduleSchema(module, testStore().types(),
 			WASM::Bindings::Direction::GuestToGuest, "asmjit_i32_import");
 	const std::string rustBoth = WASM::Bindings::emitRustModule(both);
-	REQUIRE(rustBoth.find("#[export_name = \"call_host\"]") != std::string::npos);
-	REQUIRE(rustBoth.find("#[link(wasm_import_module = \"host\")]")
+	REQUIRE(rustBoth.find("#[link(wasm_import_module = \"asmjit_i32_import\")]")
 			!= std::string::npos);
+	REQUIRE(rustBoth.find("#[link_name = \"call_host\"]") != std::string::npos);
+	REQUIRE(rustBoth.find("#[export_name = \"call_host\"]") == std::string::npos);
 
 	if (haveTool("rustc --version > /dev/null 2>&1")) {
 		const std::filesystem::path dir = bindingsDir();
@@ -461,25 +467,20 @@ TEST_CASE("an optimized module keeps the same binding signatures", "[bindings]")
 				optimizedStore.types(), WASM::Bindings::Direction::GuestToGuest,
 				fixture);
 
-		for (const char* section : { "exports", "imports" }) {
-			for (const Json& original : baseline.at(section)) {
-				if (original.value("kind", "") != "function")
-					continue;
-				const std::string name = original.at("name").get<std::string>();
-				const Json* match = nullptr;
-				if (std::string_view(section) == "exports") {
-					match = findExport(optimized, name);
-				} else {
-					match = findImport(optimized,
-							original.value("module", ""), name);
-				}
-				REQUIRE(match != nullptr);
-				REQUIRE(match->at("kind") == original.at("kind"));
-				REQUIRE(withoutTypeIds(match->at("type").at("params"))
-						== withoutTypeIds(original.at("type").at("params")));
-				REQUIRE(withoutTypeIds(match->at("type").at("results"))
-						== withoutTypeIds(original.at("type").at("results")));
-			}
+		// In G2G the producer's exports are the consumer's imports; comparing
+		// that one projection covers the exported signatures after optimization.
+		for (const Json& original : baseline.at("imports")) {
+			if (original.value("kind", "") != "function")
+				continue;
+			const std::string name = original.at("name").get<std::string>();
+			const Json* match = findImport(optimized,
+					original.value("module", ""), name);
+			REQUIRE(match != nullptr);
+			REQUIRE(match->at("kind") == original.at("kind"));
+			REQUIRE(withoutTypeIds(match->at("type").at("params"))
+					== withoutTypeIds(original.at("type").at("params")));
+			REQUIRE(withoutTypeIds(match->at("type").at("results"))
+					== withoutTypeIds(original.at("type").at("results")));
 		}
 	}
 }
@@ -518,7 +519,10 @@ TEST_CASE("the remaining language emitters produce declarations", "[bindings]")
 {
 	const WASM::Module module = loadTestModule("wasm_js_string_length");
 	const Json schema = WASM::Bindings::moduleSchema(module, testStore().types(),
-			WASM::Bindings::Direction::GuestToGuest, "wasm_js_string_length");
+			WASM::Bindings::Direction::GuestToHost, "wasm_js_string_length");
+	const Json exportSchema = WASM::Bindings::moduleSchema(module,
+			testStore().types(), WASM::Bindings::Direction::HostToGuest,
+			"wasm_js_string_length");
 	const std::filesystem::path dir = bindingsDir();
 
 	const auto write = [&](std::string_view name, const std::string& text) {
@@ -533,7 +537,7 @@ TEST_CASE("the remaining language emitters produce declarations", "[bindings]")
 		return std::system(command.c_str()) == 0;
 	};
 
-	const std::string ts = WASM::Bindings::emit(schema,
+	const std::string ts = WASM::Bindings::emit(exportSchema,
 			WASM::Bindings::Language::TypeScript);
 	REQUIRE(ts.find("export interface WasmExternref") != std::string::npos);
 	REQUIRE(ts.find("export declare function wasmjit_identity") != std::string::npos);
@@ -608,8 +612,11 @@ TEST_CASE("the remaining language emitters produce declarations", "[bindings]")
 		WARN("moonc not found; skipped the MoonBit check");
 	}
 
-	const std::string go = WASM::Bindings::emit(schema, WASM::Bindings::Language::Go);
-	REQUIRE(go.find("//go:wasmimport wasm:js-string length") != std::string::npos);
+	const std::string go = WASM::Bindings::emit(exportSchema,
+			WASM::Bindings::Language::Go);
+	const std::string goImport = WASM::Bindings::emit(schema,
+			WASM::Bindings::Language::Go);
+	REQUIRE(goImport.find("//go:wasmimport wasm:js-string length") != std::string::npos);
 	REQUIRE(go.find("//go:wasmexport len") != std::string::npos);
 	if (haveTool("command -v gofmt > /dev/null 2>&1")) {
 		const auto path = write("lang.go", go);
@@ -648,11 +655,15 @@ TEST_CASE("the binding schema projects component functions", "[bindings]")
 {
 	WASM::Component component;
 	loadTestComponent("component_runtime_import", component);
-	const Json schema = WASM::Bindings::componentSchema(component, testStore().types(),
-			WASM::Bindings::Direction::GuestToGuest, "component_runtime_import");
+	const Json importSchema = WASM::Bindings::componentSchema(component,
+			testStore().types(), WASM::Bindings::Direction::GuestToHost,
+			"component_runtime_import");
+	const Json exportSchema = WASM::Bindings::componentSchema(component,
+			testStore().types(), WASM::Bindings::Direction::HostToGuest,
+			"component_runtime_import");
 
-	REQUIRE(schema.at("kind") == "component");
-	const Json* import = findByName(schema.at("imports"), "host-add");
+	REQUIRE(importSchema.at("kind") == "component");
+	const Json* import = findByName(importSchema.at("imports"), "host-add");
 	REQUIRE(import != nullptr);
 	REQUIRE(import->at("kind") == "function");
 	REQUIRE(import->at("type").at("kind") == "func");
@@ -661,7 +672,7 @@ TEST_CASE("the binding schema projects component functions", "[bindings]")
 	REQUIRE(import->at("type").at("params")[0].at("name") == "a");
 	REQUIRE(import->at("type").at("results")[0].at("type") == "u32");
 
-	const Json* exportEntry = findByName(schema.at("exports"), "host-add");
+	const Json* exportEntry = findByName(exportSchema.at("exports"), "host-add");
 	REQUIRE(exportEntry != nullptr);
 	REQUIRE(exportEntry->at("kind") == "function");
 	REQUIRE(exportEntry->at("type").at("kind") == "func");
@@ -696,21 +707,28 @@ TEST_CASE("component schema directions split imports and exports", "[bindings]")
 	const Json g2g = schema(WASM::Bindings::Direction::GuestToGuest);
 	REQUIRE(g2g.at("direction") == "g2g");
 	REQUIRE_FALSE(g2g.at("imports").empty());
-	REQUIRE_FALSE(g2g.at("exports").empty());
+	REQUIRE(g2g.at("exports").empty());
+	const Json* g2gImport = findByName(g2g.at("imports"), "host-add");
+	REQUIRE(g2gImport != nullptr);
+	REQUIRE(g2gImport->at("module") == "component_runtime_import");
 }
 
 TEST_CASE("the binding schema projects component records and type imports", "[bindings]")
 {
 	WASM::Component component;
 	loadTestComponent("component_typeimports", component);
-	const Json schema = WASM::Bindings::componentSchema(component, testStore().types(),
-			WASM::Bindings::Direction::GuestToGuest, "component_typeimports");
+	const Json importSchema = WASM::Bindings::componentSchema(component,
+			testStore().types(), WASM::Bindings::Direction::GuestToHost,
+			"component_typeimports");
+	const Json exportSchema = WASM::Bindings::componentSchema(component,
+			testStore().types(), WASM::Bindings::Direction::HostToGuest,
+			"component_typeimports");
 
-	const Json* import = findByName(schema.at("imports"), "r");
+	const Json* import = findByName(importSchema.at("imports"), "r");
 	REQUIRE(import != nullptr);
 	REQUIRE(import->at("kind") == "type");
 
-	const Json* exportEntry = findByName(schema.at("exports"), "t");
+	const Json* exportEntry = findByName(exportSchema.at("exports"), "t");
 	REQUIRE(exportEntry != nullptr);
 	REQUIRE(exportEntry->at("kind") == "type");
 	REQUIRE(exportEntry->at("type").at("kind") == "record");
@@ -724,7 +742,10 @@ TEST_CASE("component schemas feed the language emitters", "[bindings]")
 	WASM::Component component;
 	loadTestComponent("component_runtime_import", component);
 	const Json schema = WASM::Bindings::componentSchema(component, testStore().types(),
-			WASM::Bindings::Direction::GuestToGuest, "component_runtime_import");
+			WASM::Bindings::Direction::HostToGuest, "component_runtime_import");
+	const Json importSchema = WASM::Bindings::componentSchema(component,
+			testStore().types(), WASM::Bindings::Direction::GuestToHost,
+			"component_runtime_import");
 	const std::filesystem::path dir = bindingsDir();
 
 	const auto write = [&](std::string_view name, const std::string& text) {
@@ -779,7 +800,8 @@ TEST_CASE("component schemas feed the language emitters", "[bindings]")
 		WARN("rustc not found; skipped the component Rust check");
 	}
 
-	const std::string zig = WASM::Bindings::emit(schema, WASM::Bindings::Language::Zig);
+	const std::string zig = WASM::Bindings::emit(importSchema,
+			WASM::Bindings::Language::Zig);
 	REQUIRE(zig.find(".library_name = \"component\"") != std::string::npos);
 	if (haveTool("command -v zig > /dev/null 2>&1")) {
 		const auto path = write("component.zig", zig);
@@ -792,8 +814,10 @@ TEST_CASE("component schemas feed the language emitters", "[bindings]")
 	}
 
 	const std::string go = WASM::Bindings::emit(schema, WASM::Bindings::Language::Go);
+	const std::string goImport = WASM::Bindings::emit(importSchema,
+			WASM::Bindings::Language::Go);
 	REQUIRE(go.find("//go:wasmexport host-add") != std::string::npos);
-	REQUIRE(go.find("//go:wasmimport component host-add") != std::string::npos);
+	REQUIRE(goImport.find("//go:wasmimport component host-add") != std::string::npos);
 	if (haveTool("command -v go > /dev/null 2>&1")) {
 		const std::filesystem::path goDir = dir / "componentgopkg";
 		std::filesystem::create_directories(goDir);
@@ -812,14 +836,15 @@ TEST_CASE("component schemas feed the language emitters", "[bindings]")
 		WARN("go not found; skipped the component Go build");
 	}
 
-	const std::string kotlin = WASM::Bindings::emit(schema,
+	const std::string kotlin = WASM::Bindings::emit(importSchema,
 			WASM::Bindings::Language::Kotlin);
 	REQUIRE(kotlin.find("external fun wasmjit_component_host_add") != std::string::npos);
-	const std::string moonbit = WASM::Bindings::emit(schema,
+	const std::string moonbit = WASM::Bindings::emit(importSchema,
 			WASM::Bindings::Language::MoonBit);
 	REQUIRE(moonbit.find("extern \"wasm\" fn wasmjit_component_host_add")
 			!= std::string::npos);
-	const std::string dart = WASM::Bindings::emit(schema, WASM::Bindings::Language::Dart);
+	const std::string dart = WASM::Bindings::emit(importSchema,
+			WASM::Bindings::Language::Dart);
 	REQUIRE(dart.find("@Native<Int32 Function(Int32, Int32)>") != std::string::npos);
 
 	const std::string cpp = WASM::Bindings::emit(schema,
@@ -837,17 +862,23 @@ TEST_CASE("non-function entries stay visible in emitted bindings", "[bindings]")
 {
 	WASM::Component component;
 	loadTestComponent("component_typeimports", component);
-	const Json schema = WASM::Bindings::componentSchema(component, testStore().types(),
-			WASM::Bindings::Direction::GuestToGuest, "component_typeimports");
-	const std::string c = WASM::Bindings::emit(schema,
+	const Json importSchema = WASM::Bindings::componentSchema(component,
+			testStore().types(), WASM::Bindings::Direction::GuestToHost,
+			"component_typeimports");
+	const Json exportSchema = WASM::Bindings::componentSchema(component,
+			testStore().types(), WASM::Bindings::Direction::HostToGuest,
+			"component_typeimports");
+	const std::string c = WASM::Bindings::emit(importSchema,
 			WASM::Bindings::Language::CHeader);
 	REQUIRE(c.find("Non-function entries") != std::string::npos);
-	REQUIRE(c.find("// export: type \"t\" (record)") != std::string::npos);
+	REQUIRE(c.find("// import: type \"r\"") != std::string::npos);
+	REQUIRE(WASM::Bindings::emit(exportSchema, WASM::Bindings::Language::CHeader)
+			.find("// export: type \"t\" (record)") != std::string::npos);
 
 	WASM::Component values;
 	loadTestComponent("component_instance_args", values);
 	const Json valueSchema = WASM::Bindings::componentSchema(values,
-			testStore().types(), WASM::Bindings::Direction::GuestToGuest,
+			testStore().types(), WASM::Bindings::Direction::GuestToHost,
 			"component_instance_args");
 	const std::string ts = WASM::Bindings::emit(valueSchema,
 			WASM::Bindings::Language::TypeScript);
@@ -858,7 +889,7 @@ TEST_CASE("non-function entries stay visible in emitted bindings", "[bindings]")
 			"asmjit_i32_basic");
 	const std::string header = WASM::Bindings::emit(core,
 			WASM::Bindings::Language::CHeader);
-	REQUIRE(header.find("// export: global \"g\" (i32)") != std::string::npos);
+	REQUIRE(header.find("// import: global \"g\" (i32)") != std::string::npos);
 }
 
 TEST_CASE("component canonical ABI flattening feeds the emitters", "[bindings]")
@@ -1287,16 +1318,10 @@ TEST_CASE("host-side callable typedefs follow the engine ABI", "[bindings]")
 			WASM::Bindings::Direction::GuestToHost, "wasm_js_string_length");
 	const std::string importHeader = WASM::Bindings::emit(g2h,
 			WASM::Bindings::Language::CppTypedefs);
-	REQUIRE(importHeader.find("int32_t wasmjit_wasm_js_string_length(")
-			!= std::string::npos);
-	REQUIRE(importHeader.find("using wasmjit_wasm_js_string_length_fn")
-			== std::string::npos);
+	REQUIRE(importHeader.find("cpp-typedefs is an H2G") != std::string::npos);
 	const std::string importSource = WASM::Bindings::emit(g2h,
 			WASM::Bindings::Language::CppSource);
-	REQUIRE(importSource.find("int32_t wasmjit_wasm_js_string_length(")
-			!= std::string::npos);
-	REQUIRE(importSource.find("TODO: implement this host import.")
-			!= std::string::npos);
+	REQUIRE(importSource.find("cpp-source is an H2G") != std::string::npos);
 
 	if (haveTool("command -v g++ > /dev/null 2>&1")) {
 		const std::filesystem::path dir = bindingsDir() / "cpp-callables";

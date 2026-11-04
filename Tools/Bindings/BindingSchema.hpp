@@ -24,7 +24,7 @@ namespace WASM::Bindings {
 enum class Direction {
 	GuestToHost, //!< A Wasm guest calls a host function (host-side imports).
 	HostToGuest, //!< A native host calls a module/component export.
-	GuestToGuest //!< One module/component calls another.
+	GuestToGuest //!< A consumer imports the other module/component's exports.
 };
 
 /*! \brief A target language the schema can be emitted for. */
@@ -94,6 +94,10 @@ const char* directionName(Direction direction) noexcept;
  * identified by its kind for emission and keeps its `TypeId` only as tooling
  * metadata.
  *
+ * For `GuestToGuest`, `imports` is projected from the module's **exports**,
+ * using `moduleName` as the Wasm import module; the module's own imports are
+ * not part of the consumer interface.
+ *
  * \param module The parsed core module.
  * \param types The store's type registry, used to resolve canonical types.
  * \param direction The adapter direction recorded in the envelope.
@@ -113,6 +117,10 @@ nlohmann::ordered_json moduleSchema(const WASM::Module& module,
  * entries also carry an `abi` object — the exact flattened core parameter and
  * result cells plus the indirect flags from `TypeStore::canonicalAbi()`. The
  * function does not instantiate or execute the component.
+ *
+ * For `GuestToGuest`, `imports` is projected from the component's **exports**,
+ * using `componentName` as the Wasm import module; the component's own imports
+ * are not part of the consumer interface.
  *
  * \param component The parsed and validated component.
  * \param types The store's type registry, used to resolve component type ids.
