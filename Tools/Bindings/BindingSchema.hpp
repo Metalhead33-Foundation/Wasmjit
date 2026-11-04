@@ -6,6 +6,7 @@
 #include <string>
 #include <string_view>
 
+#include "WasmBase/WasmComponent.hpp"
 #include "WasmBase/WasmModule.hpp"
 #include "WasmBase/WasmTypeRegistry.hpp"
 
@@ -86,6 +87,24 @@ const char* directionName(Direction direction) noexcept;
 nlohmann::ordered_json moduleSchema(const WASM::Module& module,
 		const WASM::TypeRegistry& types, Direction direction,
 		std::string_view moduleName = "module");
+
+/*!
+ * \brief Projects a validated Component Model component into the binding schema.
+ *
+ * Component-level imports and exports are projected from the AST and the
+ * canonical component type records. WIT JSON is not required; when a component
+ * was built from WIT, its interface names remain the export names. The function
+ * does not instantiate or execute the component.
+ *
+ * \param component The parsed and validated component.
+ * \param types The store's type registry, used to resolve component type ids.
+ * \param direction The adapter direction recorded in the envelope.
+ * \param componentName The name recorded in the schema envelope.
+ * \return The ordered JSON schema.
+ */
+nlohmann::ordered_json componentSchema(const WASM::Component& component,
+		const WASM::TypeRegistry& types, Direction direction,
+		std::string_view componentName = "component");
 
 /*!
  * \brief Emits a C header from a binding schema.

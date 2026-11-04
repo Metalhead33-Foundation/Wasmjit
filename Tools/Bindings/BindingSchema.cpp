@@ -342,15 +342,24 @@ std::string cType(const Json& type)
 	if (type.value("packed", false))
 		return type.value("type", "") == "i8" ? "int8_t" : "int16_t";
 	const std::string kind = type.value("type", "");
-	if (kind == "i32") return "int32_t";
-	if (kind == "i64") return "int64_t";
-	if (kind == "f32") return "float";
-	if (kind == "f64") return "double";
+	if (kind == "i32" || kind == "s32") return "int32_t";
+	if (kind == "u32") return "uint32_t";
+	if (kind == "i64" || kind == "s64") return "int64_t";
+	if (kind == "u64") return "uint64_t";
+	if (kind == "s8") return "int8_t";
+	if (kind == "u8") return "uint8_t";
+	if (kind == "s16") return "int16_t";
+	if (kind == "u16") return "uint16_t";
+	if (kind == "f32" || kind == "float32") return "float";
+	if (kind == "f64" || kind == "float64") return "double";
+	if (kind == "bool") return "int32_t";
+	if (kind == "char") return "uint32_t";
 	if (kind == "v128") return "wasm_v128";
 	if (kind == "void") return "void";
+	if (kind == "string" || kind == "error-context") return "void*";
 	if (isReference(type))
 		return refTypeName(type) + "*";
-	return "void";
+	return "void*";
 }
 
 void collectRefs(const Json& node, std::set<std::string>& names)
@@ -370,6 +379,31 @@ void collectRefs(const Json& node, std::set<std::string>& names)
 		if (node.contains(key))
 			collectRefs(node.at(key), names);
 	}
+}
+
+void collectSchemaRefs(const Json& schema, std::set<std::string>& names)
+{
+	if (schema.contains("types"))
+		collectRefs(schema.at("types"), names);
+	collectRefs(schema.at("imports"), names);
+	collectRefs(schema.at("exports"), names);
+}
+
+std::string importModule(const Json& entry)
+{
+	const std::string module = entry.value("module", "");
+	return module.empty() ? "component" : module;
+}
+
+std::string importName(const Json& entry)
+{
+	return "wasmjit_" + sanitize(importModule(entry)) + "_"
+			+ sanitize(entry.at("name").get<std::string>());
+}
+
+std::string importComment(const Json& entry)
+{
+	return importModule(entry) + "." + entry.at("name").get<std::string>();
 }
 
 void emitFunction(std::ostringstream& out, const Json& entry, const std::string& name,
@@ -421,9 +455,7 @@ void emitFunction(std::ostringstream& out, const Json& entry, const std::string&
 std::string emitCHeaderImpl(const Json& schema)
 {
 	std::set<std::string> refs;
-	collectRefs(schema.at("types"), refs);
-	collectRefs(schema.at("imports"), refs);
-	collectRefs(schema.at("exports"), refs);
+	collectSchemaRefs(schema, refs);
 
 	const std::string guard =
 			"WASMJIT_GENERATED_" + sanitize(schema.value("module", "module")) + "_H";
@@ -454,8 +486,7 @@ std::string emitCHeaderImpl(const Json& schema)
 		if (entry.value("kind", "") != "function")
 			continue;
 		emitFunction(out, entry,
-				"wasmjit_" + sanitize(entry.at("module").get<std::string>()) + "_"
-						+ sanitize(entry.at("name").get<std::string>()),
+				importName(entry),
 				"H2G import");
 	}
 
@@ -469,15 +500,25 @@ std::string rustType(const Json& type)
 	if (type.value("packed", false))
 		return type.value("type", "") == "i8" ? "i8" : "i16";
 	const std::string kind = type.value("type", "");
-	if (kind == "i32") return "i32";
-	if (kind == "i64") return "i64";
-	if (kind == "f32") return "f32";
-	if (kind == "f64") return "f64";
+	if (kind == "i32" || kind == "s32") return "i32";
+	if (kind == "u32") return "u32";
+	if (kind == "i64" || kind == "s64") return "i64";
+	if (kind == "u64") return "u64";
+	if (kind == "s8") return "i8";
+	if (kind == "u8") return "u8";
+	if (kind == "s16") return "i16";
+	if (kind == "u16") return "u16";
+	if (kind == "f32" || kind == "float32") return "f32";
+	if (kind == "f64" || kind == "float64") return "f64";
+	if (kind == "bool") return "i32";
+	if (kind == "char") return "u32";
 	if (kind == "v128") return "wasm_v128";
 	if (kind == "void") return "()";
+	if (kind == "string" || kind == "error-context")
+		return "*mut core::ffi::c_void";
 	if (isReference(type))
 		return "*mut " + refTypeName(type);
-	return "()";
+	return "*mut core::ffi::c_void";
 }
 
 void emitRustParams(std::ostringstream& out, const Json& params, bool resultBuffer)
@@ -533,8 +574,13 @@ std::string refPascal(const Json& type)
 std::string tsType(const Json& type)
 {
 	const std::string kind = type.value("type", "");
-	if (kind == "i32" || kind == "i64" || kind == "f32" || kind == "f64")
+	if (kind == "i32" || kind == "i64" || kind == "f32" || kind == "f64"
+			|| kind == "s8" || kind == "u8" || kind == "s16" || kind == "u16"
+			|| kind == "s32" || kind == "u32")
 		return "number";
+	if (kind == "s64" || kind == "u64") return "bigint";
+	if (kind == "bool") return "boolean";
+	if (kind == "char" || kind == "string") return "string";
 	if (kind == "v128") return "Uint8Array";
 	if (kind == "void") return "void";
 	if (isReference(type)) return refPascal(type);
@@ -544,79 +590,118 @@ std::string tsType(const Json& type)
 std::string asType(const Json& type)
 {
 	const std::string kind = type.value("type", "");
-	if (kind == "i32") return "i32";
-	if (kind == "i64") return "i64";
-	if (kind == "f32") return "f32";
-	if (kind == "f64") return "f64";
+	if (kind == "i32" || kind == "s8" || kind == "u8" || kind == "s16"
+			|| kind == "u16" || kind == "s32" || kind == "u32")
+		return "i32";
+	if (kind == "i64" || kind == "s64" || kind == "u64") return "i64";
+	if (kind == "f32" || kind == "float32") return "f32";
+	if (kind == "f64" || kind == "float64") return "f64";
+	if (kind == "bool") return "bool";
+	if (kind == "char" || kind == "string") return "string";
 	if (kind == "v128") return "v128";
 	if (kind == "void") return "void";
-	if (isReference(type)) return "externref";
-	return "i32";
+	if (kind == "error-context" || isReference(type)) return "externref";
+	return "externref";
 }
 
 std::string zigType(const Json& type)
 {
 	const std::string kind = type.value("type", "");
-	if (kind == "i32") return "i32";
-	if (kind == "i64") return "i64";
-	if (kind == "f32") return "f32";
-	if (kind == "f64") return "f64";
+	if (kind == "i32" || kind == "s32") return "i32";
+	if (kind == "u32") return "u32";
+	if (kind == "i64" || kind == "s64") return "i64";
+	if (kind == "u64") return "u64";
+	if (kind == "s8") return "i8";
+	if (kind == "u8") return "u8";
+	if (kind == "s16") return "i16";
+	if (kind == "u16") return "u16";
+	if (kind == "f32" || kind == "float32") return "f32";
+	if (kind == "f64" || kind == "float64") return "f64";
+	if (kind == "bool") return "bool";
+	if (kind == "char") return "u32";
+	if (kind == "string") return "[]const u8";
 	if (kind == "v128") return "wasm_v128";
 	if (kind == "void") return "void";
+	if (kind == "error-context") return "*anyopaque";
 	if (isReference(type)) return "*" + refTypeName(type);
-	return "void";
+	return "*anyopaque";
 }
 
 std::string kotlinType(const Json& type)
 {
 	const std::string kind = type.value("type", "");
-	if (kind == "i32") return "Int";
-	if (kind == "i64") return "Long";
-	if (kind == "f32") return "Float";
-	if (kind == "f64") return "Double";
+	if (kind == "i32" || kind == "s8" || kind == "u8" || kind == "s16"
+			|| kind == "u16" || kind == "s32" || kind == "u32")
+		return "Int";
+	if (kind == "i64" || kind == "s64" || kind == "u64") return "Long";
+	if (kind == "f32" || kind == "float32") return "Float";
+	if (kind == "f64" || kind == "float64") return "Double";
+	if (kind == "bool") return "Boolean";
+	if (kind == "char") return "Char";
+	if (kind == "string") return "String";
 	if (kind == "v128") return "WasmV128";
 	if (kind == "void") return "Unit";
 	if (isReference(type)) return refPascal(type);
-	return "Unit";
+	return "Any";
 }
 
 std::string moonbitType(const Json& type)
 {
 	const std::string kind = type.value("type", "");
-	if (kind == "i32") return "Int";
-	if (kind == "i64") return "Int64";
-	if (kind == "f32") return "Float";
-	if (kind == "f64") return "Double";
+	if (kind == "i32" || kind == "s8" || kind == "u8" || kind == "s16"
+			|| kind == "u16" || kind == "s32" || kind == "u32")
+		return "Int";
+	if (kind == "i64" || kind == "s64" || kind == "u64") return "Int64";
+	if (kind == "f32" || kind == "float32") return "Float";
+	if (kind == "f64" || kind == "float64") return "Double";
+	if (kind == "bool") return "Bool";
+	if (kind == "char") return "Char";
+	if (kind == "string") return "String";
 	if (kind == "v128") return "Bytes";
 	if (kind == "void") return "Unit";
 	if (isReference(type)) return refPascal(type);
-	return "Unit";
+	return "Bytes";
 }
 
 std::string goType(const Json& type)
 {
 	const std::string kind = type.value("type", "");
-	if (kind == "i32") return "int32";
-	if (kind == "i64") return "int64";
-	if (kind == "f32") return "float32";
-	if (kind == "f64") return "float64";
+	if (kind == "i32" || kind == "s32") return "int32";
+	if (kind == "u32") return "uint32";
+	if (kind == "i64" || kind == "s64") return "int64";
+	if (kind == "u64") return "uint64";
+	if (kind == "s8") return "int8";
+	if (kind == "u8") return "uint8";
+	if (kind == "s16") return "int16";
+	if (kind == "u16") return "uint16";
+	if (kind == "f32" || kind == "float32") return "float32";
+	if (kind == "f64" || kind == "float64") return "float64";
+	if (kind == "bool") return "bool";
+	if (kind == "char") return "rune";
+	if (kind == "string") return "string";
 	if (kind == "v128") return "[16]byte";
 	if (kind == "void") return "";
 	// Go's wasmimport/wasmexport accept integer handles, not pointer types
 	// (docs/EMBEDDING_SURFACE.md §12.6: prefer a table handle).
-	if (isReference(type)) return "uintptr";
-	return "";
+	if (kind == "error-context" || isReference(type)) return "uintptr";
+	return "uintptr";
 }
 
 std::string dartType(const Json& type)
 {
 	const std::string kind = type.value("type", "");
-	if (kind == "i32" || kind == "i64") return "int";
-	if (kind == "f32" || kind == "f64") return "double";
+	if (kind == "i32" || kind == "i64" || kind == "s8" || kind == "u8"
+			|| kind == "s16" || kind == "u16" || kind == "s32" || kind == "u32"
+			|| kind == "s64" || kind == "u64")
+		return "int";
+	if (kind == "f32" || kind == "f64" || kind == "float32" || kind == "float64")
+		return "double";
+	if (kind == "bool") return "bool";
+	if (kind == "char" || kind == "string") return "String";
 	if (kind == "v128") return "Pointer<Uint8>";
 	if (kind == "void") return "void";
-	if (isReference(type)) return "Pointer<Void>";
-	return "void";
+	if (kind == "error-context" || isReference(type)) return "Pointer<Void>";
+	return "Pointer<Void>";
 }
 
 template <typename Fn>
@@ -647,6 +732,295 @@ Json moduleSchema(const WASM::Module& module, const WASM::TypeRegistry& types,
 	return moduleSchemaImpl(module, types, direction, moduleName);
 }
 
+namespace {
+
+using Json = nlohmann::ordered_json;
+
+const char* primitiveName(WASM::PrimitiveValueType primitive)
+{
+	switch (primitive) {
+	case WASM::PrimitiveValueType::Bool: return "bool";
+	case WASM::PrimitiveValueType::S8: return "s8";
+	case WASM::PrimitiveValueType::U8: return "u8";
+	case WASM::PrimitiveValueType::S16: return "s16";
+	case WASM::PrimitiveValueType::U16: return "u16";
+	case WASM::PrimitiveValueType::S32: return "s32";
+	case WASM::PrimitiveValueType::U32: return "u32";
+	case WASM::PrimitiveValueType::S64: return "s64";
+	case WASM::PrimitiveValueType::U64: return "u64";
+	case WASM::PrimitiveValueType::F32: return "float32";
+	case WASM::PrimitiveValueType::F64: return "float64";
+	case WASM::PrimitiveValueType::Char: return "char";
+	case WASM::PrimitiveValueType::String: return "string";
+	case WASM::PrimitiveValueType::ErrorContext: return "error-context";
+	case WASM::PrimitiveValueType::Invalid: return "invalid";
+	}
+	return "invalid";
+}
+
+Json componentValueJson(const WASM::ComponentValueType& type,
+		const WASM::Component& component, const WASM::TypeStore& store, unsigned depth);
+
+Json componentTypeJson(const WASM::ComponentTypeView& view,
+		const WASM::Component& component, const WASM::TypeStore& store, unsigned depth)
+{
+	if (depth > 32)
+		return Json{{"kind", "recursive"}};
+
+	Json out;
+	switch (view.kind()) {
+	case WASM::TypeKind::ComponentPrimitive:
+		out["type"] = primitiveName(view.primitive());
+		break;
+	case WASM::TypeKind::ComponentRecord:
+		out["kind"] = "record";
+		out["fields"] = Json::array();
+		for (const WASM::ComponentField& field : view.fields()) {
+			Json entry;
+			entry["name"] = std::string(store.string(field.name));
+			entry["type"] = componentValueJson(field.type, component, store, depth + 1);
+			out["fields"].push_back(entry);
+		}
+		break;
+	case WASM::TypeKind::ComponentVariant:
+		out["kind"] = "variant";
+		out["cases"] = Json::array();
+		for (const WASM::ComponentCase& item : view.cases()) {
+			Json entry;
+			entry["label"] = std::string(store.string(item.label));
+			if (item.hasType)
+				entry["type"] = componentValueJson(item.type, component, store, depth + 1);
+			out["cases"].push_back(entry);
+		}
+		break;
+	case WASM::TypeKind::ComponentList:
+		out["kind"] = "list";
+		out["element"] = componentValueJson(view.element(), component, store, depth + 1);
+		break;
+	case WASM::TypeKind::ComponentFixedList:
+		out["kind"] = "list";
+		out["length"] = view.fixedLength();
+		out["element"] = componentValueJson(view.element(), component, store, depth + 1);
+		break;
+	case WASM::TypeKind::ComponentTuple:
+		out["kind"] = "tuple";
+		out["elements"] = Json::array();
+		for (const WASM::ComponentValueType& item : view.tuple())
+			out["elements"].push_back(componentValueJson(item, component, store, depth + 1));
+		break;
+	case WASM::TypeKind::ComponentFlags:
+	case WASM::TypeKind::ComponentEnum:
+		out["kind"] = view.kind() == WASM::TypeKind::ComponentFlags ? "flags" : "enum";
+		out["labels"] = Json::array();
+		for (const WASM::StringId label : view.labels())
+			out["labels"].push_back(std::string(store.string(label)));
+		break;
+	case WASM::TypeKind::ComponentOption:
+		out["kind"] = "option";
+		out["element"] = componentValueJson(view.element(), component, store, depth + 1);
+		break;
+	case WASM::TypeKind::ComponentResult:
+		out["kind"] = "result";
+		if (view.hasResultOk())
+			out["ok"] = componentValueJson(view.resultOk(), component, store, depth + 1);
+		if (view.hasResultError())
+			out["error"] = componentValueJson(view.resultError(), component, store, depth + 1);
+		break;
+	case WASM::TypeKind::ComponentOwn:
+	case WASM::TypeKind::ComponentBorrow:
+		out["kind"] = view.kind() == WASM::TypeKind::ComponentOwn ? "own" : "borrow";
+		out["typeRef"] = view.typeRef();
+		break;
+	case WASM::TypeKind::ComponentStream:
+	case WASM::TypeKind::ComponentFuture:
+		out["kind"] = view.kind() == WASM::TypeKind::ComponentStream ? "stream" : "future";
+		if (view.hasStreamElement())
+			out["element"] = componentValueJson(view.streamElement(), component, store, depth + 1);
+		break;
+	case WASM::TypeKind::ComponentMap:
+		out["kind"] = "map";
+		out["key"] = componentValueJson(view.mapKey(), component, store, depth + 1);
+		out["value"] = componentValueJson(view.mapValue(), component, store, depth + 1);
+		break;
+	case WASM::TypeKind::ComponentFunc:
+		out["kind"] = "func";
+		out["params"] = Json::array();
+		for (const WASM::ComponentFuncParam& param : view.params()) {
+			Json entry = componentValueJson(param.type, component, store, depth + 1);
+			if (entry.is_object())
+				entry["name"] = std::string(store.string(param.name));
+			out["params"].push_back(entry);
+		}
+		out["results"] = Json::array();
+		for (const WASM::ComponentValueType& result : view.results())
+			out["results"].push_back(componentValueJson(result, component, store, depth + 1));
+		break;
+	case WASM::TypeKind::ComponentInstance:
+	case WASM::TypeKind::ComponentComponent:
+		out["kind"] =
+				view.kind() == WASM::TypeKind::ComponentInstance ? "instance" : "component";
+		out["declarations"] = Json::array();
+		for (const WASM::ComponentDeclRecord& decl : view.declarations()) {
+			Json entry;
+			entry["name"] = std::string(store.string(decl.name));
+			entry["sort"] = decl.sort;
+			if (!decl.type.isNone())
+				entry["typeId"] = decl.type.value;
+			out["declarations"].push_back(entry);
+		}
+		break;
+	case WASM::TypeKind::ComponentResource:
+		out["kind"] = "resource";
+		break;
+	default:
+		out["kind"] = "core";
+		break;
+	}
+	return out;
+}
+
+Json componentValueJson(const WASM::ComponentValueType& type,
+		const WASM::Component& component, const WASM::TypeStore& store, unsigned depth)
+{
+	if (depth > 32)
+		return Json{{"kind", "recursive"}};
+	switch (type.kind) {
+	case WASM::ComponentValueType::Kind::Primitive:
+		return Json{{"type", primitiveName(type.primitive)}};
+	case WASM::ComponentValueType::Kind::TypeId:
+		return componentTypeJson(
+				store.componentType(WASM::TypeId{type.typeIndex}), component, store, depth + 1);
+	case WASM::ComponentValueType::Kind::TypeIndex:
+		if (type.typeIndex < component.types.size()) {
+			const WASM::ComponentTypeDef& def = component.types[type.typeIndex];
+			if (!def.id.isNone())
+				return componentTypeJson(
+						store.componentType(def.id), component, store, depth + 1);
+		}
+		return Json{{"kind", "type-index"}, {"index", type.typeIndex}};
+	}
+	return Json{{"kind", "unknown"}};
+}
+
+void fillComponentExtern(Json& out, const WASM::ExternType& type,
+		const WASM::Component& component, const WASM::TypeStore& store, unsigned depth)
+{
+	switch (type.kind) {
+	case WASM::ExternType::Kind::Func:
+		out["kind"] = "function";
+		if (type.typeIndex < component.types.size()
+				&& !component.types[type.typeIndex].id.isNone())
+			out["type"] = componentTypeJson(
+					store.componentType(component.types[type.typeIndex].id), component, store,
+					depth + 1);
+		else
+			out["typeIndex"] = type.typeIndex;
+		break;
+	case WASM::ExternType::Kind::Value:
+		out["kind"] = "value";
+		if (type.value.kind == WASM::ValueBound::Kind::Type)
+			out["type"] = componentValueJson(type.value.type, component, store, depth + 1);
+		else
+			out["valueIndex"] = type.value.valueIndex;
+		break;
+	case WASM::ExternType::Kind::Instance:
+		out["kind"] = "instance";
+		out["typeIndex"] = type.typeIndex;
+		break;
+	case WASM::ExternType::Kind::Component:
+		out["kind"] = "component";
+		out["typeIndex"] = type.typeIndex;
+		break;
+	case WASM::ExternType::Kind::CoreModule:
+		out["kind"] = "core-module";
+		out["typeIndex"] = type.typeIndex;
+		break;
+	case WASM::ExternType::Kind::Type:
+		out["kind"] = "type";
+		out["typeIndex"] = type.typeBound.typeIndex;
+		break;
+	}
+}
+
+Json componentExportJson(const WASM::ComponentExport& exportDecl,
+		const WASM::Component& component, const WASM::ComponentIndexSpaces& spaces,
+		const WASM::TypeStore& store)
+{
+	Json out;
+	out["name"] = exportDecl.name.name;
+	out["sort"] = static_cast<unsigned>(exportDecl.sortIndex.sort);
+	if (exportDecl.sortIndex.core)
+		out["coreSort"] = static_cast<unsigned>(exportDecl.sortIndex.core->sort);
+
+	if (exportDecl.type) {
+		fillComponentExtern(out, *exportDecl.type, component, store, 0);
+		return out;
+	}
+
+	const std::optional<WASM::ComponentDefinitionRef> ref =
+			spaces.resolve(exportDecl.sortIndex);
+	if (ref) {
+		const WASM::Component& owner = *ref->owner;
+		if (ref->kind == WASM::ComponentDefinitionKind::Type
+				&& ref->index < owner.types.size()) {
+			const WASM::ComponentTypeDef& def = owner.types[ref->index];
+			if (!def.id.isNone()) {
+				out["kind"] = def.kind == WASM::ComponentTypeDef::Kind::Func
+						? "function"
+						: "type";
+				out["type"] = componentTypeJson(
+						store.componentType(def.id), owner, store, 0);
+			}
+		} else if (ref->kind == WASM::ComponentDefinitionKind::Canon
+				&& ref->index < owner.canons.size()) {
+			const WASM::Canon& canon = owner.canons[ref->index];
+			if (canon.typeIndex < owner.types.size()
+					&& !owner.types[canon.typeIndex].id.isNone()) {
+				out["kind"] = "function";
+				out["type"] = componentTypeJson(
+						store.componentType(owner.types[canon.typeIndex].id), owner, store, 0);
+			}
+		} else if (ref->kind == WASM::ComponentDefinitionKind::Import
+				&& ref->index < owner.imports.size()) {
+			fillComponentExtern(out, owner.imports[ref->index].type, owner, store, 0);
+		}
+	}
+	return out;
+}
+
+Json componentImportJson(const WASM::ImportDecl& importDecl,
+		const WASM::Component& component, const WASM::TypeStore& store)
+{
+	Json out;
+	out["name"] = importDecl.name.name;
+	fillComponentExtern(out, importDecl.type, component, store, 0);
+	return out;
+}
+
+} // namespace
+
+Json componentSchema(const WASM::Component& component, const WASM::TypeRegistry& types,
+		Direction direction, std::string_view componentName)
+{
+	const WASM::TypeStore& store = types.store();
+	const WASM::ComponentIndexSpaces spaces = component.buildIndexSpaces();
+
+	Json schema;
+	schema["schema"] = "wasmjit.binding/1";
+	schema["kind"] = "component";
+	schema["direction"] = directionName(direction);
+	schema["module"] = componentName;
+	schema["componentName"] = component.componentName();
+	schema["imports"] = Json::array();
+	for (const WASM::ImportDecl& importDecl : component.imports)
+		schema["imports"].push_back(componentImportJson(importDecl, component, store));
+	schema["exports"] = Json::array();
+	for (const WASM::ComponentExport& exportDecl : component.exports)
+		schema["exports"].push_back(
+				componentExportJson(exportDecl, component, spaces, store));
+	return schema;
+}
+
 std::string emitCHeader(const nlohmann::ordered_json& schema)
 {
 	return emitCHeaderImpl(schema);
@@ -655,9 +1029,7 @@ std::string emitCHeader(const nlohmann::ordered_json& schema)
 std::string emitRustModule(const nlohmann::ordered_json& schema)
 {
 	std::set<std::string> refs;
-	collectRefs(schema.at("types"), refs);
-	collectRefs(schema.at("imports"), refs);
-	collectRefs(schema.at("exports"), refs);
+	collectSchemaRefs(schema, refs);
 
 	std::ostringstream out;
 	out << "#![allow(non_camel_case_types)]\n";
@@ -692,10 +1064,9 @@ std::string emitRustModule(const nlohmann::ordered_json& schema)
 				continue;
 			const Json& type = entry.at("type");
 			const std::string name = "wasmjit_"
-					+ sanitize(entry.at("module").get<std::string>()) + "_"
+					+ sanitize(importModule(entry)) + "_"
 					+ sanitize(entry.at("name").get<std::string>());
-			out << "    // H2G import: " << entry.at("module").get<std::string>() << "."
-				<< entry.at("name").get<std::string>() << "\n";
+			out << "    // H2G import: " << importComment(entry) << "\n";
 			out << "    pub fn " << name << "(";
 			emitRustParams(out, type.at("params"), type.at("results").size() > 1u);
 			out << ")";
@@ -712,9 +1083,7 @@ namespace {
 std::string emitTypeScriptImpl(const Json& schema)
 {
 	std::set<std::string> refs;
-	collectRefs(schema.at("types"), refs);
-	collectRefs(schema.at("imports"), refs);
-	collectRefs(schema.at("exports"), refs);
+	collectSchemaRefs(schema, refs);
 
 	std::ostringstream out;
 	out << "/* Generated from the " << schema.at("schema").get<std::string>() << " "
@@ -759,10 +1128,9 @@ std::string emitTypeScriptImpl(const Json& schema)
 
 	forEachFunction(schema, "imports", [&](const Json& entry) {
 		const Json& type = entry.at("type");
-		out << "// H2G import: " << entry.at("module").get<std::string>() << "."
-			<< entry.at("name").get<std::string>() << "\n";
+		out << "// H2G import: " << importComment(entry) << "\n";
 		out << "export declare function wasmjit_"
-			<< sanitize(entry.at("module").get<std::string>()) << "_"
+			<< sanitize(importModule(entry)) << "_"
 			<< sanitize(entry.at("name").get<std::string>()) << "(";
 		const Json& params = type.at("params");
 		for (std::size_t i = 0; i < params.size(); ++i) {
@@ -792,10 +1160,10 @@ std::string emitAssemblyScriptImpl(const Json& schema)
 
 	forEachFunction(schema, "imports", [&](const Json& entry) {
 		const Json& type = entry.at("type");
-		out << "@external(\"" << entry.at("module").get<std::string>() << "\", \""
+		out << "@external(\"" << importModule(entry) << "\", \""
 			<< entry.at("name").get<std::string>() << "\")\n";
 		out << "export declare function wasmjit_"
-			<< sanitize(entry.at("module").get<std::string>()) << "_"
+			<< sanitize(importModule(entry)) << "_"
 			<< sanitize(entry.at("name").get<std::string>()) << "(";
 		const Json& params = type.at("params");
 		for (std::size_t i = 0; i < params.size(); ++i) {
@@ -829,9 +1197,7 @@ std::string emitAssemblyScriptImpl(const Json& schema)
 std::string emitZigImpl(const Json& schema)
 {
 	std::set<std::string> refs;
-	collectRefs(schema.at("types"), refs);
-	collectRefs(schema.at("imports"), refs);
-	collectRefs(schema.at("exports"), refs);
+	collectSchemaRefs(schema, refs);
 
 	std::ostringstream out;
 	out << "// Generated from the " << schema.at("schema").get<std::string>() << " "
@@ -866,10 +1232,9 @@ std::string emitZigImpl(const Json& schema)
 
 	forEachFunction(schema, "imports", [&](const Json& entry) {
 		const Json& type = entry.at("type");
-		out << "// H2G import: " << entry.at("module").get<std::string>() << "."
-			<< entry.at("name").get<std::string>() << "\n";
-		out << "pub extern \"" << entry.at("module").get<std::string>() << "\" fn wasmjit_"
-			<< sanitize(entry.at("module").get<std::string>()) << "_"
+		out << "// H2G import: " << importComment(entry) << "\n";
+		out << "pub extern \"" << importModule(entry) << "\" fn wasmjit_"
+			<< sanitize(importModule(entry)) << "_"
 			<< sanitize(entry.at("name").get<std::string>()) << "(";
 		const Json& params = type.at("params");
 		for (std::size_t i = 0; i < params.size(); ++i) {
@@ -894,9 +1259,7 @@ std::string emitZigImpl(const Json& schema)
 std::string emitKotlinImpl(const Json& schema)
 {
 	std::set<std::string> refs;
-	collectRefs(schema.at("types"), refs);
-	collectRefs(schema.at("imports"), refs);
-	collectRefs(schema.at("exports"), refs);
+	collectSchemaRefs(schema, refs);
 
 	std::ostringstream out;
 	out << "// Generated from the " << schema.at("schema").get<std::string>() << " "
@@ -924,10 +1287,9 @@ std::string emitKotlinImpl(const Json& schema)
 
 	forEachFunction(schema, "imports", [&](const Json& entry) {
 		const Json& type = entry.at("type");
-		out << "// H2G import: " << entry.at("module").get<std::string>() << "."
-			<< entry.at("name").get<std::string>() << "\n";
+		out << "// H2G import: " << importComment(entry) << "\n";
 		out << "external fun wasmjit_"
-			<< sanitize(entry.at("module").get<std::string>()) << "_"
+			<< sanitize(importModule(entry)) << "_"
 			<< sanitize(entry.at("name").get<std::string>()) << "(";
 		const Json& params = type.at("params");
 		for (std::size_t i = 0; i < params.size(); ++i) {
@@ -945,9 +1307,7 @@ std::string emitKotlinImpl(const Json& schema)
 std::string emitMoonBitImpl(const Json& schema)
 {
 	std::set<std::string> refs;
-	collectRefs(schema.at("types"), refs);
-	collectRefs(schema.at("imports"), refs);
-	collectRefs(schema.at("exports"), refs);
+	collectSchemaRefs(schema, refs);
 
 	std::ostringstream out;
 	out << "// Generated from the " << schema.at("schema").get<std::string>() << " "
@@ -958,8 +1318,7 @@ std::string emitMoonBitImpl(const Json& schema)
 
 	forEachFunction(schema, "imports", [&](const Json& entry) {
 		const Json& type = entry.at("type");
-		out << "// H2G import: " << entry.at("module").get<std::string>() << "."
-			<< entry.at("name").get<std::string>() << "\n";
+		out << "// H2G import: " << importComment(entry) << "\n";
 		std::string borrow;
 		for (std::size_t i = 0; i < type.at("params").size(); ++i) {
 			if (isReference(type.at("params")[i])) {
@@ -970,7 +1329,7 @@ std::string emitMoonBitImpl(const Json& schema)
 		if (!borrow.empty())
 			out << "#borrow(" << borrow << ")\n";
 		out << "extern \"wasm\" fn wasmjit_"
-			<< sanitize(entry.at("module").get<std::string>()) << "_"
+			<< sanitize(importModule(entry)) << "_"
 			<< sanitize(entry.at("name").get<std::string>()) << "(";
 		for (std::size_t i = 0; i < type.at("params").size(); ++i) {
 			if (i != 0) out << ", ";
@@ -979,7 +1338,7 @@ std::string emitMoonBitImpl(const Json& schema)
 		out << ") -> "
 			<< (type.at("results").size() == 1 ? moonbitType(type.at("results")[0])
 											   : "Unit");
-		out << " = \"" << entry.at("module").get<std::string>() << "\" \""
+		out << " = \"" << importModule(entry) << "\" \""
 			<< entry.at("name").get<std::string>() << "\"\n\n";
 	});
 
@@ -1001,9 +1360,7 @@ std::string emitMoonBitImpl(const Json& schema)
 std::string emitGoImpl(const Json& schema)
 {
 	std::set<std::string> refs;
-	collectRefs(schema.at("types"), refs);
-	collectRefs(schema.at("imports"), refs);
-	collectRefs(schema.at("exports"), refs);
+	collectSchemaRefs(schema, refs);
 
 	std::ostringstream out;
 	out << "package wasmjitbindings\n\n";
@@ -1033,9 +1390,9 @@ std::string emitGoImpl(const Json& schema)
 
 	forEachFunction(schema, "imports", [&](const Json& entry) {
 		const Json& type = entry.at("type");
-		out << "//go:wasmimport " << entry.at("module").get<std::string>() << " "
+		out << "//go:wasmimport " << importModule(entry) << " "
 			<< entry.at("name").get<std::string>() << "\n";
-		out << "func wasmjit_" << sanitize(entry.at("module").get<std::string>()) << "_"
+		out << "func wasmjit_" << sanitize(importModule(entry)) << "_"
 			<< sanitize(entry.at("name").get<std::string>()) << "(";
 		const Json& params = type.at("params");
 		for (std::size_t i = 0; i < params.size(); ++i) {
@@ -1058,22 +1415,29 @@ std::string emitGoImpl(const Json& schema)
 std::string dartNativeType(const Json& type)
 {
 	const std::string kind = type.value("type", "");
-	if (kind == "i32") return "Int32";
-	if (kind == "i64") return "Int64";
-	if (kind == "f32") return "Float";
-	if (kind == "f64") return "Double";
+	if (kind == "i32" || kind == "s32") return "Int32";
+	if (kind == "u32") return "Uint32";
+	if (kind == "i64" || kind == "s64") return "Int64";
+	if (kind == "u64") return "Uint64";
+	if (kind == "s8") return "Int8";
+	if (kind == "u8") return "Uint8";
+	if (kind == "s16") return "Int16";
+	if (kind == "u16") return "Uint16";
+	if (kind == "f32" || kind == "float32") return "Float";
+	if (kind == "f64" || kind == "float64") return "Double";
+	if (kind == "bool") return "Bool";
+	if (kind == "char") return "Uint32";
+	if (kind == "string") return "Pointer<Utf8>";
 	if (kind == "v128") return "Pointer<Uint8>";
 	if (kind == "void") return "Void";
-	if (isReference(type)) return "Pointer<Void>";
-	return "Void";
+	if (kind == "error-context" || isReference(type)) return "Pointer<Void>";
+	return "Pointer<Void>";
 }
 
 std::string emitDartImpl(const Json& schema)
 {
 	std::set<std::string> refs;
-	collectRefs(schema.at("types"), refs);
-	collectRefs(schema.at("imports"), refs);
-	collectRefs(schema.at("exports"), refs);
+	collectSchemaRefs(schema, refs);
 
 	std::ostringstream out;
 	out << "// Generated from the " << schema.at("schema").get<std::string>() << " "
@@ -1087,9 +1451,7 @@ std::string emitDartImpl(const Json& schema)
 	const auto emitNative = [&](const Json& entry, const std::string& functionName,
 								 const char* side) {
 		const Json& type = entry.at("type");
-		out << "// " << side << ": " << entry.value("module", "");
-		if (!entry.value("module", "").empty()) out << ".";
-		out << entry.at("name").get<std::string>() << "\n";
+		out << "// " << side << ": " << entry.at("name").get<std::string>() << "\n";
 		out << "@Native<" << dartNativeType(type.at("results").size() == 1
 												   ? type.at("results")[0]
 												   : Json{{"type", "void"}})
@@ -1115,8 +1477,7 @@ std::string emitDartImpl(const Json& schema)
 	});
 	forEachFunction(schema, "imports", [&](const Json& entry) {
 		emitNative(entry,
-				"wasmjit_" + sanitize(entry.at("module").get<std::string>()) + "_"
-						+ sanitize(entry.at("name").get<std::string>()),
+				importName(entry),
 				"H2G import");
 	});
 	return out.str();

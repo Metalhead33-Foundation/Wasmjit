@@ -3,11 +3,13 @@
 #include <Euphemy/Config/GlobalConfig.hpp>
 #include <Euphemy/Io/EuphFile.hpp>
 
+#include "WasmBase/WasmArtifact.hpp"
 #include "WasmBase/WasmStore.hpp"
 
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <string>
 #include <string_view>
 
@@ -98,11 +100,20 @@ int main(int argc, char** argv)
 	std::string text;
 	try {
 		WASM::Store store;
-		WASM::Module module;
 		Euph::Io::File file(input.c_str(), Elv::Io::Mode::READ);
-		module.fromFile(file, store);
-		const nlohmann::ordered_json schema = WASM::Bindings::moduleSchema(
-				module, store.types(), direction, moduleName);
+		const std::unique_ptr<WASM::Artifact> artifact =
+				WASM::Artifact::parse(file, store);
+
+		nlohmann::ordered_json schema;
+		if (artifact->isCoreModule()) {
+			schema = WASM::Bindings::moduleSchema(*artifact->asCoreModule(),
+					store.types(), direction, moduleName);
+		} else {
+			WASM::Component* component = artifact->asComponent();
+			component->validate();
+			schema = WASM::Bindings::componentSchema(*component, store.types(),
+					direction, moduleName);
+		}
 		text = wantSchema ? schema.dump(2) + "\n"
 						  : WASM::Bindings::emit(schema, language);
 	} catch (const std::exception& error) {
