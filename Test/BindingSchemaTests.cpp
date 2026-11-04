@@ -1623,3 +1623,83 @@ TEST_CASE("WIT JSON names agree with the component schema", "[bindings]")
 			== schemaImport->at("type").at("results")[0].at("type").get<std::string>());
 }
 
+TEST_CASE("duplicate function entries are emitted once in every language",
+		"[bindings]")
+{
+	const Json functionType = {
+		{ "kind", "func" },
+		{ "params", Json::array({ { { "type", "i32" } } }) },
+		{ "results", Json::array({ { { "type", "i32" } } }) },
+	};
+	Json importEntry = {
+		{ "kind", "function" },
+		{ "module", "dup_host" },
+		{ "name", "dup_import" },
+		{ "type", functionType },
+	};
+	Json exportEntry = {
+		{ "kind", "function" },
+		{ "name", "dup_export" },
+		{ "type", functionType },
+	};
+
+	Json base = {
+		{ "schema", "wasmjit.binding/1" },
+		{ "kind", "module" },
+		{ "direction", "all" },
+		{ "module", "dup_module" },
+		{ "types", Json::array() },
+	};
+	Json single = base;
+	single["imports"] = Json::array({ importEntry });
+	single["exports"] = Json::array({ exportEntry });
+	Json duplicate = base;
+	duplicate["imports"] = Json::array({ importEntry, importEntry });
+	duplicate["exports"] = Json::array({ exportEntry, exportEntry });
+
+	const WASM::Bindings::Language languages[] = {
+		WASM::Bindings::Language::CHeader,
+		WASM::Bindings::Language::Rust,
+		WASM::Bindings::Language::TypeScript,
+		WASM::Bindings::Language::AssemblyScript,
+		WASM::Bindings::Language::Zig,
+		WASM::Bindings::Language::Kotlin,
+		WASM::Bindings::Language::MoonBit,
+		WASM::Bindings::Language::Go,
+		WASM::Bindings::Language::Dart,
+		WASM::Bindings::Language::Java,
+		WASM::Bindings::Language::CSharp,
+		WASM::Bindings::Language::FSharp,
+		WASM::Bindings::Language::Python,
+		WASM::Bindings::Language::Ruby,
+		WASM::Bindings::Language::Lua,
+		WASM::Bindings::Language::Swift,
+		WASM::Bindings::Language::DLang,
+		WASM::Bindings::Language::Nim,
+		WASM::Bindings::Language::Crystal,
+		WASM::Bindings::Language::Ada,
+		WASM::Bindings::Language::Pascal,
+		WASM::Bindings::Language::Haskell,
+		WASM::Bindings::Language::CppAdapter,
+		WASM::Bindings::Language::CppTypedefs,
+		WASM::Bindings::Language::CppSource,
+	};
+	for (const auto language : languages) {
+		INFO(WASM::Bindings::languageName(language));
+		REQUIRE(WASM::Bindings::emit(duplicate, language)
+				== WASM::Bindings::emit(single, language));
+	}
+}
+
+TEST_CASE("candidate schemas keep one entry per function name", "[bindings]")
+{
+	const WASM::Bindings::CandidateSignature candidate{
+		"host_add", "int32_t",
+		{ { "WASM::VMContext*", "context" }, { "int32_t", "a" } },
+	};
+	const Json schema = WASM::Bindings::candidateSchema(
+			{ candidate, candidate }, "g2h", "host_functions", "swig");
+	REQUIRE(schema.at("exports").size() == 1u);
+	REQUIRE(schema.at("exports")[0].at("name") == "host_add");
+}
+

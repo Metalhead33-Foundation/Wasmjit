@@ -223,6 +223,45 @@ void ensureFunctionEditorialFields(Json& out)
 		addFunctionEditorialFields(out);
 }
 
+//! Returns the identity a generated declaration is keyed by. Imports are
+//! scoped by their Wasm module; exports share one namespace.
+std::string functionEntryKey(const Json& entry, bool import)
+{
+	if (!entry.is_object())
+		return {};
+	if (import)
+		return entry.value("module", std::string()) + "\x1f"
+				+ entry.value("name", std::string());
+	return entry.value("name", std::string());
+}
+
+//! Keeps the first declaration for each identity. A Wasm module may import the
+//! same field more than once; a binding language cannot declare it twice.
+void dedupeFunctionsInArray(Json& entries, bool imports)
+{
+	if (!entries.is_array())
+		return;
+	std::set<std::string> seen;
+	Json unique = Json::array();
+	for (const Json& entry : entries) {
+		if (entry.is_object() && entry.value("kind", "") == "function") {
+			const std::string key = functionEntryKey(entry, imports);
+			if (!seen.insert(key).second)
+				continue;
+		}
+		unique.push_back(entry);
+	}
+	entries = std::move(unique);
+}
+
+void dedupeFunctionEntries(Json& schema)
+{
+	if (schema.contains("imports"))
+		dedupeFunctionsInArray(schema["imports"], true);
+	if (schema.contains("exports"))
+		dedupeFunctionsInArray(schema["exports"], false);
+}
+
 Json descriptorJson(const WASM::ExternTypeDescriptor& type, const WASM::TypeRegistry& types)
 {
 	Json out;
@@ -308,6 +347,7 @@ Json moduleSchemaImpl(const WASM::Module& module, const WASM::TypeRegistry& type
 			schema["exports"].push_back(exportEntry);
 		}
 	}
+	dedupeFunctionEntries(schema);
 	return schema;
 }
 
@@ -1255,6 +1295,7 @@ Json componentSchema(const WASM::Component& component, const WASM::TypeRegistry&
 			schema["exports"].push_back(
 					componentExportJson(exportDecl, component, spaces, store));
 	}
+	dedupeFunctionEntries(schema);
 	return schema;
 }
 
@@ -1268,8 +1309,11 @@ Json projectSchema(const Json& input, Direction direction)
 	const std::string target = directionName(direction);
 	if (source.empty())
 		throw std::runtime_error("schema import: missing direction");
-	if (source == target)
-		return input;
+	if (source == target) {
+		Json out = input;
+		dedupeFunctionEntries(out);
+		return out;
+	}
 	if (source != "all")
 		throw std::runtime_error("schema import: direction '" + source
 				+ "' cannot be projected to '" + target
@@ -1277,6 +1321,7 @@ Json projectSchema(const Json& input, Direction direction)
 
 	Json out = input;
 	out["direction"] = target;
+	dedupeFunctionEntries(out);
 	if (!out.contains("imports") || !out["imports"].is_array())
 		out["imports"] = Json::array();
 	if (!out.contains("exports") || !out["exports"].is_array())
@@ -1303,16 +1348,21 @@ Json projectSchema(const Json& input, Direction direction)
 		out["imports"].push_back(entry);
 	}
 	out["exports"] = Json::array();
+	dedupeFunctionEntries(out);
 	return out;
 }
 
-std::string emitCHeader(const nlohmann::ordered_json& schema)
+std::string emitCHeader(const nlohmann::ordered_json& input)
 {
+	Json schema = input;
+	dedupeFunctionEntries(schema);
 	return emitCHeaderImpl(schema);
 }
 
-std::string emitRustModule(const nlohmann::ordered_json& schema)
+std::string emitRustModule(const nlohmann::ordered_json& input)
 {
+	Json schema = input;
+	dedupeFunctionEntries(schema);
 	std::set<std::string> refs;
 	collectSchemaRefs(schema, refs);
 
@@ -2846,8 +2896,10 @@ bool parseLanguage(std::string_view name, Language& language) noexcept
 	return false;
 }
 
-std::string emit(const nlohmann::ordered_json& schema, Language language)
+std::string emit(const nlohmann::ordered_json& input, Language language)
 {
+	Json schema = input;
+	dedupeFunctionEntries(schema);
 	switch (language) {
 	case Language::CHeader: return emitCHeader(schema);
 	case Language::Rust: return emitRustModule(schema);

@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <optional>
+#include <set>
 #include <sstream>
 #include <string_view>
 
@@ -462,6 +463,7 @@ nlohmann::ordered_json candidateSchema(
 	schema["imports"] = nlohmann::ordered_json::array();
 	schema["exports"] = nlohmann::ordered_json::array();
 
+	std::set<std::string> emittedNames;
 	for (const CandidateSignature& candidate : candidates) {
 		if (candidate.params.empty() || !isVmContext(candidate.params[0].type))
 			continue;
@@ -488,6 +490,8 @@ nlohmann::ordered_json candidateSchema(
 		type["kind"] = "func";
 		type["params"] = std::move(params);
 		type["results"] = std::move(results);
+		if (!emittedNames.insert(candidate.name).second)
+			continue;
 		schema["exports"].push_back(
 				{ { "kind", "function" }, { "name", candidate.name },
 						{ "type", std::move(type) } });
