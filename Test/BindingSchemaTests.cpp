@@ -586,7 +586,7 @@ TEST_CASE("the binding schema projects component functions", "[bindings]")
 	WASM::Component component;
 	loadTestComponent("component_runtime_import", component);
 	const Json schema = WASM::Bindings::componentSchema(component, testStore().types(),
-			WASM::Bindings::Direction::GuestToHost, "component_runtime_import");
+			WASM::Bindings::Direction::GuestToGuest, "component_runtime_import");
 
 	REQUIRE(schema.at("kind") == "component");
 	const Json* import = findByName(schema.at("imports"), "host-add");
@@ -611,12 +611,37 @@ TEST_CASE("the binding schema projects component functions", "[bindings]")
 	REQUIRE(exportEntry->at("abi").at("indirectResults") == false);
 }
 
+TEST_CASE("component schema directions split imports and exports", "[bindings]")
+{
+	WASM::Component component;
+	loadTestComponent("component_runtime_import", component);
+	const auto schema = [&](WASM::Bindings::Direction direction) {
+		return WASM::Bindings::componentSchema(component, testStore().types(),
+				direction, "component_runtime_import");
+	};
+
+	const Json g2h = schema(WASM::Bindings::Direction::GuestToHost);
+	REQUIRE(g2h.at("direction") == "g2h");
+	REQUIRE(g2h.at("imports").empty());
+	REQUIRE_FALSE(g2h.at("exports").empty());
+
+	const Json h2g = schema(WASM::Bindings::Direction::HostToGuest);
+	REQUIRE(h2g.at("direction") == "h2g");
+	REQUIRE_FALSE(h2g.at("imports").empty());
+	REQUIRE(h2g.at("exports").empty());
+
+	const Json g2g = schema(WASM::Bindings::Direction::GuestToGuest);
+	REQUIRE(g2g.at("direction") == "g2g");
+	REQUIRE_FALSE(g2g.at("imports").empty());
+	REQUIRE_FALSE(g2g.at("exports").empty());
+}
+
 TEST_CASE("the binding schema projects component records and type imports", "[bindings]")
 {
 	WASM::Component component;
 	loadTestComponent("component_typeimports", component);
 	const Json schema = WASM::Bindings::componentSchema(component, testStore().types(),
-			WASM::Bindings::Direction::GuestToHost, "component_typeimports");
+			WASM::Bindings::Direction::GuestToGuest, "component_typeimports");
 
 	const Json* import = findByName(schema.at("imports"), "r");
 	REQUIRE(import != nullptr);
@@ -636,7 +661,7 @@ TEST_CASE("component schemas feed the language emitters", "[bindings]")
 	WASM::Component component;
 	loadTestComponent("component_runtime_import", component);
 	const Json schema = WASM::Bindings::componentSchema(component, testStore().types(),
-			WASM::Bindings::Direction::GuestToHost, "component_runtime_import");
+			WASM::Bindings::Direction::GuestToGuest, "component_runtime_import");
 	const std::filesystem::path dir = bindingsDir();
 
 	const auto write = [&](std::string_view name, const std::string& text) {
@@ -733,6 +758,15 @@ TEST_CASE("component schemas feed the language emitters", "[bindings]")
 			!= std::string::npos);
 	const std::string dart = WASM::Bindings::emit(schema, WASM::Bindings::Language::Dart);
 	REQUIRE(dart.find("@Native<Int32 Function(Int32, Int32)>") != std::string::npos);
+
+	const std::string cpp = WASM::Bindings::emit(schema,
+			WASM::Bindings::Language::CppTypedefs);
+	REQUIRE(cpp.find("using wasmjit_host_add_fn = int32_t (*)(WASM::VMContext*, "
+			"int32_t, int32_t);") != std::string::npos);
+	const std::string cppSource = WASM::Bindings::emit(schema,
+			WASM::Bindings::Language::CppSource);
+	REQUIRE(cppSource.find("wasmjit_host_add_fn wasmjit_host_add_from(")
+			!= std::string::npos);
 }
 
 
@@ -1222,8 +1256,12 @@ TEST_CASE("WIT JSON names agree with the component schema", "[bindings]")
 
 	WASM::Component component;
 	loadTestComponent("component_runtime_import", component);
-	const Json schema = WASM::Bindings::componentSchema(component, testStore().types(),
+	const Json g2h = WASM::Bindings::componentSchema(component, testStore().types(),
 			WASM::Bindings::Direction::GuestToHost, "component_runtime_import");
+	const Json h2g = WASM::Bindings::componentSchema(component, testStore().types(),
+			WASM::Bindings::Direction::HostToGuest, "component_runtime_import");
+	REQUIRE(g2h.at("imports").empty());
+	REQUIRE(h2g.at("exports").empty());
 
 	const std::filesystem::path dir = bindingsDir();
 	const std::filesystem::path witPath = dir / "component_runtime_import.wit.json";
@@ -1237,7 +1275,7 @@ TEST_CASE("WIT JSON names agree with the component schema", "[bindings]")
 	const Json wit = Json::parse(readText(witPath));
 	const Json& world = wit.at("worlds").at(0);
 	const Json& witExport = world.at("exports").at("host-add").at("function");
-	const Json* schemaExport = findByName(schema.at("exports"), "host-add");
+	const Json* schemaExport = findByName(g2h.at("exports"), "host-add");
 	REQUIRE(schemaExport != nullptr);
 	REQUIRE(witExport.at("name").get<std::string>() == "host-add");
 	REQUIRE(witExport.at("params").size()
@@ -1252,7 +1290,7 @@ TEST_CASE("WIT JSON names agree with the component schema", "[bindings]")
 			== schemaExport->at("type").at("results")[0].at("type").get<std::string>());
 
 	const Json& witImport = world.at("imports").at("host-add").at("function");
-	const Json* schemaImport = findByName(schema.at("imports"), "host-add");
+	const Json* schemaImport = findByName(h2g.at("imports"), "host-add");
 	REQUIRE(schemaImport != nullptr);
 	REQUIRE(witImport.at("params").size()
 			== schemaImport->at("type").at("params").size());

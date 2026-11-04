@@ -1110,12 +1110,17 @@ Json componentSchema(const WASM::Component& component, const WASM::TypeRegistry&
 	schema["module"] = componentName;
 	schema["componentName"] = component.componentName();
 	schema["imports"] = Json::array();
-	for (const WASM::ImportDecl& importDecl : component.imports)
-		schema["imports"].push_back(componentImportJson(importDecl, component, store));
+	if (direction != Direction::GuestToHost) {
+		for (const WASM::ImportDecl& importDecl : component.imports)
+			schema["imports"].push_back(
+					componentImportJson(importDecl, component, store));
+	}
 	schema["exports"] = Json::array();
-	for (const WASM::ComponentExport& exportDecl : component.exports)
-		schema["exports"].push_back(
-				componentExportJson(exportDecl, component, spaces, store));
+	if (direction != Direction::HostToGuest) {
+		for (const WASM::ComponentExport& exportDecl : component.exports)
+			schema["exports"].push_back(
+					componentExportJson(exportDecl, component, spaces, store));
+	}
 	return schema;
 }
 
