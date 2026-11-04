@@ -324,15 +324,24 @@ TEST_CASE("the generated C header and Rust module compile", "[bindings]")
 
 	const std::filesystem::path headerPath = dir / "wasm_js_string_length.h";
 	const std::filesystem::path cSourcePath = dir / "wasm_js_string_length.c";
+	const std::filesystem::path cppSourcePath = dir / "wasm_js_string_length.cpp";
 	const std::filesystem::path rustPath = dir / "wasm_js_string_length.rs";
 	const std::filesystem::path cLogPath = dir / "gcc.log";
+	const std::filesystem::path cppLogPath = dir / "g++-header.log";
 	const std::filesystem::path rustLogPath = dir / "rustc.log";
 
+	const std::string headerText = WASM::Bindings::emitCHeader(schema);
+	REQUIRE(headerText.find("#ifdef __cplusplus\nextern \"C\" {\n#endif")
+			!= std::string::npos);
+	REQUIRE(headerText.find("#ifdef __cplusplus\n}\n#endif")
+			!= std::string::npos);
 	{
 		std::ofstream header(headerPath, std::ios::binary);
-		header << WASM::Bindings::emitCHeader(schema);
+		header << headerText;
 		std::ofstream source(cSourcePath, std::ios::binary);
 		source << "#include \"wasm_js_string_length.h\"\nint main(void) { return 0; }\n";
+		std::ofstream cppSource(cppSourcePath, std::ios::binary);
+		cppSource << "#include \"wasm_js_string_length.h\"\nint main() { return 0; }\n";
 		std::ofstream rust(rustPath, std::ios::binary);
 		rust << WASM::Bindings::emitRustModule(schema);
 	}
@@ -344,6 +353,16 @@ TEST_CASE("the generated C header and Rust module compile", "[bindings]")
 		REQUIRE(std::system(command.c_str()) == 0);
 	} else {
 		WARN("gcc not found; skipped the generated C header compile check");
+	}
+
+	if (haveTool("g++ --version > /dev/null 2>&1")) {
+		const std::string command = "g++ -std=c++2a -fsyntax-only -I\"" + dir.string()
+				+ "\" \"" + cppSourcePath.string() + "\" > \"" + cppLogPath.string()
+				+ "\" 2>&1";
+		INFO(readText(cppLogPath));
+		REQUIRE(std::system(command.c_str()) == 0);
+	} else {
+		WARN("g++ not found; skipped the generated C header C++ check");
 	}
 
 	if (haveTool("rustc --version > /dev/null 2>&1")) {
