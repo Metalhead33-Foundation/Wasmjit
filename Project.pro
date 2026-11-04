@@ -5,7 +5,7 @@ Elvavena.subdir = extern/MhLib/Elvavena
 Euphemy.subdir  = extern/MhLib/Euphemy
 
 # Now add those aliases (plus your other folders) to SUBDIRS
-SUBDIRS = Elvavena Euphemy WasmBase WasmStub LibJit Asmjit Sljit ExampleBackend Test
+SUBDIRS = Elvavena Euphemy WasmBase WasmStub LibJit Asmjit Sljit ExampleBackend Bindings Test
 
 # Dependencies now work because 'Elvavena' is a recognized target
 WasmBase.depends = Elvavena Euphemy
@@ -19,6 +19,11 @@ LibJit.depends   = WasmBase
 # is not selectable through the runtime registry (Asmjit/README.md).
 Asmjit.depends   = WasmBase
 Sljit.depends    = WasmBase
+# The first-party binding schema/emitter tool (docs/EMBEDDING_SURFACE.md §12.8).
+# It consumes the public descriptor metadata; it is not an engine library and is
+# never linked into WasmBase or a backend.
+Bindings.subdir = Tools/Bindings
+Bindings.depends = WasmBase
 # A loadable example backend, built in its own directory so `Test` proves the
 # plugin ABI against something the frontend was not compiled with
 # (docs/BACKEND_PLUGIN_ABI.md BP-3).

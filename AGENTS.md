@@ -8,6 +8,16 @@
    env MAKE=/usr/bin/make /usr/bin/make -j16
    ```
 
+   The same rewrite affects `QMAKE`, so a changed `.pro` file or a new subproject
+   must be regenerated explicitly with `/usr/bin/qmake6`, and recursive make must
+   inherit the override:
+
+   ```bash
+   env MAKE=/usr/bin/make /usr/bin/make -j16 QMAKE=/usr/bin/qmake6
+   ```
+
+   Whenever calling `git`, always use `--no-pager`.
+
 **`WasmBase/` is backend-agnostic. Never name a backend there** — not `LibJIT`, not its headers,
 types or API, and not its internals in prose. State the *contract* a backend has to satisfy
 instead. See **[`docs/LAYERING.md`](docs/LAYERING.md)** for the rule, the vocabulary to use, and

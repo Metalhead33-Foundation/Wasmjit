@@ -41,6 +41,7 @@ LIBS += -lCatch2 -lCatch2Main
 include(../WasmBase/WasmBase.pri)
 
 INCLUDEPATH += $$PWD/..
+INCLUDEPATH += $$PWD/../Tools/Bindings
 
 # Compile every AssemblyScript test module found under Test/wasm into its own .wasm output
 # using a single shared node_modules install under Test/, not one per module.
@@ -150,6 +151,7 @@ SOURCES += main.cpp \
     MemoryProviderTests.cpp \
     ConfigurationTests.cpp \
     BranchHintTests.cpp \
+    ../Tools/Bindings/BindingSchema.cpp \
     BindingSchemaTests.cpp
 HEADERS +=  \
     helper.hpp \

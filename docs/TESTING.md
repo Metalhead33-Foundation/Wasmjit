@@ -1089,7 +1089,7 @@ schema:
 | `[compilation-policy]` | `Test/ConfigurationTests.cpp` | The compilation policy (`COMPILER_POLICY.md` `CP-1`…`CP-5`): the vocabulary, the capability refusal, `Strict` vs `Lax` on the `F1` shape, the regression record and the achieved level |
 | `[branch-hint]` | `Test/BranchHintTests.cpp` | The branch-hinting seam (`SMALL_PROPOSALS.md` §4): the backend-neutral lookup (`setBranchHints`/`branchHintAt` — exact hit, between, unknown byte, cleared) and that a hinted module still computes the same results |
 | `[mem-provider]` | `Test/MemoryProviderTests.cpp` | The host-chosen allocation policy for linear memory (`MEMORY_PROVIDER.md` MP-1): the default policy's growth and budget behaviour, a reserved memory's stable base and verbatim maximum, its named refusal of an unbounded memory, a shared memory ignoring the policy, and the store policy reaching the memories a module declares |
-| `[bindings]` | `Test/BindingSchemaTests.cpp` | The test-only `EMBEDDING_SURFACE.md` §12.8 slice: descriptor→schema for G2H/H2G/G2G, opaque reference spelling, a C header with no layout/`TypeId`, and GC struct/array definitions |
+| `[bindings]` | `Test/BindingSchemaTests.cpp` | The `EMBEDDING_SURFACE.md` §12.8 tool: descriptor→schema for G2H/H2G/G2G, opaque reference spelling, C header and Rust emission, GC struct/array definitions, gcc/rustc compile checks, and a `wasm-opt` post-optimization signature comparison |
 
 The plugin fixture is `Test/ExampleBackend/ExampleBackend.pro`, a shared library
 built in its own directory (`libwasmjit-backend-example.so`) so the test proves the
