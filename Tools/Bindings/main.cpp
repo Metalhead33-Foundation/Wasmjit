@@ -21,7 +21,8 @@ void usage(std::ostream& out)
 {
 	out << "usage: wasmjit-bindings <module.wasm> [options]\n"
 		   "  --direction g2h|h2g|g2g   adapter direction (default: g2h)\n"
-		   "  --emit schema|c-header|rust\n"
+		   "  --emit schema|c-header|rust|typescript|assemblyscript|zig|kotlin|\n"
+		   "         moonbit|go|dart (default: schema)\n"
 		   "  --module-name NAME       name in the schema envelope\n"
 		   "  --output FILE            write to FILE instead of stdout\n";
 }
@@ -85,7 +86,9 @@ int main(int argc, char** argv)
 		usage(std::cerr);
 		return 2;
 	}
-	if (emit != "schema" && emit != "c-header" && emit != "rust") {
+	const bool wantSchema = emit == "schema";
+	WASM::Bindings::Language language = WASM::Bindings::Language::CHeader;
+	if (!wantSchema && !WASM::Bindings::parseLanguage(emit, language)) {
 		std::cerr << "unknown --emit value: " << emit << "\n";
 		return 2;
 	}
@@ -100,12 +103,8 @@ int main(int argc, char** argv)
 		module.fromFile(file, store);
 		const nlohmann::ordered_json schema = WASM::Bindings::moduleSchema(
 				module, store.types(), direction, moduleName);
-		if (emit == "schema")
-			text = schema.dump(2) + "\n";
-		else if (emit == "c-header")
-			text = WASM::Bindings::emitCHeader(schema);
-		else
-			text = WASM::Bindings::emitRustModule(schema);
+		text = wantSchema ? schema.dump(2) + "\n"
+						  : WASM::Bindings::emit(schema, language);
 	} catch (const std::exception& error) {
 		std::cerr << "wasmjit-bindings: " << error.what() << "\n";
 		return 1;

@@ -18,6 +18,10 @@
 #define WASM_TEST_DIR ""
 #endif
 
+#ifndef WASM_TESTSUITE_SOURCE_DIR
+#define WASM_TESTSUITE_SOURCE_DIR ""
+#endif
+
 // docs/EMBEDDING_SURFACE.md §12.8: conformance tests for the first-party
 // bindingSchema tool. The implementation lives in Tools/Bindings/, outside
 // WasmBase/; these tests prove the schema and both emitters from the engine's
@@ -280,5 +284,133 @@ TEST_CASE("an optimized module keeps the same binding signatures", "[bindings]")
 		REQUIRE(match->at("type").at("params") == original.at("type").at("params"));
 		REQUIRE(match->at("type").at("results") == original.at("type").at("results"));
 	}
+}
+
+
+TEST_CASE("the remaining language emitters produce declarations", "[bindings]")
+{
+	const WASM::Module module = loadTestModule("wasm_js_string_length");
+	const Json schema = WASM::Bindings::moduleSchema(module, testStore().types(),
+			WASM::Bindings::Direction::HostToGuest, "wasm_js_string_length");
+	const std::filesystem::path dir = bindingsDir();
+
+	const auto write = [&](std::string_view name, const std::string& text) {
+		const std::filesystem::path path = dir / std::string(name);
+		std::ofstream out(path, std::ios::binary);
+		out << text;
+		return path;
+	};
+	const auto run = [&](const std::string& command,
+							  const std::filesystem::path& log) {
+		INFO(readText(log));
+		return std::system(command.c_str()) == 0;
+	};
+
+	const std::string ts = WASM::Bindings::emit(schema,
+			WASM::Bindings::Language::TypeScript);
+	REQUIRE(ts.find("export interface WasmExternref") != std::string::npos);
+	REQUIRE(ts.find("export declare function wasmjit_identity") != std::string::npos);
+	if (haveTool("command -v tsc > /dev/null 2>&1")) {
+		const auto path = write("lang.d.ts", ts);
+		const auto log = dir / "tsc-lang.log";
+		REQUIRE(run("tsc --noEmit --strict \"" + path.string() + "\" > \""
+							+ log.string() + "\" 2>&1",
+				log));
+	} else {
+		WARN("tsc not found; skipped the TypeScript check");
+	}
+
+	const std::string as = WASM::Bindings::emit(schema,
+			WASM::Bindings::Language::AssemblyScript);
+	REQUIRE(as.find("@external(\"wasm:js-string\", \"length\")") != std::string::npos);
+	REQUIRE(as.find("externref") != std::string::npos);
+	const std::filesystem::path asc = std::filesystem::path(WASM_TESTSUITE_SOURCE_DIR)
+			/ "node_modules" / ".bin" / "asc";
+	if (std::filesystem::exists(asc)) {
+		const auto path = write("lang.ts", as);
+		const auto log = dir / "asc-lang.log";
+		REQUIRE(run("\"" + asc.string() + "\" --noEmit --enable reference-types \""
+							+ path.string() + "\" > \"" + log.string() + "\" 2>&1",
+				log));
+	} else {
+		WARN("asc not found; skipped the AssemblyScript check");
+	}
+
+	const std::string zig = WASM::Bindings::emit(schema, WASM::Bindings::Language::Zig);
+	REQUIRE(zig.find("pub extern \"wasm:js-string\" fn") != std::string::npos);
+	REQUIRE(zig.find("pub const wasm_externref = opaque {};") != std::string::npos);
+	if (haveTool("command -v zig > /dev/null 2>&1")) {
+		const auto path = write("lang.zig", zig);
+		const auto log = dir / "zig-lang.log";
+		REQUIRE(run("zig ast-check \"" + path.string() + "\" > \"" + log.string()
+							+ "\" 2>&1",
+				log));
+	} else {
+		WARN("zig not found; skipped the Zig check");
+	}
+
+	const std::string kotlin = WASM::Bindings::emit(schema,
+			WASM::Bindings::Language::Kotlin);
+	REQUIRE(kotlin.find("class WasmExternref private constructor()") != std::string::npos);
+	REQUIRE(kotlin.find("external fun wasmjit_wasm_js_string_length") != std::string::npos);
+	if (haveTool("command -v kotlinc > /dev/null 2>&1")) {
+		const auto path = write("lang.kt", kotlin);
+		const auto jar = dir / "lang.jar";
+		const auto log = dir / "kotlin-lang.log";
+		REQUIRE(run("kotlinc \"" + path.string() + "\" -d \"" + jar.string() + "\" > \""
+							+ log.string() + "\" 2>&1",
+				log));
+	} else {
+		WARN("kotlinc not found; skipped the Kotlin check");
+	}
+
+	const std::string moonbit = WASM::Bindings::emit(schema,
+			WASM::Bindings::Language::MoonBit);
+	REQUIRE(moonbit.find("#borrow(arg0)") != std::string::npos);
+	REQUIRE(moonbit.find("extern \"wasm\" fn wasmjit_wasm_js_string_length")
+			!= std::string::npos);
+	if (haveTool("command -v moonc > /dev/null 2>&1")) {
+		const auto path = write("lang.mbt", moonbit);
+		const auto log = dir / "moonbit-lang.log";
+		REQUIRE(run("cd \"" + dir.string() + "\" && moonc check \"" + path.string()
+							+ "\" > \"" + log.string() + "\" 2>&1",
+				log));
+	} else {
+		WARN("moonc not found; skipped the MoonBit check");
+	}
+
+	const std::string go = WASM::Bindings::emit(schema, WASM::Bindings::Language::Go);
+	REQUIRE(go.find("//go:wasmimport wasm:js-string length") != std::string::npos);
+	REQUIRE(go.find("//go:wasmexport len") != std::string::npos);
+	if (haveTool("command -v gofmt > /dev/null 2>&1")) {
+		const auto path = write("lang.go", go);
+		const auto log = dir / "go-lang.log";
+		REQUIRE(run("gofmt -e \"" + path.string() + "\" > /dev/null 2> \""
+							+ log.string() + "\"",
+				log));
+	} else {
+		WARN("gofmt not found; skipped the Go syntax check");
+	}
+	if (haveTool("command -v go > /dev/null 2>&1")) {
+		const std::filesystem::path goDir = dir / "gopkg";
+		std::filesystem::create_directories(goDir);
+		{
+			std::ofstream mod(goDir / "go.mod", std::ios::binary);
+			mod << "module example.com/bindings\n\ngo 1.24\n";
+			std::ofstream source(goDir / "bindings.go", std::ios::binary);
+			source << go;
+		}
+		const auto log = dir / "go-build.log";
+		REQUIRE(run("cd \"" + goDir.string()
+							+ "\" && GOOS=wasip1 GOARCH=wasm go build ./... > \""
+							+ log.string() + "\" 2>&1",
+				log));
+	} else {
+		WARN("go not found; skipped the Go wasm build");
+	}
+
+	const std::string dart = WASM::Bindings::emit(schema, WASM::Bindings::Language::Dart);
+	REQUIRE(dart.find("typedef WasmExternref = Pointer<Void>;") != std::string::npos);
+	REQUIRE(dart.find("@Native<Int32 Function(Pointer<Void>)>") != std::string::npos);
 }
 

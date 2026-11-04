@@ -26,6 +26,42 @@ enum class Direction {
 	GuestToGuest //!< One module/component calls another.
 };
 
+/*! \brief A target language the schema can be emitted for. */
+enum class Language {
+	CHeader, //!< A C/C++ header.
+	Rust, //!< A Rust module.
+	TypeScript, //!< TypeScript declarations.
+	AssemblyScript, //!< AssemblyScript declarations.
+	Zig, //!< Zig declarations.
+	Kotlin, //!< Kotlin/Wasm declarations.
+	MoonBit, //!< MoonBit declarations.
+	Go, //!< Go Wasm declarations.
+	Dart //!< Dart FFI declarations.
+};
+
+/*!
+ * \brief Returns the CLI spelling of a target language.
+ * \param language The language to name.
+ * \return The lower-case language name.
+ */
+const char* languageName(Language language) noexcept;
+
+/*!
+ * \brief Parses a CLI language name.
+ * \param name The name to parse.
+ * \param language Receives the parsed language on success.
+ * \return true when the name is a known language.
+ */
+bool parseLanguage(std::string_view name, Language& language) noexcept;
+
+/*!
+ * \brief Emits a schema in the requested target language.
+ * \param schema The schema produced by `moduleSchema()`.
+ * \param language The target language.
+ * \return The generated source text.
+ */
+std::string emit(const nlohmann::ordered_json& schema, Language language);
+
 /*!
  * \brief Returns the lower-case schema spelling of a direction.
  * \param direction The direction to name.

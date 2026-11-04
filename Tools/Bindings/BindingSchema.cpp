@@ -507,6 +507,128 @@ void emitRustReturn(std::ostringstream& out, const Json& results)
 		out << " /* ownership: explicit */";
 }
 
+std::string pascalName(std::string_view name)
+{
+	std::string out;
+	bool upper = true;
+	for (const char c : name) {
+		if (c == '_' || c == '-') {
+			upper = true;
+			continue;
+		}
+		out.push_back(upper ? static_cast<char>(std::toupper(static_cast<unsigned char>(c)))
+							: c);
+		upper = false;
+	}
+	if (out.empty() || std::isdigit(static_cast<unsigned char>(out.front())))
+		out.insert(0, "X");
+	return out;
+}
+
+std::string refPascal(const Json& type)
+{
+	return pascalName(refTypeName(type));
+}
+
+std::string tsType(const Json& type)
+{
+	const std::string kind = type.value("type", "");
+	if (kind == "i32" || kind == "i64" || kind == "f32" || kind == "f64")
+		return "number";
+	if (kind == "v128") return "Uint8Array";
+	if (kind == "void") return "void";
+	if (isReference(type)) return refPascal(type);
+	return "unknown";
+}
+
+std::string asType(const Json& type)
+{
+	const std::string kind = type.value("type", "");
+	if (kind == "i32") return "i32";
+	if (kind == "i64") return "i64";
+	if (kind == "f32") return "f32";
+	if (kind == "f64") return "f64";
+	if (kind == "v128") return "v128";
+	if (kind == "void") return "void";
+	if (isReference(type)) return "externref";
+	return "i32";
+}
+
+std::string zigType(const Json& type)
+{
+	const std::string kind = type.value("type", "");
+	if (kind == "i32") return "i32";
+	if (kind == "i64") return "i64";
+	if (kind == "f32") return "f32";
+	if (kind == "f64") return "f64";
+	if (kind == "v128") return "wasm_v128";
+	if (kind == "void") return "void";
+	if (isReference(type)) return "*" + refTypeName(type);
+	return "void";
+}
+
+std::string kotlinType(const Json& type)
+{
+	const std::string kind = type.value("type", "");
+	if (kind == "i32") return "Int";
+	if (kind == "i64") return "Long";
+	if (kind == "f32") return "Float";
+	if (kind == "f64") return "Double";
+	if (kind == "v128") return "WasmV128";
+	if (kind == "void") return "Unit";
+	if (isReference(type)) return refPascal(type);
+	return "Unit";
+}
+
+std::string moonbitType(const Json& type)
+{
+	const std::string kind = type.value("type", "");
+	if (kind == "i32") return "Int";
+	if (kind == "i64") return "Int64";
+	if (kind == "f32") return "Float";
+	if (kind == "f64") return "Double";
+	if (kind == "v128") return "Bytes";
+	if (kind == "void") return "Unit";
+	if (isReference(type)) return refPascal(type);
+	return "Unit";
+}
+
+std::string goType(const Json& type)
+{
+	const std::string kind = type.value("type", "");
+	if (kind == "i32") return "int32";
+	if (kind == "i64") return "int64";
+	if (kind == "f32") return "float32";
+	if (kind == "f64") return "float64";
+	if (kind == "v128") return "[16]byte";
+	if (kind == "void") return "";
+	// Go's wasmimport/wasmexport accept integer handles, not pointer types
+	// (docs/EMBEDDING_SURFACE.md §12.6: prefer a table handle).
+	if (isReference(type)) return "uintptr";
+	return "";
+}
+
+std::string dartType(const Json& type)
+{
+	const std::string kind = type.value("type", "");
+	if (kind == "i32" || kind == "i64") return "int";
+	if (kind == "f32" || kind == "f64") return "double";
+	if (kind == "v128") return "Pointer<Uint8>";
+	if (kind == "void") return "void";
+	if (isReference(type)) return "Pointer<Void>";
+	return "void";
+}
+
+template <typename Fn>
+void forEachFunction(const Json& schema, const char* key, Fn fn)
+{
+	for (const Json& entry : schema.at(key)) {
+		if (entry.value("kind", "") != "function")
+			continue;
+		fn(entry);
+	}
+}
+
 } // namespace
 
 const char* directionName(Direction direction) noexcept
@@ -583,6 +705,468 @@ std::string emitRustModule(const nlohmann::ordered_json& schema)
 		out << "}\n";
 	}
 	return out.str();
+}
+
+namespace {
+
+std::string emitTypeScriptImpl(const Json& schema)
+{
+	std::set<std::string> refs;
+	collectRefs(schema.at("types"), refs);
+	collectRefs(schema.at("imports"), refs);
+	collectRefs(schema.at("exports"), refs);
+
+	std::ostringstream out;
+	out << "/* Generated from the " << schema.at("schema").get<std::string>() << " "
+		<< schema.at("direction").get<std::string>() << " schema. Do not edit. */\n\n";
+	out << "export type wasm_v128 = Uint8Array;\n";
+	for (const std::string& ref : refs)
+		out << "export interface " << pascalName(ref) << " { readonly __" << ref
+			<< ": unique symbol; }\n";
+	out << "\n// Reference types are opaque. Reference parameters are borrowed unless\n"
+		   "// the adapter says otherwise; reference results carry an explicit\n"
+		   "// ownership note.\n\n";
+
+	forEachFunction(schema, "exports", [&](const Json& entry) {
+		const Json& type = entry.at("type");
+		out << "// G2H export: " << entry.at("name").get<std::string>() << "\n";
+		out << "export declare function wasmjit_"
+			<< sanitize(entry.at("name").get<std::string>()) << "(";
+		const Json& params = type.at("params");
+		for (std::size_t i = 0; i < params.size(); ++i) {
+			if (i != 0) out << ", ";
+			out << "arg" << i << ": " << tsType(params[i]);
+			if (isReference(params[i])) out << " /* borrowed */";
+		}
+		if (params.empty()) out << "void";
+		out << ")";
+		const Json& results = type.at("results");
+		if (results.size() == 1) {
+			out << ": " << tsType(results[0]);
+			if (isReference(results[0])) out << " /* ownership: explicit */";
+		} else if (results.size() > 1) {
+			out << ": [";
+			for (std::size_t i = 0; i < results.size(); ++i) {
+				if (i != 0) out << ", ";
+				out << tsType(results[i]);
+			}
+			out << "]";
+		} else {
+			out << ": void";
+		}
+		out << ";\n\n";
+	});
+
+	forEachFunction(schema, "imports", [&](const Json& entry) {
+		const Json& type = entry.at("type");
+		out << "// H2G import: " << entry.at("module").get<std::string>() << "."
+			<< entry.at("name").get<std::string>() << "\n";
+		out << "export declare function wasmjit_"
+			<< sanitize(entry.at("module").get<std::string>()) << "_"
+			<< sanitize(entry.at("name").get<std::string>()) << "(";
+		const Json& params = type.at("params");
+		for (std::size_t i = 0; i < params.size(); ++i) {
+			if (i != 0) out << ", ";
+			out << "arg" << i << ": " << tsType(params[i]);
+			if (isReference(params[i])) out << " /* borrowed */";
+		}
+		if (params.empty()) out << "void";
+		out << ")";
+		const Json& results = type.at("results");
+		if (results.size() == 1)
+			out << ": " << tsType(results[0]);
+		else if (results.size() > 1)
+			out << ": void";
+		else
+			out << ": void";
+		out << ";\n\n";
+	});
+	return out.str();
+}
+
+std::string emitAssemblyScriptImpl(const Json& schema)
+{
+	std::ostringstream out;
+	out << "// Generated from the " << schema.at("schema").get<std::string>() << " "
+		<< schema.at("direction").get<std::string>() << " schema. Do not edit.\n\n";
+
+	forEachFunction(schema, "imports", [&](const Json& entry) {
+		const Json& type = entry.at("type");
+		out << "@external(\"" << entry.at("module").get<std::string>() << "\", \""
+			<< entry.at("name").get<std::string>() << "\")\n";
+		out << "export declare function wasmjit_"
+			<< sanitize(entry.at("module").get<std::string>()) << "_"
+			<< sanitize(entry.at("name").get<std::string>()) << "(";
+		const Json& params = type.at("params");
+		for (std::size_t i = 0; i < params.size(); ++i) {
+			if (i != 0) out << ", ";
+			out << "arg" << i << ": " << asType(params[i]);
+		}
+		out << ")";
+		const Json& results = type.at("results");
+		out << (results.size() == 1 ? ": " + asType(results[0]) : ": void");
+		out << ";\n\n";
+	});
+
+	forEachFunction(schema, "exports", [&](const Json& entry) {
+		const Json& type = entry.at("type");
+		out << "// G2H export: " << entry.at("name").get<std::string>() << "\n";
+		out << "export declare function wasmjit_"
+			<< sanitize(entry.at("name").get<std::string>()) << "(";
+		const Json& params = type.at("params");
+		for (std::size_t i = 0; i < params.size(); ++i) {
+			if (i != 0) out << ", ";
+			out << "arg" << i << ": " << asType(params[i]);
+		}
+		out << ")";
+		const Json& results = type.at("results");
+		out << (results.size() == 1 ? ": " + asType(results[0]) : ": void");
+		out << ";\n\n";
+	});
+	return out.str();
+}
+
+std::string emitZigImpl(const Json& schema)
+{
+	std::set<std::string> refs;
+	collectRefs(schema.at("types"), refs);
+	collectRefs(schema.at("imports"), refs);
+	collectRefs(schema.at("exports"), refs);
+
+	std::ostringstream out;
+	out << "// Generated from the " << schema.at("schema").get<std::string>() << " "
+		<< schema.at("direction").get<std::string>() << " schema. Do not edit.\n\n";
+	out << "pub const wasm_v128 = [16]u8;\n";
+	for (const std::string& ref : refs)
+		out << "pub const " << ref << " = opaque {};\n";
+	out << "\n";
+
+	forEachFunction(schema, "exports", [&](const Json& entry) {
+		const Json& type = entry.at("type");
+		out << "// G2H export: " << entry.at("name").get<std::string>() << "\n";
+		out << "pub const wasmjit_" << sanitize(entry.at("name").get<std::string>())
+			<< "_t = *const fn (";
+		const Json& params = type.at("params");
+		for (std::size_t i = 0; i < params.size(); ++i) {
+			if (i != 0) out << ", ";
+			out << "arg" << i << ": " << zigType(params[i]);
+		}
+		const bool multi = type.at("results").size() > 1u;
+		if (multi) {
+			if (!params.empty()) out << ", ";
+			out << "result: *anyopaque";
+		}
+		out << ") callconv(.c) ";
+		if (multi || type.at("results").empty())
+			out << "void";
+		else
+			out << zigType(type.at("results")[0]);
+		out << ";\n\n";
+	});
+
+	forEachFunction(schema, "imports", [&](const Json& entry) {
+		const Json& type = entry.at("type");
+		out << "// H2G import: " << entry.at("module").get<std::string>() << "."
+			<< entry.at("name").get<std::string>() << "\n";
+		out << "pub extern \"" << entry.at("module").get<std::string>() << "\" fn wasmjit_"
+			<< sanitize(entry.at("module").get<std::string>()) << "_"
+			<< sanitize(entry.at("name").get<std::string>()) << "(";
+		const Json& params = type.at("params");
+		for (std::size_t i = 0; i < params.size(); ++i) {
+			if (i != 0) out << ", ";
+			out << "arg" << i << ": " << zigType(params[i]);
+		}
+		const bool multi = type.at("results").size() > 1u;
+		if (multi) {
+			if (!params.empty()) out << ", ";
+			out << "result: *anyopaque";
+		}
+		out << ") callconv(.c) ";
+		if (multi || type.at("results").empty())
+			out << "void";
+		else
+			out << zigType(type.at("results")[0]);
+		out << ";\n\n";
+	});
+	return out.str();
+}
+
+std::string emitKotlinImpl(const Json& schema)
+{
+	std::set<std::string> refs;
+	collectRefs(schema.at("types"), refs);
+	collectRefs(schema.at("imports"), refs);
+	collectRefs(schema.at("exports"), refs);
+
+	std::ostringstream out;
+	out << "// Generated from the " << schema.at("schema").get<std::string>() << " "
+		<< schema.at("direction").get<std::string>() << " schema. Do not edit.\n\n";
+	out << "class WasmV128(val bytes: ByteArray)\n";
+	for (const std::string& ref : refs)
+		out << "class " << pascalName(ref) << " private constructor()\n";
+	out << "\n";
+
+	forEachFunction(schema, "exports", [&](const Json& entry) {
+		const Json& type = entry.at("type");
+		out << "// G2H export: " << entry.at("name").get<std::string>() << "\n";
+		out << "typealias wasmjit_" << sanitize(entry.at("name").get<std::string>())
+			<< "_t = (";
+		const Json& params = type.at("params");
+		for (std::size_t i = 0; i < params.size(); ++i) {
+			if (i != 0) out << ", ";
+			out << kotlinType(params[i]);
+		}
+		out << ") -> "
+			<< (type.at("results").size() == 1 ? kotlinType(type.at("results")[0])
+											   : "Unit");
+		out << "\n\n";
+	});
+
+	forEachFunction(schema, "imports", [&](const Json& entry) {
+		const Json& type = entry.at("type");
+		out << "// H2G import: " << entry.at("module").get<std::string>() << "."
+			<< entry.at("name").get<std::string>() << "\n";
+		out << "external fun wasmjit_"
+			<< sanitize(entry.at("module").get<std::string>()) << "_"
+			<< sanitize(entry.at("name").get<std::string>()) << "(";
+		const Json& params = type.at("params");
+		for (std::size_t i = 0; i < params.size(); ++i) {
+			if (i != 0) out << ", ";
+			out << "arg" << i << ": " << kotlinType(params[i]);
+		}
+		out << "): "
+			<< (type.at("results").size() == 1 ? kotlinType(type.at("results")[0])
+											   : "Unit");
+		out << "\n\n";
+	});
+	return out.str();
+}
+
+std::string emitMoonBitImpl(const Json& schema)
+{
+	std::set<std::string> refs;
+	collectRefs(schema.at("types"), refs);
+	collectRefs(schema.at("imports"), refs);
+	collectRefs(schema.at("exports"), refs);
+
+	std::ostringstream out;
+	out << "// Generated from the " << schema.at("schema").get<std::string>() << " "
+		<< schema.at("direction").get<std::string>() << " schema. Do not edit.\n\n";
+	for (const std::string& ref : refs)
+		out << "#external\ntype " << pascalName(ref) << "\n";
+	out << "\n";
+
+	forEachFunction(schema, "imports", [&](const Json& entry) {
+		const Json& type = entry.at("type");
+		out << "// H2G import: " << entry.at("module").get<std::string>() << "."
+			<< entry.at("name").get<std::string>() << "\n";
+		std::string borrow;
+		for (std::size_t i = 0; i < type.at("params").size(); ++i) {
+			if (isReference(type.at("params")[i])) {
+				if (!borrow.empty()) borrow += ", ";
+				borrow += "arg" + std::to_string(i);
+			}
+		}
+		if (!borrow.empty())
+			out << "#borrow(" << borrow << ")\n";
+		out << "extern \"wasm\" fn wasmjit_"
+			<< sanitize(entry.at("module").get<std::string>()) << "_"
+			<< sanitize(entry.at("name").get<std::string>()) << "(";
+		for (std::size_t i = 0; i < type.at("params").size(); ++i) {
+			if (i != 0) out << ", ";
+			out << "arg" << i << " : " << moonbitType(type.at("params")[i]);
+		}
+		out << ") -> "
+			<< (type.at("results").size() == 1 ? moonbitType(type.at("results")[0])
+											   : "Unit");
+		out << " = \"" << entry.at("module").get<std::string>() << "\" \""
+			<< entry.at("name").get<std::string>() << "\"\n\n";
+	});
+
+	forEachFunction(schema, "exports", [&](const Json& entry) {
+		const Json& type = entry.at("type");
+		out << "// G2H export: " << entry.at("name").get<std::string>() << "(";
+		for (std::size_t i = 0; i < type.at("params").size(); ++i) {
+			if (i != 0) out << ", ";
+			out << moonbitType(type.at("params")[i]);
+		}
+		out << ") -> "
+			<< (type.at("results").size() == 1 ? moonbitType(type.at("results")[0])
+											   : "Unit")
+			<< "\n";
+	});
+	return out.str();
+}
+
+std::string emitGoImpl(const Json& schema)
+{
+	std::set<std::string> refs;
+	collectRefs(schema.at("types"), refs);
+	collectRefs(schema.at("imports"), refs);
+	collectRefs(schema.at("exports"), refs);
+
+	std::ostringstream out;
+	out << "package wasmjitbindings\n\n";
+	for (const std::string& ref : refs)
+		out << "type " << pascalName(ref) << " struct{ _ [0]byte }\n";
+	out << "\n";
+
+	forEachFunction(schema, "exports", [&](const Json& entry) {
+		const Json& type = entry.at("type");
+		out << "//go:wasmexport " << entry.at("name").get<std::string>() << "\n";
+		out << "func wasmjit_" << sanitize(entry.at("name").get<std::string>()) << "(";
+		const Json& params = type.at("params");
+		for (std::size_t i = 0; i < params.size(); ++i) {
+			if (i != 0) out << ", ";
+			out << "arg" << i << " " << goType(params[i]);
+		}
+		const bool multi = type.at("results").size() > 1u;
+		if (multi) {
+			if (!params.empty()) out << ", ";
+			out << "result *byte";
+		}
+		out << ")";
+		if (!multi && type.at("results").size() == 1)
+			out << " " << goType(type.at("results")[0]);
+		out << " { panic(\"generated adapter stub\") }\n\n";
+	});
+
+	forEachFunction(schema, "imports", [&](const Json& entry) {
+		const Json& type = entry.at("type");
+		out << "//go:wasmimport " << entry.at("module").get<std::string>() << " "
+			<< entry.at("name").get<std::string>() << "\n";
+		out << "func wasmjit_" << sanitize(entry.at("module").get<std::string>()) << "_"
+			<< sanitize(entry.at("name").get<std::string>()) << "(";
+		const Json& params = type.at("params");
+		for (std::size_t i = 0; i < params.size(); ++i) {
+			if (i != 0) out << ", ";
+			out << "arg" << i << " " << goType(params[i]);
+		}
+		const bool multi = type.at("results").size() > 1u;
+		if (multi) {
+			if (!params.empty()) out << ", ";
+			out << "result *byte";
+		}
+		out << ")";
+		if (!multi && type.at("results").size() == 1)
+			out << " " << goType(type.at("results")[0]);
+		out << "\n\n";
+	});
+	return out.str();
+}
+
+std::string dartNativeType(const Json& type)
+{
+	const std::string kind = type.value("type", "");
+	if (kind == "i32") return "Int32";
+	if (kind == "i64") return "Int64";
+	if (kind == "f32") return "Float";
+	if (kind == "f64") return "Double";
+	if (kind == "v128") return "Pointer<Uint8>";
+	if (kind == "void") return "Void";
+	if (isReference(type)) return "Pointer<Void>";
+	return "Void";
+}
+
+std::string emitDartImpl(const Json& schema)
+{
+	std::set<std::string> refs;
+	collectRefs(schema.at("types"), refs);
+	collectRefs(schema.at("imports"), refs);
+	collectRefs(schema.at("exports"), refs);
+
+	std::ostringstream out;
+	out << "// Generated from the " << schema.at("schema").get<std::string>() << " "
+		<< schema.at("direction").get<std::string>() << " schema. Do not edit.\n\n";
+	out << "import 'dart:ffi';\n\n";
+	out << "typedef WasmV128 = Pointer<Uint8>;\n";
+	for (const std::string& ref : refs)
+		out << "typedef " << pascalName(ref) << " = Pointer<Void>;\n";
+	out << "\n";
+
+	const auto emitNative = [&](const Json& entry, const std::string& functionName,
+								 const char* side) {
+		const Json& type = entry.at("type");
+		out << "// " << side << ": " << entry.value("module", "");
+		if (!entry.value("module", "").empty()) out << ".";
+		out << entry.at("name").get<std::string>() << "\n";
+		out << "@Native<" << dartNativeType(type.at("results").size() == 1
+												   ? type.at("results")[0]
+												   : Json{{"type", "void"}})
+			<< " Function(";
+		for (std::size_t i = 0; i < type.at("params").size(); ++i) {
+			if (i != 0) out << ", ";
+			out << dartNativeType(type.at("params")[i]);
+		}
+		out << ")>(" << "symbol: '" << functionName << "')\n";
+		out << "external "
+			<< (type.at("results").size() == 1 ? dartType(type.at("results")[0]) : "void")
+			<< " " << functionName << "(";
+		for (std::size_t i = 0; i < type.at("params").size(); ++i) {
+			if (i != 0) out << ", ";
+			out << dartType(type.at("params")[i]) << " arg" << i;
+		}
+		out << ");\n\n";
+	};
+
+	forEachFunction(schema, "exports", [&](const Json& entry) {
+		emitNative(entry,
+				"wasmjit_" + sanitize(entry.at("name").get<std::string>()), "G2H export");
+	});
+	forEachFunction(schema, "imports", [&](const Json& entry) {
+		emitNative(entry,
+				"wasmjit_" + sanitize(entry.at("module").get<std::string>()) + "_"
+						+ sanitize(entry.at("name").get<std::string>()),
+				"H2G import");
+	});
+	return out.str();
+}
+
+} // namespace
+
+const char* languageName(Language language) noexcept
+{
+	switch (language) {
+	case Language::CHeader: return "c-header";
+	case Language::Rust: return "rust";
+	case Language::TypeScript: return "typescript";
+	case Language::AssemblyScript: return "assemblyscript";
+	case Language::Zig: return "zig";
+	case Language::Kotlin: return "kotlin";
+	case Language::MoonBit: return "moonbit";
+	case Language::Go: return "go";
+	case Language::Dart: return "dart";
+	}
+	return "c-header";
+}
+
+bool parseLanguage(std::string_view name, Language& language) noexcept
+{
+	for (const Language candidate : { Language::CHeader, Language::Rust,
+				 Language::TypeScript, Language::AssemblyScript, Language::Zig,
+				 Language::Kotlin, Language::MoonBit, Language::Go, Language::Dart }) {
+		if (name == languageName(candidate)) {
+			language = candidate;
+			return true;
+		}
+	}
+	return false;
+}
+
+std::string emit(const nlohmann::ordered_json& schema, Language language)
+{
+	switch (language) {
+	case Language::CHeader: return emitCHeader(schema);
+	case Language::Rust: return emitRustModule(schema);
+	case Language::TypeScript: return emitTypeScriptImpl(schema);
+	case Language::AssemblyScript: return emitAssemblyScriptImpl(schema);
+	case Language::Zig: return emitZigImpl(schema);
+	case Language::Kotlin: return emitKotlinImpl(schema);
+	case Language::MoonBit: return emitMoonBitImpl(schema);
+	case Language::Go: return emitGoImpl(schema);
+	case Language::Dart: return emitDartImpl(schema);
+	}
+	return {};
 }
 
 } // namespace WASM::Bindings
