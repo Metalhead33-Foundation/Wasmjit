@@ -1364,9 +1364,18 @@ TEST_CASE("host-side callable typedefs follow the engine ABI", "[bindings]")
 			!= std::string::npos);
 	REQUIRE(header.find("namespace WASM { struct VMContext; struct ModuleInstance; }")
 			!= std::string::npos);
+	const std::size_t callableLinkage = header.find(
+			"#ifdef __cplusplus\nextern \"C\" {\n#endif");
+	const std::size_t loaderDeclaration = header.find(
+			"bool wasmjit_asmjit_i32_basic_load_callables(");
+	const std::size_t callableLinkageEnd = header.find("} // extern \"C\"");
+	REQUIRE(callableLinkage != std::string::npos);
+	REQUIRE(loaderDeclaration > callableLinkage);
+	REQUIRE(callableLinkageEnd > loaderDeclaration);
 
 	const std::string source = WASM::Bindings::emit(schema,
 			WASM::Bindings::Language::CppSource);
+	REQUIRE(source.find("extern \"C\"") == std::string::npos);
 	REQUIRE(source.find("wasmjit_add_fn wasmjit_add = nullptr;")
 			!= std::string::npos);
 	REQUIRE(source.find("wasmjit_asmjit_i32_basic_load_callables("
@@ -1379,10 +1388,25 @@ TEST_CASE("host-side callable typedefs follow the engine ABI", "[bindings]")
 			WASM::Bindings::Direction::GuestToHost, "wasm_js_string_length");
 	const std::string importHeader = WASM::Bindings::emit(g2h,
 			WASM::Bindings::Language::CppTypedefs);
-	REQUIRE(importHeader.find("cpp-typedefs is an H2G") != std::string::npos);
+	REQUIRE(importHeader.find("int32_t wasmjit_wasm_js_string_length(")
+			!= std::string::npos);
+	REQUIRE(importHeader.find("using wasmjit_wasm_js_string_length_fn")
+			== std::string::npos);
+	const std::size_t importLinkage = importHeader.find(
+			"#ifdef __cplusplus\nextern \"C\" {\n#endif");
+	const std::size_t importDeclaration = importHeader.find(
+			"int32_t wasmjit_wasm_js_string_length(");
+	const std::size_t importLinkageEnd = importHeader.find("} // extern \"C\"");
+	REQUIRE(importLinkage != std::string::npos);
+	REQUIRE(importDeclaration > importLinkage);
+	REQUIRE(importLinkageEnd > importDeclaration);
 	const std::string importSource = WASM::Bindings::emit(g2h,
 			WASM::Bindings::Language::CppSource);
-	REQUIRE(importSource.find("cpp-source is an H2G") != std::string::npos);
+	REQUIRE(importSource.find("extern \"C\"") == std::string::npos);
+	REQUIRE(importSource.find("int32_t wasmjit_wasm_js_string_length(")
+			!= std::string::npos);
+	REQUIRE(importSource.find("TODO: implement this host import.")
+			!= std::string::npos);
 
 	if (haveTool("command -v g++ > /dev/null 2>&1")) {
 		const std::filesystem::path dir = bindingsDir() / "cpp-callables";
@@ -1397,6 +1421,23 @@ TEST_CASE("host-side callable typedefs follow the engine ABI", "[bindings]")
 		const std::filesystem::path sourceRoot =
 				std::filesystem::path(WASM_TESTSUITE_SOURCE_DIR).parent_path()
 						.parent_path();
+		{
+			std::ofstream out(dir / "wasmjit_wasm_js_string_length_callables.hpp",
+					std::ios::binary);
+			out << importHeader;
+			std::ofstream stubOut(dir / "import_stubs.cpp", std::ios::binary);
+			stubOut << importSource;
+		}
+		const std::filesystem::path importLog = dir / "g++-import-stubs.log";
+		const std::string compileImports = "g++ -std=c++2a -fsyntax-only -I\"" + dir.string()
+				+ "\" -I\"" + sourceRoot.string() + "\" -I\""
+				+ (sourceRoot / "extern" / "MhLib").string() + "\" \""
+				+ (dir / "import_stubs.cpp").string() + "\" > \"" + importLog.string()
+				+ std::string(1, '"') + " 2>&1";
+
+		INFO(readText(importLog));
+		REQUIRE(std::system(compileImports.c_str()) == 0);
+
 		const std::filesystem::path log = dir / "g++-callables.log";
 		const std::string compile = "g++ -std=c++2a -fsyntax-only -I\"" + dir.string()
 				+ "\" -I\"" + sourceRoot.string() + "\" -I\""

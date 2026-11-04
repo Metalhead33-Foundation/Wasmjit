@@ -2574,14 +2574,14 @@ void emitCppImportStub(std::ostringstream &out, const Json &entry) {
 std::string emitCppTypedefsImpl(const Json& schema)
 {
 	const std::string direction = schema.value("direction", "g2h");
-	if (direction != "h2g")
-		return "// cpp-typedefs is an H2G (host calls guest) surface; no output "
-			   "for " + direction + ".\n";
+	if (direction == "g2g")
+		return "// cpp-typedefs is not applicable to G2G; project the producer "
+			   "schema to g2h or h2g first.\n";
 
 	std::set<std::string> refs;
 	collectSchemaRefs(schema, refs);
-	const bool emitImports = false;
-	const bool emitExports = true;
+	const bool emitImports = direction != "h2g";
+	const bool emitExports = direction != "g2h";
 	std::ostringstream out;
 	out << "// Generated C++ binding surface from the "
 		<< schema.at("schema").get<std::string>() << " " << direction
@@ -2597,10 +2597,12 @@ std::string emitCppTypedefsImpl(const Json& schema)
 	out << "\n// A Callable's fnPtr is `ret f(VMContext*, params...)`; multi-value\n"
 		   "// results use a trailing result buffer.\n";
 	if (emitImports) {
+		out << "\n#ifdef __cplusplus\nextern \"C\" {\n#endif\n";
 		out << "\n// Host imports the guest expects you to implement (G2H).\n";
 		forEachFunction(schema, "imports", [&](const Json& entry) {
 			emitCppImportDeclaration(out, entry);
 		});
+		out << "\n#ifdef __cplusplus\n} // extern \"C\"\n#endif\n";
 	}
 	if (emitExports) {
 		out << "\n// Guest exports the host can resolve (H2G).\n";
@@ -2609,8 +2611,10 @@ std::string emitCppTypedefsImpl(const Json& schema)
 			emitCppExportDeclaration(out, entry);
 		});
 		out << "\n// Resolve the pointers above from a loaded module instance.\n";
+		out << "#ifdef __cplusplus\nextern \"C\" {\n#endif\n";
 		out << "bool wasmjit_" << sanitize(schema.value("module", "module"))
 			<< "_load_callables(WASM::ModuleInstance* instance);\n";
+		out << "\n#ifdef __cplusplus\n} // extern \"C\"\n#endif\n";
 	}
 	out << nonFunctionNotes(schema);
 	out << "\n#endif // WASMJIT_GENERATED_"
@@ -2622,12 +2626,12 @@ std::string emitCppTypedefsImpl(const Json& schema)
 std::string emitCppSourceImpl(const Json& schema)
 {
 	const std::string direction = schema.value("direction", "g2h");
-	if (direction != "h2g")
-		return "// cpp-source is an H2G (host calls guest) surface; no output "
-			   "for " + direction + ".\n";
+	if (direction == "g2g")
+		return "// cpp-source is not applicable to G2G; project the producer "
+			   "schema to g2h or h2g first.\n";
 
-	const bool emitImports = false;
-	const bool emitExports = true;
+	const bool emitImports = direction != "h2g";
+	const bool emitExports = direction != "g2h";
 	const std::string module = sanitize(schema.value("module", "module"));
 	std::ostringstream out;
 	out << "// Generated C++ binding implementation from the "
