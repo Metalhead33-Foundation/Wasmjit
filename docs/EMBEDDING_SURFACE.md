@@ -2,12 +2,12 @@
 
 *`WASM::Runtime`, the Umbrella Header, Versioning, and the Include Set*
 
-Status: design note + plan (revision 28 — 2026-11-04). `WasmBase/WasmCallCache.hpp`
+Status: design note + plan (revision 29 — 2026-11-04). `WasmBase/WasmCallCache.hpp`
 adds the optional libffi export precache; `Tools/Bindings/`
 projects descriptors into direction-specific binding schemas, emits the
 documented language families (including JVM, .NET, VM-hosted and native-ABI
 targets) plus C++ adapter/typedef/source output, and derives candidate schemas
-from SWIG/Glue functions shaped with `VMContext*`; `[bindings]` is at 612
+from SWIG/Glue functions shaped with `VMContext*`; `[bindings]` is at 635
 assertions. This note answers `AAS1`/`AAS2` of
 [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) and decides the fate of two empty
 placeholder headers.
@@ -755,7 +755,7 @@ check. The embedding surface is what the installed `wasmjit/wasmjit.hpp` exposes
 | Default suite (**2026-11-01**, `8c87f5f`) | **17,090 assertions in 551 cases, green** | The `ES-*`, `BP-*`, `CP-*`, `CFG-*` and multi-agent additions are additive: every earlier assertion still passes. The 2026-10-29 run (11,454 / 481) in the milestone notes is the dated baseline. |
 | `[docs]` lint | **1013 assertions / 2 cases, green** | Note shape for `docs/proposals/` **and** the note tree for all three folders (§9 of `DOCUMENTATION.md`), so this note's index row is checked too |
 | `[callcache]` (**2026-11-04**) | **18 assertions / 4 cases, green** | `ModuleCallCache` ffi calls, `v128` by value, multi-result calls and `ComponentCallCache` flat calls. |
-| `[bindings]` (**2026-11-04**) | **612 assertions / 28 cases, green** | The §12.8 tool: descriptor→schema, direction-specific module/component imports/exports (G2H/H2G/G2G), opaque reference spelling, `stringref` through every emitter, C header (compiled as C11 and C++23), Rust, TypeScript, AssemblyScript, Zig, Kotlin, MoonBit, Go, Dart, Java, C#, F#, Python, Ruby, Lua, Swift, D, Nim, Crystal, Ada, Pascal and Haskell emission, a compiled C++ adapter (call/trap/import/reference/multi-value/retain-drop), SWIG and Glue candidate validation, `VMContext*` candidate schemas, direction-aware C++ typedefs/source, non-function entry comments, producer toolchain evidence, defined-reference kind naming, exact-reference flags, GC struct/array definitions, Rust `#[link(wasm_import_module)]`/`#[link_name]` declarations and export skeletons, C `WASMJIT_WASM_IMPORT` annotations, per-toolchain compile checks, and a `wasm-opt --all-features -O2` signature comparison on five fixtures. |
+| `[bindings]` (**2026-11-04**) | **635 assertions / 29 cases, green** | The §12.8 tool: descriptor→schema, direction-specific module/component imports/exports (G2H/H2G/G2G), complete-schema export/re-import and editorial name/description fields, opaque reference spelling, `stringref` through every emitter, C header (compiled as C11 and C++23), Rust, TypeScript, AssemblyScript, Zig, Kotlin, MoonBit, Go, Dart, Java, C#, F#, Python, Ruby, Lua, Swift, D, Nim, Crystal, Ada, Pascal and Haskell emission, a compiled C++ adapter (call/trap/import/reference/multi-value/retain-drop), SWIG and Glue candidate validation, `VMContext*` candidate schemas, direction-aware C++ typedefs/source, non-function entry comments, producer toolchain evidence, defined-reference kind naming, exact-reference flags, GC struct/array definitions, Rust `#[link(wasm_import_module)]`/`#[link_name]` declarations and export skeletons, C `WASMJIT_WASM_IMPORT` annotations, per-toolchain compile checks, and a `wasm-opt --all-features -O2` signature comparison on five fixtures. |
 | `[runtime]` | 64 assertions / 9 cases, green | Load → instantiate → call, idempotence, named errors, the `MF-2` guard, agents, the store-scoping proof (two stores, two heaps, an artifact records its store), and the unloader (one instance destroyed, the module re-instantiated, a provisional backend's code freed twice over). |
 | `[concurrency]` | 80 assertions / 13 cases, green | The model claim, the `Single` refusal, re-entrant invocation across threads, the `MF-2` guard, the `MF-3`/`MF-4` safepoint rules and the multi-agent suite. |
 | `[multiagent]` | 51 assertions / 6 cases, green | Two agents on one instance: acquire-release, wait/notify, shared-global RMW, traps, GC stress, reference barrier. |
@@ -875,8 +875,8 @@ layers:
 
 A generator should treat these as the schema. It should not scrape comments,
 C++ classes or arbitrary source headers. The neutral schema built from them has
-three directions — guest-to-host, host-to-guest and guest-to-guest — defined in
-§12.8.
+four schema directions — guest-to-host, host-to-guest, guest-to-guest and the
+complete `all` interchange form — defined in §12.8.
 
 ### 12.3 Options, with a recommendation
 
@@ -977,8 +977,9 @@ The realistic sequence is:
    TypeScript/AssemblyScript.
 2. **Next:** the first-party schema emitter in this repository (§12.8). It
    now lives in `Tools/Bindings/` with the `wasmjit-bindings` CLI, reads core
-   module and component descriptors, and writes the neutral JSON envelope for
-   the G2H/H2G/G2G direction.
+   module and component descriptors, writes the neutral JSON envelope for any
+   schema direction (G2H/H2G/G2G/all), and can import a complete JSON schema
+   with `--schema`.
 3. **Then:** language emitters in the same tool. C/C++, Rust,
    TS/AssemblyScript, Zig, Kotlin, MoonBit, Go, Dart, Java, C#, F#, Python,
    Ruby, Lua, Swift, D, Nim, Crystal, Ada, Pascal and Haskell now exist, along
@@ -1010,19 +1011,22 @@ nevertheless a **first-party in-repo deliverable**, because it consumes the
 engine’s metadata contract and because `EN-12` cannot be proved without one.
 “Outside the engine” is not “outside the project” (§16.5).
 
-#### Three directions, not one schema
+#### Four schema directions, not one
 
 | Direction | Who reads whom | Authoritative input | Output |
 |---|---|---|---|
 | **G2H** — guest to host | a Wasm guest calls a host function | import descriptors plus the host function’s native signature | host declarations and implementation stubs |
 | **H2G** — host to guest | a native host calls a module/component export | export descriptors, `typeView()`, component function/value metadata | host-side `Callable` typedefs, pointers and a resolver |
 | **G2G** — guest to guest | one module/component calls another | the producer’s **export** descriptors; **WIT** at a component boundary | the producer’s exports projected as the consumer’s imports |
+| **All** — complete | no adapter direction | both import and export descriptors | both arrays, with no projection; this is the interchange form |
 
-The three are related but not interchangeable. A G2H adapter owns the host
+The first three are related but not interchangeable. A G2H adapter owns the host
 function’s implementation and `nativeImport`; an H2G adapter owns the guest’s
 exported `Callable` and host references; a G2G contract is an ABI agreement
 between two guest modules. A generator that conflates them can emit headers that
-compile and still pass the wrong ownership or calling convention.
+compile and still pass the wrong ownership or calling convention. The `all`
+form is deliberately **not** an adapter: it preserves both sides so the same
+JSON can be re-projected to G2H, H2G or G2G later.
 
 The neutral envelope is deliberately small — a JSON projection, not an IDL:
 
@@ -1033,14 +1037,26 @@ The neutral envelope is deliberately small — a JSON projection, not an IDL:
   "module": "demo",
   "imports": [
     { "module": "host", "name": "log", "kind": "function",
+      "description": "", "argNames": [],
       "type": { "params": [{ "type": "i32" }], "results": [] } }
   ],
   "exports": [
     { "name": "run", "kind": "function",
+      "description": "", "argNames": [],
       "type": { "params": [], "results": [{ "type": "i32" }] } }
   ]
 }
 ```
+
+Function entries carry two editorial fields. They are empty by default because
+the engine metadata has no names or prose. If a human or AI fills them in, the
+emitters use `argNames[i]` for the parameter name and `description` for the
+comment above the declaration. The fields are absent from older schemas; the
+emitters fall back to `argN`.
+
+`--emit schema --direction all` writes the complete interchange form, and
+`--schema FILE --direction g2h|h2g|g2g|all --emit ...` imports it and projects it
+to the requested direction.
 
 A reference type is spelled with its kind, nullability and interface/type name;
 it never carries a numeric `TypeId` into generated code (§14.4, §14.8):
@@ -1079,6 +1095,12 @@ its imports/exports are projected. The invocation is:
 ```bash
 ./build/Desktop-Release/Tools/Bindings/wasmjit-bindings <module.wasm> \
     --direction g2h --emit c-header
+
+./build/Desktop-Release/Tools/Bindings/wasmjit-bindings <module.wasm> \
+    --direction all --emit schema > module.binding.json
+
+./build/Desktop-Release/Tools/Bindings/wasmjit-bindings \
+    --schema module.binding.json --direction g2g --emit rust
 
 ./build/Desktop-Release/Tools/Bindings/wasmjit-bindings \
     --frontend-schema --candidates host.hpp
@@ -2548,7 +2570,7 @@ and the producer rows are toolchain constraints recorded in this repository.
 | **TB-8** | Generated headers for GC/string references | §14.4–§14.8 | **Verify** | Emitter rule, not an engine gap: opaque per-kind types, no layout/`TypeId` constants, explicit ownership comments. All emitters spell `stringref` as opaque `wasm_stringref`; `[bindings]` covers it with a hand-built reserved-encoding fixture. |
 | **TB-9** | Install/pkg-config/out-of-tree consumer | §7, §8 | **Verify** | Re-run 2026-11-04: `Test/install-check.sh build/Desktop-Release` installed into a scratch prefix, linked the consumer through `wasmjit.pc`, and ran the i32/f64/multi-result/v128/mixed-tuple checks (`install-check: OK`). Re-run when packaging changes. |
 | **TB-10** | Cross-vendor C++ ABI stability | §9 | **Accepted** | Soname discipline only; deferred unless a pimpl firewall is designed. |
-| **TB-11** | Generated-adapter conformance tests | §12.5, §12.8, §15.6 | **Verify** | In-repo `[bindings]` tests compile every generated target (including the C header as C and C++), compare five `wasm-opt` modules, and run a generated C++ adapter through an export call, a trap, an import, an opaque-reference pass-through, a multi-value export and explicit retain/drop of a GC reference result (28 cases / 612 assertions across the suite). |
+| **TB-11** | Generated-adapter conformance tests | §12.5, §12.8, §15.6 | **Verify** | In-repo `[bindings]` tests compile every generated target (including the C header as C and C++), compare five `wasm-opt` modules, and run a generated C++ adapter through an export call, a trap, an import, an opaque-reference pass-through, a multi-value export and explicit retain/drop of a GC reference result (29 cases / 635 assertions across the suite). |
 | **TB-12** | Compiler/tool output whose encoding collides with the engine’s reserved forms | §14.7, `STRINGREF.md` | **Verify** | The reserved `stringref` encoding (`0x67`) is covered by the hand-built `[bindings]` fixture (TB-8) and stays opaque through every emitter. Keep the producer/toolchain checklist note; do not patch the engine around a tool bug. |
 | **TB-13** | Legacy/alternative exception encoding from a producer (e.g. Kotlin/Wasm) | §12, `LEGACY_EXCEPTIONS.md` | **Verify** | `[legacy-eh]` covers strict refusal, default recovery, opt-in rewrite, rethrow/delegate cases and agreement with Binaryen (110 assertions / 12 cases, green 2026-11-04). The policy stays producer/parser-side, not a source-language type rule. |
 | **TB-14** | Language-specific host import/export ABI emission | §12.6, §12.8, §14.4 | **Verify** | Function entries are emitted for all nine targets, plus C++ host-side typedef/source output. Non-function component value/instance/type/component/core-module entries (and core global/memory/table entries) are emitted as explicit comments because host access is through `ComponentInstance`/`ModuleInstance`, not a generated callable; `[bindings]` checks the comments are present. The engine only sees the resulting Wasm function signature. |

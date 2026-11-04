@@ -11,6 +11,7 @@
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 
@@ -22,8 +23,11 @@ namespace {
 
 void usage(std::ostream& out)
 {
-	out << "usage: wasmjit-bindings [module.wasm] [options]\n"
-		   "  --direction g2h|h2g|g2g   adapter direction (default: g2h)\n"
+	out << "usage: wasmjit-bindings [module.wasm|schema.json] [options]\n"
+		   "  --schema FILE            import a complete JSON schema instead of a\n"
+		   "                           module/component\n"
+		   "  --direction g2h|h2g|g2g|all\n"
+		   "                           adapter direction (default: g2h)\n"
 		   "  --emit schema|c-header|rust|typescript|assemblyscript|zig|kotlin|\n"
 		   "         moonbit|go|dart|java|csharp|fsharp|python|ruby|lua|swift|\n"
 		   "         d|nim|crystal|ada|pascal|haskell|cpp-adapter|cpp-typedefs|\n"
@@ -52,6 +56,10 @@ bool parseDirection(std::string_view text, WASM::Bindings::Direction& direction)
 		direction = WASM::Bindings::Direction::GuestToGuest;
 		return true;
 	}
+	if (text == "all" || text == "complete" || text == "full") {
+		direction = WASM::Bindings::Direction::Complete;
+		return true;
+	}
 	return false;
 }
 
@@ -65,6 +73,7 @@ int main(int argc, char** argv)
 	std::string candidatesPath;
 	std::string glueCandidatesPath;
 	bool frontendSchema = false;
+	bool schemaInput = false;
 	std::string emit = "schema";
 	WASM::Bindings::Direction direction = WASM::Bindings::Direction::GuestToHost;
 
@@ -89,6 +98,9 @@ int main(int argc, char** argv)
 			candidatesPath = argv[++i];
 		} else if (arg == "--glue-candidates" && i + 1 < argc) {
 			glueCandidatesPath = argv[++i];
+		} else if (arg == "--schema" && i + 1 < argc) {
+			input = argv[++i];
+			schemaInput = true;
 		} else if (arg == "--frontend-schema") {
 			frontendSchema = true;
 		} else if (!arg.empty() && arg.front() == '-') {
@@ -102,8 +114,17 @@ int main(int argc, char** argv)
 		}
 	}
 
+	if (!schemaInput && !input.empty()
+			&& std::filesystem::path(input).extension() == ".json")
+		schemaInput = true;
 	if (input.empty() && !frontendSchema) {
 		usage(std::cerr);
+		return 2;
+	}
+	if (schemaInput && (!candidatesPath.empty() || !glueCandidatesPath.empty()
+			|| frontendSchema)) {
+		std::cerr << "wasmjit-bindings: --schema cannot be combined with "
+					 "--candidates, --glue-candidates or --frontend-schema\n";
 		return 2;
 	}
 	if (!candidatesPath.empty() && !glueCandidatesPath.empty()) {
@@ -122,7 +143,7 @@ int main(int argc, char** argv)
 		std::cerr << "unknown --emit value: " << emit << "\n";
 		return 2;
 	}
-	if (moduleName.empty()) {
+	if (moduleName.empty() && !schemaInput) {
 		const std::string source = !candidatesPath.empty() ? candidatesPath
 				: (!glueCandidatesPath.empty() ? glueCandidatesPath : input);
 		moduleName = std::filesystem::path(source).stem().string();
@@ -137,7 +158,24 @@ int main(int argc, char** argv)
 					? WASM::Bindings::glueCandidates(glueCandidatesPath, error)
 					: WASM::Bindings::swigCandidates(candidatesPath, error);
 		};
-		if (frontendSchema) {
+		if (schemaInput) {
+			std::ifstream stream(input, std::ios::binary);
+			if (!stream)
+				throw std::runtime_error("cannot open schema '" + input + "'");
+			nlohmann::ordered_json imported;
+			stream >> imported;
+			nlohmann::ordered_json schema =
+					WASM::Bindings::projectSchema(imported, direction);
+			if (!moduleName.empty()) {
+				schema["module"] = moduleName;
+				if (direction == WASM::Bindings::Direction::GuestToGuest) {
+					for (nlohmann::ordered_json& entry : schema["imports"])
+						entry["module"] = moduleName;
+				}
+			}
+			text = wantSchema ? schema.dump(2) + "\n"
+							  : WASM::Bindings::emit(schema, language);
+		} else if (frontendSchema) {
 			const auto candidates = loadCandidates();
 			if (!error.empty()) {
 				std::cerr << "wasmjit-bindings: " << error << "\n";

@@ -24,7 +24,8 @@ namespace WASM::Bindings {
 enum class Direction {
 	GuestToHost, //!< A Wasm guest calls a host function (host-side imports).
 	HostToGuest, //!< A native host calls a module/component export.
-	GuestToGuest //!< A consumer imports the other module/component's exports.
+	GuestToGuest, //!< A consumer imports the other module/component's exports.
+	Complete //!< Save all imports and exports; no direction projection.
 };
 
 /*! \brief A target language the schema can be emitted for. */
@@ -82,9 +83,26 @@ std::string emit(const nlohmann::ordered_json& schema, Language language);
 /*!
  * \brief Returns the lower-case schema spelling of a direction.
  * \param direction The direction to name.
- * \return `"g2h"`, `"h2g"` or `"g2g"`.
+ * \return `"g2h"`, `"h2g"`, `"g2g"` or `"all"`.
  */
 const char* directionName(Direction direction) noexcept;
+
+/*!
+ * \brief Projects an imported complete schema into a requested direction.
+ *
+ * The input should be the `"all"` form produced by `--emit schema --direction all`
+ * (or a hand-authored equivalent): it must retain both imports and exports.
+ * A directional input can only be returned unchanged when the requested
+ * direction matches it.
+ *
+ * \param schema The complete imported schema.
+ * \param direction The requested output direction.
+ * \return A projected schema with `direction` set accordingly.
+ * \throws std::runtime_error when the input is malformed or cannot supply the
+ * requested direction.
+ */
+nlohmann::ordered_json projectSchema(const nlohmann::ordered_json& schema,
+		Direction direction);
 
 /*!
  * \brief Projects a parsed core module into the neutral binding schema.

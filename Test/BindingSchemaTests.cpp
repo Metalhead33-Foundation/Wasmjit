@@ -299,6 +299,67 @@ TEST_CASE("g2h Rust emits Wasm import declarations", "[bindings]")
 	}
 }
 
+TEST_CASE("a complete schema can be projected to every direction", "[bindings]")
+{
+	const WASM::Module module = loadTestModule("asmjit_i32_import");
+	const Json complete = WASM::Bindings::moduleSchema(module, testStore().types(),
+			WASM::Bindings::Direction::Complete, "asmjit_i32_import");
+	REQUIRE(complete.at("direction") == "all");
+	REQUIRE(findImport(complete, "host", "double") != nullptr);
+	REQUIRE(findExport(complete, "call_host") != nullptr);
+	for (const char* section : { "imports", "exports" }) {
+		for (const Json& entry : complete.at(section)) {
+			if (entry.value("kind", "") == "function") {
+				REQUIRE(entry.contains("description"));
+				REQUIRE(entry.contains("argNames"));
+				REQUIRE(entry.at("argNames").is_array());
+			}
+		}
+	}
+
+	const Json g2h = WASM::Bindings::projectSchema(complete,
+			WASM::Bindings::Direction::GuestToHost);
+	REQUIRE(g2h.at("direction") == "g2h");
+	REQUIRE(findImport(g2h, "host", "double") != nullptr);
+	REQUIRE(g2h.at("exports").empty());
+
+	const Json h2g = WASM::Bindings::projectSchema(complete,
+			WASM::Bindings::Direction::HostToGuest);
+	REQUIRE(h2g.at("direction") == "h2g");
+	REQUIRE(h2g.at("imports").empty());
+	REQUIRE(findExport(h2g, "call_host") != nullptr);
+
+	const Json g2g = WASM::Bindings::projectSchema(complete,
+			WASM::Bindings::Direction::GuestToGuest);
+	REQUIRE(g2g.at("imports").size() == 1u);
+	REQUIRE(findImport(g2g, "asmjit_i32_import", "call_host") != nullptr);
+	REQUIRE(g2g.at("exports").empty());
+
+	Json annotated = complete;
+	annotated["imports"][0]["description"] = "Double a value.";
+	annotated["imports"][0]["argNames"] = Json::array({"value"});
+	annotated["exports"][0]["description"] = "Entry point called from the host.";
+	annotated["exports"][0]["argNames"] = Json::array({"seed"});
+
+	const std::string rust = WASM::Bindings::emit(
+			WASM::Bindings::projectSchema(annotated,
+					WASM::Bindings::Direction::GuestToHost),
+			WASM::Bindings::Language::Rust);
+	REQUIRE(rust.find("// G2H import: host.double — Double a value.")
+			!= std::string::npos);
+	REQUIRE(rust.find("pub fn wasmjit_host_double(value: i32)") != std::string::npos);
+
+	const std::string c = WASM::Bindings::emit(
+			WASM::Bindings::projectSchema(annotated,
+					WASM::Bindings::Direction::HostToGuest),
+			WASM::Bindings::Language::CHeader);
+	REQUIRE(c.find("/* Entry point called from the host. */") != std::string::npos);
+	REQUIRE(c.find("int32_t wasmjit_call_host(int32_t seed);") != std::string::npos);
+
+	REQUIRE_THROWS(WASM::Bindings::projectSchema(g2h,
+			WASM::Bindings::Direction::HostToGuest));
+}
+
 TEST_CASE("defined references use a kind name, not a numeric TypeId, in the header", "[bindings]")
 {
 	const WASM::Module module = loadTestModule("plain_ref");
