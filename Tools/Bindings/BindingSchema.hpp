@@ -93,8 +93,10 @@ nlohmann::ordered_json moduleSchema(const WASM::Module& module,
  *
  * Component-level imports and exports are projected from the AST and the
  * canonical component type records. WIT JSON is not required; when a component
- * was built from WIT, its interface names remain the export names. The function
- * does not instantiate or execute the component.
+ * was built from WIT, its interface names remain the export names. Function
+ * entries also carry an `abi` object — the exact flattened core parameter and
+ * result cells plus the indirect flags from `TypeStore::canonicalAbi()`. The
+ * function does not instantiate or execute the component.
  *
  * \param component The parsed and validated component.
  * \param types The store's type registry, used to resolve component type ids.

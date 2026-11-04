@@ -455,6 +455,11 @@ TEST_CASE("the binding schema projects component functions", "[bindings]")
 	REQUIRE(exportEntry->at("type").at("kind") == "func");
 	REQUIRE(exportEntry->at("type").at("params").size() == 2u);
 	REQUIRE(exportEntry->at("type").at("results")[0].at("type") == "u32");
+	REQUIRE(exportEntry->at("abi").at("params").size() == 2u);
+	REQUIRE(exportEntry->at("abi").at("params")[0].at("type") == "i32");
+	REQUIRE(exportEntry->at("abi").at("results")[0].at("type") == "i32");
+	REQUIRE(exportEntry->at("abi").at("indirectParams") == false);
+	REQUIRE(exportEntry->at("abi").at("indirectResults") == false);
 }
 
 TEST_CASE("the binding schema projects component records and type imports", "[bindings]")
@@ -498,7 +503,7 @@ TEST_CASE("component schemas feed the language emitters", "[bindings]")
 	};
 
 	const std::string c = WASM::Bindings::emit(schema, WASM::Bindings::Language::CHeader);
-	REQUIRE(c.find("uint32_t wasmjit_host_add") != std::string::npos);
+	REQUIRE(c.find("int32_t wasmjit_host_add") != std::string::npos);
 	if (haveTool("command -v gcc > /dev/null 2>&1")) {
 		const auto path = write("component.h", c);
 		const auto source = write("component.c",
@@ -578,6 +583,37 @@ TEST_CASE("component schemas feed the language emitters", "[bindings]")
 	REQUIRE(moonbit.find("extern \"wasm\" fn wasmjit_component_host_add")
 			!= std::string::npos);
 	const std::string dart = WASM::Bindings::emit(schema, WASM::Bindings::Language::Dart);
-	REQUIRE(dart.find("@Native<Uint32 Function(Uint32, Uint32)>") != std::string::npos);
+	REQUIRE(dart.find("@Native<Int32 Function(Int32, Int32)>") != std::string::npos);
+}
+
+
+TEST_CASE("component canonical ABI flattening feeds the emitters", "[bindings]")
+{
+	WASM::Component component;
+	loadTestComponent("component_runtime_string", component);
+	const Json schema = WASM::Bindings::componentSchema(component, testStore().types(),
+			WASM::Bindings::Direction::GuestToHost, "component_runtime_string");
+
+	const Json* echo = findByName(schema.at("exports"), "echo");
+	REQUIRE(echo != nullptr);
+	REQUIRE(echo->at("type").at("params")[0].at("type") == "string");
+	REQUIRE(echo->at("abi").at("params").size() == 2u);
+	REQUIRE(echo->at("abi").at("params")[0].at("type") == "i32");
+	REQUIRE(echo->at("abi").at("results").size() == 1u);
+	REQUIRE(echo->at("abi").at("results")[0].at("type") == "i32");
+	REQUIRE(echo->at("abi").at("indirectResults") == true);
+
+	const std::string c = WASM::Bindings::emit(schema, WASM::Bindings::Language::CHeader);
+	REQUIRE(c.find("int32_t wasmjit_echo(int32_t arg0, int32_t arg1)")
+			!= std::string::npos);
+	const std::string rust = WASM::Bindings::emit(schema, WASM::Bindings::Language::Rust);
+	REQUIRE(rust.find("fn(arg0: i32, arg1: i32) -> i32") != std::string::npos);
+	const std::string ts = WASM::Bindings::emit(schema,
+			WASM::Bindings::Language::TypeScript);
+	REQUIRE(ts.find("wasmjit_echo(arg0: number, arg1: number): number")
+			!= std::string::npos);
+	const std::string go = WASM::Bindings::emit(schema, WASM::Bindings::Language::Go);
+	REQUIRE(go.find("func wasmjit_echo(arg0 int32, arg1 int32) int32")
+			!= std::string::npos);
 }
 

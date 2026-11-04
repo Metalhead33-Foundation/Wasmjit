@@ -406,17 +406,30 @@ std::string importComment(const Json& entry)
 	return importModule(entry) + "." + entry.at("name").get<std::string>();
 }
 
+const Json& signatureParams(const Json& entry)
+{
+	if (entry.contains("abi") && entry.at("abi").contains("params"))
+		return entry.at("abi").at("params");
+	return entry.at("type").at("params");
+}
+
+const Json& signatureResults(const Json& entry)
+{
+	if (entry.contains("abi") && entry.at("abi").contains("results"))
+		return entry.at("abi").at("results");
+	return entry.at("type").at("results");
+}
+
 void emitFunction(std::ostringstream& out, const Json& entry, const std::string& name,
 		const char* side)
 {
-	const Json& type = entry.at("type");
 	std::string display = entry.value("module", "");
 	if (!display.empty())
 		display += ".";
 	display += entry.at("name").get<std::string>();
 
 	out << "/* " << side << ": " << display << " */\n";
-	const Json& results = type.at("results");
+	const Json& results = signatureResults(entry);
 	const bool multiValue = results.size() > 1u;
 	if (multiValue) {
 		out << "/* multi-value result: use a generated result buffer */\n";
@@ -427,7 +440,7 @@ void emitFunction(std::ostringstream& out, const Json& entry, const std::string&
 		out << cType(results[0]) << " " << name << "(";
 	}
 
-	const Json& params = type.at("params");
+	const Json& params = signatureParams(entry);
 	if (params.empty()) {
 		if (!multiValue)
 			out << "void";
@@ -758,6 +771,34 @@ const char* primitiveName(WASM::PrimitiveValueType primitive)
 	return "invalid";
 }
 
+Json abiCoreTypeJson(WASM::AbiCoreType type)
+{
+	switch (type) {
+	case WASM::AbiCoreType::I32: return Json{{"type", "i32"}};
+	case WASM::AbiCoreType::I64: return Json{{"type", "i64"}};
+	case WASM::AbiCoreType::F32: return Json{{"type", "f32"}};
+	case WASM::AbiCoreType::F64: return Json{{"type", "f64"}};
+	}
+	return Json{{"type", "i32"}};
+}
+
+Json canonicalAbiJson(const WASM::TypeStore& store, WASM::TypeId id)
+{
+	const WASM::CanonicalAbiSignature* abi = store.canonicalAbi(id, {});
+	if (abi == nullptr)
+		return Json();
+	Json out;
+	out["params"] = Json::array();
+	for (const WASM::AbiCoreType type : abi->coreParams)
+		out["params"].push_back(abiCoreTypeJson(type));
+	out["results"] = Json::array();
+	for (const WASM::AbiCoreType type : abi->coreResults)
+		out["results"].push_back(abiCoreTypeJson(type));
+	out["indirectParams"] = abi->indirectParams;
+	out["indirectResults"] = abi->indirectResults;
+	return out;
+}
+
 Json componentValueJson(const WASM::ComponentValueType& type,
 		const WASM::Component& component, const WASM::TypeStore& store, unsigned depth);
 
@@ -909,12 +950,16 @@ void fillComponentExtern(Json& out, const WASM::ExternType& type,
 	case WASM::ExternType::Kind::Func:
 		out["kind"] = "function";
 		if (type.typeIndex < component.types.size()
-				&& !component.types[type.typeIndex].id.isNone())
+				&& !component.types[type.typeIndex].id.isNone()) {
+			const WASM::TypeId id = component.types[type.typeIndex].id;
 			out["type"] = componentTypeJson(
-					store.componentType(component.types[type.typeIndex].id), component, store,
-					depth + 1);
-		else
+					store.componentType(id), component, store, depth + 1);
+			Json abi = canonicalAbiJson(store, id);
+			if (!abi.is_null())
+				out["abi"] = abi;
+		} else {
 			out["typeIndex"] = type.typeIndex;
+		}
 		break;
 	case WASM::ExternType::Kind::Value:
 		out["kind"] = "value";
@@ -970,15 +1015,24 @@ Json componentExportJson(const WASM::ComponentExport& exportDecl,
 						: "type";
 				out["type"] = componentTypeJson(
 						store.componentType(def.id), owner, store, 0);
+				if (def.kind == WASM::ComponentTypeDef::Kind::Func) {
+					Json abi = canonicalAbiJson(store, def.id);
+					if (!abi.is_null())
+						out["abi"] = abi;
+				}
 			}
 		} else if (ref->kind == WASM::ComponentDefinitionKind::Canon
 				&& ref->index < owner.canons.size()) {
 			const WASM::Canon& canon = owner.canons[ref->index];
 			if (canon.typeIndex < owner.types.size()
 					&& !owner.types[canon.typeIndex].id.isNone()) {
+				const WASM::TypeId id = owner.types[canon.typeIndex].id;
 				out["kind"] = "function";
 				out["type"] = componentTypeJson(
-						store.componentType(owner.types[canon.typeIndex].id), owner, store, 0);
+						store.componentType(id), owner, store, 0);
+				Json abi = canonicalAbiJson(store, id);
+				if (!abi.is_null())
+					out["abi"] = abi;
 			}
 		} else if (ref->kind == WASM::ComponentDefinitionKind::Import
 				&& ref->index < owner.imports.size()) {
@@ -1047,13 +1101,12 @@ std::string emitRustModule(const nlohmann::ordered_json& schema)
 	for (const Json& entry : schema.at("exports")) {
 		if (entry.value("kind", "") != "function")
 			continue;
-		const Json& type = entry.at("type");
 		const std::string name = "wasmjit_" + sanitize(entry.at("name").get<std::string>());
 		out << "// G2H export: " << entry.at("name").get<std::string>() << "\n";
 		out << "pub type " << name << "_t = unsafe extern \"C\" fn(";
-		emitRustParams(out, type.at("params"), type.at("results").size() > 1u);
+		emitRustParams(out, signatureParams(entry), signatureResults(entry).size() > 1u);
 		out << ")";
-		emitRustReturn(out, type.at("results"));
+		emitRustReturn(out, signatureResults(entry));
 		out << ";\n\n";
 	}
 
@@ -1062,15 +1115,14 @@ std::string emitRustModule(const nlohmann::ordered_json& schema)
 		for (const Json& entry : schema.at("imports")) {
 			if (entry.value("kind", "") != "function")
 				continue;
-			const Json& type = entry.at("type");
 			const std::string name = "wasmjit_"
 					+ sanitize(importModule(entry)) + "_"
 					+ sanitize(entry.at("name").get<std::string>());
 			out << "    // H2G import: " << importComment(entry) << "\n";
 			out << "    pub fn " << name << "(";
-			emitRustParams(out, type.at("params"), type.at("results").size() > 1u);
+			emitRustParams(out, signatureParams(entry), signatureResults(entry).size() > 1u);
 			out << ")";
-			emitRustReturn(out, type.at("results"));
+			emitRustReturn(out, signatureResults(entry));
 			out << ";\n";
 		}
 		out << "}\n";
@@ -1097,11 +1149,10 @@ std::string emitTypeScriptImpl(const Json& schema)
 		   "// ownership note.\n\n";
 
 	forEachFunction(schema, "exports", [&](const Json& entry) {
-		const Json& type = entry.at("type");
 		out << "// G2H export: " << entry.at("name").get<std::string>() << "\n";
 		out << "export declare function wasmjit_"
 			<< sanitize(entry.at("name").get<std::string>()) << "(";
-		const Json& params = type.at("params");
+		const Json& params = signatureParams(entry);
 		for (std::size_t i = 0; i < params.size(); ++i) {
 			if (i != 0) out << ", ";
 			out << "arg" << i << ": " << tsType(params[i]);
@@ -1109,7 +1160,7 @@ std::string emitTypeScriptImpl(const Json& schema)
 		}
 		if (params.empty()) out << "void";
 		out << ")";
-		const Json& results = type.at("results");
+		const Json& results = signatureResults(entry);
 		if (results.size() == 1) {
 			out << ": " << tsType(results[0]);
 			if (isReference(results[0])) out << " /* ownership: explicit */";
@@ -1127,12 +1178,11 @@ std::string emitTypeScriptImpl(const Json& schema)
 	});
 
 	forEachFunction(schema, "imports", [&](const Json& entry) {
-		const Json& type = entry.at("type");
 		out << "// H2G import: " << importComment(entry) << "\n";
 		out << "export declare function wasmjit_"
 			<< sanitize(importModule(entry)) << "_"
 			<< sanitize(entry.at("name").get<std::string>()) << "(";
-		const Json& params = type.at("params");
+		const Json& params = signatureParams(entry);
 		for (std::size_t i = 0; i < params.size(); ++i) {
 			if (i != 0) out << ", ";
 			out << "arg" << i << ": " << tsType(params[i]);
@@ -1140,7 +1190,7 @@ std::string emitTypeScriptImpl(const Json& schema)
 		}
 		if (params.empty()) out << "void";
 		out << ")";
-		const Json& results = type.at("results");
+		const Json& results = signatureResults(entry);
 		if (results.size() == 1)
 			out << ": " << tsType(results[0]);
 		else if (results.size() > 1)
@@ -1159,35 +1209,33 @@ std::string emitAssemblyScriptImpl(const Json& schema)
 		<< schema.at("direction").get<std::string>() << " schema. Do not edit.\n\n";
 
 	forEachFunction(schema, "imports", [&](const Json& entry) {
-		const Json& type = entry.at("type");
 		out << "@external(\"" << importModule(entry) << "\", \""
 			<< entry.at("name").get<std::string>() << "\")\n";
 		out << "export declare function wasmjit_"
 			<< sanitize(importModule(entry)) << "_"
 			<< sanitize(entry.at("name").get<std::string>()) << "(";
-		const Json& params = type.at("params");
+		const Json& params = signatureParams(entry);
 		for (std::size_t i = 0; i < params.size(); ++i) {
 			if (i != 0) out << ", ";
 			out << "arg" << i << ": " << asType(params[i]);
 		}
 		out << ")";
-		const Json& results = type.at("results");
+		const Json& results = signatureResults(entry);
 		out << (results.size() == 1 ? ": " + asType(results[0]) : ": void");
 		out << ";\n\n";
 	});
 
 	forEachFunction(schema, "exports", [&](const Json& entry) {
-		const Json& type = entry.at("type");
 		out << "// G2H export: " << entry.at("name").get<std::string>() << "\n";
 		out << "export declare function wasmjit_"
 			<< sanitize(entry.at("name").get<std::string>()) << "(";
-		const Json& params = type.at("params");
+		const Json& params = signatureParams(entry);
 		for (std::size_t i = 0; i < params.size(); ++i) {
 			if (i != 0) out << ", ";
 			out << "arg" << i << ": " << asType(params[i]);
 		}
 		out << ")";
-		const Json& results = type.at("results");
+		const Json& results = signatureResults(entry);
 		out << (results.size() == 1 ? ": " + asType(results[0]) : ": void");
 		out << ";\n\n";
 	});
@@ -1208,49 +1256,47 @@ std::string emitZigImpl(const Json& schema)
 	out << "\n";
 
 	forEachFunction(schema, "exports", [&](const Json& entry) {
-		const Json& type = entry.at("type");
 		out << "// G2H export: " << entry.at("name").get<std::string>() << "\n";
 		out << "pub const wasmjit_" << sanitize(entry.at("name").get<std::string>())
 			<< "_t = *const fn (";
-		const Json& params = type.at("params");
+		const Json& params = signatureParams(entry);
 		for (std::size_t i = 0; i < params.size(); ++i) {
 			if (i != 0) out << ", ";
 			out << "arg" << i << ": " << zigType(params[i]);
 		}
-		const bool multi = type.at("results").size() > 1u;
+		const bool multi = signatureResults(entry).size() > 1u;
 		if (multi) {
 			if (!params.empty()) out << ", ";
 			out << "result: *anyopaque";
 		}
 		out << ") callconv(.c) ";
-		if (multi || type.at("results").empty())
+		if (multi || signatureResults(entry).empty())
 			out << "void";
 		else
-			out << zigType(type.at("results")[0]);
+			out << zigType(signatureResults(entry)[0]);
 		out << ";\n\n";
 	});
 
 	forEachFunction(schema, "imports", [&](const Json& entry) {
-		const Json& type = entry.at("type");
 		out << "// H2G import: " << importComment(entry) << "\n";
 		out << "pub extern \"" << importModule(entry) << "\" fn wasmjit_"
 			<< sanitize(importModule(entry)) << "_"
 			<< sanitize(entry.at("name").get<std::string>()) << "(";
-		const Json& params = type.at("params");
+		const Json& params = signatureParams(entry);
 		for (std::size_t i = 0; i < params.size(); ++i) {
 			if (i != 0) out << ", ";
 			out << "arg" << i << ": " << zigType(params[i]);
 		}
-		const bool multi = type.at("results").size() > 1u;
+		const bool multi = signatureResults(entry).size() > 1u;
 		if (multi) {
 			if (!params.empty()) out << ", ";
 			out << "result: *anyopaque";
 		}
 		out << ") callconv(.c) ";
-		if (multi || type.at("results").empty())
+		if (multi || signatureResults(entry).empty())
 			out << "void";
 		else
-			out << zigType(type.at("results")[0]);
+			out << zigType(signatureResults(entry)[0]);
 		out << ";\n\n";
 	});
 	return out.str();
@@ -1270,34 +1316,32 @@ std::string emitKotlinImpl(const Json& schema)
 	out << "\n";
 
 	forEachFunction(schema, "exports", [&](const Json& entry) {
-		const Json& type = entry.at("type");
 		out << "// G2H export: " << entry.at("name").get<std::string>() << "\n";
 		out << "typealias wasmjit_" << sanitize(entry.at("name").get<std::string>())
 			<< "_t = (";
-		const Json& params = type.at("params");
+		const Json& params = signatureParams(entry);
 		for (std::size_t i = 0; i < params.size(); ++i) {
 			if (i != 0) out << ", ";
 			out << kotlinType(params[i]);
 		}
 		out << ") -> "
-			<< (type.at("results").size() == 1 ? kotlinType(type.at("results")[0])
+			<< (signatureResults(entry).size() == 1 ? kotlinType(signatureResults(entry)[0])
 											   : "Unit");
 		out << "\n\n";
 	});
 
 	forEachFunction(schema, "imports", [&](const Json& entry) {
-		const Json& type = entry.at("type");
 		out << "// H2G import: " << importComment(entry) << "\n";
 		out << "external fun wasmjit_"
 			<< sanitize(importModule(entry)) << "_"
 			<< sanitize(entry.at("name").get<std::string>()) << "(";
-		const Json& params = type.at("params");
+		const Json& params = signatureParams(entry);
 		for (std::size_t i = 0; i < params.size(); ++i) {
 			if (i != 0) out << ", ";
 			out << "arg" << i << ": " << kotlinType(params[i]);
 		}
 		out << "): "
-			<< (type.at("results").size() == 1 ? kotlinType(type.at("results")[0])
+			<< (signatureResults(entry).size() == 1 ? kotlinType(signatureResults(entry)[0])
 											   : "Unit");
 		out << "\n\n";
 	});
@@ -1317,11 +1361,10 @@ std::string emitMoonBitImpl(const Json& schema)
 	out << "\n";
 
 	forEachFunction(schema, "imports", [&](const Json& entry) {
-		const Json& type = entry.at("type");
 		out << "// H2G import: " << importComment(entry) << "\n";
 		std::string borrow;
-		for (std::size_t i = 0; i < type.at("params").size(); ++i) {
-			if (isReference(type.at("params")[i])) {
+		for (std::size_t i = 0; i < signatureParams(entry).size(); ++i) {
+			if (isReference(signatureParams(entry)[i])) {
 				if (!borrow.empty()) borrow += ", ";
 				borrow += "arg" + std::to_string(i);
 			}
@@ -1331,26 +1374,25 @@ std::string emitMoonBitImpl(const Json& schema)
 		out << "extern \"wasm\" fn wasmjit_"
 			<< sanitize(importModule(entry)) << "_"
 			<< sanitize(entry.at("name").get<std::string>()) << "(";
-		for (std::size_t i = 0; i < type.at("params").size(); ++i) {
+		for (std::size_t i = 0; i < signatureParams(entry).size(); ++i) {
 			if (i != 0) out << ", ";
-			out << "arg" << i << " : " << moonbitType(type.at("params")[i]);
+			out << "arg" << i << " : " << moonbitType(signatureParams(entry)[i]);
 		}
 		out << ") -> "
-			<< (type.at("results").size() == 1 ? moonbitType(type.at("results")[0])
+			<< (signatureResults(entry).size() == 1 ? moonbitType(signatureResults(entry)[0])
 											   : "Unit");
 		out << " = \"" << importModule(entry) << "\" \""
 			<< entry.at("name").get<std::string>() << "\"\n\n";
 	});
 
 	forEachFunction(schema, "exports", [&](const Json& entry) {
-		const Json& type = entry.at("type");
 		out << "// G2H export: " << entry.at("name").get<std::string>() << "(";
-		for (std::size_t i = 0; i < type.at("params").size(); ++i) {
+		for (std::size_t i = 0; i < signatureParams(entry).size(); ++i) {
 			if (i != 0) out << ", ";
-			out << moonbitType(type.at("params")[i]);
+			out << moonbitType(signatureParams(entry)[i]);
 		}
 		out << ") -> "
-			<< (type.at("results").size() == 1 ? moonbitType(type.at("results")[0])
+			<< (signatureResults(entry).size() == 1 ? moonbitType(signatureResults(entry)[0])
 											   : "Unit")
 			<< "\n";
 	});
@@ -1369,44 +1411,42 @@ std::string emitGoImpl(const Json& schema)
 	out << "\n";
 
 	forEachFunction(schema, "exports", [&](const Json& entry) {
-		const Json& type = entry.at("type");
 		out << "//go:wasmexport " << entry.at("name").get<std::string>() << "\n";
 		out << "func wasmjit_" << sanitize(entry.at("name").get<std::string>()) << "(";
-		const Json& params = type.at("params");
+		const Json& params = signatureParams(entry);
 		for (std::size_t i = 0; i < params.size(); ++i) {
 			if (i != 0) out << ", ";
 			out << "arg" << i << " " << goType(params[i]);
 		}
-		const bool multi = type.at("results").size() > 1u;
+		const bool multi = signatureResults(entry).size() > 1u;
 		if (multi) {
 			if (!params.empty()) out << ", ";
 			out << "result *byte";
 		}
 		out << ")";
-		if (!multi && type.at("results").size() == 1)
-			out << " " << goType(type.at("results")[0]);
+		if (!multi && signatureResults(entry).size() == 1)
+			out << " " << goType(signatureResults(entry)[0]);
 		out << " { panic(\"generated adapter stub\") }\n\n";
 	});
 
 	forEachFunction(schema, "imports", [&](const Json& entry) {
-		const Json& type = entry.at("type");
 		out << "//go:wasmimport " << importModule(entry) << " "
 			<< entry.at("name").get<std::string>() << "\n";
 		out << "func wasmjit_" << sanitize(importModule(entry)) << "_"
 			<< sanitize(entry.at("name").get<std::string>()) << "(";
-		const Json& params = type.at("params");
+		const Json& params = signatureParams(entry);
 		for (std::size_t i = 0; i < params.size(); ++i) {
 			if (i != 0) out << ", ";
 			out << "arg" << i << " " << goType(params[i]);
 		}
-		const bool multi = type.at("results").size() > 1u;
+		const bool multi = signatureResults(entry).size() > 1u;
 		if (multi) {
 			if (!params.empty()) out << ", ";
 			out << "result *byte";
 		}
 		out << ")";
-		if (!multi && type.at("results").size() == 1)
-			out << " " << goType(type.at("results")[0]);
+		if (!multi && signatureResults(entry).size() == 1)
+			out << " " << goType(signatureResults(entry)[0]);
 		out << "\n\n";
 	});
 	return out.str();
@@ -1450,23 +1490,22 @@ std::string emitDartImpl(const Json& schema)
 
 	const auto emitNative = [&](const Json& entry, const std::string& functionName,
 								 const char* side) {
-		const Json& type = entry.at("type");
 		out << "// " << side << ": " << entry.at("name").get<std::string>() << "\n";
-		out << "@Native<" << dartNativeType(type.at("results").size() == 1
-												   ? type.at("results")[0]
+		out << "@Native<" << dartNativeType(signatureResults(entry).size() == 1
+												   ? signatureResults(entry)[0]
 												   : Json{{"type", "void"}})
 			<< " Function(";
-		for (std::size_t i = 0; i < type.at("params").size(); ++i) {
+		for (std::size_t i = 0; i < signatureParams(entry).size(); ++i) {
 			if (i != 0) out << ", ";
-			out << dartNativeType(type.at("params")[i]);
+			out << dartNativeType(signatureParams(entry)[i]);
 		}
 		out << ")>(" << "symbol: '" << functionName << "')\n";
 		out << "external "
-			<< (type.at("results").size() == 1 ? dartType(type.at("results")[0]) : "void")
+			<< (signatureResults(entry).size() == 1 ? dartType(signatureResults(entry)[0]) : "void")
 			<< " " << functionName << "(";
-		for (std::size_t i = 0; i < type.at("params").size(); ++i) {
+		for (std::size_t i = 0; i < signatureParams(entry).size(); ++i) {
 			if (i != 0) out << ", ";
-			out << dartType(type.at("params")[i]) << " arg" << i;
+			out << dartType(signatureParams(entry)[i]) << " arg" << i;
 		}
 		out << ");\n\n";
 	};
