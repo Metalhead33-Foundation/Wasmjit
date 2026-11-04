@@ -9,5 +9,5 @@ Version: 1.0.0
 # The core package names no backend: code generators are separate objects,
 # selected by name or loaded through WASMJIT_BACKEND_PATH.
 Libs: -L${libdir} -lWasmBase -lElvavena -lEuphemy
-Libs.private: -lhwy -ldl
+Libs.private: -lhwy -ldl -lffi
 Cflags: -I${includedir} -I${includedir}/wasmjit -I${includedir}/wasmjit/internal

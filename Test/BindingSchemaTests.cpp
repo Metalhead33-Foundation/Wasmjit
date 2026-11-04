@@ -267,6 +267,13 @@ TEST_CASE("g2h Rust emits Wasm import declarations", "[bindings]")
 	REQUIRE(rust.find("pub fn wasmjit_host_double(arg0: i32) -> i32;")
 			!= std::string::npos);
 
+	const Json both = WASM::Bindings::moduleSchema(module, testStore().types(),
+			WASM::Bindings::Direction::GuestToGuest, "asmjit_i32_import");
+	const std::string rustBoth = WASM::Bindings::emitRustModule(both);
+	REQUIRE(rustBoth.find("#[export_name = \"call_host\"]") != std::string::npos);
+	REQUIRE(rustBoth.find("#[link(wasm_import_module = \"host\")]")
+			!= std::string::npos);
+
 	if (haveTool("rustc --version > /dev/null 2>&1")) {
 		const std::filesystem::path dir = bindingsDir();
 		const std::filesystem::path source = dir / "asmjit_i32_import.rs";
