@@ -1341,6 +1341,45 @@ int main(int argc, char** argv)
 	REQUIRE(std::system(run.c_str()) == 0);
 }
 
+TEST_CASE("additional documented language emitters produce declarations", "[bindings]")
+{
+	const Json hi = WASM::Bindings::moduleSchema(loadTestModule("asmjit_i32_basic"),
+			testStore().types(), WASM::Bindings::Direction::HostToGuest,
+			"asmjit_i32_basic");
+	const std::vector<std::pair<WASM::Bindings::Language, std::string>> targets = {
+		{ WASM::Bindings::Language::Java, "teavm" },
+		{ WASM::Bindings::Language::CSharp, "UnmanagedCallersOnly" },
+		{ WASM::Bindings::Language::FSharp, "UnmanagedCallersOnly" },
+		{ WASM::Bindings::Language::Python, "ctypes" },
+		{ WASM::Bindings::Language::Ruby, "Fiddle" },
+		{ WASM::Bindings::Language::Lua, "ffi.cdef" },
+		{ WASM::Bindings::Language::Swift, "@convention(c)" },
+		{ WASM::Bindings::Language::DLang, "extern(C)" },
+		{ WASM::Bindings::Language::Nim, "cdecl" },
+		{ WASM::Bindings::Language::Crystal, "lib WasmJitBindings" },
+		{ WASM::Bindings::Language::Ada, "Convention => C" },
+		{ WASM::Bindings::Language::Pascal, "cdecl" },
+		{ WASM::Bindings::Language::Haskell, "type Wasmjit_" }
+	};
+	for (const auto& [language, marker] : targets) {
+		INFO(WASM::Bindings::languageName(language));
+		const std::string text = WASM::Bindings::emit(hi, language);
+		REQUIRE_FALSE(text.empty());
+		REQUIRE(text.find(marker) != std::string::npos);
+		REQUIRE(text.find("add") != std::string::npos);
+	}
+
+	const Json g2h = WASM::Bindings::moduleSchema(
+			loadTestModule("wasm_js_string_length"), testStore().types(),
+			WASM::Bindings::Direction::GuestToHost, "wasm_js_string_length");
+	REQUIRE(WASM::Bindings::emit(g2h, WASM::Bindings::Language::Java)
+			.find("wasmjit_wasm_js_string_length") != std::string::npos);
+	REQUIRE(WASM::Bindings::emit(g2h, WASM::Bindings::Language::CSharp)
+			.find("wasmjit_wasm_js_string_length") != std::string::npos);
+	REQUIRE(WASM::Bindings::emit(g2h, WASM::Bindings::Language::Python)
+			.find("wasmjit_wasm_js_string_length") != std::string::npos);
+}
+
 TEST_CASE("WIT JSON names agree with the component schema", "[bindings]")
 {
 	if (!haveTool("command -v wasm-tools > /dev/null 2>&1")) {

@@ -1583,6 +1583,698 @@ std::string emitDartImpl(const Json& schema)
 	return out.str();
 }
 
+std::string javaType(const Json& type)
+{
+	const std::string kind = type.value("type", "");
+	if (kind == "i32" || kind == "u32" || kind == "s32" || kind == "i8"
+			|| kind == "u8" || kind == "i16" || kind == "u16")
+		return "int";
+	if (kind == "i64" || kind == "u64" || kind == "s64") return "long";
+	if (kind == "f32" || kind == "float32") return "float";
+	if (kind == "f64" || kind == "float64") return "double";
+	if (kind == "v128") return "byte[]";
+	if (kind == "void") return "void";
+	return "WasmExternref";
+}
+
+void emitJavaParams(std::ostringstream& out, const Json& entry)
+{
+	const Json& params = signatureParams(entry);
+	for (std::size_t i = 0; i < params.size(); ++i) {
+		if (i != 0) out << ", ";
+		out << javaType(params[i]) << " arg" << i;
+	}
+	if (signatureResults(entry).size() > 1u) {
+		if (!params.empty()) out << ", ";
+		out << "long[] result";
+	}
+}
+
+std::string emitJavaImpl(const Json& schema)
+{
+	std::set<std::string> refs;
+	collectSchemaRefs(schema, refs);
+	std::ostringstream out;
+	out << "// Generated Java/Wasm bindings from the "
+		<< schema.at("schema").get<std::string>() << " "
+		<< schema.at("direction").get<std::string>() << " schema. Do not edit.\n";
+	out << "package wasmjit.bindings;\n\n";
+	out << "import org.teavm.interop.Export;\n";
+	out << "import org.teavm.interop.Import;\n\n";
+	out << "public final class WasmJitBindings {\n";
+	out << "\tprivate WasmJitBindings() {}\n";
+	for (const std::string& ref : refs)
+		out << "\tpublic static final class " << pascalName(ref)
+			<< " { private " << pascalName(ref) << "() {} }\n";
+	out << "\n";
+	forEachFunction(schema, "exports", [&](const Json& entry) {
+		const std::string name = entry.at("name").get<std::string>();
+		out << "\t@Export(name = \"" << name << "\")\n";
+		out << "\tpublic static "
+			<< (signatureResults(entry).size() == 1
+					? javaType(signatureResults(entry)[0]) : "void")
+			<< " wasmjit_" << sanitize(name) << "(";
+		emitJavaParams(out, entry);
+		out << ")\n\t{\n\t\tthrow new UnsupportedOperationException(\"" << name
+			<< " is not implemented\");\n\t}\n\n";
+	});
+	forEachFunction(schema, "imports", [&](const Json& entry) {
+		out << "\t@Import(module = \"" << importModule(entry) << "\", name = \""
+			<< entry.at("name").get<std::string>() << "\")\n";
+		out << "\tprivate static native "
+			<< (signatureResults(entry).size() == 1
+					? javaType(signatureResults(entry)[0]) : "void")
+			<< " wasmjit_" << sanitize(importModule(entry)) << "_"
+			<< sanitize(entry.at("name").get<std::string>()) << "(";
+		emitJavaParams(out, entry);
+		out << ");\n\n";
+	});
+	out << nonFunctionNotes(schema);
+	out << "}\n";
+	return out.str();
+}
+
+
+std::string csharpType(const Json& type)
+{
+	const std::string kind = type.value("type", "");
+	if (kind == "i32" || kind == "u32" || kind == "s32" || kind == "i8"
+			|| kind == "u8" || kind == "i16" || kind == "u16")
+		return "int";
+	if (kind == "i64" || kind == "u64" || kind == "s64") return "long";
+	if (kind == "f32" || kind == "float32") return "float";
+	if (kind == "f64" || kind == "float64") return "double";
+	if (kind == "v128") return "byte*";
+	if (kind == "void") return "void";
+	return "void*";
+}
+
+void emitCSharpParams(std::ostringstream& out, const Json& entry)
+{
+	const Json& params = signatureParams(entry);
+	for (std::size_t i = 0; i < params.size(); ++i) {
+		if (i != 0) out << ", ";
+		out << csharpType(params[i]) << " arg" << i;
+	}
+	if (signatureResults(entry).size() > 1u) {
+		if (!params.empty()) out << ", ";
+		out << "byte* result";
+	}
+}
+
+std::string emitCSharpImpl(const Json& schema)
+{
+	std::ostringstream out;
+	out << "// Generated C#/.NET Wasm bindings from the "
+		<< schema.at("schema").get<std::string>() << " "
+		<< schema.at("direction").get<std::string>() << " schema. Do not edit.\n";
+	out << "using System;\nusing System.Runtime.InteropServices;\n\n";
+	out << "public static unsafe class WasmJitBindings\n{\n";
+	forEachFunction(schema, "exports", [&](const Json& entry) {
+		const std::string name = entry.at("name").get<std::string>();
+		out << "\t[UnmanagedCallersOnly(EntryPoint = \"" << name << "\")]\n";
+		out << "\tpublic static "
+			<< (signatureResults(entry).size() == 1
+					? csharpType(signatureResults(entry)[0]) : "void")
+			<< " wasmjit_" << sanitize(name) << "(";
+		emitCSharpParams(out, entry);
+		out << ")\n\t{\n\t\tthrow new NotSupportedException(\"" << name
+			<< " is not implemented\");\n\t}\n\n";
+	});
+	forEachFunction(schema, "imports", [&](const Json& entry) {
+		out << "\t[DllImport(\"" << importModule(entry) << "\", EntryPoint = \""
+			<< entry.at("name").get<std::string>()
+			<< "\", CallingConvention = CallingConvention.Cdecl)]\n";
+		out << "\tpublic static extern "
+			<< (signatureResults(entry).size() == 1
+					? csharpType(signatureResults(entry)[0]) : "void")
+			<< " wasmjit_" << sanitize(importModule(entry)) << "_"
+			<< sanitize(entry.at("name").get<std::string>()) << "(";
+		emitCSharpParams(out, entry);
+		out << ");\n\n";
+	});
+	out << nonFunctionNotes(schema);
+	out << "}\n";
+	return out.str();
+}
+
+
+std::string emitFSharpImpl(const Json& schema)
+{
+	std::ostringstream out;
+	out << "// Generated F#/.NET Wasm bindings from the "
+		<< schema.at("schema").get<std::string>() << " "
+		<< schema.at("direction").get<std::string>() << " schema. Do not edit.\n";
+	out << "open System\nopen System.Runtime.InteropServices\n\n";
+	out << "module WasmJitBindings\n\n";
+	forEachFunction(schema, "exports", [&](const Json& entry) {
+		const std::string name = entry.at("name").get<std::string>();
+		out << "[<UnmanagedCallersOnly(EntryPoint = \"" << name << "\")>]\n";
+		out << "let wasmjit_" << sanitize(name) << " ";
+		const Json& params = signatureParams(entry);
+		for (std::size_t i = 0; i < params.size(); ++i)
+			out << "(arg" << i << " : " << csharpType(params[i]) << ") ";
+		out << ": "
+			<< (signatureResults(entry).size() == 1
+					? csharpType(signatureResults(entry)[0]) : "unit")
+			<< " =\n\traise (NotSupportedException(\"" << name
+			<< " is not implemented\"))\n\n";
+	});
+	forEachFunction(schema, "imports", [&](const Json& entry) {
+		out << "[<DllImport(\"" << importModule(entry) << "\", EntryPoint = \""
+			<< entry.at("name").get<std::string>()
+			<< "\", CallingConvention = CallingConvention.Cdecl)>]\n";
+		out << "extern " << (signatureResults(entry).size() == 1
+				? csharpType(signatureResults(entry)[0]) : "void")
+			<< " wasmjit_" << sanitize(importModule(entry)) << "_"
+			<< sanitize(entry.at("name").get<std::string>()) << "(";
+		const Json& params = signatureParams(entry);
+		for (std::size_t i = 0; i < params.size(); ++i) {
+			if (i != 0) out << ", ";
+			out << "arg" << i << " : " << csharpType(params[i]);
+		}
+		out << ")\n\n";
+	});
+	out << nonFunctionNotes(schema);
+	return out.str();
+}
+
+
+std::string pythonType(const Json& type)
+{
+	const std::string kind = type.value("type", "");
+	if (kind == "i32" || kind == "u32" || kind == "s32" || kind == "i8"
+			|| kind == "u8" || kind == "i16" || kind == "u16")
+		return "ctypes.c_int32";
+	if (kind == "i64" || kind == "u64" || kind == "s64")
+		return "ctypes.c_int64";
+	if (kind == "f32" || kind == "float32") return "ctypes.c_float";
+	if (kind == "f64" || kind == "float64") return "ctypes.c_double";
+	if (kind == "v128") return "ctypes.c_ubyte * 16";
+	if (kind == "void") return "None";
+	return "ctypes.c_void_p";
+}
+
+std::string emitPythonImpl(const Json& schema)
+{
+	std::ostringstream out;
+	out << "# Generated Python ctypes bindings from the "
+		<< schema.at("schema").get<std::string>() << " "
+		<< schema.at("direction").get<std::string>() << " schema. Do not edit.\n";
+	out << "import ctypes\n\n";
+	out << "class WasmExternref(ctypes.Structure):\n\tpass\n\n";
+	forEachFunction(schema, "imports", [&](const Json& entry) {
+		const std::string name = "wasmjit_" + sanitize(importModule(entry)) + "_"
+				+ sanitize(entry.at("name").get<std::string>());
+		out << "# G2H import: " << importComment(entry) << "\n";
+		out << name << "_type = ctypes.CFUNCTYPE("
+			<< pythonType(signatureResults(entry).size() == 1
+					? signatureResults(entry)[0] : Json{{"type", "void"}});
+		for (const Json& param : signatureParams(entry))
+			out << ", " << pythonType(param);
+		if (signatureResults(entry).size() > 1u)
+			out << ", ctypes.c_void_p";
+		out << ")\n\n";
+	});
+	forEachFunction(schema, "exports", [&](const Json& entry) {
+		const std::string name = "wasmjit_" + sanitize(entry.at("name").get<std::string>());
+		out << "# H2G export: " << entry.at("name").get<std::string>() << "\n";
+		out << name << "_type = ctypes.CFUNCTYPE("
+			<< pythonType(signatureResults(entry).size() == 1
+					? signatureResults(entry)[0] : Json{{"type", "void"}});
+		for (const Json& param : signatureParams(entry))
+			out << ", " << pythonType(param);
+		if (signatureResults(entry).size() > 1u)
+			out << ", ctypes.c_void_p";
+		out << ")\n";
+		out << name << " = " << name << "_type()\n\n";
+	});
+	out << nonFunctionNotes(schema);
+	return out.str();
+}
+
+
+std::string emitRubyImpl(const Json& schema)
+{
+	std::ostringstream out;
+	out << "# Generated Ruby/Fiddle bindings from the "
+		<< schema.at("schema").get<std::string>() << " "
+		<< schema.at("direction").get<std::string>() << " schema. Do not edit.\n";
+	out << "require 'fiddle'\nrequire 'fiddle/import'\n\n";
+	out << "module WasmJitBindings\n\textend Fiddle::Importer\n\n";
+	out << "\t# Use dlload with the host's Wasm bridge library before calling.\n";
+	forEachFunction(schema, "imports", [&](const Json& entry) {
+		out << "\t# G2H import: " << importComment(entry) << "\n";
+		out << "\textern 'void* wasmjit_" << sanitize(importModule(entry)) << "_"
+			<< sanitize(entry.at("name").get<std::string>()) << "'\n\n";
+	});
+	forEachFunction(schema, "exports", [&](const Json& entry) {
+		out << "\t# H2G export: " << entry.at("name").get<std::string>()
+			<< "\n\t# type: Fiddle::TYPE_VOIDP\n\n";
+	});
+	out << nonFunctionNotes(schema);
+	out << "end\n";
+	return out.str();
+}
+
+std::string luaType(const Json& type)
+{
+	const std::string kind = type.value("type", "");
+	if (kind == "i32" || kind == "u32" || kind == "s32" || kind == "i8"
+			|| kind == "u8" || kind == "i16" || kind == "u16")
+		return "int32_t";
+	if (kind == "i64" || kind == "u64" || kind == "s64") return "int64_t";
+	if (kind == "f32" || kind == "float32") return "float";
+	if (kind == "f64" || kind == "float64") return "double";
+	if (kind == "v128") return "uint8_t[16]";
+	if (kind == "void") return "void";
+	return "void*";
+}
+
+std::string emitLuaImpl(const Json& schema)
+{
+	std::ostringstream out;
+	out << "-- Generated LuaJIT FFI bindings from the "
+		<< schema.at("schema").get<std::string>() << " "
+		<< schema.at("direction").get<std::string>() << " schema. Do not edit.\n";
+	out << "local ffi = require(\"ffi\")\n\nffi.cdef[[\n";
+	forEachFunction(schema, "exports", [&](const Json& entry) {
+		out << "typedef " << (signatureResults(entry).size() == 1
+				? luaType(signatureResults(entry)[0]) : "void")
+			<< " (*wasmjit_" << sanitize(entry.at("name").get<std::string>())
+			<< "_fn)(";
+		const Json& params = signatureParams(entry);
+		for (std::size_t i = 0; i < params.size(); ++i) {
+			if (i != 0) out << ", ";
+			out << luaType(params[i]);
+		}
+		if (signatureResults(entry).size() > 1u)
+			out << (params.empty() ? "" : ", ") << "void*";
+		out << ");\n";
+	});
+	forEachFunction(schema, "imports", [&](const Json& entry) {
+		out << luaType(signatureResults(entry).size() == 1
+				? signatureResults(entry)[0] : Json{{"type", "void"}})
+			<< " wasmjit_" << sanitize(importModule(entry)) << "_"
+			<< sanitize(entry.at("name").get<std::string>()) << "(";
+		const Json& params = signatureParams(entry);
+		for (std::size_t i = 0; i < params.size(); ++i) {
+			if (i != 0) out << ", ";
+			out << luaType(params[i]);
+		}
+		if (signatureResults(entry).size() > 1u)
+			out << (params.empty() ? "" : ", ") << "void*";
+		out << ");\n";
+	});
+	out << "]]\n\n";
+	out << nonFunctionNotes(schema);
+	return out.str();
+}
+
+
+std::string swiftType(const Json& type)
+{
+	const std::string kind = type.value("type", "");
+	if (kind == "i32" || kind == "u32" || kind == "s32" || kind == "i8"
+			|| kind == "u8" || kind == "i16" || kind == "u16")
+		return "Int32";
+	if (kind == "i64" || kind == "u64" || kind == "s64") return "Int64";
+	if (kind == "f32" || kind == "float32") return "Float";
+	if (kind == "f64" || kind == "float64") return "Double";
+	if (kind == "void") return "Void";
+	return "UnsafeMutableRawPointer?";
+}
+
+std::string emitSwiftImpl(const Json& schema)
+{
+	std::ostringstream out;
+	out << "// Generated Swift/C-convention bindings from the "
+		<< schema.at("schema").get<std::string>() << " "
+		<< schema.at("direction").get<std::string>() << " schema. Do not edit.\n";
+	out << "import Foundation\n\n";
+	out << "public typealias WasmExternref = UnsafeMutableRawPointer\n\n";
+	forEachFunction(schema, "exports", [&](const Json& entry) {
+		const std::string name = sanitize(entry.at("name").get<std::string>());
+		out << "public typealias Wasmjit_" << name << "_Fn = @convention(c) (";
+		const Json& params = signatureParams(entry);
+		for (std::size_t i = 0; i < params.size(); ++i) {
+			if (i != 0) out << ", ";
+			out << swiftType(params[i]);
+		}
+		if (signatureResults(entry).size() > 1u)
+			out << (params.empty() ? "" : ", ") << "UnsafeMutableRawPointer?";
+		out << ") -> "
+			<< (signatureResults(entry).size() == 1
+					? swiftType(signatureResults(entry)[0]) : "Void")
+			<< "\n\n";
+	});
+	forEachFunction(schema, "imports", [&](const Json& entry) {
+		out << "// G2H import: " << importComment(entry) << "\n";
+		out << "@_silgen_name(\"" << entry.at("name").get<std::string>() << "\")\n";
+		out << "public func wasmjit_" << sanitize(importModule(entry)) << "_"
+			<< sanitize(entry.at("name").get<std::string>()) << "(";
+		const Json& params = signatureParams(entry);
+		for (std::size_t i = 0; i < params.size(); ++i) {
+			if (i != 0) out << ", ";
+			out << "arg" << i << ": " << swiftType(params[i]);
+		}
+		if (signatureResults(entry).size() > 1u)
+			out << (params.empty() ? "" : ", ") << "result: UnsafeMutableRawPointer";
+		out << ") -> "
+			<< (signatureResults(entry).size() == 1
+					? swiftType(signatureResults(entry)[0]) : "Void") << "\n\n";
+	});
+	out << nonFunctionNotes(schema);
+	return out.str();
+}
+
+
+std::string dType(const Json& type)
+{
+	const std::string kind = type.value("type", "");
+	if (kind == "i32" || kind == "u32" || kind == "s32" || kind == "i8"
+			|| kind == "u8" || kind == "i16" || kind == "u16")
+		return "int";
+	if (kind == "i64" || kind == "u64" || kind == "s64") return "long";
+	if (kind == "f32" || kind == "float32") return "float";
+	if (kind == "f64" || kind == "float64") return "double";
+	if (kind == "v128") return "ubyte[16]";
+	if (kind == "void") return "void";
+	return "void*";
+}
+
+std::string emitDLangImpl(const Json& schema)
+{
+	std::ostringstream out;
+	out << "// Generated D extern(C) bindings from the "
+		<< schema.at("schema").get<std::string>() << " "
+		<< schema.at("direction").get<std::string>() << " schema. Do not edit.\n";
+	out << "extern(C):\n\n";
+	forEachFunction(schema, "exports", [&](const Json& entry) {
+		const std::string name = sanitize(entry.at("name").get<std::string>());
+		out << "alias Wasmjit_" << name << "_Fn = " << dType(
+				signatureResults(entry).size() == 1
+						? signatureResults(entry)[0] : Json{{"type", "void"}})
+			<< " function(";
+		const Json& params = signatureParams(entry);
+		for (std::size_t i = 0; i < params.size(); ++i) {
+			if (i != 0) out << ", ";
+			out << dType(params[i]);
+		}
+		if (signatureResults(entry).size() > 1u)
+			out << (params.empty() ? "" : ", ") << "void*";
+		out << ");\n\n";
+	});
+	forEachFunction(schema, "imports", [&](const Json& entry) {
+		out << "// G2H import: " << importComment(entry) << "\n";
+		out << dType(signatureResults(entry).size() == 1
+				? signatureResults(entry)[0] : Json{{"type", "void"}})
+			<< " wasmjit_" << sanitize(importModule(entry)) << "_"
+			<< sanitize(entry.at("name").get<std::string>()) << "(";
+		const Json& params = signatureParams(entry);
+		for (std::size_t i = 0; i < params.size(); ++i) {
+			if (i != 0) out << ", ";
+			out << dType(params[i]);
+		}
+		if (signatureResults(entry).size() > 1u)
+			out << (params.empty() ? "" : ", ") << "void*";
+		out << ");\n\n";
+	});
+	out << nonFunctionNotes(schema);
+	return out.str();
+}
+
+std::string nimType(const Json& type)
+{
+	const std::string kind = type.value("type", "");
+	if (kind == "i32" || kind == "u32" || kind == "s32" || kind == "i8"
+			|| kind == "u8" || kind == "i16" || kind == "u16")
+		return "int32";
+	if (kind == "i64" || kind == "u64" || kind == "s64") return "int64";
+	if (kind == "f32" || kind == "float32") return "float32";
+	if (kind == "f64" || kind == "float64") return "float64";
+	if (kind == "v128") return "array[16, uint8]";
+	if (kind == "void") return "void";
+	return "pointer";
+}
+
+std::string emitNimImpl(const Json& schema)
+{
+	std::ostringstream out;
+	out << "# Generated Nim bindings from the "
+		<< schema.at("schema").get<std::string>() << " "
+		<< schema.at("direction").get<std::string>() << " schema. Do not edit.\n";
+	forEachFunction(schema, "exports", [&](const Json& entry) {
+		const std::string name = sanitize(entry.at("name").get<std::string>());
+		out << "type Wasmjit_" << name << "_Fn = proc(";
+		const Json& params = signatureParams(entry);
+		for (std::size_t i = 0; i < params.size(); ++i) {
+			if (i != 0) out << "; ";
+			out << "arg" << i << ": " << nimType(params[i]);
+		}
+		if (signatureResults(entry).size() > 1u)
+			out << (params.empty() ? "" : "; ") << "result: pointer";
+		out << "): " << (signatureResults(entry).size() == 1
+				? nimType(signatureResults(entry)[0]) : "void")
+			<< " {.cdecl.}\n\n";
+	});
+	forEachFunction(schema, "imports", [&](const Json& entry) {
+		out << "proc wasmjit_" << sanitize(importModule(entry)) << "_"
+			<< sanitize(entry.at("name").get<std::string>()) << "(";
+		const Json& params = signatureParams(entry);
+		for (std::size_t i = 0; i < params.size(); ++i) {
+			if (i != 0) out << "; ";
+			out << "arg" << i << ": " << nimType(params[i]);
+		}
+		if (signatureResults(entry).size() > 1u)
+			out << (params.empty() ? "" : "; ") << "result: pointer";
+		out << "): " << (signatureResults(entry).size() == 1
+				? nimType(signatureResults(entry)[0]) : "void")
+			<< " {.importc: \"" << entry.at("name").get<std::string>()
+			<< "\", cdecl.}\n\n";
+	});
+	out << nonFunctionNotes(schema);
+	return out.str();
+}
+
+
+std::string crystalType(const Json& type)
+{
+	const std::string kind = type.value("type", "");
+	if (kind == "i32" || kind == "u32" || kind == "s32" || kind == "i8"
+			|| kind == "u8" || kind == "i16" || kind == "u16")
+		return "Int32";
+	if (kind == "i64" || kind == "u64" || kind == "s64") return "Int64";
+	if (kind == "f32" || kind == "float32") return "Float32";
+	if (kind == "f64" || kind == "float64") return "Float64";
+	if (kind == "v128") return "StaticArray(UInt8, 16)";
+	if (kind == "void") return "Void";
+	return "Void*";
+}
+
+std::string emitCrystalImpl(const Json& schema)
+{
+	std::ostringstream out;
+	out << "# Generated Crystal lib bindings from the "
+		<< schema.at("schema").get<std::string>() << " "
+		<< schema.at("direction").get<std::string>() << " schema. Do not edit.\n";
+	out << "lib WasmJitBindings\n";
+	forEachFunction(schema, "exports", [&](const Json& entry) {
+		const std::string name = sanitize(entry.at("name").get<std::string>());
+		out << "  alias Wasmjit_" << name << "_Fn = (";
+		const Json& params = signatureParams(entry);
+		for (std::size_t i = 0; i < params.size(); ++i) {
+			if (i != 0) out << ", ";
+			out << crystalType(params[i]);
+		}
+		if (signatureResults(entry).size() > 1u)
+			out << (params.empty() ? "" : ", ") << "Void*";
+		out << ") -> " << (signatureResults(entry).size() == 1
+				? crystalType(signatureResults(entry)[0]) : "Void") << "\n";
+	});
+	forEachFunction(schema, "imports", [&](const Json& entry) {
+		out << "  # G2H import: " << importComment(entry) << "\n";
+		out << "  fun wasmjit_" << sanitize(importModule(entry)) << "_"
+			<< sanitize(entry.at("name").get<std::string>()) << "(";
+		const Json& params = signatureParams(entry);
+		for (std::size_t i = 0; i < params.size(); ++i) {
+			if (i != 0) out << ", ";
+			out << "arg" << i << " : " << crystalType(params[i]);
+		}
+		if (signatureResults(entry).size() > 1u)
+			out << (params.empty() ? "" : ", ") << "result : Void*";
+		out << ") : " << (signatureResults(entry).size() == 1
+				? crystalType(signatureResults(entry)[0]) : "Void") << "\n";
+	});
+	out << "end\n";
+	out << nonFunctionNotes(schema);
+	return out.str();
+}
+
+std::string adaType(const Json& type)
+{
+	const std::string kind = type.value("type", "");
+	if (kind == "i32" || kind == "u32" || kind == "s32" || kind == "i8"
+			|| kind == "u8" || kind == "i16" || kind == "u16")
+		return "Interfaces.Integer_32";
+	if (kind == "i64" || kind == "u64" || kind == "s64")
+		return "Interfaces.Integer_64";
+	if (kind == "f32" || kind == "float32") return "Interfaces.Float_32";
+	if (kind == "f64" || kind == "float64") return "Interfaces.Float_64";
+	if (kind == "void") return "Ada.Numerics.Void";
+	return "System.Address";
+}
+
+std::string emitAdaImpl(const Json& schema)
+{
+	std::ostringstream out;
+	out << "-- Generated Ada bindings from the "
+		<< schema.at("schema").get<std::string>() << " "
+		<< schema.at("direction").get<std::string>() << " schema. Do not edit.\n";
+	out << "with Interfaces; use Interfaces;\n";
+	out << "with System;\n\npackage WasmJit.Bindings is\n";
+	forEachFunction(schema, "exports", [&](const Json& entry) {
+		const std::string name = sanitize(entry.at("name").get<std::string>());
+		out << "   type Wasmjit_" << name << "_Fn is access function (";
+		const Json& params = signatureParams(entry);
+		for (std::size_t i = 0; i < params.size(); ++i) {
+			if (i != 0) out << "; ";
+			out << "Arg" << i << " : " << adaType(params[i]);
+		}
+		if (signatureResults(entry).size() > 1u)
+			out << (params.empty() ? "" : "; ") << "Result : System.Address";
+		out << ") return " << (signatureResults(entry).size() == 1
+				? adaType(signatureResults(entry)[0]) : "System.Address")
+			<< " with Convention => C;\n";
+	});
+	forEachFunction(schema, "imports", [&](const Json& entry) {
+		out << "   -- G2H import: " << importComment(entry) << "\n";
+		out << "   function Wasmjit_" << sanitize(importModule(entry)) << "_"
+			<< sanitize(entry.at("name").get<std::string>()) << " (";
+		const Json& params = signatureParams(entry);
+		for (std::size_t i = 0; i < params.size(); ++i) {
+			if (i != 0) out << "; ";
+			out << "Arg" << i << " : " << adaType(params[i]);
+		}
+		if (signatureResults(entry).size() > 1u)
+			out << (params.empty() ? "" : "; ") << "Result : System.Address";
+		out << ") return " << (signatureResults(entry).size() == 1
+				? adaType(signatureResults(entry)[0]) : "System.Address")
+			<< " with Import, Convention => C, External_Name => \""
+			<< entry.at("name").get<std::string>() << "\";\n";
+	});
+	out << "end WasmJit.Bindings;\n";
+	out << nonFunctionNotes(schema);
+	return out.str();
+}
+
+
+std::string pascalType(const Json& type)
+{
+	const std::string kind = type.value("type", "");
+	if (kind == "i32" || kind == "u32" || kind == "s32" || kind == "i8"
+			|| kind == "u8" || kind == "i16" || kind == "u16")
+		return "LongInt";
+	if (kind == "i64" || kind == "u64" || kind == "s64") return "Int64";
+	if (kind == "f32" || kind == "float32") return "Single";
+	if (kind == "f64" || kind == "float64") return "Double";
+	if (kind == "v128") return "array[0..15] of Byte";
+	if (kind == "void") return "";
+	return "Pointer";
+}
+
+std::string emitPascalImpl(const Json& schema)
+{
+	std::ostringstream out;
+	out << "{ Generated Pascal bindings from the "
+		<< schema.at("schema").get<std::string>() << " "
+		<< schema.at("direction").get<std::string>() << " schema. Do not edit. }\n";
+	out << "unit WasmJitBindings;\n\ninterface\n\ntype\n";
+	forEachFunction(schema, "exports", [&](const Json& entry) {
+		const std::string name = sanitize(entry.at("name").get<std::string>());
+		out << "  Wasmjit_" << name << "_Fn = function (";
+		const Json& params = signatureParams(entry);
+		for (std::size_t i = 0; i < params.size(); ++i) {
+			if (i != 0) out << "; ";
+			out << "arg" << i << ": " << pascalType(params[i]);
+		}
+		if (signatureResults(entry).size() > 1u)
+			out << (params.empty() ? "" : "; ") << "result: Pointer";
+		out << "): " << (signatureResults(entry).size() == 1
+				? pascalType(signatureResults(entry)[0]) : "LongInt")
+			<< "; cdecl;\n";
+	});
+	forEachFunction(schema, "imports", [&](const Json& entry) {
+		out << "  // G2H import: " << importComment(entry) << "\n";
+		out << "  function wasmjit_" << sanitize(importModule(entry)) << "_"
+			<< sanitize(entry.at("name").get<std::string>()) << "(";
+		const Json& params = signatureParams(entry);
+		for (std::size_t i = 0; i < params.size(); ++i) {
+			if (i != 0) out << "; ";
+			out << "arg" << i << ": " << pascalType(params[i]);
+		}
+		if (signatureResults(entry).size() > 1u)
+			out << (params.empty() ? "" : "; ") << "result: Pointer";
+		out << "): " << (signatureResults(entry).size() == 1
+				? pascalType(signatureResults(entry)[0]) : "LongInt")
+			<< "; cdecl; external '" << importModule(entry) << "' name '"
+			<< entry.at("name").get<std::string>() << "';\n";
+	});
+	out << "\nimplementation\n\nend.\n";
+	out << nonFunctionNotes(schema);
+	return out.str();
+}
+
+std::string haskellType(const Json& type)
+{
+	const std::string kind = type.value("type", "");
+	if (kind == "i32" || kind == "u32" || kind == "s32" || kind == "i8"
+			|| kind == "u8" || kind == "i16" || kind == "u16")
+		return "CInt";
+	if (kind == "i64" || kind == "u64" || kind == "s64") return "CLLong";
+	if (kind == "f32" || kind == "float32") return "CFloat";
+	if (kind == "f64" || kind == "float64") return "CDouble";
+	if (kind == "void") return "()";
+	return "Ptr ()";
+}
+
+std::string emitHaskellImpl(const Json& schema)
+{
+	std::ostringstream out;
+	out << "-- Generated Haskell FFI bindings from the "
+		<< schema.at("schema").get<std::string>() << " "
+		<< schema.at("direction").get<std::string>() << " schema. Do not edit.\n";
+	out << "{-# LANGUAGE ForeignFunctionInterface #-}\n";
+	out << "module WasmJitBindings where\n\n";
+	out << "import Foreign.C.Types\nimport Foreign.Ptr\n\n";
+	forEachFunction(schema, "exports", [&](const Json& entry) {
+		out << "-- H2G export: " << entry.at("name").get<std::string>() << "\n";
+		out << "type Wasmjit_" << sanitize(entry.at("name").get<std::string>())
+			<< "_Fn = ";
+		const Json& params = signatureParams(entry);
+		for (const Json& param : params)
+			out << haskellType(param) << " -> ";
+		if (signatureResults(entry).size() > 1u)
+			out << "Ptr () -> ";
+		out << "IO " << (signatureResults(entry).size() == 1
+				? haskellType(signatureResults(entry)[0]) : "()") << "\n\n";
+	});
+	forEachFunction(schema, "imports", [&](const Json& entry) {
+		out << "foreign import ccall \"" << entry.at("name").get<std::string>()
+			<< "\" wasmjit_" << sanitize(importModule(entry)) << "_"
+			<< sanitize(entry.at("name").get<std::string>()) << "\n  :: ";
+		for (const Json& param : signatureParams(entry))
+			out << haskellType(param) << " -> ";
+		if (signatureResults(entry).size() > 1u)
+			out << "Ptr () -> ";
+		out << "IO " << (signatureResults(entry).size() == 1
+				? haskellType(signatureResults(entry)[0]) : "()") << "\n\n";
+	});
+	out << nonFunctionNotes(schema);
+	return out.str();
+}
+
+
 std::string cppTypedefName(const Json &entry) {
 	return "wasmjit_" + sanitize(entry.at("name").get<std::string>()) + "_fn";
 }
@@ -1868,6 +2560,19 @@ const char* languageName(Language language) noexcept
 	case Language::MoonBit: return "moonbit";
 	case Language::Go: return "go";
 	case Language::Dart: return "dart";
+	case Language::Java: return "java";
+	case Language::CSharp: return "csharp";
+	case Language::FSharp: return "fsharp";
+	case Language::Python: return "python";
+	case Language::Ruby: return "ruby";
+	case Language::Lua: return "lua";
+	case Language::Swift: return "swift";
+	case Language::DLang: return "d";
+	case Language::Nim: return "nim";
+	case Language::Crystal: return "crystal";
+	case Language::Ada: return "ada";
+	case Language::Pascal: return "pascal";
+	case Language::Haskell: return "haskell";
 	case Language::CppAdapter: return "cpp-adapter";
 	case Language::CppTypedefs: return "cpp-typedefs";
 	case Language::CppSource: return "cpp-source";
@@ -1880,8 +2585,12 @@ bool parseLanguage(std::string_view name, Language& language) noexcept
 	for (const Language candidate : { Language::CHeader, Language::Rust,
 				 Language::TypeScript, Language::AssemblyScript, Language::Zig,
 				 Language::Kotlin, Language::MoonBit, Language::Go, Language::Dart,
-				 Language::CppAdapter, Language::CppTypedefs,
-				 Language::CppSource }) {
+				 Language::Java, Language::CSharp, Language::FSharp,
+				 Language::Python, Language::Ruby, Language::Lua,
+				 Language::Swift, Language::DLang, Language::Nim,
+				 Language::Crystal, Language::Ada, Language::Pascal,
+				 Language::Haskell, Language::CppAdapter,
+				 Language::CppTypedefs, Language::CppSource }) {
 		if (name == languageName(candidate)) {
 			language = candidate;
 			return true;
@@ -1902,6 +2611,19 @@ std::string emit(const nlohmann::ordered_json& schema, Language language)
 	case Language::MoonBit: return emitMoonBitImpl(schema);
 	case Language::Go: return emitGoImpl(schema);
 	case Language::Dart: return emitDartImpl(schema);
+	case Language::Java: return emitJavaImpl(schema);
+	case Language::CSharp: return emitCSharpImpl(schema);
+	case Language::FSharp: return emitFSharpImpl(schema);
+	case Language::Python: return emitPythonImpl(schema);
+	case Language::Ruby: return emitRubyImpl(schema);
+	case Language::Lua: return emitLuaImpl(schema);
+	case Language::Swift: return emitSwiftImpl(schema);
+	case Language::DLang: return emitDLangImpl(schema);
+	case Language::Nim: return emitNimImpl(schema);
+	case Language::Crystal: return emitCrystalImpl(schema);
+	case Language::Ada: return emitAdaImpl(schema);
+	case Language::Pascal: return emitPascalImpl(schema);
+	case Language::Haskell: return emitHaskellImpl(schema);
 	case Language::CppAdapter: return emitCppAdapterImpl(schema);
 	case Language::CppTypedefs: return emitCppTypedefsImpl(schema);
 	case Language::CppSource: return emitCppSourceImpl(schema);

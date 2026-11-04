@@ -38,6 +38,19 @@ enum class Language {
 	MoonBit, //!< MoonBit declarations.
 	Go, //!< Go Wasm declarations.
 	Dart, //!< Dart FFI declarations.
+	Java, //!< Java/TeaVM or JWebAssembly declarations.
+	CSharp, //!< C#/.NET Wasm declarations.
+	FSharp, //!< F#/.NET Wasm declarations.
+	Python, //!< Python `ctypes` declarations.
+	Ruby, //!< Ruby/Fiddle declarations.
+	Lua, //!< LuaJIT FFI declarations.
+	Swift, //!< Swift/C convention declarations.
+	DLang, //!< D `extern(C)` declarations.
+	Nim, //!< Nim `importc`/`exportc` declarations.
+	Crystal, //!< Crystal `lib` bindings.
+	Ada, //!< Ada `pragma Import`/`Export` bindings.
+	Pascal, //!< Pascal `cdecl` external declarations.
+	Haskell, //!< Haskell `foreign import ccall` declarations.
 	CppAdapter, //!< A C++ adapter that dispatches through `WASM::callCallable`.
 	CppTypedefs, //!< Host-side `Callable` function-pointer typedefs.
 	CppSource //!< A C++ source with `Callable::fnPtr` cast helpers.
