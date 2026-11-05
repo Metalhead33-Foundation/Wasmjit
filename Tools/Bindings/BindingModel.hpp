@@ -102,6 +102,7 @@ struct ValueType {
 	bool nullable = true; //!< True for `ref null`.
 	bool shared = false; //!< True for a shared reference.
 	bool exact = false; //!< True for an exact reference type.
+	bool wit = false; //!< True when a WIT front-end supplied a named opaque type.
 	HeapKind heap = HeapKind::Unknown; //!< The heap kind of a reference.
 	std::string typeKind; //!< The defined type kind (`struct`, `array`, ...).
 	std::string name; //!< An optional interface/type name.

@@ -129,6 +129,50 @@ std::string refTypeName(const Json& type)
 	}
 }
 
+std::string witOpaqueTypeName(std::string_view name)
+{
+	return "wasmjit_wit_" + sanitize(name);
+}
+
+bool witTypeIsAlias(const Json& definition)
+{
+	return definition.is_object() && definition.contains("kind")
+			&& definition.at("kind").is_object()
+			&& definition.at("kind").contains("type");
+}
+
+void emitWitOpaqueTypes(std::ostringstream& out, const Json& schema, bool cpp)
+{
+	if (schema.value("frontend", "") != "wit")
+		return;
+	std::set<std::string> emitted;
+	if (!schema.contains("types") || !schema.at("types").is_array())
+		return;
+	std::size_t index = 0;
+	for (const Json& type : schema.at("types")) {
+		std::string sourceName;
+		if (type.is_object() && witTypeIsAlias(type)) {
+			++index;
+			continue;
+		}
+		if (type.is_object() && type.contains("name")
+				&& type.at("name").is_string())
+			sourceName = type.at("name").get<std::string>();
+		else if (type.is_object() && type.contains("kind"))
+			sourceName = "type-" + std::to_string(index);
+		++index;
+		if (sourceName.empty())
+			continue;
+		const std::string name = witOpaqueTypeName(sourceName);
+		if (!emitted.insert(name).second)
+			continue;
+		out << (cpp ? "struct " : "typedef struct ") << name;
+		if (!cpp)
+			out << " " << name;
+		out << ";\n";
+	}
+}
+
 std::string cType(const Json& type)
 {
 	const ValueType value = ValueType::fromJson(type);
@@ -156,6 +200,9 @@ std::string cType(const Json& type)
 	case ValueKind::String:
 	case ValueKind::ErrorContext: return "void*";
 	case ValueKind::Ref:
+		if (value.wit && !value.name.empty())
+			return witOpaqueTypeName(value.name) + "*";
+		return refTypeName(type) + "*";
 	case ValueKind::StringRef:
 	case ValueKind::StringViewWtf8:
 	case ValueKind::StringViewWtf16:
@@ -341,6 +388,7 @@ std::string emitCHeaderImpl(const Json& schema)
 	out << "#endif\n\n";
 	out << "#ifdef __cplusplus\nextern \"C\" {\n#endif\n\n";
 	out << "typedef struct wasm_v128 { uint8_t bytes[16]; } wasm_v128;\n";
+	emitWitOpaqueTypes(out, schema, false);
 	for (const std::string& ref : refs)
 		out << "typedef struct " << ref << " " << ref << ";\n";
 	out << "\n/* Reference types are opaque. Reference parameters are borrowed unless\n"

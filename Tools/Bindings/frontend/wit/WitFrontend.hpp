@@ -21,6 +21,20 @@
 namespace WASM::Bindings {
 
 /*!
+ * \brief Resolves one WIT type reference through a WIT JSON type table.
+ *
+ * Scalar aliases resolve to their underlying scalar; records, variants,
+ * lists, resources and other structured types resolve to a named opaque WIT
+ * reference.
+ *
+ * \param document A document containing a `types` array.
+ * \param type A WIT type id, scalar spelling or type object.
+ * \return The neutral schema value type.
+ */
+nlohmann::ordered_json witResolveType(const nlohmann::ordered_json& document,
+		const nlohmann::ordered_json& type);
+
+/*!
  * \brief Selects and converts one WIT world from a WIT JSON document.
  *
  * The first world is used when \p worldName is empty. A world function becomes

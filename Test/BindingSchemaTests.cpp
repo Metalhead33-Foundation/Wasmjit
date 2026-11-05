@@ -1762,6 +1762,41 @@ TEST_CASE("WIT type aliases resolve through the type table", "[bindings]")
 			== WASM::Bindings::ValueKind::U64);
 }
 
+TEST_CASE("WIT records get named C++ declarations", "[bindings]")
+{
+	const Json wit = {
+		{ "worlds", Json::array({
+			{ { "name", "demo" },
+				{ "imports", { { "echo", { { "function", {
+					{ "name", "echo" },
+					{ "params", Json::array({ { { "name", "value" },
+						{ "type", 0 } } }) },
+					{ "result", 0 } } } } } } },
+				{ "exports", Json::object() }, { "package", 0 } } }) },
+		{ "interfaces", Json::array() },
+		{ "types", Json::array({
+			{ { "name", "point" }, { "kind", { { "record", {
+				{ "fields", Json::array({ { { "name", "x" },
+					{ "type", "s32" } } }) } } } } } } }) },
+		{ "packages", Json::array({ { { "name", "test:demo@0.1.0" },
+			{ "interfaces", Json::object() },
+			{ "worlds", { { "demo", 0 } } } } }) },
+	};
+	std::string error;
+	const auto schema = WASM::Bindings::witSchema(wit,
+			WASM::Bindings::Direction::Complete, "demo", "demo", error);
+	REQUIRE(error.empty());
+	REQUIRE(schema.imports.size() == 1u);
+	REQUIRE(schema.imports[0].function.params[0].wit);
+	const std::string header = WASM::Bindings::emit(schema,
+			WASM::Bindings::Language::CppTypedefs);
+	REQUIRE(header.find("struct wasmjit_wit_point;") != std::string::npos);
+	REQUIRE(header.find("struct wasmjit_wit_point {") != std::string::npos);
+	REQUIRE(header.find("int32_t x;") != std::string::npos);
+	REQUIRE(header.find("wasmjit_wit_point* value")
+			!= std::string::npos);
+}
+
 TEST_CASE("WIT JSON names agree with the component schema", "[bindings]")
 {
 	if (!haveTool("command -v wasm-tools > /dev/null 2>&1")) {

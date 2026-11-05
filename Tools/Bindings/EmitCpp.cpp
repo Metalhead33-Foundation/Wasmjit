@@ -1,5 +1,6 @@
 #include "EmitInternal.hpp"
 #include "EmitShared.hpp"
+#include "frontend/wit/WitFrontend.hpp"
 
 #include <cstddef>
 #include <map>
@@ -78,6 +79,49 @@ void emitCppImportStub(std::ostringstream &out, const Json &entry) {
 	out << "}\n\n";
 }
 
+std::string witCppDefinitionName(const Json& definition, std::size_t index)
+{
+	if (definition.is_object() && definition.contains("name")
+			&& definition.at("name").is_string())
+		return witOpaqueTypeName(definition.at("name").get<std::string>());
+	return witOpaqueTypeName("type-" + std::to_string(index));
+}
+
+void emitWitCppTypeDefinitions(std::ostringstream& out, const Json& schema)
+{
+	if (schema.value("frontend", "") != "wit"
+			|| !schema.contains("types") || !schema.at("types").is_array())
+		return;
+	const Json document = { { "types", schema.at("types") } };
+	std::set<std::string> emitted;
+	std::size_t index = 0;
+	for (const Json& definition : schema.at("types")) {
+		++index;
+		if (!definition.is_object() || witTypeIsAlias(definition)
+				|| !definition.contains("kind"))
+			continue;
+		const Json& kind = definition.at("kind");
+		if (!kind.is_object() || !kind.contains("record"))
+			continue;
+		const std::string name = witCppDefinitionName(definition, index - 1);
+		if (!emitted.insert(name).second)
+			continue;
+		out << "struct " << name << " {\n";
+		const auto fields = kind.at("record").find("fields");
+		if (fields != kind.at("record").end() && fields->is_array()) {
+			for (const Json& field : *fields) {
+				if (!field.is_object() || !field.contains("name")
+						|| !field.at("name").is_string())
+					continue;
+				out << "\t" << cType(witResolveType(document,
+						field.value("type", Json{}))) << " "
+					<< sanitize(field.at("name").get<std::string>()) << ";\n";
+			}
+		}
+		out << "};\n";
+	}
+}
+
 std::string emitCppTypedefsImpl(const Json& schema)
 {
 	const std::string direction = schema.value("direction", "g2h");
@@ -99,6 +143,8 @@ std::string emitCppTypedefsImpl(const Json& schema)
 	out << "#include <cstdint>\n\n";
 	out << "namespace WASM { struct VMContext; struct ModuleInstance; class RegistryImportResolver; }\n";
 	out << "struct wasm_v128 { std::uint8_t bytes[16]; };\n";
+	emitWitOpaqueTypes(out, schema, true);
+	emitWitCppTypeDefinitions(out, schema);
 	for (const std::string& ref : refs)
 		out << "struct " << ref << ";\n";
 	out << "\n// A Callable's fnPtr is `ret f(VMContext*, params...)`; multi-value\n"
@@ -256,6 +302,7 @@ std::string emitCppAdapterImpl(const Json& schema)
 	out << "#include <stdexcept>\n";
 	out << "#include <string>\n\n";
 	out << "struct wasm_v128 { std::uint8_t bytes[16]; };\n";
+	emitWitOpaqueTypes(out, schema, true);
 	for (const std::string& ref : refs)
 		out << "struct " << ref << ";\n";
 	out << "\nWASM::ModuleInstance* wasmjit_adapter_instance = nullptr;\n\n";

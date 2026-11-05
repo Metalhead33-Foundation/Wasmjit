@@ -36,6 +36,15 @@ std::string refTypeName(const Json& type);
 //! Returns the C spelling of a value type.
 std::string cType(const Json& type);
 
+//! Returns the stable opaque name of a WIT type.
+std::string witOpaqueTypeName(std::string_view name);
+
+//! True when a WIT type definition is an alias rather than a structured type.
+bool witTypeIsAlias(const Json& definition);
+
+//! Emits forward declarations for the named types of a WIT schema.
+void emitWitOpaqueTypes(std::ostringstream& out, const Json& schema, bool cpp);
+
 //! Collects opaque reference names from a schema fragment.
 void collectRefs(const Json& node, std::set<std::string>& names);
 

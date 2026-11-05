@@ -257,6 +257,7 @@ ValueType ValueType::fromJson(const Json& json)
 	out.nullable = jsonBool(json, "nullable", true);
 	out.shared = jsonBool(json, "shared");
 	out.exact = jsonBool(json, "exact");
+	out.wit = jsonBool(json, "wit");
 	out.typeKind = jsonString(json, "typeKind");
 	out.name = jsonString(json, "name");
 	if (json.contains("typeId") && json.at("typeId").is_number_unsigned()) {
@@ -304,6 +305,8 @@ Json ValueType::toJson() const
 			out["shared"] = true;
 		if (exact)
 			out["exact"] = true;
+		if (wit)
+			out["wit"] = true;
 		return out;
 	}
 	Json out = { { "type", valueKindName(kind) } };

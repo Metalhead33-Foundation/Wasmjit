@@ -37,7 +37,7 @@ std::string stringAt(const Json& object, std::string_view key)
 Json opaqueWitType(const std::string& name)
 {
 	Json out = { { "type", "ref" }, { "heap", "extern" },
-		{ "nullable", true } };
+		{ "nullable", true }, { "wit", true } };
 	if (!name.empty())
 		out["name"] = name;
 	return out;
@@ -87,10 +87,12 @@ Json resolveWitType(const Json& type, const Json& document, unsigned depth)
 			const Json resolved = resolveWitKind(definition.at("kind"),
 					document, depth + 1);
 			// An alias to a scalar keeps the scalar type; a structured type
-			// keeps its own name instead of leaking an internal id.
-			if (resolved.value("type", "") != "ref" || name.empty())
+			// keeps its name (or a stable synthetic name) instead of leaking
+			// an internal id into a target-language identifier.
+			if (resolved.value("type", "") != "ref")
 				return resolved;
-			return opaqueWitType(name);
+			return opaqueWitType(name.empty() ? "type-" + std::to_string(id)
+											  : name);
 		}
 		return opaqueWitType(name.empty() ? "type-" + std::to_string(id) : name);
 	}
@@ -238,6 +240,12 @@ void appendWorldEntry(const Json& node, const Json& document, const std::string&
 }
 
 } // namespace
+
+Json witResolveType(const Json& document, const Json& type)
+{
+	return resolveWitType(type, document, 0);
+}
+
 Schema witSchema(const Json& document, Direction direction,
 		std::string_view moduleName, std::string_view worldName,
 		std::string& error)
