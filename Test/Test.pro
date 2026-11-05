@@ -161,6 +161,7 @@ SOURCES += main.cpp \
     ../Tools/Bindings/EmitDynamic.cpp \
     ../Tools/Bindings/EmitCpp.cpp \
     ../Tools/Bindings/frontend/cpp/CppFrontend.cpp \
+    ../Tools/Bindings/frontend/wit/WitFrontend.cpp \
     BindingSchemaTests.cpp \
     CallCacheTests.cpp
 HEADERS +=  \

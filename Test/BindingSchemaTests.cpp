@@ -17,6 +17,7 @@
 
 #include "BindingSchema.hpp"
 #include "frontend/cpp/CppFrontend.hpp"
+#include "frontend/wit/WitFrontend.hpp"
 #include "helper.hpp"
 #include "TestStore.hpp"
 #include "WasmBase/WasmArtifact.hpp"
@@ -1662,6 +1663,71 @@ TEST_CASE("additional documented language emitters produce declarations", "[bind
 			.find("wasmjit_wasm_js_string_length") != std::string::npos);
 	REQUIRE(WASM::Bindings::emit(g2h, WASM::Bindings::Language::Python)
 			.find("wasmjit_wasm_js_string_length") != std::string::npos);
+}
+
+TEST_CASE("WIT JSON and WIT text are binding-schema inputs", "[bindings]")
+{
+	const Json wit = {
+		{ "worlds", Json::array({
+			{ { "name", "demo" },
+				{ "imports", { { "host-add", { { "function", {
+					{ "name", "host-add" }, { "kind", "freestanding" },
+					{ "params", Json::array({ { { "name", "a" },
+						{ "type", "u32" } }, { { "name", "b" },
+						{ "type", "u32" } } }) },
+					{ "result", "u32" } } } } } } },
+				{ "exports", { { "run", { { "function", {
+					{ "name", "run" }, { "kind", "freestanding" },
+					{ "params", Json::array({ { { "name", "x" },
+						{ "type", "u32" } } }) },
+					{ "result", "u32" } } } } } } },
+				{ "package", 0 } } }) },
+		{ "interfaces", Json::array() },
+		{ "types", Json::array() },
+		{ "packages", Json::array({ { { "name", "test:demo@0.1.0" },
+			{ "interfaces", Json::object() },
+			{ "worlds", { { "demo", 0 } } } } }) },
+	};
+
+	std::string error;
+	const auto complete = WASM::Bindings::witSchema(wit,
+			WASM::Bindings::Direction::Complete, "demo", "demo", error);
+	REQUIRE(error.empty());
+	REQUIRE(complete.imports.size() == 1u);
+	REQUIRE(complete.exports.size() == 1u);
+	REQUIRE(complete.imports[0].name == "host-add");
+	REQUIRE(complete.imports[0].argNames[1] == "b");
+	const auto g2h = WASM::Bindings::projectSchema(complete,
+			WASM::Bindings::Direction::GuestToHost);
+	const auto h2g = WASM::Bindings::projectSchema(complete,
+			WASM::Bindings::Direction::HostToGuest);
+	REQUIRE(g2h.exports.empty());
+	REQUIRE(h2g.imports.empty());
+	REQUIRE(WASM::Bindings::emit(g2h, WASM::Bindings::Language::CHeader)
+			.find("wasmjit_demo_host_add") != std::string::npos);
+	REQUIRE(WASM::Bindings::emit(h2g, WASM::Bindings::Language::Rust)
+			.find("wasmjit_run") != std::string::npos);
+
+	if (haveTool("command -v wasm-tools > /dev/null 2>&1")) {
+		const std::filesystem::path path = bindingsDir() / "wit-input.wit";
+		{
+			std::ofstream out(path, std::ios::binary);
+			out << "package test:demo@0.1.0;\n"
+				   "world demo {\n"
+				   "  import host-add: func(a: u32, b: u32) -> u32;\n"
+				   "  export run: func(x: u32) -> u32;\n"
+				   "}\n";
+		}
+		const auto fromText = WASM::Bindings::witSchemaFromFile(path,
+				WASM::Bindings::Direction::Complete, "demo", "demo", false,
+				error);
+		REQUIRE(error.empty());
+		REQUIRE(fromText.imports.size() == 1u);
+		REQUIRE(fromText.exports.size() == 1u);
+		REQUIRE(WASM::Bindings::emit(fromText,
+			WASM::Bindings::Language::CHeader).find("host_add")
+			!= std::string::npos);
+	}
 }
 
 TEST_CASE("WIT JSON names agree with the component schema", "[bindings]")

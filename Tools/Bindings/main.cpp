@@ -1,5 +1,6 @@
 #include "BindingSchema.hpp"
 #include "frontend/cpp/CppFrontend.hpp"
+#include "frontend/wit/WitFrontend.hpp"
 
 #include <Euphemy/Config/GlobalConfig.hpp>
 #include <Euphemy/Io/EuphFile.hpp>
@@ -37,6 +38,10 @@ void usage(std::ostream& out)
 		   "                           candidate signatures against the schema\n"
 		   "  --glue-candidates SRC    compile a Glue registration source and\n"
 		   "                           validate its printed declarations\n"
+		   "  --wit PATH               WIT text/package/directory input (invokes\n"
+		   "                           wasm-tools component wit --json)\n"
+		   "  --wit-json FILE          WIT JSON input produced by wasm-tools\n"
+		   "  --wit-world NAME         select a WIT world (default: first)\n"
 		   "  --frontend-schema        with --candidates/--glue-candidates, derive a\n"
 		   "                           G2H imports schema (or emit any --emit target)\n"
 		   "  --output FILE            write to FILE instead of stdout\n";
@@ -51,6 +56,9 @@ int main(int argc, char** argv)
 	std::string outputPath;
 	std::string candidatesPath;
 	std::string glueCandidatesPath;
+	std::string witPath;
+	std::string witJsonPath;
+	std::string witWorld;
 	bool frontendSchema = false;
 	bool schemaInput = false;
 	std::string emit = "schema";
@@ -77,6 +85,12 @@ int main(int argc, char** argv)
 			candidatesPath = argv[++i];
 		} else if (arg == "--glue-candidates" && i + 1 < argc) {
 			glueCandidatesPath = argv[++i];
+		} else if (arg == "--wit" && i + 1 < argc) {
+			witPath = argv[++i];
+		} else if (arg == "--wit-json" && i + 1 < argc) {
+			witJsonPath = argv[++i];
+		} else if (arg == "--wit-world" && i + 1 < argc) {
+			witWorld = argv[++i];
 		} else if (arg == "--schema" && i + 1 < argc) {
 			input = argv[++i];
 			schemaInput = true;
@@ -96,14 +110,25 @@ int main(int argc, char** argv)
 	if (!schemaInput && !input.empty()
 			&& std::filesystem::path(input).extension() == ".json")
 		schemaInput = true;
-	if (input.empty() && !frontendSchema) {
+	const bool witInput = !witPath.empty() || !witJsonPath.empty();
+	if (!witPath.empty() && !witJsonPath.empty()) {
+		std::cerr << "wasmjit-bindings: choose --wit or --wit-json, not both\n";
+		return 2;
+	}
+	if (witInput && (!input.empty() || schemaInput || !candidatesPath.empty()
+			|| !glueCandidatesPath.empty() || frontendSchema)) {
+		std::cerr << "wasmjit-bindings: WIT input cannot be combined with a "
+					 "module, schema or C++ candidate input\n";
+		return 2;
+	}
+	if (input.empty() && !witInput && !frontendSchema) {
 		usage(std::cerr);
 		return 2;
 	}
 	if (schemaInput && (!candidatesPath.empty() || !glueCandidatesPath.empty()
-			|| frontendSchema)) {
+			|| frontendSchema || witInput)) {
 		std::cerr << "wasmjit-bindings: --schema cannot be combined with "
-					 "--candidates, --glue-candidates or --frontend-schema\n";
+					 "--candidates, --glue-candidates, --frontend-schema or WIT\n";
 		return 2;
 	}
 	if (!candidatesPath.empty() && !glueCandidatesPath.empty()) {
@@ -123,8 +148,10 @@ int main(int argc, char** argv)
 		return 2;
 	}
 	if (moduleName.empty() && !schemaInput) {
-		const std::string source = !candidatesPath.empty() ? candidatesPath
-				: (!glueCandidatesPath.empty() ? glueCandidatesPath : input);
+		const std::string source = !witPath.empty() ? witPath
+				: (!witJsonPath.empty() ? witJsonPath
+				: (!candidatesPath.empty() ? candidatesPath
+				: (!glueCandidatesPath.empty() ? glueCandidatesPath : input)));
 		moduleName = std::filesystem::path(source).stem().string();
 	}
 
@@ -137,7 +164,17 @@ int main(int argc, char** argv)
 					? WASM::Bindings::glueCandidates(glueCandidatesPath, error)
 					: WASM::Bindings::swigCandidates(candidatesPath, error);
 		};
-		if (schemaInput) {
+		if (witInput) {
+			const std::filesystem::path path = !witPath.empty() ? witPath : witJsonPath;
+			WASM::Bindings::Schema schema = WASM::Bindings::witSchemaFromFile(
+					path, direction, moduleName, witWorld, !witJsonPath.empty(), error);
+			if (!error.empty()) {
+				std::cerr << "wasmjit-bindings: " << error << "\n";
+				return 1;
+			}
+			text = wantSchema ? schema.toJson().dump(2) + "\n"
+						  : WASM::Bindings::emit(schema, language);
+		} else if (schemaInput) {
 			std::ifstream stream(input, std::ios::binary);
 			if (!stream)
 				throw std::runtime_error("cannot open schema '" + input + "'");

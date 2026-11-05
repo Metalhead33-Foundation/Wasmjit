@@ -20,14 +20,16 @@ SOURCES += \
     EmitManaged.cpp \
     EmitDynamic.cpp \
     EmitCpp.cpp \
-    frontend/cpp/CppFrontend.cpp
+    frontend/cpp/CppFrontend.cpp \
+    frontend/wit/WitFrontend.cpp
 
 HEADERS += \
     BindingModel.hpp \
     BindingSchema.hpp \
     EmitInternal.hpp \
     EmitShared.hpp \
-    frontend/cpp/CppFrontend.hpp
+    frontend/cpp/CppFrontend.hpp \
+    frontend/wit/WitFrontend.hpp
 
 LIBS += -L$$OUT_PWD/../../WasmBase -lWasmBase
 QMAKE_LFLAGS += -Wl,-rpath,\'\$$ORIGIN/../../WasmBase\'

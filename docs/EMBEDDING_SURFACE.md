@@ -749,16 +749,16 @@ check. The embedding surface is what the installed `wasmjit/wasmjit.hpp` exposes
 ## 10. Test survey
 
 **Snapshot (2026-11-05, working tree on `77506af`):** the default suite is
-18,342 assertions in 649 cases; `[bindings]` is 717/32, `[docs]` is 1017/2,
+18,355 assertions in 650 cases; `[bindings]` is 730/33, `[docs]` is 1017/2,
 `[tiers]` is 250/3, and Doxygen is warning-free. Re-run the tagged cases after
 changing a schema, emitter or this note's code paths.
 
 | Evidence | Result | Reading |
 |---|---|---|
-| Default suite (**2026-11-05**, `77506af`) | **18,342 assertions in 649 cases, green** | Supersedes the 2026-11-01 baseline (17,090 / 551); every earlier assertion still passes. The 2026-10-29 run (11,454 / 481) in the milestone notes remains the historical baseline. |
+| Default suite (**2026-11-05**, `77506af`) | **18,355 assertions in 650 cases, green** | Supersedes the 2026-11-01 baseline (17,090 / 551); every earlier assertion still passes. The 2026-10-29 run (11,454 / 481) in the milestone notes remains the historical baseline. |
 | `[docs]` lint (**2026-11-05**, `77506af`) | **1017 assertions / 2 cases, green** | Note shape for `docs/proposals/` **and** the note tree for all three folders (§9 of `DOCUMENTATION.md`), so this note's index row is checked too |
 | `[callcache]` (**2026-11-04**) | **18 assertions / 4 cases, green** | `ModuleCallCache` ffi calls, `v128` by value, multi-result calls and `ComponentCallCache` flat calls. |
-| `[bindings]` (**2026-11-05**, `77506af`) | **717 assertions / 32 cases, green** | The §12.8 tool: descriptor→schema, direction-specific module/component imports/exports (G2H/H2G/G2G), complete-schema export/re-import and editorial name/description fields, opaque reference spelling, `stringref` through every emitter, C header (compiled as C11 and C++23), Rust, TypeScript, AssemblyScript, Zig, Kotlin, MoonBit, Go, Dart, Java, C#, F#, Python, Ruby, Lua, Swift, D, Nim, Crystal, Ada, Pascal and Haskell emission, a compiled C++ adapter (call/trap/import/reference/multi-value/retain-drop), SWIG and Glue candidate validation, `VMContext*` candidate schemas, direction-aware C++ typedefs/source, non-function entry comments, producer toolchain evidence, defined-reference kind naming, exact-reference flags, GC struct/array definitions, Rust `#[link(wasm_import_module)]`/`#[link_name]` declarations and export skeletons, C `WASMJIT_WASM_IMPORT` annotations, per-toolchain compile checks, and a `wasm-opt --all-features -O2` signature comparison on five fixtures. |
+| `[bindings]` (**2026-11-05**, `77506af`) | **730 assertions / 33 cases, green** | The §12.8 tool: descriptor→schema, direction-specific module/component imports/exports (G2H/H2G/G2G), complete-schema export/re-import and editorial name/description fields, opaque reference spelling, `stringref` through every emitter, C header (compiled as C11 and C++23), Rust, TypeScript, AssemblyScript, Zig, Kotlin, MoonBit, Go, Dart, Java, C#, F#, Python, Ruby, Lua, Swift, D, Nim, Crystal, Ada, Pascal and Haskell emission, a compiled C++ adapter (call/trap/import/reference/multi-value/retain-drop), SWIG and Glue candidate validation, `VMContext*` candidate schemas, WIT JSON/text input and world projection, direction-aware C++ typedefs/source, non-function entry comments, producer toolchain evidence, defined-reference kind naming, exact-reference flags, GC struct/array definitions, Rust `#[link(wasm_import_module)]`/`#[link_name]` declarations and export skeletons, C `WASMJIT_WASM_IMPORT` annotations, per-toolchain compile checks, and a `wasm-opt --all-features -O2` signature comparison on five fixtures. |
 | `[runtime]` (**2026-11-05**) | 141 assertions / 18 cases, green | Load → instantiate → call, idempotence, named errors, the `MF-2` guard, agents, the store-scoping proof (two stores, two heaps, an artifact records its store), and the unloader (one instance destroyed, the module re-instantiated, a provisional backend's code freed twice over). |
 | `[concurrency]` | 80 assertions / 13 cases, green | The model claim, the `Single` refusal, re-entrant invocation across threads, the `MF-2` guard, the `MF-3`/`MF-4` safepoint rules and the multi-agent suite. |
 | `[multiagent]` | 51 assertions / 6 cases, green | Two agents on one instance: acquire-release, wait/notify, shared-global RMW, traps, GC stress, reference barrier. |
@@ -873,8 +873,12 @@ layers:
   resource/stream/future kinds.
 - `ComponentImport` for host-supplied functions, values, instances, types,
   components and core modules.
-- Optional WIT JSON from `wasm-tools component wit --json` for a component’s
-  interface names and WIT-level structure.
+- Optional WIT JSON/text as a component-level input: `--wit-json` parses the
+  `wasm-tools component wit --json` document directly, and `--wit` accepts a
+  `.wit` file or package directory and asks `wasm-tools` to produce that JSON.
+  WIT describes a logical component interface, not core memory/table/global
+  identity or the exact Canonical ABI; descriptor schemas remain authoritative
+  when a binary module or component is available.
 
 A generator should treat these as the schema. It may read C++ comments and
 parameter names only in an optional candidate front-end, and only as editorial
@@ -889,7 +893,7 @@ form — defined in §12.8.
 |---|---|---|
 | **Hand-written guide + per-language templates** | Language-specific declarations and adapter skeletons from the documented ABI | **Always valid.** The guide in §12.5 and the hand-written adapter path remain supported; generation is optional. |
 | **Descriptor-driven schema + emitters** | A neutral schema from `Module`/`Component` metadata, then every target named in §12.6 | **Shipped** in `Tools/Bindings/`, outside `WasmBase/` (§12.8). The engine guarantees metadata; the first-party tool consumes it. |
-| **WIT as the IDL** | Component-level interfaces and skeleton adapters for component exports/imports | **Shipped as an optional component cross-check, not as the source of truth.** WIT cannot describe a core module’s memory/table/global imports or its raw `Callable` ABI; there is no second IDL. |
+| **WIT as the IDL** | Component-level interfaces and skeleton adapters for component exports/imports | **Shipped as an optional schema input and cross-check.** `--wit-json` parses `wasm-tools` JSON; `--wit` accepts text/package input and converts it through `wasm-tools`. WIT cannot describe a core module’s memory/table/global imports or its raw `Callable` ABI, and its logical types are not the exact Canonical ABI; descriptors remain the truth. |
 | **SWIG** | C++ bindings driven by parsed C++ declarations | **Shipped as an optional candidate front-end.** `--candidates` parses a header; `--frontend-schema` now writes a G2H `imports` schema and can emit every non-C++ target. It is never the authority (`TB-4a`, §12.8). |
 | **Glue** | Runtime C++ map + `DeclarationPrinter`; the host registers functions explicitly | **Shipped as an optional candidate front-end.** `--glue-candidates` compiles a registration source, prints declarations and validates them; the same schema/emitter path applies (`TB-4a`, §12.8). |
 | **Automatic scan of existing C/C++ headers** | Guessed declarations | **Rejected as truth; retained only as a candidate front-end.** The literal `TB-4` form remains rejected; a candidate must still be checked against descriptors when a module or component is available. |
@@ -1092,6 +1096,7 @@ designed, and this note does not propose one.
 | `Tools/Bindings/Emit*.cpp` | shared emitter helpers, Rust, web/JVM/.NET, dynamic/native-ABI and C++ emitters | one source table per language group |
 | `Tools/Bindings/main.cpp` | the `wasmjit-bindings` CLI | operates on `Schema`, never on raw JSON except at file input/output |
 | `Tools/Bindings/frontend/cpp/` | optional SWIG and Glue candidate front-ends | build-time only; candidate schemas are G2H imports and never authority |
+| `Tools/Bindings/frontend/wit/` | WIT JSON and WIT text/package input (`--wit-json`, `--wit`) | component-level schema input; `wasm-tools` is an optional build-time converter |
 | `Test/BindingSchemaTests.cpp` (`[bindings]`) | schema/emitter conformance tests (`TB-11`) | compiles generated targets when the toolchain is present |
 | `WasmBase/`, `LibJit/`, `Sljit/`, `Asmjit/` | engine and backends | must never include a tool header or link a generator |
 
@@ -1117,6 +1122,12 @@ its imports/exports are projected. The invocation is:
 ./build/Desktop-Release/Tools/Bindings/wasmjit-bindings \
     --frontend-schema --candidates host.hpp \
     --direction g2h --emit c-header > host_bindings.h
+
+./build/Desktop-Release/Tools/Bindings/wasmjit-bindings \
+    --wit package/ --wit-world demo --direction all --emit schema > component.binding.json
+
+./build/Desktop-Release/Tools/Bindings/wasmjit-bindings \
+    --wit-json component.wit.json --direction h2g --emit rust
 ```
 
 `--emit` accepts `schema`, `c-header`, `rust`, `typescript`, `assemblyscript`,
@@ -1255,13 +1266,14 @@ that want name lookup plus libffi invocation instead of writing their own
 ### 12.10 Other schema inputs: an exploration
 
 The question is not “which parser is best”. It is which artefact is *allowed to
-be authoritative* for a Wasm ABI. There are three useful classes:
+be authoritative* for a Wasm ABI. There are four useful classes:
 
 | Input | Authority | What it adds | Decision |
 |---|---|---|---|
 | **Module/component descriptors** | the engine | exact import/export names, canonical type identity, flat Canonical ABI cells | **Keep as the only authoritative source.** |
 | **A complete `wasmjit.binding/1` JSON** | a prior descriptor export or a reviewed hand edit | replay across machines, editorial `description`/`argNames`, G2G projection | **Keep as the interchange form** (`--schema`). |
 | **A C++ scan (SWIG, Glue, future Clang)** | a proposal only | native function names/signatures and comments for the host side | **Keep as a candidate front-end**, then cross-check. |
+| **WIT text/package or WIT JSON** | component-level interface description | world/interface/function names, parameters, results and docs | **Supported as an optional source** (`--wit`, `--wit-json`); it is not a core ABI. |
 
 Candidate inputs considered and not made authoritative:
 
@@ -1273,14 +1285,21 @@ Candidate inputs considered and not made authoritative:
   recovering source names when a module was built with debug info, but debug
   sections are stripped in production and do not define export ownership. It
   can annotate editorial fields, never replace descriptors.
-- **WIT text or `wit-bindgen`.** Appropriate for component interfaces; WIT has
-  no core-module memory/table/global imports or raw `Callable` ABI. It remains
-  an optional cross-check, not a second IDL.
+- **WIT text/package and WIT JSON.** Implemented as `--wit` and `--wit-json`.
+  `wasm-tools component wit --json` is the optional converter for text; no WIT
+  parser enters the engine. Structured WIT values remain opaque in the neutral
+  schema unless a descriptor component supplies the exact Canonical ABI.
+- **WITX.** The older s-expression IDL is superseded by WIT and has no installed
+  converter on this host. It could reuse the same parser boundary if a consumer
+  provides a converter, but it is not a separate in-tree schema dialect today.
 - **`wasm-bindgen` metadata.** A JS ecosystem contract, not a neutral Wasm
   binding schema; adopting it would import JS-specific ownership and host glue.
-- **Hand-authored IDL (Smithy, FlatBuffers, custom DSL).** A new IDL would need
-  a second validator and a second source of truth. The JSON envelope is already
-  the reviewed hand-editable form; no new DSL is planned.
+- **Protobuf, FlatBuffers, Thrift, Smithy and other general IDLs.** They describe
+  application messages, not Wasm imports/exports or the Canonical ABI. A project
+  may translate them to the JSON envelope, but the generator will not grow a
+  second schema model for each one.
+- **Clang/libclang and DWARF** are candidate/annotation sources only; they do not
+  define a component world or a core `Callable` ABI.
 - **Binary introspection alone.** Parsing the module without descriptors gives
   names and raw types but not the engine’s canonical `TypeId` or the intended
   adapter direction. It is useful only for diagnostics and candidate checks.
@@ -2331,13 +2350,13 @@ and the producer rows are toolchain constraints recorded in this repository.
 | **TB-3** | SWIG/Glue integration | §12.3, §15.5 | **Verify** | Optional build-time front-ends only: `--candidates` runs SWIG's XML front-end and `--glue-candidates` compiles a Glue registration source and reads its declaration printer. Local snapshot in §15.5; never link into the engine. |
 | **TB-4** | Automatic scan of existing C/C++ headers as truth | §12.3 | **Rejected** | A C++ header is not a Wasm ABI; the literal form stays rejected. The `VMContext*`-filtered candidate schema is `TB-4a`, not an exception to this row. |
 | **TB-4a** | C++ header discovery as a *candidate* front-end | §12.3, §12.8, §15.5 | **Verify** | SWIG header proposals and Glue-declaration proposals are checked against the schema by name, arity, result shape and type; `[bindings]` covers a match and a mismatch for both. `--frontend-schema` additionally derives a G2H imports schema (and can emit every non-C++ target) only from functions with `VMContext*` first. Glue 1.5 is runtime registration, not a header parser. |
-| **TB-5** | WIT as an IDL for core modules | §12.3–§12.4 | **Accepted** | WIT is component-level only; the schema reads component descriptors directly (G2H imports, H2G exports, G2G exports projected as consumer imports) and treats WIT JSON as optional; core modules use descriptors/`Callable`; no second WIT. |
+| **TB-5** | WIT as an IDL for core modules | §12.3–§12.4 | **Accepted** | WIT is component-level only. `--wit-json`/`--wit` now make it an optional schema source (with `wasm-tools` as the text converter), while descriptor components remain the authority for the Canonical ABI. Core modules use descriptors/`Callable`; no second core IDL. |
 | **TB-6** | Binaryen/`wasm-opt` rewrites/optimizations | §12, §14 | **Verify** | Keep them in the producer pipeline; `[bindings]` runs `wasm-opt --all-features -O2` on five fixtures (scalars, multi-value, GC struct/array, reference ownership and an externref import) and compares both imported and exported function signatures, ignoring the store-scoped `typeId`. |
 | **TB-7** | Compiler flags/versions that emit or omit GC refs, `externref`, EH, stringref | §12, §14 | **Verify** | 2026-11-04 host recorded by `[bindings]` in `toolchain.txt`: wasm-opt 124, wasm-tools 1.252.0, wat2wasm 1.0.41, clang 23.1.4, rustc 1.99.0 and Go 1.27.3; the optimizer flags stay pinned at `--all-features -O2`. Re-record when a producer toolchain changes. |
 | **TB-8** | Generated headers for GC/string references | §14.4–§14.8 | **Verify** | Emitter rule, not an engine gap: opaque per-kind types, no layout/`TypeId` constants, explicit ownership comments. All emitters spell `stringref` as opaque `wasm_stringref`; `[bindings]` covers it with a hand-built reserved-encoding fixture. |
 | **TB-9** | Install/pkg-config/out-of-tree consumer | §7, §8 | **Verify** | Re-run 2026-11-04: `Test/install-check.sh build/Desktop-Release` installed into a scratch prefix, linked the consumer through `wasmjit.pc`, and ran the i32/f64/multi-result/v128/mixed-tuple checks (`install-check: OK`). Re-run when packaging changes. |
 | **TB-10** | Cross-vendor C++ ABI stability | §9 | **Accepted** | Soname discipline only; deferred unless a pimpl firewall is designed. |
-| **TB-11** | Generated-adapter conformance tests | §12.5, §12.8, §15.6 | **Verify** | In-repo `[bindings]` tests compile every generated target (including the C header as C and C++), compare five `wasm-opt` modules, and run a generated C++ adapter through an export call, a trap, an import, an opaque-reference pass-through, a multi-value export and explicit retain/drop of a GC reference result (32 cases / 717 assertions across the suite, **2026-11-05**). |
+| **TB-11** | Generated-adapter conformance tests | §12.5, §12.8, §15.6 | **Verify** | In-repo `[bindings]` tests compile every generated target (including the C header as C and C++), compare five `wasm-opt` modules, and run a generated C++ adapter through an export call, a trap, an import, an opaque-reference pass-through, a multi-value export and explicit retain/drop of a GC reference result (33 cases / 730 assertions across the suite, **2026-11-05**). |
 | **TB-12** | Compiler/tool output whose encoding collides with the engine’s reserved forms | §14.7, `STRINGREF.md` | **Verify** | The reserved `stringref` encoding (`0x67`) is covered by the hand-built `[bindings]` fixture (TB-8) and stays opaque through every emitter. Keep the producer/toolchain checklist note; do not patch the engine around a tool bug. |
 | **TB-13** | Legacy/alternative exception encoding from a producer (e.g. Kotlin/Wasm) | §12, `LEGACY_EXCEPTIONS.md` | **Verify** | `[legacy-eh]` covers strict refusal, default recovery, opt-in rewrite, rethrow/delegate cases and agreement with Binaryen (110 assertions / 12 cases, green 2026-11-04). The policy stays producer/parser-side, not a source-language type rule. |
 | **TB-14** | Language-specific host import/export ABI emission | §12.6, §12.8, §14.4 | **Verify** | Function entries are emitted for every target in §12.6, plus C++ host-side typedef/source output. Non-function component value/instance/type/component/core-module entries (and core global/memory/table entries) are emitted as explicit comments because host access is through `ComponentInstance`/`ModuleInstance`, not a generated callable; `[bindings]` checks the comments are present. The engine only sees the resulting Wasm function signature. |
