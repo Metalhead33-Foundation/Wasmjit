@@ -201,7 +201,8 @@ The `v128` function-boundary work was analysed and **deliberately deferred**; th
 | Item | State | Why it blocks closure |
 |---|---|---|
 | `v128` parameters | **SLJIT landed** (two argument slots); AsmJit pending | the AsmJit half needs two `kUInt64` signature entries per parameter and the two-slot index mapping |
-| `v128` results | **SLJIT permanently refused** (LibJIT returns it directly via a struct type; SLJIT has neither aggregates nor RAX:RDX); AsmJit pending two return registers | see [`V128_SIGNATURE_DECISION.md`](V128_SIGNATURE_DECISION.md) §7 and §9 |
+| `v128` results | **permanently refused on both** (LibJIT only: it has aggregate types; SLJIT has no aggregates and RDX is `TMP_REG1`; AsmJit has a single return value) | [`V128_SIGNATURE_DECISION.md`](V128_SIGNATURE_DECISION.md) §7, §9, §10 |
+| `v128` block types | **deferred to the ABI plan** ([`V128_SIGNATURE_DECISION.md`](V128_SIGNATURE_DECISION.md) §11) | needs a workaround; AsmJit blocks carry no results yet |
 | Wasm→Wasm calls with `v128` | deferred | SLJIT's `SLJIT_ARGS*` are fixed-arity; AsmJit's per-type signature cache needs the two-slot form |
 | `ref.eq` fixture | lowered, unfixtured | needs a `(ref null eq)` value, which only **GC construction** can produce |
 | `br_on_non_null` | `onUnhandledOpcode` | needs a label carrying the reference, i.e. **block parameters** (AsmJit gap) |

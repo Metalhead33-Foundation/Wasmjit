@@ -1,6 +1,8 @@
 > **DEFERRED by decision (2026-11-05).** This note must be revisited at the
 > end of the saga, before the SLJIT/AsmJit saga can be closed and the final
-> saga post-mortem written. See
+> saga post-mortem written. §11 records the long-term, ABI-breaking plan (treat
+> `v128` returns as lowered multi-returns on every backend, LibJIT included) and
+> the deferred `v128` block types. See
 > [`ASMJIT_SLJIT_P3_REFS1.md`](ASMJIT_SLJIT_P3_REFS1.md) §2 for the closure
 > checklist.
 
@@ -228,3 +230,103 @@ multi-result** functions, never for `v128`.
 4. **SLJIT `v128` results are a permanent, documented refusal** — not a TODO.
    The function is left without `fnPtr`, the core reports "no compiled body", and
    nothing is miscompiled.
+
+## 10. Correction: AsmJit cannot return `v128` either (2026-11-05)
+
+§7 and §9 assumed AsmJit could produce the SysV RAX:RDX pair with two
+`kUInt64` returns. **That assumption was wrong**, and the header says so:
+
+```c
+struct FuncSignature {          // /usr/include/asmjit/core/func.h:390
+  ...
+  TypeId _ret = TypeId::kVoid;  // :409  — one return, not a list
+  ...
+  void set_ret(TypeId ret_type) noexcept { _ret = ret_type; }   // :512
+};
+```
+
+`grep -c add_ret` on that header returns **0**: AsmJit 1.21 models exactly one
+return value. A 16-byte struct return therefore has no representation — the
+`kInt32x4` mapping the translator uses is a *vector* return (XMM0), which is the
+wrong eightbyte class for a `{uint32_t[4]}` struct anyway.
+
+**The engine already has the only alternative, and it is the one that was
+scratched:** for `results.size() > 1` the translator appends a trailing
+`kUIntPtr` "caller-provided result buffer" argument, explicitly *"Do not rely on
+a platform's aggregate-return ABI."* That is pointer-lowering for multi-results —
+and neither LibJIT nor AsmJit uses it for a single `v128`, so extending it to
+`v128` would be a new ABI and stays scratched.
+
+### Where that leaves the three items
+
+| Item | SLJIT | AsmJit | LibJIT |
+|---|---|---|---|
+| `v128` **parameters** | **implemented** (two argument slots) | feasible: the signature's *argument* list is a list, so two `kUInt64` entries work; needs the two-slot index mapping | supported |
+| `v128` **results** | **impossible** — RDX is `TMP_REG1`, no aggregate return | **impossible** — one return value only | supported (16-byte struct type) |
+| `v128` **block types** | feasible: SLJIT's blocks already carry results/params; needs a 16-byte `transferToBase` | **not possible** — AsmJit's blocks have no results/parameters at all | supported |
+
+So of the two items requested after parameters, **neither is implementable in
+AsmJit**, and one of them (block types) is implementable in SLJIT alone. That is a
+capability divergence, not an ABI one: the core reports "no compiled body" for the
+AsmJit function, exactly as it does for SLJIT `v128` results.
+
+**Consequence for saga closure:** `v128` results on SLJIT/AsmJit are a permanent,
+documented limitation of those toolkits (only LibJIT supports them), and `v128`
+block types are SLJIT-only. Both belong in the final saga post-mortem as
+*permanently refused with the toolkit limitation named*, not as pending work.
+
+## 11. Long-term plan: `v128` returns as a lowered multi-return (DEFERRED)
+
+**Status: deferred by decision (2026-11-05). This is an ABI-breaking, long-term
+refactor, to be executed only after the remaining AsmJit and SLJIT backend work
+(in this saga: the rest of P3, then P4 references/GC and exceptions, then P5
+`call_ref`/continuations) is complete.**
+
+### The plan
+
+Stop relying on any platform's aggregate-return ABI for `v128` altogether, and
+**treat a `v128` return as what the engine already knows how to do: a
+multi-return**. Concretely, a function returning `v128` would take the same
+trailing *caller-provided result buffer* argument that `results.size() > 1`
+already uses (`AsmjitTypeTranslator.cpp`: *“Multi-value tuples are written through
+the caller-provided trailing result buffer. Do not rely on a platform's
+aggregate-return ABI.”*), and write the vector as **four 32-bit integers** into
+it.
+
+Properties of that plan:
+
+- **Uniform across all three backends, including LibJIT.** LibJIT can already
+  return the 16-byte struct directly, so applying the lowering there is a
+  deliberate *unification*, not a necessity — it removes the last
+  backend-specific ABI behaviour and makes the three code generators
+  interchangeable at the boundary.
+- **It reuses an existing convention.** The multi-result buffer is already
+  implemented and tested; `v128` becomes a fourth “one value, four words” case in
+  the same mechanism instead of a special aggregate rule.
+- **It is ABI-breaking.** The host harness (`AbiV128` by value), cross-instance
+  imports, `ref.func`-style callables and every embedder that calls a
+  `v128`-returning export would have to change. It therefore needs a **milestone
+  decision** under [`docs/API_ABI_STABILITY.md`](../API_ABI_STABILITY.md), not a
+  slice commit.
+- **What it buys:** `v128` returns on SLJIT and AsmJit, which today are
+  impossible (§7: RDX is `TMP_REG1`; §10: AsmJit has a single return value), and
+  one ABI instead of three behaviours.
+
+### Also deferred: `v128` block types
+
+SLJIT could carry a `v128` block type today with a 16-byte `transferToBase`; AsmJit
+cannot, because its blocks carry no results or parameters at all (§10). Rather
+than ship a SLJIT-only block type that the ABI plan would then have to revisit,
+**`v128` block types are deferred to the same refactor**, and may need their own
+workaround — most likely the same “value in four words” lowering applied to block
+results, or a slot-based form once AsmJit gains block results.
+
+### Sequencing
+
+1. Finish the AsmJit/SLJIT feature work (P3 remainder, P4, P5).
+2. Decide the ABI milestone (`API_ABI_STABILITY.md`) for the uniform
+   multi-return lowering.
+3. Implement it in all three backends at once, with the existing multi-result
+   tests as the template, plus a new `AbiV128`-by-buffer harness form.
+4. Only then can `v128` block types and `v128` results on SLJIT/AsmJit be marked
+   *implemented* rather than *refused*.
