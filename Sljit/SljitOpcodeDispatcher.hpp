@@ -344,6 +344,58 @@ protected:
 	void dispatchI16x8NarrowI32x4S() override; //!< `i16x8.narrow_i32x4_s`.
 	void dispatchI16x8NarrowI32x4U() override; //!< `i16x8.narrow_i32x4_u`.
 	void dispatchI32x4DotI16x8S() override; //!< `i32x4.dot_i16x8_s`.
+	void dispatchF32x4Add() override; //!< `f32x4.add`.
+	void dispatchF32x4Sub() override; //!< `f32x4.sub`.
+	void dispatchF32x4Mul() override; //!< `f32x4.mul`.
+	void dispatchF32x4Div() override; //!< `f32x4.div`.
+	void dispatchF32x4Min() override; //!< `f32x4.min`.
+	void dispatchF32x4Max() override; //!< `f32x4.max`.
+	void dispatchF32x4PMin() override; //!< `f32x4.pmin`.
+	void dispatchF32x4PMax() override; //!< `f32x4.pmax`.
+	void dispatchF32x4Eq() override; //!< `f32x4.eq`.
+	void dispatchF32x4Ne() override; //!< `f32x4.ne`.
+	void dispatchF32x4Lt() override; //!< `f32x4.lt`.
+	void dispatchF32x4Gt() override; //!< `f32x4.gt`.
+	void dispatchF32x4Le() override; //!< `f32x4.le`.
+	void dispatchF32x4Ge() override; //!< `f32x4.ge`.
+	void dispatchF64x2Add() override; //!< `f64x2.add`.
+	void dispatchF64x2Sub() override; //!< `f64x2.sub`.
+	void dispatchF64x2Mul() override; //!< `f64x2.mul`.
+	void dispatchF64x2Div() override; //!< `f64x2.div`.
+	void dispatchF64x2Min() override; //!< `f64x2.min`.
+	void dispatchF64x2Max() override; //!< `f64x2.max`.
+	void dispatchF64x2PMin() override; //!< `f64x2.pmin`.
+	void dispatchF64x2PMax() override; //!< `f64x2.pmax`.
+	void dispatchF64x2Eq() override; //!< `f64x2.eq`.
+	void dispatchF64x2Ne() override; //!< `f64x2.ne`.
+	void dispatchF64x2Lt() override; //!< `f64x2.lt`.
+	void dispatchF64x2Gt() override; //!< `f64x2.gt`.
+	void dispatchF64x2Le() override; //!< `f64x2.le`.
+	void dispatchF64x2Ge() override; //!< `f64x2.ge`.
+	void dispatchF32x4Ceil() override; //!< `f32x4.ceil`.
+	void dispatchF32x4Floor() override; //!< `f32x4.floor`.
+	void dispatchF32x4Trunc() override; //!< `f32x4.trunc`.
+	void dispatchF32x4Nearest() override; //!< `f32x4.nearest`.
+	void dispatchF32x4Abs() override; //!< `f32x4.abs`.
+	void dispatchF32x4Neg() override; //!< `f32x4.neg`.
+	void dispatchF32x4Sqrt() override; //!< `f32x4.sqrt`.
+	void dispatchF64x2Ceil() override; //!< `f64x2.ceil`.
+	void dispatchF64x2Floor() override; //!< `f64x2.floor`.
+	void dispatchF64x2Trunc() override; //!< `f64x2.trunc`.
+	void dispatchF64x2Nearest() override; //!< `f64x2.nearest`.
+	void dispatchF64x2Abs() override; //!< `f64x2.abs`.
+	void dispatchF64x2Neg() override; //!< `f64x2.neg`.
+	void dispatchF64x2Sqrt() override; //!< `f64x2.sqrt`.
+	void dispatchI32x4TruncSatF32x4S() override; //!< `i32x4.trunc_sat_f32x4_s`.
+	void dispatchI32x4TruncSatF32x4U() override; //!< `i32x4.trunc_sat_f32x4_u`.
+	void dispatchF32x4ConvertI32x4S() override; //!< `f32x4.convert_i32x4_s`.
+	void dispatchF32x4ConvertI32x4U() override; //!< `f32x4.convert_i32x4_u`.
+	void dispatchF64x2ConvertLowI32x4S() override; //!< `f64x2.convert_low_i32x4_s`.
+	void dispatchF64x2ConvertLowI32x4U() override; //!< `f64x2.convert_low_i32x4_u`.
+	void dispatchF64x2PromoteLowF32x4() override; //!< `f64x2.promote_low_f32x4`.
+	void dispatchI32x4TruncSatF64x2SZero() override; //!< `i32x4.trunc_sat_f64x2_s_zero`.
+	void dispatchI32x4TruncSatF64x2UZero() override; //!< `i32x4.trunc_sat_f64x2_u_zero`.
+	void dispatchF32x4DemoteF64x2Zero() override; //!< `f32x4.demote_f64x2_zero`.
 	void dispatchI8x16Add() override; //!< `i8x16.add`.
 	void dispatchI8x16Sub() override; //!< `i8x16.sub`.
 	void dispatchI16x8Add() override; //!< `i16x8.add`.

@@ -1490,3 +1490,119 @@ TEST_CASE("asmjit and sljit agree on the shared v128 widening module",
 	sameNiladic("i8x16_narrow_i16x8_u");
 	sameNiladic("i32x4_dot_i16x8_s");
 }
+
+
+TEST_CASE("sljit: the shared v128 float module executes",
+"[sljit][module][parity][simd]")
+{
+auto session = Sljit::createSession();
+REQUIRE(session != nullptr);
+WASM::RegistryImportResolver imports;
+LoadedModule loaded = loadAndInstantiateTestModule("simd_float", imports, *session);
+REQUIRE(loaded.instance != nullptr);
+WASM::ModuleInstance& instance = *loaded.instance;
+const auto niladic = [&](const char* name) -> std::int32_t {
+const std::optional<WASM::Callable> callable = instance.exportedFunction(name);
+INFO("export " << name);
+REQUIRE(callable.has_value());
+REQUIRE(callable->fnPtr != nullptr);
+return WASM::callCallable<std::int32_t>(*callable);
+};
+
+
+	CHECK(niladic("f32x4_add") == std::int32_t{0x40800000});
+	CHECK(niladic("f32x4_sub") == std::int32_t{0x40500000});
+	CHECK(niladic("f32x4_mul") == std::int32_t{0x40C00000});
+	CHECK(niladic("f32x4_div") == std::int32_t{0x40400000});
+	CHECK(niladic("f32x4_min") == std::int32_t{0x3F800000});
+	CHECK(niladic("f32x4_max") == std::int32_t{0x40000000});
+	CHECK(niladic("f32x4_pmin") == std::int32_t{0x3F800000});
+	CHECK(niladic("f32x4_pmax") == std::int32_t{0x40000000});
+	CHECK(niladic("f64x2_add") == std::int32_t{0x40100000});
+	CHECK(niladic("f64x2_mul") == std::int32_t{0x40180000});
+	CHECK(niladic("f64x2_min") == std::int32_t{0x3FF00000});
+	CHECK(niladic("f64x2_max") == std::int32_t{0x40000000});
+	CHECK(niladic("f32x4_sqrt") == std::int32_t{0x40400000});
+	CHECK(niladic("f32x4_abs") == std::int32_t{0x40200000});
+	CHECK(niladic("f32x4_neg") == static_cast<std::int32_t>(0xC0200000u));
+	CHECK(niladic("f32x4_ceil") == std::int32_t{0x40000000});
+	CHECK(niladic("f32x4_floor") == static_cast<std::int32_t>(0xC0000000u));
+	CHECK(niladic("f32x4_trunc") == static_cast<std::int32_t>(0xBF800000u));
+	CHECK(niladic("f32x4_nearest") == std::int32_t{0x40000000});
+	CHECK(niladic("f64x2_sqrt") == std::int32_t{0x40080000});
+	CHECK(niladic("f64x2_abs") == std::int32_t{0x40040000});
+	CHECK(niladic("f32x4_eq") == -1);
+	CHECK(niladic("f32x4_ne") == -1);
+	CHECK(niladic("f32x4_lt") == -1);
+	CHECK(niladic("f32x4_ge") == std::int32_t{0});
+	CHECK(niladic("f64x2_lt") == -1);
+	CHECK(niladic("i32x4_trunc_sat_f32x4_s") == std::int32_t{3});
+	CHECK(niladic("i32x4_trunc_sat_f32x4_u") == std::int32_t{0});
+	CHECK(niladic("f32x4_convert_i32x4_s") == std::int32_t{0x40400000});
+	CHECK(niladic("f64x2_convert_low_i32x4_s") == std::int32_t{0x40080000});
+	CHECK(niladic("f64x2_promote_low_f32x4") == std::int32_t{0x40000000});
+	CHECK(niladic("f32x4_demote_f64x2_zero") == std::int32_t{0x40000000});
+	CHECK(niladic("i32x4_trunc_sat_f64x2_s_zero") == std::int32_t{3});
+};
+
+
+TEST_CASE("asmjit and sljit agree on the shared v128 float module",
+"[sljit][asmjit][parity][simd]")
+{
+WASM::Module module = loadTestModule("simd_float");
+AsmJitBackend::Context asmContext;
+AsmJitBackend::ModuleCompiler asmCompiler(asmContext);
+Sljit::ModuleCompiler sljitCompiler;
+WASM::RegistryImportResolver asmImports;
+WASM::RegistryImportResolver sljitImports;
+std::unique_ptr<WASM::ModuleInstance> asmInstance =
+asmCompiler.instantiate(module, asmImports);
+std::unique_ptr<WASM::ModuleInstance> sljitInstance =
+	sljitCompiler.instantiate(module, sljitImports);
+REQUIRE(asmInstance != nullptr);
+REQUIRE(sljitInstance != nullptr);
+
+const auto sameNiladic = [&](const char* name) {
+const std::optional<WASM::Callable> asmCallable = asmInstance->exportedFunction(name);
+const std::optional<WASM::Callable> sljitCallable = sljitInstance->exportedFunction(name);
+REQUIRE(asmCallable.has_value());
+REQUIRE(sljitCallable.has_value());
+INFO("export " << name);
+CHECK(WASM::callCallable<std::int32_t>(*asmCallable)
+== WASM::callCallable<std::int32_t>(*sljitCallable));
+};
+
+	sameNiladic("f32x4_add");
+	sameNiladic("f32x4_sub");
+	sameNiladic("f32x4_mul");
+	sameNiladic("f32x4_div");
+	sameNiladic("f32x4_min");
+	sameNiladic("f32x4_max");
+	sameNiladic("f32x4_pmin");
+	sameNiladic("f32x4_pmax");
+	sameNiladic("f64x2_add");
+	sameNiladic("f64x2_mul");
+	sameNiladic("f64x2_min");
+	sameNiladic("f64x2_max");
+	sameNiladic("f32x4_sqrt");
+	sameNiladic("f32x4_abs");
+	sameNiladic("f32x4_neg");
+	sameNiladic("f32x4_ceil");
+	sameNiladic("f32x4_floor");
+	sameNiladic("f32x4_trunc");
+	sameNiladic("f32x4_nearest");
+	sameNiladic("f64x2_sqrt");
+	sameNiladic("f64x2_abs");
+	sameNiladic("f32x4_eq");
+	sameNiladic("f32x4_ne");
+	sameNiladic("f32x4_lt");
+	sameNiladic("f32x4_ge");
+	sameNiladic("f64x2_lt");
+	sameNiladic("i32x4_trunc_sat_f32x4_s");
+	sameNiladic("i32x4_trunc_sat_f32x4_u");
+	sameNiladic("f32x4_convert_i32x4_s");
+	sameNiladic("f64x2_convert_low_i32x4_s");
+	sameNiladic("f64x2_promote_low_f32x4");
+	sameNiladic("f32x4_demote_f64x2_zero");
+	sameNiladic("i32x4_trunc_sat_f64x2_s_zero");
+}

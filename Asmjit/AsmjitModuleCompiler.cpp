@@ -1866,6 +1866,60 @@ protected:
 	void dispatchI16x8NarrowI32x4U() override { emitVectorHelper2(&wasm_i16x8_narrow_i32x4_u); }
 	void dispatchI32x4DotI16x8S() override { emitVectorHelper2(&wasm_i32x4_dot_i16x8_s); }
 
+	void dispatchF32x4Add() override { emitVectorHelper2(&wasm_f32x4_add); }
+	void dispatchF32x4Sub() override { emitVectorHelper2(&wasm_f32x4_sub); }
+	void dispatchF32x4Mul() override { emitVectorHelper2(&wasm_f32x4_mul); }
+	void dispatchF32x4Div() override { emitVectorHelper2(&wasm_f32x4_div); }
+	void dispatchF32x4Min() override { emitVectorHelper2(&wasm_f32x4_min); }
+	void dispatchF32x4Max() override { emitVectorHelper2(&wasm_f32x4_max); }
+	void dispatchF32x4PMin() override { emitVectorHelper2(&wasm_f32x4_pmin); }
+	void dispatchF32x4PMax() override { emitVectorHelper2(&wasm_f32x4_pmax); }
+	void dispatchF32x4Eq() override { emitVectorHelper2(&wasm_f32x4_eq); }
+	void dispatchF32x4Ne() override { emitVectorHelper2(&wasm_f32x4_ne); }
+	void dispatchF32x4Lt() override { emitVectorHelper2(&wasm_f32x4_lt); }
+	void dispatchF32x4Gt() override { emitVectorHelper2(&wasm_f32x4_gt); }
+	void dispatchF32x4Le() override { emitVectorHelper2(&wasm_f32x4_le); }
+	void dispatchF32x4Ge() override { emitVectorHelper2(&wasm_f32x4_ge); }
+	void dispatchF64x2Add() override { emitVectorHelper2(&wasm_f64x2_add); }
+	void dispatchF64x2Sub() override { emitVectorHelper2(&wasm_f64x2_sub); }
+	void dispatchF64x2Mul() override { emitVectorHelper2(&wasm_f64x2_mul); }
+	void dispatchF64x2Div() override { emitVectorHelper2(&wasm_f64x2_div); }
+	void dispatchF64x2Min() override { emitVectorHelper2(&wasm_f64x2_min); }
+	void dispatchF64x2Max() override { emitVectorHelper2(&wasm_f64x2_max); }
+	void dispatchF64x2PMin() override { emitVectorHelper2(&wasm_f64x2_pmin); }
+	void dispatchF64x2PMax() override { emitVectorHelper2(&wasm_f64x2_pmax); }
+	void dispatchF64x2Eq() override { emitVectorHelper2(&wasm_f64x2_eq); }
+	void dispatchF64x2Ne() override { emitVectorHelper2(&wasm_f64x2_ne); }
+	void dispatchF64x2Lt() override { emitVectorHelper2(&wasm_f64x2_lt); }
+	void dispatchF64x2Gt() override { emitVectorHelper2(&wasm_f64x2_gt); }
+	void dispatchF64x2Le() override { emitVectorHelper2(&wasm_f64x2_le); }
+	void dispatchF64x2Ge() override { emitVectorHelper2(&wasm_f64x2_ge); }
+
+	void dispatchF32x4Ceil() override { emitVectorHelper1(&wasm_f32x4_ceil); }
+	void dispatchF32x4Floor() override { emitVectorHelper1(&wasm_f32x4_floor); }
+	void dispatchF32x4Trunc() override { emitVectorHelper1(&wasm_f32x4_trunc); }
+	void dispatchF32x4Nearest() override { emitVectorHelper1(&wasm_f32x4_nearest); }
+	void dispatchF32x4Abs() override { emitVectorHelper1(&wasm_f32x4_abs); }
+	void dispatchF32x4Neg() override { emitVectorHelper1(&wasm_f32x4_neg); }
+	void dispatchF32x4Sqrt() override { emitVectorHelper1(&wasm_f32x4_sqrt); }
+	void dispatchF64x2Ceil() override { emitVectorHelper1(&wasm_f64x2_ceil); }
+	void dispatchF64x2Floor() override { emitVectorHelper1(&wasm_f64x2_floor); }
+	void dispatchF64x2Trunc() override { emitVectorHelper1(&wasm_f64x2_trunc); }
+	void dispatchF64x2Nearest() override { emitVectorHelper1(&wasm_f64x2_nearest); }
+	void dispatchF64x2Abs() override { emitVectorHelper1(&wasm_f64x2_abs); }
+	void dispatchF64x2Neg() override { emitVectorHelper1(&wasm_f64x2_neg); }
+	void dispatchF64x2Sqrt() override { emitVectorHelper1(&wasm_f64x2_sqrt); }
+	void dispatchI32x4TruncSatF32x4S() override { emitVectorHelper1(&wasm_i32x4_trunc_sat_f32x4_s); }
+	void dispatchI32x4TruncSatF32x4U() override { emitVectorHelper1(&wasm_i32x4_trunc_sat_f32x4_u); }
+	void dispatchF32x4ConvertI32x4S() override { emitVectorHelper1(&wasm_f32x4_convert_i32x4_s); }
+	void dispatchF32x4ConvertI32x4U() override { emitVectorHelper1(&wasm_f32x4_convert_i32x4_u); }
+	void dispatchF64x2ConvertLowI32x4S() override { emitVectorHelper1(&wasm_f64x2_convert_low_i32x4_s); }
+	void dispatchF64x2ConvertLowI32x4U() override { emitVectorHelper1(&wasm_f64x2_convert_low_i32x4_u); }
+	void dispatchF64x2PromoteLowF32x4() override { emitVectorHelper1(&wasm_f64x2_promote_low_f32x4); }
+	void dispatchI32x4TruncSatF64x2SZero() override { emitVectorHelper1(&wasm_i32x4_trunc_sat_f64x2_s_zero); }
+	void dispatchI32x4TruncSatF64x2UZero() override { emitVectorHelper1(&wasm_i32x4_trunc_sat_f64x2_u_zero); }
+	void dispatchF32x4DemoteF64x2Zero() override { emitVectorHelper1(&wasm_f32x4_demote_f64x2_zero); }
+
 	void dispatchI8x16Add() override { emitVectorHelper2(&wasm_i8x16_add); }
 	void dispatchI8x16Sub() override { emitVectorHelper2(&wasm_i8x16_sub); }
 	void dispatchI16x8Add() override { emitVectorHelper2(&wasm_i16x8_add); }

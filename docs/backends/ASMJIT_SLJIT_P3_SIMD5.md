@@ -113,7 +113,8 @@ Do not copy:
 | Opcode family | Refusal | Status |
 |---|---|---|
 | `i16x8.narrow_i32x4_s/u` | **none** — enabled in both backends | fixed here; `simd_widen.wat` and the A/B case cover it |
-| `f32x4`/`f64x2` lanes, conversions, `f16` | `onUnhandledOpcode` | float SIMD slice, not started |
+| `f32x4`/`f64x2` arithmetic, comparisons, unary ops, conversions | **landed in slice 6** ([`ASMJIT_SLJIT_P3_SIMD6.md`](ASMJIT_SLJIT_P3_SIMD6.md)) | `simd_float.wat` |
+| `f32x4`/`f64x2` lane access, `f16` | `onUnhandledOpcode` | slice 7 (float-bearing signatures) |
 | `i8x16.shuffle`/`swizzle`, relaxed SIMD | `onUnhandledOpcode` | transport-only helpers exist |
 | extending/splat/lane loads, lane stores | `onUnhandledOpcode` | transport-only helpers exist |
 | `v128` parameters/results, block types, `select_t` | refused by name | unchanged from slice 1 |
