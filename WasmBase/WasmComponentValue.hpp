@@ -31,6 +31,7 @@ namespace WASM {
 class LoadedComponent;
 class Module;
 class ComponentRuntime;
+struct HostComponentDefinition;
 
 /** \brief The VM context of the current component host callback, or null.
  *
@@ -234,7 +235,7 @@ struct ComponentImport {
 		Instance, //!< A host-supplied instance bag.
 		Value, //!< A runtime value.
 		Type, //!< A compile-time type identity (no runtime object).
-		Component, //!< A component definition.
+		Component, //!< A loaded or host-defined component definition.
 		CoreModule //!< A host-supplied core module definition.
 	};
 	Kind kind = Kind::Function; //!< Discriminant for the payload below.
@@ -242,8 +243,9 @@ struct ComponentImport {
 	std::shared_ptr<ComponentInstanceValue> instance; //!< Valid when kind == Instance.
 	ComponentValue value; //!< Valid when kind == Value.
 	WASM::TypeId type{WASM::TypeId::kNone}; //!< Valid when kind == Type.
-	std::shared_ptr<const LoadedComponent> component; //!< Valid when kind == Component.
+	std::shared_ptr<const LoadedComponent> component; //!< Valid when kind == Component and the definition is a loaded artifact.
 	std::shared_ptr<const Module> coreModule; //!< Valid when kind == CoreModule.
+	std::shared_ptr<const HostComponentDefinition> hostComponent; //!< Valid when kind == Component and the definition is host-defined.
 
 	/** \brief Creates an empty import. */
 	ComponentImport() = default;
@@ -275,13 +277,22 @@ struct ComponentImport {
 		out.type = type;
 		return out;
 	}
-	/** \brief Creates a component import. \param component Loaded component definition. \return The import. */
+	/** \brief Creates a component import from a loaded binary artifact. \param component Loaded component definition. \return The import. */
 	static ComponentImport componentImport(
 			std::shared_ptr<const LoadedComponent> component)
 	{
 		ComponentImport out;
 		out.kind = Kind::Component;
 		out.component = std::move(component);
+		return out;
+	}
+	/** \brief Creates a component import from a host-defined component definition. \param definition Host component definition. \return The import. */
+	static ComponentImport hostComponentImport(
+			std::shared_ptr<const HostComponentDefinition> definition)
+	{
+		ComponentImport out;
+		out.kind = Kind::Component;
+		out.hostComponent = std::move(definition);
 		return out;
 	}
 	/** \brief Creates a core-module import. \param module Parsed core module definition. \return The import. */
@@ -292,6 +303,26 @@ struct ComponentImport {
 		out.coreModule = std::move(module);
 		return out;
 	}
+};
+
+//! The imports supplied to a host component's instantiation callback.
+using ComponentHostImports = std::unordered_map<std::string, ComponentImport>;
+
+//! A component-sort implementation supplied by the host instead of a binary
+//! artifact. The runtime creates the instance from `exports`, or from the
+//! `instantiate` callback when the host needs one bag per instance or wants the
+//! importer's `with` arguments. A host definition is trusted by the embedder:
+//! the importing component's own type validation still checks the import
+//! declaration, but the runtime does not synthesize a Component AST for the
+//! host side.
+/** \brief Host-provided component definition used to satisfy a component-sort import. */
+struct HostComponentDefinition {
+	//! Default export bag copied for every instance when `instantiate` is empty.
+	ComponentInstanceValue exports;
+	//! Optional per-instance factory. It receives the arguments the importing
+	//! component supplied through `with`, plus the runtime's existing imports.
+	//! When set, it takes precedence over `exports`.
+	std::function<ComponentInstanceValue(const ComponentHostImports&)> instantiate;
 };
 
 } // namespace WASM

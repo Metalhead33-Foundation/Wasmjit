@@ -292,6 +292,63 @@ TEST_CASE("runtime: component import is instantiated by the host",
 	REQUIRE(result.u64 == 42);
 }
 
+TEST_CASE("runtime: host component definition satisfies a component import",
+		"[runtime][component-api]")
+{
+	auto runtime = WASM::Runtime::create("libjit");
+	REQUIRE(runtime != nullptr);
+	auto imported = runtime->loadComponentBytes(
+			readComponentFixture("component_component_import"),
+			WASM::ComponentOptions{WASM::ComponentFeatures::all()});
+	REQUIRE(imported != nullptr);
+
+	WASM::ComponentFunction answer;
+	answer.results = {WASM::AbiCoreType::I32};
+	answer.callValues = [](std::span<const WASM::ComponentValue>,
+			std::span<WASM::ComponentValue> results) {
+		results[0].kind = WASM::ComponentValue::Kind::U32;
+		results[0].u64 = 42;
+	};
+	int instantiations = 0;
+	auto definition = std::make_shared<WASM::HostComponentDefinition>();
+	definition->instantiate = [answer, &instantiations](
+			const WASM::ComponentHostImports& imports) {
+		if (imports.count("c") != 1)
+			throw std::runtime_error("host component lost its import bag");
+		++instantiations;
+		WASM::ComponentInstanceValue exports;
+		exports.functions.emplace("answer", answer);
+		return exports;
+	};
+
+	WASM::ComponentHostImports imports;
+	imports.emplace("c", WASM::ComponentImport::hostComponentImport(definition));
+	WASM::ComponentInstanceHandle& instance =
+			runtime->instantiateComponent(*imported, std::move(imports));
+	REQUIRE(instantiations == 1);
+	auto function = instance.exportedFunction("answer");
+	REQUIRE(function.has_value());
+	WASM::ComponentValue result;
+	function->callValues({}, {&result, 1});
+	REQUIRE(result.kind == WASM::ComponentValue::Kind::U32);
+	REQUIRE(result.u64 == 42);
+
+	// The default export bag is copied when no per-instance factory is set.
+	auto defaultDefinition = std::make_shared<WASM::HostComponentDefinition>();
+	defaultDefinition->exports.functions.emplace("answer", answer);
+	WASM::ComponentHostImports defaultImports;
+	defaultImports.emplace("c",
+			WASM::ComponentImport::hostComponentImport(defaultDefinition));
+	WASM::ComponentInstanceHandle& defaultInstance =
+			runtime->instantiateComponent(*imported, std::move(defaultImports));
+	auto defaultFunction = defaultInstance.exportedFunction("answer");
+	REQUIRE(defaultFunction.has_value());
+	WASM::ComponentValue defaultResult;
+	defaultFunction->callValues({}, {&defaultResult, 1});
+	REQUIRE(defaultResult.kind == WASM::ComponentValue::Kind::U32);
+	REQUIRE(defaultResult.u64 == 42);
+}
+
 TEST_CASE("runtime: exported value, instance and type are visible",
 		"[runtime][component-api]")
 {

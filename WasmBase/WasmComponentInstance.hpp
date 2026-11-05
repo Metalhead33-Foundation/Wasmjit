@@ -40,9 +40,6 @@ namespace WASM {
 class LoadedComponent;
 class ComponentInstanceHandle;
 
-//! The host implementations of a component's component-level imports.
-using ComponentHostImports = std::unordered_map<std::string, ComponentImport>;
-
 //! Execution and embedding settings for one component instance.
 //!
 //! These are the component equivalents of the fields a core module receives

@@ -2,12 +2,14 @@
 
 *Spec Status, Design Space, and a QVM-Style Scope*
 
-Status: proposal + implementation note (revision 18 — 2026-11-03). `CM-0`…`CM-8`
+Status: proposal + implementation note (revision 19 — 2026-11-05). `CM-0`…`CM-8`
 are complete: the parser, the thirteen-index-space validator (including Canonical
 ABI flattenability), the component runtime (nested components, resources and the
 single-agent async surface) and the green reference corpus (516 cases, 0
 disagreements) are in place; `Threads` and `Memory64` feature gates ship. WIT is
-build-time and WASI is host-provided: contract boundaries, not engine gaps.
+build-time and WASI is host-provided: contract boundaries, not engine gaps. A
+host-provided `HostComponentDefinition` now satisfies a component-sort import
+without a serialized artifact (`CM-28`).
 
 **Direction note (2026-11-01).** This note is where the project's centre of
 gravity is most visible: a component is a *managed extension unit*, and a product
@@ -258,10 +260,11 @@ handles, named imports/exports, and WIT as the authoring format. Everything in
   `ComponentExecutor` hook (`WasmComponentExecutor.hpp`) drives tasks, copies and
   wakeups, and `Runtime`/`ComponentInstanceHandle::setExecutor` installs it. The
   engine never owns a thread pool; it provides the scheduling seam, not a policy.
-- **No WIT-level value import/export or component-sort import.** Binary value
-  definitions, `start`, and function/instance/value/type imports execute; a
-  component-sort import, a bag re-export of a component sort, and a public
-  accessor for exported values/instances remain open (see §4.3).
+- **No WIT-level value import/export or component-sort import is required.**
+  Binary value definitions, `start`, and function/instance/value/type imports
+  execute; a component-sort import accepts either a loaded artifact or a
+  host-defined `HostComponentDefinition` (CM-28), and exported values and
+  instances have public accessors.
 - **No validation of the `name` custom section**; names are optional metadata.
 - **No obligation to be maximally permissive about subtyping** — only
   module/instance/component types are subtypes at all today.
@@ -331,7 +334,7 @@ supplied by the embedder's `ComponentExecutor`.
 
 ## 4. What is in the tree today
 
-**Snapshot (2026-11-03, working tree; no commit yet).** Everything below is a kind-2 statement under `docs/FRESHNESS.md` §2.2, so the whole section carries one stamp rather than a date per sentence. Measured with `build/Desktop-Debug/Test/WasmJit` (**17,587 assertions / 611 cases**) and `[component-corpus]` (**516 verdict cases; 0 reject-side, 0 accept-side**); `[component-execution]` additionally constructs **140** accepted artifacts and executes every extracted upstream primitive/structured-JSON row, including the resource-handle-table groups. Before changing a count below, re-run those and `docs/FRESHNESS.md` §8; if a sentence disagrees with the runs, the sentence is stale.
+**Snapshot (2026-11-05, working tree).** Everything below is a kind-2 statement under `docs/FRESHNESS.md` §2.2, so the whole section carries one stamp rather than a date per sentence. Measured with `build/Desktop-Release/Test/WasmJit` (**18,572 assertions / 661 cases**) and `[component-corpus]` (**516 verdict cases; 0 reject-side, 0 accept-side**); `[component-execution]` additionally constructs **140** accepted artifacts and executes every extracted upstream primitive/structured-JSON row, including the resource-handle-table groups. Before changing a count below, re-run those and `docs/FRESHNESS.md` §8; if a sentence disagrees with the runs, the sentence is stale.
 
 ### 4.1 Short answer: an honest rejection (CM-0), plus a parser (CM-1a/CM-1b)
 
@@ -418,8 +421,9 @@ embedder-supplied `ComponentExecutor` path described in §4.3 and §5.
   overload derives them from `RuntimeConfig`. The surface exposes exported
   functions, values, instances, types, core functions, memories, tables, globals
   and tags; `ComponentImport::Kind::CoreModule` supplies a host core module;
-  `ComponentInstanceValue` carries core-module exports and has a recursive
-  walker. It also exposes paired stream/future endpoints, read/write/cancel/drop/
+  `ComponentImport::hostComponentImport` supplies a component-sort definition
+  without a binary; `ComponentInstanceValue` carries core-module exports and has
+  a recursive walker. It also exposes paired stream/future endpoints, read/write/cancel/drop/
   forward, host-created resource handles, and `callAsync`/`runExecutorUntilIdle`
   for non-blocking host calls. A component host callback can recover its caller
   through `currentComponentHostContext()`. `ComponentInstanceOptions::maxLiveHandles`
@@ -572,6 +576,141 @@ component grammar into an AST:
   multi-agent embedder schedules the same state machine through its
   `ComponentExecutor`.
 
+### 4.5 Execution and code-generation boundary
+
+The Component Model has two layers, and WasmJit treats them differently on
+purpose.
+
+| Layer | What it is | Who executes it | Machine code? |
+|---|---|---|---|
+| Embedded core modules | ordinary core Wasm modules with function bodies | `ModuleInstantiator` / the selected backend | **yes**, through the normal JIT path |
+| Component graph | modules, instances, aliases, imports/exports, `canon` definitions, start/values | `ComponentRuntime` in `WasmBase`, backend-neutral | **no component instruction stream exists** |
+| `canon lift` | component-function wrapper around a core function | a C++ lambda in `ComponentRuntime` | no; it calls the JIT'ed core function |
+| `canon lower` | core-callable wrapper around a component function | a libffi closure owned by `ComponentRuntime` | a platform trampoline, not per-component codegen |
+| async surface | tasks, streams, futures, waitables, subtasks | `ComponentRuntime` state machine plus the embedder's `ComponentExecutor` | no |
+
+The consequence is that “JIT the component” is not the same operation as “JIT a
+module”. A component binary carries no function bodies of its own; the
+executable payload is the embedded core modules. WasmJit compiles those through
+the backend seam exactly as it compiles a standalone module: the
+`ComponentRuntime::processCoreInstance` path calls
+`instantiator_.instantiate`, then runs the component graph above it.
+
+`canon lift` and `canon lower` are Canonical ABI adapters, not Wasm code. In the
+current implementation:
+
+- `canon lift` creates a `ComponentFunction` whose `call`/`callValues` closures
+  lower the structured arguments, invoke the embedded core `Callable`, and lift
+  the results (`ComponentRuntime::processCanon`, lift branch).
+- `canon lower` allocates a libffi closure and publishes it as a core `Callable`
+  whose callback is the C++ lowering path (`ComponentRuntime::processCanon`,
+  lower branch).
+- `invokeCore` marshals the flat arguments and calls the JIT'ed core function
+  through `ffi_call` (`ComponentRuntime::invokeCore`).
+
+This is why the Component Model is a first-class **artifact and runtime** but
+not a first-class **code-generation target**: there is nothing to compile at the
+component level. The only plausible codegen optimization is replacing the
+C++/libffi adapter path with specialized native thunks for hot component
+signatures. `ComponentCallCache` currently caches export lookup and ffi types,
+but it still calls through `ComponentFunction`; `invokeCore` prepares an
+`ffi_cif` per invocation. That is a performance opportunity, not a missing
+semantic layer, and it would not change the `ComponentFunction` contract.
+
+The public surface follows the same split:
+
+- `Artifact::parse` dispatches layer 0 (module) and layer 1 (component).
+- `Runtime::loadComponentBytes/File` and `Runtime::instantiateComponent` expose
+  components without requiring a backend header.
+- `ComponentInstanceHandle`, `ComponentFunction`, `ComponentValue`,
+  `ComponentImport` and `ComponentCallCache` are the embedder-facing component
+  surface.
+- `ModuleInstantiator` remains the only compilation seam. There is no
+  `ComponentInstantiator`, and that is intentional: the core stays independent
+  of the code generator, and no backend is asked to understand the component
+  graph.
+
+
+### 4.6 Synthetic modules, synthetic component instances and host component definitions
+
+A **synthetic module** is not a `Module` object. It is a resolver convention: a
+`(module, field)` namespace whose entries are host-provided functions, memories,
+tables or globals. The guest sees ordinary imports; the provider can be native
+C++, another module, or an adapter. That is why a synthetic module needs no new
+engine object ([`LF2_ABI_INTEROP.md`](../languages/LF2_ABI_INTEROP.md) §2).
+
+The component-level analogue is split by sort:
+
+1. **A function import** is a `ComponentFunction` in `ComponentImport`.
+2. **An instance/interface import** is a `ComponentInstanceValue` supplied through
+   `ComponentImport::instanceImport`. This is the real “synthetic component
+   instance”: it carries functions, values, types, nested instances, components
+   and core-module exports, and the runtime wraps it in an instance handle.
+   `Test/main.cpp` “component instance imports carry a function bag” covers it.
+3. **A component-sort import** is a definition, not an instance bag. It can be
+   instantiated by the importing component, so a plain function table is not
+   enough. It needs a component definition, and until `CM-28` that meant a
+   serialized `LoadedComponent`.
+
+`CM-28` adds the narrow host-side definition without inventing a second
+component runtime or a fake `Component` AST:
+
+```cpp
+WASM::ComponentFunction answer;
+answer.callValues = [](auto, auto results) {
+    results[0].kind = WASM::ComponentValue::Kind::U32;
+    results[0].u64 = 42;
+};
+
+auto definition = std::make_shared<WASM::HostComponentDefinition>();
+definition->exports.functions.emplace("answer", answer);
+// or: definition->instantiate = [](const WASM::ComponentHostImports& with) {
+//     return exportsForThisInstance(with);
+// };
+
+WASM::ComponentHostImports imports;
+imports.emplace("c", WASM::ComponentImport::hostComponentImport(definition));
+auto& instance = runtime->instantiateComponent(*component, std::move(imports));
+```
+
+
+The builder has two forms:
+
+- `exports` is a default `ComponentInstanceValue` copied for every instance.
+- `instantiate` is an optional factory for per-instance state or for consuming
+  the importer's `with` arguments. It receives the same import bag the runtime
+  would give a nested component, and takes precedence over `exports`.
+
+The runtime stores either a loaded component or a
+`HostComponentDefinition` in its component index space. When a component
+instance targets a host definition, `ComponentRuntime` calls the factory (or
+copies the default bag), builds the instance handle, and exposes the bag
+through the normal alias/export machinery. No component AST, `TypeId` or
+validator state is synthesized for the host side.
+
+That boundary is deliberate:
+
+- The importing component's own **component declaration** is still checked by
+  `Component::validate()`.
+- The host definition is a **trusted provider**. The runtime does not invent
+  component type declarations or re-run structural validation against a
+  fabricated AST; a missing or wrong export fails by name when an alias or call
+  uses it.
+- The host definition is not a parsed artifact. It has no embedded core module
+  of its own, no outer aliases, and no component-local type index space. If an
+  embedder needs those, it should provide a real loaded component (or build one
+  through the normal parser) rather than extend the synthetic path.
+- The default bag is copied per instance; a factory is the answer when each
+  instance needs independent state.
+
+This is intentionally not called a “synthetic component” in the engine API.
+“Synthetic module” worked because a core import is a namespace lookup.
+“Synthetic component instance” is already represented by
+`ComponentInstanceValue`. A host component **definition** is a factory plus an
+export bag; calling it a component artifact would imply a type identity and
+instantiation semantics it does not own.
+
+
 ## 5. Gaps
 
 | # | Gap | Evidence | Severity |
@@ -590,6 +729,8 @@ component grammar into an AST:
 | `CM13` ✔ | **The two validator disagreements are closed (2026-11-01).** `CM13a`: `canon lift`/`lower` with an `async` option is refused with the corpus's own wording, because every component function type this engine models is synchronous. `CM13b`: an outer alias may name any sort of an enclosing scope — `ValidationScope` now links to the enclosing component scope, so `processAlias` resolves the full index space instead of only `(core type)`/`(type)`. Both `async/validate-no-async-abi-for-sync-type.wast` and both `async/validate-task-return.wast` cases assert, `Test/component_known_failures.txt` is empty, and the corpus is green in both directions since `CM15` | `WasmBase/WasmComponentValidation.cpp`, `Test/component_known_failures.txt` | **Closed** |
 | `CM14` ✔ | **Closed 2026-11-02: all 35 spec-rejected components we accepted are now rejected.** The last batch was resource identity and canonical-name semantics: the instantiation path substitutes the callee's abstract resources into each import type before an *exact* (nominal) comparison; an export's explicit ascription becomes the export's type; `resource.new`/`rep` require a *local* resource (`drop` accepts any resource type, including an abstract handle); an `outer` alias crossing a component boundary rejects a type that transitively mentions a resource (declarator-only boundaries stay legal); `max-value-size` implements `elem_size` < 2^28 for a 64-bit context; the ABI `memory` rule uses `MAX_FLAT_PARAMS=16`/`MAX_FLAT_RESULTS=1` and checks the direct core signature; `task.return` refuses nested borrows; a re-exported core func/tag keeps its canonical id; and a bag of inline exports is validated as an instance type (annotated names + resource names). Verified: `[component-corpus]` **516 verdict cases (140 accept / 376 reject), 0 reject-side disagreements**, accept-side was 38 at that point (closed by `CM15`); suite re-measured at **17,110 / 553** | `[component-corpus]`, `Test/ComponentCorpusTests.cpp` | **Closed** |
 | `CM15` ✔ | **Closed 2026-11-02: the 38 corpus-valid components we rejected are now accepted.** The work was validator scoping and core-module typing, not new runtime behaviour: every index-space entity carries its sort (component instances/components, core modules, core types, values); superfluous component instantiate arguments are ignored and argument names are uninterpreted; external visibility is scoped to the instance/component type that introduces a name (so a nested type export is named without leaking, while a bag referencing an enclosing record stays invalid); concrete core-module arguments are checked by core subtyping (contravariant imports, covariant exports) and a module *type* is a valid core instantiate target; `resource.drop` accepts an abstract handle; an instance type instantiates its abstract resources freshly per use; open (abstract-resource) function types no longer demand a closed ABI identity; and core-module-type `outer` aliases count from the module type's own index space. Verified against the reference corpus: **516 verdict cases (140 accept / 376 reject), 0 accept-side and 0 reject-side disagreements**, suite **17,110 / 553**. Both directions are now a hard gate in `[component-corpus]` | `[component-corpus]`, `Test/ComponentCorpusTests.cpp` | **Closed** |
+| `CM28` ✔ | **Component-sort imports required a loaded artifact.** A component import could only be satisfied by `ComponentImport::componentImport(std::shared_ptr<const LoadedComponent>)`; there was no host-side definition builder. Closed by `HostComponentDefinition` plus `ComponentImport::hostComponentImport`: a default export bag or a per-instance factory is stored in the component index space, and `processComponentInstance` materializes the bag without a synthetic `Component` AST. Covered by “runtime: host component definition satisfies a component import”. | `WasmBase/WasmComponentValue.hpp`, `WasmBase/WasmComponentRuntime.*`, `Test/RuntimeTests.cpp` | **Closed** |
+
 
 ### 5.1 Maturity: what is mature, what the ceiling is, and what is deliberately refused
 
@@ -702,6 +843,7 @@ caller reuses the callee's buffer.
 | **CM-19 — 1.0 refinements** ✅ | `CM25`: lenient `component-name` parsing, subtyping conformance matrix, multi-memory core fixture, pointer-size-aware string/list/map flattening and a memory64 string signature fixture; JS goes through `HostBridge`/`nativeImport`. | `CM25` | **Done 2026-11-02:** `[component-name]`, `[component-subtyping]`, `[component-execution]` and the memory64/multi-memory fixtures pass. |
 | **CM-20 — Embedder contracts** ✅ | `CM26`: `ComponentExecutor` is the documented multi-agent scheduling seam; WIT is build-time and WASI/host imports are embedder-owned; `FRESHNESS.md` carries the final stamp. | `CM26` | **Done 2026-11-02:** multi-agent is documented as an embedder-supplied `ComponentExecutor` path; `[docs]`, `[layering]` and the full suite pass. |
 | **CM-27 — Cross-instance handle transfer and bounds** ✅ | `CM-27`: owning and borrowed resource handles rebase into the receiving instance's table; borrows may be re-lent and are scoped; stream/future endpoints move with a shared channel; `ComponentInstanceOptions::maxLiveHandles` bounds the shared resource/async handle table. | CM6, CM18 | **Done 2026-11-03:** direct borrow, endpoint, blocked-copy and budget-exhaustion tests pass; `[component-execution]` remains green. |
+| **CM-28 — Host component definitions** ✅ | `CM28`: `HostComponentDefinition` (default export bag or per-instance factory) and `ComponentImport::hostComponentImport` satisfy a component-sort import without a serialized artifact; `ComponentRuntime` materializes the bag through the normal instance/alias path. | CM28 | **Done 2026-11-05:** the component-sort import fixture instantiates through both the factory and default-bag paths. |
 | **(non-goals)** | WIT private-type subtyping, and engine-side WASI 0.2 implementations (WASI is host-provided). WIT value imports/exports are build-time WIT and binary value/import support is covered by `CM17`. | CM9 | — |
 
 ## 8. Indicative test survey
@@ -724,6 +866,7 @@ asserted separately (see the `component-corpus` row).
 | manual async tests, CM-5 | **pass** | `component_runtime_async.wat` blocks an async stream read, completes it with a write, delivers the `stream-read` waitable event and round-trips a future. |
 | manual async tests, CM19 | **pass** | `component_async_stackful.wat` (task.return), `component_async_callback.wat` (YIELD → callback → EXIT), `component_async_lower.wat` (4-param cap + result pointer + packed i32) and `component_async_invalid_{postreturn,callback,callback_type,callback_lower}.wat` (all four reject by name). The task-state test injects a non-single-agent executor and checks result storage plus the live-task bound. |
 | manual component-side space tests, CM17/CM18 | **pass** | `component_bag_before_nested.wat` (bag at instance 0, nested at 1, alias resolves the bag), `component_instance_args.wat` (value + instance + type `with` arguments), `component_instance_import.wat` (a host-supplied instance bag), and a hand-authored binary core bag carrying type + tag + func. |
+| host component definition, CM28 | **pass** | “runtime: host component definition satisfies a component import” instantiates `component_component_import.wasm` through both a per-instance factory and the default `HostComponentDefinition::exports` bag, then calls the exported host function. |
 | manual getter/setter tests, CM-1d | **pass** | `component_getters_setters.wat` covers plain/method/static getters and setters; the three invalid fixtures reject a missing getter, a parameterised getter and a strongly-conflicting name. |
 | manual Type import/export tests, CM-6 | **pass** | hand-authored core binaries link a struct export to a `sub any` import and reject a `sub func` bound. |
 | tooling test, CM-3 | **pass** | `Spec::WitPackage::parse` ingests `wasm-tools component wit --json` and exposes packages/worlds/interfaces/functions. |

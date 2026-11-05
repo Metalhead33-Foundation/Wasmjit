@@ -300,10 +300,12 @@ private:
 	//! Ancestor core-module index spaces for `alias outer`; nearest first.
 	std::vector<std::vector<const WASM::Module*>> outerCoreModuleSpaces_;
 	//! One component definition in the component index space: a nested
-	//! definition (owner empty) or an imported/aliased `LoadedComponent`.
+	//! definition (owner empty), an imported/aliased `LoadedComponent`, or a
+	//! host-provided `HostComponentDefinition`.
 	struct ComponentDefinitionHandle {
 		const WASM::Component* definition = nullptr; //!< Parsed definition.
 		std::shared_ptr<const LoadedComponent> owner; //!< Keeps an imported component alive.
+		std::shared_ptr<const HostComponentDefinition> hostDefinition; //!< Host-defined replacement for a component-sort import.
 		//! Core-module index space of the instance that exported this component.
 		//! Empty for a definition owned by this runtime.
 		std::vector<const WASM::Module*> outerCoreModules;

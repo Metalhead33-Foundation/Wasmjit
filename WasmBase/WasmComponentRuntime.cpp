@@ -2588,7 +2588,7 @@ void ComponentRuntime::processComponent(uint32_t index)
 	if (index >= component_.components.size())
 		throw std::runtime_error(
 				"component runtime: nested component index out of bounds");
-	componentSpace_.push_back({component_.components[index].get(), {}, {},
+	componentSpace_.push_back({component_.components[index].get(), {}, {}, {},
 			nullptr});
 }
 
@@ -2749,8 +2749,12 @@ void ComponentRuntime::processComponentInstance(
 		componentInstances_.push_back(std::move(handle));
 		return;
 	}
-	if (instance.componentIndex >= componentSpace_.size()
-			|| componentSpace_[instance.componentIndex].definition == nullptr)
+	if (instance.componentIndex >= componentSpace_.size())
+		throw std::runtime_error(
+				"component runtime: component instance target is not a component");
+	const ComponentDefinitionHandle& target =
+			componentSpace_[instance.componentIndex];
+	if (target.definition == nullptr && !target.hostDefinition)
 		throw std::runtime_error(
 				"component runtime: component instance target is not a component");
 	ComponentImports childImports = imports_;
@@ -2802,15 +2806,21 @@ void ComponentRuntime::processComponentInstance(
 					component_.typeId(index));
 			break;
 		case WASM::ComponentSort::Component: {
-			if (index >= componentSpace_.size()
-					|| componentSpace_[index].definition == nullptr)
+			if (index >= componentSpace_.size())
 				throw std::runtime_error(
 						"component runtime: instantiate component argument is out of bounds");
-			std::shared_ptr<const LoadedComponent> owner =
-					componentSpace_[index].owner;
+			const ComponentDefinitionHandle& argument = componentSpace_[index];
+			if (argument.hostDefinition) {
+				childImports[arg.name] = ComponentImport::hostComponentImport(
+						argument.hostDefinition);
+				break;
+			}
+			if (argument.definition == nullptr)
+				throw std::runtime_error(
+						"component runtime: instantiate component argument is out of bounds");
+			std::shared_ptr<const LoadedComponent> owner = argument.owner;
 			if (!owner)
-				owner = makeBorrowedLoadedComponent(
-						componentSpace_[index].definition);
+				owner = makeBorrowedLoadedComponent(argument.definition);
 			childImports[arg.name] =
 					ComponentImport::componentImport(std::move(owner));
 			break;
@@ -2820,13 +2830,25 @@ void ComponentRuntime::processComponentInstance(
 					"component runtime: unsupported component instantiate argument sort");
 		}
 	}
+	// A host-defined component has no AST or component-local imports of its
+	// own; its factory receives the `with` bag and returns the instance exports.
+	if (target.definition == nullptr) {
+		ComponentInstanceValue exports =
+				target.hostDefinition->instantiate
+						? target.hostDefinition->instantiate(childImports)
+						: target.hostDefinition->exports;
+		auto hostHandle = makeInstanceHandle(std::move(exports));
+		for (const auto& [name, module] : hostHandle->exports.coreModules)
+			if (module)
+				hostHandle->coreModules[name] = module.get();
+		componentInstances_.push_back(std::move(hostHandle));
+		return;
+	}
 	auto handle = std::make_shared<ComponentInstanceHandle>();
 	std::vector<std::vector<const WASM::Module*>> childOuterModuleSpaces =
 			outerCoreModuleSpaces_;
 	std::vector<const std::vector<ComponentDefinitionHandle>*> childOuterComponents =
 			outerComponentSpaces_;
-	const ComponentDefinitionHandle& target =
-			componentSpace_[instance.componentIndex];
 	if (!target.outerCoreModules.empty())
 		childOuterModuleSpaces.insert(childOuterModuleSpaces.begin(),
 				target.outerCoreModules);
@@ -2903,7 +2925,7 @@ void ComponentRuntime::processAlias(const WASM::Alias& alias, uint32_t typeIndex
 				throw std::runtime_error(
 						"component runtime: component export is not a component");
 			ComponentDefinitionHandle handle{
-					it->second->componentDefinition(), it->second, {}, nullptr};
+					it->second->componentDefinition(), it->second, {}, {}, nullptr};
 			const auto source = componentInstances_[alias.instanceIndex];
 			if (source && source->nested) {
 				handle.outerCoreModules = source->nested->coreModuleSpace_;
@@ -4161,12 +4183,19 @@ void ComponentRuntime::processImport(const WASM::ImportDecl& importDecl)
 	case WASM::ExternType::Kind::Component: {
 		const ComponentImport* import = require(ComponentImport::Kind::Component,
 				"a component");
-		if (!import->component)
+		if (import->component) {
+			componentSpace_.push_back(
+					{import->component->componentDefinition(), import->component, {},
+					 {}, nullptr});
+			return;
+		}
+		if (!import->hostComponent)
 			throw std::runtime_error(
 					"component runtime: host component import is empty");
+		// Store the provider in the same component index space; instantiation
+		// materializes its export bag without a synthetic Component AST.
 		componentSpace_.push_back(
-				{import->component->componentDefinition(), import->component, {},
-				 nullptr});
+				{nullptr, {}, import->hostComponent, {}, nullptr});
 		return;
 	}
 	case WASM::ExternType::Kind::Func:

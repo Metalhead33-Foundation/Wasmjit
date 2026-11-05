@@ -749,17 +749,17 @@ check. The embedding surface is what the installed `wasmjit/wasmjit.hpp` exposes
 ## 10. Test survey
 
 **Snapshot (2026-11-05, working tree on `77506af`):** the default suite is
-18,562 assertions in 660 cases; `[bindings]` is 937/43, `[docs]` is 1017/2,
+18,572 assertions in 661 cases; `[bindings]` is 937/43, `[docs]` is 1017/2,
 `[tiers]` is 250/3, and Doxygen is warning-free. Re-run the tagged cases after
 changing a schema, emitter or this note's code paths.
 
 | Evidence | Result | Reading |
 |---|---|---|
-| Default suite (**2026-11-05**, `77506af`) | **18,562 assertions in 660 cases, green** | Supersedes the 2026-11-01 baseline (17,090 / 551); every earlier assertion still passes. The 2026-10-29 run (11,454 / 481) in the milestone notes remains the historical baseline. |
+| Default suite (**2026-11-05**, `77506af`) | **18,572 assertions in 661 cases, green** | Supersedes the 2026-11-01 baseline (17,090 / 551); every earlier assertion still passes. The 2026-10-29 run (11,454 / 481) in the milestone notes remains the historical baseline. |
 | `[docs]` lint (**2026-11-05**, `77506af`) | **1017 assertions / 2 cases, green** | Note shape for `docs/proposals/` **and** the note tree for all three folders (§9 of `DOCUMENTATION.md`), so this note's index row is checked too |
 | `[callcache]` (**2026-11-04**) | **18 assertions / 4 cases, green** | `ModuleCallCache` ffi calls, `v128` by value, multi-result calls and `ComponentCallCache` flat calls. |
 | `[bindings]` (**2026-11-05**, `77506af`) | **937 assertions / 43 cases, green** | The §12.8 tool: descriptor→schema, direction-specific module/component imports/exports (G2H/H2G/G2G), complete-schema export/re-import and editorial name/description fields, opaque reference spelling, `stringref` through every emitter, C header (compiled as C11 and C++23), Rust, TypeScript, AssemblyScript, Zig, Kotlin, MoonBit, Go, Dart, Java, C#, F#, Python, Ruby, Lua, Swift, D, Nim, Crystal, Ada, Pascal and Haskell emission, a compiled C++ adapter (call/trap/import/reference/multi-value/retain-drop), SWIG and Glue candidate validation, `VMContext*` candidate schemas, WIT JSON/text input and world projection, direction-aware C++ typedefs/source, non-function entry comments, producer toolchain evidence, defined-reference kind naming, exact-reference flags, GC struct/array definitions, Rust `#[link(wasm_import_module)]`/`#[link_name]` declarations and export skeletons, C `WASMJIT_WASM_IMPORT` annotations, per-toolchain compile checks, and a `wasm-opt --all-features -O2` signature comparison on five fixtures. |
-| `[runtime]` (**2026-11-05**) | 141 assertions / 18 cases, green | Load → instantiate → call, idempotence, named errors, the `MF-2` guard, agents, the store-scoping proof (two stores, two heaps, an artifact records its store), and the unloader (one instance destroyed, the module re-instantiated, a provisional backend's code freed twice over). |
+| `[runtime]` (**2026-11-05**) | 151 assertions / 19 cases, green | Load → instantiate → call, idempotence, named errors, the `MF-2` guard, agents, the store-scoping proof (two stores, two heaps, an artifact records its store), and the unloader (one instance destroyed, the module re-instantiated, a provisional backend's code freed twice over). |
 | `[concurrency]` | 80 assertions / 13 cases, green | The model claim, the `Single` refusal, re-entrant invocation across threads, the `MF-2` guard, the `MF-3`/`MF-4` safepoint rules and the multi-agent suite. |
 | `[multiagent]` | 51 assertions / 6 cases, green | Two agents on one instance: acquire-release, wait/notify, shared-global RMW, traps, GC stress, reference barrier. |
 | `[backendabi]` | 36 assertions / 4 cases, green | The POD signature/layout views (`WasmBackendAbi.hpp`) match `ABI.md`'s tuple rule. |
@@ -872,7 +872,11 @@ layers:
 - `ComponentValueType` / `ComponentValue` for structured component values and
   resource/stream/future kinds.
 - `ComponentImport` for host-supplied functions, values, instances, types,
-  components and core modules.
+  loaded components, host-defined components and core modules. A component-sort
+  import can use either a `LoadedComponent` artifact or a
+  `HostComponentDefinition` (a default `ComponentInstanceValue` bag or a
+  per-instance factory); the latter is a trusted export provider, not a second
+  component parser or type authority.
 - Optional WIT JSON/text as a component-level input: `--wit-json` parses the
   `wasm-tools component wit --json` document directly, and `--wit` accepts a
   `.wit` file or package directory and asks `wasm-tools` to produce that JSON.
