@@ -35,7 +35,9 @@ struct UnsupportedBody {
 constexpr std::size_t kSlotBytes = 16;
 
 //! Reserved frame slots that follow the locals and precede the operand stack.
-constexpr std::size_t kReservedSlots = 3;
+//! Reserved frame cells: context, target, scratch, then the two-word selector
+//! block `i8x16.shuffle` passes to its adapter.
+constexpr std::size_t kReservedSlots = 5;
 
 //! Width of a local in bytes, or 0 when the type is outside the supported subset.
 int widthOf(const WASM::ValueType& type)
@@ -422,6 +424,15 @@ extern "C" uint64_t sljitI64TruncSatF64U(double x) noexcept
 //! Checked address of a memory32 access. The immediate offset and the access
 //! width travel packed in one word, because an SLJIT call carries at most four
 //! integer arguments and `VMContext*` is one of them.
+
+//! Turns the five-argument shuffle helper into the four-argument shape SLJIT's
+//! call ABI supports. It contains no semantics: it only forwards to the shared
+//! helper, which stays the single definition of `i8x16.shuffle`.
+extern "C" void sljitShuffleAdapter(const void* a, const void* b,
+		const uint64_t* selectors, void* out)
+{
+	wasm_i8x16_shuffle(a, b, selectors[0], selectors[1], out);
+}
 
 extern "C" void* sljitMemoryAddress(WASM::VMContext* vm, uint32_t memoryIndex,
 		uint32_t address, uint64_t offsetAndWidth) noexcept
@@ -1128,6 +1139,11 @@ sljit_sw OpcodeDispatcher::targetSlotOffset() const
 sljit_sw OpcodeDispatcher::scratchSlotOffset() const
 {
 	return static_cast<sljit_sw>((localSlots_ + 2) * kSlotBytes);
+}
+
+sljit_sw OpcodeDispatcher::selectorBlockOffset() const
+{
+	return static_cast<sljit_sw>((localSlots_ + 3) * kSlotBytes);
 }
 
 void OpcodeDispatcher::loadSlot(int reg, std::size_t depth, int width)
@@ -2646,6 +2662,46 @@ void OpcodeDispatcher::emitV128StoreLane(const WASM::MemArg& arg, std::uint32_t 
 	pop();
 }
 
+void OpcodeDispatcher::emitV128Shuffle(std::span<uint8_t> selectors, sljit_sw address)
+{
+	if (!reachable_)
+		return;
+	require(selectors.size() == 16, "the shuffle selector is not 16 bytes");
+	requireStack(2);
+	const std::size_t aDepth = stackWidths_.size() - 2;
+	const std::size_t bDepth = stackWidths_.size() - 1;
+	// A shuffle may read any byte of either operand, so the result cannot be
+	// written into either cell: it goes to a scratch cell and is copied down.
+	push(16);
+	const std::size_t outDepth = stackWidths_.size() - 1;
+	if (!measureOnly_) {
+		std::uint64_t lo = 0;
+		std::uint64_t hi = 0;
+		std::memcpy(&lo, selectors.data(), sizeof(lo));
+		std::memcpy(&hi, selectors.data() + sizeof(lo), sizeof(hi));
+		// The selector block lives in the reserved frame area; the adapter turns
+		// the five-argument helper into the four arguments SLJIT can pass.
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+				selectorBlockOffset(), SLJIT_IMM, static_cast<sljit_sw>(lo)));
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+				selectorBlockOffset() + 8, SLJIT_IMM, static_cast<sljit_sw>(hi)));
+		slotAddress(SLJIT_R1, bDepth);
+		emit(sljit_get_local_base(compiler_, SLJIT_R2, 0, selectorBlockOffset()));
+		slotAddress(SLJIT_R3, outDepth);
+		// R0 is materialised last: sljit_get_local_base clobbers it on x86.
+		slotAddress(SLJIT_R0, aDepth);
+		emitHelper(SLJIT_ARGS4V(P, P, P, P), address);
+		for (int word = 0; word < 2; ++word) {
+			emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0, SLJIT_MEM1(SLJIT_SP),
+					stackSlotOffset(outDepth) + word * 8));
+			emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+					stackSlotOffset(aDepth) + word * 8, SLJIT_R0, 0));
+		}
+	}
+	pop();
+	pop();
+}
+
 void OpcodeDispatcher::emitV128Shift(sljit_sw address)
 {
 	if (!reachable_)
@@ -2888,6 +2944,7 @@ void OpcodeDispatcher::dispatchV128Store16Lane(WASM::MemArg arg1, uint8_t arg2) 
 void OpcodeDispatcher::dispatchV128Store32Lane(WASM::MemArg arg1, uint8_t arg2) { emitV128StoreLane(arg1, 4, arg2, codeAddress(&wasm_v128_store32_lane)); }
 void OpcodeDispatcher::dispatchV128Store64Lane(WASM::MemArg arg1, uint8_t arg2) { emitV128StoreLane(arg1, 8, arg2, codeAddress(&wasm_v128_store64_lane)); }
 
+void OpcodeDispatcher::dispatchI8x16Shuffle(std::span<uint8_t> selectors) { emitV128Shuffle(selectors, codeAddress(&sljitShuffleAdapter)); }
 void OpcodeDispatcher::dispatchI8x16Swizzle() { emitV128Binary(codeAddress(&wasm_i8x16_swizzle)); }
 
 void OpcodeDispatcher::dispatchI8x16Add() { emitV128Binary(codeAddress(&wasm_i8x16_add)); }

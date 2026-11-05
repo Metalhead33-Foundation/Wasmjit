@@ -51,8 +51,8 @@ The emitter lowers:
   families, the `f32x4`/`f64x2` arithmetic, comparison, unary and conversion
   families, float lane access (`f32x4`/`f64x2`
   `splat`/`extract_lane`/`replace_lane`), and the transport families (extending,
-  splatting and zeroing loads, lane loads and lane stores, `i8x16.swizzle`), all
-  through the core's shared helper ABI.
+  splatting and zeroing loads, lane loads and lane stores, `i8x16.swizzle` and
+  `i8x16.shuffle`), all through the core's shared helper ABI.
 
 A unit test exercises the same `asmjit_i32_basic`/`asmjit_i64_basic` fixtures
 that the AsmJit suite uses (`[sljit][module][parity]`), so the shared slice is
@@ -60,8 +60,7 @@ checked against one fixture set rather than two drifting ones.
 
 ## What it still refuses
 
-`v128` in signatures, block types or `select`, `i8x16.shuffle` and relaxed
-SIMD,
+`v128` in signatures, block types or `select`, and relaxed SIMD,
 references/GC, exceptions, continuations, atomics, `f16` load/store, bulk
 memory on a memory64, functions with more than three parameters, and functions
 with more than one result. Each refusal leaves that
@@ -120,8 +119,8 @@ Generated code **is** released on `Runtime::unload` and runtime teardown through
 
 ## Next steps
 
-1. `i8x16.shuffle` (it needs a fifth argument register and a scratch-count
-   decision), then `v128` in signatures and block types. What landed is recorded in
+1. `v128` in signatures, block types and `select_t` — the last P3 item, and an
+   ABI decision as much as a lowering one. What landed is recorded in
    [`docs/backends/ASMJIT_SLJIT_P3_SIMD1.md`](../docs/backends/ASMJIT_SLJIT_P3_SIMD1.md)
    and [`docs/backends/ASMJIT_SLJIT_P3_SIMD2.md`](../docs/backends/ASMJIT_SLJIT_P3_SIMD2.md).
 2. References/GC, `ref.*`, GC barriers and exceptions (P4), following

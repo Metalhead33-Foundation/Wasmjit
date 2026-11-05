@@ -1807,3 +1807,63 @@ CHECK(WASM::callCallable<std::int32_t>(*asmCallable)
 	sameNiladic("swizzle");
 	sameNiladic("swizzle_oob");
 }
+
+
+TEST_CASE("sljit: the shared v128 shuffle module executes",
+"[sljit][module][parity][simd]")
+{
+	auto session = Sljit::createSession();
+	REQUIRE(session != nullptr);
+	WASM::RegistryImportResolver imports;
+	LoadedModule loaded = loadAndInstantiateTestModule("simd_shuffle_imm", imports, *session);
+	REQUIRE(loaded.instance != nullptr);
+	WASM::ModuleInstance& instance = *loaded.instance;
+	const auto niladic = [&](const char* name) -> std::int32_t {
+		const std::optional<WASM::Callable> callable = instance.exportedFunction(name);
+		INFO("export " << name);
+		REQUIRE(callable.has_value());
+		REQUIRE(callable->fnPtr != nullptr);
+		return WASM::callCallable<std::int32_t>(*callable);
+	};
+
+	CHECK(niladic("shuffle_interleave") == std::int32_t{0x14031201});
+	CHECK(niladic("shuffle_all_zero") == std::int32_t{0x01010101});
+	CHECK(niladic("shuffle_take_b") == std::int32_t{0x14131211});
+	CHECK(niladic("shuffle_reverse") == std::int32_t{0x0D0E0F10});
+	// Two shuffles in one function: the selector block is rewritten per use.
+	CHECK(niladic("shuffle_twice") == std::int32_t{0x14131211});
+}
+
+
+TEST_CASE("asmjit and sljit agree on the shared v128 shuffle module",
+"[sljit][asmjit][parity][simd]")
+{
+	WASM::Module module = loadTestModule("simd_shuffle_imm");
+	AsmJitBackend::Context asmContext;
+	AsmJitBackend::ModuleCompiler asmCompiler(asmContext);
+	Sljit::ModuleCompiler sljitCompiler;
+	WASM::RegistryImportResolver asmImports;
+	WASM::RegistryImportResolver sljitImports;
+	std::unique_ptr<WASM::ModuleInstance> asmInstance =
+			asmCompiler.instantiate(module, asmImports);
+	std::unique_ptr<WASM::ModuleInstance> sljitInstance =
+			sljitCompiler.instantiate(module, sljitImports);
+	REQUIRE(asmInstance != nullptr);
+	REQUIRE(sljitInstance != nullptr);
+
+	const auto sameNiladic = [&](const char* name) {
+		const std::optional<WASM::Callable> asmCallable = asmInstance->exportedFunction(name);
+		const std::optional<WASM::Callable> sljitCallable = sljitInstance->exportedFunction(name);
+		REQUIRE(asmCallable.has_value());
+		REQUIRE(sljitCallable.has_value());
+		INFO("export " << name);
+		CHECK(WASM::callCallable<std::int32_t>(*asmCallable)
+				== WASM::callCallable<std::int32_t>(*sljitCallable));
+	};
+
+	sameNiladic("shuffle_interleave");
+	sameNiladic("shuffle_all_zero");
+	sameNiladic("shuffle_take_b");
+	sameNiladic("shuffle_reverse");
+	sameNiladic("shuffle_twice");
+}

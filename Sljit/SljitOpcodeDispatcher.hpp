@@ -422,6 +422,7 @@ protected:
 	void dispatchV128Store16Lane(WASM::MemArg arg1, uint8_t arg2) override; //!< `v128.store16_lane`.
 	void dispatchV128Store32Lane(WASM::MemArg arg1, uint8_t arg2) override; //!< `v128.store32_lane`.
 	void dispatchV128Store64Lane(WASM::MemArg arg1, uint8_t arg2) override; //!< `v128.store64_lane`.
+	void dispatchI8x16Shuffle(std::span<uint8_t> arg) override; //!< `i8x16.shuffle`.
 	void dispatchI8x16Swizzle() override; //!< `i8x16.swizzle`.
 	void dispatchI8x16Add() override; //!< `i8x16.add`.
 	void dispatchI8x16Sub() override; //!< `i8x16.sub`.
@@ -613,6 +614,8 @@ private:
 	 * \return Offset from `SLJIT_SP`.
 	 */
 	sljit_sw scratchSlotOffset() const;
+	//! Offset of the two-word shuffle selector block.
+	sljit_sw selectorBlockOffset() const;
 
 	/*!
 	 * \brief Loads one operand-stack slot into a register.
@@ -904,6 +907,12 @@ private:
 	 * \param address Helper entry point.
 	 */
 	void emitV128StoreLane(const WASM::MemArg& arg, std::uint32_t width, uint8_t lane, sljit_sw address);
+	/*!
+	 * \brief Calls the shuffle helper over the top two vectors.
+	 * \param selectors The 16 shuffle indices.
+	 * \param address Helper entry point.
+	 */
+	void emitV128Shuffle(std::span<uint8_t> selectors, sljit_sw address);
 	/*!
 	 * \brief Calls a binary v128 helper over the top two slots.
 	 * \param address Helper entry point.

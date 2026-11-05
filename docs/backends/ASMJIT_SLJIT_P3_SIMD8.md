@@ -149,7 +149,7 @@ Do not copy:
 
 | Opcode family | Refusal | Status |
 |---|---|---|
-| `i8x16.shuffle` | `onUnhandledOpcode` | needs a fifth argument register and a scratch-count decision (§3) |
+| `i8x16.shuffle` | **landed in slice 9** ([`ASMJIT_SLJIT_P3_SIMD9.md`](ASMJIT_SLJIT_P3_SIMD9.md)) via an SLJIT forwarding adapter | `simd_shuffle_imm.wat` |
 | relaxed SIMD | `onUnhandledOpcode` | helpers exist; not scheduled |
 | `v128` parameters/results, block types, `select_t` | refused by name | the remaining P3 item; an ABI decision |
 | `f16` load/store and the `f16` proposal | `onUnhandledOpcode` | not started |

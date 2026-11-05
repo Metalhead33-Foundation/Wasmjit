@@ -2124,6 +2124,40 @@ protected:
 
 	void dispatchI8x16Swizzle() override { emitVectorHelper2(&wasm_i8x16_swizzle); }
 
+	void dispatchI8x16Shuffle(std::span<uint8_t> selectors) override
+	{
+		if (selectors.size() != 16)
+			throw std::runtime_error("AsmJit i8x16.shuffle selector is not 16 bytes");
+		if (values.size() < 2)
+			throw std::runtime_error("AsmJit i8x16.shuffle operand underflow");
+		auto b = values.back();
+		values.pop_back();
+		auto a = values.back();
+		values.pop_back();
+		uint64_t lo = 0;
+		uint64_t hi = 0;
+		std::memcpy(&lo, selectors.data(), sizeof(lo));
+		std::memcpy(&hi, selectors.data() + sizeof(lo), sizeof(hi));
+		auto buffer = newVectorBuffer("v128Shuffle");
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kVoid);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUInt64);
+		signature.add_arg(asmjit::TypeId::kUInt64);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke),
+				reinterpret_cast<uint64_t>(&wasm_i8x16_shuffle), signature),
+				"AsmJit i8x16.shuffle helper call failed");
+		invoke->set_arg(0, a);
+		invoke->set_arg(1, b);
+		invoke->set_arg(2, asmjit::Imm(static_cast<int64_t>(lo)));
+		invoke->set_arg(3, asmjit::Imm(static_cast<int64_t>(hi)));
+		invoke->set_arg(4, buffer);
+		values.push_back(buffer);
+	}
+
 	void dispatchI8x16Add() override { emitVectorHelper2(&wasm_i8x16_add); }
 	void dispatchI8x16Sub() override { emitVectorHelper2(&wasm_i8x16_sub); }
 	void dispatchI16x8Add() override { emitVectorHelper2(&wasm_i16x8_add); }
