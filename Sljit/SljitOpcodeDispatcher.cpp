@@ -1852,18 +1852,33 @@ void OpcodeDispatcher::dispatchSelect()
 	const int valueWidth = stackWidths_[stackWidths_.size() - 3];
 	require(stackWidths_[stackWidths_.size() - 2] == valueWidth,
 			"select requires two values of the same type");
-	require(valueWidth != 16, "the SLJIT backend does not lower v128 select yet");
 	require(stackWidths_.back() == 4, "select requires an i32 condition");
 	if (!measureOnly_) {
-		loadSlot(SLJIT_R1, stackWidths_.size() - 3, valueWidth);
-		loadSlot(SLJIT_R2, stackWidths_.size() - 2, valueWidth);
 		loadSlot(SLJIT_R0, stackWidths_.size() - 1, 4);
 		emit(sljit_emit_op2u(compiler_, SLJIT_SUB | SLJIT_SET_Z, SLJIT_R0, 0,
 				SLJIT_IMM, 0));
-		emit(sljit_emit_select(compiler_,
-				SLJIT_NOT_EQUAL | (valueWidth == 4 ? SLJIT_32 : 0),
-				SLJIT_R1, SLJIT_R1, 0, SLJIT_R2));
-		storeSlot(SLJIT_R1, stackWidths_.size() - 3, valueWidth);
+		if (valueWidth == 16) {
+			// A v128 is 16 bytes, so both words are selected under the same flags.
+			const sljit_sw aOffset = stackSlotOffset(stackWidths_.size() - 3);
+			const sljit_sw bOffset = stackSlotOffset(stackWidths_.size() - 2);
+			for (int word = 0; word < 2; ++word) {
+				emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R1, 0,
+						SLJIT_MEM1(SLJIT_SP), aOffset + word * 8));
+				emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R2, 0,
+						SLJIT_MEM1(SLJIT_SP), bOffset + word * 8));
+				emit(sljit_emit_select(compiler_, SLJIT_NOT_EQUAL,
+						SLJIT_R1, SLJIT_R1, 0, SLJIT_R2));
+				emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+						aOffset + word * 8, SLJIT_R1, 0));
+			}
+		} else {
+			loadSlot(SLJIT_R1, stackWidths_.size() - 3, valueWidth);
+			loadSlot(SLJIT_R2, stackWidths_.size() - 2, valueWidth);
+			emit(sljit_emit_select(compiler_,
+					SLJIT_NOT_EQUAL | (valueWidth == 4 ? SLJIT_32 : 0),
+					SLJIT_R1, SLJIT_R1, 0, SLJIT_R2));
+			storeSlot(SLJIT_R1, stackWidths_.size() - 3, valueWidth);
+		}
 	}
 	stackWidths_.resize(stackWidths_.size() - 2);
 }
@@ -1871,8 +1886,8 @@ void OpcodeDispatcher::dispatchSelect()
 void OpcodeDispatcher::dispatchSelectT(std::vector<WASM::ValueType>&& types)
 {
 	require(types.size() == 1, "select_t requires exactly one value type");
-	require(widthOf(types.front()) != 0 && widthOf(types.front()) != 16,
-			"select_t only supports scalar values");
+	require(widthOf(types.front()) != 0,
+			"select_t only supports the modelled value types");
 	dispatchSelect();
 }
 

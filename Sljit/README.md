@@ -64,7 +64,9 @@ checked against one fixture set rather than two drifting ones.
 
 ## What it still refuses
 
-`v128` in signatures, block types or `select`, and relaxed SIMD,
+`v128` in signatures or block types (deferred — see
+[`docs/backends/V128_SIGNATURE_DECISION.md`](../docs/backends/V128_SIGNATURE_DECISION.md)),
+and relaxed SIMD,
 references/GC, exceptions, continuations, atomics, `f16` load/store, bulk
 memory on a memory64, functions with more than three parameters, and functions
 with more than one result. Each refusal leaves that

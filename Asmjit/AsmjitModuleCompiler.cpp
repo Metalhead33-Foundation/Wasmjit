@@ -981,7 +981,10 @@ protected:
     {
         if (types.size() != 1)
             throw std::runtime_error("AsmJit select_t currently supports exactly one value type");
-        requireScalar(types.front(), "select_t values");
+        // A v128 value is an immutable 16-byte buffer, so selecting its address
+        // selects the value; no byte-wise select is needed.
+        if (types.front().opcode != WASM::ValueTypeCode::V128)
+            requireScalar(types.front(), "select_t values");
         emitSelect();
     }
 

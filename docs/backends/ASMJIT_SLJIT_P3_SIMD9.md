@@ -164,3 +164,23 @@ Do not copy:
   `simd: shuffle and swizzle run through the JIT`);
   `./Test/WasmJit '[headerdoc]'` — green; `doxygen Doxyfile` — exit 0 with no
   warnings.
+
+### 2026-11-05 — follow-up: `select` and `select_t` on v128
+
+This was the cheapest refusal left in the SIMD surface, and it needed no ABI
+  work — which is why it came after the reference chunks rather than before them.
+
+- **SLJIT** selects the 16-byte value as **two words** under one set of flags:
+  the condition is turned into flags once, then each word is loaded, `select`ed
+  and stored, so both halves see the same condition.
+- **AsmJit** needs nothing new at all: a v128 value is an immutable 16-byte
+  buffer, so selecting the two **addresses** selects the value. The only change
+  was to stop `select_t` rejecting the vector type; `emitSelect()` already
+  handled pointer-shaped values.
+- **The untyped `select` works too**, so the slice-1 limitation ("v128 select
+  refused") is gone in both forms.
+
+The fixture pins both arms of three exports: a single-lane difference, a
+  difference visible only in the **second word** (which is what the two-word
+  SLJIT path could get wrong), and the untyped form. Both backends agree on all
+  six calls.

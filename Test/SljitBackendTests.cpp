@@ -2008,3 +2008,61 @@ TEST_CASE("asmjit and sljit agree on an imported function reference",
 	same("import_ref_not_null", 0);
 	same("call_import", 42);
 }
+
+
+TEST_CASE("sljit: select on v128 executes", "[sljit][module][parity][simd]")
+{
+	auto session = Sljit::createSession();
+	REQUIRE(session != nullptr);
+	WASM::RegistryImportResolver imports;
+	LoadedModule loaded = loadAndInstantiateTestModule("select_v128", imports, *session);
+	REQUIRE(loaded.instance != nullptr);
+	WASM::ModuleInstance& instance = *loaded.instance;
+	const auto call = [&](const char* name) -> WASM::Callable {
+		const std::optional<WASM::Callable> callable = instance.exportedFunction(name);
+		INFO("export " << name);
+		REQUIRE(callable.has_value());
+		REQUIRE(callable->fnPtr != nullptr);
+		return *callable;
+	};
+
+	CHECK(WASM::callCallable<std::int32_t>(call("select_v128"), 1) == 1);
+	CHECK(WASM::callCallable<std::int32_t>(call("select_v128"), 0) == 2);
+	CHECK(WASM::callCallable<std::int32_t>(call("select_v128_two_words"), 1) == 10);
+	CHECK(WASM::callCallable<std::int32_t>(call("select_v128_two_words"), 0) == 6);
+	CHECK(WASM::callCallable<std::int32_t>(call("select_v128_untyped"), 1) == 12);
+	CHECK(WASM::callCallable<std::int32_t>(call("select_v128_untyped"), 0) == 2);
+}
+
+
+TEST_CASE("asmjit and sljit agree on select over v128", "[sljit][asmjit][parity][simd]")
+{
+	WASM::Module module = loadTestModule("select_v128");
+	AsmJitBackend::Context asmContext;
+	AsmJitBackend::ModuleCompiler asmCompiler(asmContext);
+	Sljit::ModuleCompiler sljitCompiler;
+	WASM::RegistryImportResolver asmImports;
+	WASM::RegistryImportResolver sljitImports;
+	std::unique_ptr<WASM::ModuleInstance> asmInstance =
+			asmCompiler.instantiate(module, asmImports);
+	std::unique_ptr<WASM::ModuleInstance> sljitInstance =
+			sljitCompiler.instantiate(module, sljitImports);
+	REQUIRE(asmInstance != nullptr);
+	REQUIRE(sljitInstance != nullptr);
+
+	const auto same = [&](const char* name, std::int32_t condition) {
+		const std::optional<WASM::Callable> asmCallable = asmInstance->exportedFunction(name);
+		const std::optional<WASM::Callable> sljitCallable = sljitInstance->exportedFunction(name);
+		REQUIRE(asmCallable.has_value());
+		REQUIRE(sljitCallable.has_value());
+		INFO("export " << name << " condition " << condition);
+		CHECK(WASM::callCallable<std::int32_t>(*asmCallable, condition)
+				== WASM::callCallable<std::int32_t>(*sljitCallable, condition));
+	};
+
+	for (std::int32_t condition : {0, 1}) {
+		same("select_v128", condition);
+		same("select_v128_two_words", condition);
+		same("select_v128_untyped", condition);
+	}
+}
