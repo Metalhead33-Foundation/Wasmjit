@@ -1935,10 +1935,17 @@ TEST_CASE("WIT interface functions use qualified package modules", "[bindings]")
 	})");
 	std::string error;
 	const auto schema = WASM::Bindings::witSchema(wit,
-			WASM::Bindings::Direction::Complete, "demo", "demo", error);
+			WASM::Bindings::Direction::Complete, "demo", "demo", error,
+			WASM::Bindings::WitAsyncPolicy::AllowSynchronous);
 	REQUIRE(error.empty());
 	REQUIRE(schema.imports.size() == 1u);
 	REQUIRE(schema.imports[0].module == "wasi:filesystem/types@0.3.2");
+
+	std::string rejectedError;
+	const auto rejected = WASM::Bindings::witSchema(wit,
+			WASM::Bindings::Direction::Complete, "demo", "demo", rejectedError);
+	REQUIRE(rejected.imports.empty());
+	REQUIRE(rejectedError.find("--wit-allow-async") != std::string::npos);
 	const std::string header = WASM::Bindings::emit(schema,
 			WASM::Bindings::Language::CHeader);
 	REQUIRE(header.find("WASMJIT_WASM_IMPORT(\"wasi:filesystem/types@0.3.2\"")

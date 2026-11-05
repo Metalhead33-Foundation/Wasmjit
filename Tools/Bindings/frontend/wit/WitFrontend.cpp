@@ -635,7 +635,7 @@ std::string witTypeDisplayName(const Json& document, std::size_t id)
 
 Schema witSchema(const Json& document, Direction direction,
 		std::string_view moduleName, std::string_view worldName,
-		std::string& error)
+		std::string& error, WitAsyncPolicy asyncPolicy)
 {
 	error.clear();
 	if (!document.is_object()) {
@@ -722,6 +722,21 @@ Schema witSchema(const Json& document, Direction direction,
 	}
 	if (!error.empty())
 		return {};
+	if (asyncPolicy == WitAsyncPolicy::Reject) {
+		const auto rejectAsync = [&](const std::vector<Entry>& entries) {
+			for (const Entry& entry : entries) {
+				if (entry.raw.value("witAsync", false)) {
+					error = "WIT async function '" + entry.name
+							+ "' has no generated async ABI; "
+							  "pass --wit-allow-async to emit synchronous stubs";
+					return true;
+				}
+			}
+			return false;
+		};
+		if (rejectAsync(schema.imports) || rejectAsync(schema.exports))
+			return {};
+	}
 	schema.dedupe();
 	try {
 		return projectSchema(schema, direction);
@@ -733,7 +748,7 @@ Schema witSchema(const Json& document, Direction direction,
 
 Schema witSchemaFromFile(const std::filesystem::path& path, Direction direction,
 		std::string_view moduleName, std::string_view worldName, bool forceJson,
-		std::string& error)
+		std::string& error, WitAsyncPolicy asyncPolicy)
 {
 	error.clear();
 	if (!std::filesystem::is_regular_file(path)
@@ -765,7 +780,7 @@ Schema witSchemaFromFile(const std::filesystem::path& path, Direction direction,
 		Schema schema;
 		try {
 			schema = witSchema(Json::parse(readText(jsonPath)), direction,
-					moduleName, worldName, error);
+					moduleName, worldName, error, asyncPolicy);
 		} catch (const std::exception& exception) {
 			error = std::string("WIT JSON: ") + exception.what();
 		}
@@ -776,7 +791,7 @@ Schema witSchemaFromFile(const std::filesystem::path& path, Direction direction,
 
 	try {
 		return witSchema(Json::parse(readText(path)), direction, moduleName,
-				worldName, error);
+				worldName, error, asyncPolicy);
 	} catch (const std::exception& exception) {
 		error = std::string("WIT JSON: ") + exception.what();
 		return {};

@@ -21,6 +21,14 @@
 namespace WASM::Bindings {
 
 /*!
+ * \brief How the front-end treats an async WIT function.
+ */
+enum class WitAsyncPolicy {
+	Reject, //!< Reject async WIT instead of generating a synchronous stub.
+	AllowSynchronous //!< Emit a documented synchronous stub.
+};
+
+/*!
  * \brief Resolves one WIT type reference through a WIT JSON type table.
  *
  * Scalar aliases resolve to their underlying scalar; records, variants,
@@ -61,11 +69,13 @@ std::string witTypeDisplayName(const nlohmann::ordered_json& document,
  * \param moduleName The module/component name in the schema envelope.
  * \param worldName The world to select, or empty for the first world.
  * \param error Receives a diagnostic when the document or world is invalid.
+ * \param asyncPolicy How async WIT functions are handled.
  * \return The projected typed schema, or an empty schema on error.
  */
 Schema witSchema(const nlohmann::ordered_json& document, Direction direction,
 		std::string_view moduleName, std::string_view worldName,
-		std::string& error);
+		std::string& error,
+		WitAsyncPolicy asyncPolicy = WitAsyncPolicy::Reject);
 
 /*!
  * \brief Loads a WIT JSON file or a WIT text/package path.
@@ -81,11 +91,13 @@ Schema witSchema(const nlohmann::ordered_json& document, Direction direction,
  * \param worldName The world to select, or empty for the first world.
  * \param forceJson Treat \p path as WIT JSON even without a `.json` extension.
  * \param error Receives a diagnostic when the file/tool/JSON is invalid.
+ * \param asyncPolicy How async WIT functions are handled.
  * \return The projected typed schema, or an empty schema on error.
  */
 Schema witSchemaFromFile(const std::filesystem::path& path, Direction direction,
 		std::string_view moduleName, std::string_view worldName, bool forceJson,
-		std::string& error);
+		std::string& error,
+		WitAsyncPolicy asyncPolicy = WitAsyncPolicy::Reject);
 
 } // namespace WASM::Bindings
 
