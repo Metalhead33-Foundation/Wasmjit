@@ -1,9 +1,32 @@
 #include <catch2/catch_all.hpp>
 
 #include "Asmjit/AsmjitContext.hpp"
+#include "TestFixtures.hpp"
+#include "WasmBase/WasmBackendRegistry.hpp"
+#include "WasmBase/WasmRegistryImportResolver.hpp"
+#include "WasmBase/WasmRuntime.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
+#include <string>
+#include <vector>
+
+TEST_CASE("AsmJit registers under its name and instantiates a module", "[asmjit]")
+{
+	const std::vector<std::string> names = WASM::backendNames();
+	REQUIRE(std::find(names.begin(), names.end(), "asmjit") != names.end());
+	const WASM::BackendInstance backend = WASM::createBackendInstance("asmjit");
+	REQUIRE(backend.instantiator != nullptr);
+	REQUIRE(backend.keepAlive != nullptr);
+
+	auto runtime = WASM::Runtime::create("asmjit");
+	REQUIRE(runtime->backendName() == "asmjit");
+	auto module = runtime->loadBytes(TestFixtures::answerModuleBytes());
+	WASM::RegistryImportResolver imports;
+	WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+	REQUIRE(runtime->callExport<std::int32_t>(instance, "answer") == 42);
+}
 
 TEST_CASE("AsmJit emits and executes a native function", "[asmjit]")
 {

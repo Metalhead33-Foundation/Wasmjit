@@ -4,7 +4,11 @@
 #include <Euphemy/Io/EuphConstBufferDevice.hpp>
 
 #include "Sljit/SljitBackend.hpp"
+#include "Sljit/SljitModuleCompiler.hpp"
+#include "Asmjit/AsmjitContext.hpp"
+#include "Asmjit/AsmjitModuleCompiler.hpp"
 #include "TestFixtures.hpp"
+#include "helper.hpp"
 #include "WasmBase/WasmBackendRegistry.hpp"
 #include "WasmBase/WasmModule.hpp"
 #include "WasmBase/WasmRegistryImportResolver.hpp"
@@ -22,16 +26,18 @@
 
 /*!
   \file SljitBackendTests.cpp
-  \brief The provisional SLJIT backend: registration, execution and refusal.
+  \brief The SLJIT backend: registration, the shared integer slice and refusal.
 
   This header is internal: it is not part of the embedding surface.
 
-  `[sljit]` is the five-step acceptance list of docs/WRITING_A_BACKEND.md §10:
-  the backend registers, a constant function executes, parameters flow through
-  the frame, an unsupported opcode is refused rather than miscompiled, and the
-  session applies the tuple rule plus the diagnostic lane-wise operation. It does
-  not claim the LibJIT backend's feature set — see §9 of that note for what the
-  scaffold deliberately leaves out.
+  The cases cover docs/WRITING_A_BACKEND.md §12's acceptance list — the backend
+  registers, a constant function executes, parameters flow through the frame,
+  an unsupported opcode is refused rather than miscompiled, and the session
+  applies the tuple rule plus the diagnostic lane-wise operation — and extend it
+  to the shared `asmjit_i32_basic`/`asmjit_i64_basic` fixtures and a direct
+  AsmJit-versus-SLJIT outcome comparison (`[parity]`). Floating point,
+  references/GC, exceptions, continuations and SIMD are still refused; see
+  §11 of that note for the current limits.
 */
 
 namespace {
@@ -52,14 +58,14 @@ const std::vector<std::uint8_t> kAddModule = {
 	0x0a, 0x09, 0x01, 0x07, 0x00, 0x20, 0x00, 0x20, 0x01, 0x6a, 0x0b,
 };
 
-// (module (func (export "div") (param i32 i32) (result i32)
-//   local.get 0 local.get 1 i32.div_s))  -- outside the provisional subset
-const std::vector<std::uint8_t> kDivModule = {
+// (module (func (export "fadd") (param f32 f32) (result f32)
+//   local.get 0 local.get 1 f32.add))  -- outside the integer subset
+const std::vector<std::uint8_t> kFloatAddModule = {
 	0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
-	0x01, 0x07, 0x01, 0x60, 0x02, 0x7f, 0x7f, 0x01, 0x7f,
+	0x01, 0x07, 0x01, 0x60, 0x02, 0x7d, 0x7d, 0x01, 0x7d,
 	0x03, 0x02, 0x01, 0x00,
-	0x07, 0x07, 0x01, 0x03, 0x64, 0x69, 0x76, 0x00, 0x00,
-	0x0a, 0x09, 0x01, 0x07, 0x00, 0x20, 0x00, 0x20, 0x01, 0x6d, 0x0b,
+	0x07, 0x08, 0x01, 0x04, 0x66, 0x61, 0x64, 0x64, 0x00, 0x00,
+	0x0a, 0x09, 0x01, 0x07, 0x00, 0x20, 0x00, 0x20, 0x01, 0x92, 0x0b,
 };
 
 // The harness pattern of Test/helper.cpp, but from bytes: a store, a module
@@ -118,18 +124,18 @@ TEST_CASE("sljit: parameters flow through the frame slots", "[sljit]")
 TEST_CASE("sljit: an unsupported opcode is refused, never miscompiled", "[sljit]")
 {
 	auto runtime = WASM::Runtime::create("sljit");
-	auto module = runtime->loadBytes(bytesOf(kDivModule));
+	auto module = runtime->loadBytes(bytesOf(kFloatAddModule));
 	WASM::RegistryImportResolver imports;
 	WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
 
 	// The export exists and the callable is declared; only the entry point is
 	// absent, which is exactly the contract (Callable::fnPtr is null until a
 	// body is compiled).
-	const std::optional<WASM::Callable> callable = instance.exportedFunction("div");
+	const std::optional<WASM::Callable> callable = instance.exportedFunction("fadd");
 	REQUIRE(callable.has_value());
 	REQUIRE(callable->fnPtr == nullptr);
 
-	REQUIRE_THROWS_WITH(runtime->callExport<std::int32_t>(instance, "div", 42, 1),
+	REQUIRE_THROWS_WITH(runtime->callExport<float>(instance, "fadd", 1.0f, 2.0f),
 			Catch::Matchers::ContainsSubstring("no compiled body"));
 }
 
@@ -212,3 +218,375 @@ TEST_CASE("sljit: the session invokes a compiled callable through the host ABI",
 	REQUIRE_FALSE(trapped);
 	REQUIRE(trapMessage.empty());
 }
+
+/*
+ * Parity with the AsmJit backend: the same fixture, the same calls, the same
+ * expectations. Both backends execute the integer/control/memory slice of
+ * `Test/wasm_wat/asmjit_i32_basic.wat`; a divergence here is a conformance bug
+ * in one of them (docs/WRITING_A_BACKEND.md §14.2).
+ */
+TEST_CASE("sljit: the shared integer module executes", "[sljit][module][parity]")
+{
+	auto session = Sljit::createSession();
+	REQUIRE(session != nullptr);
+	WASM::RegistryImportResolver imports;
+	LoadedModule loaded = loadAndInstantiateTestModule("asmjit_i32_basic", imports, *session);
+	REQUIRE(loaded.instance != nullptr);
+	WASM::ModuleInstance& instance = *loaded.instance;
+	const auto call = [&](const char* name) -> WASM::Callable {
+		const std::optional<WASM::Callable> callable = instance.exportedFunction(name);
+		REQUIRE(callable.has_value());
+		return *callable;
+	};
+
+	CHECK(WASM::callCallable<std::int32_t>(call("add"), 19, 23) == 42);
+	CHECK(WASM::callCallable<std::int32_t>(call("sub"), 50, 8) == 42);
+	CHECK(WASM::callCallable<std::int32_t>(call("mul"), 6, 7) == 42);
+	CHECK(WASM::callCallable<std::int32_t>(call("get_global")) == 7);
+	CHECK(WASM::callCallable<std::int32_t>(call("set_global"), 42) == 42);
+	CHECK(WASM::callCallable<std::int32_t>(call("get_global")) == 42);
+	CHECK(WASM::callCallable<std::int32_t>(call("eq"), 7, 7) == 1);
+	CHECK(WASM::callCallable<std::int32_t>(call("lt_s"), -1, 1) == 1);
+	CHECK(WASM::callCallable<std::int32_t>(call("lt_u"), 1, -1) == 1);
+	CHECK(WASM::callCallable<std::int32_t>(call("extend8_s"), 0x80) == -128);
+	CHECK(WASM::callCallable<std::int32_t>(call("extend16_s"), 0x8001) == -32767);
+	CHECK(WASM::callCallable<std::int32_t>(call("popcnt"), -1) == 32);
+	CHECK(WASM::callCallable<std::int32_t>(call("popcnt"), 0xF0F) == 8);
+	CHECK(WASM::callCallable<std::int32_t>(call("clz"), 1) == 31);
+	CHECK(WASM::callCallable<std::int32_t>(call("clz"), 0) == 32);
+	CHECK(WASM::callCallable<std::int32_t>(call("ctz"), 8) == 3);
+	CHECK(WASM::callCallable<std::int32_t>(call("ctz"), 0) == 32);
+	CHECK(WASM::callCallable<std::int32_t>(call("div_s"), -42, 2) == -21);
+	CHECK(WASM::callCallable<std::int32_t>(call("div_u"), -1, 2) == 0x7FFFFFFF);
+	CHECK(WASM::callCallable<std::int32_t>(call("rem_s"), -5, 2) == -1);
+	CHECK(WASM::callCallable<std::int32_t>(call("rem_u"), 5, 2) == 1);
+	CHECK(WASM::callCallable<std::int32_t>(call("rem_s"), INT32_MIN, -1) == 0);
+	CHECK_THROWS(WASM::callCallable<std::int32_t>(call("div_s"), INT32_MIN, -1));
+	CHECK_THROWS(WASM::callCallable<std::int32_t>(call("div_u"), 1, 0));
+	CHECK(WASM::callCallable<std::int32_t>(call("and"), 0xF0, 0x3C) == 0x30);
+	CHECK(WASM::callCallable<std::int32_t>(call("or"), 0xF0, 0x0F) == 0xFF);
+	CHECK(WASM::callCallable<std::int32_t>(call("xor"), 0xFF, 0x0F) == 0xF0);
+	CHECK(WASM::callCallable<std::int32_t>(call("shl"), 3, 2) == 12);
+	CHECK(WASM::callCallable<std::int32_t>(call("shr_s"), -16, 2) == -4);
+	CHECK(WASM::callCallable<std::int32_t>(call("shr_u"), -16, 2) == 0x3FFFFFFC);
+	CHECK(WASM::callCallable<std::int32_t>(call("rotl"), 1, 4) == 16);
+	CHECK(WASM::callCallable<std::int32_t>(call("rotr"), 16, 4) == 1);
+	CHECK(WASM::callCallable<std::int32_t>(call("local_roundtrip"), 14) == 42);
+	CHECK(WASM::callCallable<std::int32_t>(call("choose"), 1, 42, 7) == 42);
+	CHECK(WASM::callCallable<std::int32_t>(call("choose"), 0, 42, 7) == 7);
+	CHECK(WASM::callCallable<std::int32_t>(call("block_result"), 41) == 42);
+	CHECK(WASM::callCallable<std::int32_t>(call("if_result"), 1) == 42);
+	CHECK(WASM::callCallable<std::int32_t>(call("if_result"), 0) == 7);
+	CHECK(WASM::callCallable<std::int32_t>(call("br_result")) == 42);
+	CHECK(WASM::callCallable<std::int32_t>(call("br_if_result"), 1) == 42);
+	CHECK(WASM::callCallable<std::int32_t>(call("br_if_result"), 0) == 7);
+	CHECK(WASM::callCallable<std::int32_t>(call("loop_result")) == 42);
+	CHECK(WASM::callCallable<std::int32_t>(call("typed_block_result"), 21) == 42);
+	CHECK(WASM::callCallable<std::int32_t>(call("branch_if"), 1) == 10);
+	CHECK(WASM::callCallable<std::int32_t>(call("branch_if"), 0) == 20);
+	CHECK(WASM::callCallable<std::int32_t>(call("branch")) == 10);
+	CHECK(WASM::callCallable<std::int32_t>(call("branch_to_function")) == 42);
+	CHECK(WASM::callCallable<std::int32_t>(call("branch_if_function"), 1) == 42);
+	CHECK(WASM::callCallable<std::int32_t>(call("branch_if_function"), 0) == 7);
+	CHECK(WASM::callCallable<std::int32_t>(call("branch_table"), 0) == 43);
+	CHECK(WASM::callCallable<std::int32_t>(call("branch_table"), 1) == 42);
+	CHECK(WASM::callCallable<std::int32_t>(call("branch_table"), 99) == 42);
+	CHECK_THROWS(WASM::callCallable<std::int32_t>(call("unreachable_trap")));
+	CHECK_THROWS(WASM::callCallable<std::int32_t>(call("call_unreachable")));
+	CHECK(WASM::callCallable<std::int32_t>(call("unreachable_if"), 0) == 7);
+	CHECK_THROWS(WASM::callCallable<std::int32_t>(call("unreachable_if"), 1));
+	CHECK_THROWS(WASM::callCallable<void>(call("unreachable_block")));
+	CHECK(WASM::callCallable<std::int32_t>(call("loop_sum"), 5) == 15);
+	CHECK(WASM::callCallable<std::int32_t>(call("call_forward"), 21) == 42);
+	CHECK(WASM::callCallable<std::int32_t>(call("call_tail"), 21) == 42);
+	CHECK(WASM::callCallable<std::int32_t>(call("call_tail_indirect"), 21, 0) == 42);
+	CHECK(WASM::callCallable<std::int32_t>(call("call_indirect"), 21, 0) == 42);
+	CHECK(WASM::callCallable<std::int32_t>(call("mutual_recursion"), 20) == 42);
+}
+
+
+TEST_CASE("sljit: select, tables and memory32 execute", "[sljit][module][parity]")
+{
+	auto session = Sljit::createSession();
+	REQUIRE(session != nullptr);
+	WASM::RegistryImportResolver imports;
+	LoadedModule loaded = loadAndInstantiateTestModule("asmjit_i32_basic", imports, *session);
+	REQUIRE(loaded.instance != nullptr);
+	WASM::ModuleInstance& instance = *loaded.instance;
+	const auto call = [&](const char* name) -> WASM::Callable {
+		const std::optional<WASM::Callable> callable = instance.exportedFunction(name);
+		REQUIRE(callable.has_value());
+		return *callable;
+	};
+
+	CHECK(WASM::callCallable<std::int32_t>(call("select"), 11, 22, 1) == 11);
+	CHECK(WASM::callCallable<std::int32_t>(call("select"), 11, 22, 0) == 22);
+	CHECK(WASM::callCallable<std::int32_t>(call("select_t"), 33, 44, 1) == 33);
+	CHECK(WASM::callCallable<std::int32_t>(call("select_t"), 33, 44, 0) == 44);
+
+	CHECK(WASM::callCallable<std::int32_t>(call("table_size")) == 3);
+	WASM::callCallable<void>(call("table_init"), 1, 0, 1);
+	CHECK(WASM::callCallable<std::int32_t>(call("call_indirect"), 14, 1) == 42);
+	WASM::callCallable<void>(call("table_copy"), 2, 1, 1);
+	CHECK(WASM::callCallable<std::int32_t>(call("call_indirect"), 14, 2) == 42);
+	WASM::callCallable<void>(call("table_copy"), 1, 0, 2);
+	CHECK(WASM::callCallable<std::int32_t>(call("call_indirect"), 14, 1) == 28);
+	CHECK(WASM::callCallable<std::int32_t>(call("call_indirect"), 14, 2) == 42);
+	CHECK_THROWS(WASM::callCallable<void>(call("table_copy"), 3, 1, 1));
+
+	CHECK(WASM::callCallable<std::int32_t>(call("store_load"), 64, 0x12345678) == 0x12345678);
+	CHECK(WASM::callCallable<std::int32_t>(call("store8_load8"), 80, 0x1AB) == 0xAB);
+	CHECK(WASM::callCallable<std::int32_t>(call("store16_load16_s"), 96, 0x8001) == -32767);
+	CHECK(WASM::callCallable<std::int32_t>(call("store16_load16_u"), 104, 0x1AB) == 0x1AB);
+	CHECK_THROWS(WASM::callCallable<std::int32_t>(call("load_oob"), -1));
+
+	WASM::callCallable<void>(call("memory_fill"), 128, 0x1AB, 4);
+	CHECK(WASM::callCallable<std::int32_t>(call("load_at"), 128) == 0xABABABAB);
+	WASM::callCallable<void>(call("memory_copy"), 140, 128, 4);
+	CHECK(WASM::callCallable<std::int32_t>(call("load_at"), 140) == 0xABABABAB);
+	WASM::callCallable<void>(call("memory_init"), 256, 1, 2);
+	CHECK(WASM::callCallable<std::int32_t>(call("load_at"), 256) == 0x00004342);
+	CHECK_THROWS(WASM::callCallable<void>(call("memory_init"), 65535, 0, 2));
+	CHECK_THROWS(WASM::callCallable<void>(call("memory_init"), 260, 3, 2));
+	WASM::callCallable<void>(call("data_drop"));
+	CHECK_THROWS(WASM::callCallable<void>(call("memory_init"), 260, 0, 1));
+
+	CHECK(WASM::callCallable<std::int32_t>(call("memory_size")) == 1);
+	CHECK(WASM::callCallable<std::int32_t>(call("memory_grow"), 1) == 1);
+	CHECK(WASM::callCallable<std::int32_t>(call("memory_size")) == 2);
+	CHECK(WASM::callCallable<std::int32_t>(call("memory_grow"), 1) == -1);
+	CHECK(WASM::callCallable<std::int32_t>(call("memory_grow"), 0) == 2);
+}
+
+
+TEST_CASE("sljit: the shared i64 module executes", "[sljit][module][parity][i64]")
+{
+	auto session = Sljit::createSession();
+	REQUIRE(session != nullptr);
+	WASM::RegistryImportResolver imports;
+	LoadedModule loaded = loadAndInstantiateTestModule("asmjit_i64_basic", imports, *session);
+	REQUIRE(loaded.instance != nullptr);
+	WASM::ModuleInstance& instance = *loaded.instance;
+	const auto call = [&](const char* name) -> WASM::Callable {
+		const std::optional<WASM::Callable> callable = instance.exportedFunction(name);
+		REQUIRE(callable.has_value());
+		return *callable;
+	};
+
+	CHECK(WASM::callCallable<std::int64_t>(call("i64_call_direct"),
+			INT64_C(0x100000000)) == INT64_C(0x200000000));
+	CHECK(WASM::callCallable<std::int64_t>(call("i64_call_indirect"),
+			INT64_C(0x100000000)) == INT64_C(0x200000000));
+	CHECK(WASM::callCallable<std::int64_t>(call("i64_add"),
+			INT64_C(0x100000000), INT64_C(0x200000000)) == INT64_C(0x300000000));
+	CHECK(WASM::callCallable<std::int64_t>(call("i64_sub"),
+			INT64_C(0x300000000), INT64_C(0x100000000)) == INT64_C(0x200000000));
+	CHECK(WASM::callCallable<std::int64_t>(call("i64_mul"),
+			INT64_C(0x100000000), 7) == INT64_C(0x700000000));
+	CHECK(WASM::callCallable<std::int64_t>(call("i64_const")) == INT64_C(0x100000000));
+	CHECK(WASM::callCallable<std::int64_t>(call("i64_get_global")) == INT64_C(0x100000000));
+	CHECK(WASM::callCallable<std::int64_t>(call("i64_set_global"),
+			INT64_C(0x123456789ABCDEF0)) == INT64_C(0x123456789ABCDEF0));
+	CHECK(WASM::callCallable<std::int64_t>(call("i64_get_global"))
+			== INT64_C(0x123456789ABCDEF0));
+	CHECK(WASM::callCallable<std::int64_t>(call("i64_if_result"), 1) == INT64_C(0x100000000));
+	CHECK(WASM::callCallable<std::int64_t>(call("i64_if_result"), 0) == 7);
+	CHECK(WASM::callCallable<std::int64_t>(call("i64_block_result"),
+			INT64_C(0x100000000)) == INT64_C(0x100000001));
+	CHECK(WASM::callCallable<std::int64_t>(call("i64_br_result")) == INT64_C(0x100000000));
+	CHECK(WASM::callCallable<std::int64_t>(call("i64_br_if_result"), 1) == INT64_C(0x100000000));
+	CHECK(WASM::callCallable<std::int64_t>(call("i64_br_if_result"), 0) == 7);
+	CHECK(WASM::callCallable<std::int64_t>(call("i64_typed_block_result"),
+			INT64_C(0x100000000)) == INT64_C(0x200000000));
+	CHECK(WASM::callCallable<std::int64_t>(call("i64_br_table"), 0) == 43);
+	CHECK(WASM::callCallable<std::int64_t>(call("i64_br_table"), 1) == 42);
+	CHECK(WASM::callCallable<std::int64_t>(call("i64_br_table"), 9) == 42);
+	CHECK(WASM::callCallable<std::int64_t>(call("i64_get_const"))
+			== INT64_C(0x1122334455667788));
+	CHECK(WASM::callCallable<std::int64_t>(call("i64_select"), 1, 42, 7) == 42);
+	CHECK(WASM::callCallable<std::int64_t>(call("i64_select"), 0, 42, 7) == 7);
+	CHECK(WASM::callCallable<std::int64_t>(call("i64_select_t"), 1, 42, 7) == 42);
+	CHECK(WASM::callCallable<std::int64_t>(call("i64_select_t"), 0, 42, 7) == 7);
+	CHECK(WASM::callCallable<std::int32_t>(call("i32_wrap_i64"),
+			INT64_C(0x100000001)) == 1);
+	CHECK(WASM::callCallable<std::int64_t>(call("i64_extend_i32_s"), -1) == -1);
+	CHECK(WASM::callCallable<std::int64_t>(call("i64_extend_i32_u"), -1)
+			== static_cast<std::int64_t>(UINT64_C(0xFFFFFFFF)));
+	CHECK(WASM::callCallable<std::int64_t>(call("i64_extend8_s"), 0xFF) == -1);
+	CHECK(WASM::callCallable<std::int64_t>(call("i64_extend16_s"), 0x8001) == -32767);
+	CHECK(WASM::callCallable<std::int64_t>(call("i64_extend32_s"),
+			INT64_C(0x80000001)) == -INT64_C(2147483647));
+	CHECK(WASM::callCallable<std::int64_t>(call("i64_local"),
+			INT64_C(0x100000000)) == INT64_C(0x300000000));
+	CHECK(WASM::callCallable<std::int64_t>(call("i64_store_load"),
+			64, INT64_C(0x123456789ABCDEF0)) == INT64_C(0x123456789ABCDEF0));
+	CHECK(WASM::callCallable<std::int64_t>(call("i64_store8_load_s"), 80, 0xFF) == -1);
+	CHECK(WASM::callCallable<std::int64_t>(call("i64_store8_load_u"), 80, 0x1FF) == 255);
+	CHECK(WASM::callCallable<std::int64_t>(call("i64_store16_load_s"), 82, 0x8001) == -32767);
+	CHECK(WASM::callCallable<std::int64_t>(call("i64_store16_load_u"), 82, 0x18001) == 32769);
+	CHECK(WASM::callCallable<std::int64_t>(call("i64_store32_load_s"),
+			84, INT64_C(0x80000001)) == -INT64_C(2147483647));
+	CHECK(WASM::callCallable<std::int64_t>(call("i64_store32_load_u"),
+			84, INT64_C(0x180000001)) == INT64_C(0x80000001));
+	CHECK_THROWS(WASM::callCallable<std::int64_t>(call("i64_store_load"), 65532,
+			INT64_C(0x123456789ABCDEF0)));
+	CHECK_THROWS(WASM::callCallable<std::int64_t>(call("i64_store_load"), -1,
+			INT64_C(0x123456789ABCDEF0)));
+	CHECK_THROWS(WASM::callCallable<std::int64_t>(call("i64_load_at"), 65532));
+	CHECK(WASM::callCallable<std::int64_t>(call("i64_tee"),
+			INT64_C(0x123456789)) == INT64_C(0x123456789));
+	CHECK(WASM::callCallable<std::int64_t>(call("i64_mixed"),
+			17, INT64_C(0x100000000)) == INT64_C(0x100000001));
+	CHECK(WASM::callCallable<std::int64_t>(call("i64_wrap")) == INT64_MIN);
+}
+
+
+TEST_CASE("sljit: i64 bitwise, comparison and checked arithmetic execute",
+		"[sljit][module][parity][i64]")
+{
+	auto session = Sljit::createSession();
+	REQUIRE(session != nullptr);
+	WASM::RegistryImportResolver imports;
+	LoadedModule loaded = loadAndInstantiateTestModule("asmjit_i64_basic", imports, *session);
+	REQUIRE(loaded.instance != nullptr);
+	WASM::ModuleInstance& instance = *loaded.instance;
+	const auto call = [&](const char* name) -> WASM::Callable {
+		const std::optional<WASM::Callable> callable = instance.exportedFunction(name);
+		REQUIRE(callable.has_value());
+		return *callable;
+	};
+
+	CHECK(WASM::callCallable<std::int64_t>(call("i64_and"),
+			INT64_C(0xF00000000), INT64_C(0x3C0000000)) == INT64_C(0x300000000));
+	CHECK(WASM::callCallable<std::int64_t>(call("i64_or"),
+			INT64_C(0xF00000000), INT64_C(0x0F0000000)) == INT64_C(0xFF0000000));
+	CHECK(WASM::callCallable<std::int64_t>(call("i64_xor"),
+			INT64_C(0xFF0000000), INT64_C(0x0F0000000)) == INT64_C(0xF00000000));
+	CHECK(WASM::callCallable<std::int64_t>(call("i64_shl"), 3, 66) == 12);
+	CHECK(WASM::callCallable<std::int64_t>(call("i64_shr_s"), -INT64_C(16), 2) == -4);
+	CHECK(WASM::callCallable<std::int64_t>(call("i64_shr_u"), -INT64_C(16), 2)
+			== static_cast<std::int64_t>(UINT64_C(0x3FFFFFFFFFFFFFFC)));
+	CHECK(WASM::callCallable<std::int64_t>(call("i64_rotl"), INT64_C(1), INT64_C(4)) == 16);
+	CHECK(WASM::callCallable<std::int64_t>(call("i64_rotr"), INT64_C(16), INT64_C(4)) == 1);
+
+	CHECK(WASM::callCallable<std::int32_t>(call("i64_eqz"), INT64_C(0)) == 1);
+	CHECK(WASM::callCallable<std::int32_t>(call("i64_eqz"), INT64_C(1)) == 0);
+	CHECK(WASM::callCallable<std::int32_t>(call("i64_eq"),
+			INT64_C(0x100000000), INT64_C(0x100000000)) == 1);
+	CHECK(WASM::callCallable<std::int32_t>(call("i64_ne"), INT64_C(1), INT64_C(2)) == 1);
+	CHECK(WASM::callCallable<std::int32_t>(call("i64_lt_s"), -INT64_C(1), INT64_C(1)) == 1);
+	CHECK(WASM::callCallable<std::int32_t>(call("i64_lt_u"), INT64_C(1), -INT64_C(1)) == 1);
+	CHECK(WASM::callCallable<std::int32_t>(call("i64_gt_s"), INT64_C(1), -INT64_C(1)) == 1);
+	CHECK(WASM::callCallable<std::int32_t>(call("i64_gt_u"), -INT64_C(1), INT64_C(1)) == 1);
+	CHECK(WASM::callCallable<std::int32_t>(call("i64_le_s"), -INT64_C(1), -INT64_C(1)) == 1);
+	CHECK(WASM::callCallable<std::int32_t>(call("i64_le_u"), INT64_C(1), INT64_C(2)) == 1);
+	CHECK(WASM::callCallable<std::int32_t>(call("i64_ge_s"), INT64_C(1), -INT64_C(1)) == 1);
+	CHECK(WASM::callCallable<std::int32_t>(call("i64_ge_u"), -INT64_C(1), INT64_C(1)) == 1);
+
+	CHECK(WASM::callCallable<std::int64_t>(call("i64_div_s"), -INT64_C(42), INT64_C(2)) == -21);
+	CHECK(WASM::callCallable<std::int64_t>(call("i64_div_u"), -INT64_C(1), INT64_C(2)) == INT64_MAX);
+	CHECK(WASM::callCallable<std::int64_t>(call("i64_rem_s"), -INT64_C(5), INT64_C(2)) == -1);
+	CHECK(WASM::callCallable<std::int64_t>(call("i64_rem_u"), -INT64_C(1), INT64_C(2)) == 1);
+	CHECK(WASM::callCallable<std::int64_t>(call("i64_rem_s"), INT64_MIN, -INT64_C(1)) == 0);
+	CHECK_THROWS(WASM::callCallable<std::int64_t>(call("i64_div_s"), INT64_MIN, -INT64_C(1)));
+	CHECK_THROWS(WASM::callCallable<std::int64_t>(call("i64_div_u"), INT64_C(1), INT64_C(0)));
+	CHECK_THROWS(WASM::callCallable<std::int64_t>(call("i64_rem_s"), INT64_C(1), INT64_C(0)));
+}
+
+
+namespace {
+
+//! Result of one call on one backend: either a value or a Wasm trap.
+struct CallOutcome {
+	bool trapped = false; //!< True when the call reported a trap.
+	std::int64_t value = 0; //!< The returned value when it did not trap.
+};
+
+template <typename Ret, typename... Args>
+CallOutcome outcomeOf(const WASM::Callable& callable, Args... args)
+{
+	try {
+		return CallOutcome{ false, static_cast<std::int64_t>(
+				WASM::callCallable<Ret>(callable, args...)) };
+	} catch (...) {
+		return CallOutcome{ true, 0 };
+	}
+}
+
+} // namespace
+
+/*
+ * The conformance matrix of docs/WRITING_A_BACKEND.md §14.2: one module, two
+ * generators, the same calls. This compares the *outcomes* rather than
+ * duplicating expectations, so a fixture change cannot silently diverge.
+ */
+TEST_CASE("asmjit and sljit agree on the shared integer module", "[sljit][asmjit][parity]")
+{
+	WASM::Module module = loadTestModule("asmjit_i32_basic");
+	AsmJitBackend::Context asmContext;
+	AsmJitBackend::ModuleCompiler asmCompiler(asmContext);
+	Sljit::ModuleCompiler sljitCompiler;
+	WASM::RegistryImportResolver asmImports;
+	WASM::RegistryImportResolver sljitImports;
+	std::unique_ptr<WASM::ModuleInstance> asmInstance =
+			asmCompiler.instantiate(module, asmImports);
+	std::unique_ptr<WASM::ModuleInstance> sljitInstance =
+			sljitCompiler.instantiate(module, sljitImports);
+	REQUIRE(asmInstance != nullptr);
+	REQUIRE(sljitInstance != nullptr);
+
+	const auto same = [&](const char* name, auto&& call) {
+		const std::optional<WASM::Callable> asmCallable = asmInstance->exportedFunction(name);
+		const std::optional<WASM::Callable> sljitCallable = sljitInstance->exportedFunction(name);
+		REQUIRE(asmCallable.has_value());
+		REQUIRE(sljitCallable.has_value());
+		const CallOutcome asmOutcome = call(*asmCallable);
+		const CallOutcome sljitOutcome = call(*sljitCallable);
+		INFO("export " << name);
+		CHECK(asmOutcome.trapped == sljitOutcome.trapped);
+		if (!asmOutcome.trapped && !sljitOutcome.trapped)
+			CHECK(asmOutcome.value == sljitOutcome.value);
+	};
+
+	same("add", [](const WASM::Callable& c) { return outcomeOf<std::int32_t>(c, 19, 23); });
+	same("sub", [](const WASM::Callable& c) { return outcomeOf<std::int32_t>(c, 50, 8); });
+	same("mul", [](const WASM::Callable& c) { return outcomeOf<std::int32_t>(c, 6, 7); });
+	same("eq", [](const WASM::Callable& c) { return outcomeOf<std::int32_t>(c, 7, 7); });
+	same("lt_s", [](const WASM::Callable& c) { return outcomeOf<std::int32_t>(c, -1, 1); });
+	same("lt_u", [](const WASM::Callable& c) { return outcomeOf<std::int32_t>(c, 1, -1); });
+	same("and", [](const WASM::Callable& c) { return outcomeOf<std::int32_t>(c, 0xF0, 0x3C); });
+	same("xor", [](const WASM::Callable& c) { return outcomeOf<std::int32_t>(c, 0xFF, 0x0F); });
+	same("shl", [](const WASM::Callable& c) { return outcomeOf<std::int32_t>(c, 3, 2); });
+	same("shr_s", [](const WASM::Callable& c) { return outcomeOf<std::int32_t>(c, -16, 2); });
+	same("rotl", [](const WASM::Callable& c) { return outcomeOf<std::int32_t>(c, 1, 4); });
+	same("clz", [](const WASM::Callable& c) { return outcomeOf<std::int32_t>(c, 0); });
+	same("ctz", [](const WASM::Callable& c) { return outcomeOf<std::int32_t>(c, 8); });
+	same("popcnt", [](const WASM::Callable& c) { return outcomeOf<std::int32_t>(c, 0xF0F); });
+	same("div_s", [](const WASM::Callable& c) { return outcomeOf<std::int32_t>(c, -42, 2); });
+	same("div_s", [](const WASM::Callable& c) { return outcomeOf<std::int32_t>(c, INT32_MIN, -1); });
+	same("div_u", [](const WASM::Callable& c) { return outcomeOf<std::int32_t>(c, 1, 0); });
+	same("rem_s", [](const WASM::Callable& c) { return outcomeOf<std::int32_t>(c, -5, 2); });
+	same("local_roundtrip",
+			[](const WASM::Callable& c) { return outcomeOf<std::int32_t>(c, 14); });
+	same("choose", [](const WASM::Callable& c) { return outcomeOf<std::int32_t>(c, 1, 42, 7); });
+	same("block_result",
+			[](const WASM::Callable& c) { return outcomeOf<std::int32_t>(c, 41); });
+	same("if_result", [](const WASM::Callable& c) { return outcomeOf<std::int32_t>(c, 0); });
+	same("loop_sum", [](const WASM::Callable& c) { return outcomeOf<std::int32_t>(c, 5); });
+	same("branch_table", [](const WASM::Callable& c) { return outcomeOf<std::int32_t>(c, 0); });
+	same("branch_table", [](const WASM::Callable& c) { return outcomeOf<std::int32_t>(c, 99); });
+	same("call_forward", [](const WASM::Callable& c) { return outcomeOf<std::int32_t>(c, 21); });
+	same("call_indirect", [](const WASM::Callable& c) { return outcomeOf<std::int32_t>(c, 21, 0); });
+	same("mutual_recursion",
+			[](const WASM::Callable& c) { return outcomeOf<std::int32_t>(c, 20); });
+	same("unreachable_trap",
+			[](const WASM::Callable& c) { return outcomeOf<std::int32_t>(c); });
+	same("get_global", [](const WASM::Callable& c) { return outcomeOf<std::int32_t>(c); });
+	same("set_global", [](const WASM::Callable& c) { return outcomeOf<std::int32_t>(c, 42); });
+	same("get_global", [](const WASM::Callable& c) { return outcomeOf<std::int32_t>(c); });
+	same("store_load",
+			[](const WASM::Callable& c) { return outcomeOf<std::int32_t>(c, 64, 0x12345678); });
+	same("load_oob", [](const WASM::Callable& c) { return outcomeOf<std::int32_t>(c, -1); });
+	same("memory_size", [](const WASM::Callable& c) { return outcomeOf<std::int32_t>(c); });
+}
+

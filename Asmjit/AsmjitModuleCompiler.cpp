@@ -2071,6 +2071,7 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance,
 
 		checkError(compiler.finalize(), "AsmJit compiler finalisation failed");
 		void* codeBase = context.install(code);
+		moduleBases.emplace_back(&instance, codeBase);
 		for (uint32_t i = 0; i < functionRecords.size(); ++i) {
 			const uint64_t offset = code.label_offset_from_base(functions[i]->label());
 			functionRecords[i]->entry = static_cast<uint8_t*>(codeBase) + offset;
@@ -2093,6 +2094,23 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance,
 		}
 		functionRecords.clear();
 		throw;
+	}
+}
+
+void ModuleCompiler::releaseInstance(WASM::ModuleInstance& instance) noexcept
+{
+	WASM::ModuleInstanceInternals& internals = instanceInternals(instance);
+	for (WASM::Callable& callable : internals.internalCallables) {
+		callable.fnPtr = nullptr;
+		callable.rawFnPtr = nullptr;
+		callable.tailEntry = nullptr;
+	}
+	for (auto it = moduleBases.begin(); it != moduleBases.end(); ++it) {
+		if (it->first == &instance) {
+			context.release(it->second);
+			moduleBases.erase(it);
+			break;
+		}
 	}
 }
 

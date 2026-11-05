@@ -394,9 +394,10 @@ std::unique_ptr<Session> create()
 	if (name == "asmjit")
 		return std::make_unique<AsmJitSession>();
 	// The session factory lives with the backend, never in the core
-	// (docs/WRITING_A_BACKEND.md §8). SLJIT is provisional: it executes a small
-	// integer subset and refuses the rest, so most generic fixtures are expected
-	// to fail under it (docs/WRITING_A_BACKEND.md §9).
+	// (docs/WRITING_A_BACKEND.md §8). SLJIT executes the shared P0-P2 integer,
+	// control-flow, call and memory slice and refuses floating point,
+	// references/GC, exceptions and SIMD (docs/WRITING_A_BACKEND.md §11), so
+	// fixtures from those families are expected to fail under it.
 	if (name == "sljit")
 		return Sljit::createSession();
 	throw std::runtime_error("unknown WASMJIT_BACKEND '" + name

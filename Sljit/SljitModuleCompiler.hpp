@@ -42,6 +42,23 @@ public:
 	const std::vector<std::string>& unsupportedFunctions() const { return unsupportedFunctions_; }
 
 	/*!
+	 * \brief Resolves a module function index to its runtime callable.
+	 *
+	 * Generated code calls this helper before every direct `call`: the entry
+	 * point of a forward or mutually recursive function is not known while the
+	 * caller's body is emitted, so the lookup happens at run time. A missing
+	 * import or an uncompiled target reports an internal trap and returns null,
+	 * which makes the generated caller abandon the call instead of jumping to a
+	 * null address.
+	 *
+	 * \param vm The caller's `VMContext*`; the instance address is the same.
+	 * \param functionIndex Module function index, imports first.
+	 * \return The resolved callable, or null with a trap pending.
+	 */
+	static WASM::Callable* resolveCallable(WASM::VMContext* vm,
+			std::uint32_t functionIndex) noexcept;
+
+	/*!
 	 * \brief Gives the executable memory of one instance's functions back.
 	 *
 	 * SLJIT's compiler object is freed as soon as a body is emitted, and the

@@ -161,6 +161,17 @@ public:
 	 * \param checkpoint Allocation count previously returned by allocationCheckpoint().
 	 */
 	void releaseAllocationsSince(std::size_t checkpoint) noexcept;
+	/*!
+	 * \brief Releases one module's executable allocation.
+	 *
+	 * `Runtime::unload` reaches a backend through `releaseInstance`, which must
+	 * hand the code back instead of holding it until the context dies
+	 * (docs/WRITING_A_BACKEND.md §9, §12).
+	 *
+	 * \param entry Base address returned by install(); an interior entry point
+	 *        is not accepted by the runtime and is ignored.
+	 */
+	void release(void* entry) noexcept;
 
 private:
 	asmjit::JitRuntime runtime;

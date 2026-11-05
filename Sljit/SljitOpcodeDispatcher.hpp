@@ -20,26 +20,37 @@
 
 namespace Sljit {
 
+//! Highest number of Wasm parameters one generated function can carry.
+//! SLJIT accepts at most four arguments in `sljit_emit_enter` and in an emitted
+//! call, and `VMContext*` is always the first of them.
+inline constexpr std::uint32_t kMaxWasmParameters = 3;
+
 /*!
  * \brief Compiles one WebAssembly function body into SLJIT machine code.
  *
- * The emitter is deliberately a *presence* implementation, not a complete
- * backend: it lowers a straight-line integer subset and refuses everything else
- * by leaving the function without an entry point, so the core refuses the call
- * at the boundary instead of executing a half-emitted function
- * (docs/WRITING_A_BACKEND.md §9).
+ * The emitter lowers the integer, control-flow, call, global and memory32
+ * subset that the AsmJit backend also executes; a body outside it is refused
+ * rather than half-emitted, so the core reports "no compiled body" at the call
+ * boundary (docs/WRITING_A_BACKEND.md §9).
  *
  * Frame model: every Wasm local and every operand-stack slot is one machine
  * word in the function's local stack area, addressed as `SLJIT_MEM1(SLJIT_SP)`.
- * Two scratch registers (R0, R1) carry every operation, so register pressure is
- * constant and independent of the body. Parameters arrive in the saved
- * registers SLJIT assigns (`VMContext*` in S0, parameter *i* in S(i+1)) and are
- * copied into their frame slots in the prologue.
+ * A few reserved slots follow the locals: the saved `VMContext*`, the indirect
+ * call target and a scratch word that survives a helper call. Four scratch
+ * registers (R0-R3) carry every operation and every C helper call, so register
+ * pressure is constant and independent of the body. Parameters arrive in the
+ * saved registers SLJIT assigns (`VMContext*` in S0, parameter *i* in S(i+1))
+ * and are copied into their frame slots in the prologue.
  *
  * A function is compiled in two passes over the decoded body: the first
  * measures the operand-stack high-water mark (the frame cannot grow after
  * `sljit_emit_enter`), the second emits. Both passes share the same visit code,
  * so the measured depth cannot disagree with the emitted one.
+ *
+ * The emitter tracks a `reachable` flag per instruction. After `br`, `br_table`,
+ * `return` or `unreachable`, ordinary instructions are skipped until a
+ * structured `else`/`end` joins back into reachable code, which is what makes
+ * the polymorphic stack of unreachable code safe to walk without emitting it.
  */
 class OpcodeDispatcher : public WASM::OpcodeDispatcher
 {
@@ -72,7 +83,6 @@ public:
 	 */
 	const std::string& unsupportedReason() const { return unsupportedReason_; }
 
-
 protected:
 	/*!
 	 * \brief Refuses a function whose body uses an opcode this backend does not lower.
@@ -81,54 +91,150 @@ protected:
 	void onUnhandledOpcode(const char* name) override;
 
 	void dispatchNop() override; //!< `nop`: nothing to emit.
-	void dispatchEnd() override; //!< The function's terminating `end` (implicit return).
-	void dispatchReturn() override; //!< `return`: an explicit function exit.
-	void dispatchDrop() override; //!< `drop`: pop one operand-stack slot.
-	/*!
-	 * \brief `local.get`: copy a local slot onto the operand stack.
-	 * \param arg Local index.
-	 */
-	void dispatchLocalGet(WASM::LocalIdx arg) override;
-	/*!
-	 * \brief `local.set`: pop the operand stack into a local slot.
-	 * \param arg Local index.
-	 */
-	void dispatchLocalSet(WASM::LocalIdx arg) override;
-	/*!
-	 * \brief `local.tee`: copy the operand stack top into a local, keeping it.
-	 * \param arg Local index.
-	 */
-	void dispatchLocalTee(WASM::LocalIdx arg) override;
-	/*!
-	 * \brief `i32.const`: push a 32-bit immediate.
-	 * \param arg The constant.
-	 */
-	void dispatchI32Const(std::int32_t arg) override;
-	/*!
-	 * \brief `i64.const`: push a 64-bit immediate.
-	 * \param arg The constant.
-	 */
-	void dispatchI64Const(std::int64_t arg) override;
+	void dispatchUnreachable() override; //!< `unreachable`: report the trap and stop.
+	void dispatchBlock(const WASM::BlockType& arg) override; //!< `block`.
+	void dispatchLoop(const WASM::BlockType& arg) override; //!< `loop`.
+	void dispatchIf(const WASM::BlockType& arg) override; //!< `if`.
+	void dispatchElse() override; //!< `else`.
+	void dispatchEnd() override; //!< `end` of a block or of the function.
+	void dispatchBr(WASM::LabelIdx arg) override; //!< `br`.
+	void dispatchBrIf(WASM::LabelIdx arg) override; //!< `br_if`.
+	void dispatchBrTable(std::vector<WASM::LabelIdx>&& arg1, WASM::LabelIdx arg2) override; //!< `br_table`.
+	void dispatchReturn() override; //!< `return`.
+	void dispatchReturnCall(WASM::FuncIdx arg) override; //!< `return_call`.
+	void dispatchReturnCallIndirect(WASM::TypeIdx arg1, WASM::TableIdx arg2) override; //!< `return_call_indirect`.
+	void dispatchCall(WASM::FuncIdx arg) override; //!< `call`.
+	void dispatchCallIndirect(WASM::TypeIdx arg1, WASM::TableIdx arg2) override; //!< `call_indirect`.
+	void dispatchDrop() override; //!< `drop`.
+	void dispatchSelect() override; //!< Untyped `select`.
+	void dispatchSelectT(std::vector<WASM::ValueType>&& arg) override; //!< Typed `select`.
+	void dispatchLocalGet(WASM::LocalIdx arg) override; //!< `local.get`.
+	void dispatchLocalSet(WASM::LocalIdx arg) override; //!< `local.set`.
+	void dispatchLocalTee(WASM::LocalIdx arg) override; //!< `local.tee`.
+	void dispatchGlobalGet(WASM::GlobalIdx arg) override; //!< `global.get`.
+	void dispatchGlobalSet(WASM::GlobalIdx arg) override; //!< `global.set`.
+	void dispatchI32Const(std::int32_t arg) override; //!< `i32.const`.
+	void dispatchI64Const(std::int64_t arg) override; //!< `i64.const`.
+
 	void dispatchI32Add() override; //!< `i32.add`.
 	void dispatchI32Sub() override; //!< `i32.sub`.
 	void dispatchI32Mul() override; //!< `i32.mul`.
+	void dispatchI32DivS() override; //!< `i32.div_s`.
+	void dispatchI32DivU() override; //!< `i32.div_u`.
+	void dispatchI32RemS() override; //!< `i32.rem_s`.
+	void dispatchI32RemU() override; //!< `i32.rem_u`.
 	void dispatchI32And() override; //!< `i32.and`.
 	void dispatchI32Or() override; //!< `i32.or`.
 	void dispatchI32Xor() override; //!< `i32.xor`.
 	void dispatchI32Shl() override; //!< `i32.shl`.
 	void dispatchI32ShrS() override; //!< `i32.shr_s`.
 	void dispatchI32ShrU() override; //!< `i32.shr_u`.
+	void dispatchI32Rotl() override; //!< `i32.rotl`.
+	void dispatchI32Rotr() override; //!< `i32.rotr`.
+	void dispatchI32Clz() override; //!< `i32.clz`.
+	void dispatchI32Ctz() override; //!< `i32.ctz`.
+	void dispatchI32Popcnt() override; //!< `i32.popcnt`.
+	void dispatchI32Eqz() override; //!< `i32.eqz`.
+	void dispatchI32Eq() override; //!< `i32.eq`.
+	void dispatchI32Ne() override; //!< `i32.ne`.
+	void dispatchI32LtS() override; //!< `i32.lt_s`.
+	void dispatchI32LtU() override; //!< `i32.lt_u`.
+	void dispatchI32GtS() override; //!< `i32.gt_s`.
+	void dispatchI32GtU() override; //!< `i32.gt_u`.
+	void dispatchI32LeS() override; //!< `i32.le_s`.
+	void dispatchI32LeU() override; //!< `i32.le_u`.
+	void dispatchI32GeS() override; //!< `i32.ge_s`.
+	void dispatchI32GeU() override; //!< `i32.ge_u`.
+	void dispatchI32Extend8S() override; //!< `i32.extend8_s`.
+	void dispatchI32Extend16S() override; //!< `i32.extend16_s`.
+	void dispatchI32WrapI64() override; //!< `i32.wrap_i64`.
+
 	void dispatchI64Add() override; //!< `i64.add`.
 	void dispatchI64Sub() override; //!< `i64.sub`.
 	void dispatchI64Mul() override; //!< `i64.mul`.
+	void dispatchI64DivS() override; //!< `i64.div_s`.
+	void dispatchI64DivU() override; //!< `i64.div_u`.
+	void dispatchI64RemS() override; //!< `i64.rem_s`.
+	void dispatchI64RemU() override; //!< `i64.rem_u`.
 	void dispatchI64And() override; //!< `i64.and`.
 	void dispatchI64Or() override; //!< `i64.or`.
 	void dispatchI64Xor() override; //!< `i64.xor`.
 	void dispatchI64Shl() override; //!< `i64.shl`.
 	void dispatchI64ShrS() override; //!< `i64.shr_s`.
 	void dispatchI64ShrU() override; //!< `i64.shr_u`.
+	void dispatchI64Rotl() override; //!< `i64.rotl`.
+	void dispatchI64Rotr() override; //!< `i64.rotr`.
+	void dispatchI64Eqz() override; //!< `i64.eqz`.
+	void dispatchI64Eq() override; //!< `i64.eq`.
+	void dispatchI64Ne() override; //!< `i64.ne`.
+	void dispatchI64LtS() override; //!< `i64.lt_s`.
+	void dispatchI64LtU() override; //!< `i64.lt_u`.
+	void dispatchI64GtS() override; //!< `i64.gt_s`.
+	void dispatchI64GtU() override; //!< `i64.gt_u`.
+	void dispatchI64LeS() override; //!< `i64.le_s`.
+	void dispatchI64LeU() override; //!< `i64.le_u`.
+	void dispatchI64GeS() override; //!< `i64.ge_s`.
+	void dispatchI64GeU() override; //!< `i64.ge_u`.
+	void dispatchI64Extend8S() override; //!< `i64.extend8_s`.
+	void dispatchI64Extend16S() override; //!< `i64.extend16_s`.
+	void dispatchI64Extend32S() override; //!< `i64.extend32_s`.
+	void dispatchI64ExtendI32S() override; //!< `i64.extend_i32_s`.
+	void dispatchI64ExtendI32U() override; //!< `i64.extend_i32_u`.
+
+	void dispatchI32Load(WASM::MemArg arg) override; //!< `i32.load`.
+	void dispatchI32Load8S(WASM::MemArg arg) override; //!< `i32.load8_s`.
+	void dispatchI32Load8U(WASM::MemArg arg) override; //!< `i32.load8_u`.
+	void dispatchI32Load16S(WASM::MemArg arg) override; //!< `i32.load16_s`.
+	void dispatchI32Load16U(WASM::MemArg arg) override; //!< `i32.load16_u`.
+	void dispatchI32Store(WASM::MemArg arg) override; //!< `i32.store`.
+	void dispatchI32Store8(WASM::MemArg arg) override; //!< `i32.store8`.
+	void dispatchI32Store16(WASM::MemArg arg) override; //!< `i32.store16`.
+	void dispatchI64Load(WASM::MemArg arg) override; //!< `i64.load`.
+	void dispatchI64Load8S(WASM::MemArg arg) override; //!< `i64.load8_s`.
+	void dispatchI64Load8U(WASM::MemArg arg) override; //!< `i64.load8_u`.
+	void dispatchI64Load16S(WASM::MemArg arg) override; //!< `i64.load16_s`.
+	void dispatchI64Load16U(WASM::MemArg arg) override; //!< `i64.load16_u`.
+	void dispatchI64Load32S(WASM::MemArg arg) override; //!< `i64.load32_s`.
+	void dispatchI64Load32U(WASM::MemArg arg) override; //!< `i64.load32_u`.
+	void dispatchI64Store(WASM::MemArg arg) override; //!< `i64.store`.
+	void dispatchI64Store8(WASM::MemArg arg) override; //!< `i64.store8`.
+	void dispatchI64Store16(WASM::MemArg arg) override; //!< `i64.store16`.
+	void dispatchI64Store32(WASM::MemArg arg) override; //!< `i64.store32`.
+	void dispatchMemorySize(WASM::MemIdx arg) override; //!< `memory.size`.
+	void dispatchMemoryGrow(WASM::MemIdx arg) override; //!< `memory.grow`.
+	void dispatchMemoryCopy(WASM::MemIdx arg1, WASM::MemIdx arg2) override; //!< `memory.copy`.
+	void dispatchMemoryFill(WASM::MemIdx arg) override; //!< `memory.fill`.
+	void dispatchMemoryInit(uint32_t arg1, WASM::MemIdx arg2) override; //!< `memory.init`.
+	void dispatchDataDrop(uint32_t arg) override; //!< `data.drop`.
+	void dispatchTableInit(uint32_t arg1, WASM::TableIdx arg2) override; //!< `table.init`.
+	void dispatchElemDrop(uint32_t arg) override; //!< `elem.drop`.
+	void dispatchTableCopy(WASM::TableIdx arg1, WASM::TableIdx arg2) override; //!< `table.copy`.
+	void dispatchTableSize(WASM::TableIdx arg) override; //!< `table.size`.
 
 private:
+	//! Structured control kind of one active block frame.
+	enum class ControlKind { Block, Loop, If };
+
+	//! One entry of the structured-control stack.
+	struct ControlFrame {
+		ControlKind kind = ControlKind::Block; //!< Block, loop or if.
+		std::size_t baseDepth = 0; //!< Operand depth the label's values live at.
+		std::vector<int> paramWidths; //!< Widths of the block's parameters.
+		std::vector<int> resultWidths; //!< Widths of the block's results.
+		sljit_label* begin = nullptr; //!< Branch target of a loop.
+		sljit_jump* alternateJump = nullptr; //!< False path of an `if`.
+		std::vector<sljit_jump*> endJumps; //!< Branches to the merge point.
+		bool hasElse = false; //!< True once `else` was seen.
+		bool entryReachable = false; //!< True when the block was entered in live code.
+		bool endTargeted = false; //!< True once a `br` targets `end`.
+	};
+
+	//! Parameter and result widths of one block type.
+	struct BlockSignature {
+		std::vector<int> params; //!< Parameter widths, in order.
+		std::vector<int> results; //!< Result widths, in order.
+	};
+
 	/*!
 	 * \brief Runs one pass over the body.
 	 * \param measure true for the depth-measuring pass (no code is emitted).
@@ -136,7 +242,7 @@ private:
 	 */
 	bool run(bool measure);
 	/*!
-	 * \brief Emits the prologue: frame, stack guard, pending check, argument copy.
+	 * \brief Emits the prologue: frame, stack guard, argument copy and local zeroing.
 	 * \return true when the prologue was emitted successfully.
 	 */
 	bool beginFunction();
@@ -151,13 +257,16 @@ private:
 
 	//! Records one SLJIT status; the first failure refuses the whole function.
 	void emit(sljit_s32 status);
-	//! Pushes one operand-stack slot.
-	void push();
 	/*!
-	 * \brief Refuses the function unless at least `count` operands are present.
-	 * \param count Required operand-stack depth.
+	 * \brief Pushes one operand-stack slot and records its width.
+	 * \param width 4 for an i32 slot, 8 for an i64 slot.
 	 */
-	void requireStack(std::size_t count);
+	void push(int width);
+	/*!
+	 * \brief Pops one operand-stack slot.
+	 * \return The width of the popped slot.
+	 */
+	int pop();
 	/*!
 	 * \brief Refuses the function unless `condition` holds.
 	 * \param condition Tested condition.
@@ -165,24 +274,20 @@ private:
 	 */
 	void require(bool condition, const char* reason);
 	/*!
+	 * \brief Refuses the function unless at least `count` operands are present.
+	 * \param count Required operand-stack depth.
+	 */
+	void requireStack(std::size_t count);
+	/*!
 	 * \brief Refuses a local index outside the frame.
 	 * \param index Local index to check.
 	 * \param what Opcode name for the diagnostic.
 	 */
 	void requireLocal(std::size_t index, const char* what);
-	/*!
-	 * \brief Refuses any instruction after an explicit return.
-	 * \param what Opcode name for the diagnostic.
-	 */
-	void guardNotReturned(const char* what);
-	/*!
-	 * \brief Lowers one integer binary operator over two operand-stack slots.
-	 * \param wordOp Word-width SLJIT operation; the 32-bit form is derived.
-	 * \param width 4 for i32, 8 for i64.
-	 */
-	void emitIntegerBinary(sljit_s32 wordOp, int width);
-	//! Emits the return of the function's result (peeking at the stack top).
-	void emitReturnValue();
+	//! Drops the operand stack back to the innermost frame's base and marks the
+	//! rest of the current arm unreachable.
+	void markUnreachable();
+
 	/*!
 	 * \brief Byte offset of a local slot in the frame.
 	 * \param index Local index.
@@ -195,6 +300,167 @@ private:
 	 * \return Offset from `SLJIT_SP`.
 	 */
 	sljit_sw stackSlotOffset(std::size_t depth) const;
+	/*!
+	 * \brief Byte offset of the reserved `VMContext*` frame slot.
+	 * \return Offset from `SLJIT_SP`.
+	 */
+	sljit_sw contextSlotOffset() const;
+	/*!
+	 * \brief Byte offset of the reserved indirect-call-target frame slot.
+	 * \return Offset from `SLJIT_SP`.
+	 */
+	sljit_sw targetSlotOffset() const;
+	/*!
+	 * \brief Byte offset of the reserved helper-result scratch frame slot.
+	 * \return Offset from `SLJIT_SP`.
+	 */
+	sljit_sw scratchSlotOffset() const;
+
+	/*!
+	 * \brief Loads one operand-stack slot into a register.
+	 * \param reg Destination scratch register.
+	 * \param depth Zero-based operand-stack depth.
+	 * \param width 4 for an i32 slot, 8 for an i64 slot.
+	 */
+	void loadSlot(int reg, std::size_t depth, int width);
+	/*!
+	 * \brief Stores a register into one operand-stack slot.
+	 * \param reg Source scratch register.
+	 * \param depth Zero-based operand-stack depth.
+	 * \param width 4 for an i32 slot, 8 for an i64 slot.
+	 */
+	void storeSlot(int reg, std::size_t depth, int width);
+	/*!
+	 * \brief Loads the saved `VMContext*` into a register.
+	 * \param reg Destination scratch register.
+	 */
+	void loadContext(int reg);
+	/*!
+	 * \brief Moves the top `widths.size()` operand slots down to `base`.
+	 * \param widths Widths of the values to move, in stack order.
+	 * \param base Destination depth.
+	 */
+	void transferToBase(const std::vector<int>& widths, std::size_t base);
+	//! Emits the return of the function's single result (peeking at the stack top).
+	void emitReturnValue();
+
+	/*!
+	 * \brief Calls one C helper through the host ABI.
+	 * \tparam Function Helper function type.
+	 * \param argTypes SLJIT argument description of the helper.
+	 * \param address Helper entry point.
+	 */
+	template <typename Function>
+	void emitHelper(sljit_s32 argTypes, Function address)
+	{
+		if (measureOnly_)
+			return;
+		emit(sljit_emit_icall(compiler_, SLJIT_CALL, argTypes, SLJIT_IMM,
+				reinterpret_cast<sljit_sw>(address)));
+	}
+	//! Probes the pending-trap slot and branches to the trap epilogue when set.
+	void emitPendingTrapCheck();
+	//! Emits an unconditional branch to the trap epilogue.
+	void emitTrapBranch();
+	/*!
+	 * \brief Emits a two-operand integer operation over the top two slots.
+	 * \param wordOp Word-width SLJIT operation; the 32-bit form is derived.
+	 * \param width 4 for i32, 8 for i64.
+	 */
+	void emitIntegerBinary(sljit_s32 wordOp, int width);
+	/*!
+	 * \brief Emits a one-operand integer operation over the top slot.
+	 * \param wordOp Word-width SLJIT operation; the 32-bit form is derived.
+	 * \param width 4 for i32, 8 for i64.
+	 * \param resultWidth Width of the result slot.
+	 */
+	void emitIntegerUnary(sljit_s32 wordOp, int width, int resultWidth);
+	/*!
+	 * \brief Emits a comparison of the top two slots, producing an i32 0/1.
+	 * \param condition SLJIT comparison for "true".
+	 * \param width Operand width (4 or 8).
+	 */
+	void emitCompare(sljit_s32 condition, int width);
+	/*!
+	 * \brief Emits `eqz` over the top slot, producing an i32 0/1.
+	 * \param width Operand width (4 or 8).
+	 */
+	void emitEqz(int width);
+	/*!
+	 * \brief Emits a checked division or remainder through a C helper.
+	 * \param address Helper entry point.
+	 * \param width 4 for i32, 8 for i64.
+	 * \param operation Human-readable opcode name for diagnostics.
+	 */
+	void emitCheckedBinary(sljit_sw address, int width, const char* operation);
+
+	/*!
+	 * \brief Resolves a block type into parameter and result widths.
+	 * \param type Block type to resolve.
+	 * \return The parameter and result widths.
+	 */
+	BlockSignature blockSignature(const WASM::BlockType& type);
+	/*!
+	 * \brief Emits the branch-transfer and jump to one structured frame.
+	 * \param target The frame to branch to.
+	 */
+	void emitBranchTo(ControlFrame& target);
+
+	/*!
+	 * \brief Emits `call`, or its tail-call form.
+	 * \param index Function index.
+	 * \param isTail True when the caller must return the callee's result.
+	 */
+	void emitCall(WASM::FuncIdx index, bool isTail);
+	/*!
+	 * \brief Emits `call_indirect`, or its tail-call form.
+	 * \param typeIndex Type index the callee must match.
+	 * \param tableIndex Table index.
+	 * \param isTail True when the caller must return the callee's result.
+	 */
+	void emitCallIndirect(WASM::TypeIdx typeIndex, WASM::TableIdx tableIndex, bool isTail);
+	/*!
+	 * \brief Emits the post-resolver half of a call: context selection, argument
+	 *        registers, the indirect call and the result store.
+	 * \param type Callee signature.
+	 * \param callableReg Register holding the resolved `Callable*`.
+	 */
+	void emitResolvedCall(const WASM::FuncType& type, int callableReg);
+
+	/*!
+	 * \brief Validates a memory index and returns its type.
+	 * \param index Memory index.
+	 * \return The declared memory type.
+	 */
+	const WASM::MemoryType& requireMemoryIndex(WASM::MemIdx index);
+	/*!
+	 * \brief Emits one checked memory load.
+	 * \param arg Memory immediate.
+	 * \param width Access width in bytes.
+	 * \param loadOp SLJIT load operation for the access.
+	 * \param resultWidth Width of the value pushed on the operand stack.
+	 */
+	void emitMemoryLoad(const WASM::MemArg& arg, std::uint32_t width,
+			sljit_s32 loadOp, int resultWidth);
+	/*!
+	 * \brief Emits one checked memory store.
+	 * \param arg Memory immediate.
+	 * \param width Access width in bytes.
+	 * \param storeOp SLJIT store operation for the access.
+	 */
+	void emitMemoryStore(const WASM::MemArg& arg, std::uint32_t width,
+			sljit_s32 storeOp);
+	/*!
+	 * \brief Validates a global index and returns its type.
+	 * \param index Global index.
+	 * \return The declared global type.
+	 */
+	const WASM::GlobalType& requireGlobalIndex(WASM::GlobalIdx index);
+	/*!
+	 * \brief Validates a table index.
+	 * \param index Table index.
+	 */
+	void requireTableIndex(WASM::TableIdx index);
 
 	const WASM::Module& module_; //!< Module owning the body; borrowed.
 	const WASM::FuncType& funcType_; //!< Declared signature of the function.
@@ -208,17 +474,23 @@ private:
 	std::size_t localSlots_ = 0; //!< Parameters plus declared locals.
 	int resultWidth_ = 0; //!< 0 (void), 4 (i32) or 8 (i64).
 
+	std::vector<int> stackWidths_; //!< Widths of the live operand stack, bottom first.
+	std::size_t maxStackDepth_ = 0; //!< High-water mark of the operand stack.
+	std::vector<ControlFrame> controls_; //!< Active structured-control frames.
+	std::vector<sljit_jump*> trapJumps_; //!< Branches to the trap epilogue.
+
 	sljit_compiler* compiler_ = nullptr; //!< Compiler for the emitting pass.
-	sljit_jump* trapJump_ = nullptr; //!< Branch to the trap epilogue.
 	bool ok_ = true; //!< False once any SLJIT call has failed.
 	bool supported_ = false; //!< True when the signature is inside the subset.
 	bool measureOnly_ = true; //!< True while measuring the operand-stack depth.
-	bool returned_ = false; //!< True once the function has returned.
-	std::size_t stackDepth_ = 0; //!< Current operand-stack depth.
-	std::size_t maxStackDepth_ = 0; //!< High-water mark of the operand stack.
+	bool reachable_ = true; //!< True while the current instruction can execute.
 	std::string unsupportedReason_; //!< Why the body was refused; empty on success.
 };
 
 } // namespace Sljit
 
 #endif // SLJITOPCODEDISPATCHER_HPP
+
+
+
+

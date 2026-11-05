@@ -17,7 +17,13 @@ include(../WasmBase/WasmBase.pri)
 # AsmJit is external and remains confined to this backend.
 SOURCES += AsmjitContext.cpp \
     AsmjitTypeTranslator.cpp \
-    AsmjitModuleCompiler.cpp
+    AsmjitModuleCompiler.cpp \
+    AsmjitBackend.cpp
 HEADERS += AsmjitContext.hpp \
     AsmjitTypeTranslator.hpp \
     AsmjitModuleCompiler.hpp
+
+# Registering the backend references the core's registry, so link the one shared
+# libWasmBase the same way LibJit.pro and Sljit.pro do (docs/LAYERING.md §4).
+LIBS += -L$$OUT_PWD/../WasmBase -lWasmBase
+PRE_TARGETDEPS += $$OUT_PWD/../WasmBase/libWasmBase.so

@@ -12,6 +12,45 @@
 
 namespace Sljit {
 
+WASM::Callable* ModuleCompiler::resolveCallable(WASM::VMContext* vm,
+		std::uint32_t functionIndex) noexcept
+{
+	if (vm == nullptr) {
+		WASM::reportTrap(WASM::TrapKind::Internal, "SLJIT call has no VMContext");
+		return nullptr;
+	}
+	auto* instance = reinterpret_cast<WASM::ModuleInstance*>(vm);
+	WASM::ModuleInstanceInternals& internals = instanceInternals(*instance);
+	const std::uint32_t importedCount = vm->importedFunctionCount;
+	if (functionIndex < importedCount) {
+		if (functionIndex >= internals.importStorage.size()) {
+			WASM::reportTrap(WASM::TrapKind::Internal,
+					"SLJIT call references an unknown function import");
+			return nullptr;
+		}
+		WASM::Callable* callable = &internals.importStorage[functionIndex];
+		if (callable->fnPtr == nullptr) {
+			WASM::reportTrap(WASM::TrapKind::Internal,
+					"SLJIT call references an unresolved function import");
+			return nullptr;
+		}
+		return callable;
+	}
+	const std::uint32_t internalIndex = functionIndex - importedCount;
+	if (internalIndex >= internals.internalCallables.size()) {
+		WASM::reportTrap(WASM::TrapKind::Internal,
+				"SLJIT call function index is out of range");
+		return nullptr;
+	}
+	WASM::Callable* callable = &internals.internalCallables[internalIndex];
+	if (callable->fnPtr == nullptr) {
+		WASM::reportTrap(WASM::TrapKind::Internal,
+				"SLJIT call target has no compiled body");
+		return nullptr;
+	}
+	return callable;
+}
+
 void ModuleCompiler::translateTypes(WASM::ModuleInstance& instance, const WASM::Module& module,
 		WASM::ModuleInstanceInternals& internals)
 {
