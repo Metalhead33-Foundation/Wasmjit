@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "BindingModel.hpp"
 
@@ -19,6 +20,81 @@
   only: no WIT parser or package resolver is part of `WasmBase/`.
 */
 namespace WASM::Bindings {
+
+/*!
+ * \brief One typed WIT type-table entry.
+ */
+struct WitTypeInfo {
+	std::size_t id = 0; //!< Type-table id.
+	std::string name; //!< Declared WIT name, empty when anonymous.
+	std::string displayName; //!< Generated target-language name.
+	nlohmann::ordered_json kind; //!< Raw WIT kind (record, variant, ...).
+	int ownerInterface = -1; //!< Owning interface id, or -1.
+	int ownerPackage = -1; //!< Owning package id, or -1.
+	bool alias = false; //!< True for an alias entry.
+};
+
+/*!
+ * \brief One typed WIT function in an interface or world.
+ */
+struct WitFunctionInfo {
+	std::string name; //!< WIT function name.
+	nlohmann::ordered_json raw; //!< The complete WIT function object.
+	bool async = false; //!< True for an async WIT function kind.
+};
+
+/*!
+ * \brief One typed WIT interface.
+ */
+struct WitInterfaceInfo {
+	std::size_t id = 0; //!< Interface id.
+	std::string name; //!< Declared interface name.
+	int package = -1; //!< Owning package id, or -1.
+	std::vector<WitFunctionInfo> functions; //!< Interface functions.
+	std::vector<std::size_t> types; //!< Type ids exposed by the interface.
+};
+
+/*!
+ * \brief One typed WIT world.
+ */
+struct WitWorldInfo {
+	std::size_t id = 0; //!< World id.
+	std::string name; //!< Declared world name.
+	int package = -1; //!< Owning package id, or -1.
+	nlohmann::ordered_json imports; //!< Raw imports object.
+	nlohmann::ordered_json exports; //!< Raw exports object.
+};
+
+/*!
+ * \brief One typed WIT package.
+ */
+struct WitPackageInfo {
+	std::size_t id = 0; //!< Package id.
+	std::string name; //!< Qualified package name.
+	std::vector<std::size_t> interfaces; //!< Package interface ids.
+	std::vector<std::size_t> worlds; //!< Package world ids.
+};
+
+/*!
+ * \brief The typed package/interface/world/type graph of one WIT document.
+ */
+struct WitModel {
+	std::vector<WitTypeInfo> types; //!< Type table.
+	std::vector<WitInterfaceInfo> interfaces; //!< Interfaces.
+	std::vector<WitWorldInfo> worlds; //!< Worlds.
+	std::vector<WitPackageInfo> packages; //!< Packages.
+};
+
+/*!
+ * \brief Parses a WIT JSON document into the typed package graph.
+ *
+ * \param document The `wasm-tools component wit --json` document.
+ * \param model Receives the parsed graph.
+ * \param error Receives a diagnostic when the document is malformed.
+ * \return true on success.
+ */
+bool parseWitModel(const nlohmann::ordered_json& document, WitModel& model,
+		std::string& error);
 
 /*!
  * \brief How the front-end treats an async WIT function.

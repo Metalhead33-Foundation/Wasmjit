@@ -622,6 +622,122 @@ void appendWorldEntry(const Json& node, const Json& document, const std::string&
 
 } // namespace
 
+bool parseWitModel(const Json& document, WitModel& model, std::string& error)
+{
+	error.clear();
+	model = {};
+	if (!document.is_object()) {
+		error = "WIT JSON: expected an object";
+		return false;
+	}
+
+	if (document.contains("types") && document.at("types").is_array()) {
+		std::size_t id = 0;
+		for (const Json& definition : document.at("types")) {
+			WitTypeInfo type;
+			type.id = id++;
+			if (!definition.is_object()) {
+				error = "WIT JSON: type-table entry is not an object";
+				return false;
+			}
+			type.name = stringAt(definition, "name");
+			type.kind = definition.contains("kind") ? definition.at("kind")
+					: Json();
+			type.alias = definition.contains("kind")
+					&& definition.at("kind").is_object()
+					&& definition.at("kind").contains("type");
+			if (definition.contains("owner")
+					&& definition.at("owner").is_object()
+					&& definition.at("owner").contains("interface")
+					&& definition.at("owner").at("interface").is_number_integer())
+				type.ownerInterface = definition.at("owner").at("interface")
+						.get<int>();
+			if (definition.contains("witName"))
+				type.displayName = stringAt(definition, "witName");
+			else
+				type.displayName = witTypeReferenceName(Json(id - 1), document, 0);
+			model.types.push_back(std::move(type));
+		}
+	}
+
+	if (document.contains("interfaces") && document.at("interfaces").is_array()) {
+		std::size_t id = 0;
+		for (const Json& definition : document.at("interfaces")) {
+			WitInterfaceInfo interface;
+			interface.id = id++;
+			interface.name = stringAt(definition, "name");
+			interface.package = definition.value("package", -1);
+			const auto functions = definition.find("functions");
+			if (functions != definition.end() && functions->is_object()) {
+				for (const auto& [name, function] : functions->items()) {
+					WitFunctionInfo info;
+					info.name = name;
+					info.raw = function;
+					info.async = witFunctionIsAsync(function);
+					interface.functions.push_back(std::move(info));
+				}
+			}
+			const auto types = definition.find("types");
+			if (types != definition.end() && types->is_object()) {
+				for (const auto& [name, type] : types->items()) {
+					(void)name;
+					if (type.is_number_integer())
+						interface.types.push_back(type.get<std::size_t>());
+				}
+			}
+			model.interfaces.push_back(std::move(interface));
+		}
+	}
+
+	for (WitTypeInfo& type : model.types) {
+		if (type.ownerInterface >= 0
+				&& static_cast<std::size_t>(type.ownerInterface) < model.interfaces.size())
+			type.ownerPackage =
+					model.interfaces[static_cast<std::size_t>(type.ownerInterface)].package;
+	}
+
+	if (document.contains("packages") && document.at("packages").is_array()) {
+		std::size_t id = 0;
+		for (const Json& definition : document.at("packages")) {
+			WitPackageInfo package;
+			package.id = id++;
+			package.name = stringAt(definition, "name");
+			const auto interfaces = definition.find("interfaces");
+			if (interfaces != definition.end() && interfaces->is_object())
+				for (const auto& [name, value] : interfaces->items()) {
+					(void)name;
+					if (value.is_number_integer())
+						package.interfaces.push_back(value.get<std::size_t>());
+				}
+			const auto worlds = definition.find("worlds");
+			if (worlds != definition.end() && worlds->is_object())
+				for (const auto& [name, value] : worlds->items()) {
+					(void)name;
+					if (value.is_number_integer())
+						package.worlds.push_back(value.get<std::size_t>());
+				}
+			model.packages.push_back(std::move(package));
+		}
+	}
+
+	if (document.contains("worlds") && document.at("worlds").is_array()) {
+		std::size_t id = 0;
+		for (const Json& definition : document.at("worlds")) {
+			WitWorldInfo world;
+			world.id = id++;
+			world.name = stringAt(definition, "name");
+			world.package = definition.value("package", -1);
+			world.imports = definition.contains("imports")
+					? definition.at("imports") : Json::object();
+			world.exports = definition.contains("exports")
+					? definition.at("exports") : Json::object();
+			model.worlds.push_back(std::move(world));
+		}
+	}
+
+	return true;
+}
+
 Json witResolveType(const Json& document, const Json& type)
 {
 	return resolveWitType(type, document, 0);
@@ -649,21 +765,22 @@ Schema witSchema(const Json& document, Direction direction,
 		return {};
 	}
 
-	const auto worldPackageName = [&](const Json& world) -> std::string {
-		const int id = world.value("package", -1);
-		if (id < 0 || !document.contains("packages")
-				|| !document.at("packages").is_array()
-				|| static_cast<std::size_t>(id) >= document.at("packages").size())
+	WitModel model;
+	if (!parseWitModel(document, model, error))
+		return {};
+
+	const auto packageNameFor = [&](const WitWorldInfo& world) -> std::string {
+		if (world.package < 0
+				|| static_cast<std::size_t>(world.package) >= model.packages.size())
 			return {};
-		return stringAt(document.at("packages").at(static_cast<std::size_t>(id)),
-				"name");
+		return model.packages[static_cast<std::size_t>(world.package)].name;
 	};
-	const Json* selected = nullptr;
-	for (const Json& world : *worlds) {
+	const WitWorldInfo* selected = nullptr;
+	for (const WitWorldInfo& world : model.worlds) {
 		const bool worldMatches = worldName.empty()
-				? packageName.empty() || worldPackageName(world) == packageName
-				: stringAt(world, "name") == worldName
-				&& (packageName.empty() || worldPackageName(world) == packageName);
+				? packageName.empty() || packageNameFor(world) == packageName
+				: world.name == worldName
+				&& (packageName.empty() || packageNameFor(world) == packageName);
 		if (worldMatches) {
 			selected = &world;
 			break;
@@ -679,17 +796,13 @@ Schema witSchema(const Json& document, Direction direction,
 
 	std::string schemaName(moduleName);
 	if (schemaName.empty()) {
-		const int packageId = selected->value("package", -1);
-		if (document.contains("packages") && document.at("packages").is_array()) {
-			const Json& packages = document.at("packages");
-			if (packageId >= 0 && static_cast<std::size_t>(packageId) < packages.size())
-				schemaName = stringAt(packages.at(static_cast<std::size_t>(packageId)),
-						"name");
-			if (schemaName.empty() && !packages.empty())
-				schemaName = stringAt(packages.at(0), "name");
-		}
+		if (selected->package >= 0
+				&& static_cast<std::size_t>(selected->package) < model.packages.size())
+			schemaName = model.packages[static_cast<std::size_t>(selected->package)].name;
+		if (schemaName.empty() && !model.packages.empty())
+			schemaName = model.packages.front().name;
 		if (schemaName.empty())
-			schemaName = stringAt(*selected, "name");
+			schemaName = selected->name;
 		if (schemaName.empty())
 			schemaName = "component";
 	}
@@ -701,42 +814,33 @@ Schema witSchema(const Json& document, Direction direction,
 	}
 
 	std::map<int, std::string> interfaceModules;
-	if (document.contains("packages") && document.at("packages").is_array()) {
-		for (const Json& package : document.at("packages")) {
-			const std::string packageName = stringAt(package, "name");
-			const auto packageInterfaces = package.find("interfaces");
-			if (packageInterfaces == package.end()
-					|| !packageInterfaces->is_object())
-				continue;
-			for (const auto& [interfaceName, id] : packageInterfaces->items()) {
-				if (id.is_number_integer())
-					interfaceModules.emplace(id.get<int>(),
-							qualifiedInterfaceName(packageName, interfaceName));
-			}
-		}
-	}
+	for (const WitPackageInfo& package : model.packages)
+		for (const std::size_t id : package.interfaces)
+			if (id < model.interfaces.size())
+				interfaceModules.emplace(static_cast<int>(id),
+						qualifiedInterfaceName(package.name,
+								model.interfaces[id].name));
 
 	Schema schema;
 	schema.module = schemaName;
 	schema.direction = Direction::Complete;
 	schema.extras = { { "kind", "component" }, { "frontend", "wit" },
-		{ "world", stringAt(*selected, "name") } };
+		{ "world", selected->name }, { "witPackages", model.packages.size() },
+		{ "witInterfaces", model.interfaces.size() },
+		{ "witTypes", model.types.size() } };
 	if (document.contains("types")) {
 		schema.types = document.at("types");
 		for (std::size_t i = 0; i < schema.types.size(); ++i)
-			schema.types[i]["witName"] = witTypeDisplayName(document, i);
+			schema.types[i]["witName"] = i < model.types.size()
+					? model.types[i].displayName : witTypeDisplayName(document, i);
 	}
 
-	if (selected->contains("imports") && selected->at("imports").is_object()) {
-		for (const auto& [name, node] : selected->at("imports").items())
-			appendWorldEntry(node, document, name, true, schemaName, interfaces,
-					interfaceModules, schema, error);
-	}
-	if (selected->contains("exports") && selected->at("exports").is_object()) {
-		for (const auto& [name, node] : selected->at("exports").items())
-			appendWorldEntry(node, document, name, false, schemaName, interfaces,
-					interfaceModules, schema, error);
-	}
+	for (const auto& [name, node] : selected->imports.items())
+		appendWorldEntry(node, document, name, true, schemaName, interfaces,
+				interfaceModules, schema, error);
+	for (const auto& [name, node] : selected->exports.items())
+		appendWorldEntry(node, document, name, false, schemaName, interfaces,
+				interfaceModules, schema, error);
 	if (!error.empty())
 		return {};
 	if (asyncPolicy == WitAsyncPolicy::Reject) {

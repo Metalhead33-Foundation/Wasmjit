@@ -1991,6 +1991,14 @@ TEST_CASE("WIT selects the world package and keeps stability", "[bindings]")
 	REQUIRE(schema.imports[0].raw.at("abi").at("results")[0].at("type")
 			== "i32");
 
+	WASM::Bindings::WitModel model;
+	REQUIRE(WASM::Bindings::parseWitModel(wit, model, error));
+	REQUIRE(error.empty());
+	REQUIRE(model.packages.size() == 2u);
+	REQUIRE(model.worlds.size() == 1u);
+	REQUIRE(model.worlds[0].package == 1);
+	REQUIRE(model.packages[1].name == "test:demo@0.1.0");
+
 	std::string missingError;
 	const auto missing = WASM::Bindings::witSchema(wit,
 			WASM::Bindings::Direction::Complete, "", "demo", missingError,
@@ -2038,6 +2046,16 @@ TEST_CASE("WIT named types are qualified by their owning interface", "[bindings]
 			!= std::string::npos);
 	REQUIRE(header.find("wasmjit_wit_wasi_filesystem_types_0_3_2_point")
 			!= std::string::npos);
+
+	WASM::Bindings::WitModel model;
+	REQUIRE(WASM::Bindings::parseWitModel(wit, model, error));
+	REQUIRE(error.empty());
+	REQUIRE(model.interfaces.size() == 1u);
+	REQUIRE(model.interfaces[0].functions.size() == 1u);
+	REQUIRE(model.types.size() == 1u);
+	REQUIRE(model.types[0].ownerInterface == 0);
+	REQUIRE(model.types[0].ownerPackage == 0);
+	REQUIRE(model.types[0].displayName == "wasi_filesystem_types_0_3_2_point");
 }
 
 TEST_CASE("WIT JSON names agree with the component schema", "[bindings]")
