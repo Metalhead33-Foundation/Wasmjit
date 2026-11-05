@@ -1735,6 +1735,84 @@ protected:
 		values.push_back(buffer);
 	}
 
+	//! Calls a v128 reduction helper and pushes its i32 result.
+	void emitVectorReduce(int32_t (*helper)(const void*))
+	{
+		if (values.empty())
+			throw std::runtime_error("AsmJit v128 reduction operand underflow");
+		auto a = values.back();
+		values.pop_back();
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kInt32);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke),
+				reinterpret_cast<uint64_t>(helper), signature),
+				"AsmJit v128 reduction helper call failed");
+		invoke->set_arg(0, a);
+		auto result = compiler.new_gp32("v128Reduce");
+		invoke->set_ret(0, result);
+		values.push_back(result);
+	}
+
+	void dispatchI8x16Add() override { emitVectorHelper2(&wasm_i8x16_add); }
+	void dispatchI8x16Sub() override { emitVectorHelper2(&wasm_i8x16_sub); }
+	void dispatchI16x8Add() override { emitVectorHelper2(&wasm_i16x8_add); }
+	void dispatchI16x8Sub() override { emitVectorHelper2(&wasm_i16x8_sub); }
+	void dispatchI16x8Mul() override { emitVectorHelper2(&wasm_i16x8_mul); }
+	void dispatchI32x4Add() override { emitVectorHelper2(&wasm_i32x4_add); }
+	void dispatchI32x4Sub() override { emitVectorHelper2(&wasm_i32x4_sub); }
+	void dispatchI32x4Mul() override { emitVectorHelper2(&wasm_i32x4_mul); }
+	void dispatchI64x2Add() override { emitVectorHelper2(&wasm_i64x2_add); }
+	void dispatchI64x2Sub() override { emitVectorHelper2(&wasm_i64x2_sub); }
+	void dispatchI64x2Mul() override { emitVectorHelper2(&wasm_i64x2_mul); }
+	void dispatchI8x16Eq() override { emitVectorHelper2(&wasm_i8x16_eq); }
+	void dispatchI8x16Ne() override { emitVectorHelper2(&wasm_i8x16_ne); }
+	void dispatchI8x16LtS() override { emitVectorHelper2(&wasm_i8x16_lt_s); }
+	void dispatchI8x16LtU() override { emitVectorHelper2(&wasm_i8x16_lt_u); }
+	void dispatchI8x16GtS() override { emitVectorHelper2(&wasm_i8x16_gt_s); }
+	void dispatchI8x16GtU() override { emitVectorHelper2(&wasm_i8x16_gt_u); }
+	void dispatchI8x16LeS() override { emitVectorHelper2(&wasm_i8x16_le_s); }
+	void dispatchI8x16LeU() override { emitVectorHelper2(&wasm_i8x16_le_u); }
+	void dispatchI8x16GeS() override { emitVectorHelper2(&wasm_i8x16_ge_s); }
+	void dispatchI8x16GeU() override { emitVectorHelper2(&wasm_i8x16_ge_u); }
+	void dispatchI16x8Eq() override { emitVectorHelper2(&wasm_i16x8_eq); }
+	void dispatchI16x8Ne() override { emitVectorHelper2(&wasm_i16x8_ne); }
+	void dispatchI16x8LtS() override { emitVectorHelper2(&wasm_i16x8_lt_s); }
+	void dispatchI16x8LtU() override { emitVectorHelper2(&wasm_i16x8_lt_u); }
+	void dispatchI16x8GtS() override { emitVectorHelper2(&wasm_i16x8_gt_s); }
+	void dispatchI16x8GtU() override { emitVectorHelper2(&wasm_i16x8_gt_u); }
+	void dispatchI16x8LeS() override { emitVectorHelper2(&wasm_i16x8_le_s); }
+	void dispatchI16x8LeU() override { emitVectorHelper2(&wasm_i16x8_le_u); }
+	void dispatchI16x8GeS() override { emitVectorHelper2(&wasm_i16x8_ge_s); }
+	void dispatchI16x8GeU() override { emitVectorHelper2(&wasm_i16x8_ge_u); }
+	void dispatchI32x4Eq() override { emitVectorHelper2(&wasm_i32x4_eq); }
+	void dispatchI32x4Ne() override { emitVectorHelper2(&wasm_i32x4_ne); }
+	void dispatchI32x4LtS() override { emitVectorHelper2(&wasm_i32x4_lt_s); }
+	void dispatchI32x4LtU() override { emitVectorHelper2(&wasm_i32x4_lt_u); }
+	void dispatchI32x4GtS() override { emitVectorHelper2(&wasm_i32x4_gt_s); }
+	void dispatchI32x4GtU() override { emitVectorHelper2(&wasm_i32x4_gt_u); }
+	void dispatchI32x4LeS() override { emitVectorHelper2(&wasm_i32x4_le_s); }
+	void dispatchI32x4LeU() override { emitVectorHelper2(&wasm_i32x4_le_u); }
+	void dispatchI32x4GeS() override { emitVectorHelper2(&wasm_i32x4_ge_s); }
+	void dispatchI32x4GeU() override { emitVectorHelper2(&wasm_i32x4_ge_u); }
+	void dispatchI64x2Eq() override { emitVectorHelper2(&wasm_i64x2_eq); }
+	void dispatchI64x2Ne() override { emitVectorHelper2(&wasm_i64x2_ne); }
+	void dispatchI64x2LtS() override { emitVectorHelper2(&wasm_i64x2_lt_s); }
+	void dispatchI64x2GtS() override { emitVectorHelper2(&wasm_i64x2_gt_s); }
+	void dispatchI64x2LeS() override { emitVectorHelper2(&wasm_i64x2_le_s); }
+	void dispatchI64x2GeS() override { emitVectorHelper2(&wasm_i64x2_ge_s); }
+
+	void dispatchI8x16Neg() override { emitVectorHelper1(&wasm_i8x16_neg); }
+	void dispatchI16x8Neg() override { emitVectorHelper1(&wasm_i16x8_neg); }
+	void dispatchI32x4Neg() override { emitVectorHelper1(&wasm_i32x4_neg); }
+	void dispatchI64x2Neg() override { emitVectorHelper1(&wasm_i64x2_neg); }
+
+	void dispatchI8x16AllTrue() override { emitVectorReduce(&wasm_i8x16_all_true); }
+	void dispatchI16x8AllTrue() override { emitVectorReduce(&wasm_i16x8_all_true); }
+	void dispatchI32x4AllTrue() override { emitVectorReduce(&wasm_i32x4_all_true); }
+	void dispatchI64x2AllTrue() override { emitVectorReduce(&wasm_i64x2_all_true); }
+
 	void dispatchI32Load(WASM::MemArg arg) override { emitMemoryLoad(arg, 4, LoadKind::I32); }
 	void dispatchI32Load8S(WASM::MemArg arg) override { emitMemoryLoad(arg, 1, LoadKind::I8Signed); }
 	void dispatchI32Load8U(WASM::MemArg arg) override { emitMemoryLoad(arg, 1, LoadKind::I8Unsigned); }

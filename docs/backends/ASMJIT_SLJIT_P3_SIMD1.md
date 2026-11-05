@@ -146,8 +146,8 @@ Do not copy:
 | Opcode family | Refusal | Test |
 |---|---|---|
 | `v128` parameters/results, block types, `select_t` | function left without `fnPtr`, or an unsupported-body report | the SLJIT constructor path is pinned by the refusal tests |
-| lane arithmetic/comparisons (all shapes) | `onUnhandledOpcode` | `[simd]` covers only the landed set |
-| `i8x16`/`i16x8`/`i64x2`/`f32x4`/`f64x2` lane access | `onUnhandledOpcode` | the next SIMD slice |
+| lane arithmetic/comparisons | **integer families landed in slice 2** ([`ASMJIT_SLJIT_P3_SIMD2.md`](ASMJIT_SLJIT_P3_SIMD2.md)); float lanes and shifts are still unhandled | `simd_lanes.wat` |
+| `i8x16`/`i16x8`/`i64x2`/`f32x4`/`f64x2` lane access | `onUnhandledOpcode` | the next SIMD slice; slice 2 observes lanes through `i32x4` only |
 | extending/splat/lane loads, lane stores, `shuffle`/`swizzle` | `onUnhandledOpcode` | the helpers exist; the lowering is next |
 | relaxed SIMD | `onUnhandledOpcode` | not in scope |
 | `f16`, references/GC, exceptions, continuations, atomics | unchanged from P3 | unchanged |

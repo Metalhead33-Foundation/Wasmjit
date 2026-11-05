@@ -1133,3 +1133,127 @@ TEST_CASE("asmjit and sljit agree on the shared v128 module", "[sljit][asmjit][p
 	same("any_true", [](const WASM::Callable& c) { return outcomeOf<std::int32_t>(c, 5); });
 	same("local_roundtrip", [](const WASM::Callable& c) { return outcomeOf<std::int32_t>(c, 7); });
 }
+
+
+TEST_CASE("sljit: the shared v128 lane module executes", "[sljit][module][parity][simd]")
+{
+	auto session = Sljit::createSession();
+	REQUIRE(session != nullptr);
+	WASM::RegistryImportResolver imports;
+	LoadedModule loaded = loadAndInstantiateTestModule("simd_lanes", imports, *session);
+	REQUIRE(loaded.instance != nullptr);
+	WASM::ModuleInstance& instance = *loaded.instance;
+	const auto call = [&](const char* name) -> WASM::Callable {
+		const std::optional<WASM::Callable> callable = instance.exportedFunction(name);
+		INFO("export " << name);
+		REQUIRE(callable.has_value());
+		REQUIRE(callable->fnPtr != nullptr);
+		return *callable;
+	};
+	const auto unary = [&](const char* name, std::int32_t x) {
+		return WASM::callCallable<std::int32_t>(call(name), x);
+	};
+	const auto binary = [&](const char* name, std::int32_t x, std::int32_t y) {
+		return WASM::callCallable<std::int32_t>(call(name), x, y);
+	};
+	const auto niladic = [&](const char* name) {
+		return WASM::callCallable<std::int32_t>(call(name));
+	};
+
+	CHECK(unary("i8x16_add", 0x01010101) == 0x02020202);
+	CHECK(unary("i8x16_sub", 0x05050505) == 0x04040404);
+	CHECK(binary("i16x8_mul", 3, 4) == 12);
+	CHECK(binary("i32x4_add", 40, 2) == 42);
+	CHECK(binary("i32x4_mul", 7, 6) == 42);
+	CHECK(niladic("i64x2_add") == 12);
+	CHECK(niladic("i64x2_sub") == 7);
+	CHECK(niladic("i64x2_mul") == 42);
+
+	// Only the low byte of each 32-bit lane is set by `i32x4.splat(1)`, so the
+	// byte-wide comparisons are driven with byte-fill splats instead.
+	CHECK(binary("i8x16_lt_s", 0x01010101, 0x02020202) == -1);
+	CHECK(binary("i8x16_lt_s", 0x02020202, 0x01010101) == 0);
+	CHECK(binary("i8x16_lt_u", 0x01010101, -1) == -1);
+	CHECK(binary("i8x16_lt_u", -1, 0x01010101) == 0);
+	CHECK(binary("i16x8_ge_s", 0x00020002, 0x00010001) == -1);
+	CHECK(binary("i16x8_ge_s", 0x00010001, 0x00020002) == 0);
+	CHECK(binary("i32x4_ne", 1, 2) == -1);
+	CHECK(binary("i32x4_ne", 1, 1) == 0);
+	CHECK(binary("i32x4_gt_u", -1, 1) == -1);
+	CHECK(binary("i32x4_gt_u", 1, -1) == 0);
+	CHECK(niladic("i64x2_lt_s") == -1);
+	CHECK(niladic("i64x2_eq") == -1);
+
+	CHECK(unary("i8x16_neg", 0x01010101) == -1);
+	CHECK(unary("i32x4_neg", 5) == -5);
+
+	CHECK(unary("i8x16_all_true", 0) == 0);
+	CHECK(unary("i8x16_all_true", 0x01010101) == 1);
+	CHECK(unary("i32x4_all_true", 0) == 0);
+	CHECK(unary("i32x4_all_true", 7) == 1);
+}
+
+
+TEST_CASE("asmjit and sljit agree on the shared v128 lane module", "[sljit][asmjit][parity][simd]")
+{
+	WASM::Module module = loadTestModule("simd_lanes");
+	AsmJitBackend::Context asmContext;
+	AsmJitBackend::ModuleCompiler asmCompiler(asmContext);
+	Sljit::ModuleCompiler sljitCompiler;
+	WASM::RegistryImportResolver asmImports;
+	WASM::RegistryImportResolver sljitImports;
+	std::unique_ptr<WASM::ModuleInstance> asmInstance =
+			asmCompiler.instantiate(module, asmImports);
+	std::unique_ptr<WASM::ModuleInstance> sljitInstance =
+			sljitCompiler.instantiate(module, sljitImports);
+	REQUIRE(asmInstance != nullptr);
+	REQUIRE(sljitInstance != nullptr);
+
+	const auto both = [&](const char* name) {
+		const std::optional<WASM::Callable> asmCallable = asmInstance->exportedFunction(name);
+		const std::optional<WASM::Callable> sljitCallable = sljitInstance->exportedFunction(name);
+		REQUIRE(asmCallable.has_value());
+		REQUIRE(sljitCallable.has_value());
+		return std::pair<WASM::Callable, WASM::Callable>{*asmCallable, *sljitCallable};
+	};
+	const auto sameUnary = [&](const char* name, std::int32_t x) {
+		const auto calls = both(name);
+		INFO("export " << name);
+		CHECK(WASM::callCallable<std::int32_t>(calls.first, x)
+				== WASM::callCallable<std::int32_t>(calls.second, x));
+	};
+	const auto sameBinary = [&](const char* name, std::int32_t x, std::int32_t y) {
+		const auto calls = both(name);
+		INFO("export " << name);
+		CHECK(WASM::callCallable<std::int32_t>(calls.first, x, y)
+				== WASM::callCallable<std::int32_t>(calls.second, x, y));
+	};
+	const auto sameNiladic = [&](const char* name) {
+		const auto calls = both(name);
+		INFO("export " << name);
+		CHECK(WASM::callCallable<std::int32_t>(calls.first)
+				== WASM::callCallable<std::int32_t>(calls.second));
+	};
+
+	sameUnary("i8x16_add", 0x01010101);
+	sameUnary("i8x16_sub", 0x05050505);
+	sameBinary("i16x8_mul", 3, 4);
+	sameBinary("i32x4_add", 40, 2);
+	sameBinary("i32x4_mul", 7, 6);
+	sameNiladic("i64x2_add");
+	sameNiladic("i64x2_sub");
+	sameNiladic("i64x2_mul");
+	sameBinary("i8x16_lt_s", 0x01010101, 0x02020202);
+	sameBinary("i8x16_lt_u", -1, 0x01010101);
+	sameBinary("i16x8_ge_s", 0x00020002, 0x00010001);
+	sameBinary("i32x4_ne", 1, 1);
+	sameBinary("i32x4_gt_u", -1, 1);
+	sameNiladic("i64x2_lt_s");
+	sameNiladic("i64x2_eq");
+	sameUnary("i8x16_neg", 0x01010101);
+	sameUnary("i32x4_neg", 5);
+	sameUnary("i8x16_all_true", 0);
+	sameUnary("i8x16_all_true", 0x01010101);
+	sameUnary("i32x4_all_true", 7);
+}
+

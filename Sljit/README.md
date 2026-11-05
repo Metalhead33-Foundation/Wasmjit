@@ -41,10 +41,12 @@ The emitter lowers:
   `table.init`/`copy`/`size` and `elem.drop`;
 - `select`/`select_t`, `drop`, `nop`, `return`, `unreachable`, and the guest
   stack guard with the pending-trap epilogue;
-- the first `v128` slice: `v128.const`/`load`/`store`, `v128` locals,
-  `i32x4.splat`/`extract_lane`/`replace_lane`, and the bitwise family
-  (`not`/`and`/`andnot`/`or`/`xor`/`bitselect`) plus `any_true`, all through the
-  core's shared helper ABI.
+- the first two `v128` slices: `v128.const`/`load`/`store`, `v128` locals,
+  `i32x4.splat`/`extract_lane`/`replace_lane`, the bitwise family
+  (`not`/`and`/`andnot`/`or`/`xor`/`bitselect`), `any_true`, the integer lane
+  arithmetic (`add`/`sub` for every shape, `mul` where the spec has it), the
+  comparison families and the four `all_true` reductions, all through the core's
+  shared helper ABI.
 
 A unit test exercises the same `asmjit_i32_basic`/`asmjit_i64_basic` fixtures
 that the AsmJit suite uses (`[sljit][module][parity]`), so the shared slice is
@@ -113,10 +115,11 @@ Generated code **is** released on `Runtime::unload` and runtime teardown through
 
 ## Next steps
 
-1. The remaining `v128` families (lane arithmetic/comparisons, the other lane
-   widths and float shapes, extending/lane loads, `shuffle`/`swizzle`), then
-   `v128` in signatures and block types. What landed is recorded in
-   [`docs/backends/ASMJIT_SLJIT_P3_SIMD1.md`](../docs/backends/ASMJIT_SLJIT_P3_SIMD1.md).
+1. The remaining `v128` families (shifts, saturating/narrowing/widening, float
+   lanes, extending/lane loads, `shuffle`/`swizzle`), then `v128` in signatures
+   and block types. What landed is recorded in
+   [`docs/backends/ASMJIT_SLJIT_P3_SIMD1.md`](../docs/backends/ASMJIT_SLJIT_P3_SIMD1.md)
+   and [`docs/backends/ASMJIT_SLJIT_P3_SIMD2.md`](../docs/backends/ASMJIT_SLJIT_P3_SIMD2.md).
 2. References/GC, `ref.*`, GC barriers and exceptions (P4), following
    [`docs/WRITING_A_BACKEND.md`](../docs/WRITING_A_BACKEND.md) §6 "Reference
    ownership" — the initialiser-shape test is the gate, not an optional

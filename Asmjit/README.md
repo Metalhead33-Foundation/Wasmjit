@@ -52,7 +52,7 @@ direct calls. Each generated function emits the required
   currently support only one scalar result and no block parameters; `br_table`
   requires identical target stack heights/signatures. The `unreachable`
   instruction reports a trap and supplies a limited single-result placeholder,
-  but general unreachable-stack polymorphism remains unsupported. Cross-instance scalar Wasm imports are covered by tests. Scalar globals are lowered; the first `v128` slice (const/load/store, locals, `i32x4` lane access, the bitwise family and `any_true`, through the shared helper ABI) is lowered, while the remaining SIMD families, references, `f16`, bulk memory on a memory64 and
+  but general unreachable-stack polymorphism remains unsupported. Cross-instance scalar Wasm imports are covered by tests. Scalar globals are lowered; the first two `v128` slices (const/load/store, locals, `i32x4` lane access, the bitwise family, `any_true`, integer lane arithmetic, the comparison families and `all_true`, through the shared helper ABI) are lowered, while the remaining SIMD families, references, `f16`, bulk memory on a memory64 and
   most remaining instructions are still unsupported and fail explicitly.
 - `Test/TestBackend.cpp` exposes an `AsmJitSession` through
   `WASMJIT_BACKEND=asmjit`, including i32 invocation marshalling, aggregate
@@ -116,11 +116,12 @@ target-architecture check).
 
 ## Next implementation stages
 
-1. The remaining `v128` families (lane arithmetic/comparisons, the other lane
-   widths and float shapes, extending/lane loads, `shuffle`/`swizzle`), then
-   `v128` in signatures; SLJIT landed the same first slice, so the shared
+1. The remaining `v128` families (shifts, saturating/narrowing/widening, float
+   lanes, extending/lane loads, `shuffle`/`swizzle`), then `v128` in signatures;
+   SLJIT landed the same first two slices, so the shared
    `[sljit][asmjit][parity][simd]` fixture grows with both. See
-   [`docs/backends/ASMJIT_SLJIT_P3_SIMD1.md`](../docs/backends/ASMJIT_SLJIT_P3_SIMD1.md).
+   [`docs/backends/ASMJIT_SLJIT_P3_SIMD1.md`](../docs/backends/ASMJIT_SLJIT_P3_SIMD1.md)
+   and [`docs/backends/ASMJIT_SLJIT_P3_SIMD2.md`](../docs/backends/ASMJIT_SLJIT_P3_SIMD2.md).
 2. Extend structured control flow to general unreachable-stack polymorphism
    (SLJIT already covers block parameters and multi-value block results, so the
    two backends currently differ there).

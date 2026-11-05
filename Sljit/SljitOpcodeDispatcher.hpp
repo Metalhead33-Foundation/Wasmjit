@@ -271,6 +271,61 @@ protected:
 	void dispatchV128Xor() override; //!< `v128.xor`.
 	void dispatchV128Bitselect() override; //!< `v128.bitselect`.
 	void dispatchV128AnyTrue() override; //!< `v128.any_true`.
+	void dispatchI8x16Add() override; //!< `i8x16.add`.
+	void dispatchI8x16Sub() override; //!< `i8x16.sub`.
+	void dispatchI16x8Add() override; //!< `i16x8.add`.
+	void dispatchI16x8Sub() override; //!< `i16x8.sub`.
+	void dispatchI16x8Mul() override; //!< `i16x8.mul`.
+	void dispatchI32x4Add() override; //!< `i32x4.add`.
+	void dispatchI32x4Sub() override; //!< `i32x4.sub`.
+	void dispatchI32x4Mul() override; //!< `i32x4.mul`.
+	void dispatchI64x2Add() override; //!< `i64x2.add`.
+	void dispatchI64x2Sub() override; //!< `i64x2.sub`.
+	void dispatchI64x2Mul() override; //!< `i64x2.mul`.
+	void dispatchI8x16Eq() override; //!< `i8x16.eq`.
+	void dispatchI8x16Ne() override; //!< `i8x16.ne`.
+	void dispatchI8x16LtS() override; //!< `i8x16.lt_s`.
+	void dispatchI8x16LtU() override; //!< `i8x16.lt_u`.
+	void dispatchI8x16GtS() override; //!< `i8x16.gt_s`.
+	void dispatchI8x16GtU() override; //!< `i8x16.gt_u`.
+	void dispatchI8x16LeS() override; //!< `i8x16.le_s`.
+	void dispatchI8x16LeU() override; //!< `i8x16.le_u`.
+	void dispatchI8x16GeS() override; //!< `i8x16.ge_s`.
+	void dispatchI8x16GeU() override; //!< `i8x16.ge_u`.
+	void dispatchI16x8Eq() override; //!< `i16x8.eq`.
+	void dispatchI16x8Ne() override; //!< `i16x8.ne`.
+	void dispatchI16x8LtS() override; //!< `i16x8.lt_s`.
+	void dispatchI16x8LtU() override; //!< `i16x8.lt_u`.
+	void dispatchI16x8GtS() override; //!< `i16x8.gt_s`.
+	void dispatchI16x8GtU() override; //!< `i16x8.gt_u`.
+	void dispatchI16x8LeS() override; //!< `i16x8.le_s`.
+	void dispatchI16x8LeU() override; //!< `i16x8.le_u`.
+	void dispatchI16x8GeS() override; //!< `i16x8.ge_s`.
+	void dispatchI16x8GeU() override; //!< `i16x8.ge_u`.
+	void dispatchI32x4Eq() override; //!< `i32x4.eq`.
+	void dispatchI32x4Ne() override; //!< `i32x4.ne`.
+	void dispatchI32x4LtS() override; //!< `i32x4.lt_s`.
+	void dispatchI32x4LtU() override; //!< `i32x4.lt_u`.
+	void dispatchI32x4GtS() override; //!< `i32x4.gt_s`.
+	void dispatchI32x4GtU() override; //!< `i32x4.gt_u`.
+	void dispatchI32x4LeS() override; //!< `i32x4.le_s`.
+	void dispatchI32x4LeU() override; //!< `i32x4.le_u`.
+	void dispatchI32x4GeS() override; //!< `i32x4.ge_s`.
+	void dispatchI32x4GeU() override; //!< `i32x4.ge_u`.
+	void dispatchI64x2Eq() override; //!< `i64x2.eq`.
+	void dispatchI64x2Ne() override; //!< `i64x2.ne`.
+	void dispatchI64x2LtS() override; //!< `i64x2.lt_s`.
+	void dispatchI64x2GtS() override; //!< `i64x2.gt_s`.
+	void dispatchI64x2LeS() override; //!< `i64x2.le_s`.
+	void dispatchI64x2GeS() override; //!< `i64x2.ge_s`.
+	void dispatchI8x16Neg() override; //!< `i8x16.neg`.
+	void dispatchI16x8Neg() override; //!< `i16x8.neg`.
+	void dispatchI32x4Neg() override; //!< `i32x4.neg`.
+	void dispatchI64x2Neg() override; //!< `i64x2.neg`.
+	void dispatchI8x16AllTrue() override; //!< `i8x16.all_true`.
+	void dispatchI16x8AllTrue() override; //!< `i16x8.all_true`.
+	void dispatchI32x4AllTrue() override; //!< `i32x4.all_true`.
+	void dispatchI64x2AllTrue() override; //!< `i64x2.all_true`.
 
 	void dispatchI32Load(WASM::MemArg arg) override; //!< `i32.load`.
 	void dispatchI32Load8S(WASM::MemArg arg) override; //!< `i32.load8_s`.
@@ -639,6 +694,16 @@ private:
 	 * \param localIndex Local index.
 	 */
 	void copyStackToLocal(std::size_t depth, std::size_t localIndex);
+	/*!
+	 * \brief Calls a unary v128 helper over the top slot.
+	 * \param address Helper entry point.
+	 */
+	void emitV128Unary(sljit_sw address);
+	/*!
+	 * \brief Calls a v128 reduction helper and leaves its i32 result.
+	 * \param address Helper entry point.
+	 */
+	void emitV128Reduce(sljit_sw address);
 	/*!
 	 * \brief Calls a binary v128 helper over the top two slots.
 	 * \param address Helper entry point.

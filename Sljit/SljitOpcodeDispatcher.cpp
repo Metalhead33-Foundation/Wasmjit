@@ -2496,16 +2496,33 @@ void OpcodeDispatcher::dispatchI32x4ReplaceLane(uint8_t lane)
 	pop();
 }
 
-void OpcodeDispatcher::dispatchV128Not()
+void OpcodeDispatcher::dispatchV128Not() { emitV128Unary(codeAddress(&wasm_v128_not)); }
+
+void OpcodeDispatcher::emitV128Unary(sljit_sw address)
 {
 	if (!reachable_)
 		return;
 	requireStack(1);
 	if (!measureOnly_) {
+		// R0 is the helper's first argument, and sljit_get_local_base clobbers
+		// it on x86, so the output address is materialised last.
 		slotAddress(SLJIT_R1, stackWidths_.size() - 1);
 		slotAddress(SLJIT_R0, stackWidths_.size() - 1);
-		emitHelper(SLJIT_ARGS2V(P, P), &wasm_v128_not);
+		emitHelper(SLJIT_ARGS2V(P, P), address);
 	}
+}
+
+void OpcodeDispatcher::emitV128Reduce(sljit_sw address)
+{
+	if (!reachable_)
+		return;
+	requireStack(1);
+	if (!measureOnly_) {
+		slotAddress(SLJIT_R0, stackWidths_.size() - 1);
+		emitHelper(SLJIT_ARGS1(32, P), address);
+		storeSlot(SLJIT_R0, stackWidths_.size() - 1, 4);
+	}
+	stackWidths_.back() = 4;
 }
 
 void OpcodeDispatcher::emitV128Binary(sljit_sw address)
@@ -2570,6 +2587,64 @@ void OpcodeDispatcher::dispatchV128AnyTrue()
 	}
 	stackWidths_.back() = 4;
 }
+
+void OpcodeDispatcher::dispatchI8x16Add() { emitV128Binary(codeAddress(&wasm_i8x16_add)); }
+void OpcodeDispatcher::dispatchI8x16Sub() { emitV128Binary(codeAddress(&wasm_i8x16_sub)); }
+void OpcodeDispatcher::dispatchI16x8Add() { emitV128Binary(codeAddress(&wasm_i16x8_add)); }
+void OpcodeDispatcher::dispatchI16x8Sub() { emitV128Binary(codeAddress(&wasm_i16x8_sub)); }
+void OpcodeDispatcher::dispatchI16x8Mul() { emitV128Binary(codeAddress(&wasm_i16x8_mul)); }
+void OpcodeDispatcher::dispatchI32x4Add() { emitV128Binary(codeAddress(&wasm_i32x4_add)); }
+void OpcodeDispatcher::dispatchI32x4Sub() { emitV128Binary(codeAddress(&wasm_i32x4_sub)); }
+void OpcodeDispatcher::dispatchI32x4Mul() { emitV128Binary(codeAddress(&wasm_i32x4_mul)); }
+void OpcodeDispatcher::dispatchI64x2Add() { emitV128Binary(codeAddress(&wasm_i64x2_add)); }
+void OpcodeDispatcher::dispatchI64x2Sub() { emitV128Binary(codeAddress(&wasm_i64x2_sub)); }
+void OpcodeDispatcher::dispatchI64x2Mul() { emitV128Binary(codeAddress(&wasm_i64x2_mul)); }
+void OpcodeDispatcher::dispatchI8x16Eq() { emitV128Binary(codeAddress(&wasm_i8x16_eq)); }
+void OpcodeDispatcher::dispatchI8x16Ne() { emitV128Binary(codeAddress(&wasm_i8x16_ne)); }
+void OpcodeDispatcher::dispatchI8x16LtS() { emitV128Binary(codeAddress(&wasm_i8x16_lt_s)); }
+void OpcodeDispatcher::dispatchI8x16LtU() { emitV128Binary(codeAddress(&wasm_i8x16_lt_u)); }
+void OpcodeDispatcher::dispatchI8x16GtS() { emitV128Binary(codeAddress(&wasm_i8x16_gt_s)); }
+void OpcodeDispatcher::dispatchI8x16GtU() { emitV128Binary(codeAddress(&wasm_i8x16_gt_u)); }
+void OpcodeDispatcher::dispatchI8x16LeS() { emitV128Binary(codeAddress(&wasm_i8x16_le_s)); }
+void OpcodeDispatcher::dispatchI8x16LeU() { emitV128Binary(codeAddress(&wasm_i8x16_le_u)); }
+void OpcodeDispatcher::dispatchI8x16GeS() { emitV128Binary(codeAddress(&wasm_i8x16_ge_s)); }
+void OpcodeDispatcher::dispatchI8x16GeU() { emitV128Binary(codeAddress(&wasm_i8x16_ge_u)); }
+void OpcodeDispatcher::dispatchI16x8Eq() { emitV128Binary(codeAddress(&wasm_i16x8_eq)); }
+void OpcodeDispatcher::dispatchI16x8Ne() { emitV128Binary(codeAddress(&wasm_i16x8_ne)); }
+void OpcodeDispatcher::dispatchI16x8LtS() { emitV128Binary(codeAddress(&wasm_i16x8_lt_s)); }
+void OpcodeDispatcher::dispatchI16x8LtU() { emitV128Binary(codeAddress(&wasm_i16x8_lt_u)); }
+void OpcodeDispatcher::dispatchI16x8GtS() { emitV128Binary(codeAddress(&wasm_i16x8_gt_s)); }
+void OpcodeDispatcher::dispatchI16x8GtU() { emitV128Binary(codeAddress(&wasm_i16x8_gt_u)); }
+void OpcodeDispatcher::dispatchI16x8LeS() { emitV128Binary(codeAddress(&wasm_i16x8_le_s)); }
+void OpcodeDispatcher::dispatchI16x8LeU() { emitV128Binary(codeAddress(&wasm_i16x8_le_u)); }
+void OpcodeDispatcher::dispatchI16x8GeS() { emitV128Binary(codeAddress(&wasm_i16x8_ge_s)); }
+void OpcodeDispatcher::dispatchI16x8GeU() { emitV128Binary(codeAddress(&wasm_i16x8_ge_u)); }
+void OpcodeDispatcher::dispatchI32x4Eq() { emitV128Binary(codeAddress(&wasm_i32x4_eq)); }
+void OpcodeDispatcher::dispatchI32x4Ne() { emitV128Binary(codeAddress(&wasm_i32x4_ne)); }
+void OpcodeDispatcher::dispatchI32x4LtS() { emitV128Binary(codeAddress(&wasm_i32x4_lt_s)); }
+void OpcodeDispatcher::dispatchI32x4LtU() { emitV128Binary(codeAddress(&wasm_i32x4_lt_u)); }
+void OpcodeDispatcher::dispatchI32x4GtS() { emitV128Binary(codeAddress(&wasm_i32x4_gt_s)); }
+void OpcodeDispatcher::dispatchI32x4GtU() { emitV128Binary(codeAddress(&wasm_i32x4_gt_u)); }
+void OpcodeDispatcher::dispatchI32x4LeS() { emitV128Binary(codeAddress(&wasm_i32x4_le_s)); }
+void OpcodeDispatcher::dispatchI32x4LeU() { emitV128Binary(codeAddress(&wasm_i32x4_le_u)); }
+void OpcodeDispatcher::dispatchI32x4GeS() { emitV128Binary(codeAddress(&wasm_i32x4_ge_s)); }
+void OpcodeDispatcher::dispatchI32x4GeU() { emitV128Binary(codeAddress(&wasm_i32x4_ge_u)); }
+void OpcodeDispatcher::dispatchI64x2Eq() { emitV128Binary(codeAddress(&wasm_i64x2_eq)); }
+void OpcodeDispatcher::dispatchI64x2Ne() { emitV128Binary(codeAddress(&wasm_i64x2_ne)); }
+void OpcodeDispatcher::dispatchI64x2LtS() { emitV128Binary(codeAddress(&wasm_i64x2_lt_s)); }
+void OpcodeDispatcher::dispatchI64x2GtS() { emitV128Binary(codeAddress(&wasm_i64x2_gt_s)); }
+void OpcodeDispatcher::dispatchI64x2LeS() { emitV128Binary(codeAddress(&wasm_i64x2_le_s)); }
+void OpcodeDispatcher::dispatchI64x2GeS() { emitV128Binary(codeAddress(&wasm_i64x2_ge_s)); }
+
+void OpcodeDispatcher::dispatchI8x16Neg() { emitV128Unary(codeAddress(&wasm_i8x16_neg)); }
+void OpcodeDispatcher::dispatchI16x8Neg() { emitV128Unary(codeAddress(&wasm_i16x8_neg)); }
+void OpcodeDispatcher::dispatchI32x4Neg() { emitV128Unary(codeAddress(&wasm_i32x4_neg)); }
+void OpcodeDispatcher::dispatchI64x2Neg() { emitV128Unary(codeAddress(&wasm_i64x2_neg)); }
+
+void OpcodeDispatcher::dispatchI8x16AllTrue() { emitV128Reduce(codeAddress(&wasm_i8x16_all_true)); }
+void OpcodeDispatcher::dispatchI16x8AllTrue() { emitV128Reduce(codeAddress(&wasm_i16x8_all_true)); }
+void OpcodeDispatcher::dispatchI32x4AllTrue() { emitV128Reduce(codeAddress(&wasm_i32x4_all_true)); }
+void OpcodeDispatcher::dispatchI64x2AllTrue() { emitV128Reduce(codeAddress(&wasm_i64x2_all_true)); }
 
 void OpcodeDispatcher::dispatchI32Add() { emitIntegerBinary(SLJIT_ADD, 4); }
 
