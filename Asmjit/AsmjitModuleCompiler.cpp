@@ -2007,6 +2007,123 @@ protected:
 	void dispatchF64x2ReplaceLane(uint8_t lane) override
 	{ emitVectorReplaceFloat(8, reinterpret_cast<uint64_t>(&wasm_f64x2_replace_lane), lane); }
 
+	// ── v128 transport (extending/splat/zero loads, lane loads and stores) ──
+
+	//! Calls a load-transform helper over a checked address.
+	void emitVectorLoadTransform(WASM::MemArg arg, uint32_t width, uint64_t helper)
+	{
+		if (values.empty())
+			throw std::runtime_error("AsmJit v128 load-transform address underflow");
+		auto address = values.back();
+		values.pop_back();
+		auto pointer = emitMemoryAddress(arg, width, address);
+		auto buffer = newVectorBuffer("v128Transform");
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kVoid);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke), helper, signature),
+				"AsmJit v128 load-transform helper call failed");
+		invoke->set_arg(0, pointer);
+		invoke->set_arg(1, buffer);
+		values.push_back(buffer);
+	}
+
+	//! Calls a lane-load helper over the address and the vector below it.
+	void emitVectorLoadLane(WASM::MemArg arg, uint32_t width, uint8_t lane, uint64_t helper)
+	{
+		if (values.size() < 2)
+			throw std::runtime_error("AsmJit v128 load-lane operand underflow");
+		auto vector = values.back();
+		values.pop_back();
+		auto address = values.back();
+		values.pop_back();
+		auto pointer = emitMemoryAddress(arg, width, address);
+		auto buffer = newVectorBuffer("v128LoadLane");
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kVoid);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke), helper, signature),
+				"AsmJit v128 load-lane helper call failed");
+		invoke->set_arg(0, pointer);
+		invoke->set_arg(1, vector);
+		invoke->set_arg(2, asmjit::Imm(lane));
+		invoke->set_arg(3, buffer);
+		values.push_back(buffer);
+	}
+
+	//! Calls a lane-store helper over the address and the vector below it.
+	void emitVectorStoreLane(WASM::MemArg arg, uint32_t width, uint8_t lane, uint64_t helper)
+	{
+		if (values.size() < 2)
+			throw std::runtime_error("AsmJit v128 store-lane operand underflow");
+		auto vector = values.back();
+		values.pop_back();
+		auto address = values.back();
+		values.pop_back();
+		auto pointer = emitMemoryAddress(arg, width, address);
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kVoid);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke), helper, signature),
+				"AsmJit v128 store-lane helper call failed");
+		invoke->set_arg(0, pointer);
+		invoke->set_arg(1, vector);
+		invoke->set_arg(2, asmjit::Imm(lane));
+	}
+
+	void dispatchV128Load8x8S(WASM::MemArg arg) override
+	{ emitVectorLoadTransform(arg, 8, reinterpret_cast<uint64_t>(&wasm_v128_load8x8_s)); }
+	void dispatchV128Load8x8U(WASM::MemArg arg) override
+	{ emitVectorLoadTransform(arg, 8, reinterpret_cast<uint64_t>(&wasm_v128_load8x8_u)); }
+	void dispatchV128Load16x4S(WASM::MemArg arg) override
+	{ emitVectorLoadTransform(arg, 8, reinterpret_cast<uint64_t>(&wasm_v128_load16x4_s)); }
+	void dispatchV128Load16x4U(WASM::MemArg arg) override
+	{ emitVectorLoadTransform(arg, 8, reinterpret_cast<uint64_t>(&wasm_v128_load16x4_u)); }
+	void dispatchV128Load32x2S(WASM::MemArg arg) override
+	{ emitVectorLoadTransform(arg, 8, reinterpret_cast<uint64_t>(&wasm_v128_load32x2_s)); }
+	void dispatchV128Load32x2U(WASM::MemArg arg) override
+	{ emitVectorLoadTransform(arg, 8, reinterpret_cast<uint64_t>(&wasm_v128_load32x2_u)); }
+	void dispatchV128Load8Splat(WASM::MemArg arg) override
+	{ emitVectorLoadTransform(arg, 1, reinterpret_cast<uint64_t>(&wasm_v128_load8_splat)); }
+	void dispatchV128Load16Splat(WASM::MemArg arg) override
+	{ emitVectorLoadTransform(arg, 2, reinterpret_cast<uint64_t>(&wasm_v128_load16_splat)); }
+	void dispatchV128Load32Splat(WASM::MemArg arg) override
+	{ emitVectorLoadTransform(arg, 4, reinterpret_cast<uint64_t>(&wasm_v128_load32_splat)); }
+	void dispatchV128Load64Splat(WASM::MemArg arg) override
+	{ emitVectorLoadTransform(arg, 8, reinterpret_cast<uint64_t>(&wasm_v128_load64_splat)); }
+	void dispatchV128Load32Zero(WASM::MemArg arg) override
+	{ emitVectorLoadTransform(arg, 4, reinterpret_cast<uint64_t>(&wasm_v128_load32_zero)); }
+	void dispatchV128Load64Zero(WASM::MemArg arg) override
+	{ emitVectorLoadTransform(arg, 8, reinterpret_cast<uint64_t>(&wasm_v128_load64_zero)); }
+
+	void dispatchV128Load8Lane(WASM::MemArg arg1, uint8_t arg2) override
+	{ emitVectorLoadLane(arg1, 1, arg2, reinterpret_cast<uint64_t>(&wasm_v128_load8_lane)); }
+	void dispatchV128Load16Lane(WASM::MemArg arg1, uint8_t arg2) override
+	{ emitVectorLoadLane(arg1, 2, arg2, reinterpret_cast<uint64_t>(&wasm_v128_load16_lane)); }
+	void dispatchV128Load32Lane(WASM::MemArg arg1, uint8_t arg2) override
+	{ emitVectorLoadLane(arg1, 4, arg2, reinterpret_cast<uint64_t>(&wasm_v128_load32_lane)); }
+	void dispatchV128Load64Lane(WASM::MemArg arg1, uint8_t arg2) override
+	{ emitVectorLoadLane(arg1, 8, arg2, reinterpret_cast<uint64_t>(&wasm_v128_load64_lane)); }
+	void dispatchV128Store8Lane(WASM::MemArg arg1, uint8_t arg2) override
+	{ emitVectorStoreLane(arg1, 1, arg2, reinterpret_cast<uint64_t>(&wasm_v128_store8_lane)); }
+	void dispatchV128Store16Lane(WASM::MemArg arg1, uint8_t arg2) override
+	{ emitVectorStoreLane(arg1, 2, arg2, reinterpret_cast<uint64_t>(&wasm_v128_store16_lane)); }
+	void dispatchV128Store32Lane(WASM::MemArg arg1, uint8_t arg2) override
+	{ emitVectorStoreLane(arg1, 4, arg2, reinterpret_cast<uint64_t>(&wasm_v128_store32_lane)); }
+	void dispatchV128Store64Lane(WASM::MemArg arg1, uint8_t arg2) override
+	{ emitVectorStoreLane(arg1, 8, arg2, reinterpret_cast<uint64_t>(&wasm_v128_store64_lane)); }
+
+	void dispatchI8x16Swizzle() override { emitVectorHelper2(&wasm_i8x16_swizzle); }
+
 	void dispatchI8x16Add() override { emitVectorHelper2(&wasm_i8x16_add); }
 	void dispatchI8x16Sub() override { emitVectorHelper2(&wasm_i8x16_sub); }
 	void dispatchI16x8Add() override { emitVectorHelper2(&wasm_i16x8_add); }

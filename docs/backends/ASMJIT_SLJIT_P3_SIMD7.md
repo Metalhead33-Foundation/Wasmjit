@@ -129,8 +129,8 @@ Do not copy:
 
 | Opcode family | Refusal | Status |
 |---|---|---|
-| extending/splat/lane loads, lane stores | `onUnhandledOpcode` | transport-only helpers exist; next slice |
-| `i8x16.shuffle`/`swizzle`, relaxed SIMD | `onUnhandledOpcode` | transport-only helpers exist |
+| extending/splat/zero loads, lane loads, lane stores | **landed in slice 8** ([`ASMJIT_SLJIT_P3_SIMD8.md`](ASMJIT_SLJIT_P3_SIMD8.md)) | `simd_transport.wat` |
+| `i8x16.swizzle` | **landed in slice 8**; `i8x16.shuffle` needs a fifth argument register | `simd_transport.wat` |
 | `v128` parameters/results, block types, `select_t` | refused by name | the remaining P3 item; an ABI decision |
 | `f16` load/store and the `f16` proposal | `onUnhandledOpcode` | not started |
 | references/GC, exceptions, continuations, atomics | unchanged from P3 | unchanged |

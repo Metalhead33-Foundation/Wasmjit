@@ -402,6 +402,27 @@ protected:
 	void dispatchF32x4ReplaceLane(uint8_t arg) override; //!< `f32x4.replace_lane`.
 	void dispatchF64x2ExtractLane(uint8_t arg) override; //!< `f64x2.extract_lane`.
 	void dispatchF64x2ReplaceLane(uint8_t arg) override; //!< `f64x2.replace_lane`.
+	void dispatchV128Load8x8S(WASM::MemArg arg) override; //!< `v128.load8x8_s`.
+	void dispatchV128Load8x8U(WASM::MemArg arg) override; //!< `v128.load8x8_u`.
+	void dispatchV128Load16x4S(WASM::MemArg arg) override; //!< `v128.load16x4_s`.
+	void dispatchV128Load16x4U(WASM::MemArg arg) override; //!< `v128.load16x4_u`.
+	void dispatchV128Load32x2S(WASM::MemArg arg) override; //!< `v128.load32x2_s`.
+	void dispatchV128Load32x2U(WASM::MemArg arg) override; //!< `v128.load32x2_u`.
+	void dispatchV128Load8Splat(WASM::MemArg arg) override; //!< `v128.load8_splat`.
+	void dispatchV128Load16Splat(WASM::MemArg arg) override; //!< `v128.load16_splat`.
+	void dispatchV128Load32Splat(WASM::MemArg arg) override; //!< `v128.load32_splat`.
+	void dispatchV128Load64Splat(WASM::MemArg arg) override; //!< `v128.load64_splat`.
+	void dispatchV128Load32Zero(WASM::MemArg arg) override; //!< `v128.load32_zero`.
+	void dispatchV128Load64Zero(WASM::MemArg arg) override; //!< `v128.load64_zero`.
+	void dispatchV128Load8Lane(WASM::MemArg arg1, uint8_t arg2) override; //!< `v128.load8_lane`.
+	void dispatchV128Load16Lane(WASM::MemArg arg1, uint8_t arg2) override; //!< `v128.load16_lane`.
+	void dispatchV128Load32Lane(WASM::MemArg arg1, uint8_t arg2) override; //!< `v128.load32_lane`.
+	void dispatchV128Load64Lane(WASM::MemArg arg1, uint8_t arg2) override; //!< `v128.load64_lane`.
+	void dispatchV128Store8Lane(WASM::MemArg arg1, uint8_t arg2) override; //!< `v128.store8_lane`.
+	void dispatchV128Store16Lane(WASM::MemArg arg1, uint8_t arg2) override; //!< `v128.store16_lane`.
+	void dispatchV128Store32Lane(WASM::MemArg arg1, uint8_t arg2) override; //!< `v128.store32_lane`.
+	void dispatchV128Store64Lane(WASM::MemArg arg1, uint8_t arg2) override; //!< `v128.store64_lane`.
+	void dispatchI8x16Swizzle() override; //!< `i8x16.swizzle`.
 	void dispatchI8x16Add() override; //!< `i8x16.add`.
 	void dispatchI8x16Sub() override; //!< `i8x16.sub`.
 	void dispatchI16x8Add() override; //!< `i16x8.add`.
@@ -860,6 +881,29 @@ private:
 	 * \param lane Lane index.
 	 */
 	void emitV128ReplaceFloat(sljit_sw address, int width, uint8_t lane);
+	/*!
+	 * \brief Calls a load-transform helper (extending, splatting or zeroing).
+	 * \param arg Memory immediate.
+	 * \param width Bytes read from memory.
+	 * \param address Helper entry point.
+	 */
+	void emitV128LoadTransform(const WASM::MemArg& arg, std::uint32_t width, sljit_sw address);
+	/*!
+	 * \brief Calls a lane-load helper over the address and the vector below it.
+	 * \param arg Memory immediate.
+	 * \param width Lane width in bytes.
+	 * \param lane Lane index.
+	 * \param address Helper entry point.
+	 */
+	void emitV128LoadLane(const WASM::MemArg& arg, std::uint32_t width, uint8_t lane, sljit_sw address);
+	/*!
+	 * \brief Calls a lane-store helper over the address and the vector below it.
+	 * \param arg Memory immediate.
+	 * \param width Lane width in bytes.
+	 * \param lane Lane index.
+	 * \param address Helper entry point.
+	 */
+	void emitV128StoreLane(const WASM::MemArg& arg, std::uint32_t width, uint8_t lane, sljit_sw address);
 	/*!
 	 * \brief Calls a binary v128 helper over the top two slots.
 	 * \param address Helper entry point.

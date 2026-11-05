@@ -1708,3 +1708,102 @@ TEST_CASE("asmjit and sljit agree on the shared v128 float lane module",
 		return WASM::callCallable<double>(c, 9.25);
 	});
 }
+
+
+TEST_CASE("sljit: the shared v128 transport module executes",
+"[sljit][module][parity][simd]")
+{
+auto session = Sljit::createSession();
+REQUIRE(session != nullptr);
+WASM::RegistryImportResolver imports;
+LoadedModule loaded = loadAndInstantiateTestModule("simd_transport", imports, *session);
+REQUIRE(loaded.instance != nullptr);
+WASM::ModuleInstance& instance = *loaded.instance;
+const auto niladic = [&](const char* name) -> std::int32_t {
+const std::optional<WASM::Callable> callable = instance.exportedFunction(name);
+INFO("export " << name);
+REQUIRE(callable.has_value());
+REQUIRE(callable->fnPtr != nullptr);
+return WASM::callCallable<std::int32_t>(*callable);
+};
+
+	CHECK(niladic("load8x8_s") == -1);
+	CHECK(niladic("load8x8_u") == 0x00FF00FF);
+	CHECK(niladic("load16x4_s") == -1);
+	CHECK(niladic("load16x4_u") == 0x0000FFFF);
+	CHECK(niladic("load32x2_s") == -1);
+	CHECK(niladic("load32x2_u") == 0x0000FFFF);
+	CHECK(niladic("load8_splat") == 0x01010101);
+	CHECK(niladic("load16_splat") == 0x00020002);
+	CHECK(niladic("load32_splat") == 5);
+	CHECK(niladic("load64_splat") == 7);
+	CHECK(niladic("load64_splat_hi") == 0);
+	CHECK(niladic("load32_zero") == 5);
+	CHECK(niladic("load32_zero_hi") == 0);
+	CHECK(niladic("load64_zero") == 7);
+	CHECK(niladic("load64_zero_hi") == 0);
+	CHECK(niladic("load8_lane") == 0x00004200);
+	CHECK(niladic("load16_lane") == 0x1234);
+	CHECK(niladic("load32_lane") == static_cast<std::int32_t>(0xDEADBEEFu));
+	CHECK(niladic("load64_lane") == 0x11223344);
+	CHECK(niladic("store8_lane") == 0xAB);
+	CHECK(niladic("store16_lane") == 0xBEEF);
+	CHECK(niladic("store32_lane") == static_cast<std::int32_t>(0xCAFEBABEu));
+	CHECK(niladic("store64_lane") == 0x11223344);
+	CHECK(niladic("swizzle") == 0x01010101);
+	CHECK(niladic("swizzle_oob") == 0);
+}
+
+
+TEST_CASE("asmjit and sljit agree on the shared v128 transport module",
+"[sljit][asmjit][parity][simd]")
+{
+WASM::Module module = loadTestModule("simd_transport");
+AsmJitBackend::Context asmContext;
+AsmJitBackend::ModuleCompiler asmCompiler(asmContext);
+Sljit::ModuleCompiler sljitCompiler;
+WASM::RegistryImportResolver asmImports;
+WASM::RegistryImportResolver sljitImports;
+std::unique_ptr<WASM::ModuleInstance> asmInstance =
+asmCompiler.instantiate(module, asmImports);
+std::unique_ptr<WASM::ModuleInstance> sljitInstance =
+sljitCompiler.instantiate(module, sljitImports);
+REQUIRE(asmInstance != nullptr);
+REQUIRE(sljitInstance != nullptr);
+
+const auto sameNiladic = [&](const char* name) {
+const std::optional<WASM::Callable> asmCallable = asmInstance->exportedFunction(name);
+const std::optional<WASM::Callable> sljitCallable = sljitInstance->exportedFunction(name);
+REQUIRE(asmCallable.has_value());
+REQUIRE(sljitCallable.has_value());
+INFO("export " << name);
+CHECK(WASM::callCallable<std::int32_t>(*asmCallable)
+== WASM::callCallable<std::int32_t>(*sljitCallable));
+};
+
+	sameNiladic("load8x8_s");
+	sameNiladic("load8x8_u");
+	sameNiladic("load16x4_s");
+	sameNiladic("load16x4_u");
+	sameNiladic("load32x2_s");
+	sameNiladic("load32x2_u");
+	sameNiladic("load8_splat");
+	sameNiladic("load16_splat");
+	sameNiladic("load32_splat");
+	sameNiladic("load64_splat");
+	sameNiladic("load64_splat_hi");
+	sameNiladic("load32_zero");
+	sameNiladic("load32_zero_hi");
+	sameNiladic("load64_zero");
+	sameNiladic("load64_zero_hi");
+	sameNiladic("load8_lane");
+	sameNiladic("load16_lane");
+	sameNiladic("load32_lane");
+	sameNiladic("load64_lane");
+	sameNiladic("store8_lane");
+	sameNiladic("store16_lane");
+	sameNiladic("store32_lane");
+	sameNiladic("store64_lane");
+	sameNiladic("swizzle");
+	sameNiladic("swizzle_oob");
+}

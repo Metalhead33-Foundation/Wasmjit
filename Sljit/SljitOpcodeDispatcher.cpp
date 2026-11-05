@@ -422,6 +422,7 @@ extern "C" uint64_t sljitI64TruncSatF64U(double x) noexcept
 //! Checked address of a memory32 access. The immediate offset and the access
 //! width travel packed in one word, because an SLJIT call carries at most four
 //! integer arguments and `VMContext*` is one of them.
+
 extern "C" void* sljitMemoryAddress(WASM::VMContext* vm, uint32_t memoryIndex,
 		uint32_t address, uint64_t offsetAndWidth) noexcept
 {
@@ -2574,6 +2575,77 @@ void OpcodeDispatcher::emitV128ReplaceFloat(sljit_sw address, int width, uint8_t
 	pop();
 }
 
+void OpcodeDispatcher::emitV128LoadTransform(const WASM::MemArg& arg, std::uint32_t width,
+		sljit_sw address)
+{
+	if (!reachable_)
+		return;
+	requireStack(1);
+	const std::size_t depth = stackWidths_.size() - 1;
+	if (!measureOnly_) {
+		emitCheckedMemoryAddress(arg, width, depth);
+		// The result cell is the address cell; the pointer is parked in the
+		// reserved scratch slot while the cell address is materialised, because
+		// sljit_get_local_base clobbers R0 on x86.
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+				scratchSlotOffset(), SLJIT_R0, 0));
+		slotAddress(SLJIT_R1, depth);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0, SLJIT_MEM1(SLJIT_SP),
+				scratchSlotOffset()));
+		emitHelper(SLJIT_ARGS2V(P, P), address);
+	}
+	pop();
+	push(16);
+}
+
+void OpcodeDispatcher::emitV128LoadLane(const WASM::MemArg& arg, std::uint32_t width,
+		uint8_t lane, sljit_sw address)
+{
+	if (!reachable_)
+		return;
+	requireStack(2);
+	const std::size_t addressDepth = stackWidths_.size() - 2;
+	const std::size_t vectorDepth = stackWidths_.size() - 1;
+	if (!measureOnly_) {
+		emitCheckedMemoryAddress(arg, width, addressDepth);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+				scratchSlotOffset(), SLJIT_R0, 0));
+		// The pair collapses to one entry in the address cell, so that cell is
+		// the helper output; `a` stays in the vector cell.
+		slotAddress(SLJIT_R3, addressDepth);
+		slotAddress(SLJIT_R1, vectorDepth);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R2, 0, SLJIT_IMM, lane));
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0, SLJIT_MEM1(SLJIT_SP),
+				scratchSlotOffset()));
+		emitHelper(SLJIT_ARGS4V(P, P, 32, P), address);
+	}
+	pop();
+	pop();
+	push(16);
+}
+
+void OpcodeDispatcher::emitV128StoreLane(const WASM::MemArg& arg, std::uint32_t width,
+		uint8_t lane, sljit_sw address)
+{
+	if (!reachable_)
+		return;
+	requireStack(2);
+	const std::size_t addressDepth = stackWidths_.size() - 2;
+	const std::size_t vectorDepth = stackWidths_.size() - 1;
+	if (!measureOnly_) {
+		emitCheckedMemoryAddress(arg, width, addressDepth);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+				scratchSlotOffset(), SLJIT_R0, 0));
+		slotAddress(SLJIT_R1, vectorDepth);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R2, 0, SLJIT_IMM, lane));
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0, SLJIT_MEM1(SLJIT_SP),
+				scratchSlotOffset()));
+		emitHelper(SLJIT_ARGS3V(P, P, 32), address);
+	}
+	pop();
+	pop();
+}
+
 void OpcodeDispatcher::emitV128Shift(sljit_sw address)
 {
 	if (!reachable_)
@@ -2793,6 +2865,30 @@ void OpcodeDispatcher::dispatchF32x4ExtractLane(uint8_t lane) { emitV128ExtractF
 void OpcodeDispatcher::dispatchF64x2ExtractLane(uint8_t lane) { emitV128ExtractFloat(codeAddress(&wasm_f64x2_extract_lane), 8, lane); }
 void OpcodeDispatcher::dispatchF32x4ReplaceLane(uint8_t lane) { emitV128ReplaceFloat(codeAddress(&wasm_f32x4_replace_lane), 4, lane); }
 void OpcodeDispatcher::dispatchF64x2ReplaceLane(uint8_t lane) { emitV128ReplaceFloat(codeAddress(&wasm_f64x2_replace_lane), 8, lane); }
+
+void OpcodeDispatcher::dispatchV128Load8x8S(WASM::MemArg arg) { emitV128LoadTransform(arg, 8, codeAddress(&wasm_v128_load8x8_s)); }
+void OpcodeDispatcher::dispatchV128Load8x8U(WASM::MemArg arg) { emitV128LoadTransform(arg, 8, codeAddress(&wasm_v128_load8x8_u)); }
+void OpcodeDispatcher::dispatchV128Load16x4S(WASM::MemArg arg) { emitV128LoadTransform(arg, 8, codeAddress(&wasm_v128_load16x4_s)); }
+void OpcodeDispatcher::dispatchV128Load16x4U(WASM::MemArg arg) { emitV128LoadTransform(arg, 8, codeAddress(&wasm_v128_load16x4_u)); }
+void OpcodeDispatcher::dispatchV128Load32x2S(WASM::MemArg arg) { emitV128LoadTransform(arg, 8, codeAddress(&wasm_v128_load32x2_s)); }
+void OpcodeDispatcher::dispatchV128Load32x2U(WASM::MemArg arg) { emitV128LoadTransform(arg, 8, codeAddress(&wasm_v128_load32x2_u)); }
+void OpcodeDispatcher::dispatchV128Load8Splat(WASM::MemArg arg) { emitV128LoadTransform(arg, 1, codeAddress(&wasm_v128_load8_splat)); }
+void OpcodeDispatcher::dispatchV128Load16Splat(WASM::MemArg arg) { emitV128LoadTransform(arg, 2, codeAddress(&wasm_v128_load16_splat)); }
+void OpcodeDispatcher::dispatchV128Load32Splat(WASM::MemArg arg) { emitV128LoadTransform(arg, 4, codeAddress(&wasm_v128_load32_splat)); }
+void OpcodeDispatcher::dispatchV128Load64Splat(WASM::MemArg arg) { emitV128LoadTransform(arg, 8, codeAddress(&wasm_v128_load64_splat)); }
+void OpcodeDispatcher::dispatchV128Load32Zero(WASM::MemArg arg) { emitV128LoadTransform(arg, 4, codeAddress(&wasm_v128_load32_zero)); }
+void OpcodeDispatcher::dispatchV128Load64Zero(WASM::MemArg arg) { emitV128LoadTransform(arg, 8, codeAddress(&wasm_v128_load64_zero)); }
+
+void OpcodeDispatcher::dispatchV128Load8Lane(WASM::MemArg arg1, uint8_t arg2) { emitV128LoadLane(arg1, 1, arg2, codeAddress(&wasm_v128_load8_lane)); }
+void OpcodeDispatcher::dispatchV128Load16Lane(WASM::MemArg arg1, uint8_t arg2) { emitV128LoadLane(arg1, 2, arg2, codeAddress(&wasm_v128_load16_lane)); }
+void OpcodeDispatcher::dispatchV128Load32Lane(WASM::MemArg arg1, uint8_t arg2) { emitV128LoadLane(arg1, 4, arg2, codeAddress(&wasm_v128_load32_lane)); }
+void OpcodeDispatcher::dispatchV128Load64Lane(WASM::MemArg arg1, uint8_t arg2) { emitV128LoadLane(arg1, 8, arg2, codeAddress(&wasm_v128_load64_lane)); }
+void OpcodeDispatcher::dispatchV128Store8Lane(WASM::MemArg arg1, uint8_t arg2) { emitV128StoreLane(arg1, 1, arg2, codeAddress(&wasm_v128_store8_lane)); }
+void OpcodeDispatcher::dispatchV128Store16Lane(WASM::MemArg arg1, uint8_t arg2) { emitV128StoreLane(arg1, 2, arg2, codeAddress(&wasm_v128_store16_lane)); }
+void OpcodeDispatcher::dispatchV128Store32Lane(WASM::MemArg arg1, uint8_t arg2) { emitV128StoreLane(arg1, 4, arg2, codeAddress(&wasm_v128_store32_lane)); }
+void OpcodeDispatcher::dispatchV128Store64Lane(WASM::MemArg arg1, uint8_t arg2) { emitV128StoreLane(arg1, 8, arg2, codeAddress(&wasm_v128_store64_lane)); }
+
+void OpcodeDispatcher::dispatchI8x16Swizzle() { emitV128Binary(codeAddress(&wasm_i8x16_swizzle)); }
 
 void OpcodeDispatcher::dispatchI8x16Add() { emitV128Binary(codeAddress(&wasm_i8x16_add)); }
 void OpcodeDispatcher::dispatchI8x16Sub() { emitV128Binary(codeAddress(&wasm_i8x16_sub)); }
