@@ -1920,6 +1920,93 @@ protected:
 	void dispatchI32x4TruncSatF64x2UZero() override { emitVectorHelper1(&wasm_i32x4_trunc_sat_f64x2_u_zero); }
 	void dispatchF32x4DemoteF64x2Zero() override { emitVectorHelper1(&wasm_f32x4_demote_f64x2_zero); }
 
+	// ── float lane access (the first float-bearing helper signatures) ────────
+	// The value stack carries floats as bit patterns in Gp (the P3 model), so
+	// each call materialises an Xmm argument or moves the Xmm result back.
+
+	//! `f32x4.splat`/`f64x2.splat`: replicate the scalar into every lane.
+	void emitVectorSplatFloat(int width, uint64_t helper)
+	{
+		if (values.empty())
+			throw std::runtime_error("AsmJit v128 float splat operand underflow");
+		auto bits = values.back();
+		values.pop_back();
+		auto buffer = newVectorBuffer("v128FloatSplat");
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kVoid);
+		signature.add_arg(width == 4 ? asmjit::TypeId::kFloat32 : asmjit::TypeId::kFloat64);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		// The argument is materialised before the call node is appended.
+		const auto argument = materializeFloat(bits, width);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke), helper, signature),
+				"AsmJit v128 float splat helper call failed");
+		invoke->set_arg(0, argument);
+		invoke->set_arg(1, buffer);
+		values.push_back(buffer);
+	}
+
+	//! `f32x4.extract_lane`/`f64x2.extract_lane`: push the lane's bits.
+	void emitVectorExtractFloat(int width, uint64_t helper, uint8_t lane)
+	{
+		if (values.empty())
+			throw std::runtime_error("AsmJit v128 float extract operand underflow");
+		auto vector = values.back();
+		values.pop_back();
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(width == 4 ? asmjit::TypeId::kFloat32 : asmjit::TypeId::kFloat64);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke), helper, signature),
+				"AsmJit v128 float extract helper call failed");
+		invoke->set_arg(0, vector);
+		invoke->set_arg(1, asmjit::Imm(lane));
+		auto result = compiler.new_xmm("v128FloatLane");
+		invoke->set_ret(0, result);
+		values.push_back(bitsOfFloat(result, width));
+	}
+
+	//! `f32x4.replace_lane`/`f64x2.replace_lane`.
+	void emitVectorReplaceFloat(int width, uint64_t helper, uint8_t lane)
+	{
+		if (values.size() < 2)
+			throw std::runtime_error("AsmJit v128 float replace operand underflow");
+		auto scalar = values.back();
+		values.pop_back();
+		auto vector = values.back();
+		values.pop_back();
+		auto buffer = newVectorBuffer("v128FloatReplace");
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kVoid);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		signature.add_arg(width == 4 ? asmjit::TypeId::kFloat32 : asmjit::TypeId::kFloat64);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		const auto argument = materializeFloat(scalar, width);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke), helper, signature),
+				"AsmJit v128 float replace helper call failed");
+		invoke->set_arg(0, vector);
+		invoke->set_arg(1, asmjit::Imm(lane));
+		invoke->set_arg(2, argument);
+		invoke->set_arg(3, buffer);
+		values.push_back(buffer);
+	}
+
+	void dispatchF32x4Splat() override
+	{ emitVectorSplatFloat(4, reinterpret_cast<uint64_t>(&wasm_f32x4_splat)); }
+	void dispatchF64x2Splat() override
+	{ emitVectorSplatFloat(8, reinterpret_cast<uint64_t>(&wasm_f64x2_splat)); }
+	void dispatchF32x4ExtractLane(uint8_t lane) override
+	{ emitVectorExtractFloat(4, reinterpret_cast<uint64_t>(&wasm_f32x4_extract_lane), lane); }
+	void dispatchF64x2ExtractLane(uint8_t lane) override
+	{ emitVectorExtractFloat(8, reinterpret_cast<uint64_t>(&wasm_f64x2_extract_lane), lane); }
+	void dispatchF32x4ReplaceLane(uint8_t lane) override
+	{ emitVectorReplaceFloat(4, reinterpret_cast<uint64_t>(&wasm_f32x4_replace_lane), lane); }
+	void dispatchF64x2ReplaceLane(uint8_t lane) override
+	{ emitVectorReplaceFloat(8, reinterpret_cast<uint64_t>(&wasm_f64x2_replace_lane), lane); }
+
 	void dispatchI8x16Add() override { emitVectorHelper2(&wasm_i8x16_add); }
 	void dispatchI8x16Sub() override { emitVectorHelper2(&wasm_i8x16_sub); }
 	void dispatchI16x8Add() override { emitVectorHelper2(&wasm_i16x8_add); }

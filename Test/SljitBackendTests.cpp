@@ -1606,3 +1606,105 @@ CHECK(WASM::callCallable<std::int32_t>(*asmCallable)
 	sameNiladic("f32x4_demote_f64x2_zero");
 	sameNiladic("i32x4_trunc_sat_f64x2_s_zero");
 }
+
+
+TEST_CASE("sljit: the shared v128 float lane module executes",
+"[sljit][module][parity][simd]")
+{
+	auto session = Sljit::createSession();
+	REQUIRE(session != nullptr);
+	WASM::RegistryImportResolver imports;
+	LoadedModule loaded = loadAndInstantiateTestModule("simd_float_lanes", imports, *session);
+	REQUIRE(loaded.instance != nullptr);
+	WASM::ModuleInstance& instance = *loaded.instance;
+	const auto call = [&](const char* name) -> WASM::Callable {
+		const std::optional<WASM::Callable> callable = instance.exportedFunction(name);
+		INFO("export " << name);
+		REQUIRE(callable.has_value());
+		REQUIRE(callable->fnPtr != nullptr);
+		return *callable;
+	};
+
+	CHECK(WASM::callCallable<float>(call("f32x4_extract")) == 3.5f);
+	CHECK(WASM::callCallable<double>(call("f64x2_extract")) == 2.5);
+	CHECK(WASM::callCallable<std::int32_t>(call("f32x4_extract_negzero_bits"))
+			== std::numeric_limits<std::int32_t>::min());
+
+	CHECK(WASM::callCallable<float>(call("f32x4_splat"), 2.5f) == 2.5f);
+	CHECK(WASM::callCallable<double>(call("f64x2_splat"), -1.25) == -1.25);
+	CHECK(WASM::callCallable<std::int32_t>(call("f32x4_splat_bits"), 1.5f) == 0x3FC00000);
+
+	CHECK(WASM::callCallable<float>(call("f32x4_replace"), 7.5f) == 7.5f);
+	CHECK(WASM::callCallable<float>(call("f32x4_replace_neighbour"), 7.5f) == 2.0f);
+	CHECK(WASM::callCallable<double>(call("f64x2_replace"), 9.25) == 9.25);
+	CHECK(WASM::callCallable<double>(call("f64x2_replace_low"), 9.25) == 2.0);
+}
+
+
+TEST_CASE("asmjit and sljit agree on the shared v128 float lane module",
+"[sljit][asmjit][parity][simd]")
+{
+	WASM::Module module = loadTestModule("simd_float_lanes");
+	AsmJitBackend::Context asmContext;
+	AsmJitBackend::ModuleCompiler asmCompiler(asmContext);
+	Sljit::ModuleCompiler sljitCompiler;
+	WASM::RegistryImportResolver asmImports;
+	WASM::RegistryImportResolver sljitImports;
+	std::unique_ptr<WASM::ModuleInstance> asmInstance =
+			asmCompiler.instantiate(module, asmImports);
+	std::unique_ptr<WASM::ModuleInstance> sljitInstance =
+			sljitCompiler.instantiate(module, sljitImports);
+	REQUIRE(asmInstance != nullptr);
+	REQUIRE(sljitInstance != nullptr);
+
+	const auto both = [&](const char* name) {
+		const std::optional<WASM::Callable> asmCallable = asmInstance->exportedFunction(name);
+		const std::optional<WASM::Callable> sljitCallable = sljitInstance->exportedFunction(name);
+		REQUIRE(asmCallable.has_value());
+		REQUIRE(sljitCallable.has_value());
+		return std::pair<WASM::Callable, WASM::Callable>{*asmCallable, *sljitCallable};
+	};
+	const auto sameInt = [&](const char* name, auto&& call) {
+		const auto calls = both(name);
+		INFO("export " << name);
+		CHECK(call(calls.first) == call(calls.second));
+	};
+	const auto sameFloat = [&](const char* name, auto&& call) {
+		const auto calls = both(name);
+		INFO("export " << name);
+		const auto asmValue = call(calls.first);
+		const auto sljitValue = call(calls.second);
+		CHECK(std::memcmp(&asmValue, &sljitValue, sizeof(asmValue)) == 0);
+	};
+
+	sameFloat("f32x4_extract", [](const WASM::Callable& c) {
+		return WASM::callCallable<float>(c);
+	});
+	sameFloat("f64x2_extract", [](const WASM::Callable& c) {
+		return WASM::callCallable<double>(c);
+	});
+	sameInt("f32x4_extract_negzero_bits", [](const WASM::Callable& c) {
+		return WASM::callCallable<std::int32_t>(c);
+	});
+	sameFloat("f32x4_splat", [](const WASM::Callable& c) {
+		return WASM::callCallable<float>(c, 2.5f);
+	});
+	sameFloat("f64x2_splat", [](const WASM::Callable& c) {
+		return WASM::callCallable<double>(c, -1.25);
+	});
+	sameInt("f32x4_splat_bits", [](const WASM::Callable& c) {
+		return WASM::callCallable<std::int32_t>(c, 1.5f);
+	});
+	sameFloat("f32x4_replace", [](const WASM::Callable& c) {
+		return WASM::callCallable<float>(c, 7.5f);
+	});
+	sameFloat("f32x4_replace_neighbour", [](const WASM::Callable& c) {
+		return WASM::callCallable<float>(c, 7.5f);
+	});
+	sameFloat("f64x2_replace", [](const WASM::Callable& c) {
+		return WASM::callCallable<double>(c, 9.25);
+	});
+	sameFloat("f64x2_replace_low", [](const WASM::Callable& c) {
+		return WASM::callCallable<double>(c, 9.25);
+	});
+}

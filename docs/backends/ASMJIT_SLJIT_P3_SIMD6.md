@@ -132,7 +132,7 @@ Do not copy:
 
 | Opcode family | Refusal | Status |
 |---|---|---|
-| `f32x4`/`f64x2` `splat`, `extract_lane`, `replace_lane` | `onUnhandledOpcode` | slice 7: needs float-bearing helper signatures |
+| `f32x4`/`f64x2` `splat`, `extract_lane`, `replace_lane` | **landed in slice 7** ([`ASMJIT_SLJIT_P3_SIMD7.md`](ASMJIT_SLJIT_P3_SIMD7.md)) | `simd_float_lanes.wat` |
 | `f16` load/store and the `f16` proposal | `onUnhandledOpcode` | not started |
 | `i8x16.shuffle`/`swizzle`, relaxed SIMD | `onUnhandledOpcode` | transport-only helpers exist |
 | extending/splat/lane loads, lane stores | `onUnhandledOpcode` | transport-only helpers exist |

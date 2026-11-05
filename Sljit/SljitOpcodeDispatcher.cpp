@@ -2525,6 +2525,55 @@ void OpcodeDispatcher::emitV128Reduce(sljit_sw address)
 	stackWidths_.back() = 4;
 }
 
+void OpcodeDispatcher::emitV128SplatFloat(sljit_sw address, int width)
+{
+	if (!reachable_)
+		return;
+	requireStack(1);
+	const std::size_t depth = stackWidths_.size() - 1;
+	pop();
+	push(16);
+	if (measureOnly_)
+		return;
+	// R0 is the output pointer; the scalar travels in FR0.
+	slotAddress(SLJIT_R0, depth);
+	loadFloatSlot(SLJIT_FR0, depth, width);
+	emitHelper(width == 4 ? SLJIT_ARGS2V(F32, P) : SLJIT_ARGS2V(F64, P), address);
+}
+
+void OpcodeDispatcher::emitV128ExtractFloat(sljit_sw address, int width, uint8_t lane)
+{
+	if (!reachable_)
+		return;
+	requireStack(1);
+	if (!measureOnly_) {
+		slotAddress(SLJIT_R0, stackWidths_.size() - 1);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R1, 0, SLJIT_IMM, lane));
+		emitHelper(width == 4 ? SLJIT_ARGS2(F32, P, 32) : SLJIT_ARGS2(F64, P, 32), address);
+		storeFloatSlot(SLJIT_FR0, stackWidths_.size() - 1, width);
+	}
+	stackWidths_.back() = width;
+}
+
+void OpcodeDispatcher::emitV128ReplaceFloat(sljit_sw address, int width, uint8_t lane)
+{
+	if (!reachable_)
+		return;
+	requireStack(2);
+	const std::size_t vectorDepth = stackWidths_.size() - 2;
+	const std::size_t scalarDepth = stackWidths_.size() - 1;
+	if (!measureOnly_) {
+		// Integer arguments are numbered per class: a -> R0, lane -> R1,
+		// out -> R2; the new lane value travels in FR0.
+		slotAddress(SLJIT_R0, vectorDepth);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R1, 0, SLJIT_IMM, lane));
+		loadFloatSlot(SLJIT_FR0, scalarDepth, width);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R2, 0, SLJIT_R0, 0));
+		emitHelper(width == 4 ? SLJIT_ARGS4V(P, 32, F32, P) : SLJIT_ARGS4V(P, 32, F64, P), address);
+	}
+	pop();
+}
+
 void OpcodeDispatcher::emitV128Shift(sljit_sw address)
 {
 	if (!reachable_)
@@ -2737,6 +2786,13 @@ void OpcodeDispatcher::dispatchF64x2PromoteLowF32x4() { emitV128Unary(codeAddres
 void OpcodeDispatcher::dispatchI32x4TruncSatF64x2SZero() { emitV128Unary(codeAddress(&wasm_i32x4_trunc_sat_f64x2_s_zero)); }
 void OpcodeDispatcher::dispatchI32x4TruncSatF64x2UZero() { emitV128Unary(codeAddress(&wasm_i32x4_trunc_sat_f64x2_u_zero)); }
 void OpcodeDispatcher::dispatchF32x4DemoteF64x2Zero() { emitV128Unary(codeAddress(&wasm_f32x4_demote_f64x2_zero)); }
+
+void OpcodeDispatcher::dispatchF32x4Splat() { emitV128SplatFloat(codeAddress(&wasm_f32x4_splat), 4); }
+void OpcodeDispatcher::dispatchF64x2Splat() { emitV128SplatFloat(codeAddress(&wasm_f64x2_splat), 8); }
+void OpcodeDispatcher::dispatchF32x4ExtractLane(uint8_t lane) { emitV128ExtractFloat(codeAddress(&wasm_f32x4_extract_lane), 4, lane); }
+void OpcodeDispatcher::dispatchF64x2ExtractLane(uint8_t lane) { emitV128ExtractFloat(codeAddress(&wasm_f64x2_extract_lane), 8, lane); }
+void OpcodeDispatcher::dispatchF32x4ReplaceLane(uint8_t lane) { emitV128ReplaceFloat(codeAddress(&wasm_f32x4_replace_lane), 4, lane); }
+void OpcodeDispatcher::dispatchF64x2ReplaceLane(uint8_t lane) { emitV128ReplaceFloat(codeAddress(&wasm_f64x2_replace_lane), 8, lane); }
 
 void OpcodeDispatcher::dispatchI8x16Add() { emitV128Binary(codeAddress(&wasm_i8x16_add)); }
 void OpcodeDispatcher::dispatchI8x16Sub() { emitV128Binary(codeAddress(&wasm_i8x16_sub)); }

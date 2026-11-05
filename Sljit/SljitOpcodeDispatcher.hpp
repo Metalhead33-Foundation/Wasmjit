@@ -396,6 +396,12 @@ protected:
 	void dispatchI32x4TruncSatF64x2SZero() override; //!< `i32x4.trunc_sat_f64x2_s_zero`.
 	void dispatchI32x4TruncSatF64x2UZero() override; //!< `i32x4.trunc_sat_f64x2_u_zero`.
 	void dispatchF32x4DemoteF64x2Zero() override; //!< `f32x4.demote_f64x2_zero`.
+	void dispatchF32x4Splat() override; //!< `f32x4.splat`.
+	void dispatchF64x2Splat() override; //!< `f64x2.splat`.
+	void dispatchF32x4ExtractLane(uint8_t arg) override; //!< `f32x4.extract_lane`.
+	void dispatchF32x4ReplaceLane(uint8_t arg) override; //!< `f32x4.replace_lane`.
+	void dispatchF64x2ExtractLane(uint8_t arg) override; //!< `f64x2.extract_lane`.
+	void dispatchF64x2ReplaceLane(uint8_t arg) override; //!< `f64x2.replace_lane`.
 	void dispatchI8x16Add() override; //!< `i8x16.add`.
 	void dispatchI8x16Sub() override; //!< `i8x16.sub`.
 	void dispatchI16x8Add() override; //!< `i16x8.add`.
@@ -834,6 +840,26 @@ private:
 	 * \param address Helper entry point.
 	 */
 	void emitV128Shift(sljit_sw address);
+	/*!
+	 * \brief Calls a float splat helper over the top scalar slot.
+	 * \param address Helper entry point.
+	 * \param width Scalar width in bytes (4 or 8).
+	 */
+	void emitV128SplatFloat(sljit_sw address, int width);
+	/*!
+	 * \brief Calls a float extract helper and leaves the lane as a scalar.
+	 * \param address Helper entry point.
+	 * \param width Scalar width in bytes (4 or 8).
+	 * \param lane Lane index.
+	 */
+	void emitV128ExtractFloat(sljit_sw address, int width, uint8_t lane);
+	/*!
+	 * \brief Calls a float replace helper over a vector and a scalar lane.
+	 * \param address Helper entry point.
+	 * \param width Scalar width in bytes (4 or 8).
+	 * \param lane Lane index.
+	 */
+	void emitV128ReplaceFloat(sljit_sw address, int width, uint8_t lane);
 	/*!
 	 * \brief Calls a binary v128 helper over the top two slots.
 	 * \param address Helper entry point.
