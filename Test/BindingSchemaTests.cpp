@@ -1935,17 +1935,17 @@ TEST_CASE("WIT interface functions use qualified package modules", "[bindings]")
 	})");
 	std::string error;
 	const auto schema = WASM::Bindings::witSchema(wit,
-			WASM::Bindings::Direction::Complete, "demo", "demo", error,
-			WASM::Bindings::WitAsyncPolicy::AllowSynchronous);
+			WASM::Bindings::Direction::Complete, "demo", "demo", error);
 	REQUIRE(error.empty());
 	REQUIRE(schema.imports.size() == 1u);
 	REQUIRE(schema.imports[0].module == "wasi:filesystem/types@0.3.2");
 
 	std::string rejectedError;
 	const auto rejected = WASM::Bindings::witSchema(wit,
-			WASM::Bindings::Direction::Complete, "demo", "demo", rejectedError);
+			WASM::Bindings::Direction::Complete, "demo", "demo", rejectedError,
+			WASM::Bindings::WitAsyncPolicy::Reject);
 	REQUIRE(rejected.imports.empty());
-	REQUIRE(rejectedError.find("--wit-allow-async") != std::string::npos);
+	REQUIRE(rejectedError.find("--wit-reject-async") != std::string::npos);
 	const std::string header = WASM::Bindings::emit(schema,
 			WASM::Bindings::Language::CHeader);
 	REQUIRE(header.find("WASMJIT_WASM_IMPORT(\"wasi:filesystem/types@0.3.2\"")
@@ -1980,7 +1980,9 @@ TEST_CASE("WIT selects the world package and keeps stability", "[bindings]")
 	})");
 	std::string error;
 	const auto schema = WASM::Bindings::witSchema(wit,
-			WASM::Bindings::Direction::Complete, "", "demo", error);
+			WASM::Bindings::Direction::Complete, "", "demo", error,
+			WASM::Bindings::WitAsyncPolicy::AllowSynchronous,
+			"test:demo@0.1.0");
 	REQUIRE(error.empty());
 	REQUIRE(schema.module == "test:demo@0.1.0");
 	REQUIRE(schema.imports.size() == 1u);
@@ -1988,6 +1990,13 @@ TEST_CASE("WIT selects the world package and keeps stability", "[bindings]")
 			== "0.3.0");
 	REQUIRE(schema.imports[0].raw.at("abi").at("results")[0].at("type")
 			== "i32");
+
+	std::string missingError;
+	const auto missing = WASM::Bindings::witSchema(wit,
+			WASM::Bindings::Direction::Complete, "", "demo", missingError,
+			WASM::Bindings::WitAsyncPolicy::AllowSynchronous, "other:pkg@0.1.0");
+	REQUIRE(missing.imports.empty());
+	REQUIRE(missingError.find("other:pkg@0.1.0") != std::string::npos);
 }
 
 TEST_CASE("WIT named types are qualified by their owning interface", "[bindings]")

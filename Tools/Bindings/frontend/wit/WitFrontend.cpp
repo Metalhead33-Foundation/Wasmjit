@@ -635,7 +635,8 @@ std::string witTypeDisplayName(const Json& document, std::size_t id)
 
 Schema witSchema(const Json& document, Direction direction,
 		std::string_view moduleName, std::string_view worldName,
-		std::string& error, WitAsyncPolicy asyncPolicy)
+		std::string& error, WitAsyncPolicy asyncPolicy,
+		std::string_view packageName)
 {
 	error.clear();
 	if (!document.is_object()) {
@@ -648,15 +649,31 @@ Schema witSchema(const Json& document, Direction direction,
 		return {};
 	}
 
+	const auto worldPackageName = [&](const Json& world) -> std::string {
+		const int id = world.value("package", -1);
+		if (id < 0 || !document.contains("packages")
+				|| !document.at("packages").is_array()
+				|| static_cast<std::size_t>(id) >= document.at("packages").size())
+			return {};
+		return stringAt(document.at("packages").at(static_cast<std::size_t>(id)),
+				"name");
+	};
 	const Json* selected = nullptr;
 	for (const Json& world : *worlds) {
-		if (worldName.empty() || stringAt(world, "name") == worldName) {
+		const bool worldMatches = worldName.empty()
+				? packageName.empty() || worldPackageName(world) == packageName
+				: stringAt(world, "name") == worldName
+				&& (packageName.empty() || worldPackageName(world) == packageName);
+		if (worldMatches) {
 			selected = &world;
 			break;
 		}
 	}
 	if (selected == nullptr) {
-		error = "WIT JSON: requested world was not found";
+		error = packageName.empty()
+				? "WIT JSON: requested world was not found"
+				: "WIT JSON: requested world was not found in package '"
+						+ std::string(packageName) + "'";
 		return {};
 	}
 
@@ -727,8 +744,9 @@ Schema witSchema(const Json& document, Direction direction,
 			for (const Entry& entry : entries) {
 				if (entry.raw.value("witAsync", false)) {
 					error = "WIT async function '" + entry.name
-							+ "' has no generated async ABI; "
-							  "pass --wit-allow-async to emit synchronous stubs";
+							+ "' is rejected by the selected async policy; "
+							  "remove --wit-reject-async or select "
+							  "WitAsyncPolicy::AllowSynchronous";
 					return true;
 				}
 			}
@@ -748,7 +766,7 @@ Schema witSchema(const Json& document, Direction direction,
 
 Schema witSchemaFromFile(const std::filesystem::path& path, Direction direction,
 		std::string_view moduleName, std::string_view worldName, bool forceJson,
-		std::string& error, WitAsyncPolicy asyncPolicy)
+		std::string& error, WitAsyncPolicy asyncPolicy, std::string_view packageName)
 {
 	error.clear();
 	if (!std::filesystem::is_regular_file(path)
@@ -780,7 +798,7 @@ Schema witSchemaFromFile(const std::filesystem::path& path, Direction direction,
 		Schema schema;
 		try {
 			schema = witSchema(Json::parse(readText(jsonPath)), direction,
-					moduleName, worldName, error, asyncPolicy);
+					moduleName, worldName, error, asyncPolicy, packageName);
 		} catch (const std::exception& exception) {
 			error = std::string("WIT JSON: ") + exception.what();
 		}
@@ -791,7 +809,7 @@ Schema witSchemaFromFile(const std::filesystem::path& path, Direction direction,
 
 	try {
 		return witSchema(Json::parse(readText(path)), direction, moduleName,
-				worldName, error, asyncPolicy);
+				worldName, error, asyncPolicy, packageName);
 	} catch (const std::exception& exception) {
 		error = std::string("WIT JSON: ") + exception.what();
 		return {};

@@ -75,7 +75,8 @@ std::string witTypeDisplayName(const nlohmann::ordered_json& document,
 Schema witSchema(const nlohmann::ordered_json& document, Direction direction,
 		std::string_view moduleName, std::string_view worldName,
 		std::string& error,
-		WitAsyncPolicy asyncPolicy = WitAsyncPolicy::Reject);
+		WitAsyncPolicy asyncPolicy = WitAsyncPolicy::AllowSynchronous,
+		std::string_view packageName = {});
 
 /*!
  * \brief Loads a WIT JSON file or a WIT text/package path.
@@ -92,12 +93,14 @@ Schema witSchema(const nlohmann::ordered_json& document, Direction direction,
  * \param forceJson Treat \p path as WIT JSON even without a `.json` extension.
  * \param error Receives a diagnostic when the file/tool/JSON is invalid.
  * \param asyncPolicy How async WIT functions are handled.
+ * \param packageName The package to select, or empty for any package.
  * \return The projected typed schema, or an empty schema on error.
  */
 Schema witSchemaFromFile(const std::filesystem::path& path, Direction direction,
 		std::string_view moduleName, std::string_view worldName, bool forceJson,
 		std::string& error,
-		WitAsyncPolicy asyncPolicy = WitAsyncPolicy::Reject);
+		WitAsyncPolicy asyncPolicy = WitAsyncPolicy::AllowSynchronous,
+		std::string_view packageName = {});
 
 } // namespace WASM::Bindings
 

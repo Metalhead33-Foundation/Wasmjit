@@ -66,8 +66,10 @@ void usage(std::ostream& out)
 		   "                           wasm-tools component wit --json)\n"
 		   "  --wit-json FILE          WIT JSON input produced by wasm-tools\n"
 		   "  --wit-world NAME         select a WIT world (default: first)\n"
-		   "  --wit-allow-async        emit documented synchronous stubs for async\n"
-		   "                           WIT (the default is to reject async WIT)\n"
+		   "  --wit-package NAME       select the package that owns the world\n"
+		   "  --wit-reject-async       reject async WIT functions instead of\n"
+		   "                           emitting documented synchronous stubs\n"
+		   "                           (default: allow synchronous stubs)\n"
 		   "  --wit-reject-unstable    reject WIT entries marked @unstable\n"
 		   "  --frontend-schema        with --candidates/--glue-candidates, derive a\n"
 		   "                           G2H imports schema (or emit any --emit target)\n"
@@ -86,6 +88,7 @@ int main(int argc, char** argv)
 	std::string witPath;
 	std::string witJsonPath;
 	std::string witWorld;
+	std::string witPackage;
 	bool frontendSchema = false;
 	bool schemaInput = false;
 	bool rejectAsync = false;
@@ -121,6 +124,8 @@ int main(int argc, char** argv)
 			witJsonPath = argv[++i];
 		} else if (arg == "--wit-world" && i + 1 < argc) {
 			witWorld = argv[++i];
+		} else if (arg == "--wit-package" && i + 1 < argc) {
+			witPackage = argv[++i];
 		} else if (arg == "--wit-reject-async") {
 			rejectAsync = true;
 		} else if (arg == "--wit-allow-async") {
@@ -151,8 +156,9 @@ int main(int argc, char** argv)
 		std::cerr << "wasmjit-bindings: choose --wit or --wit-json, not both\n";
 		return 2;
 	}
-	if ((rejectAsync || allowAsync || rejectUnstable) && !witInput) {
-		std::cerr << "wasmjit-bindings: WIT async/stability policy flags "
+	if ((rejectAsync || allowAsync || rejectUnstable || !witPackage.empty())
+			&& !witInput) {
+		std::cerr << "wasmjit-bindings: WIT policy/selection flags "
 				 "require WIT input\n";
 		return 2;
 	}
@@ -214,8 +220,9 @@ int main(int argc, char** argv)
 			const std::filesystem::path path = !witPath.empty() ? witPath : witJsonPath;
 			WASM::Bindings::Schema schema = WASM::Bindings::witSchemaFromFile(
 					path, direction, moduleName, witWorld, !witJsonPath.empty(), error,
-					allowAsync ? WASM::Bindings::WitAsyncPolicy::AllowSynchronous
-							: WASM::Bindings::WitAsyncPolicy::Reject);
+					rejectAsync ? WASM::Bindings::WitAsyncPolicy::Reject
+							: WASM::Bindings::WitAsyncPolicy::AllowSynchronous,
+					witPackage);
 			if (!error.empty()) {
 				std::cerr << "wasmjit-bindings: " << error << "\n";
 				return 1;
