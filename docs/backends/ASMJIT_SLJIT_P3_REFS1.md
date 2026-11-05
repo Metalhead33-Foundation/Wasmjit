@@ -160,7 +160,22 @@ SLJIT refuses functions with more than three parameters. The bound is a single
   invalid mapping or the encoding truncates.
 
 Reverted in full: constant, messages, fixture and the two test cases. The suite
-  is back to its pre-attempt count. The item is recorded in the closure table as
+  is back to its pre-attempt count.
+
+**Second attempt, same day — and the saved-register count does not explain it.**
+  `SLJIT_NUMBER_OF_SAVED_REGISTERS` is **6** on Linux x86-64 (`S0..S5`), so the
+  context plus five parameters is exactly the ceiling and four should be
+  comfortable. Retried with an **SLJIT-only** test so AsmJit could not be the
+  culprit: five parameters crashed, and **four parameters crashed as well**, both
+  with `SIGILL` right after the session's first assertions. So the bound of
+  three is *not* explained by the saved-register file, and the fault is inside
+  SLJIT's own prologue/epilogue for those shapes.
+
+**What the next attempt must do:** instrument `sljit_emit_enter`'s return value
+  and its `saveds`/`arg_types` arguments, and check whether the call path's
+  `SLJIT_ARG_VALUE(..., i + 2)` encoding is at fault, before touching the
+  constant again. Until then the three-parameter refusal stands and is the safe
+  behaviour: it refuses, it does not miscompile. The item is recorded in the closure table as
   **attempted-and-reverted** so nobody spends the same hour twice; the next
   attempt should start by checking `SLJIT_NUMBER_OF_SAVED_REGISTERS` against
   `1 + parameterCount` and by reading what `sljit_emit_enter` actually validates,
@@ -194,7 +209,7 @@ The `v128` function-boundary work was analysed and **deliberately deferred**; th
 | exceptions | not started | P4 |
 | `call_ref`, continuations | not started | P5 |
 | atomics, `f16`, relaxed SIMD, bulk memory on a memory64 | refused by name | proposal-level, still open |
-| SLJIT: >3 parameters | refused by name | **attempted and reverted** (entry 8): raising the constant crashes; start from the saved-register count |
+| SLJIT: >3 parameters | refused by name | **two attempts, both crash** (entry 8): five parameters and even four `SIGILL` with an SLJIT-only test; the saved-register count does not explain it |
 | AsmJit: multi-value block results; block parameters | refused by name | pre-existing capability gaps that predate this saga; also blocks `br_on_non_null` |
 
 **Closure rule for whoever writes the final saga post-mortem:** every row above
