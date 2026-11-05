@@ -1888,6 +1888,7 @@ TEST_CASE("sljit: the shared reference module executes",
 
 	CHECK(niladic("null_is_null") == 1);
 	CHECK(niladic("null_extern_is_null") == 1);
+	CHECK_THROWS(niladic("as_non_null_traps"));
 }
 
 
@@ -1919,4 +1920,13 @@ TEST_CASE("asmjit and sljit agree on the shared reference module",
 
 	sameNiladic("null_is_null");
 	sameNiladic("null_extern_is_null");
+	// Both backends must refuse the same null reference at run time.
+	{
+		const std::optional<WASM::Callable> asmFn = asmInstance->exportedFunction("as_non_null_traps");
+		const std::optional<WASM::Callable> sljitFn = sljitInstance->exportedFunction("as_non_null_traps");
+		REQUIRE(asmFn.has_value());
+		REQUIRE(sljitFn.has_value());
+		CHECK_THROWS(WASM::callCallable<std::int32_t>(*asmFn));
+		CHECK_THROWS(WASM::callCallable<std::int32_t>(*sljitFn));
+	}
 }

@@ -477,6 +477,11 @@ WASM::Callable* asmjitResolveIndirectCallable(WASM::VMContext* vm, uint32_t tabl
 	return callable;
 }
 
+void asmjitReportNullReference() noexcept
+{
+	WASM::reportTrap(WASM::TrapKind::NullReference);
+}
+
 void asmjitReportUnreachable() noexcept
 {
 	WASM::reportTrap(WASM::TrapKind::Unreachable);
@@ -2145,6 +2150,24 @@ protected:
 		checkError(compiler.set(asmjit::x86::CondCode::kE, result.r8()),
 				"AsmJit ref.is_null set failed");
 		values.push_back(result);
+	}
+
+	void dispatchRefAsNonNull() override
+	{
+		if (values.empty())
+			throw std::runtime_error("AsmJit ref.as_non_null operand underflow");
+		auto reference = values.back();
+		asmjit::Label notNull = compiler.new_label();
+		checkError(compiler.test(reference, reference), "AsmJit ref.as_non_null test failed");
+		checkError(compiler.jnz(notNull), "AsmJit ref.as_non_null branch failed");
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kVoid);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke),
+				reinterpret_cast<uint64_t>(&asmjitReportNullReference), signature),
+				"AsmJit ref.as_non_null trap helper emission failed");
+		emitPendingTrapReturn();
+		checkError(compiler.bind(notNull), "AsmJit ref.as_non_null label binding failed");
 	}
 
 	void dispatchRefEq() override

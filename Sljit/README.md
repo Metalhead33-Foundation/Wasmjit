@@ -53,7 +53,9 @@ The emitter lowers:
   `splat`/`extract_lane`/`replace_lane`), and the transport families (extending,
   splatting and zeroing loads, lane loads and lane stores, `i8x16.swizzle` and
   `i8x16.shuffle`), all through the core's shared helper ABI;
-- `ref.null`, `ref.is_null` and `ref.eq` (typed nulls are not modelled).
+- `ref.null`, `ref.is_null`, `ref.eq` and `ref.as_non_null` with its null
+  trap (typed nulls are not modelled; `ref.func` is blocked on a shared
+  callable resolver).
 
 A unit test exercises the same `asmjit_i32_basic`/`asmjit_i64_basic` fixtures
 that the AsmJit suite uses (`[sljit][module][parity]`), so the shared slice is

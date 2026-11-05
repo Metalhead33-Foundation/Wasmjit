@@ -8,4 +8,9 @@
   (func (export "null_extern_is_null") (result i32)
     ref.null extern
     ref.is_null)
+  (func (export "as_non_null_traps") (result i32)
+    ref.null func
+    ref.as_non_null
+    drop
+    i32.const 1)
 )

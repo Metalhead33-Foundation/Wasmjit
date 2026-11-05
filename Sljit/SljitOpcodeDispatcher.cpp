@@ -89,6 +89,11 @@ extern "C" sljit_sw sljitTrapPending()
 }
 
 //! Reports the spec's `unreachable` trap without returning through a Wasm frame.
+extern "C" void sljitReportNullReference() noexcept
+{
+	WASM::reportTrap(WASM::TrapKind::NullReference);
+}
+
 extern "C" void sljitReportUnreachable() noexcept
 {
 	WASM::reportTrap(WASM::TrapKind::Unreachable);
@@ -2979,6 +2984,28 @@ void OpcodeDispatcher::dispatchRefIsNull()
 		storeSlot(SLJIT_R1, stackWidths_.size() - 1, 4);
 	}
 	stackWidths_.back() = 4;
+}
+
+void OpcodeDispatcher::dispatchRefAsNonNull()
+{
+	if (!reachable_)
+		return;
+	requireStack(1);
+	require(stackWidths_.back() == 8, "ref.as_non_null requires a reference operand");
+	if (!measureOnly_) {
+		loadSlot(SLJIT_R0, stackWidths_.size() - 1, 8);
+		sljit_jump* notNull = sljit_emit_cmp(compiler_, SLJIT_NOT_EQUAL,
+				SLJIT_R0, 0, SLJIT_IMM, 0);
+		if (notNull == nullptr)
+			ok_ = false;
+		emitHelper(SLJIT_ARGS0V(), &sljitReportNullReference);
+		emitTrapBranch();
+		sljit_label* done = sljit_emit_label(compiler_);
+		if (done == nullptr)
+			ok_ = false;
+		else if (notNull != nullptr)
+			sljit_set_label(notNull, done);
+	}
 }
 
 void OpcodeDispatcher::dispatchRefEq()
