@@ -2986,6 +2986,63 @@ void OpcodeDispatcher::dispatchRefIsNull()
 	stackWidths_.back() = 4;
 }
 
+void OpcodeDispatcher::dispatchBrOnNull(WASM::LabelIdx depth)
+{
+	require(reachable_, "a br_on_null appears in unreachable code");
+	require(depth <= controls_.size(), "the br_on_null label depth is out of range");
+	requireStack(1);
+	require(stackWidths_.back() == 8, "br_on_null requires a reference operand");
+	// The reference stays on the stack for the non-null path.
+	if (depth == controls_.size()) {
+		require(resultWidth_ == 0, "br_on_null to the function label requires a void result");
+		if (measureOnly_)
+			return;
+		loadSlot(SLJIT_R0, stackWidths_.size() - 1, 8);
+		sljit_jump* notNull = sljit_emit_cmp(compiler_, SLJIT_NOT_EQUAL,
+				SLJIT_R0, 0, SLJIT_IMM, 0);
+		if (notNull == nullptr)
+			ok_ = false;
+		emitReturnValue();
+		sljit_label* skip = sljit_emit_label(compiler_);
+		if (skip == nullptr)
+			ok_ = false;
+		else if (notNull != nullptr)
+			sljit_set_label(notNull, skip);
+		return;
+	}
+	ControlFrame& target = controls_[controls_.size() - 1 - depth];
+	const std::vector<int>& widths =
+			target.kind == ControlKind::Loop ? target.paramWidths : target.resultWidths;
+	require(widths.empty(), "br_on_null requires a label without results or parameters");
+	if (measureOnly_) {
+		if (target.kind != ControlKind::Loop)
+			target.endTargeted = true;
+		return;
+	}
+	loadSlot(SLJIT_R0, stackWidths_.size() - 1, 8);
+	sljit_jump* notNull = sljit_emit_cmp(compiler_, SLJIT_NOT_EQUAL,
+			SLJIT_R0, 0, SLJIT_IMM, 0);
+	if (notNull == nullptr)
+		ok_ = false;
+	sljit_jump* jump = sljit_emit_jump(compiler_, SLJIT_JUMP);
+	if (jump == nullptr) {
+		ok_ = false;
+	} else if (target.kind == ControlKind::Loop) {
+		if (target.begin == nullptr)
+			ok_ = false;
+		else
+			sljit_set_label(jump, target.begin);
+	} else {
+		target.endJumps.push_back(jump);
+		target.endTargeted = true;
+	}
+	sljit_label* skip = sljit_emit_label(compiler_);
+	if (skip == nullptr)
+		ok_ = false;
+	else if (notNull != nullptr)
+		sljit_set_label(notNull, skip);
+}
+
 void OpcodeDispatcher::dispatchRefFunc(WASM::FuncIdx arg)
 {
 	if (!reachable_)

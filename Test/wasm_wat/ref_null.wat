@@ -24,4 +24,22 @@
     ref.as_non_null
     drop
     i32.const 1)
+  (func (export "br_on_null_null") (result i32) (local i32)
+    block
+      ref.null func
+      br_on_null 0
+      drop
+      i32.const 7
+      local.set 0
+    end
+    local.get 0)
+  (func (export "br_on_null_func") (result i32) (local i32)
+    block
+      ref.func $f0
+      br_on_null 0
+      drop
+      i32.const 7
+      local.set 0
+    end
+    local.get 0)
 )

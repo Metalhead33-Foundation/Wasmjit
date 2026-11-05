@@ -426,6 +426,7 @@ protected:
 	void dispatchI8x16Swizzle() override; //!< `i8x16.swizzle`.
 	void dispatchRefNull(const WASM::HeapType& arg) override; //!< `ref.null`.
 	void dispatchRefIsNull() override; //!< `ref.is_null`.
+	void dispatchBrOnNull(WASM::LabelIdx arg) override; //!< `br_on_null`.
 	void dispatchRefFunc(WASM::FuncIdx arg) override; //!< `ref.func`.
 	void dispatchRefAsNonNull() override; //!< `ref.as_non_null`.
 	void dispatchRefEq() override; //!< `ref.eq`.

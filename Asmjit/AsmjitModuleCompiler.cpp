@@ -2152,6 +2152,34 @@ protected:
 		values.push_back(result);
 	}
 
+	void dispatchBrOnNull(WASM::LabelIdx depth) override
+	{
+		if (values.empty())
+			throw std::runtime_error("AsmJit br_on_null operand underflow");
+		if (depth > controls.size())
+			throw std::runtime_error("AsmJit br_on_null label depth is out of range");
+		auto reference = values.back();
+		if (depth == controls.size()) {
+			if (resultCount != 0)
+				throw std::runtime_error("AsmJit br_on_null to the function label requires a void result");
+			auto skip = compiler.new_label();
+			checkError(compiler.test(reference, reference), "AsmJit br_on_null test failed");
+			checkError(compiler.jnz(skip), "AsmJit br_on_null skip failed");
+			checkError(compiler.ret(), "AsmJit br_on_null return failed");
+			checkError(compiler.bind(skip), "AsmJit br_on_null label binding failed");
+			return;
+		}
+		ControlFrame& target = controls[controls.size() - 1 - depth];
+		const size_t branchValues = target.kind == ControlKind::Loop ? 0 : target.resultCount;
+		if (branchValues != 0)
+			throw std::runtime_error("AsmJit br_on_null requires a label without results");
+		if (values.size() != target.stackHeight + 1)
+			throw std::runtime_error("AsmJit br_on_null operand stack does not match the target label");
+		const asmjit::Label label = target.kind == ControlKind::Loop ? target.begin : target.end;
+		checkError(compiler.test(reference, reference), "AsmJit br_on_null test failed");
+		checkError(compiler.jz(label), "AsmJit br_on_null branch failed");
+	}
+
 	void dispatchRefFunc(WASM::FuncIdx index) override
 	{
 		const size_t importedCount = module.importFunctions.size();

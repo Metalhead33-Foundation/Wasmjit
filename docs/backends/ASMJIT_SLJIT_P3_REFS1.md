@@ -10,6 +10,7 @@ Scope: the first non-SIMD feature after the v128 series — three reference ops,
 **Chunk 2:** `ref.as_non_null` with its null-reference trap.
 **Chunk 3:** `ref.func` (a runtime resolver on SLJIT, a code address on
 AsmJit) and the non-null paths it unlocks.
+**Chunk 4:** `br_on_null`.
 Out: `br_on_null`/`br_on_non_null`, GC types, `call_ref`, and a `ref.eq`
 fixture (blocked by the type system, §entry 5).
 
@@ -105,6 +106,28 @@ blocker is the GC work in the closure table — not the callable resolver. The
 earlier assumption (`ref.func` would unlock it) was wrong and is corrected here
 rather than left to mislead the next session.
 
+### 2026-11-05 — entry 6: `br_on_null` (and why `br_on_non_null` is not here)
+
+- **`br_on_null` is a conditional branch plus a kept value.** The reference is
+  popped conceptually — on the null path it branches to the label with nothing,
+  on the non-null path it stays on the stack. SLJIT mirrors `br_if`'s shape: a
+  compare whose *non-null* arm skips, an unconditional jump registered on the
+  target frame's `endJumps` (or bound to the loop head). AsmJit uses
+  `test` + `jz(label)`, and relies on its existing frame bookkeeping: it requires
+  the label to carry **no results**, and the operand stack to be exactly
+  `stackHeight + 1` so the kept reference cannot be mistaken for a branch value.
+- **`br_on_non_null` needs a label that carries the reference**, i.e. a block
+  with a parameter of reference type. AsmJit's structured control flow still
+  supports no block parameters (a pre-existing gap, listed in the closure table),
+  so implementing it on SLJIT alone would create a capability divergence for no
+  gain. It stays refused by name in both backends until block parameters land.
+- **A fixture lesson about AsmJit's block stack.** The first version of the
+  `br_on_null` exports used `return` inside the block; AsmJit then reported
+  `structured block leaves an unexpected operand stack shape` because the block's
+  fallthrough stack no longer matched its frame. The working shape uses a local
+  and a fallthrough assignment, which is also the better test: the null path
+  yields `0`, the non-null path `7`, and both are asserted.
+
 ## 1. What the shared ABI forced
 
 Nothing — no helper is involved. The reference ops are pure register/slot work,
@@ -128,7 +151,7 @@ The `v128` function-boundary work was analysed and **deliberately deferred**; th
 | `v128` results | deferred; **SLJIT cannot express it** | SysV returns the 16-byte struct in RAX:RDX; SLJIT's return is one register and its R1 is not RDX |
 | Wasm→Wasm calls with `v128` | deferred | SLJIT's `SLJIT_ARGS*` are fixed-arity; AsmJit's per-type signature cache needs the two-slot form |
 | `ref.eq` fixture | lowered, unfixtured | needs a `(ref null eq)` value, which only **GC construction** can produce |
-| `br_on_null`/`br_on_non_null` | `onUnhandledOpcode` | branch plumbing over the same word; next reference chunk |
+| `br_on_non_null` | `onUnhandledOpcode` | needs a label carrying the reference, i.e. **block parameters** (AsmJit gap) |
 | GC types and barriers | not started | the P4 gate in `WRITING_A_BACKEND.md` §6 |
 | exceptions | not started | P4 |
 | `call_ref`, continuations | not started | P5 |
@@ -176,7 +199,7 @@ Do not copy: assuming `ref.eq` is testable with nulls — the engine requires
 
 | Opcode family | Refusal | Status |
 |---|---|---|
-| `br_on_null`, `br_on_non_null` | `onUnhandledOpcode` | next reference chunk |
+| `br_on_non_null` | `onUnhandledOpcode` | blocked on AsmJit block parameters |
 | `ref.eq` | lowered, **unfixtured** | needs a GC-constructed `(ref null eq)` |
 | `ref.eq` | lowered, **unfixtured** | needs an `eqref`; pairs with `ref.func` |
 | GC types/structs/arrays, `call_ref`, continuations | refused by name | P4/P5 |
@@ -187,10 +210,11 @@ Do not copy: assuming `ref.eq` is testable with nulls — the engine requires
 ## 8. Sign-off
 
 - Chunks: (1) `ref.null`, `ref.is_null`, `ref.eq`; (2) `ref.as_non_null`;
-  (3) `ref.func`. 5 hooks per backend, with `ref.eq` lowered but unfixtured.
+  (3) `ref.func`; (4) `br_on_null`. 6 hooks per backend, with `ref.eq` lowered
+  but unfixtured and `br_on_non_null` refused on AsmJit block parameters.
 - Commit: working tree on `backendsMh33`.
-- Commands and counts: `./Test/WasmJit '[ref]'` — 35 assertions in 2 cases; the
-  full suite — 21032 assertions in 695 cases; `[headerdoc]` — green;
+- Commands and counts: `./Test/WasmJit '[ref]'` — 47 assertions in 2 cases; the
+  full suite — 21044 assertions in 695 cases; `[headerdoc]` — green;
   `doxygen Doxyfile` — exit 0 with no warnings.
 - **Carried forward explicitly:** the deferred `v128` decision in §2. It must be
   resolved before the saga closes.

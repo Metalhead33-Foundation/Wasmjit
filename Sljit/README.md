@@ -54,8 +54,9 @@ The emitter lowers:
   splatting and zeroing loads, lane loads and lane stores, `i8x16.swizzle` and
   `i8x16.shuffle`), all through the core's shared helper ABI;
 - `ref.null`, `ref.is_null`, `ref.eq`, `ref.as_non_null` with its null trap,
-  and `ref.func` (resolved at run time); `ref.eq` is lowered but unfixtured until
-  GC values exist.
+  `ref.func` (resolved at run time) and `br_on_null`; `ref.eq` is lowered but
+  unfixtured until GC values exist, and `br_on_non_null` waits on AsmJit block
+  parameters.
 
 A unit test exercises the same `asmjit_i32_basic`/`asmjit_i64_basic` fixtures
 that the AsmJit suite uses (`[sljit][module][parity]`), so the shared slice is
