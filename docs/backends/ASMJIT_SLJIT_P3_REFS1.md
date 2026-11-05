@@ -7,8 +7,11 @@ Scope: the first non-SIMD feature after the v128 series — three reference ops,
   one word each, no signature support required because every fixture keeps the
   reference on the operand stack.
 
-**Chunk 2 (same note):** `ref.as_non_null` with its null-reference trap.
-Out: `ref.func`, `br_on_null`/`br_on_non_null`, GC types, `call_ref`.
+**Chunk 2:** `ref.as_non_null` with its null-reference trap.
+**Chunk 3:** `ref.func` (a runtime resolver on SLJIT, a code address on
+AsmJit) and the non-null paths it unlocks.
+Out: `br_on_null`/`br_on_non_null`, GC types, `call_ref`, and a `ref.eq`
+fixture (blocked by the type system, §entry 5).
 
 ## 0. Development log
 
@@ -61,6 +64,47 @@ So an `eqref` cannot be constructed from a null alone in this engine; it needs
   `ref.func`; today only the trap path is asserted. That is the honest state of
   the reference surface.
 
+### 2026-11-05 — entry 4: `ref.func`, and why the two backends (rightly) differ
+
+A previous draft of this note called `ref.func` blocked on a *shared* callable
+resolver. That was the wrong instinct: the backends only owe the same
+**observable behaviour**, not the same machine code. Each now does what is
+natural — and cheapest — for its own toolkit:
+
+- **SLJIT calls its resolver.** `ModuleCompiler::resolveCallable(vm, index)`
+  returns the instance's `Callable*` at run time; the emitter is one context
+  load, one index materialisation and one helper call. It works for internal and
+  imported functions alike, because the resolver looks both up in the context.
+- **AsmJit never calls anything.** An internal function reference is the address
+  of the compiled body — `lea reg, [functions[i]->label()]`, one instruction and
+  no memory traffic; an imported one is `mov reg, imm64` of the already-resolved
+  `fnPtr` from `internals.importStorage`. AsmJit already knows both at emission
+  time, so a runtime lookup would be strictly worse.
+
+**The addresses differ between backends, deliberately.** Wasm can only compare a
+reference and ask whether it is null, and both relations are identical across
+the two choices (distinct functions have distinct bodies; the resolver returns
+one pointer per index). Nothing user-visible depends on the value, so there is
+no reason to make the cheaper backend pay for the other's representation.
+
+### 2026-11-05 — entry 5: `ref.eq` is blocked by the type system, not by us
+
+With `ref.func` available, `ref.eq` was the next candidate. The engine rejects
+it every way this slice tried:
+
+| Operands | Result |
+|---|---|
+| `ref.null extern` vs itself | rejected: not an `eqref` |
+| `ref.null func` vs itself | rejected: not an `eqref` |
+| `ref.null any` vs itself | rejected: `anyref` is a **supertype** of `eqref` |
+
+`ref.eq` requires operands of type `(ref null eq)`, and the only way to build a
+value of that type in this engine is a **GC** construction (`struct.new`,
+`array.new`, …). So `ref.eq` is lowered in both backends, **unfixtured**, and the
+blocker is the GC work in the closure table — not the callable resolver. The
+earlier assumption (`ref.func` would unlock it) was wrong and is corrected here
+rather than left to mislead the next session.
+
 ## 1. What the shared ABI forced
 
 Nothing — no helper is involved. The reference ops are pure register/slot work,
@@ -83,7 +127,8 @@ The `v128` function-boundary work was analysed and **deliberately deferred**; th
 | `v128` parameters (both backends) | deferred, analysed | needs the two-slot parameter mapping (two GPRs per Wasm parameter) in the prologue, the call path and the signature cache |
 | `v128` results | deferred; **SLJIT cannot express it** | SysV returns the 16-byte struct in RAX:RDX; SLJIT's return is one register and its R1 is not RDX |
 | Wasm→Wasm calls with `v128` | deferred | SLJIT's `SLJIT_ARGS*` are fixed-arity; AsmJit's per-type signature cache needs the two-slot form |
-| `ref.func`, `ref.eq` fixture, `br_on_null`/`br_on_non_null` | this note's gaps | `ref.func` needs a **shared** callable resolver (embedding-surface decision); `ref.eq` needs an `eqref`, i.e. `ref.func` |
+| `ref.eq` fixture | lowered, unfixtured | needs a `(ref null eq)` value, which only **GC construction** can produce |
+| `br_on_null`/`br_on_non_null` | `onUnhandledOpcode` | branch plumbing over the same word; next reference chunk |
 | GC types and barriers | not started | the P4 gate in `WRITING_A_BACKEND.md` §6 |
 | exceptions | not started | P4 |
 | `call_ref`, continuations | not started | P5 |
@@ -105,10 +150,11 @@ Nothing in this slice. The next reference ops need two things the backends do
 
 ## 4. What the tests did not catch
 
-- **`ref.eq` is unasserted** (§0.2) — the one op in the slice with no coverage.
-- **No non-null reference exists in any fixture**, so `ref.is_null` and the
-  success path of `ref.as_non_null` are untested; `ref.func` is what unlocks
-  both, plus `ref.eq` on non-null operands.
+- **`ref.eq` is unasserted** (entry 5) — the one op in the surface with no
+  coverage at all, and it will stay that way until GC values exist.
+- **Imported `ref.func` is untested.** The fixture only references internal
+  functions; the AsmJit `mov imm64` path for imports and the SLJIT resolver
+  path for imports are both unexercised.
 - **Typed-null distinctions are not modelled**, so nothing asserts that
   `ref.null func` and `ref.null extern` coincide on both backends.
 - **References in locals/parameters/blocks** are refused, not tested.
@@ -130,7 +176,8 @@ Do not copy: assuming `ref.eq` is testable with nulls — the engine requires
 
 | Opcode family | Refusal | Status |
 |---|---|---|
-| `ref.func`, `br_on_null`, `br_on_non_null` | `onUnhandledOpcode` | blocked on a shared callable resolver |
+| `br_on_null`, `br_on_non_null` | `onUnhandledOpcode` | next reference chunk |
+| `ref.eq` | lowered, **unfixtured** | needs a GC-constructed `(ref null eq)` |
 | `ref.eq` | lowered, **unfixtured** | needs an `eqref`; pairs with `ref.func` |
 | GC types/structs/arrays, `call_ref`, continuations | refused by name | P4/P5 |
 | exceptions | refused by name | P4 |
@@ -139,12 +186,11 @@ Do not copy: assuming `ref.eq` is testable with nulls — the engine requires
 
 ## 8. Sign-off
 
-- Chunks: (1) `ref.null`, `ref.is_null`, `ref.eq`; (2) `ref.as_non_null` with
-  its trap. 4 hooks per backend; `ref.eq` and the `ref.as_non_null` success path
-  are unfixtured pending `ref.func`.
+- Chunks: (1) `ref.null`, `ref.is_null`, `ref.eq`; (2) `ref.as_non_null`;
+  (3) `ref.func`. 5 hooks per backend, with `ref.eq` lowered but unfixtured.
 - Commit: working tree on `backendsMh33`.
-- Commands and counts: `./Test/WasmJit '[ref]'` — 23 assertions in 2 cases; the
-  full suite — 21020 assertions in 695 cases; `[headerdoc]` — green;
+- Commands and counts: `./Test/WasmJit '[ref]'` — 35 assertions in 2 cases; the
+  full suite — 21032 assertions in 695 cases; `[headerdoc]` — green;
   `doxygen Doxyfile` — exit 0 with no warnings.
 - **Carried forward explicitly:** the deferred `v128` decision in §2. It must be
   resolved before the saga closes.

@@ -2986,6 +2986,22 @@ void OpcodeDispatcher::dispatchRefIsNull()
 	stackWidths_.back() = 4;
 }
 
+void OpcodeDispatcher::dispatchRefFunc(WASM::FuncIdx arg)
+{
+	if (!reachable_)
+		return;
+	push(8);
+	if (measureOnly_)
+		return;
+	// SLJIT resolves the callable at run time: its own `resolveCallable` maps a
+	// function index to the instance's Callable, which is what a reference is.
+	loadContext(SLJIT_R0);
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R1, 0, SLJIT_IMM,
+			static_cast<sljit_sw>(arg)));
+	emitHelper(SLJIT_ARGS2(P, P, 32), &ModuleCompiler::resolveCallable);
+	storeSlot(SLJIT_R0, stackWidths_.size() - 1, 8);
+}
+
 void OpcodeDispatcher::dispatchRefAsNonNull()
 {
 	if (!reachable_)

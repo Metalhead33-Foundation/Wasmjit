@@ -2152,6 +2152,32 @@ protected:
 		values.push_back(result);
 	}
 
+	void dispatchRefFunc(WASM::FuncIdx index) override
+	{
+		const size_t importedCount = module.importFunctions.size();
+		const size_t totalCount = importedCount + module.internalFunctionTypeIndices.size();
+		if (index >= totalCount)
+			throw std::runtime_error("AsmJit ref.func index is out of range");
+		// The reference is the function's own code address, so no call and no
+		// memory load are needed. Equality is all Wasm can observe, and distinct
+		// functions have distinct bodies.
+		auto reference = compiler.new_gp_ptr("funcRef");
+		if (index >= importedCount) {
+			const size_t internalIndex = static_cast<size_t>(index) - importedCount;
+			checkError(compiler.lea(reference,
+					asmjit::x86::ptr(functions[internalIndex]->label())),
+					"AsmJit ref.func address emission failed");
+		} else {
+			if (index >= internals.importStorage.size()
+					|| internals.importStorage[index].fnPtr == nullptr)
+				throw std::runtime_error("AsmJit ref.func references an unresolved function import");
+			checkError(compiler.mov(reference,
+					reinterpret_cast<uint64_t>(internals.importStorage[index].fnPtr)),
+					"AsmJit ref.func import materialisation failed");
+		}
+		values.push_back(reference);
+	}
+
 	void dispatchRefAsNonNull() override
 	{
 		if (values.empty())
