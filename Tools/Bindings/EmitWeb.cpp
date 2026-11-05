@@ -88,6 +88,11 @@ std::string emitAssemblyScriptImpl(const Json& schema)
 	std::ostringstream out;
 	out << "// Generated from the " << schema.at("schema").get<std::string>() << " "
 		<< schema.at("direction").get<std::string>() << " schema. Do not edit.\n\n";
+	std::set<std::string> witTypes;
+	collectWitTypeNames(schema, witTypes);
+	for (const std::string& type : witTypes)
+		out << "export class " << type << " { private constructor() {} }\n";
+	out << "\n";
 
 	forEachFunction(schema, "imports", [&](const Json& entry) {
 		out << "@external(\"" << importModule(entry) << "\", \""

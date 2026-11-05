@@ -239,12 +239,31 @@ void collectRefs(const Json& node, std::set<std::string>& names)
 	}
 }
 
+void collectWitTypeNames(const Json& schema, std::set<std::string>& names)
+{
+	if (schema.value("frontend", "") != "wit"
+			|| !schema.contains("types") || !schema.at("types").is_array())
+		return;
+	std::size_t index = 0;
+	for (const Json& definition : schema.at("types")) {
+		const std::size_t id = index++;
+		if (!definition.is_object() || witTypeIsAlias(definition))
+			continue;
+		const std::string name = definition.contains("witName")
+				? definition.value("witName", std::string())
+				: witTypeDisplayName(schema, id);
+		if (!name.empty())
+			names.insert(witOpaqueTypeName(name));
+	}
+}
+
 void collectSchemaRefs(const Json& schema, std::set<std::string>& names)
 {
 	if (schema.contains("types"))
 		collectRefs(schema.at("types"), names);
 	collectRefs(schema.at("imports"), names);
 	collectRefs(schema.at("exports"), names);
+	collectWitTypeNames(schema, names);
 }
 
 std::string importModule(const Json& entry)
@@ -396,8 +415,11 @@ std::string emitCHeaderImpl(const Json& schema)
 	out << "#ifdef __cplusplus\nextern \"C\" {\n#endif\n\n";
 	out << "typedef struct wasm_v128 { uint8_t bytes[16]; } wasm_v128;\n";
 	emitWitOpaqueTypes(out, schema, false);
-	for (const std::string& ref : refs)
+	for (const std::string& ref : refs) {
+		if (ref.rfind("wasmjit_wit_", 0) == 0)
+			continue;
 		out << "typedef struct " << ref << " " << ref << ";\n";
+	}
 	out << "\n/* Reference types are opaque. Reference parameters are borrowed unless\n"
 		   "   the adapter says otherwise; reference results carry an explicit\n"
 		   "   ownership note. This header defines no layout, no TypeId and no\n"

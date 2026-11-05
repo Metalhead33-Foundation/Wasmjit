@@ -2058,6 +2058,65 @@ TEST_CASE("WIT named types are qualified by their owning interface", "[bindings]
 	REQUIRE(model.types[0].displayName == "wasi_filesystem_types_0_3_2_point");
 }
 
+TEST_CASE("every target declares named WIT types", "[bindings]")
+{
+	const Json wit = Json::parse(R"({
+		"worlds": [{
+			"name": "demo",
+			"imports": { "echo": { "function": {
+				"name": "echo",
+				"params": [{ "name": "p", "type": 0 }],
+				"result": 0 } } },
+			"exports": {},
+			"package": 0
+		}],
+		"interfaces": [],
+		"types": [{
+			"name": "point",
+			"kind": { "record": { "fields": [
+				{ "name": "x", "type": "s32" }] } }
+		}],
+		"packages": [{
+			"name": "test:demo@0.1.0",
+			"interfaces": {},
+			"worlds": { "demo": 0 }
+		}]
+	})");
+	std::string error;
+	const auto schema = WASM::Bindings::witSchema(wit,
+			WASM::Bindings::Direction::Complete, "demo", "demo", error);
+	REQUIRE(error.empty());
+	for (const auto language : {
+			WASM::Bindings::Language::CHeader,
+			WASM::Bindings::Language::Rust,
+			WASM::Bindings::Language::TypeScript,
+			WASM::Bindings::Language::AssemblyScript,
+			WASM::Bindings::Language::Zig,
+			WASM::Bindings::Language::Kotlin,
+			WASM::Bindings::Language::MoonBit,
+			WASM::Bindings::Language::Go,
+			WASM::Bindings::Language::Dart,
+			WASM::Bindings::Language::Java,
+			WASM::Bindings::Language::CSharp,
+			WASM::Bindings::Language::FSharp,
+			WASM::Bindings::Language::Python,
+			WASM::Bindings::Language::Ruby,
+			WASM::Bindings::Language::Lua,
+			WASM::Bindings::Language::Swift,
+			WASM::Bindings::Language::DLang,
+			WASM::Bindings::Language::Nim,
+			WASM::Bindings::Language::Crystal,
+			WASM::Bindings::Language::Ada,
+			WASM::Bindings::Language::Pascal,
+			WASM::Bindings::Language::Haskell,
+			WASM::Bindings::Language::CppTypedefs }) {
+		INFO(WASM::Bindings::languageName(language));
+		const std::string output = WASM::Bindings::emit(schema, language);
+		REQUIRE((output.find("wasmjit_wit_point") != std::string::npos
+				|| output.find("WasmjitWitPoint") != std::string::npos));
+	}
+}
+
 TEST_CASE("WIT JSON names agree with the component schema", "[bindings]")
 {
 	if (!haveTool("command -v wasm-tools > /dev/null 2>&1")) {

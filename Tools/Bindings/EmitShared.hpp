@@ -51,6 +51,9 @@ void collectRefs(const Json& node, std::set<std::string>& names);
 //! Collects opaque reference names from a complete schema.
 void collectSchemaRefs(const Json& schema, std::set<std::string>& names);
 
+//! Collects the generated names of all non-alias WIT types.
+void collectWitTypeNames(const Json& schema, std::set<std::string>& names);
+
 //! Returns an import's Wasm module, falling back to `component`.
 std::string importModule(const Json& entry);
 

@@ -35,6 +35,11 @@ std::string emitPythonImpl(const Json& schema)
 		<< schema.at("direction").get<std::string>() << " schema. Do not edit.\n";
 	out << "import ctypes\n\n";
 	out << "class WasmExternref(ctypes.Structure):\n\tpass\n\n";
+	std::set<std::string> witTypes;
+	collectWitTypeNames(schema, witTypes);
+	for (const std::string& type : witTypes)
+		out << "class " << type << "(ctypes.Structure):\n\tpass\n";
+	out << "\n";
 	forEachFunction(schema, "imports", [&](const Json& entry) {
 		const std::string name = "wasmjit_" + sanitize(importModule(entry)) + "_"
 				+ sanitize(entry.at("name").get<std::string>());
@@ -74,6 +79,11 @@ std::string emitRubyImpl(const Json& schema)
 		<< schema.at("direction").get<std::string>() << " schema. Do not edit.\n";
 	out << "require 'fiddle'\nrequire 'fiddle/import'\n\n";
 	out << "module WasmJitBindings\n\textend Fiddle::Importer\n\n";
+	std::set<std::string> witTypes;
+	collectWitTypeNames(schema, witTypes);
+	for (const std::string& type : witTypes)
+		out << "\t" << pascalName(type) << " = Object\n";
+	out << "\n";
 	out << "\t# Use dlload with the host's Wasm bridge library before calling.\n";
 	forEachFunction(schema, "imports", [&](const Json& entry) {
 		out << "\t# G2H import: " << importComment(entry) << "\n";
@@ -110,6 +120,10 @@ std::string emitLuaImpl(const Json& schema)
 		<< schema.at("schema").get<std::string>() << " "
 		<< schema.at("direction").get<std::string>() << " schema. Do not edit.\n";
 	out << "local ffi = require(\"ffi\")\n\nffi.cdef[[\n";
+	std::set<std::string> witTypes;
+	collectWitTypeNames(schema, witTypes);
+	for (const std::string& type : witTypes)
+		out << "typedef struct " << type << " " << type << ";\n";
 	forEachFunction(schema, "exports", [&](const Json& entry) {
 		out << "typedef " << (signatureResults(entry).size() == 1
 				? luaType(signatureResults(entry)[0]) : "void")
@@ -165,6 +179,11 @@ std::string emitSwiftImpl(const Json& schema)
 		<< schema.at("direction").get<std::string>() << " schema. Do not edit.\n";
 	out << "import Foundation\n\n";
 	out << "public typealias WasmExternref = UnsafeMutableRawPointer\n\n";
+	std::set<std::string> witTypes;
+	collectWitTypeNames(schema, witTypes);
+	for (const std::string& type : witTypes)
+		out << "public struct " << type << " { }\n";
+	out << "\n";
 	forEachFunction(schema, "exports", [&](const Json& entry) {
 		const std::string name = sanitize(entry.at("name").get<std::string>());
 		out << "public typealias Wasmjit_" << name << "_Fn = @convention(c) (";
@@ -222,6 +241,11 @@ std::string emitDLangImpl(const Json& schema)
 		<< schema.at("schema").get<std::string>() << " "
 		<< schema.at("direction").get<std::string>() << " schema. Do not edit.\n";
 	out << "extern(C):\n\n";
+	std::set<std::string> witTypes;
+	collectWitTypeNames(schema, witTypes);
+	for (const std::string& type : witTypes)
+		out << "struct " << type << " { }\n";
+	out << "\n";
 	forEachFunction(schema, "exports", [&](const Json& entry) {
 		const std::string name = sanitize(entry.at("name").get<std::string>());
 		out << "alias Wasmjit_" << name << "_Fn = " << dType(
@@ -276,6 +300,11 @@ std::string emitNimImpl(const Json& schema)
 	out << "# Generated Nim bindings from the "
 		<< schema.at("schema").get<std::string>() << " "
 		<< schema.at("direction").get<std::string>() << " schema. Do not edit.\n";
+	std::set<std::string> witTypes;
+	collectWitTypeNames(schema, witTypes);
+	for (const std::string& type : witTypes)
+		out << "type " << type << "* = object\n";
+	out << "\n";
 	forEachFunction(schema, "exports", [&](const Json& entry) {
 		const std::string name = sanitize(entry.at("name").get<std::string>());
 		out << "type Wasmjit_" << name << "_Fn = proc(";
@@ -331,6 +360,11 @@ std::string emitCrystalImpl(const Json& schema)
 		<< schema.at("schema").get<std::string>() << " "
 		<< schema.at("direction").get<std::string>() << " schema. Do not edit.\n";
 	out << "lib WasmJitBindings\n";
+	std::set<std::string> witTypes;
+	collectWitTypeNames(schema, witTypes);
+	for (const std::string& type : witTypes)
+		out << "  struct " << type << "\n  end\n";
+	out << "\n";
 	forEachFunction(schema, "exports", [&](const Json& entry) {
 		const std::string name = sanitize(entry.at("name").get<std::string>());
 		out << "  alias Wasmjit_" << name << "_Fn = (";
@@ -385,6 +419,11 @@ std::string emitAdaImpl(const Json& schema)
 		<< schema.at("direction").get<std::string>() << " schema. Do not edit.\n";
 	out << "with Interfaces; use Interfaces;\n";
 	out << "with System;\n\npackage WasmJit.Bindings is\n";
+	std::set<std::string> witTypes;
+	collectWitTypeNames(schema, witTypes);
+	for (const std::string& type : witTypes)
+		out << "   type " << pascalName(type) << " is new System.Address;\n";
+	out << "\n";
 	forEachFunction(schema, "exports", [&](const Json& entry) {
 		const std::string name = sanitize(entry.at("name").get<std::string>());
 		out << "   type Wasmjit_" << name << "_Fn is access function (";
@@ -442,6 +481,10 @@ std::string emitPascalImpl(const Json& schema)
 		<< schema.at("schema").get<std::string>() << " "
 		<< schema.at("direction").get<std::string>() << " schema. Do not edit. }\n";
 	out << "unit WasmJitBindings;\n\ninterface\n\ntype\n";
+	std::set<std::string> witTypes;
+	collectWitTypeNames(schema, witTypes);
+	for (const std::string& type : witTypes)
+		out << "  " << type << " = Pointer;\n";
 	forEachFunction(schema, "exports", [&](const Json& entry) {
 		const std::string name = sanitize(entry.at("name").get<std::string>());
 		out << "  Wasmjit_" << name << "_Fn = function (";
@@ -499,6 +542,11 @@ std::string emitHaskellImpl(const Json& schema)
 	out << "{-# LANGUAGE ForeignFunctionInterface #-}\n";
 	out << "module WasmJitBindings where\n\n";
 	out << "import Foreign.C.Types\nimport Foreign.Ptr\n\n";
+	std::set<std::string> witTypes;
+	collectWitTypeNames(schema, witTypes);
+	for (const std::string& type : witTypes)
+		out << "data " << pascalName(type) << " = " << pascalName(type) << "\n";
+	out << "\n";
 	forEachFunction(schema, "exports", [&](const Json& entry) {
 		out << "-- H2G export: " << exportComment(entry) << "\n";
 		out << "type Wasmjit_" << sanitize(entry.at("name").get<std::string>())

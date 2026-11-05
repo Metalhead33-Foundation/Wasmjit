@@ -168,6 +168,11 @@ std::string emitCSharpImpl(const Json& schema)
 		<< schema.at("direction").get<std::string>() << " schema. Do not edit.\n";
 	out << "using System;\nusing System.Runtime.InteropServices;\n\n";
 	out << "public static unsafe class WasmJitBindings\n{\n";
+	std::set<std::string> witTypes;
+	collectWitTypeNames(schema, witTypes);
+	for (const std::string& type : witTypes)
+		out << "\tpublic struct " << pascalName(type) << " { }\n";
+	out << "\n";
 	forEachFunction(schema, "exports", [&](const Json& entry) {
 		const std::string name = entry.at("name").get<std::string>();
 		out << "\t// H2G export: " << exportComment(entry) << "\n";
@@ -207,6 +212,11 @@ std::string emitFSharpImpl(const Json& schema)
 		<< schema.at("direction").get<std::string>() << " schema. Do not edit.\n";
 	out << "open System\nopen System.Runtime.InteropServices\n\n";
 	out << "module WasmJitBindings\n\n";
+	std::set<std::string> witTypes;
+	collectWitTypeNames(schema, witTypes);
+	for (const std::string& type : witTypes)
+		out << "type " << pascalName(type) << " = nativeint\n";
+	out << "\n";
 	forEachFunction(schema, "exports", [&](const Json& entry) {
 		const std::string name = entry.at("name").get<std::string>();
 		out << "// H2G export: " << exportComment(entry) << "\n";

@@ -280,8 +280,11 @@ std::string emitCppTypedefsImpl(const Json& schema)
 	out << "struct wasm_v128 { std::uint8_t bytes[16]; };\n";
 	emitWitOpaqueTypes(out, schema, true);
 	emitWitCppTypeDefinitions(out, schema);
-	for (const std::string& ref : refs)
+	for (const std::string& ref : refs) {
+		if (ref.rfind("wasmjit_wit_", 0) == 0)
+			continue;
 		out << "struct " << ref << ";\n";
+	}
 	out << "\n// A Callable's fnPtr is `ret f(VMContext*, params...)`; multi-value\n"
 		   "// results use a trailing result buffer.\n";
 	if (emitImports) {
