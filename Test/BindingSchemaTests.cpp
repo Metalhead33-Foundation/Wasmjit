@@ -1764,24 +1764,35 @@ TEST_CASE("WIT type aliases resolve through the type table", "[bindings]")
 
 TEST_CASE("WIT records get named C++ declarations", "[bindings]")
 {
-	const Json wit = {
-		{ "worlds", Json::array({
-			{ { "name", "demo" },
-				{ "imports", { { "echo", { { "function", {
-					{ "name", "echo" },
-					{ "params", Json::array({ { { "name", "value" },
-						{ "type", 0 } } }) },
-					{ "result", 0 } } } } } } },
-				{ "exports", Json::object() }, { "package", 0 } } }) },
-		{ "interfaces", Json::array() },
-		{ "types", Json::array({
-			{ { "name", "point" }, { "kind", { { "record", {
-				{ "fields", Json::array({ { { "name", "x" },
-					{ "type", "s32" } } }) } } } } } } }) },
-		{ "packages", Json::array({ { { "name", "test:demo@0.1.0" },
-			{ "interfaces", Json::object() },
-			{ "worlds", { { "demo", 0 } } } } }) },
-	};
+	const Json wit = Json::parse(R"({
+		"worlds": [{
+			"name": "demo",
+			"imports": { "echo": { "function": {
+				"name": "echo",
+				"params": [{ "name": "value", "type": 0 }],
+				"result": 0 } } },
+			"exports": {},
+			"package": 0
+		}],
+		"interfaces": [],
+		"types": [
+			{ "name": "point", "kind": { "record": {
+				"fields": [{ "name": "x", "type": "s32" }] } } },
+			{ "name": "color", "kind": { "enum": {
+				"cases": [{ "name": "red" }, { "name": "green" }] } } },
+			{ "name": "perms", "kind": { "flags": {
+				"flags": [{ "name": "read" }, { "name": "write" }] } } },
+			{ "kind": { "list": "u8" } },
+			{ "kind": { "variant": { "cases": [
+				{ "name": "point", "type": 0 },
+				{ "name": "empty", "type": null }] } } }
+		],
+		"packages": [{
+			"name": "test:demo@0.1.0",
+			"interfaces": {},
+			"worlds": { "demo": 0 }
+		}]
+	})");
 	std::string error;
 	const auto schema = WASM::Bindings::witSchema(wit,
 			WASM::Bindings::Direction::Complete, "demo", "demo", error);
@@ -1794,6 +1805,57 @@ TEST_CASE("WIT records get named C++ declarations", "[bindings]")
 	REQUIRE(header.find("struct wasmjit_wit_point {") != std::string::npos);
 	REQUIRE(header.find("int32_t x;") != std::string::npos);
 	REQUIRE(header.find("wasmjit_wit_point* value")
+			!= std::string::npos);
+	REQUIRE(header.find("enum class wasmjit_wit_color") != std::string::npos);
+	REQUIRE(header.find("red = 0") != std::string::npos);
+	REQUIRE(header.find("using wasmjit_wit_perms = std::uint32_t;")
+			!= std::string::npos);
+	REQUIRE(header.find("wasmjit_wit_perms_read") != std::string::npos);
+	REQUIRE(header.find("struct wasmjit_wit_type_3 {") != std::string::npos);
+	REQUIRE(header.find("uint8_t* data;") != std::string::npos);
+	REQUIRE(header.find("struct wasmjit_wit_type_4 {") != std::string::npos);
+	REQUIRE(header.find("Tag tag;") != std::string::npos);
+	REQUIRE(header.find("wasmjit_wit_point* point;") != std::string::npos);
+}
+
+TEST_CASE("WIT interface functions use qualified package modules", "[bindings]")
+{
+	const Json wit = Json::parse(R"({
+		"worlds": [{
+			"name": "demo",
+			"imports": { "interface-0": { "interface": { "id": 0 } } },
+			"exports": {},
+			"package": 0
+		}],
+		"interfaces": [{
+			"name": "types",
+			"package": 0,
+			"functions": { "[method]descriptor.get-type": {
+				"name": "[method]descriptor.get-type",
+				"kind": { "async-method": 0 },
+				"params": [{ "name": "self", "type": "u32" }],
+				"result": "u32" } }
+		}],
+		"types": [],
+		"packages": [{
+			"name": "wasi:filesystem@0.3.2",
+			"interfaces": { "types": 0 },
+			"worlds": {}
+		}]
+	})");
+	std::string error;
+	const auto schema = WASM::Bindings::witSchema(wit,
+			WASM::Bindings::Direction::Complete, "demo", "demo", error);
+	REQUIRE(error.empty());
+	REQUIRE(schema.imports.size() == 1u);
+	REQUIRE(schema.imports[0].module == "wasi:filesystem/types@0.3.2");
+	const std::string header = WASM::Bindings::emit(schema,
+			WASM::Bindings::Language::CHeader);
+	REQUIRE(header.find("WASMJIT_WASM_IMPORT(\"wasi:filesystem/types@0.3.2\"")
+			!= std::string::npos);
+	REQUIRE(header.find("wasmjit_wasi_filesystem_types_0_3_2")
+			!= std::string::npos);
+	REQUIRE(header.find("WIT async functions are emitted as synchronous")
 			!= std::string::npos);
 }
 

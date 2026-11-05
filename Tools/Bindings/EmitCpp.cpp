@@ -87,6 +87,96 @@ std::string witCppDefinitionName(const Json& definition, std::size_t index)
 	return witOpaqueTypeName("type-" + std::to_string(index));
 }
 
+std::string witCppType(const Json& document, const Json& type)
+{
+	return cType(witResolveType(document, type));
+}
+
+bool witCppIsVoid(const Json& document, const Json& type)
+{
+	if (type.is_null())
+		return true;
+	const Json resolved = witResolveType(document, type);
+	return resolved.value("type", "") == "void";
+}
+
+void emitWitCppNamedField(std::ostringstream& out, const Json& document,
+		const Json& field)
+{
+	if (!field.is_object() || !field.contains("name")
+			|| !field.at("name").is_string())
+		return;
+	out << "\t" << witCppType(document, field.value("type", Json{})) << " "
+		<< sanitize(field.at("name").get<std::string>()) << ";\n";
+}
+
+void emitWitCppRecord(std::ostringstream& out, const Json& document,
+		const Json& kind)
+{
+	const auto fields = kind.at("record").find("fields");
+	if (fields == kind.at("record").end() || !fields->is_array())
+		return;
+	for (const Json& field : *fields)
+		emitWitCppNamedField(out, document, field);
+}
+
+void emitWitCppVariant(std::ostringstream& out, const Json& document,
+		const Json& kind)
+{
+	const Json& variant = kind.at("variant");
+	const auto cases = variant.find("cases");
+	if (cases == variant.end() || !cases->is_array())
+		return;
+	out << "\tenum class Tag : std::uint32_t {\n";
+	std::size_t caseIndex = 0;
+	for (const Json& alternative : *cases) {
+		out << "\t\t" << sanitize(alternative.value("name", std::string()))
+			<< " = " << caseIndex++ << ",\n";
+	}
+	out << "\t};\n\tTag tag;\n";
+	bool hasPayload = false;
+	for (const Json& alternative : *cases)
+		if (alternative.contains("type") && !alternative.at("type").is_null())
+			hasPayload = true;
+	if (!hasPayload)
+		return;
+	out << "\tunion {\n";
+	for (const Json& alternative : *cases) {
+		if (!alternative.contains("type") || alternative.at("type").is_null())
+			continue;
+		out << "\t\t" << witCppType(document, alternative.at("type")) << " "
+			<< sanitize(alternative.value("name", std::string())) << ";\n";
+	}
+	out << "\t} payload;\n";
+}
+
+void emitWitCppTuple(std::ostringstream& out, const Json& document,
+		const Json& kind)
+{
+	const auto types = kind.at("tuple").find("types");
+	if (types == kind.at("tuple").end() || !types->is_array())
+		return;
+	std::size_t fieldIndex = 0;
+	for (const Json& field : *types)
+		out << "\t" << witCppType(document, field) << " field_" << fieldIndex++
+			<< ";\n";
+}
+
+void emitWitCppFlags(std::ostringstream& out, const Json& kind,
+		const std::string& name)
+{
+	const Json& flags = kind.at("flags");
+	const auto values = flags.find("flags");
+	if (values == flags.end() || !values->is_array())
+		return;
+	std::size_t bit = 0;
+	for (const Json& flag : *values) {
+		out << "constexpr " << name << " "
+			<< sanitize(name + "_" + flag.value("name", std::string())) << " = "
+			<< "(" << name << ")(1u << " << bit++ << ");\n";
+	}
+}
+
 void emitWitCppTypeDefinitions(std::ostringstream& out, const Json& schema)
 {
 	if (schema.value("frontend", "") != "wit"
@@ -101,24 +191,58 @@ void emitWitCppTypeDefinitions(std::ostringstream& out, const Json& schema)
 				|| !definition.contains("kind"))
 			continue;
 		const Json& kind = definition.at("kind");
-		if (!kind.is_object() || !kind.contains("record"))
+		if (!kind.is_object())
 			continue;
 		const std::string name = witCppDefinitionName(definition, index - 1);
 		if (!emitted.insert(name).second)
 			continue;
-		out << "struct " << name << " {\n";
-		const auto fields = kind.at("record").find("fields");
-		if (fields != kind.at("record").end() && fields->is_array()) {
-			for (const Json& field : *fields) {
-				if (!field.is_object() || !field.contains("name")
-						|| !field.at("name").is_string())
-					continue;
-				out << "\t" << cType(witResolveType(document,
-						field.value("type", Json{}))) << " "
-					<< sanitize(field.at("name").get<std::string>()) << ";\n";
+		if (kind.contains("enum")) {
+			const auto cases = kind.at("enum").find("cases");
+			out << "enum class " << name << " : std::uint32_t {\n";
+			if (cases != kind.at("enum").end() && cases->is_array()) {
+				std::size_t value = 0;
+				for (const Json& entry : *cases) {
+					const std::string caseName = entry.is_string()
+							? entry.get<std::string>()
+							: entry.value("name", std::string());
+					out << "\t" << sanitize(caseName) << " = " << value++
+						<< ",\n";
+				}
 			}
+			out << "};\n";
+		} else if (kind.contains("flags")) {
+			emitWitCppFlags(out, kind, name);
+		} else if (kind.contains("record") || kind.contains("variant")
+				|| kind.contains("tuple") || kind.contains("list")
+				|| kind.contains("option") || kind.contains("result")
+				|| kind.contains("handle")) {
+			out << "struct " << name << " {\n";
+			if (kind.contains("record"))
+				emitWitCppRecord(out, document, kind);
+			else if (kind.contains("variant"))
+				emitWitCppVariant(out, document, kind);
+			else if (kind.contains("tuple"))
+				emitWitCppTuple(out, document, kind);
+			else if (kind.contains("list")) {
+				out << "\tuint32_t length;\n\t"
+					<< witCppType(document, kind.at("list")) << "* data;\n";
+			} else if (kind.contains("option")) {
+				out << "\tuint8_t is_some;\n";
+				if (!witCppIsVoid(document, kind.at("option")))
+					out << "\t" << witCppType(document, kind.at("option"))
+						<< " value;\n";
+			} else if (kind.contains("result")) {
+				out << "\tuint8_t is_err;\n";
+				if (!witCppIsVoid(document, kind.at("result").value("ok", Json{})))
+					out << "\t" << witCppType(document,
+							kind.at("result").value("ok", Json{})) << " ok;\n";
+				if (!witCppIsVoid(document, kind.at("result").value("err", Json{})))
+					out << "\t" << witCppType(document,
+							kind.at("result").value("err", Json{})) << " err;\n";
+			} else if (kind.contains("handle"))
+				out << "\tuint32_t handle;\n";
+			out << "};\n";
 		}
-		out << "};\n";
 	}
 }
 

@@ -166,10 +166,17 @@ void emitWitOpaqueTypes(std::ostringstream& out, const Json& schema, bool cpp)
 		const std::string name = witOpaqueTypeName(sourceName);
 		if (!emitted.insert(name).second)
 			continue;
-		out << (cpp ? "struct " : "typedef struct ") << name;
-		if (!cpp)
-			out << " " << name;
-		out << ";\n";
+		const Json& kind = type.at("kind");
+		if (cpp && kind.contains("enum"))
+			out << "enum class " << name << " : std::uint32_t;\n";
+		else if (cpp && kind.contains("flags"))
+			out << "using " << name << " = std::uint32_t;\n";
+		else {
+			out << (cpp ? "struct " : "typedef struct ") << name;
+			if (!cpp)
+				out << " " << name;
+			out << ";\n";
+		}
 	}
 }
 
@@ -666,6 +673,10 @@ std::string nonFunctionNotes(const Json& schema)
 	}
 	if (started)
 		out << "\n";
+	if (schema.value("witAsync", false))
+		out << "// WIT async functions are emitted as synchronous callables; no\n"
+			   "// async ABI, stream/future protocol or async ownership contract is\n"
+			   "// generated yet.\n\n";
 	return out.str();
 }
 

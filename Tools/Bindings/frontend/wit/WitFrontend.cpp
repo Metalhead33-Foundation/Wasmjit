@@ -118,6 +118,23 @@ std::string documentation(const Json& function)
 	return {};
 }
 
+bool witFunctionIsAsync(const Json& function)
+{
+	if (!function.is_object() || !function.contains("kind"))
+		return false;
+	const Json& kind = function.at("kind");
+	if (kind.is_string())
+		return kind.get<std::string>().rfind("async", 0) == 0;
+	if (kind.is_object()) {
+		for (const auto& [name, ignored] : kind.items()) {
+			(void)ignored;
+			if (name.rfind("async", 0) == 0)
+				return true;
+		}
+	}
+	return false;
+}
+
 void appendFunction(const Json& function, const Json& document,
 		const std::string& fallbackName, bool import, const std::string& module,
 		Schema& schema)
@@ -169,6 +186,10 @@ void appendFunction(const Json& function, const Json& document,
 		{ "argNames", entry.argNames },
 		{ "type", std::move(type) },
 	};
+	if (witFunctionIsAsync(function)) {
+		entry.raw["witAsync"] = true;
+		schema.extras["witAsync"] = true;
+	}
 	if (import)
 		entry.raw["module"] = entry.module;
 	if (import)
@@ -177,12 +198,24 @@ void appendFunction(const Json& function, const Json& document,
 		schema.exports.push_back(std::move(entry));
 }
 
+std::string qualifiedInterfaceName(std::string packageName,
+		const std::string& interfaceName)
+{
+	if (packageName.empty())
+		return interfaceName;
+	const auto version = packageName.find('@');
+	if (version == std::string::npos)
+		return packageName + "/" + interfaceName;
+	packageName.insert(version, "/" + interfaceName);
+	return packageName;
+}
+
 void appendInterface(const Json& interfaceEntry, const Json& document,
-		bool import, const std::string& fallbackModule, Schema& schema)
+		bool import, const std::string& interfaceModule, Schema& schema)
 {
 	const std::string interfaceName = stringAt(interfaceEntry, "name");
 	const std::string module = import
-			? (interfaceName.empty() ? fallbackModule : interfaceName)
+			? (interfaceModule.empty() ? interfaceName : interfaceModule)
 			: std::string();
 	const auto functions = interfaceEntry.find("functions");
 	if (functions == interfaceEntry.end() || !functions->is_object())
@@ -210,7 +243,9 @@ const Json* resolveInterface(const Json& reference,
 
 void appendWorldEntry(const Json& node, const Json& document, const std::string& key,
 		bool import, const std::string& moduleName,
-		std::map<int, const Json*>& interfaces, Schema& schema, std::string& error)
+		std::map<int, const Json*>& interfaces,
+		const std::map<int, std::string>& interfaceModules, Schema& schema,
+		std::string& error)
 {
 	if (node.contains("function")) {
 		appendFunction(node.at("function"), document, key, import,
@@ -218,7 +253,13 @@ void appendWorldEntry(const Json& node, const Json& document, const std::string&
 		return;
 	}
 	if (const Json* interfaceEntry = resolveInterface(node, interfaces, error)) {
-		appendInterface(*interfaceEntry, document, import, key, schema);
+		int id = -1;
+		if (node.contains("interface") && node.at("interface").is_object())
+			id = node.at("interface").value("id", -1);
+		const auto module = interfaceModules.find(id);
+		appendInterface(*interfaceEntry, document, import,
+				module == interfaceModules.end() ? std::string() : module->second,
+				schema);
 		return;
 	}
 	if (!error.empty())
@@ -290,6 +331,22 @@ Schema witSchema(const Json& document, Direction direction,
 			interfaces.emplace(static_cast<int>(i), &document.at("interfaces")[i]);
 	}
 
+	std::map<int, std::string> interfaceModules;
+	if (document.contains("packages") && document.at("packages").is_array()) {
+		for (const Json& package : document.at("packages")) {
+			const std::string packageName = stringAt(package, "name");
+			const auto packageInterfaces = package.find("interfaces");
+			if (packageInterfaces == package.end()
+					|| !packageInterfaces->is_object())
+				continue;
+			for (const auto& [interfaceName, id] : packageInterfaces->items()) {
+				if (id.is_number_integer())
+					interfaceModules.emplace(id.get<int>(),
+							qualifiedInterfaceName(packageName, interfaceName));
+			}
+		}
+	}
+
 	Schema schema;
 	schema.module = schemaName;
 	schema.direction = Direction::Complete;
@@ -301,12 +358,12 @@ Schema witSchema(const Json& document, Direction direction,
 	if (selected->contains("imports") && selected->at("imports").is_object()) {
 		for (const auto& [name, node] : selected->at("imports").items())
 			appendWorldEntry(node, document, name, true, schemaName, interfaces,
-					schema, error);
+					interfaceModules, schema, error);
 	}
 	if (selected->contains("exports") && selected->at("exports").is_object()) {
 		for (const auto& [name, node] : selected->at("exports").items())
 			appendWorldEntry(node, document, name, false, schemaName, interfaces,
-					schema, error);
+					interfaceModules, schema, error);
 	}
 	if (!error.empty())
 		return {};
