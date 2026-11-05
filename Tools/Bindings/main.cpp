@@ -37,30 +37,9 @@ void usage(std::ostream& out)
 		   "                           candidate signatures against the schema\n"
 		   "  --glue-candidates SRC    compile a Glue registration source and\n"
 		   "                           validate its printed declarations\n"
-		   "  --frontend-schema        with --candidates/--glue-candidates, emit a\n"
-		   "                           schema for functions taking VMContext* first\n"
+		   "  --frontend-schema        with --candidates/--glue-candidates, derive a\n"
+		   "                           G2H imports schema (or emit any --emit target)\n"
 		   "  --output FILE            write to FILE instead of stdout\n";
-}
-
-bool parseDirection(std::string_view text, WASM::Bindings::Direction& direction)
-{
-	if (text == "g2h") {
-		direction = WASM::Bindings::Direction::GuestToHost;
-		return true;
-	}
-	if (text == "h2g") {
-		direction = WASM::Bindings::Direction::HostToGuest;
-		return true;
-	}
-	if (text == "g2g") {
-		direction = WASM::Bindings::Direction::GuestToGuest;
-		return true;
-	}
-	if (text == "all" || text == "complete" || text == "full") {
-		direction = WASM::Bindings::Direction::Complete;
-		return true;
-	}
-	return false;
 }
 
 } // namespace
@@ -84,7 +63,7 @@ int main(int argc, char** argv)
 			return 0;
 		}
 		if (arg == "--direction" && i + 1 < argc) {
-			if (!parseDirection(argv[++i], direction)) {
+			if (!WASM::Bindings::parseDirection(argv[++i], direction)) {
 				std::cerr << "unknown direction: " << argv[i] << "\n";
 				return 2;
 			}
@@ -164,16 +143,17 @@ int main(int argc, char** argv)
 				throw std::runtime_error("cannot open schema '" + input + "'");
 			nlohmann::ordered_json imported;
 			stream >> imported;
-			nlohmann::ordered_json schema =
-					WASM::Bindings::projectSchema(imported, direction);
+			WASM::Bindings::Schema schema =
+					WASM::Bindings::projectSchema(
+							WASM::Bindings::Schema::fromJson(imported), direction);
 			if (!moduleName.empty()) {
-				schema["module"] = moduleName;
+				schema.module = moduleName;
 				if (direction == WASM::Bindings::Direction::GuestToGuest) {
-					for (nlohmann::ordered_json& entry : schema["imports"])
-						entry["module"] = moduleName;
+					for (WASM::Bindings::Entry& entry : schema.imports)
+						entry.module = moduleName;
 				}
 			}
-			text = wantSchema ? schema.dump(2) + "\n"
+			text = wantSchema ? schema.toJson().dump(2) + "\n"
 							  : WASM::Bindings::emit(schema, language);
 		} else if (frontendSchema) {
 			const auto candidates = loadCandidates();
@@ -181,23 +161,25 @@ int main(int argc, char** argv)
 				std::cerr << "wasmjit-bindings: " << error << "\n";
 				return 1;
 			}
-			text = WASM::Bindings::candidateSchema(candidates,
-					WASM::Bindings::directionName(direction), moduleName,
-					glue ? "glue" : "swig").dump(2) + "\n";
+			const WASM::Bindings::Schema schema =
+					WASM::Bindings::candidateSchemaModel(candidates, direction,
+							moduleName, glue ? "glue" : "swig");
+			text = wantSchema ? schema.toJson().dump(2) + "\n"
+						  : WASM::Bindings::emit(schema, language);
 		} else {
 			WASM::Store store;
 			Euph::Io::File file(input.c_str(), Elv::Io::Mode::READ);
 			const std::unique_ptr<WASM::Artifact> artifact =
 					WASM::Artifact::parse(file, store);
 
-			nlohmann::ordered_json schema;
+			WASM::Bindings::Schema schema;
 			if (artifact->isCoreModule()) {
-				schema = WASM::Bindings::moduleSchema(*artifact->asCoreModule(),
+				schema = WASM::Bindings::moduleSchemaModel(*artifact->asCoreModule(),
 						store.types(), direction, moduleName);
 			} else {
 				WASM::Component* component = artifact->asComponent();
 				component->validate();
-				schema = WASM::Bindings::componentSchema(*component, store.types(),
+				schema = WASM::Bindings::componentSchemaModel(*component, store.types(),
 						direction, moduleName);
 			}
 			if (!candidatesPath.empty() || !glueCandidatesPath.empty()) {
@@ -206,10 +188,10 @@ int main(int argc, char** argv)
 					std::cerr << "wasmjit-bindings: " << error << "\n";
 					return 1;
 				}
-				text = WASM::Bindings::crossCheckCandidates(schema, candidates,
+				text = WASM::Bindings::crossCheckCandidates(schema.toJson(), candidates,
 						glue ? "glue" : "swig").dump(2) + "\n";
 			} else {
-				text = wantSchema ? schema.dump(2) + "\n"
+				text = wantSchema ? schema.toJson().dump(2) + "\n"
 						  : WASM::Bindings::emit(schema, language);
 			}
 		}

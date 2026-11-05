@@ -360,6 +360,40 @@ TEST_CASE("a complete schema can be projected to every direction", "[bindings]")
 			WASM::Bindings::Direction::HostToGuest));
 }
 
+TEST_CASE("the typed schema model parses enums and round-trips JSON", "[bindings]")
+{
+	const Json input = {
+		{ "schema", "wasmjit.binding/1" },
+		{ "direction", "g2h" },
+		{ "module", "typed" },
+		{ "imports", Json::array({
+			{ { "kind", "function" }, { "module", "host" },
+				{ "name", "map" }, { "description", "Maps a value." },
+				{ "argNames", Json::array({ "value", "handle" }) },
+				{ "type", { { "kind", "func" },
+					{ "params", Json::array({ { { "type", "i32" } },
+						{ { "type", "ref" }, { "heap", "extern" },
+							{ "nullable", true } } }) },
+					{ "results", Json::array() } } } },
+		}) },
+		{ "exports", Json::array() },
+	};
+	const WASM::Bindings::Schema schema = WASM::Bindings::Schema::fromJson(input);
+	REQUIRE(schema.direction == WASM::Bindings::Direction::GuestToHost);
+	REQUIRE(schema.imports.size() == 1u);
+	const WASM::Bindings::Entry& entry = schema.imports[0];
+	REQUIRE(entry.kind == WASM::Bindings::EntryKind::Function);
+	REQUIRE(entry.function.params.size() == 2u);
+	REQUIRE(entry.function.params[0].kind == WASM::Bindings::ValueKind::I32);
+	REQUIRE(entry.function.params[1].kind == WASM::Bindings::ValueKind::Ref);
+	REQUIRE(entry.function.params[1].heap == WASM::Bindings::HeapKind::Extern);
+	REQUIRE(entry.description == "Maps a value.");
+	REQUIRE(entry.argNames[1] == "handle");
+	const Json output = schema.toJson();
+	REQUIRE(output.at("imports")[0].at("name") == "map");
+	REQUIRE(output.at("imports")[0].at("description") == "Maps a value.");
+}
+
 TEST_CASE("defined references use a kind name, not a numeric TypeId, in the header", "[bindings]")
 {
 	const WASM::Module module = loadTestModule("plain_ref");
@@ -1303,6 +1337,7 @@ TEST_CASE("C++ host functions with VMContext* produce a G2H schema", "[bindings]
 		std::ofstream out(header, std::ios::binary);
 		out << "#include <cstdint>\n"
 			   "namespace WASM { struct VMContext; }\n"
+			   "/*! Adds two numbers. */\n"
 			   "int32_t host_add(WASM::VMContext*, int32_t a, int32_t b);\n"
 			   "int32_t not_exposed(int32_t a);\n";
 	}
@@ -1314,12 +1349,41 @@ TEST_CASE("C++ host functions with VMContext* produce a G2H schema", "[bindings]
 			"host_functions", "swig");
 	REQUIRE(schema.at("direction") == "g2h");
 	REQUIRE(schema.at("frontend") == "swig");
-	REQUIRE(schema.at("exports").size() == 1u);
-	const Json& exportEntry = schema.at("exports")[0];
-	REQUIRE(exportEntry.at("name") == "host_add");
-	REQUIRE(exportEntry.at("type").at("params").size() == 2u);
-	REQUIRE(exportEntry.at("type").at("params")[0].at("type") == "i32");
-	REQUIRE(exportEntry.at("type").at("results")[0].at("type") == "i32");
+	REQUIRE(schema.at("imports").size() == 1u);
+	REQUIRE(schema.at("exports").empty());
+	const Json& importEntry = schema.at("imports")[0];
+	REQUIRE(importEntry.at("name") == "host_add");
+	REQUIRE(importEntry.at("module") == "host_functions");
+	REQUIRE(importEntry.at("description") == "Adds two numbers.");
+	REQUIRE(importEntry.at("argNames").size() == 2u);
+	REQUIRE(importEntry.at("argNames")[0] == "a");
+	REQUIRE(importEntry.at("argNames")[1] == "b");
+	REQUIRE(importEntry.at("type").at("params").size() == 2u);
+	REQUIRE(importEntry.at("type").at("params")[0].at("type") == "i32");
+	REQUIRE(importEntry.at("type").at("results")[0].at("type") == "i32");
+
+	const auto typed = WASM::Bindings::candidateSchemaModel(candidates,
+			WASM::Bindings::Direction::GuestToHost, "host_functions", "swig");
+	const std::string c = WASM::Bindings::emit(typed,
+			WASM::Bindings::Language::CHeader);
+	REQUIRE(c.find("WASMJIT_WASM_IMPORT(\"host_functions\", \"host_add\")")
+			!= std::string::npos);
+	REQUIRE(c.find("int32_t a, int32_t b") != std::string::npos);
+	const std::string rust = WASM::Bindings::emit(typed,
+			WASM::Bindings::Language::Rust);
+	REQUIRE(rust.find("#[link(wasm_import_module = \"host_functions\")]")
+			!= std::string::npos);
+	REQUIRE(rust.find("pub fn wasmjit_host_functions_host_add(a: i32, b: i32)")
+			!= std::string::npos);
+	const std::string ts = WASM::Bindings::emit(typed,
+			WASM::Bindings::Language::TypeScript);
+	REQUIRE(ts.find("wasmjit_host_functions_host_add(a: number, b: number): number")
+			!= std::string::npos);
+	REQUIRE(ts.find("Adds two numbers.") != std::string::npos);
+	const std::string java = WASM::Bindings::emit(typed,
+			WASM::Bindings::Language::Java);
+	REQUIRE(java.find("wasmjit_host_functions_host_add(int a, int b)")
+			!= std::string::npos);
 
 	if (std::filesystem::is_regular_file(
 				"/usr/local/lib/Glue-1.5/libGlue.a")) {
@@ -1329,6 +1393,7 @@ TEST_CASE("C++ host functions with VMContext* produce a G2H schema", "[bindings]
 			out << "#include <glue/value.h>\n"
 				   "#include <cstdint>\n"
 				   "namespace WASM { struct VMContext; }\n"
+				   "/*! Adds two numbers. */\n"
 				   "int32_t host_add(WASM::VMContext*, int32_t a, int32_t b) "
 				   "{ return a + b; }\n"
 				   "int32_t not_exposed(int32_t a) { return a; }\n"
@@ -1346,8 +1411,11 @@ TEST_CASE("C++ host functions with VMContext* produce a G2H schema", "[bindings]
 		REQUIRE(glueError.empty());
 		const Json glueSchema = WASM::Bindings::candidateSchema(glueCandidates,
 				"g2h", "host_glue", "glue");
-		REQUIRE(glueSchema.at("exports").size() == 1u);
-		REQUIRE(glueSchema.at("exports")[0].at("name") == "host_add");
+		REQUIRE(glueSchema.at("imports").size() == 1u);
+		REQUIRE(glueSchema.at("imports")[0].at("name") == "host_add");
+		REQUIRE(glueSchema.at("imports")[0].at("description") == "Adds two numbers.");
+		REQUIRE(glueSchema.at("imports")[0].at("argNames")[0] == "a");
+		REQUIRE(glueSchema.at("imports")[0].at("argNames")[1] == "b");
 	}
 }
 
@@ -1362,16 +1430,16 @@ TEST_CASE("host-side callable typedefs follow the engine ABI", "[bindings]")
 			"context, int32_t arg0, int32_t arg1);") != std::string::npos);
 	REQUIRE(header.find("extern wasmjit_add_fn wasmjit_add;")
 			!= std::string::npos);
-	REQUIRE(header.find("namespace WASM { struct VMContext; struct ModuleInstance; }")
+	REQUIRE(header.find("namespace WASM { struct VMContext; struct ModuleInstance; class ImportRegistrar; }")
 			!= std::string::npos);
-	const std::size_t callableLinkage = header.find(
-			"#ifdef __cplusplus\nextern \"C\" {\n#endif");
+	REQUIRE(header.find("#include <cstdint>") != std::string::npos);
+	REQUIRE(header.find("struct wasm_v128 { std::uint8_t bytes[16]; };")
+			!= std::string::npos);
+	REQUIRE(header.find("#ifdef __cplusplus") == std::string::npos);
+	REQUIRE(header.find("extern \"C\" {") == std::string::npos);
 	const std::size_t loaderDeclaration = header.find(
 			"bool wasmjit_asmjit_i32_basic_load_callables(");
-	const std::size_t callableLinkageEnd = header.find("} // extern \"C\"");
-	REQUIRE(callableLinkage != std::string::npos);
-	REQUIRE(loaderDeclaration > callableLinkage);
-	REQUIRE(callableLinkageEnd > loaderDeclaration);
+	REQUIRE(loaderDeclaration != std::string::npos);
 
 	const std::string source = WASM::Bindings::emit(schema,
 			WASM::Bindings::Language::CppSource);
@@ -1392,20 +1460,33 @@ TEST_CASE("host-side callable typedefs follow the engine ABI", "[bindings]")
 			!= std::string::npos);
 	REQUIRE(importHeader.find("using wasmjit_wasm_js_string_length_fn")
 			== std::string::npos);
-	const std::size_t importLinkage = importHeader.find(
-			"#ifdef __cplusplus\nextern \"C\" {\n#endif");
+	const std::size_t importLinkage = importHeader.find("extern \"C\" {");
 	const std::size_t importDeclaration = importHeader.find(
 			"int32_t wasmjit_wasm_js_string_length(");
 	const std::size_t importLinkageEnd = importHeader.find("} // extern \"C\"");
+	const std::size_t registrationDeclaration = importHeader.find(
+			"bool wasmjit_wasm_js_string_length_register_imports("
+			"WASM::ImportRegistrar& registrar);");
+	REQUIRE(importHeader.find("#ifdef __cplusplus") == std::string::npos);
+	REQUIRE(importHeader.find("#include <cstdint>") != std::string::npos);
 	REQUIRE(importLinkage != std::string::npos);
 	REQUIRE(importDeclaration > importLinkage);
 	REQUIRE(importLinkageEnd > importDeclaration);
+	REQUIRE(registrationDeclaration > importLinkageEnd);
 	const std::string importSource = WASM::Bindings::emit(g2h,
 			WASM::Bindings::Language::CppSource);
 	REQUIRE(importSource.find("extern \"C\"") == std::string::npos);
 	REQUIRE(importSource.find("int32_t wasmjit_wasm_js_string_length(")
 			!= std::string::npos);
 	REQUIRE(importSource.find("TODO: implement this host import.")
+			!= std::string::npos);
+	REQUIRE(importSource.find("#include <WasmBase/WasmNativeImport.hpp>")
+			!= std::string::npos);
+	REQUIRE(importSource.find("bool wasmjit_wasm_js_string_length_register_imports("
+			"WASM::ImportRegistrar& registrar)") != std::string::npos);
+	REQUIRE(importSource.find("registrar.registerFunction(\"wasm:js-string\", \"length\",")
+			!= std::string::npos);
+	REQUIRE(importSource.find("WASM::nativeImport<&wasmjit_wasm_js_string_length>());")
 			!= std::string::npos);
 
 	if (haveTool("command -v g++ > /dev/null 2>&1")) {
@@ -1696,10 +1777,11 @@ TEST_CASE("candidate schemas keep one entry per function name", "[bindings]")
 	const WASM::Bindings::CandidateSignature candidate{
 		"host_add", "int32_t",
 		{ { "WASM::VMContext*", "context" }, { "int32_t", "a" } },
+		"Adds one.",
 	};
 	const Json schema = WASM::Bindings::candidateSchema(
 			{ candidate, candidate }, "g2h", "host_functions", "swig");
-	REQUIRE(schema.at("exports").size() == 1u);
-	REQUIRE(schema.at("exports")[0].at("name") == "host_add");
+	REQUIRE(schema.at("imports").size() == 1u);
+	REQUIRE(schema.at("imports")[0].at("name") == "host_add");
 }
 

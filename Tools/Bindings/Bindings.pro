@@ -11,11 +11,22 @@ INCLUDEPATH += $$PWD
 
 SOURCES += \
     main.cpp \
+    BindingModel.cpp \
     BindingSchema.cpp \
+    Emit.cpp \
+    EmitShared.cpp \
+    EmitRust.cpp \
+    EmitWeb.cpp \
+    EmitManaged.cpp \
+    EmitDynamic.cpp \
+    EmitCpp.cpp \
     frontend/cpp/CppFrontend.cpp
 
 HEADERS += \
+    BindingModel.hpp \
     BindingSchema.hpp \
+    EmitInternal.hpp \
+    EmitShared.hpp \
     frontend/cpp/CppFrontend.hpp
 
 LIBS += -L$$OUT_PWD/../../WasmBase -lWasmBase

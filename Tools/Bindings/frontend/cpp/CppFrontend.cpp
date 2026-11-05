@@ -8,6 +8,7 @@
 #include <optional>
 #include <set>
 #include <sstream>
+#include <stdexcept>
 #include <string_view>
 
 namespace WASM::Bindings {
@@ -29,6 +30,186 @@ std::string trim(std::string text)
 	text.erase(std::find_if(text.rbegin(), text.rend(), notSpace).base(),
 			text.end());
 	return text;
+}
+
+std::string cleanCommentLine(std::string line)
+{
+	line = trim(std::move(line));
+	for (const std::string_view prefix : { "///", "//!", "//", "/**", "/*!",
+			"/*", "*", "*/" }) {
+		if (line.rfind(prefix, 0) == 0) {
+			line.erase(0, prefix.size());
+			line = trim(std::move(line));
+			break;
+		}
+	}
+	if (line.size() >= 2 && line.compare(line.size() - 2, 2, "*/") == 0)
+		line.erase(line.size() - 2);
+	line = trim(std::move(line));
+	for (const std::string_view command : { "\\brief", "\\return", "\\details" }) {
+		if (line.rfind(command, 0) == 0) {
+			line.erase(0, command.size());
+			line = trim(std::move(line));
+			break;
+		}
+	}
+	return line;
+}
+
+//! Reads the comment block immediately above a function declaration. SWIG's
+//! XML output does not retain C++ comments, so the source is the only place
+//! the editorial description can come from.
+std::string commentForFunction(const std::string& source, const std::string& name)
+{
+	std::vector<std::string> lines;
+	std::istringstream input(source);
+	std::string line;
+	while (std::getline(input, line))
+		lines.push_back(line);
+
+	const std::string needle = name + "(";
+	for (std::size_t i = 0; i < lines.size(); ++i) {
+		const std::string trimmed = trim(lines[i]);
+		if (trimmed.rfind("//", 0) == 0 || trimmed.rfind("*", 0) == 0
+				|| trimmed.rfind("/*", 0) == 0)
+			continue;
+		const std::size_t found = lines[i].find(needle);
+		if (found == std::string::npos)
+			continue;
+		std::size_t cursor = found + name.size();
+		while (cursor < lines[i].size()
+				&& std::isspace(static_cast<unsigned char>(lines[i][cursor])))
+			++cursor;
+		if (cursor >= lines[i].size() || lines[i][cursor] != '(')
+			continue;
+
+		std::vector<std::string> collected;
+		std::size_t j = i;
+		while (j > 0) {
+			const std::string previous = trim(lines[j - 1]);
+			if (previous.empty())
+				break;
+			if (previous.rfind("//", 0) == 0) {
+				collected.push_back(cleanCommentLine(previous));
+				--j;
+				continue;
+			}
+			if (previous.rfind("*/", 0) == 0) {
+				std::vector<std::string> block;
+				std::size_t k = j;
+				while (k > 0) {
+					const std::string current = trim(lines[k - 1]);
+					const std::string cleaned = cleanCommentLine(current);
+					if (!cleaned.empty())
+						block.push_back(cleaned);
+					--k;
+					if (current.rfind("/*", 0) == 0)
+						break;
+				}
+				for (auto it = block.rbegin(); it != block.rend(); ++it)
+					collected.push_back(*it);
+				break;
+			}
+			if (previous.rfind("/*", 0) == 0
+					|| (previous.find("/*") != std::string::npos
+							&& previous.find("*/") != std::string::npos)) {
+				collected.push_back(cleanCommentLine(previous));
+				break;
+			}
+			break;
+		}
+		std::string description;
+		for (auto it = collected.rbegin(); it != collected.rend(); ++it) {
+			if (it->empty())
+				continue;
+			if (!description.empty())
+				description += " ";
+			description += *it;
+		}
+		return description;
+	}
+	return {};
+}
+
+//! Recovers the declared parameter names from a C++ signature. Glue's
+//! declaration printer emits generic `argN` names for some registrations, so
+//! the source declaration is the fallback that keeps `argNames` meaningful.
+std::vector<std::string> sourceParameterNames(const std::string& source,
+		const std::string& name)
+{
+	std::vector<std::string> names;
+	const std::string needle = name + "(";
+	std::size_t found = std::string::npos;
+	std::size_t search = 0;
+	while ((search = source.find(needle, search)) != std::string::npos) {
+		const std::size_t lineStart = source.rfind('\n', search);
+		const std::string line = source.substr(
+				lineStart == std::string::npos ? 0 : lineStart + 1,
+				search - (lineStart == std::string::npos ? 0 : lineStart + 1));
+		if (trim(line).rfind("//", 0) != 0 && trim(line).rfind("*", 0) != 0
+				&& trim(line).rfind("/*", 0) != 0) {
+			found = search;
+			break;
+		}
+		search += needle.size();
+	}
+	if (found == std::string::npos)
+		return names;
+
+	std::size_t open = found + name.size();
+	while (open < source.size() && source[open] != '(')
+		++open;
+	int depth = 0;
+	std::size_t close = open;
+	for (; close < source.size(); ++close) {
+		if (source[close] == '(')
+			++depth;
+		else if (source[close] == ')' && --depth == 0)
+			break;
+	}
+	if (close >= source.size())
+		return names;
+	const std::string parameters = source.substr(open + 1, close - open - 1);
+	std::size_t start = 0;
+	int nested = 0;
+	for (std::size_t i = 0; i <= parameters.size(); ++i) {
+		const bool separator = i == parameters.size()
+				|| (parameters[i] == ',' && nested == 0);
+		if (i < parameters.size() && (parameters[i] == '<'
+				|| parameters[i] == '(' || parameters[i] == '['))
+			++nested;
+		else if (i < parameters.size() && (parameters[i] == '>'
+				|| parameters[i] == ')' || parameters[i] == ']'))
+			--nested;
+		if (!separator)
+			continue;
+		std::string parameter = trim(parameters.substr(start, i - start));
+		start = i + 1;
+		const std::size_t comment = parameter.find("/*");
+		if (comment != std::string::npos)
+			parameter.erase(comment);
+		const std::size_t equal = parameter.find('=');
+		if (equal != std::string::npos)
+			parameter.erase(equal);
+		parameter = trim(std::move(parameter));
+		std::size_t end = parameter.size();
+		while (end > 0 && std::isspace(static_cast<unsigned char>(parameter[end - 1])))
+			--end;
+		if (end == 0 || parameter[end - 1] == '*' || parameter[end - 1] == '&') {
+			names.emplace_back();
+			continue;
+		}
+		std::size_t begin = end;
+		while (begin > 0
+				&& (std::isalnum(static_cast<unsigned char>(parameter[begin - 1]))
+						|| parameter[begin - 1] == '_'))
+			--begin;
+		const std::string token = parameter.substr(begin, end - begin);
+		const bool hasType = begin > 0
+				&& std::isspace(static_cast<unsigned char>(parameter[begin - 1]));
+		names.push_back(hasType ? token : std::string());
+	}
+	return names;
 }
 
 std::string decodeXml(std::string text)
@@ -315,6 +496,9 @@ std::vector<CandidateSignature> swigCandidates(const std::filesystem::path& head
 				current.name = *name;
 		}
 	}
+	const std::string source = readTextFile(header);
+	for (CandidateSignature& candidate : candidates)
+		candidate.description = commentForFunction(source, candidate.name);
 	std::filesystem::remove(xmlPath);
 	std::filesystem::remove(logPath);
 	return candidates;
@@ -387,8 +571,20 @@ std::vector<CandidateSignature> glueCandidates(const std::filesystem::path& sour
 		return {};
 	}
 	const std::string text = readTextFile(declarations);
+	std::vector<CandidateSignature> candidates = parseGlueDeclarations(text);
+	const std::string sourceText = readTextFile(source);
+	for (CandidateSignature& candidate : candidates) {
+		candidate.description = commentForFunction(sourceText, candidate.name);
+		const auto names = sourceParameterNames(sourceText, candidate.name);
+		for (std::size_t i = 0; i < candidate.params.size() && i < names.size(); ++i) {
+			if (!names[i].empty()
+					&& (candidate.params[i].name.empty()
+							|| candidate.params[i].name.rfind("arg", 0) == 0))
+				candidate.params[i].name = names[i];
+		}
+	}
 	std::filesystem::remove_all(dir);
-	return parseGlueDeclarations(text);
+	return candidates;
 }
 
 
@@ -449,25 +645,31 @@ std::optional<std::string> coreTypeFor(const std::string& type)
 
 } // namespace
 
-nlohmann::ordered_json candidateSchema(
+Schema candidateSchemaModel(
 		const std::vector<CandidateSignature>& candidates,
-		std::string_view direction, std::string_view moduleName,
+		Direction direction, std::string_view moduleName,
 		std::string_view frontend)
 {
-	nlohmann::ordered_json schema;
-	schema["schema"] = "wasmjit.binding/1";
-	schema["kind"] = "module";
-	schema["direction"] = std::string(direction);
-	schema["module"] = std::string(moduleName);
-	schema["frontend"] = std::string(frontend);
-	schema["imports"] = nlohmann::ordered_json::array();
-	schema["exports"] = nlohmann::ordered_json::array();
+	if (direction != Direction::GuestToHost && direction != Direction::Complete)
+		throw std::runtime_error(
+				"C++ host candidates describe Wasm imports; use --direction g2h or all");
+
+	Schema schema;
+	schema.direction = direction;
+	schema.module = std::string(moduleName);
+	schema.frontend = std::string(frontend);
+	schema.extras = { { "kind", "module" }, { "frontend", schema.frontend } };
 
 	std::set<std::string> emittedNames;
 	for (const CandidateSignature& candidate : candidates) {
 		if (candidate.params.empty() || !isVmContext(candidate.params[0].type))
 			continue;
-		nlohmann::ordered_json params = nlohmann::ordered_json::array();
+		Entry entry;
+		entry.kind = EntryKind::Function;
+		entry.import = true;
+		entry.module = std::string(moduleName);
+		entry.name = candidate.name;
+		entry.description = candidate.description;
 		bool fits = true;
 		for (std::size_t i = 1; i < candidate.params.size(); ++i) {
 			const auto type = coreTypeFor(candidate.params[i].type);
@@ -475,28 +677,55 @@ nlohmann::ordered_json candidateSchema(
 				fits = false;
 				break;
 			}
-			params.push_back({ { "type", *type } });
+			entry.function.params.push_back(ValueType::fromJson(
+					nlohmann::ordered_json{ { "type", *type } }));
+			const std::string& name = candidate.params[i].name;
+			entry.argNames.push_back(
+					name.empty() ? "arg" + std::to_string(i - 1) : name);
 		}
 		if (!fits)
 			continue;
-		nlohmann::ordered_json results = nlohmann::ordered_json::array();
 		if (candidate.returnType != "void") {
 			const auto type = coreTypeFor(candidate.returnType);
 			if (!type)
 				continue;
-			results.push_back({ { "type", *type } });
+			entry.function.results.push_back(ValueType::fromJson(
+					nlohmann::ordered_json{ { "type", *type } }));
 		}
-		nlohmann::ordered_json type;
-		type["kind"] = "func";
-		type["params"] = std::move(params);
-		type["results"] = std::move(results);
 		if (!emittedNames.insert(candidate.name).second)
 			continue;
-		schema["exports"].push_back(
-				{ { "kind", "function" }, { "name", candidate.name },
-						{ "type", std::move(type) } });
+		nlohmann::ordered_json type = { { "kind", "func" } };
+		type["params"] = nlohmann::ordered_json::array();
+		for (const ValueType& param : entry.function.params)
+			type["params"].push_back(param.toJson());
+		type["results"] = nlohmann::ordered_json::array();
+		for (const ValueType& result : entry.function.results)
+			type["results"].push_back(result.toJson());
+		entry.raw = {
+			{ "kind", "function" },
+			{ "module", entry.module },
+			{ "name", entry.name },
+			{ "description", entry.description },
+			{ "argNames", entry.argNames },
+			{ "type", std::move(type) },
+		};
+		schema.imports.push_back(std::move(entry));
 	}
+	schema.dedupe();
 	return schema;
+}
+
+nlohmann::ordered_json candidateSchema(
+		const std::vector<CandidateSignature>& candidates,
+		std::string_view direction, std::string_view moduleName,
+		std::string_view frontend)
+{
+	Direction parsed = Direction::GuestToHost;
+	if (!parseDirection(direction, parsed))
+		throw std::runtime_error("unknown candidate schema direction: "
+				+ std::string(direction));
+	return candidateSchemaModel(candidates, parsed, moduleName, frontend)
+			.toJson();
 }
 
 nlohmann::ordered_json crossCheckCandidates(const nlohmann::ordered_json& schema,

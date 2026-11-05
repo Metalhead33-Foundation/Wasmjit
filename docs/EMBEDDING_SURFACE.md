@@ -2,15 +2,13 @@
 
 *`WASM::Runtime`, the Umbrella Header, Versioning, and the Include Set*
 
-Status: design note + plan (revision 29 — 2026-11-04). `WasmBase/WasmCallCache.hpp`
-adds the optional libffi export precache; `Tools/Bindings/`
-projects descriptors into direction-specific binding schemas, emits the
-documented language families (including JVM, .NET, VM-hosted and native-ABI
-targets) plus C++ adapter/typedef/source output, and derives candidate schemas
-from SWIG/Glue functions shaped with `VMContext*`; `[bindings]` is at 673
-assertions. This note answers `AAS1`/`AAS2` of
-[`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) and decides the fate of two empty
-placeholder headers.
+Status: design note + implementation reference (revision 30 — 2026-11-05).
+`Tools/Bindings/` now has a typed schema model, modular emitters, complete
+descriptor/candidate schemas, and a C++-front-end path that produces both JSON
+and every non-C++ header target. `WasmBase/WasmCallCache.hpp` remains the
+optional libffi precache. This note answers `AAS1`/`AAS2` of
+[`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) and records the fate of two empty
+placeholder headers. The binding-tool snapshot is in §10.
 Audience: anyone who will freeze the public surface, package the library, write
 an embedder, or implement a backend.
 
@@ -750,19 +748,24 @@ check. The embedding surface is what the installed `wasmjit/wasmjit.hpp` exposes
 
 ## 10. Test survey
 
+**Snapshot (2026-11-05, working tree on `77506af`):** the default suite is
+18,324 assertions in 648 cases; `[bindings]` is 709/32, `[docs]` is 1017/2,
+`[tiers]` is 250/3, and Doxygen is warning-free. Re-run the tagged cases after
+changing a schema, emitter or this note's code paths.
+
 | Evidence | Result | Reading |
 |---|---|---|
-| Default suite (**2026-11-01**, `8c87f5f`) | **17,090 assertions in 551 cases, green** | The `ES-*`, `BP-*`, `CP-*`, `CFG-*` and multi-agent additions are additive: every earlier assertion still passes. The 2026-10-29 run (11,454 / 481) in the milestone notes is the dated baseline. |
-| `[docs]` lint | **1013 assertions / 2 cases, green** | Note shape for `docs/proposals/` **and** the note tree for all three folders (§9 of `DOCUMENTATION.md`), so this note's index row is checked too |
+| Default suite (**2026-11-05**, `77506af`) | **18,324 assertions in 648 cases, green** | Supersedes the 2026-11-01 baseline (17,090 / 551); every earlier assertion still passes. The 2026-10-29 run (11,454 / 481) in the milestone notes remains the historical baseline. |
+| `[docs]` lint (**2026-11-05**, `77506af`) | **1017 assertions / 2 cases, green** | Note shape for `docs/proposals/` **and** the note tree for all three folders (§9 of `DOCUMENTATION.md`), so this note's index row is checked too |
 | `[callcache]` (**2026-11-04**) | **18 assertions / 4 cases, green** | `ModuleCallCache` ffi calls, `v128` by value, multi-result calls and `ComponentCallCache` flat calls. |
-| `[bindings]` (**2026-11-04**) | **673 assertions / 31 cases, green** | The §12.8 tool: descriptor→schema, direction-specific module/component imports/exports (G2H/H2G/G2G), complete-schema export/re-import and editorial name/description fields, opaque reference spelling, `stringref` through every emitter, C header (compiled as C11 and C++23), Rust, TypeScript, AssemblyScript, Zig, Kotlin, MoonBit, Go, Dart, Java, C#, F#, Python, Ruby, Lua, Swift, D, Nim, Crystal, Ada, Pascal and Haskell emission, a compiled C++ adapter (call/trap/import/reference/multi-value/retain-drop), SWIG and Glue candidate validation, `VMContext*` candidate schemas, direction-aware C++ typedefs/source, non-function entry comments, producer toolchain evidence, defined-reference kind naming, exact-reference flags, GC struct/array definitions, Rust `#[link(wasm_import_module)]`/`#[link_name]` declarations and export skeletons, C `WASMJIT_WASM_IMPORT` annotations, per-toolchain compile checks, and a `wasm-opt --all-features -O2` signature comparison on five fixtures. |
+| `[bindings]` (**2026-11-05**, `77506af`) | **709 assertions / 32 cases, green** | The §12.8 tool: descriptor→schema, direction-specific module/component imports/exports (G2H/H2G/G2G), complete-schema export/re-import and editorial name/description fields, opaque reference spelling, `stringref` through every emitter, C header (compiled as C11 and C++23), Rust, TypeScript, AssemblyScript, Zig, Kotlin, MoonBit, Go, Dart, Java, C#, F#, Python, Ruby, Lua, Swift, D, Nim, Crystal, Ada, Pascal and Haskell emission, a compiled C++ adapter (call/trap/import/reference/multi-value/retain-drop), SWIG and Glue candidate validation, `VMContext*` candidate schemas, direction-aware C++ typedefs/source, non-function entry comments, producer toolchain evidence, defined-reference kind naming, exact-reference flags, GC struct/array definitions, Rust `#[link(wasm_import_module)]`/`#[link_name]` declarations and export skeletons, C `WASMJIT_WASM_IMPORT` annotations, per-toolchain compile checks, and a `wasm-opt --all-features -O2` signature comparison on five fixtures. |
 | `[runtime]` | 64 assertions / 9 cases, green | Load → instantiate → call, idempotence, named errors, the `MF-2` guard, agents, the store-scoping proof (two stores, two heaps, an artifact records its store), and the unloader (one instance destroyed, the module re-instantiated, a provisional backend's code freed twice over). |
 | `[concurrency]` | 80 assertions / 13 cases, green | The model claim, the `Single` refusal, re-entrant invocation across threads, the `MF-2` guard, the `MF-3`/`MF-4` safepoint rules and the multi-agent suite. |
 | `[multiagent]` | 51 assertions / 6 cases, green | Two agents on one instance: acquire-release, wait/notify, shared-global RMW, traps, GC stress, reference barrier. |
 | `[backendabi]` | 36 assertions / 4 cases, green | The POD signature/layout views (`WasmBackendAbi.hpp`) match `ABI.md`'s tuple rule. |
 | `[plugin]` | 50 assertions / 9 cases, green | Load by path and by name, a real example plugin, and every refusal path (missing file, no query symbol, unknown name, descriptor ABI, core ABI, failing `create`). |
 | `[compilation-policy]` | 30 assertions / 3 cases, green | The policy vocabulary, the capability query, and the ladder's ordering (`COMPILER_POLICY.md` §8.2). |
-| `[tiers]` | 222 assertions / 3 cases, green | Every header is classified exactly once, the umbrella matches the embedder tier, and every public header has a compile-only TU (`.inc` fragments excepted). |
+| `[tiers]` (**2026-11-05**, `77506af`) | 250 assertions / 3 cases, green | Every header is classified exactly once, the umbrella matches the embedder tier, and every public header has a compile-only TU (`.inc` fragments excepted). |
 | Public-header self-containment test | **Present** (2026-11-04) | **49** TUs under `Test/headers/`, enforced by `[tiers]`. |
 | Install / out-of-tree consumer test | **Present** (2026-10-29) | `Test/install-check.sh`: `make install INSTALL_ROOT=...`, then a consumer built through `wasmjit.pc` runs. |
 | Symbol-hygiene check | **2,629 exported symbols, 1,859 strong** (2026-11-01, `build/Desktop-Debug`) | `-fvisibility=hidden` + `WASMJIT_API`; the remaining count is the header-declared surface. `Test/abi-check.sh` freezes the **1,859** strong symbols (`Test/abi/libWasmBase.exports`) and fails on a removal. |
@@ -873,21 +876,23 @@ layers:
 - Optional WIT JSON from `wasm-tools component wit --json` for a component’s
   interface names and WIT-level structure.
 
-A generator should treat these as the schema. It should not scrape comments,
-C++ classes or arbitrary source headers. The neutral schema built from them has
-four schema directions — guest-to-host, host-to-guest, guest-to-guest and the
-complete `all` interchange form — defined in §12.8.
+A generator should treat these as the schema. It may read C++ comments and
+parameter names only in an optional candidate front-end, and only as editorial
+metadata; it must not treat a C++ class or an arbitrary source header as the
+ABI. The neutral schema built from descriptors has four directions —
+guest-to-host, host-to-guest, guest-to-guest and the complete `all` interchange
+form — defined in §12.8.
 
-### 12.3 Options, with a recommendation
+### 12.3 Options and decisions
 
-| Option | What it can produce | Verdict |
+| Option | What it can produce | Status / decision |
 |---|---|---|
-| **Hand-written guide + per-language templates** | Language-specific declarations and adapter skeletons from the documented ABI | **Do first.** Low risk, useful immediately, no new engine surface. |
-| **Descriptor-driven schema + emitters** | A neutral JSON schema from `Module`/`Component` metadata, then C/C++, Rust, Zig, TS/AssemblyScript, Kotlin, MoonBit, Go, Dart, JVM/.NET, VM-hosted and native-ABI target emitters | **Do second, in this repository.** The generator belongs outside `WasmBase/` (§12.8), but it is first-party tooling, not an external dependency; the engine only guarantees the metadata. |
-| **WIT as the IDL** | Component-level interfaces and skeleton adapters for component exports/imports | **Reuse it for components, not for raw core modules.** WIT cannot describe a core module’s memory/table/global imports or its raw `Callable` ABI; do not build a second WIT. |
-| **SWIG** | C++ bindings driven by parsed C++ declarations | **Optional front-end only.** Parsing C++ does not tell you the Wasm Canonical ABI, ownership, traps or component resources; `wasmjit-bindings --candidates` uses its XML output to propose candidate signatures (`TB-4a`, §12.8). |
-| **Glue** | Runtime C++ map + `DeclarationPrinter`; the host registers functions explicitly | **Optional front-end only.** Same limitation; `wasmjit-bindings --glue-candidates` compiles a registration source, prints declarations and validates them (`TB-4a`, §12.8). |
-| **Automatic scan of existing C/C++ headers** | Guessed declarations | **Do not make this the source of truth.** The literal form is rejected (`TB-4`); a header is only a candidate front-end, its output is a proposal, and it must be checked against the engine descriptors when a module or component is available. |
+| **Hand-written guide + per-language templates** | Language-specific declarations and adapter skeletons from the documented ABI | **Always valid.** The guide in §12.5 and the hand-written adapter path remain supported; generation is optional. |
+| **Descriptor-driven schema + emitters** | A neutral schema from `Module`/`Component` metadata, then every target named in §12.6 | **Shipped** in `Tools/Bindings/`, outside `WasmBase/` (§12.8). The engine guarantees metadata; the first-party tool consumes it. |
+| **WIT as the IDL** | Component-level interfaces and skeleton adapters for component exports/imports | **Shipped as an optional component cross-check, not as the source of truth.** WIT cannot describe a core module’s memory/table/global imports or its raw `Callable` ABI; there is no second IDL. |
+| **SWIG** | C++ bindings driven by parsed C++ declarations | **Shipped as an optional candidate front-end.** `--candidates` parses a header; `--frontend-schema` now writes a G2H `imports` schema and can emit every non-C++ target. It is never the authority (`TB-4a`, §12.8). |
+| **Glue** | Runtime C++ map + `DeclarationPrinter`; the host registers functions explicitly | **Shipped as an optional candidate front-end.** `--glue-candidates` compiles a registration source, prints declarations and validates them; the same schema/emitter path applies (`TB-4a`, §12.8). |
+| **Automatic scan of existing C/C++ headers** | Guessed declarations | **Rejected as truth; retained only as a candidate front-end.** The literal `TB-4` form remains rejected; a candidate must still be checked against descriptors when a module or component is available. |
 | **Embedder-owned adapters** | Any language/runtime-specific binding | **Always valid.** This is the correct default when the target runtime is not one the project can support. |
 
 ### 12.4 What “WIT texts based on embedder exports” can and cannot mean
@@ -965,38 +970,30 @@ This is why a single “C++ header generator” is not the answer: the source of
 truth is the Wasm metadata, and the target language’s host ABI decides the
 shape of the adapter.
 
-### 12.7 Decision and next steps
+### 12.7 Decision and current state
 
-**Recommendation:** keep generation out of `WasmBase/`. The engine should
-guarantee the metadata descriptors and a guide; a separate tool — or the
-embedder — owns language emitters.
+**Decision:** generation stays out of `WasmBase/`. The engine guarantees the
+metadata descriptors and the hand-written contract; `Tools/Bindings/` owns the
+schema and language emitters. An embedder may always write an adapter by hand.
 
-The realistic sequence is:
+What is implemented:
 
-1. **Now:** §12.5 as the guide, with examples for C/C++ and
-   TypeScript/AssemblyScript.
-2. **Next:** the first-party schema emitter in this repository (§12.8). It
-   now lives in `Tools/Bindings/` with the `wasmjit-bindings` CLI, reads core
-   module and component descriptors, writes the neutral JSON envelope for any
-   schema direction (G2H/H2G/G2G/all), and can import a complete JSON schema
-   with `--schema`.
-3. **Then:** language emitters in the same tool. C/C++, Rust,
-   TS/AssemblyScript, Zig, Kotlin, MoonBit, Go, Dart, Java, C#, F#, Python,
-   Ruby, Lua, Swift, D, Nim, Crystal, Ada, Pascal and Haskell now exist, along
-   with a C++ adapter that dispatches through `WASM::callCallable`. The emitters
-   are where `TB-8`’s opaque reference spelling and `TB-11`’s generated-adapter
-   conformance checks land.
-4. **Now:** SWIG (`--candidates`) and Glue (`--glue-candidates`) are the optional
-   candidate-signature front-ends (`TB-3`/`TB-4a`); both feed the same schema
-   validation step. Use WIT JSON for component-level G2G documentation. Neither
-   becomes an engine or build dependency.
-5. **Always:** an embedder may ignore all of this and write adapters by hand;
-   that remains a supported contract, not a failure to generate.
+1. §12.5 is the guide; the generated declarations and the hand-written path
+   describe the same ABI.
+2. `wasmjit-bindings` reads core modules and components, records any schema
+   direction (G2H/H2G/G2G/all), imports a complete schema with `--schema`, and
+   exposes a typed model to the CLI rather than raw JSON.
+3. Every target in §12.6 has an emitter, plus the C++ adapter, typedefs and
+   source helpers. Opaque references retain `TB-8` ownership notes and `TB-11`
+   runs a compiled adapter through call/trap/import/reference/multi-value
+   retain-drop cases.
+4. SWIG and Glue remain optional candidate front-ends. A candidate scan now
+   produces a G2H **imports** schema and can feed every non-C++ emitter, with
+   parameter names and leading comments carried into the editorial fields.
 
-The test for this work is not “the generated file compiles.” It is that a
-generated adapter can call an exported function, satisfy an import, preserve
-reference/resource ownership, and report the same trap/exception/async result
-as the raw engine API.
+The test is still not “the generated file compiles.” It is that the generated
+adapter calls an export, satisfies an import, preserves reference/resource
+ownership, and reports the same trap/exception/async result as the raw API.
 
 The per-language application of this section is
 [`languages/LF2_ABI_INTEROP.md`](languages/LF2_ABI_INTEROP.md): the two call
@@ -1048,11 +1045,20 @@ The neutral envelope is deliberately small — a JSON projection, not an IDL:
 }
 ```
 
-Function entries carry two editorial fields. They are empty by default because
-the engine metadata has no names or prose. If a human or AI fills them in, the
-emitters use `argNames[i]` for the parameter name and `description` for the
-comment above the declaration. The fields are absent from older schemas; the
-emitters fall back to `argN`.
+The tool does not manipulate this JSON ad hoc. `BindingModel.hpp` parses it into
+`Schema`, `Entry`, `FunctionType` and `ValueType`, with enums for direction,
+entry kind, value kind and heap kind; `Schema::toJson()` is the formatting
+boundary. Component value/type payloads remain JSON because they are open-ended
+structures, so the emitters consume that normalized JSON view rather than each
+re-parsing raw input.
+
+Function entries carry two optional editorial fields. Descriptors have no
+names or prose, so a descriptor-built schema leaves them empty; a C++ scan
+populates `argNames` from the parameter names (excluding the `VMContext*`
+context) and `description` from the comment immediately above the declaration.
+Emitters use `argNames[i]` when present and fall back to `argN`; they use
+`description` in the comment above the declaration. Older schemas may omit both
+fields, and that remains valid.
 
 `--emit schema --direction all` writes the complete interchange form, and
 `--schema FILE --direction g2h|h2g|g2g|all --emit ...` imports it and projects it
@@ -1081,10 +1087,12 @@ designed, and this note does not propose one.
 
 | Path | What it is | Rule |
 |---|---|---|
-| `Tools/Bindings/BindingSchema.hpp/.cpp` | core-module and component descriptor → JSON schema, plus the C/C++, Rust, TypeScript, AssemblyScript, Zig, Kotlin, MoonBit, Go, Dart, Java, C#, F#, Python, Ruby, Lua, Swift, D, Nim, Crystal, Ada, Pascal and Haskell emitters, the C++ adapter, the host-side typedef/source emitters and the candidate-schema projection (`TB-1`, `TB-2`, `TB-8`, `TB-14`) | first-party; reads `WasmBase` headers, is not part of the installed SDK |
-| `Tools/Bindings/main.cpp` | the `wasmjit-bindings` CLI | build-time tool; never linked into the engine |
-| `Tools/Bindings/frontend/cpp/` | optional SWIG and Glue candidate-signature front-ends (`TB-3`, `TB-4a`) | implemented; build-time only, output validated against the schema and never emitted into it. |
-| `Test/BindingSchemaTests.cpp` (`[bindings]`) | schema/emitter conformance tests (`TB-11`) | compiles the generated C header and Rust module when gcc/rustc are present |
+| `Tools/Bindings/BindingModel.{hpp,cpp}` | typed schema model (`Direction`, `EntryKind`, `ValueKind`, `HeapKind`, `Entry`, `Schema`), JSON parse/format and dedupe | JSON is only the interchange boundary |
+| `Tools/Bindings/BindingSchema.{hpp,cpp}` | core-module and component descriptors → schema; typed and JSON projections; public wrappers | first-party; reads `WasmBase` headers, not part of the installed SDK |
+| `Tools/Bindings/Emit*.cpp` | shared emitter helpers, Rust, web/JVM/.NET, dynamic/native-ABI and C++ emitters | one source table per language group |
+| `Tools/Bindings/main.cpp` | the `wasmjit-bindings` CLI | operates on `Schema`, never on raw JSON except at file input/output |
+| `Tools/Bindings/frontend/cpp/` | optional SWIG and Glue candidate front-ends | build-time only; candidate schemas are G2H imports and never authority |
+| `Test/BindingSchemaTests.cpp` (`[bindings]`) | schema/emitter conformance tests (`TB-11`) | compiles generated targets when the toolchain is present |
 | `WasmBase/`, `LibJit/`, `Sljit/`, `Asmjit/` | engine and backends | must never include a tool header or link a generator |
 
 The schema slice now lives in `Tools/Bindings/` and is built with the project.
@@ -1103,7 +1111,12 @@ its imports/exports are projected. The invocation is:
     --schema module.binding.json --direction g2g --emit rust
 
 ./build/Desktop-Release/Tools/Bindings/wasmjit-bindings \
-    --frontend-schema --candidates host.hpp
+    --frontend-schema --candidates host.hpp \
+    --direction g2h --emit schema > host.binding.json
+
+./build/Desktop-Release/Tools/Bindings/wasmjit-bindings \
+    --frontend-schema --candidates host.hpp \
+    --direction g2h --emit c-header > host_bindings.h
 ```
 
 `--emit` accepts `schema`, `c-header`, `rust`, `typescript`, `assemblyscript`,
@@ -1113,7 +1126,8 @@ its imports/exports are projected. The invocation is:
 the envelope and `--output` writes a file instead of stdout. `--candidates HEADER` parses a C++ header through SWIG
 and `--glue-candidates SOURCE` reads a Glue registration source. By default they
 print a per-candidate match report; `--frontend-schema` instead derives a
-candidate schema. The
+candidate schema and accepts the same `--emit` values as a module (so the
+candidate path produces JSON or any non-C++ header). The
 `[bindings]` tests prove the same paths from `Test/BindingSchemaTests.cpp`: they
 emit the schema and every target, compile the C, Rust, TypeScript,
 AssemblyScript, Zig, Kotlin, MoonBit and Go output with the available toolchains;
@@ -1134,18 +1148,27 @@ The plain C header wraps every declaration in `extern "C"` under
 `__cplusplus`; `[bindings]` compiles it as both C11 and C++23.
 
 `cpp-typedefs` and `cpp-source` support **G2H and H2G**; G2G is not their job.
-For **g2h**, `cpp-typedefs` emits the plain C++ declarations a host must
-implement inside an `extern "C"` block, and `cpp-source` emits
-`TODO: implement this host import.` stubs. For **h2g**, they emit host-side
-`Callable` typedefs/pointers for
+The emitted header is a real C++ header: it includes `<cstdint>`, uses
+`struct`/`using` declarations, and contains a plain `extern "C"` block only for
+the host functions that cross the C ABI. There is no `#ifdef __cplusplus`
+around it.
+
+For **g2h**, `cpp-typedefs` emits the plain host declarations inside that
+`extern "C"` block and, outside it, the ordinary C++ declaration
+`wasmjit_<module>_register_imports(WASM::ImportRegistrar&)`. `cpp-source`
+emits the `TODO: implement this host import.` stubs and the inverse of the
+loader: it registers every implementation with
+`WASM::nativeImport<&wasmjit_<module>_<name>>()` under its original
+`(module, field)` name. That is the synthetic Wasm module a guest imports.
+For **h2g**, they emit host-side `Callable` typedefs/pointers for
 module/component exports, always with `WASM::VMContext*` first and a trailing
-`void*` for multi-value results. `cpp-source` also emits
-`wasmjit_<module>_load_callables(WASM::ModuleInstance*)`, which resolves each
-export through `exportedFunction()`. A G2G consumer needs the producer’s
-exports projected as imports instead. C++ forbids `static_cast` from `void*` to
-a function pointer, so the generated cast is `reinterpret_cast` at that ABI
-boundary. `cpp-adapter` is generated for H2G (host calls guest); it is not a
-G2H/G2G adapter.
+`void*` for multi-value results. `cpp-source` emits
+`wasmjit_<module>_load_callables(WASM::ModuleInstance*)` outside any C block;
+it resolves each export through `exportedFunction()`. A G2G consumer needs the
+producer’s exports projected as imports instead. C++ forbids `static_cast`
+from `void*` to a function pointer, so the generated cast is
+`reinterpret_cast` at that ABI boundary. `cpp-adapter` is generated for H2G
+(host calls guest); it is not a G2H/G2G adapter.
 
 Function entries are de-duplicated before emission: imports by Wasm
 `module` + `name`, exports by `name`. A Wasm module may import the same field
@@ -1157,9 +1180,14 @@ candidate-derived schemas and for every language emitter.
 that are actually exposed to Wasm: the first parameter must be a
 `VMContext*`/`VMContext&` (the `Callable` ABI context), which is removed from the
 schema. Scalar and opaque-reference parameters are mapped to core types; a
-candidate whose remaining signature cannot be mapped is skipped. The result is
-still a **candidate-derived** schema, not a C++ header ABI, and the engine
-descriptors remain the truth for a module or component.
+candidate whose remaining signature cannot be mapped is skipped. The candidate
+functions are host implementations, so the entries land in `imports` (with the
+`--module-name`/source stem as the Wasm import module) for `g2h` and `all`;
+`h2g`/`g2g` are rejected because the `VMContext*` ABI is not a guest export.
+Parameter names and the immediately preceding comment populate `argNames` and
+`description`. The result is still a **candidate-derived** schema, not a C++
+header ABI, and the engine descriptors remain the truth for a module or
+component.
 
 **Policy check.** These two features do not reopen `TB-4`. The candidate schema
 only includes functions explicitly shaped for the `Callable` ABI (`VMContext*`
@@ -1217,6 +1245,43 @@ that want name lookup plus libffi invocation instead of writing their own
 - Both caches borrow the instance, own only metadata, and rethrow a pending trap
   through `checkTrap()`. They are not required by the runtime or by any backend.
 
+### 12.10 Other schema inputs: an exploration
+
+The question is not “which parser is best”. It is which artefact is *allowed to
+be authoritative* for a Wasm ABI. There are three useful classes:
+
+| Input | Authority | What it adds | Decision |
+|---|---|---|---|
+| **Module/component descriptors** | the engine | exact import/export names, canonical type identity, flat Canonical ABI cells | **Keep as the only authoritative source.** |
+| **A complete `wasmjit.binding/1` JSON** | a prior descriptor export or a reviewed hand edit | replay across machines, editorial `description`/`argNames`, G2G projection | **Keep as the interchange form** (`--schema`). |
+| **A C++ scan (SWIG, Glue, future Clang)** | a proposal only | native function names/signatures and comments for the host side | **Keep as a candidate front-end**, then cross-check. |
+
+Candidate inputs considered and not made authoritative:
+
+- **Clang/libclang AST.** Stronger C++ parsing than SWIG, including macros and
+  templates, but it still does not know the Wasm Canonical ABI, `TypeId`,
+  ownership or component resources. It would be a better *candidate* scanner,
+  not a schema source. Cost: a large build dependency, so it stays optional.
+- **DWARF / `name` custom section / `wasm-objdump` debug data.** Useful for
+  recovering source names when a module was built with debug info, but debug
+  sections are stripped in production and do not define export ownership. It
+  can annotate editorial fields, never replace descriptors.
+- **WIT text or `wit-bindgen`.** Appropriate for component interfaces; WIT has
+  no core-module memory/table/global imports or raw `Callable` ABI. It remains
+  an optional cross-check, not a second IDL.
+- **`wasm-bindgen` metadata.** A JS ecosystem contract, not a neutral Wasm
+  binding schema; adopting it would import JS-specific ownership and host glue.
+- **Hand-authored IDL (Smithy, FlatBuffers, custom DSL).** A new IDL would need
+  a second validator and a second source of truth. The JSON envelope is already
+  the reviewed hand-editable form; no new DSL is planned.
+- **Binary introspection alone.** Parsing the module without descriptors gives
+  names and raw types but not the engine’s canonical `TypeId` or the intended
+  adapter direction. It is useful only for diagnostics and candidate checks.
+
+The practical rule: **descriptors own truth, JSON owns interchange, C++ scans
+own candidate discovery.** A future front-end is welcome if it fits the third
+row and passes `crossCheckCandidates()`; it does not need a new schema dialect.
+
 ## 13. Native C++ objects, C structs, and the GC boundary
 
 Owner labels: the opaque `externref`/`GcHeap`/`HostBridge` primitive is **ENG**;
@@ -1251,7 +1316,7 @@ There are only a few honest answers:
 6. **A C++ reflection system in the engine** — rejected in §13.7.3. It would be
    a new subsystem, not a binding mechanism.
 
-The recommendation in §13.8 is deliberately narrower than “make everything
+The decision in §13.8 is deliberately narrower than “make everything
 work”: the engine owns the **opaque boundary** (`externref`, `HostBridge`,
 component resource handles), while the embedder or a host-side adapter library
 owns the **typed object model**. This is the same split already chosen for WASI,
@@ -1327,371 +1392,69 @@ stubs. Option C below is the runtime-identity case. The labels below therefore
 describe **host implementation difficulty**, not a second definition of the
 LF2 scale.
 
-### 13.4 Option A — opaque IDs, OpenGL-style
+### 13.4 Options A, B and C
 
-This is the lowest common denominator and the default that always works. The
-host owns a table; the guest receives an integer and never learns anything
-about the pointee. The API is a set of free functions:
+| Option | Wire shape | Host implementation | Where it works |
+|---|---|---|---|
+| **A — opaque IDs** | `u32`/`u64` | table with a generation and a type tag; free functions for create/read/write/destroy | every studied target; the default when no reference type is available |
+| **B — typed handle table** | `externref` or an integer handle | the table owns the object and a type tag; generated accessors/methods; explicit `destroy` | targets with `externref` or a stable integer ABI |
+| **C — GC-owned reference** | a typed GC reference, or a GC object holding `externref` | the host or guest GC owns the box and a finalizer releases the native object | only runtimes that provide finalization; not C/Rust/Zig/Go |
 
-```cpp
-// Host adapter, exported with a C ABI. The guest imports these functions.
-extern "C" uint32_t demo_widget_create(uint32_t kind, int32_t width);
-extern "C" int32_t  demo_widget_width(uint32_t widget);
-extern "C" void     demo_widget_set_width(uint32_t widget, int32_t width);
-extern "C" void     demo_widget_destroy(uint32_t widget);
-```
+A needs no reference types and is the only option that is uniform across C, Rust,
+Zig, Go and the GC languages. B adds type-checked accessors and is the right
+shape for a generated C++ class bridge. C is a policy of one host runtime, not
+an engine ABI: the engine must not encode it, because that privileges one GC
+language and makes the same object behave differently depending on its wrapper.
 
-The host table adds the two things a raw OpenGL-style ID usually lacks:
-**generation** (a stale handle must not silently address a recycled slot) and
-a **type tag** — either a field in the slot or, as in this sketch, a separate
-table per type so a `widget` handle cannot be passed to `document_focus`.
+### 13.5 Host-side invariants
 
-```cpp
-struct WidgetSlot {
-    uint32_t generation = 0;
-    std::shared_ptr<Widget> object; // or unique_ptr<T> with a custom deleter
-};
+Every option follows the same rules:
 
-std::vector<WidgetSlot> widgets;   // index 0 is reserved / never live
-std::vector<uint32_t>   freeWidgets;
-std::mutex              widgetsMutex;
-```
+- the guest never receives a raw native pointer or a layout description;
+- the host validates a handle (generation, type tag, thread affinity) before
+  touching a slot;
+- the object stays on the host or in an `externref` box; `pmr`, `IntrusiveArray`
+  and smart pointers are allocator/storage choices, not an engine GC contract;
+- a destructor is explicit (`destroy`) or runs from a host/guest finalizer; the
+  engine never runs an arbitrary C++ destructor.
 
-```cpp
-// Sketch only: every public entry validates the handle before touching the slot.
-static Widget* resolveWidget(uint32_t handle)
-{
-    const uint32_t index = handle & 0xffffu;
-    const uint32_t gen   = handle >> 16;
-    if (index == 0 || index >= widgets.size()) return nullptr;
-    WidgetSlot& slot = widgets[index];
-    if (slot.generation != gen) return nullptr; // stale/recycled handle
-    return slot.object.get();
-}
-```
+### 13.6 Bridge sketch
 
-The guest side is ordinary Wasm, with no reference types at all:
-
-```wat
-(import "host" "demo_widget_create" (func $widget_create (param i32 i32) (result i32)))
-(import "host" "demo_widget_width"  (func $widget_width  (param i32) (result i32)))
-(import "host" "demo_widget_destroy"(func $widget_destroy (param i32)))
-
-(func $example (result i32)
-  (local $w i32)
-  (local.set $w (call $widget_create (i32.const 1) (i32.const 640)))
-  (call $widget_width (local.get $w))
-  ;; ...use $w only by passing it back to the host...
-  (call $widget_destroy (local.get $w)))
-```
-
-Properties:
-
-- works in every studied language, including C, Rust, Zig, Go and TinyGo;
-- no C++ layout, RTTI, exceptions or smart pointers cross the boundary;
-- the guest can copy the integer, so the host must define ownership. Either the
-  handle is a borrowed token valid until `destroy`, or the table holds a
-  reference count and the guest calls explicit `retain`/`release`;
-- the wrapper layer is repetitive. That is a tooling problem, not an ABI
-  problem, and is exactly what option B automates;
-- a handle is **not** a pointer. The guest must never add an offset, read
-  memory at it, or interpret it as a `sizeof(T)`-sized object. Raw pointers in
-  `i32`/`i64` are not a substitute: the host cannot validate them, the guest
-  can forge them, and they expose the process address space.
-
-### 13.5 Option B — typed handle table and generated stubs
-
-Option B keeps A’s ABI but makes the table explicit and gives the generator
-enough information to produce ergonomic wrappers. It is the recommended target
-for a C++-facing host adapter because it addresses the “tedious, brittle,
-massive pain to maintain” objection without smuggling layout across the
-boundary.
+The useful C++ shape is a small host-side template, not an engine type:
 
 ```cpp
-enum class NativeTag : uint32_t { Widget = 1, Document = 2, Config = 3 };
-
-struct NativeSlot {
-    uint32_t generation = 0;
-    NativeTag tag = NativeTag::Widget;
-    std::shared_ptr<void> object; // deleter retains the concrete type
-};
-
-struct NativeHandle {
-    uint32_t index = 0;
-    uint32_t generation = 0;
-    NativeTag tag = NativeTag::Widget;
-};
-
-class NativeTable {
-public:
-    NativeHandle adopt(std::shared_ptr<void> object, NativeTag tag);
-    std::shared_ptr<void> borrow(NativeHandle handle, NativeTag expected) const;
-    void destroy(NativeHandle handle);
-    // Optional: retain/release for a guest that wants shared ownership.
-    void retain(NativeHandle handle);
-    void release(NativeHandle handle);
-};
+// Host-side only; the generated stubs call these functions.
+template <class T>
+uint64_t hostCreate(T object);           // table slot + type tag + generation
+T*       hostResolve(uint64_t handle);   // validated or nullptr
+void     hostDestroy(uint64_t handle);
 ```
 
-`std::shared_ptr<void>` is not a public ABI type and does not cross the
-boundary; it is the host’s storage policy. A `unique_ptr<T>` can be adopted by
-moving it into a `shared_ptr<void>` whose deleter destroys `T`; a `weak_ptr<T>`
-is a host-side check before use, not a second guest handle. This is the part
-[`JsUtil`](https://github.com/Metalhead33-Foundation/GuiTest/blob/master/JS/JsUtil.hpp) got right in principle (type-erased storage) and wrong in contract (it
-fixed the policy to `std::shared_ptr` and exposed only that).
+The generated adapter wraps each method as a free function, passes the handle
+as `u64` (or `externref` where the target supports it), and converts a failed
+resolution into the engine trap path. The table, deleter and thread policy stay
+with the embedder.
 
-The ABI still carries only scalars:
+### 13.7 Non-options
 
-```cpp
-// Generated from a small IDL, or hand-written once. Not engine metadata:
-// the engine knows the Wasm signature, not Widget's C++ methods.
-extern "C" uint64_t demo_document_open(const char* path, uint32_t pathLen);
-extern "C" int32_t  demo_document_title(uint64_t document,
-                                         uint8_t* out, uint32_t outCap);
-extern "C" void     demo_document_close(uint64_t document);
-```
+#### 13.7.1 Linear-memory object images
 
-The generated caller keeps the two layers honest:
+A raw pointer plus `sizeof(T)` promises a layout the engine cannot enforce. A
+Wasm guest cannot dereference a host pointer, and a GC reference is not a
+linear-memory address. Only explicit POD/canonical data crosses.
 
-```cpp
-// Guest-facing wrapper (generated or hand-written).
-class Document {
-public:
-    explicit Document(std::uint64_t handle) : handle_(handle) {}
-    ~Document() { if (handle_) demo_document_close(handle_); }
-    Document(const Document&) = delete;
-    Document& operator=(const Document&) = delete;
-    std::string title() const; // calls demo_document_title with a result buffer
-private:
-    std::uint64_t handle_ = 0;
-};
-```
+#### 13.7.2 “The GC allocates C++ objects”
 
-For a GC guest, the same slot can be delivered as an **opaque `externref`**
-instead of an integer. The engine still only sees the pointer payload; the
-host box and its `retain`/`release` callbacks are the adapter’s business. This
-is the bridge between B and C:
-
-```cpp
-// Host side: box the table entry so the engine can retain/release an opaque ref.
-struct ExternBox {
-    NativeTable* table;
-    NativeHandle handle;
-    std::atomic<uint32_t> refs{1};
-};
-
-void* box_new(NativeTable& table, NativeHandle handle)
-{
-    return new ExternBox{&table, handle, 1};
-}
-```
-
-```wat
-;; WasmGC guest: the field is opaque. It may be stored, cloned and dropped,
-;; but the guest cannot read the widget's fields through it.
-(type $holder (struct (field $widget (mut externref))))
-```
-
-The important separation is: **B is the table and the ABI; C is who owns the
-box and when the finalizer runs.** Mixing them is what makes the JS precedent
-hard to reuse.
-
-### 13.6 Option C — a host/guest GC owns the reference
-
-The JavaScript model is: put a private pointer in a GC object, register a
-finalizer that releases it, and expose properties/methods through native
-callbacks. A WasmGC guest can do the analogue with an `externref` field:
-
-```cpp
-// Host adapter. `Native` is the embedder's C++ type.
-struct HostBox {
-    std::shared_ptr<Native> native;
-    std::atomic<std::uint32_t> refs{1}; // 1 for the value the guest receives
-};
-
-static void retainHostRef(void*, WASM::VMContext*, void* ref)
-{
-    static_cast<HostBox*>(ref)->refs.fetch_add(1, std::memory_order_relaxed);
-}
-
-static void releaseHostRef(void*, WASM::VMContext*, void* ref)
-{
-    HostBox* box = static_cast<HostBox*>(ref);
-    if (box->refs.fetch_sub(1, std::memory_order_acq_rel) == 1) {
-        removeLiveHostBox(box); // before the address can be reused
-        delete box;             // shared_ptr releases Native; custom deleter is fine
-    }
-}
-```
-
-```cpp
-WASM::HostBridge bridge;
-bridge.references.retain  = &retainHostRef;
-bridge.references.release = &releaseHostRef;
-bridge.references.isHostReference = &isLiveHostBox; // registry/range check
-bridge.instanceDestroying = &dropPerInstanceRoots; // drop roots, not every object
-bridge.userData = &hostTables; // retain/release can run before instanceCreated
-```
-
-The guest stores and drops the reference; the engine’s barriers call the two
-callbacks; the host deletes the box when the last engine-visible count goes
-away. The guest never dereferences the pointer and the engine never learns what
-`Native` is.
-
-`isLiveHostBox` must **not** be `return true`. The same hook sees funcref,
-continuation and other opaque pointers; returning true for those would make the
-engine call `HostBox` logic on an unrelated object. Use a registry of live box
-addresses, a reserved address range, or a side table — a lookup that is safe for
-an arbitrary pointer, not a dereference of it.
-
-That is the entire legitimate “GC manages a native object” story on the guest
-side. The precise ownership chain is: **guest GC → opaque reference → host box
-→ native object**. The engine’s `GcHeap` still owns only the guest object; it
-does not scan the host box or trace the native object. What the host runtime
-does *around* the box is runtime-specific:
-
-- a JS host can put the `HostBox` in a private slot and register its own
-  finalizer; the finalizer calls the same release path;
-- a WasmGC guest can put an `externref` in a `struct`/`array` field; the
-  engine’s `refStore`/`refDrop` supply the retain/release calls;
-- a C, C++, Rust, Zig, Go or TinyGo guest has no **GC** finalizer for a foreign
-  pointer. It must use option A/B and call `destroy` explicitly. C++ can wrap a
-  handle in an RAII object whose destructor calls `destroy`, and Rust can do the
-  same with `Drop`, but that is still the explicit A/B contract, not an engine
-  finalizer. C can carry an `externref` only if its toolchain supports the
-  reference type, and it still has no automatic finalizer.
-
-This is why C cannot be the universal replacement for A/B. It is a **host-runtime
-integration policy**, and it only works where a runtime owns the object graph
-on the other side.
-
-The [`JsUtil`](https://github.com/Metalhead33-Foundation/GuiTest/blob/master/JS/JsUtil.hpp) precedent is the cautionary example. Its table is keyed by a
-sequential `uintptr_t`, values are always `std::shared_ptr<void>`, and
-`js_finalizer_shared` erases the slot when the JS object dies. Useful
-conveniences — the `ReturnValueWrapper` specialisations and the member-function
-trampolines — sit next to assumptions that do not generalise:
-
-- it cannot represent `std::unique_ptr<T>` or `std::weak_ptr<T>` as first-class
-  guest-visible policies;
-- the finalizer is tied to one runtime’s object lifecycle, so the same native
-  object cannot be handed to a non-JS host without a second mechanism;
-- the pointer is stored in a private slot, which is not available in Wasm
-  linear memory or in a C guest;
-- the table is global and mutex-protected, which is a thread-affinity decision
-  disguised as an implementation detail.
-
-Do not repeat that contract in the engine. If a JS adapter wants it, the
-adapter owns it. The engine’s contribution is the opaque `externref` and the
-`HostBridge` hooks, not a universal `shared_ptr` table.
-
-### 13.7 Non-options, and why they are non-options
-
-#### 13.7.1 Putting the object image in guest linear memory
-
-A C++ object cannot be copied into linear memory as an opaque byte blob. The
-guest compiler does not know `sizeof(T)` for a host-only `T`, and even if the
-host exports a size query, the following are still true:
-
-- the host and guest may use different ABIs, alignments, endianness assumptions
-  and standard-library layouts;
-- `std::string`, `std::vector`, `std::shared_ptr` and virtual classes contain
-  pointers, allocator state and vtable addresses that are meaningless in the
-  guest address space;
-- a host pointer inside the image is a capability leak. The guest can corrupt
-  it, and the host cannot validate it without a side table;
-- nested objects need a layout negotiation and a relocation story. That is
-  precisely the problem [`proposals/SHARING_LINEAR_MEMORY.md`](proposals/SHARING_LINEAR_MEMORY.md)
-  is about, and it is not solved by an allocator;
-- a guest can write anywhere in its own memory, so “read-only” is not
-  enforceable inside the same linear memory unless the guest runtime provides
-  protection.
-
-The legitimate subset is **plain data with an explicit schema**: integers,
-floats, fixed-width fields, fixed-size arrays, and strings/lists represented by
-offset+length pairs under the Canonical ABI. A C `struct` containing only such
-fields can cross as a `record`, and a `std::array`/fixed-size buffer can cross
-as a `list` with a canonical copy. A `std::string` cannot; copy its bytes and
-let the host own the native string.
-
-```c
-/* Crosses as a WIT record: no pointers, no host addresses. */
-typedef struct {
-    int32_t x;
-    int32_t y;
-    uint32_t flags;
-} demo_point;
-
-/* Does not cross as a record: the pointer and the char* are host addresses. */
-typedef struct {
-    const char* name;
-    void*       owner;
-    size_t      nameLen;
-} demo_bad_record;
-```
-
-The second struct is still usable, but only through option A/B: copy `name`
-into a canonical string, replace `owner` with a handle, and keep the struct
-itself on the host.
-
-A size query (`host_sizeof_widget()`) is not enough. It tells the guest a
-number, not a contract. The contract would still need field offsets, alignment,
-lifetime, ownership, mutation rules and a versioning story — the layout
-negotiation this engine deliberately does not own.
-
-#### 13.7.2 A `std::pmr::memory_resource` for engine GC
-
-`Elv::Util::PolyMorphicSmartPointerFactory<T>` and
-`Elv::Util::SmartPointerWrappersForAlloc<T, Alloc>` are useful host-side
-allocator helpers: they can build `unique_ptr`, `shared_ptr` and `weak_ptr` with
-a custom allocator/deleter, and `GenericDeleter` gives a type-erased
-destroy-and-deallocate callback. `Elv::Util::IntrusiveArray<Element, Meta>` is a
-single-slab, reference-counted array with a header and an `ElementSpan`; it is a
-good way to store a homogeneous block of host objects behind a handle.
-
-None of these is an engine GC interface:
-
-- `std::pmr::memory_resource` allocates and deallocates **bytes**. It does not
-  know `T`, does not run `T`’s destructor, and does not know which references
-  inside `T` need tracing or dropping;
-- a GC that only knows `allocate`/`deallocate` cannot reclaim a `shared_ptr`
-  graph correctly, cannot distinguish a `weak_ptr` from an owning reference,
-  and cannot run an arbitrary destructor with the right type;
-- `IntrusiveArray` is reference-counted host memory, not a Wasm GC object. Its
-  `ElementSpan` is a host pointer and cannot be handed to a guest as a linear
-  memory address;
-- if the host wants the engine to drop a native object, it must supply a
-  **type-erased releaser** (`GenericDeleter` is one) and invoke it from the
-  host’s own finalizer/box. That is option C, not “GC owns native objects”.
-
-An embedder may use `pmr` to back a handle table or a slab of same-type
-objects. It may not ask `GcHeap` to allocate a `std::string` and expect the
-engine to destroy it. Adding that would make the engine a C++ runtime, not a
-Wasm runtime.
+`GcHeap` allocates Wasm structs/arrays and owns their reference counts; it does
+not know `T`, destructors or host ownership. `std::pmr` allocates bytes and does
+not run a destructor. A host-side type-erased releaser is the correct finalizer
+hook.
 
 #### 13.7.3 A C++ reflection system in the engine
 
-A reflection layer would register classes, fields, member functions, constructors
-and ownership policies, then expose them to every guest language. It is
-technically possible to build such a thing, but not in `WasmBase/`:
-
-- it would need RTTI or generated metadata for every registered class, and C and
-  Rust have no compatible RTTI;
-- it would have to choose a single ownership model (`shared_ptr`? `unique_ptr`?
-  intrusive? GC?) — the exact mistake [`JsUtil`](https://github.com/Metalhead33-Foundation/GuiTest/blob/master/JS/JsUtil.hpp) made;
-- it would have to define object identity, thread affinity, exceptions, virtual
-  dispatch, overload resolution and lifetime across a boundary where the guest
-  can forge handles;
-- it would duplicate, badly, what SWIG, Glue, `pybind11`-style tools and
-  language-specific bindings already do;
-- it would turn a security boundary into an object-capability system that the
-  engine cannot validate. That belongs to the embedder, which knows which
-  classes are safe to expose.
-
-The engine already has a reflection-like surface for **Wasm**, not C++: type
-descriptors, canonical types and component metadata. Those describe the Wasm
-wire shape. A C++ reflection system would be a second, unrelated model. The
-“duplicate, badly” sentence above is not a plan to make SWIG or Glue an engine
-dependency; §15.5 draws the build-time-only boundary.
+It would need RTTI (absent in C and Rust), one ownership model for every
+embedder, and a security policy for forged handles. It duplicates what
+SWIG/Glue/pybind11 already do, badly. Keep reflection in an embedder adapter.
 
 ### 13.8 The boundary and the decision
 
@@ -1822,8 +1585,7 @@ boundary; the A/B/C recipes are documented adapter patterns, and the C adapter
 is explicitly untested.** That is narrower than “native C++ interop works”, and
 it is honest.
 
-The final recommendation for the guide and the descriptor-driven generator is
-therefore:
+The remaining A/B work for the guide and generator is therefore:
 
 - generate **A/B** stubs and a **handle-table skeleton** for C/C++, Rust, Zig,
   Go/TinyGo and AssemblyScript;
@@ -2411,38 +2173,28 @@ A runtime “reflection system” in the engine would be a third path that every
 embedder must use and every backend must understand. The arrows above keep it
 out of the core.
 
-### 15.6 Recommendation
+### 15.6 Decision and validation
 
-1. **Keep `nativeImport` where it is.** It is a small, generic,
+1. **`nativeImport` stays in the engine.** It is a generic
    exception-to-trap trampoline with no object model.
-2. **Put `GuestFunction`, `HostClass` and the handle table in an optional
-   host-side library/header**, not in `WasmBase/`. They depend on C++ types and
-   an ownership policy; they are not backend or engine contract.
-3. **Generate the bridge, do not reflect at runtime.** The generator consumes
-   `Module::importDescriptors()`/`exportDescriptors()` and `CoreTypeView`, and
-   emits the opaque reference types from §14 plus the handle/method stubs from
-   §15.3.
-4. **Do not register `sizeof(T)`.** Expose create/destroy/accessors; keep the
+2. **`GuestFunction`, `HostClass` and the handle table stay embedder-side.**
+   They depend on C++ types and ownership policy, so they are not engine or
+   backend contract.
+3. **Generate the bridge; do not reflect at runtime.** The generator consumes
+   descriptors and emits the opaque reference types from §14 plus the handle and
+   method stubs from §15.3.
+4. **Never register `sizeof(T)`.** Expose create/destroy/accessors and keep the
    object on the host or in an `externref` box.
-5. **Keep SWIG/Glue optional and out-of-tree.** They can propose C++ function
-   surfaces; they cannot define the Wasm ABI.
-6. **Start with C++ and Rust adapters**, then AssemblyScript/GC-language
-   front-ends. C and Rust are the useful test that the A/B path works without
-   a language runtime; Kotlin/MoonBit are the useful test that typed GC refs
-   survive a two-GC-language link.
+5. **SWIG/Glue remain optional and out-of-tree.** They propose C++ surfaces;
+   descriptors define the ABI. The candidate path is documented in §12.8.
+6. **C++ and Rust are the baseline adapters.** AssemblyScript and the GC
+   languages test typed references across a two-language link.
 
-Tests that would validate the layer:
-
-- a C++ `HostClass<T>` round-trip through `nativeImport<&create>`/`destroy` and
-  one member method, with a stale handle rejected;
-- a host `GuestFunction` call that rejects a mismatched `TypeId`;
-- a two-module same-Store GC struct pass-through, including a
-  `ref.test`/`ref.cast` in the consumer;
-- a two-module type mismatch rejected at link time;
-- a GC → C host `externref` handle that never dereferences the object;
-- a `stringref` host round-trip through `createFromUtf8`/`copyToUtf8` and a
-  cross-module string pass-through;
-- a cross-Store reference rejected, not silently accepted.
+The validation cases that matter are: a `HostClass` round-trip with a stale
+handle rejected; a `GuestFunction` call rejecting a mismatched `TypeId`; a
+same-Store GC struct pass-through with `ref.test`/`ref.cast`; a cross-module
+type mismatch rejected at link time; a GC → C `externref` that is never
+dereferenced; a `stringref` round-trip; and a cross-Store reference rejected.
 
 
 ## 16. Problem ownership: engine, embedder, tooling, language
@@ -2571,17 +2323,17 @@ and the producer rows are toolchain constraints recorded in this repository.
 | **TB-2** | No C/C++, Rust, Zig, AS, Kotlin, MoonBit, Go, Dart, Java, C#, Python, Ruby, Lua, Swift, D, Nim, Crystal, Ada, Pascal or Haskell emitter | §12.6–§12.8 | **Verify** | Emitters exist for the C/C++, Rust, TypeScript/AssemblyScript, Zig, Kotlin, MoonBit, Go, Dart, Java, C#, F#, Python, Ruby, Lua, Swift, D, Nim, Crystal, Ada, Pascal and Haskell targets, plus a C++ adapter and direction-aware `cpp-typedefs`/`cpp-source`; `[bindings]` compiles the targets whose toolchains are present. Consume the schema, not C++ headers. |
 | **TB-3** | SWIG/Glue integration | §12.3, §15.5 | **Verify** | Optional build-time front-ends only: `--candidates` runs SWIG's XML front-end and `--glue-candidates` compiles a Glue registration source and reads its declaration printer. Local snapshot in §15.5; never link into the engine. |
 | **TB-4** | Automatic scan of existing C/C++ headers as truth | §12.3 | **Rejected** | A C++ header is not a Wasm ABI; the literal form stays rejected. The `VMContext*`-filtered candidate schema is `TB-4a`, not an exception to this row. |
-| **TB-4a** | C++ header discovery as a *candidate* front-end | §12.3, §12.8, §15.5 | **Verify** | SWIG header proposals and Glue-declaration proposals are checked against the schema by name, arity, result shape and type; `[bindings]` covers a match and a mismatch for both. `--frontend-schema` additionally derives a candidate schema only from functions with `VMContext*` first. Glue 1.5 is runtime registration, not a header parser. |
+| **TB-4a** | C++ header discovery as a *candidate* front-end | §12.3, §12.8, §15.5 | **Verify** | SWIG header proposals and Glue-declaration proposals are checked against the schema by name, arity, result shape and type; `[bindings]` covers a match and a mismatch for both. `--frontend-schema` additionally derives a G2H imports schema (and can emit every non-C++ target) only from functions with `VMContext*` first. Glue 1.5 is runtime registration, not a header parser. |
 | **TB-5** | WIT as an IDL for core modules | §12.3–§12.4 | **Accepted** | WIT is component-level only; the schema reads component descriptors directly (G2H imports, H2G exports, G2G exports projected as consumer imports) and treats WIT JSON as optional; core modules use descriptors/`Callable`; no second WIT. |
 | **TB-6** | Binaryen/`wasm-opt` rewrites/optimizations | §12, §14 | **Verify** | Keep them in the producer pipeline; `[bindings]` runs `wasm-opt --all-features -O2` on five fixtures (scalars, multi-value, GC struct/array, reference ownership and an externref import) and compares both imported and exported function signatures, ignoring the store-scoped `typeId`. |
 | **TB-7** | Compiler flags/versions that emit or omit GC refs, `externref`, EH, stringref | §12, §14 | **Verify** | 2026-11-04 host recorded by `[bindings]` in `toolchain.txt`: wasm-opt 124, wasm-tools 1.252.0, wat2wasm 1.0.41, clang 23.1.4, rustc 1.99.0 and Go 1.27.3; the optimizer flags stay pinned at `--all-features -O2`. Re-record when a producer toolchain changes. |
 | **TB-8** | Generated headers for GC/string references | §14.4–§14.8 | **Verify** | Emitter rule, not an engine gap: opaque per-kind types, no layout/`TypeId` constants, explicit ownership comments. All emitters spell `stringref` as opaque `wasm_stringref`; `[bindings]` covers it with a hand-built reserved-encoding fixture. |
 | **TB-9** | Install/pkg-config/out-of-tree consumer | §7, §8 | **Verify** | Re-run 2026-11-04: `Test/install-check.sh build/Desktop-Release` installed into a scratch prefix, linked the consumer through `wasmjit.pc`, and ran the i32/f64/multi-result/v128/mixed-tuple checks (`install-check: OK`). Re-run when packaging changes. |
 | **TB-10** | Cross-vendor C++ ABI stability | §9 | **Accepted** | Soname discipline only; deferred unless a pimpl firewall is designed. |
-| **TB-11** | Generated-adapter conformance tests | §12.5, §12.8, §15.6 | **Verify** | In-repo `[bindings]` tests compile every generated target (including the C header as C and C++), compare five `wasm-opt` modules, and run a generated C++ adapter through an export call, a trap, an import, an opaque-reference pass-through, a multi-value export and explicit retain/drop of a GC reference result (31 cases / 673 assertions across the suite). |
+| **TB-11** | Generated-adapter conformance tests | §12.5, §12.8, §15.6 | **Verify** | In-repo `[bindings]` tests compile every generated target (including the C header as C and C++), compare five `wasm-opt` modules, and run a generated C++ adapter through an export call, a trap, an import, an opaque-reference pass-through, a multi-value export and explicit retain/drop of a GC reference result (32 cases / 709 assertions across the suite, **2026-11-05**). |
 | **TB-12** | Compiler/tool output whose encoding collides with the engine’s reserved forms | §14.7, `STRINGREF.md` | **Verify** | The reserved `stringref` encoding (`0x67`) is covered by the hand-built `[bindings]` fixture (TB-8) and stays opaque through every emitter. Keep the producer/toolchain checklist note; do not patch the engine around a tool bug. |
 | **TB-13** | Legacy/alternative exception encoding from a producer (e.g. Kotlin/Wasm) | §12, `LEGACY_EXCEPTIONS.md` | **Verify** | `[legacy-eh]` covers strict refusal, default recovery, opt-in rewrite, rethrow/delegate cases and agreement with Binaryen (110 assertions / 12 cases, green 2026-11-04). The policy stays producer/parser-side, not a source-language type rule. |
-| **TB-14** | Language-specific host import/export ABI emission | §12.6, §12.8, §14.4 | **Verify** | Function entries are emitted for all nine targets, plus C++ host-side typedef/source output. Non-function component value/instance/type/component/core-module entries (and core global/memory/table entries) are emitted as explicit comments because host access is through `ComponentInstance`/`ModuleInstance`, not a generated callable; `[bindings]` checks the comments are present. The engine only sees the resulting Wasm function signature. |
+| **TB-14** | Language-specific host import/export ABI emission | §12.6, §12.8, §14.4 | **Verify** | Function entries are emitted for every target in §12.6, plus C++ host-side typedef/source output. Non-function component value/instance/type/component/core-module entries (and core global/memory/table entries) are emitted as explicit comments because host access is through `ComponentInstance`/`ModuleInstance`, not a generated callable; `[bindings]` checks the comments are present. The engine only sees the resulting Wasm function signature. |
 
 **“Outside the engine” is not “outside the project.”** `TB-1`, `TB-2` and
 `TB-8` are **TOOL**: they must not add a header to `WasmBase/` or a link

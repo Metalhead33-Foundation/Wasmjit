@@ -151,7 +151,15 @@ SOURCES += main.cpp \
     MemoryProviderTests.cpp \
     ConfigurationTests.cpp \
     BranchHintTests.cpp \
+    ../Tools/Bindings/BindingModel.cpp \
     ../Tools/Bindings/BindingSchema.cpp \
+    ../Tools/Bindings/Emit.cpp \
+    ../Tools/Bindings/EmitShared.cpp \
+    ../Tools/Bindings/EmitRust.cpp \
+    ../Tools/Bindings/EmitWeb.cpp \
+    ../Tools/Bindings/EmitManaged.cpp \
+    ../Tools/Bindings/EmitDynamic.cpp \
+    ../Tools/Bindings/EmitCpp.cpp \
     ../Tools/Bindings/frontend/cpp/CppFrontend.cpp \
     BindingSchemaTests.cpp \
     CallCacheTests.cpp

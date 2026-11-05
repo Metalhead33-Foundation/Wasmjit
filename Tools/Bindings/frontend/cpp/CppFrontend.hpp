@@ -8,14 +8,18 @@
 #include <string_view>
 #include <vector>
 
+#include "BindingModel.hpp"
+
 /*!
   \file CppFrontend.hpp
   \brief The optional C++ candidate-signature front-end (`TB-3`, `TB-4a`).
 
-  This is a build-time tool. It parses a C++ header with SWIG and proposes
-  function signatures; a proposal is only a candidate until it matches an
-  engine descriptor. The engine schema remains the truth, and nothing here is
-  linked into `WasmBase/` or a backend.
+  This is a build-time tool. It parses a C++ header with SWIG (or a Glue
+  registration source) and proposes function signatures. A proposal is a
+  candidate until it matches an engine descriptor; a candidate-derived schema
+  can also drive an emitter, but it is labelled as such and never modifies a
+  descriptor-built schema. Nothing here is linked into `WasmBase/` or a
+  backend.
 */
 namespace WASM::Bindings {
 
@@ -30,6 +34,7 @@ struct CandidateSignature {
 	std::string name; //!< The parsed function name.
 	std::string returnType; //!< The parsed C++ return type, or `void`.
 	std::vector<CandidateParameter> params; //!< The parsed parameters.
+	std::string description; //!< The comment immediately above the declaration.
 };
 
 /*!
@@ -62,19 +67,38 @@ std::vector<CandidateSignature> glueCandidates(const std::filesystem::path& sour
 		std::string& error);
 
 /*!
- * \brief Builds a schema for host functions that are exposed to Wasm.
+ * \brief Builds a typed schema for host functions that are exposed to Wasm.
  *
  * Only candidates whose first parameter is a `VMContext*`/`VMContext&` are
  * included; that first parameter is part of the `Callable` ABI, not a Wasm
  * parameter, so it is removed from the schema. Every remaining parameter and
  * the result must map to a core Wasm type; a candidate that cannot be mapped is
- * skipped. This is still a candidate-derived schema, not a C++ header ABI.
+ * skipped. Parameter names and leading comments are carried into `argNames`
+ * and `description`, so every target language uses them.
+ *
+ * The candidates are host implementations, so they are **imports** of the Wasm
+ * module for `g2h` and `all`. Asking for `h2g` or `g2g` is an error: a
+ * `VMContext*` C++ function is not a guest export.
  *
  * \param candidates The signatures proposed by a C++ front-end.
- * \param direction The schema direction spelling (`"g2h"`, `"h2g"` or `"g2g"`).
- * \param moduleName The name recorded in the schema envelope.
+ * \param direction The requested direction; `g2h` or `all`.
+ * \param moduleName The Wasm import module recorded in the envelope.
  * \param frontend The front-end name recorded in the schema.
- * \return An ordered binding schema whose exports are the fitting functions.
+ * \return A typed schema whose imports are the fitting functions.
+ * \throws std::runtime_error when \p direction cannot describe host imports.
+ */
+Schema candidateSchemaModel(
+		const std::vector<CandidateSignature>& candidates,
+		Direction direction, std::string_view moduleName,
+		std::string_view frontend = "candidate");
+
+/*!
+ * \brief Builds a JSON schema for host functions that are exposed to Wasm.
+ * \param candidates The signatures proposed by a C++ front-end.
+ * \param direction The requested direction spelling (`"g2h"` or `"all"`).
+ * \param moduleName The Wasm import module recorded in the envelope.
+ * \param frontend The front-end name recorded in the schema.
+ * \return The ordered JSON form of `candidateSchemaModel()`.
  */
 nlohmann::ordered_json candidateSchema(
 		const std::vector<CandidateSignature>& candidates,

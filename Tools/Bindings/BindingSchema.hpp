@@ -6,27 +6,22 @@
 #include <string>
 #include <string_view>
 
+#include "BindingModel.hpp"
 #include "WasmBase/WasmComponent.hpp"
 #include "WasmBase/WasmModule.hpp"
 #include "WasmBase/WasmTypeRegistry.hpp"
 
 /*!
   \file BindingSchema.hpp
-  \brief The neutral binding schema and the first-party C/C++ and Rust emitters.
+  \brief The public binding-schema API and descriptor projection.
 
   This is tooling, not an engine header (docs/EMBEDDING_SURFACE.md §12.8). It
-  consumes the public descriptor metadata on a parsed `WASM::Module`; it must
-  never be included from `WasmBase/`, a backend or a plugin.
+  consumes the public descriptor metadata on a parsed `WASM::Module` or
+  `WASM::Component`; the typed model lives in `BindingModel.hpp` and the
+  language emitters live in the `Emit*.cpp` translation units. Never include
+  this from `WasmBase/`, a backend or a plugin.
 */
 namespace WASM::Bindings {
-
-/*! \brief The direction a generated adapter faces. */
-enum class Direction {
-	GuestToHost, //!< A Wasm guest calls a host function (host-side imports).
-	HostToGuest, //!< A native host calls a module/component export.
-	GuestToGuest, //!< A consumer imports the other module/component's exports.
-	Complete //!< Save all imports and exports; no direction projection.
-};
 
 /*! \brief A target language the schema can be emitted for. */
 enum class Language {
@@ -73,19 +68,20 @@ const char* languageName(Language language) noexcept;
 bool parseLanguage(std::string_view name, Language& language) noexcept;
 
 /*!
- * \brief Emits a schema in the requested target language.
+ * \brief Emits a typed schema in the requested target language.
+ * \param schema The typed schema produced by `moduleSchemaModel()`.
+ * \param language The target language.
+ * \return The generated source text.
+ */
+std::string emit(const Schema& schema, Language language);
+
+/*!
+ * \brief Emits a JSON schema in the requested target language.
  * \param schema The schema produced by `moduleSchema()`.
  * \param language The target language.
  * \return The generated source text.
  */
 std::string emit(const nlohmann::ordered_json& schema, Language language);
-
-/*!
- * \brief Returns the lower-case schema spelling of a direction.
- * \param direction The direction to name.
- * \return `"g2h"`, `"h2g"`, `"g2g"` or `"all"`.
- */
-const char* directionName(Direction direction) noexcept;
 
 /*!
  * \brief Projects an imported complete schema into a requested direction.
@@ -103,6 +99,27 @@ const char* directionName(Direction direction) noexcept;
  */
 nlohmann::ordered_json projectSchema(const nlohmann::ordered_json& schema,
 		Direction direction);
+
+/*!
+ * \brief Projects a typed complete schema into a requested direction.
+ * \param schema The complete typed schema.
+ * \param direction The requested output direction.
+ * \return A projected typed schema.
+ * \throws std::runtime_error when the direction cannot be projected.
+ */
+Schema projectSchema(const Schema& schema, Direction direction);
+
+/*!
+ * \brief Projects a parsed core module into the typed binding schema.
+ * \param module The parsed core module.
+ * \param types The store's type registry.
+ * \param direction The adapter direction recorded in the envelope.
+ * \param moduleName The name recorded in the schema envelope.
+ * \return The typed schema.
+ */
+Schema moduleSchemaModel(const WASM::Module& module,
+		const WASM::TypeRegistry& types, Direction direction,
+		std::string_view moduleName = "module");
 
 /*!
  * \brief Projects a parsed core module into the neutral binding schema.
@@ -151,6 +168,25 @@ nlohmann::ordered_json componentSchema(const WASM::Component& component,
 		std::string_view componentName = "component");
 
 /*!
+ * \brief Projects a validated component into the typed binding schema.
+ * \param component The parsed and validated component.
+ * \param types The store's type registry.
+ * \param direction The adapter direction recorded in the envelope.
+ * \param componentName The name recorded in the schema envelope.
+ * \return The typed schema.
+ */
+Schema componentSchemaModel(const WASM::Component& component,
+		const WASM::TypeRegistry& types, Direction direction,
+		std::string_view componentName = "component");
+
+/*!
+ * \brief Emits a C header from a typed binding schema.
+ * \param schema The typed schema.
+ * \return The C header text.
+ */
+std::string emitCHeader(const Schema& schema);
+
+/*!
  * \brief Emits a C header from a binding schema.
  *
  * Reference types become opaque `wasm_*` types; no layout, numeric `TypeId` or
@@ -161,6 +197,13 @@ nlohmann::ordered_json componentSchema(const WASM::Component& component,
  * \return The C header text.
  */
 std::string emitCHeader(const nlohmann::ordered_json& schema);
+
+/*!
+ * \brief Emits a Rust module from a typed binding schema.
+ * \param schema The typed schema.
+ * \return The Rust source text.
+ */
+std::string emitRustModule(const Schema& schema);
 
 /*!
  * \brief Emits a Rust module from a binding schema.
