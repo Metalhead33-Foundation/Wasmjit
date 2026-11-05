@@ -49,7 +49,8 @@ enum class Language {
 	Haskell, //!< Haskell `foreign import ccall` declarations.
 	CppAdapter, //!< A C++ adapter that dispatches through `WASM::callCallable`.
 	CppTypedefs, //!< Host-side `Callable` function-pointer typedefs.
-	CppSource //!< A C++ source with `Callable::fnPtr` cast helpers.
+	CppSource, //!< A C++ source with `Callable::fnPtr` cast helpers.
+	Wit //!< A WIT package/world representation.
 };
 
 /*!

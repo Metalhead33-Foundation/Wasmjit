@@ -2146,6 +2146,144 @@ TEST_CASE("every target declares named WIT types", "[bindings]")
 	}
 }
 
+TEST_CASE("WIT output is accepted by wasm-tools", "[bindings]")
+{
+	const Json wit = Json::parse(R"({
+		"worlds": [{
+			"name": "demo",
+			"imports": { "echo": { "function": {
+				"name": "echo",
+				"params": [{ "name": "p", "type": 0 }],
+				"result": 0 } } },
+			"exports": {},
+			"package": 0
+		}],
+		"interfaces": [],
+		"types": [
+			{ "name": "point", "kind": { "record": { "fields": [
+				{ "name": "x", "type": "s32" }] } } },
+			{ "name": "descriptor", "kind": "resource" },
+			{ "kind": { "handle": { "own": 1 } } },
+			{ "kind": { "stream": "u8" } },
+			{ "kind": { "future": "u32" } }
+		],
+		"packages": [{
+			"name": "test:demo@0.1.0",
+			"interfaces": {},
+			"worlds": { "demo": 0 }
+		}]
+	})");
+	std::string error;
+	const auto schema = WASM::Bindings::witSchema(wit,
+			WASM::Bindings::Direction::Complete, "test:demo@0.1.0", "demo", error);
+	REQUIRE(error.empty());
+	const std::string emitted = WASM::Bindings::emit(schema,
+			WASM::Bindings::Language::Wit);
+	REQUIRE(emitted.find("package test:demo@0.1.0;") != std::string::npos);
+	REQUIRE(emitted.find("world demo") != std::string::npos);
+	REQUIRE(emitted.find("record point") != std::string::npos);
+	REQUIRE(emitted.find("resource descriptor") != std::string::npos);
+	REQUIRE(emitted.find("own<descriptor>") != std::string::npos);
+	REQUIRE(emitted.find("stream<u8>") != std::string::npos);
+	REQUIRE(emitted.find("future<u32>") != std::string::npos);
+	REQUIRE(emitted.find("echo: func") != std::string::npos);
+	if (!haveTool("command -v wasm-tools > /dev/null 2>&1")) {
+		WARN("wasm-tools not found; skipped the WIT output parse check");
+		return;
+	}
+	const std::filesystem::path path = std::filesystem::temp_directory_path()
+			/ "wasmjit-wit-emitted.wit";
+	{
+		std::ofstream out(path, std::ios::binary);
+		out << emitted;
+	}
+	const std::filesystem::path log = std::filesystem::temp_directory_path()
+			/ "wasmjit-wit-emitted.log";
+	const std::string command = "wasm-tools component wit '"
+			+ path.string() + "' --json > '"
+			+ (std::filesystem::temp_directory_path()
+					/ "wasmjit-wit-emitted.json").string()
+			+ "' 2> '" + log.string() + "'";
+	const int status = std::system(command.c_str());
+	REQUIRE(status == 0);
+	std::filesystem::remove(path);
+	std::filesystem::remove(log);
+}
+
+TEST_CASE("WIT ABI conformance matrix", "[bindings]")
+{
+	if (!haveTool("command -v wasm-tools > /dev/null 2>&1")) {
+		WARN("wasm-tools not found; skipped the WIT ABI matrix");
+		return;
+	}
+	const char* fixtures[] = {
+		"component_runtime_import",
+		"component_runtime_string",
+		"component_canonopts",
+		"component_runtime_import_lower_string",
+	};
+	for (const char* fixture : fixtures) {
+		INFO(fixture);
+		WASM::Component component;
+		loadTestComponent(fixture, component);
+		const Json g2h = WASM::Bindings::componentSchema(component,
+				testStore().types(), WASM::Bindings::Direction::GuestToHost,
+				fixture);
+		const Json h2g = WASM::Bindings::componentSchema(component,
+				testStore().types(), WASM::Bindings::Direction::HostToGuest,
+				fixture);
+		const std::filesystem::path witPath = std::filesystem::temp_directory_path()
+				/ ("wasmjit-abi-" + std::string(fixture) + ".json");
+		const std::filesystem::path logPath = std::filesystem::temp_directory_path()
+				/ ("wasmjit-abi-" + std::string(fixture) + ".log");
+		const std::string command = "wasm-tools component wit '"
+				+ (std::filesystem::path(WASM_TEST_DIR)
+						/ (std::string(fixture) + ".wasm")).string()
+				+ "' --json > '" + witPath.string() + "' 2> '"
+				+ logPath.string() + "'";
+		INFO(readText(logPath));
+		REQUIRE(std::system(command.c_str()) == 0);
+		const Json wit = Json::parse(readText(witPath));
+		std::string error;
+		const auto derived = WASM::Bindings::witSchema(wit,
+				WASM::Bindings::Direction::Complete, fixture, "", error);
+		REQUIRE(error.empty());
+		std::size_t compared = 0;
+		const auto compare = [&](const Json& source,
+				const std::vector<WASM::Bindings::Entry>& target) {
+			for (const Json& entry : source) {
+				if (entry.value("kind", "") != "function"
+						|| !entry.contains("abi"))
+					continue;
+				const WASM::Bindings::Entry* match = nullptr;
+				for (const auto& candidate : target)
+					if (candidate.name == entry.value("name", ""))
+						match = &candidate;
+				if (match == nullptr || !match->raw.contains("abi"))
+					continue;
+				const Json& left = entry.at("abi");
+				const Json& right = match->raw.at("abi");
+				REQUIRE(left.at("params").size() == right.at("params").size());
+				REQUIRE(left.at("results").size() == right.at("results").size());
+				REQUIRE(left.at("indirectParams") == right.at("indirectParams"));
+				REQUIRE(left.at("indirectResults") == right.at("indirectResults"));
+				for (std::size_t i = 0; i < left.at("params").size(); ++i)
+					REQUIRE(left.at("params")[i].at("type")
+							== right.at("params")[i].at("type"));
+				for (std::size_t i = 0; i < left.at("results").size(); ++i)
+					REQUIRE(left.at("results")[i].at("type")
+							== right.at("results")[i].at("type"));
+				++compared;
+			}
+		};
+		compare(g2h.at("imports"), derived.imports);
+		compare(h2g.at("exports"), derived.exports);
+		REQUIRE(compared > 0u);
+		std::filesystem::remove(witPath);
+		std::filesystem::remove(logPath);
+	}
+}
+
 TEST_CASE("WIT JSON names agree with the component schema", "[bindings]")
 {
 	if (!haveTool("command -v wasm-tools > /dev/null 2>&1")) {

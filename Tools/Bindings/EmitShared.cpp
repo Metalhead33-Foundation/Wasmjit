@@ -702,4 +702,312 @@ std::string nonFunctionNotes(const Json& schema)
 	return out.str();
 }
 
+std::string emitWitImpl(const Json& schema)
+{
+	std::ostringstream out;
+	const auto witIdent = [](std::string text) {
+		std::string normalized;
+		for (const char c : text) {
+			const char out = c == '_' ? '-' : c;
+			if (out == '-' && !normalized.empty() && normalized.back() == '-')
+				continue;
+			normalized.push_back(out);
+		}
+		while (!normalized.empty() && normalized.front() == '-')
+			normalized.erase(normalized.begin());
+		while (!normalized.empty() && normalized.back() == '-')
+			normalized.pop_back();
+		text = std::move(normalized);
+		if (!text.empty() && !std::isalpha(static_cast<unsigned char>(text.front())))
+			text.insert(0, "x-");
+		static const std::set<std::string> reserved = { "type", "record",
+			"variant", "enum", "flags", "resource", "func", "world",
+			"interface", "package", "use", "import", "export", "own",
+			"borrow", "list", "option", "result", "tuple", "stream",
+			"future", "async", "static", "constructor" };
+		if (reserved.count(text) != 0)
+			text.insert(0, "%");
+		return text;
+	};
+	const auto witName = [&](std::string_view text) {
+		return witIdent(sanitize(text));
+	};
+	std::map<std::size_t, std::string> typeNames;
+	std::map<std::string, std::string> refNames;
+	std::set<std::string> usedNames;
+	if (schema.contains("types") && schema.at("types").is_array()) {
+		std::size_t id = 0;
+		for (const Json& definition : schema.at("types")) {
+			std::string name = definition.contains("witName")
+					&& definition.at("witName").is_string()
+					? definition.at("witName").get<std::string>() : std::string();
+			if (name.empty())
+				name = definition.contains("name")
+						&& definition.at("name").is_string()
+						? definition.at("name").get<std::string>()
+						: "type_" + std::to_string(id);
+			name = witName(name);
+			const bool primitive = name == "bool" || name == "u8" || name == "s8"
+					|| name == "u16" || name == "s16" || name == "u32"
+					|| name == "s32" || name == "u64" || name == "s64"
+					|| name == "f32" || name == "f64" || name == "char"
+					|| name == "string" || name == "error-context";
+			if (primitive || usedNames.count(name) != 0)
+				name = witIdent("wit_" + name + "_" + std::to_string(id));
+			usedNames.insert(name);
+			typeNames[id] = name;
+			const std::string declared = definition.contains("name")
+					&& definition.at("name").is_string()
+					? definition.at("name").get<std::string>() : std::string();
+			if (!declared.empty())
+				refNames.emplace(declared, name);
+			const std::string display = definition.contains("witName")
+					&& definition.at("witName").is_string()
+					? definition.at("witName").get<std::string>() : std::string();
+			if (!display.empty())
+				refNames.emplace(display, name);
+			++id;
+		}
+	}
+
+	auto ref = [&](const Json& type, auto&& self) -> std::string {
+		if (type.is_null())
+			return "_";
+		if (type.is_number_integer()) {
+			const auto id = type.get<std::size_t>();
+			const auto found = typeNames.find(id);
+			return found == typeNames.end() ? "u32" : found->second;
+		}
+		if (type.is_string()) {
+			const std::string name = type.get<std::string>();
+			return name == "void" || name == "unit" ? "_" : name;
+		}
+		if (!type.is_object())
+			return "u32";
+		if (type.contains("type")) {
+			const Json& kind = type.at("type");
+			if (kind.is_string() && kind.get<std::string>() == "ref") {
+				const std::string name = type.value("name", std::string());
+				const auto found = refNames.find(name);
+				return found == refNames.end() ? witName(name)
+						: found->second;
+			}
+			return self(kind, self);
+		}
+		return "u32";
+	};
+
+	std::string packageName = schema.value("module", "wasmjit:bindings@0.1.0");
+	if (packageName.find(':') == std::string::npos)
+		packageName = "wasmjit:bindings@0.1.0";
+	const std::string worldName = witName(
+			schema.value("world", schema.value("module", "component")));
+	out << "package " << packageName << ";\n\n";
+
+	if (schema.contains("types") && schema.at("types").is_array()
+			&& !schema.at("types").empty()) {
+		out << "interface types {\n";
+		std::size_t id = 0;
+		for (const Json& definition : schema.at("types")) {
+			const std::string name = typeNames[id++];
+			if (!definition.contains("kind"))
+				continue;
+			const Json& kind = definition.at("kind");
+			if (kind.is_string()) {
+				if (kind.get<std::string>() == "resource")
+					out << "  resource " << name << ";\n";
+				continue;
+			}
+			if (!kind.is_object())
+				continue;
+			if (kind.contains("type")) {
+				out << "  type " << name << " = "
+					<< ref(kind.at("type"), ref) << ";\n";
+			} else if (kind.contains("record")) {
+				out << "  record " << name << " {\n";
+				const auto fields = kind.at("record").find("fields");
+				if (fields != kind.at("record").end() && fields->is_array())
+					for (const Json& field : *fields)
+						out << "    " << witName(field.value("name", std::string()))
+							<< ": " << ref(field.value("type", Json{}), ref) << ",\n";
+				out << "  }\n";
+			} else if (kind.contains("variant")) {
+				out << "  variant " << name << " {\n";
+				const auto cases = kind.at("variant").find("cases");
+				if (cases != kind.at("variant").end() && cases->is_array())
+					for (const Json& alternative : *cases) {
+						out << "    " << witName(alternative.value("name", std::string()));
+						if (alternative.contains("type")
+								&& !alternative.at("type").is_null())
+							out << "(" << ref(alternative.at("type"), ref) << ")";
+						out << ",\n";
+					}
+				out << "  }\n";
+			} else if (kind.contains("enum")) {
+				out << "  enum " << name << " {\n";
+				const auto cases = kind.at("enum").find("cases");
+				if (cases != kind.at("enum").end() && cases->is_array())
+					for (const Json& entry : *cases)
+						out << "    " << witName(entry.is_string()
+								? entry.get<std::string>()
+								: entry.value("name", std::string())) << ",\n";
+				out << "  }\n";
+			} else if (kind.contains("flags")) {
+				out << "  flags " << name << " {\n";
+				const auto values = kind.at("flags").find("flags");
+				if (values != kind.at("flags").end() && values->is_array())
+					for (const Json& entry : *values)
+						out << "    " << witName(entry.value("name", std::string()))
+							<< ",\n";
+				out << "  }\n";
+			} else if (kind.contains("tuple")) {
+				out << "  type " << name << " = tuple<";
+				const auto types = kind.at("tuple").find("types");
+				if (types != kind.at("tuple").end() && types->is_array())
+					for (std::size_t i = 0; i < types->size(); ++i) {
+						if (i != 0) out << ", ";
+						out << ref(types->at(i), ref);
+					}
+				out << ">;\n";
+			} else if (kind.contains("list")) {
+				out << "  type " << name << " = list<"
+					<< ref(kind.at("list"), ref) << ">;\n";
+			} else if (kind.contains("option")) {
+				out << "  type " << name << " = option<"
+					<< ref(kind.at("option"), ref) << ">;\n";
+			} else if (kind.contains("result")) {
+				const Json& result = kind.at("result");
+				const bool hasOk = result.contains("ok") && !result.at("ok").is_null();
+				const bool hasErr = result.contains("err") && !result.at("err").is_null();
+				out << "  type " << name << " = result";
+				if (hasOk || hasErr) {
+					out << "<"
+						<< (hasOk ? ref(result.at("ok"), ref) : std::string("_"))
+						<< ", "
+						<< (hasErr ? ref(result.at("err"), ref) : std::string("_"))
+						<< ">";
+				}
+				out << ";\n";
+			} else if (kind.contains("handle")) {
+				const Json& handle = kind.at("handle");
+				out << "  type " << name << " = "
+					<< (handle.contains("own") ? "own<" : "borrow<")
+					<< ref(handle.contains("own") ? handle.at("own")
+							: handle.at("borrow"), ref) << ">;\n";
+			} else if (kind.contains("stream")) {
+				out << "  type " << name << " = stream<"
+					<< ref(kind.at("stream"), ref) << ">;\n";
+			} else if (kind.contains("future")) {
+				out << "  type " << name << " = future<"
+					<< ref(kind.at("future"), ref) << ">;\n";
+			}
+		}
+		out << "}\n\n";
+	}
+
+	const auto emitFunction = [&](const Json& entry) -> std::string {
+		std::ostringstream fn;
+		fn << witName(entry.value("name", std::string())) << ": func(";
+		const Json& logical = entry.contains("type") ? entry.at("type")
+				: Json::object();
+		const Json& params = logical.contains("params") ? logical.at("params")
+				: Json::array();
+		for (std::size_t i = 0; i < params.size(); ++i) {
+			if (i != 0)
+				fn << ", ";
+			std::string name = "arg" + std::to_string(i);
+			if (entry.contains("argNames") && entry.at("argNames").is_array()
+					&& i < entry.at("argNames").size()
+					&& entry.at("argNames")[i].is_string())
+				name = entry.at("argNames")[i].get<std::string>();
+			fn << witName(name) << ": " << ref(params[i], ref);
+		}
+		fn << ")";
+		if (logical.contains("results") && logical.at("results").is_array()
+				&& logical.at("results").size() == 1) {
+			const Json& result = logical.at("results")[0];
+			const bool isVoid = result.is_string()
+					? result.get<std::string>() == "void"
+					: result.is_object() && result.value("type", "") == "void";
+			if (!isVoid)
+				fn << " -> " << ref(result, ref);
+		}
+		fn << ";\n";
+		return fn.str();
+	};
+
+	std::map<std::string, std::vector<const Json*>> interfaceImports;
+	std::map<std::string, std::vector<const Json*>> interfaceExports;
+	std::vector<const Json*> worldImports;
+	std::vector<const Json*> worldExports;
+	if (schema.contains("imports") && schema.at("imports").is_array())
+		for (const Json& entry : schema.at("imports")) {
+			if (entry.value("kind", "") != "function")
+				continue;
+			const std::string module = entry.value("module", std::string());
+			if (module.empty())
+				worldImports.push_back(&entry);
+			else
+				interfaceImports[witName(module)].push_back(&entry);
+		}
+	if (schema.contains("exports") && schema.at("exports").is_array())
+		for (const Json& entry : schema.at("exports")) {
+			if (entry.value("kind", "") != "function")
+				continue;
+			const std::string module = entry.value("module", std::string());
+			if (module.empty())
+				worldExports.push_back(&entry);
+			else
+				interfaceExports[witName(module)].push_back(&entry);
+		}
+
+	const auto emitUseTypes = [&](std::ostringstream& target,
+			std::string_view indent) {
+		if (typeNames.empty())
+			return;
+		target << indent << "use types.{";
+		bool first = true;
+		for (const auto& [ignored, type] : typeNames) {
+			(void)ignored;
+			if (!first)
+				target << ", ";
+			target << type;
+			first = false;
+		}
+		target << "};\n";
+	};
+
+	for (const auto& [name, entries] : interfaceImports) {
+		out << "interface " << name << " {\n";
+		emitUseTypes(out, "  ");
+		for (const Json* entry : entries)
+			out << "  " << emitFunction(*entry);
+		out << "}\n\n";
+	}
+	for (const auto& [name, entries] : interfaceExports) {
+		out << "interface " << name << " {\n";
+		emitUseTypes(out, "  ");
+		for (const Json* entry : entries)
+			out << "  " << emitFunction(*entry);
+		out << "}\n\n";
+	}
+
+	out << "world " << worldName << " {\n";
+	emitUseTypes(out, "  ");
+	for (const Json* entry : worldImports)
+		out << "  import " << emitFunction(*entry);
+	for (const Json* entry : worldExports)
+		out << "  export " << emitFunction(*entry);
+	for (const auto& [name, ignored] : interfaceImports) {
+		(void)ignored;
+		out << "  import " << name << ";\n";
+	}
+	for (const auto& [name, ignored] : interfaceExports) {
+		(void)ignored;
+		out << "  export " << name << ";\n";
+	}
+	out << "}\n";
+	return out.str();
+}
+
 } // namespace WASM::Bindings::detail

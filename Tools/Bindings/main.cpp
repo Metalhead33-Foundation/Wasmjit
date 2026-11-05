@@ -56,7 +56,7 @@ void usage(std::ostream& out)
 		   "  --emit schema|c-header|rust|typescript|assemblyscript|zig|kotlin|\n"
 		   "         moonbit|go|dart|java|csharp|fsharp|python|ruby|lua|swift|\n"
 		   "         d|nim|crystal|ada|pascal|haskell|cpp-adapter|cpp-typedefs|\n"
-		   "         cpp-source (default: schema)\n"
+		   "         cpp-source|wit (default: schema)\n"
 		   "  --module-name NAME       name in the schema envelope\n"
 		   "  --candidates HEADER      SWIG-parse a C++ header and validate its\n"
 		   "                           candidate signatures against the schema\n"
