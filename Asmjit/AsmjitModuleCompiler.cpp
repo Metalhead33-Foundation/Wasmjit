@@ -1822,6 +1822,39 @@ protected:
 	void dispatchI32x4Abs() override { emitVectorHelper1(&wasm_i32x4_abs); }
 	void dispatchI64x2Abs() override { emitVectorHelper1(&wasm_i64x2_abs); }
 	void dispatchI8x16Popcnt() override { emitVectorHelper1(&wasm_i8x16_popcnt); }
+	void dispatchI16x8ExtendLowI8x16S() override { emitVectorHelper1(&wasm_i16x8_extend_low_i8x16_s); }
+	void dispatchI16x8ExtendLowI8x16U() override { emitVectorHelper1(&wasm_i16x8_extend_low_i8x16_u); }
+	void dispatchI16x8ExtendHighI8x16S() override { emitVectorHelper1(&wasm_i16x8_extend_high_i8x16_s); }
+	void dispatchI16x8ExtendHighI8x16U() override { emitVectorHelper1(&wasm_i16x8_extend_high_i8x16_u); }
+	void dispatchI32x4ExtendLowI16x8S() override { emitVectorHelper1(&wasm_i32x4_extend_low_i16x8_s); }
+	void dispatchI32x4ExtendLowI16x8U() override { emitVectorHelper1(&wasm_i32x4_extend_low_i16x8_u); }
+	void dispatchI32x4ExtendHighI16x8S() override { emitVectorHelper1(&wasm_i32x4_extend_high_i16x8_s); }
+	void dispatchI32x4ExtendHighI16x8U() override { emitVectorHelper1(&wasm_i32x4_extend_high_i16x8_u); }
+	void dispatchI64x2ExtendLowI32x4S() override { emitVectorHelper1(&wasm_i64x2_extend_low_i32x4_s); }
+	void dispatchI64x2ExtendLowI32x4U() override { emitVectorHelper1(&wasm_i64x2_extend_low_i32x4_u); }
+	void dispatchI64x2ExtendHighI32x4S() override { emitVectorHelper1(&wasm_i64x2_extend_high_i32x4_s); }
+	void dispatchI64x2ExtendHighI32x4U() override { emitVectorHelper1(&wasm_i64x2_extend_high_i32x4_u); }
+	void dispatchI16x8ExtAddPairwiseI8x16S() override { emitVectorHelper1(&wasm_i16x8_extadd_pairwise_i8x16_s); }
+	void dispatchI16x8ExtAddPairwiseI8x16U() override { emitVectorHelper1(&wasm_i16x8_extadd_pairwise_i8x16_u); }
+	void dispatchI32x4ExtAddPairwiseI16x8S() override { emitVectorHelper1(&wasm_i32x4_extadd_pairwise_i16x8_s); }
+	void dispatchI32x4ExtAddPairwiseI16x8U() override { emitVectorHelper1(&wasm_i32x4_extadd_pairwise_i16x8_u); }
+	void dispatchI16x8ExtMulLowI8x16S() override { emitVectorHelper2(&wasm_i16x8_extmul_low_i8x16_s); }
+	void dispatchI16x8ExtMulLowI8x16U() override { emitVectorHelper2(&wasm_i16x8_extmul_low_i8x16_u); }
+	void dispatchI16x8ExtMulHighI8x16S() override { emitVectorHelper2(&wasm_i16x8_extmul_high_i8x16_s); }
+	void dispatchI16x8ExtMulHighI8x16U() override { emitVectorHelper2(&wasm_i16x8_extmul_high_i8x16_u); }
+	void dispatchI32x4ExtMulLowI16x8S() override { emitVectorHelper2(&wasm_i32x4_extmul_low_i16x8_s); }
+	void dispatchI32x4ExtMulLowI16x8U() override { emitVectorHelper2(&wasm_i32x4_extmul_low_i16x8_u); }
+	void dispatchI32x4ExtMulHighI16x8S() override { emitVectorHelper2(&wasm_i32x4_extmul_high_i16x8_s); }
+	void dispatchI32x4ExtMulHighI16x8U() override { emitVectorHelper2(&wasm_i32x4_extmul_high_i16x8_u); }
+	void dispatchI64x2ExtMulLowI32x4S() override { emitVectorHelper2(&wasm_i64x2_extmul_low_i32x4_s); }
+	void dispatchI64x2ExtMulLowI32x4U() override { emitVectorHelper2(&wasm_i64x2_extmul_low_i32x4_u); }
+	void dispatchI64x2ExtMulHighI32x4S() override { emitVectorHelper2(&wasm_i64x2_extmul_high_i32x4_s); }
+	void dispatchI64x2ExtMulHighI32x4U() override { emitVectorHelper2(&wasm_i64x2_extmul_high_i32x4_u); }
+
+
+	void dispatchI8x16NarrowI16x8S() override { emitVectorHelper2(&wasm_i8x16_narrow_i16x8_s); }
+	void dispatchI8x16NarrowI16x8U() override { emitVectorHelper2(&wasm_i8x16_narrow_i16x8_u); }
+	void dispatchI32x4DotI16x8S() override { emitVectorHelper2(&wasm_i32x4_dot_i16x8_s); }
 
 	void dispatchI8x16Add() override { emitVectorHelper2(&wasm_i8x16_add); }
 	void dispatchI8x16Sub() override { emitVectorHelper2(&wasm_i8x16_sub); }

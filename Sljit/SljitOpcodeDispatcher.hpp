@@ -311,6 +311,37 @@ protected:
 	void dispatchI32x4Abs() override; //!< `i32x4.abs`.
 	void dispatchI64x2Abs() override; //!< `i64x2.abs`.
 	void dispatchI8x16Popcnt() override; //!< `i8x16.popcnt`.
+	void dispatchI16x8ExtendLowI8x16S() override; //!< `16x8.extend_low_8x16_s`.
+	void dispatchI16x8ExtendLowI8x16U() override; //!< `16x8.extend_low_8x16_u`.
+	void dispatchI16x8ExtendHighI8x16S() override; //!< `16x8.extend_high_8x16_s`.
+	void dispatchI16x8ExtendHighI8x16U() override; //!< `16x8.extend_high_8x16_u`.
+	void dispatchI32x4ExtendLowI16x8S() override; //!< `32x4.extend_low_16x8_s`.
+	void dispatchI32x4ExtendLowI16x8U() override; //!< `32x4.extend_low_16x8_u`.
+	void dispatchI32x4ExtendHighI16x8S() override; //!< `32x4.extend_high_16x8_s`.
+	void dispatchI32x4ExtendHighI16x8U() override; //!< `32x4.extend_high_16x8_u`.
+	void dispatchI64x2ExtendLowI32x4S() override; //!< `64x2.extend_low_32x4_s`.
+	void dispatchI64x2ExtendLowI32x4U() override; //!< `64x2.extend_low_32x4_u`.
+	void dispatchI64x2ExtendHighI32x4S() override; //!< `64x2.extend_high_32x4_s`.
+	void dispatchI64x2ExtendHighI32x4U() override; //!< `64x2.extend_high_32x4_u`.
+	void dispatchI16x8ExtAddPairwiseI8x16S() override; //!< `16x8.extadd_pairwise_8x16_s`.
+	void dispatchI16x8ExtAddPairwiseI8x16U() override; //!< `16x8.extadd_pairwise_8x16_u`.
+	void dispatchI32x4ExtAddPairwiseI16x8S() override; //!< `32x4.extadd_pairwise_16x8_s`.
+	void dispatchI32x4ExtAddPairwiseI16x8U() override; //!< `32x4.extadd_pairwise_16x8_u`.
+	void dispatchI16x8ExtMulLowI8x16S() override; //!< `16x8.extmul_low_8x16_s`.
+	void dispatchI16x8ExtMulLowI8x16U() override; //!< `16x8.extmul_low_8x16_u`.
+	void dispatchI16x8ExtMulHighI8x16S() override; //!< `16x8.extmul_high_8x16_s`.
+	void dispatchI16x8ExtMulHighI8x16U() override; //!< `16x8.extmul_high_8x16_u`.
+	void dispatchI32x4ExtMulLowI16x8S() override; //!< `32x4.extmul_low_16x8_s`.
+	void dispatchI32x4ExtMulLowI16x8U() override; //!< `32x4.extmul_low_16x8_u`.
+	void dispatchI32x4ExtMulHighI16x8S() override; //!< `32x4.extmul_high_16x8_s`.
+	void dispatchI32x4ExtMulHighI16x8U() override; //!< `32x4.extmul_high_16x8_u`.
+	void dispatchI64x2ExtMulLowI32x4S() override; //!< `64x2.extmul_low_32x4_s`.
+	void dispatchI64x2ExtMulLowI32x4U() override; //!< `64x2.extmul_low_32x4_u`.
+	void dispatchI64x2ExtMulHighI32x4S() override; //!< `64x2.extmul_high_32x4_s`.
+	void dispatchI64x2ExtMulHighI32x4U() override; //!< `64x2.extmul_high_32x4_u`.
+	void dispatchI8x16NarrowI16x8S() override; //!< `i8x16.narrow_i16x8_s`.
+	void dispatchI8x16NarrowI16x8U() override; //!< `i8x16.narrow_i16x8_u`.
+	void dispatchI32x4DotI16x8S() override; //!< `i32x4.dot_i16x8_s`.
 	void dispatchI8x16Add() override; //!< `i8x16.add`.
 	void dispatchI8x16Sub() override; //!< `i8x16.sub`.
 	void dispatchI16x8Add() override; //!< `i16x8.add`.

@@ -52,7 +52,7 @@ direct calls. Each generated function emits the required
   currently support only one scalar result and no block parameters; `br_table`
   requires identical target stack heights/signatures. The `unreachable`
   instruction reports a trap and supplies a limited single-result placeholder,
-  but general unreachable-stack polymorphism remains unsupported. Cross-instance scalar Wasm imports are covered by tests. Scalar globals are lowered; the first three `v128` slices (const/load/store, locals, `i32x4` lane access, the bitwise family, `any_true`, integer lane arithmetic, the comparison families, `all_true`, the shifts, saturating arithmetic, `min`/`max`, `avgr_u`, `abs` and `popcnt`, through the shared helper ABI) are lowered, while the remaining SIMD families, references, `f16`, bulk memory on a memory64 and
+  but general unreachable-stack polymorphism remains unsupported. Cross-instance scalar Wasm imports are covered by tests. Scalar globals are lowered; the first four `v128` slices (const/load/store, locals, `i32x4` lane access, the bitwise family, `any_true`, integer lane arithmetic, the comparison families, `all_true`, the shifts, saturating arithmetic, `min`/`max`, `avgr_u`, `abs`/`popcnt`, widening, `extmul`, `extadd_pairwise`, `dot` and `i8x16.narrow_i16x8_s/u`, through the shared helper ABI) are lowered, while `i16x8.narrow_i32x4_s/u` is quarantined (its lowering here disagrees with the reference — see `docs/backends/ASMJIT_SLJIT_P3_SIMD4.md`), the remaining SIMD families, references, `f16`, bulk memory on a memory64 and
   most remaining instructions are still unsupported and fail explicitly.
 - `Test/TestBackend.cpp` exposes an `AsmJitSession` through
   `WASMJIT_BACKEND=asmjit`, including i32 invocation marshalling, aggregate
@@ -116,9 +116,9 @@ target-architecture check).
 
 ## Next implementation stages
 
-1. The remaining `v128` families (narrowing/widening/pairwise/dot, float lanes,
-   extending/lane loads, `shuffle`/`swizzle`), then `v128` in signatures;
-   SLJIT landed the same first three slices, so the shared
+1. Fix the quarantined `i16x8.narrow_i32x4_s/u`, then the float lane shapes,
+   extending/lane loads and `shuffle`/`swizzle`, then `v128` in signatures;
+   SLJIT landed the same first four slices, so the shared
    `[sljit][asmjit][parity][simd]` fixture grows with both. See
    [`docs/backends/ASMJIT_SLJIT_P3_SIMD1.md`](../docs/backends/ASMJIT_SLJIT_P3_SIMD1.md)
    and [`docs/backends/ASMJIT_SLJIT_P3_SIMD2.md`](../docs/backends/ASMJIT_SLJIT_P3_SIMD2.md).

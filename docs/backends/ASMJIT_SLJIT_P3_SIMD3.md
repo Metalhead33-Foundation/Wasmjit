@@ -129,9 +129,8 @@ Do not copy:
 
 | Opcode family | Refusal | Test |
 |---|---|---|
-| narrowing (`i8x16.narrow_i16x8_*`, `i16x8.narrow_i32x4_*`) | `onUnhandledOpcode` | two-pointer signature; a table edit |
-| widening (`extend_low/high`, `extmul_*`, `extadd_pairwise_*`) | `onUnhandledOpcode` | two-pointer/unary signature |
-| pairwise/dot (`i16x8.extmul`, `i32x4.dot_i16x8_s`) | `onUnhandledOpcode` | same |
+| narrowing | `i8x16.narrow_i16x8_s/u` **landed in slice 4**; `i16x8.narrow_i32x4_s/u` **quarantined** (open AsmJit defect) | [`ASMJIT_SLJIT_P3_SIMD4.md`](ASMJIT_SLJIT_P3_SIMD4.md) |
+| widening, `extmul`, `extadd_pairwise`, `dot` | **landed in slice 4** | [`ASMJIT_SLJIT_P3_SIMD4.md`](ASMJIT_SLJIT_P3_SIMD4.md) |
 | `i64x2.min/max/avgr`, `i32x4.dot` | `onUnhandledOpcode` | not in the spec / different signature |
 | `f32x4`/`f64x2` lanes and conversions | `onUnhandledOpcode` | float SIMD slice |
 | `shuffle`/`swizzle`, relaxed SIMD | `onUnhandledOpcode` | transport-only helpers exist |

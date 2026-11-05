@@ -2648,6 +2648,39 @@ void OpcodeDispatcher::dispatchI16x8Abs() { emitV128Unary(codeAddress(&wasm_i16x
 void OpcodeDispatcher::dispatchI32x4Abs() { emitV128Unary(codeAddress(&wasm_i32x4_abs)); }
 void OpcodeDispatcher::dispatchI64x2Abs() { emitV128Unary(codeAddress(&wasm_i64x2_abs)); }
 void OpcodeDispatcher::dispatchI8x16Popcnt() { emitV128Unary(codeAddress(&wasm_i8x16_popcnt)); }
+void OpcodeDispatcher::dispatchI16x8ExtendLowI8x16S() { emitV128Unary(codeAddress(&wasm_i16x8_extend_low_i8x16_s)); }
+void OpcodeDispatcher::dispatchI16x8ExtendLowI8x16U() { emitV128Unary(codeAddress(&wasm_i16x8_extend_low_i8x16_u)); }
+void OpcodeDispatcher::dispatchI16x8ExtendHighI8x16S() { emitV128Unary(codeAddress(&wasm_i16x8_extend_high_i8x16_s)); }
+void OpcodeDispatcher::dispatchI16x8ExtendHighI8x16U() { emitV128Unary(codeAddress(&wasm_i16x8_extend_high_i8x16_u)); }
+void OpcodeDispatcher::dispatchI32x4ExtendLowI16x8S() { emitV128Unary(codeAddress(&wasm_i32x4_extend_low_i16x8_s)); }
+void OpcodeDispatcher::dispatchI32x4ExtendLowI16x8U() { emitV128Unary(codeAddress(&wasm_i32x4_extend_low_i16x8_u)); }
+void OpcodeDispatcher::dispatchI32x4ExtendHighI16x8S() { emitV128Unary(codeAddress(&wasm_i32x4_extend_high_i16x8_s)); }
+void OpcodeDispatcher::dispatchI32x4ExtendHighI16x8U() { emitV128Unary(codeAddress(&wasm_i32x4_extend_high_i16x8_u)); }
+void OpcodeDispatcher::dispatchI64x2ExtendLowI32x4S() { emitV128Unary(codeAddress(&wasm_i64x2_extend_low_i32x4_s)); }
+void OpcodeDispatcher::dispatchI64x2ExtendLowI32x4U() { emitV128Unary(codeAddress(&wasm_i64x2_extend_low_i32x4_u)); }
+void OpcodeDispatcher::dispatchI64x2ExtendHighI32x4S() { emitV128Unary(codeAddress(&wasm_i64x2_extend_high_i32x4_s)); }
+void OpcodeDispatcher::dispatchI64x2ExtendHighI32x4U() { emitV128Unary(codeAddress(&wasm_i64x2_extend_high_i32x4_u)); }
+void OpcodeDispatcher::dispatchI16x8ExtAddPairwiseI8x16S() { emitV128Unary(codeAddress(&wasm_i16x8_extadd_pairwise_i8x16_s)); }
+void OpcodeDispatcher::dispatchI16x8ExtAddPairwiseI8x16U() { emitV128Unary(codeAddress(&wasm_i16x8_extadd_pairwise_i8x16_u)); }
+void OpcodeDispatcher::dispatchI32x4ExtAddPairwiseI16x8S() { emitV128Unary(codeAddress(&wasm_i32x4_extadd_pairwise_i16x8_s)); }
+void OpcodeDispatcher::dispatchI32x4ExtAddPairwiseI16x8U() { emitV128Unary(codeAddress(&wasm_i32x4_extadd_pairwise_i16x8_u)); }
+void OpcodeDispatcher::dispatchI16x8ExtMulLowI8x16S() { emitV128Binary(codeAddress(&wasm_i16x8_extmul_low_i8x16_s)); }
+void OpcodeDispatcher::dispatchI16x8ExtMulLowI8x16U() { emitV128Binary(codeAddress(&wasm_i16x8_extmul_low_i8x16_u)); }
+void OpcodeDispatcher::dispatchI16x8ExtMulHighI8x16S() { emitV128Binary(codeAddress(&wasm_i16x8_extmul_high_i8x16_s)); }
+void OpcodeDispatcher::dispatchI16x8ExtMulHighI8x16U() { emitV128Binary(codeAddress(&wasm_i16x8_extmul_high_i8x16_u)); }
+void OpcodeDispatcher::dispatchI32x4ExtMulLowI16x8S() { emitV128Binary(codeAddress(&wasm_i32x4_extmul_low_i16x8_s)); }
+void OpcodeDispatcher::dispatchI32x4ExtMulLowI16x8U() { emitV128Binary(codeAddress(&wasm_i32x4_extmul_low_i16x8_u)); }
+void OpcodeDispatcher::dispatchI32x4ExtMulHighI16x8S() { emitV128Binary(codeAddress(&wasm_i32x4_extmul_high_i16x8_s)); }
+void OpcodeDispatcher::dispatchI32x4ExtMulHighI16x8U() { emitV128Binary(codeAddress(&wasm_i32x4_extmul_high_i16x8_u)); }
+void OpcodeDispatcher::dispatchI64x2ExtMulLowI32x4S() { emitV128Binary(codeAddress(&wasm_i64x2_extmul_low_i32x4_s)); }
+void OpcodeDispatcher::dispatchI64x2ExtMulLowI32x4U() { emitV128Binary(codeAddress(&wasm_i64x2_extmul_low_i32x4_u)); }
+void OpcodeDispatcher::dispatchI64x2ExtMulHighI32x4S() { emitV128Binary(codeAddress(&wasm_i64x2_extmul_high_i32x4_s)); }
+void OpcodeDispatcher::dispatchI64x2ExtMulHighI32x4U() { emitV128Binary(codeAddress(&wasm_i64x2_extmul_high_i32x4_u)); }
+
+
+void OpcodeDispatcher::dispatchI8x16NarrowI16x8S() { emitV128Binary(codeAddress(&wasm_i8x16_narrow_i16x8_s)); }
+void OpcodeDispatcher::dispatchI8x16NarrowI16x8U() { emitV128Binary(codeAddress(&wasm_i8x16_narrow_i16x8_u)); }
+void OpcodeDispatcher::dispatchI32x4DotI16x8S() { emitV128Binary(codeAddress(&wasm_i32x4_dot_i16x8_s)); }
 
 void OpcodeDispatcher::dispatchI8x16Add() { emitV128Binary(codeAddress(&wasm_i8x16_add)); }
 void OpcodeDispatcher::dispatchI8x16Sub() { emitV128Binary(codeAddress(&wasm_i8x16_sub)); }
