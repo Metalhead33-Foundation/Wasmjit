@@ -17,6 +17,7 @@
 #include <fstream>
 #include <future>
 #include <iterator>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -207,6 +208,31 @@ TEST_CASE("runtime: create, load, instantiate and call", "[runtime]")
 
 	REQUIRE_THROWS_AS(runtime->callExport<std::int32_t>(instance, "missing"),
 			std::runtime_error);
+}
+
+TEST_CASE("runtime: batch export lookup preserves request order", "[runtime]")
+{
+	auto runtime = WASM::Runtime::create("libjit");
+	REQUIRE(runtime != nullptr);
+	auto module = runtime->loadBytes(TestFixtures::answerModuleBytes());
+	REQUIRE(module != nullptr);
+	WASM::RegistryImportResolver imports;
+	WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+	const std::array<std::string_view, 3> names = { "answer", "missing", "answer" };
+	const auto callables = instance.exportedFunctions(names);
+	REQUIRE(callables.size() == names.size());
+	REQUIRE(callables[0].has_value());
+	REQUIRE_FALSE(callables[1].has_value());
+	REQUIRE_FALSE(callables[2].has_value());
+
+	std::array<std::optional<WASM::Callable>, 3> direct{};
+	instance.exportedFunctions(names, direct);
+	REQUIRE(direct[0].has_value());
+	REQUIRE_FALSE(direct[1].has_value());
+	REQUIRE_FALSE(direct[2].has_value());
+	REQUIRE_THROWS_AS(instance.exportedFunctions(
+		names, std::span<std::optional<WASM::Callable>>(direct).first(2)),
+		std::runtime_error);
 }
 
 TEST_CASE("runtime: load and instantiate a component through the public API",

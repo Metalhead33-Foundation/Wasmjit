@@ -18,8 +18,10 @@ WASMJIT_VISIBLE_BEGIN
 #include "WasmImport.hpp"
 #include "WasmMemory.hpp"
 #include <functional>
+#include <initializer_list>
 #include <map>
 #include <memory>
+#include <span>
 #include <string>
 #include <string_view>
 
@@ -54,6 +56,10 @@ public:
 		std::unique_ptr<Value> owned; //!< Registry-owned storage when the value was copied in.
 	};
 
+	//! Concrete per-module storage. It is deliberately not another virtual
+	//! interface: `moduleRegistry()` is the hot path for generated batch
+	//! registration, while `ImportRegistrar`/`ImportResolver` remain the
+	//! module-name-qualified interfaces other embedders implement.
 	/** \brief Set of registered importable entities under one module name. */
 	struct ModuleRegistry {
 		//! The module's exported/registered functions.
@@ -71,6 +77,10 @@ public:
 
 		/** \brief Registers a callable in this module namespace. \param fieldName Import/export field name. \param callable Callable descriptor to publish. */
 	void registerFunction(std::string_view fieldName, const Callable& callable);
+	/** \brief Registers several callables in this module namespace in one call. \param functions The named callables to publish. */
+	void registerFunctions(std::span<const NamedCallable> functions);
+	/** \brief Registers several callables from an initializer list. \param functions The named callables to publish. */
+	void registerFunctions(std::initializer_list<NamedCallable> functions);
 		/** \brief Registers a copied host global value. \param fieldName Field name. \param value Initial value copied into registry-owned storage. */
 	void registerGlobal(std::string_view fieldName, const Value& value);
 		/** \brief Registers a borrowed global cell. \param fieldName Field name. \param cell Global storage cell; must outlive its registration. \param type Declared type and mutability of the cell. */
@@ -112,6 +122,8 @@ public:
 
 	void registerFunction(std::string_view moduleName, std::string_view fieldName,
 						  const Callable& callable) override;
+	/** \brief Returns the per-module registry, creating it when absent. \param moduleName Module namespace. \return The module registry for direct batch registration. */
+	ModuleRegistry& moduleRegistry(std::string_view moduleName);
 	//! Host overload: copies `value` into a registry-owned cell.
 	void registerGlobal(std::string_view moduleName, std::string_view fieldName,
 						const Value& value);

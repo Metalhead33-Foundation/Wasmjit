@@ -1430,7 +1430,7 @@ TEST_CASE("host-side callable typedefs follow the engine ABI", "[bindings]")
 			"context, int32_t arg0, int32_t arg1);") != std::string::npos);
 	REQUIRE(header.find("extern wasmjit_add_fn wasmjit_add;")
 			!= std::string::npos);
-	REQUIRE(header.find("namespace WASM { struct VMContext; struct ModuleInstance; class ImportRegistrar; }")
+	REQUIRE(header.find("namespace WASM { struct VMContext; struct ModuleInstance; class RegistryImportResolver; }")
 			!= std::string::npos);
 	REQUIRE(header.find("#include <cstdint>") != std::string::npos);
 	REQUIRE(header.find("struct wasm_v128 { std::uint8_t bytes[16]; };")
@@ -1448,8 +1448,18 @@ TEST_CASE("host-side callable typedefs follow the engine ABI", "[bindings]")
 			!= std::string::npos);
 	REQUIRE(source.find("wasmjit_asmjit_i32_basic_load_callables("
 			"WASM::ModuleInstance* instance)") != std::string::npos);
-	REQUIRE(source.find("reinterpret_cast<wasmjit_add_fn>(callable->fnPtr)")
+	REQUIRE(source.find("std::array<std::string_view,") != std::string::npos);
+	REQUIRE(source.find("instance->exportedFunctions(names, callables)")
 			!= std::string::npos);
+	REQUIRE(source.find("using Target = std::decay_t<decltype(target)>;")
+			!= std::string::npos);
+	REQUIRE(source.find("target = reinterpret_cast<Target>(callable->fnPtr);")
+			!= std::string::npos);
+	REQUIRE(source.find("assignCallable(callables[0], wasmjit_add);")
+			!= std::string::npos);
+	const std::size_t firstIf = source.find("if (!callable)");
+	REQUIRE(firstIf != std::string::npos);
+	REQUIRE(firstIf == source.rfind("if (!callable)"));
 
 	const Json g2h = WASM::Bindings::moduleSchema(
 			loadTestModule("wasm_js_string_length"), testStore().types(),
@@ -1466,7 +1476,7 @@ TEST_CASE("host-side callable typedefs follow the engine ABI", "[bindings]")
 	const std::size_t importLinkageEnd = importHeader.find("} // extern \"C\"");
 	const std::size_t registrationDeclaration = importHeader.find(
 			"bool wasmjit_wasm_js_string_length_register_imports("
-			"WASM::ImportRegistrar& registrar);");
+			"WASM::RegistryImportResolver& registrar);");
 	REQUIRE(importHeader.find("#ifdef __cplusplus") == std::string::npos);
 	REQUIRE(importHeader.find("#include <cstdint>") != std::string::npos);
 	REQUIRE(importLinkage != std::string::npos);
@@ -1480,13 +1490,16 @@ TEST_CASE("host-side callable typedefs follow the engine ABI", "[bindings]")
 			!= std::string::npos);
 	REQUIRE(importSource.find("TODO: implement this host import.")
 			!= std::string::npos);
+	REQUIRE(importSource.find("#include <WasmBase/WasmRegistryImportResolver.hpp>")
+			!= std::string::npos);
 	REQUIRE(importSource.find("#include <WasmBase/WasmNativeImport.hpp>")
 			!= std::string::npos);
 	REQUIRE(importSource.find("bool wasmjit_wasm_js_string_length_register_imports("
-			"WASM::ImportRegistrar& registrar)") != std::string::npos);
-	REQUIRE(importSource.find("registrar.registerFunction(\"wasm:js-string\", \"length\",")
+			"WASM::RegistryImportResolver& registrar)") != std::string::npos);
+	REQUIRE(importSource.find("registrar.moduleRegistry(\"wasm:js-string\")")
 			!= std::string::npos);
-	REQUIRE(importSource.find("WASM::nativeImport<&wasmjit_wasm_js_string_length>());")
+	REQUIRE(importSource.find("module.registerFunctions({") != std::string::npos);
+	REQUIRE(importSource.find("WASM::nativeImport<&wasmjit_wasm_js_string_length>()")
 			!= std::string::npos);
 
 	if (haveTool("command -v g++ > /dev/null 2>&1")) {

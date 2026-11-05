@@ -7,6 +7,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace WASM::Bindings::detail {
 
@@ -96,7 +97,7 @@ std::string emitCppTypedefsImpl(const Json& schema)
 		<< "_CALLABLES_HPP\n#define WASMJIT_GENERATED_"
 		<< sanitize(schema.value("module", "module")) << "_CALLABLES_HPP\n\n";
 	out << "#include <cstdint>\n\n";
-	out << "namespace WASM { struct VMContext; struct ModuleInstance; class ImportRegistrar; }\n";
+	out << "namespace WASM { struct VMContext; struct ModuleInstance; class RegistryImportResolver; }\n";
 	out << "struct wasm_v128 { std::uint8_t bytes[16]; };\n";
 	for (const std::string& ref : refs)
 		out << "struct " << ref << ";\n";
@@ -113,7 +114,7 @@ std::string emitCppTypedefsImpl(const Json& schema)
 			   "// Wasm import module. This declaration is deliberately outside\n"
 			   "// the C ABI block.\n";
 		out << "bool wasmjit_" << sanitize(schema.value("module", "module"))
-			<< "_register_imports(WASM::ImportRegistrar& registrar);\n";
+			<< "_register_imports(WASM::RegistryImportResolver& registrar);\n";
 	}
 	if (emitExports) {
 		out << "\n// Guest exports the host can resolve (H2G).\n";
@@ -148,24 +149,39 @@ std::string emitCppSourceImpl(const Json& schema)
 		<< " schema. Do not edit.\n";
 	out << "#include \"wasmjit_" << module << "_callables.hpp\"\n";
 	if (emitImports)
-		out << "#include <WasmBase/WasmImport.hpp>\n"
+		out << "#include <WasmBase/WasmRegistryImportResolver.hpp>\n"
 			   "#include <WasmBase/WasmNativeImport.hpp>\n";
 	if (emitExports)
-		out << "#include <WasmBase/WasmModuleInstance.hpp>\n";
+		out << "#include <WasmBase/WasmModuleInstance.hpp>\n"
+			   "#include <array>\n"
+			   "#include <optional>\n"
+			   "#include <string_view>\n"
+			   "#include <type_traits>\n";
 	out << "\n";
 	if (emitImports) {
 		forEachFunction(schema, "imports", [&](const Json& entry) {
 			emitCppImportStub(out, entry);
 		});
 		out << "// Publish the host implementations as a synthetic Wasm import module.\n";
-		out << "// This is C++, not part of the C ABI surface.\n";
+		out << "// This is C++, not part of the C ABI surface; the concrete module\n";
+		out << "// registry avoids one virtual module lookup per function.\n";
 		out << "bool wasmjit_" << module
-			<< "_register_imports(WASM::ImportRegistrar& registrar)\n{\n";
+			<< "_register_imports(WASM::RegistryImportResolver& registrar)\n{\n";
+		std::map<std::string, std::vector<const Json*>> importsByModule;
 		forEachFunction(schema, "imports", [&](const Json& entry) {
-			out << "\tregistrar.registerFunction(\"" << importModule(entry)
-				<< "\", \"" << entry.at("name").get<std::string>() << "\",\n"
-				<< "\t\t\tWASM::nativeImport<&" << importName(entry) << ">());\n";
+			importsByModule[importModule(entry)].push_back(&entry);
 		});
+		for (const auto& [importModuleName, entries] : importsByModule) {
+			out << "\t{\n\t\tauto& module = registrar.moduleRegistry("
+				<< quoteName(importModuleName, false) << ");\n";
+			out << "\t\tmodule.registerFunctions({\n";
+			for (const Json* entry : entries) {
+				out << "\t\t\t{ " << quoteName(entry->at("name").get<std::string>(), false)
+					<< ",\n\t\t\t  WASM::nativeImport<&" << importName(*entry)
+					<< ">() },\n";
+			}
+			out << "\t\t});\n\t}\n";
+		}
 		out << "\treturn true;\n}\n\n";
 	}
 	if (emitExports) {
@@ -181,20 +197,38 @@ std::string emitCppSourceImpl(const Json& schema)
 			<< "_load_callables(WASM::ModuleInstance* instance)\n{\n";
 		out << "\tif (instance == nullptr)\n\t\treturn false;\n";
 		out << "\tbool ok = true;\n";
-		forEachFunction(schema, "exports", [&](const Json& entry) {
-			const std::string name = entry.at("name").get<std::string>();
-			out << "\t{\n";
-			out << "\t\tconst auto callable = instance->exportedFunction(\""
-				<< name << "\");\n";
+		std::size_t exportCount = 0;
+		forEachFunction(schema, "exports", [&](const Json&) { ++exportCount; });
+		if (exportCount == 0) {
+			out << "\treturn ok;\n}\n";
+		} else {
+			out << "\tstatic constexpr std::array<std::string_view, " << exportCount
+				<< "> names = {\n";
+			forEachFunction(schema, "exports", [&](const Json& entry) {
+				out << "\t\t" << quoteName(entry.at("name").get<std::string>(), false)
+					<< ",\n";
+			});
+			out << "\t};\n";
+			out << "\tstd::array<std::optional<WASM::Callable>, " << exportCount
+				<< "> callables{};\n";
+			out << "\tinstance->exportedFunctions(names, callables);\n";
+			out << "\tconst auto assignCallable = [&](const std::optional<WASM::Callable>& callable,\n"
+				   "\t\t\t\t\t\t\t\t auto& target) {\n";
+			out << "\t\tusing Target = std::decay_t<decltype(target)>;\n";
 			out << "\t\tif (!callable) {\n";
-			out << "\t\t\t" << cppCallableName(entry) << " = nullptr;\n";
+			out << "\t\t\ttarget = nullptr;\n";
 			out << "\t\t\tok = false;\n";
-			out << "\t\t} else {\n";
-			out << "\t\t\t" << cppCallableName(entry) << " = reinterpret_cast<"
-				<< cppTypedefName(entry) << ">(callable->fnPtr);\n";
-			out << "\t\t}\n\t}\n";
-		});
-		out << "\treturn ok;\n}\n";
+			out << "\t\t\treturn;\n";
+			out << "\t\t}\n";
+			out << "\t\ttarget = reinterpret_cast<Target>(callable->fnPtr);\n";
+			out << "\t};\n";
+			std::size_t index = 0;
+			forEachFunction(schema, "exports", [&](const Json& entry) {
+				out << "\tassignCallable(callables[" << index++ << "], "
+					<< cppCallableName(entry) << ");\n";
+			});
+			out << "\treturn ok;\n}\n";
+		}
 	}
 	out << nonFunctionNotes(schema);
 	return out.str();

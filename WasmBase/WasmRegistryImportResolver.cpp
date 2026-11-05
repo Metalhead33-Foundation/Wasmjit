@@ -207,14 +207,13 @@ Store& RegistryImportResolver::boundStore() const
 void RegistryImportResolver::registerFunction(std::string_view moduleName, std::string_view fieldName,
 											  const Callable& callable)
 {
-	auto module = registeredModules.find(moduleName);
-	if (module == std::end(registeredModules)) {
-		ModuleRegistry modReg;
-		modReg.registerFunction(fieldName, callable);
-		registeredModules.insert_or_assign(std::string(moduleName), std::move(modReg));
-	} else {
-		module->second.registerFunction(fieldName, callable);
-	}
+	moduleRegistry(moduleName).registerFunction(fieldName, callable);
+}
+
+RegistryImportResolver::ModuleRegistry&
+RegistryImportResolver::moduleRegistry(std::string_view moduleName)
+{
+	return registeredModules.try_emplace(std::string(moduleName)).first->second;
 }
 
 void RegistryImportResolver::registerGlobal(std::string_view moduleName, std::string_view fieldName,
@@ -342,6 +341,20 @@ std::optional<TagId> RegistryImportResolver::resolveTag(
 void RegistryImportResolver::ModuleRegistry::registerFunction(std::string_view fieldName, const Callable& callable)
 {
 	functions.insert_or_assign(std::string(fieldName), callable);
+}
+
+void RegistryImportResolver::ModuleRegistry::registerFunctions(
+		std::span<const NamedCallable> functionsToRegister)
+{
+	for (const NamedCallable& function : functionsToRegister)
+		registerFunction(function.name, function.callable);
+}
+
+void RegistryImportResolver::ModuleRegistry::registerFunctions(
+		std::initializer_list<NamedCallable> functionsToRegister)
+{
+	registerFunctions(std::span<const NamedCallable>(
+			functionsToRegister.begin(), functionsToRegister.size()));
 }
 
 void RegistryImportResolver::ModuleRegistry::registerGlobal(std::string_view fieldName, const Value& value)

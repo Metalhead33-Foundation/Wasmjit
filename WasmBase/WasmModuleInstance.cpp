@@ -571,6 +571,59 @@ std::optional<Callable> ModuleInstance::exportedFunction(std::string_view name) 
 	return std::nullopt;
 }
 
+std::vector<std::optional<Callable>> ModuleInstance::exportedFunctions(
+		std::span<const std::string_view> names) const
+{
+	std::vector<std::optional<Callable>> result(names.size());
+	exportedFunctions(names, result);
+	return result;
+}
+
+void ModuleInstance::exportedFunctions(
+		std::span<const std::string_view> names,
+		std::span<std::optional<Callable>> result) const
+{
+	if (names.size() != result.size())
+		throw std::runtime_error(
+				"exportedFunctions: name and result spans must have the same size");
+	for (std::optional<Callable>& slot : result)
+		slot.reset();
+	if (names.empty())
+		return;
+
+	std::unordered_map<std::string_view, std::size_t> positions;
+	positions.reserve(names.size());
+	for (std::size_t i = 0; i < names.size(); ++i)
+		positions.emplace(names[i], i);
+
+	const uint32_t importedFuncCount =
+			static_cast<uint32_t>(module->importFunctions.size());
+	std::size_t resolved = 0;
+	for (const Export& ex : module->exports) {
+		if (ex.kind != ExternalKind::Function)
+			continue;
+		const auto position = positions.find(ex.name);
+		if (position == positions.end() || result[position->second].has_value())
+			continue;
+
+		if (ex.index < importedFuncCount) {
+			if (ex.index >= internals.importStorage.size())
+				throw std::runtime_error(
+						"module exports a function index outside its index space");
+			result[position->second] = internals.importStorage[ex.index];
+		} else {
+			const uint32_t internalIdx = ex.index - importedFuncCount;
+			if (internalIdx >= internals.internalCallables.size())
+				throw std::runtime_error(
+						"module exports a function index outside its index space");
+			result[position->second] = internals.internalCallables[internalIdx];
+		}
+		++resolved;
+		if (resolved == positions.size())
+			break;
+	}
+}
+
 std::optional<TagId> ModuleInstance::exportedTag(std::string_view name) const
 {
 	for (const Export& ex : module->exports) {

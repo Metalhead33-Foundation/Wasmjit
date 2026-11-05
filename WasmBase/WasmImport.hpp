@@ -14,6 +14,7 @@
 WASMJIT_VISIBLE_BEGIN
 #include <cstdint>
 #include <optional>
+#include <string_view>
 #include "WasmValue.hpp"
 namespace WASM {
 //! Linear memories are owned by the (single, global) Store. A resolved memory
@@ -52,6 +53,14 @@ struct ImportedTable {
 //! Returning std::nullopt signals that the import could not be satisfied,
 //! which causes instantiation to fail with a descriptive error.
 class Store;
+
+/** \brief One named callable in a batch registration. */
+struct NamedCallable {
+	//! The export/import field name.
+	std::string_view name;
+	//! The callable to publish under that name.
+	Callable callable;
+};
 
 /** \brief Interface for publishing exports into an import resolver. */
 class ImportRegistrar {

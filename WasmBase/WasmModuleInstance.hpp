@@ -26,8 +26,10 @@ WASMJIT_VISIBLE_BEGIN
 #include <mutex>
 #include <optional>
 #include <set>
+#include <span>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 namespace WASM {
 
 //! Forward declarations
@@ -271,6 +273,12 @@ public:
 	const HostBridge* hostBridge() const { return ctx.hostBridge; }
 	/** \brief Looks up an exported function by name. \param name Export field name. \return Callable descriptor, or nullopt when no function export has that name. */
 	std::optional<Callable> exportedFunction(std::string_view name) const;
+	/** \brief Looks up several exported functions in one pass. \param names Export field names. \return One optional callable per requested name, in the same order. */
+	std::vector<std::optional<Callable>> exportedFunctions(
+			std::span<const std::string_view> names) const;
+	/** \brief Looks up several exported functions into caller storage. \param names Export field names. \param result Receives one optional callable per name; must have the same size. */
+	void exportedFunctions(std::span<const std::string_view> names,
+			std::span<std::optional<Callable>> result) const;
 	/** \brief Looks up an exported linear memory by name. \param name Export field name. \return Borrowed memory pointer, or nullopt when no memory export has that name. */
 	std::optional<LinearMemory*> exportedMemory(std::string_view name) const;
 	/** \brief Looks up an exported table by name. \param name Exported field name. \return The table view, or `std::nullopt` when no such export exists. */
