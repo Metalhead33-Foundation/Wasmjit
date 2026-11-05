@@ -72,6 +72,28 @@ something.** Every such size is bounded, in one of two ways:
   index spaces and structural validation add one bounded entry per parsed
   definition; they do not allocate code, link, or mutate the `Store`.
 
+### 2.2.1 Tooling parsers are bounded too
+
+Build-time front-ends such as the WITX reader are not engine code, but they run
+in the same process and must not turn malformed input into an unbounded loop or
+allocation. The WITX parser therefore has explicit guardrails:
+
+- **Progress guarantee.** Every top-level and nested parse step must consume
+  input; a stray `)` or an empty token is a diagnostic, never a retry loop.
+- **Input budget.** One WITX file and each included file is capped at **8 MiB**;
+  an include graph is capped at **64 files**.
+- **Node/depth budget.** A document is capped at **200,000 S-expression nodes**
+  and **128 nested levels**; exceeding either is an error.
+- **Owned input.** The parser owns a copy of the source text, so it can never
+  dereference a temporary or caller-lifetime `string_view`.
+- **Include-cycle protection.** Included `(use "...")` files are visited once by
+  absolute path.
+- **No output on failure.** A rejected document returns an empty schema and a
+  diagnostic; it cannot emit a partial schema.
+
+The WIT JSON path invokes the external `wasm-tools` converter and is governed by
+that tool's own limits; WITX has no external dependency and is guarded here.
+
 ### 2.3 Charge host memory against the store's budget
 
 `WasmStore` is the single allocator for linear memory, tables and GC objects, and

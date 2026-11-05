@@ -3,11 +3,13 @@
 #include "BindingSchema.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cstdlib>
 #include <fstream>
 #include <map>
 #include <optional>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <vector>
@@ -1153,6 +1155,330 @@ Schema witSchemaFromFile(const std::filesystem::path& path, Direction direction,
 				worldName, error, asyncPolicy, packageName);
 	} catch (const std::exception& exception) {
 		error = std::string("WIT JSON: ") + exception.what();
+		return {};
+	}
+}
+
+namespace {
+
+struct WitxNode {
+	bool list = false;
+	bool quoted = false;
+	std::string atom;
+	std::vector<WitxNode> items;
+};
+
+class WitxParser {
+public:
+	explicit WitxParser(std::string text) : text_(std::move(text)) {}
+
+	std::vector<WitxNode> parse() {
+		std::vector<WitxNode> out;
+		skip();
+		while (pos_ < text_.size()) {
+			const std::size_t before = pos_;
+			out.push_back(parseNode());
+			if (pos_ == before)
+				throw std::runtime_error("WITX: parser made no progress at byte "
+						+ std::to_string(pos_));
+			skip();
+		}
+		return out;
+	}
+
+private:
+	static constexpr std::size_t kMaxNodes = 200000;
+	static constexpr unsigned kMaxDepth = 128;
+	void skip() {
+		while (pos_ < text_.size()) {
+			if (std::isspace(static_cast<unsigned char>(text_[pos_]))) {
+				++pos_;
+				continue;
+			}
+			if (text_[pos_] == ';') {
+				while (pos_ < text_.size() && text_[pos_] != '\n')
+					++pos_;
+				continue;
+			}
+			break;
+		}
+	}
+
+	WitxNode parseNode(unsigned depth = 0) {
+		if (depth > kMaxDepth || ++nodes_ > kMaxNodes)
+			throw std::runtime_error("WITX: input nesting or node budget exceeded");
+		skip();
+		WitxNode node;
+		if (pos_ >= text_.size())
+			return node;
+		if (text_[pos_] == '(') {
+			node.list = true;
+			++pos_;
+			skip();
+			while (pos_ < text_.size() && text_[pos_] != ')') {
+				const std::size_t before = pos_;
+				node.items.push_back(parseNode(depth + 1));
+				if (pos_ == before)
+					throw std::runtime_error(
+							"WITX: parser made no progress in list at byte "
+							+ std::to_string(pos_));
+				skip();
+			}
+			if (pos_ < text_.size())
+				++pos_;
+			return node;
+		}
+		if (text_[pos_] == '"') {
+			node.quoted = true;
+			++pos_;
+			while (pos_ < text_.size()) {
+				const char c = text_[pos_++];
+				if (c == '"')
+					break;
+				if (c == '\\' && pos_ < text_.size())
+					node.atom.push_back(text_[pos_++]);
+				else
+					node.atom.push_back(c);
+			}
+			return node;
+		}
+		while (pos_ < text_.size()
+				&& !std::isspace(static_cast<unsigned char>(text_[pos_]))
+				&& text_[pos_] != '(' && text_[pos_] != ')'
+				&& text_[pos_] != ';')
+			node.atom.push_back(text_[pos_++]);
+		return node;
+	}
+
+	std::string text_; //!< Owned input; parsing never keeps a caller view.
+	std::size_t pos_ = 0;
+	std::size_t nodes_ = 0;
+};
+
+std::string witxAtom(const WitxNode& node)
+{
+	return node.list ? std::string() : node.atom;
+}
+
+std::string witxStrip(std::string name)
+{
+	if (!name.empty() && name.front() == '$')
+		name.erase(name.begin());
+	return name;
+}
+
+std::string witxText(const WitxNode& node)
+{
+	if (!node.list) {
+		if (!node.quoted)
+			return node.atom;
+		std::string out = "\"";
+		for (const char c : node.atom) {
+			if (c == '"' || c == '\\')
+				out.push_back('\\');
+			out.push_back(c);
+		}
+		out.push_back('"');
+		return out;
+	}
+	std::string out = "(";
+	for (std::size_t i = 0; i < node.items.size(); ++i) {
+		if (i != 0)
+			out += " ";
+		out += witxText(node.items[i]);
+	}
+	out += ")";
+	return out;
+}
+
+Json witxValueType(const WitxNode& node,
+		const std::map<std::string, const WitxNode*>& definitions,
+		unsigned depth)
+{
+	if (depth > 32 || (node.list && node.items.empty()))
+		return Json{ { "type", "i32" } };
+	if (!node.list) {
+		const std::string name = witxStrip(node.atom);
+		if (name == "string")
+			return Json{ { "type", "string" } };
+		if (name == "char8")
+			return Json{ { "type", "u8" } };
+		if (name == "usize")
+			return Json{ { "type", "u32" } };
+		if (name == "bool")
+			return Json{ { "type", "bool" } };
+		if (name == "f32" || name == "f64" || name == "u8" || name == "u16"
+				|| name == "u32" || name == "u64" || name == "s8"
+				|| name == "s16" || name == "s32" || name == "s64")
+			return Json{ { "type", name } };
+		const auto found = definitions.find(name);
+		if (found != definitions.end())
+			return witxValueType(*found->second, definitions, depth + 1);
+		return Json{ { "type", "i32" } };
+	}
+	const std::string head = witxAtom(node.items[0]);
+	if (head == "@witx") {
+		const std::string op = node.items.size() > 1
+				? witxAtom(node.items[1]) : std::string();
+		if (op == "pointer" || op == "const_pointer")
+			return Json{ { "type", "i32" } };
+	}
+	if (head == "handle" || head == "array" || head == "list")
+		return Json{ { "type", "i32" } };
+	if (head == "struct" || head == "union" || head == "enum" || head == "flags")
+		return Json{ { "type", "i32" } };
+	return Json{ { "type", "i32" } };
+}
+
+} // namespace
+
+Schema witxSchemaFromFile(const std::filesystem::path& path, Direction direction,
+		std::string_view moduleName, std::string& error)
+{
+	error.clear();
+	if (!std::filesystem::is_regular_file(path)) {
+		error = "not a WITX file: " + path.string();
+		return {};
+	}
+	constexpr std::uintmax_t kMaxWitxBytes = 8u * 1024u * 1024u;
+	constexpr std::size_t kMaxWitxNodes = 200000;
+	constexpr std::size_t kMaxWitxIncludes = 64;
+	std::error_code sizeError;
+	const std::uintmax_t mainSize = std::filesystem::file_size(path, sizeError);
+	if (sizeError || mainSize > kMaxWitxBytes) {
+		error = sizeError ? "WITX: cannot read input size"
+				: "WITX: input exceeds the 8 MiB parser budget";
+		return {};
+	}
+	std::vector<WitxNode> nodes;
+	std::vector<std::filesystem::path> pending{path};
+	std::set<std::filesystem::path> visited;
+	try {
+		while (!pending.empty()) {
+			const std::filesystem::path current = pending.back();
+			pending.pop_back();
+			if (visited.size() >= kMaxWitxIncludes) {
+				error = "WITX: include graph exceeds the 64-file budget";
+				return {};
+			}
+			if (!visited.insert(std::filesystem::absolute(current)).second)
+				continue;
+			std::error_code includeSizeError;
+			if (std::filesystem::file_size(current, includeSizeError)
+					> kMaxWitxBytes || includeSizeError) {
+				error = "WITX: included input exceeds the parser byte budget";
+				return {};
+			}
+			const std::string content = readText(current);
+			WitxParser parser(content);
+			std::vector<WitxNode> parsed = parser.parse();
+			if (parsed.size() > kMaxWitxNodes
+					|| nodes.size() > kMaxWitxNodes - parsed.size()) {
+				error = "WITX: input exceeds the parser node budget";
+				return {};
+			}
+			for (const WitxNode& node : parsed) {
+				if (node.list && node.items.size() >= 2
+						&& witxAtom(node.items[0]) == "use") {
+					const std::filesystem::path included =
+							current.parent_path() / witxStrip(witxAtom(node.items[1]));
+					if (std::filesystem::is_regular_file(included))
+						pending.push_back(included);
+				}
+				nodes.push_back(node);
+			}
+		}
+	} catch (const std::exception& exception) {
+		error = std::string("WITX: ") + exception.what();
+		return {};
+	}
+
+	std::map<std::string, const WitxNode*> definitions;
+	std::vector<const WitxNode*> modules;
+	for (const WitxNode& node : nodes) {
+		if (!node.list || node.items.empty())
+			continue;
+		const std::string head = witxAtom(node.items[0]);
+		if (head == "typename" && node.items.size() >= 3)
+			definitions[witxStrip(witxAtom(node.items[1]))] = &node.items[2];
+		else if (head == "module")
+			modules.push_back(&node);
+	}
+
+	Schema schema;
+	schema.direction = Direction::Complete;
+	schema.frontend = "witx";
+	schema.extras = { { "kind", "module" }, { "frontend", "witx" } };
+	Json typeDefs = Json::array();
+	for (const WitxNode& node : nodes)
+		if (node.list && node.items.size() >= 3
+				&& witxAtom(node.items[0]) == "typename")
+			typeDefs.push_back(witxText(node));
+	schema.extras["witxTypes"] = std::move(typeDefs);
+
+	for (const WitxNode* module : modules) {
+		const std::string moduleSource = module->items.size() > 1
+				? witxStrip(witxAtom(module->items[1])) : std::string();
+		schema.module = moduleName.empty() ? moduleSource
+				: std::string(moduleName);
+		if (schema.module.empty())
+			schema.module = "witx";
+		for (const WitxNode& item : module->items) {
+			if (!item.list || item.items.size() < 3
+					|| witxAtom(item.items[0]) != "@interface"
+					|| witxAtom(item.items[1]) != "func")
+				continue;
+			Entry entry;
+			entry.kind = EntryKind::Function;
+			entry.import = true;
+			entry.module = moduleSource;
+			std::string functionName;
+			if (item.items[2].list) {
+				for (const WitxNode& part : item.items[2].items)
+					if (!part.list && !part.atom.empty())
+						functionName = part.atom;
+			} else {
+				functionName = item.items[2].atom;
+			}
+			entry.name = functionName;
+			Json params = Json::array();
+			Json results = Json::array();
+			Json resultNames = Json::array();
+			for (std::size_t i = 3; i < item.items.size(); ++i) {
+				const WitxNode& field = item.items[i];
+				if (!field.list || field.items.size() < 3)
+					continue;
+				const std::string kind = witxAtom(field.items[0]);
+				if (kind != "param" && kind != "result")
+					continue;
+				const std::string name = witxStrip(witxAtom(field.items[1]));
+				const Json type = witxValueType(field.items[2], definitions, 0);
+				if (kind == "param") {
+					params.push_back(type);
+					entry.argNames.push_back(name);
+				} else {
+					results.push_back(type);
+					resultNames.push_back(name);
+				}
+			}
+			if (entry.name.empty())
+				continue;
+			entry.raw = { { "kind", "function" }, { "name", entry.name },
+				{ "module", moduleSource }, { "argNames", entry.argNames },
+				{ "resultNames", resultNames },
+				{ "witxSource", witxText(item) },
+				{ "type", { { "kind", "func" }, { "params", params },
+					{ "results", results } } } };
+			schema.imports.push_back(std::move(entry));
+		}
+	}
+	if (schema.module.empty())
+		schema.module = moduleName.empty() ? "witx" : std::string(moduleName);
+	schema.dedupe();
+	try {
+		return projectSchema(schema, direction);
+	} catch (const std::exception& exception) {
+		error = exception.what();
 		return {};
 	}
 }

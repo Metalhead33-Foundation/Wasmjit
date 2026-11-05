@@ -2210,6 +2210,69 @@ TEST_CASE("WIT output is accepted by wasm-tools", "[bindings]")
 	std::filesystem::remove(log);
 }
 
+TEST_CASE("WITX preserves Preview 1 parameter names", "[bindings]")
+{
+	const std::string source = R"(
+(module $wasi_snapshot_preview1
+  (@interface func (export "fd_write")
+    (param $fd $fd)
+    (param $iovs (@witx pointer $iovec))
+    (param $iovs_len $size)
+    (param $nwritten (@witx pointer $size))
+    (result $error $errno)
+  )
+)
+)";
+	const std::filesystem::path path = std::filesystem::temp_directory_path()
+			/ "wasmjit-test-preview1.witx";
+	{
+		std::ofstream out(path, std::ios::binary);
+		out << source;
+	}
+	std::string error;
+	const auto schema = WASM::Bindings::witxSchemaFromFile(path,
+			WASM::Bindings::Direction::Complete, "", error);
+	REQUIRE(error.empty());
+	REQUIRE(schema.module == "wasi_snapshot_preview1");
+	REQUIRE(schema.imports.size() == 1u);
+	REQUIRE(schema.imports[0].name == "fd_write");
+	REQUIRE(schema.imports[0].argNames.size() == 4u);
+	REQUIRE(schema.imports[0].argNames[0] == "fd");
+	REQUIRE(schema.imports[0].argNames[1] == "iovs");
+	REQUIRE(schema.imports[0].argNames[2] == "iovs_len");
+	REQUIRE(schema.imports[0].argNames[3] == "nwritten");
+	const std::string emitted = WASM::Bindings::emit(schema,
+			WASM::Bindings::Language::Witx);
+	REQUIRE(emitted.find("$iovs") != std::string::npos);
+	REQUIRE(emitted.find("$nwritten") != std::string::npos);
+	const std::filesystem::path roundtrip = std::filesystem::temp_directory_path()
+			/ "wasmjit-test-preview1-roundtrip.witx";
+	{
+		std::ofstream out(roundtrip, std::ios::binary);
+		out << emitted;
+	}
+	const auto reparsed = WASM::Bindings::witxSchemaFromFile(roundtrip,
+			WASM::Bindings::Direction::Complete, "", error);
+	REQUIRE(error.empty());
+	REQUIRE(reparsed.imports.size() == 1u);
+	REQUIRE(reparsed.imports[0].argNames.size() == 4u);
+	REQUIRE(reparsed.imports[0].argNames[1] == "iovs");
+
+	const std::filesystem::path malformed = std::filesystem::temp_directory_path()
+			/ "wasmjit-test-malformed.witx";
+	{
+		std::ofstream out(malformed, std::ios::binary);
+		out << ")";
+	}
+	const auto rejected = WASM::Bindings::witxSchemaFromFile(malformed,
+			WASM::Bindings::Direction::Complete, "", error);
+	REQUIRE(rejected.imports.empty());
+	REQUIRE(!error.empty());
+	std::filesystem::remove(path);
+	std::filesystem::remove(roundtrip);
+	std::filesystem::remove(malformed);
+}
+
 TEST_CASE("WIT ABI conformance matrix", "[bindings]")
 {
 	if (!haveTool("command -v wasm-tools > /dev/null 2>&1")) {

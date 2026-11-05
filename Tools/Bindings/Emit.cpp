@@ -36,6 +36,7 @@ const char* languageName(Language language) noexcept
 	case Language::CppTypedefs: return "cpp-typedefs";
 	case Language::CppSource: return "cpp-source";
 	case Language::Wit: return "wit";
+	case Language::Witx: return "witx";
 	}
 	return "c-header";
 }
@@ -50,7 +51,8 @@ bool parseLanguage(std::string_view name, Language& language) noexcept
 			Language::Swift, Language::DLang, Language::Nim,
 			Language::Crystal, Language::Ada, Language::Pascal,
 			Language::Haskell, Language::CppAdapter,
-			Language::CppTypedefs, Language::CppSource, Language::Wit }) {
+			Language::CppTypedefs, Language::CppSource, Language::Wit,
+			Language::Witx }) {
 		if (name == languageName(candidate)) {
 			language = candidate;
 			return true;
@@ -90,6 +92,7 @@ std::string emit(const Schema& input, Language language)
 	case Language::CppTypedefs: return detail::emitCppTypedefsImpl(schema);
 	case Language::CppSource: return detail::emitCppSourceImpl(schema);
 	case Language::Wit: return detail::emitWitImpl(schema);
+	case Language::Witx: return detail::emitWitxImpl(schema);
 	}
 	return {};
 }

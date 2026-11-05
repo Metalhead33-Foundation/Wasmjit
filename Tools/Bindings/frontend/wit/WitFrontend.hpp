@@ -178,6 +178,23 @@ Schema witSchemaFromFile(const std::filesystem::path& path, Direction direction,
 		WitAsyncPolicy asyncPolicy = WitAsyncPolicy::AllowSynchronous,
 		std::string_view packageName = {});
 
+/*!
+ * \brief Parses a WITX file into the neutral core-module schema.
+ *
+ * WITX is a Preview 1 / legacy interface description. The core module
+ * descriptor remains authoritative for the binary ABI; this front-end preserves
+ * WITX module, function, parameter and result names for semantic binding output.
+ *
+ * \param path The `.witx` file.
+ * \param direction The requested output direction.
+ * \param moduleName The module name in the schema envelope, or empty for the
+ *        WITX module name.
+ * \param error Receives a diagnostic when the file or WITX syntax is invalid.
+ * \return The projected schema, or an empty schema on error.
+ */
+Schema witxSchemaFromFile(const std::filesystem::path& path, Direction direction,
+		std::string_view moduleName, std::string& error);
+
 } // namespace WASM::Bindings
 
 #endif // WASMJIT_BINDINGS_FRONTEND_WIT_WITFRONTEND_HPP

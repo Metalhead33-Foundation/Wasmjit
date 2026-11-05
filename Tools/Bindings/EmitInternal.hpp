@@ -81,6 +81,9 @@ std::string emitCppAdapterImpl(const nlohmann::ordered_json& schema);
 //! Emits a WIT package/world representation.
 std::string emitWitImpl(const nlohmann::ordered_json& schema);
 
+//! Emits a legacy WITX module representation.
+std::string emitWitxImpl(const nlohmann::ordered_json& schema);
+
 } // namespace WASM::Bindings::detail
 
 #endif // WASMJIT_BINDINGS_EMITINTERNAL_HPP

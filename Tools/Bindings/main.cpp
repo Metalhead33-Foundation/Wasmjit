@@ -56,7 +56,7 @@ void usage(std::ostream& out)
 		   "  --emit schema|c-header|rust|typescript|assemblyscript|zig|kotlin|\n"
 		   "         moonbit|go|dart|java|csharp|fsharp|python|ruby|lua|swift|\n"
 		   "         d|nim|crystal|ada|pascal|haskell|cpp-adapter|cpp-typedefs|\n"
-		   "         cpp-source|wit (default: schema)\n"
+		   "         cpp-source|wit|witx (default: schema)\n"
 		   "  --module-name NAME       name in the schema envelope\n"
 		   "  --candidates HEADER      SWIG-parse a C++ header and validate its\n"
 		   "                           candidate signatures against the schema\n"
@@ -65,6 +65,7 @@ void usage(std::ostream& out)
 		   "  --wit PATH               WIT text/package/directory input (invokes\n"
 		   "                           wasm-tools component wit --json)\n"
 		   "  --wit-json FILE          WIT JSON input produced by wasm-tools\n"
+		   "  --witx FILE              legacy WITX input (Preview 1 semantic names)\n"
 		   "  --wit-world NAME         select a WIT world (default: first)\n"
 		   "  --wit-package NAME       select the package that owns the world\n"
 		   "  --wit-reject-async       reject async WIT functions instead of\n"
@@ -88,6 +89,7 @@ int main(int argc, char** argv)
 	std::string witPath;
 	std::string witJsonPath;
 	std::string witWorld;
+	std::string witxPath;
 	std::string witPackage;
 	bool frontendSchema = false;
 	bool schemaInput = false;
@@ -122,6 +124,8 @@ int main(int argc, char** argv)
 			witPath = argv[++i];
 		} else if (arg == "--wit-json" && i + 1 < argc) {
 			witJsonPath = argv[++i];
+		} else if (arg == "--witx" && i + 1 < argc) {
+			witxPath = argv[++i];
 		} else if (arg == "--wit-world" && i + 1 < argc) {
 			witWorld = argv[++i];
 		} else if (arg == "--wit-package" && i + 1 < argc) {
@@ -152,6 +156,7 @@ int main(int argc, char** argv)
 			&& std::filesystem::path(input).extension() == ".json")
 		schemaInput = true;
 	const bool witInput = !witPath.empty() || !witJsonPath.empty();
+	const bool witxInput = !witxPath.empty();
 	if (!witPath.empty() && !witJsonPath.empty()) {
 		std::cerr << "wasmjit-bindings: choose --wit or --wit-json, not both\n";
 		return 2;
@@ -173,7 +178,14 @@ int main(int argc, char** argv)
 					 "module, schema or C++ candidate input\n";
 		return 2;
 	}
-	if (input.empty() && !witInput && !frontendSchema) {
+	if (witxInput && (witInput || !input.empty() || schemaInput
+			|| !candidatesPath.empty() || !glueCandidatesPath.empty()
+			|| frontendSchema)) {
+		std::cerr << "wasmjit-bindings: --witx cannot be combined with WIT, "
+				 "module, schema or C++ candidate input\n";
+		return 2;
+	}
+	if (input.empty() && !witInput && !witxInput && !frontendSchema) {
 		usage(std::cerr);
 		return 2;
 	}
@@ -216,7 +228,17 @@ int main(int argc, char** argv)
 					? WASM::Bindings::glueCandidates(glueCandidatesPath, error)
 					: WASM::Bindings::swigCandidates(candidatesPath, error);
 		};
-		if (witInput) {
+		if (witxInput) {
+			const WASM::Bindings::Schema schema =
+					WASM::Bindings::witxSchemaFromFile(witxPath, direction,
+							moduleName, error);
+			if (!error.empty()) {
+				std::cerr << "wasmjit-bindings: " << error << "\n";
+				return 1;
+			}
+			text = wantSchema ? schema.toJson().dump(2) + "\n"
+					: WASM::Bindings::emit(schema, language);
+		} else if (witInput) {
 			const std::filesystem::path path = !witPath.empty() ? witPath : witJsonPath;
 			WASM::Bindings::Schema schema = WASM::Bindings::witSchemaFromFile(
 					path, direction, moduleName, witWorld, !witJsonPath.empty(), error,

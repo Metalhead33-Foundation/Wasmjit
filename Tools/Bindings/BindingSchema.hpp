@@ -50,7 +50,8 @@ enum class Language {
 	CppAdapter, //!< A C++ adapter that dispatches through `WASM::callCallable`.
 	CppTypedefs, //!< Host-side `Callable` function-pointer typedefs.
 	CppSource, //!< A C++ source with `Callable::fnPtr` cast helpers.
-	Wit //!< A WIT package/world representation.
+	Wit, //!< A WIT package/world representation.
+	Witx //!< A legacy WITX module representation.
 };
 
 /*!
