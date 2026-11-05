@@ -1938,3 +1938,73 @@ TEST_CASE("asmjit and sljit agree on the shared reference module",
 		CHECK_THROWS(WASM::callCallable<std::int32_t>(*sljitFn));
 	}
 }
+
+
+namespace {
+
+//! The native behind the imported function in `ref_func_import.wat`.
+std::int32_t refImportHost42(WASM::VMContext*) { return 42; }
+
+WASM::Callable refImportCallable()
+{
+	return WASM::Callable{ .fnPtr = reinterpret_cast<void*>(&refImportHost42),
+			.context = nullptr, .localTypeIdx = 0 };
+}
+
+} // namespace
+
+
+TEST_CASE("sljit: an imported function reference is not null",
+"[sljit][module][parity][ref]")
+{
+	auto session = Sljit::createSession();
+	REQUIRE(session != nullptr);
+	WASM::RegistryImportResolver imports;
+	imports.registerFunction("host", "f", refImportCallable());
+	LoadedModule loaded = loadAndInstantiateTestModule("ref_func_import", imports, *session);
+	REQUIRE(loaded.instance != nullptr);
+	WASM::ModuleInstance& instance = *loaded.instance;
+	const auto call = [&](const char* name) -> WASM::Callable {
+		const std::optional<WASM::Callable> callable = instance.exportedFunction(name);
+		INFO("export " << name);
+		REQUIRE(callable.has_value());
+		REQUIRE(callable->fnPtr != nullptr);
+		return *callable;
+	};
+
+	CHECK(WASM::callCallable<std::int32_t>(call("import_ref_not_null")) == 0);
+	CHECK(WASM::callCallable<std::int32_t>(call("call_import")) == 42);
+}
+
+
+TEST_CASE("asmjit and sljit agree on an imported function reference",
+"[sljit][asmjit][parity][ref]")
+{
+	WASM::Module module = loadTestModule("ref_func_import");
+	AsmJitBackend::Context asmContext;
+	AsmJitBackend::ModuleCompiler asmCompiler(asmContext);
+	Sljit::ModuleCompiler sljitCompiler;
+	WASM::RegistryImportResolver asmImports;
+	WASM::RegistryImportResolver sljitImports;
+	asmImports.registerFunction("host", "f", refImportCallable());
+	sljitImports.registerFunction("host", "f", refImportCallable());
+	std::unique_ptr<WASM::ModuleInstance> asmInstance =
+			asmCompiler.instantiate(module, asmImports);
+	std::unique_ptr<WASM::ModuleInstance> sljitInstance =
+			sljitCompiler.instantiate(module, sljitImports);
+	REQUIRE(asmInstance != nullptr);
+	REQUIRE(sljitInstance != nullptr);
+
+	const auto same = [&](const char* name, std::int32_t expected) {
+		const std::optional<WASM::Callable> asmCallable = asmInstance->exportedFunction(name);
+		const std::optional<WASM::Callable> sljitCallable = sljitInstance->exportedFunction(name);
+		REQUIRE(asmCallable.has_value());
+		REQUIRE(sljitCallable.has_value());
+		INFO("export " << name);
+		CHECK(WASM::callCallable<std::int32_t>(*asmCallable) == expected);
+		CHECK(WASM::callCallable<std::int32_t>(*sljitCallable) == expected);
+	};
+
+	same("import_ref_not_null", 0);
+	same("call_import", 42);
+}

@@ -11,6 +11,7 @@ Scope: the first non-SIMD feature after the v128 series — three reference ops,
 **Chunk 3:** `ref.func` (a runtime resolver on SLJIT, a code address on
 AsmJit) and the non-null paths it unlocks.
 **Chunk 4:** `br_on_null`.
+**Chunk 5:** imported function references, with the declaration rule fixtured.
 Out: `br_on_null`/`br_on_non_null`, GC types, `call_ref`, and a `ref.eq`
 fixture (blocked by the type system, §entry 5).
 
@@ -128,6 +129,24 @@ rather than left to mislead the next session.
   and a fallthrough assignment, which is also the better test: the null path
   yields `0`, the non-null path `7`, and both are asserted.
 
+### 2026-11-05 — entry 7: imported function references, and the declaration rule
+
+Both backends carry a path for `ref.func` on an **imported** index — SLJIT's
+  resolver looks it up in the context, AsmJit emits `mov reg, imm64` of the
+  already-resolved `fnPtr` from `importStorage` — and neither was exercised. A
+  new fixture closes that: it imports `(func $imp (result i32))`, references it
+  with `ref.func`, checks `ref.is_null` is `0`, and calls it to prove the import
+  itself is live (`42`). Registered with `imports.registerFunction("host", "f",
+  callable)` where the native is `int32_t f(WASM::VMContext*)` — the context is
+  the first parameter even when it is unused, which is the convention the
+  existing native-import tests use.
+
+**The engine enforces the spec's declaration rule**: `ref.func $imp` failed
+  validation with `undeclared function reference 0 ($imp)` until the fixture
+  gained `(elem declare func $imp)`. That is worth recording because the earlier
+  `ref.func` fixture only referenced *exported* functions, which are declared by
+  their export — so the rule was invisible until an import was referenced.
+
 ## 1. What the shared ABI forced
 
 Nothing — no helper is involved. The reference ops are pure register/slot work,
@@ -175,9 +194,9 @@ Nothing in this slice. The next reference ops need two things the backends do
 
 - **`ref.eq` is unasserted** (entry 5) — the one op in the surface with no
   coverage at all, and it will stay that way until GC values exist.
-- **Imported `ref.func` is untested.** The fixture only references internal
-  functions; the AsmJit `mov imm64` path for imports and the SLJIT resolver
-  path for imports are both unexercised.
+- **Reference identity across a boundary is untested**: the fixture proves an
+  imported reference is non-null, not that `ref.func $imp` equals the reference
+  another module holds for the same function.
 - **Typed-null distinctions are not modelled**, so nothing asserts that
   `ref.null func` and `ref.null extern` coincide on both backends.
 - **References in locals/parameters/blocks** are refused, not tested.
@@ -210,11 +229,12 @@ Do not copy: assuming `ref.eq` is testable with nulls — the engine requires
 ## 8. Sign-off
 
 - Chunks: (1) `ref.null`, `ref.is_null`, `ref.eq`; (2) `ref.as_non_null`;
-  (3) `ref.func`; (4) `br_on_null`. 6 hooks per backend, with `ref.eq` lowered
-  but unfixtured and `br_on_non_null` refused on AsmJit block parameters.
+  (3) `ref.func`; (4) `br_on_null`; (5) imported function references. 6 hooks
+  per backend, with `ref.eq` lowered but unfixtured and `br_on_non_null` refused
+  on AsmJit block parameters.
 - Commit: working tree on `backendsMh33`.
-- Commands and counts: `./Test/WasmJit '[ref]'` — 47 assertions in 2 cases; the
-  full suite — 21044 assertions in 695 cases; `[headerdoc]` — green;
+- Commands and counts: `./Test/WasmJit '[ref]'` — 65 assertions in 4 cases; the
+  full suite — 21062 assertions in 697 cases; `[headerdoc]` — green;
   `doxygen Doxyfile` — exit 0 with no warnings.
 - **Carried forward explicitly:** the deferred `v128` decision in §2. It must be
   resolved before the saga closes.
