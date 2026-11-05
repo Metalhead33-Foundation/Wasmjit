@@ -206,7 +206,7 @@ The `v128` function-boundary work was analysed and **deliberately deferred**; th
 | Wasm→Wasm calls with `v128` | deferred | SLJIT's `SLJIT_ARGS*` are fixed-arity; AsmJit's per-type signature cache needs the two-slot form |
 | `ref.eq` fixture | lowered, unfixtured | needs a `(ref null eq)` value, which only **GC construction** can produce |
 | `br_on_non_null` | `onUnhandledOpcode` | needs a label carrying the reference, i.e. **block parameters** (AsmJit gap) |
-| GC types and barriers | not started | the P4 gate in `WRITING_A_BACKEND.md` §6 |
+| GC types | **planned** — [`GC_PLAN.md`](GC_PLAN.md): struct/array construction, field layout, `ref.test`/`ref.cast`; also the route to a `ref.eq` fixture | the P4 gate in `WRITING_A_BACKEND.md` §6 |
 | exceptions | not started | P4 |
 | `call_ref`, continuations | not started | P5 |
 | atomics, `f16`, relaxed SIMD, bulk memory on a memory64 | refused by name | proposal-level, still open |
