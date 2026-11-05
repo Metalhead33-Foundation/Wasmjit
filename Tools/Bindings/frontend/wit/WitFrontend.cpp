@@ -2,6 +2,7 @@
 
 #include "BindingSchema.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <fstream>
@@ -118,6 +119,188 @@ std::string documentation(const Json& function)
 	return {};
 }
 
+std::vector<std::string> flattenWitType(const Json& type, const Json& document,
+		unsigned depth);
+
+std::vector<std::string> flattenWitKind(const Json& kind, const Json& document,
+		unsigned depth)
+{
+	if (depth > 32)
+		return { "i32" };
+	if (kind.contains("type"))
+		return flattenWitType(kind.at("type"), document, depth + 1);
+	if (kind.contains("record")) {
+		std::vector<std::string> out;
+		const auto fields = kind.at("record").find("fields");
+		if (fields != kind.at("record").end() && fields->is_array()) {
+			for (const Json& field : *fields) {
+				const std::vector<std::string> flat = flattenWitType(
+						field.value("type", Json{}), document, depth + 1);
+				out.insert(out.end(), flat.begin(), flat.end());
+			}
+		}
+		return out;
+	}
+	if (kind.contains("tuple")) {
+		std::vector<std::string> out;
+		const auto types = kind.at("tuple").find("types");
+		if (types != kind.at("tuple").end() && types->is_array()) {
+			for (const Json& item : *types) {
+				const std::vector<std::string> flat =
+						flattenWitType(item, document, depth + 1);
+				out.insert(out.end(), flat.begin(), flat.end());
+			}
+		}
+		return out;
+	}
+	if (kind.contains("list") || kind.contains("string"))
+		return { "i32", "i32" };
+	if (kind.contains("flags")) {
+		std::size_t count = 0;
+		const auto values = kind.at("flags").find("flags");
+		if (values != kind.at("flags").end() && values->is_array())
+			count = values->size();
+		return std::vector<std::string>((count + 31u) / 32u, "i32");
+	}
+	if (kind.contains("enum"))
+		return { "i32" };
+	if (kind.contains("option")) {
+		std::vector<std::string> out = { "i32" };
+		const std::vector<std::string> payload =
+				flattenWitType(kind.at("option"), document, depth + 1);
+		out.insert(out.end(), payload.begin(), payload.end());
+		return out;
+	}
+	if (kind.contains("result")) {
+		std::vector<std::string> out = { "i32" };
+		std::vector<std::string> ok;
+		std::vector<std::string> error;
+		if (kind.at("result").contains("ok"))
+			ok = flattenWitType(kind.at("result").at("ok"), document, depth + 1);
+		if (kind.at("result").contains("err"))
+			error = flattenWitType(kind.at("result").at("err"), document,
+					depth + 1);
+		const std::size_t width = std::max(ok.size(), error.size());
+		for (std::size_t i = 0; i < width; ++i) {
+			const std::string left = i < ok.size() ? ok[i] : "i32";
+			const std::string right = i < error.size() ? error[i] : "i32";
+			out.push_back(left == right ? left
+					: (left == "f64" || right == "f64" ? "f64"
+					: (left == "i64" || right == "i64" ? "i64" : "i32")));
+		}
+		return out;
+	}
+	if (kind.contains("variant")) {
+		std::vector<std::string> payload;
+		const auto cases = kind.at("variant").find("cases");
+		if (cases != kind.at("variant").end() && cases->is_array()) {
+			for (const Json& alternative : *cases) {
+				if (!alternative.contains("type")
+						|| alternative.at("type").is_null())
+					continue;
+				const std::vector<std::string> flat = flattenWitType(
+						alternative.at("type"), document, depth + 1);
+				const std::size_t width = std::max(payload.size(), flat.size());
+				for (std::size_t i = 0; i < width; ++i) {
+					const std::string left = i < payload.size() ? payload[i] : "i32";
+					const std::string right = i < flat.size() ? flat[i] : "i32";
+					if (i >= payload.size())
+						payload.push_back(right);
+					else if (payload[i] != right)
+						payload[i] = left == "f64" || right == "f64" ? "f64"
+								: (left == "i64" || right == "i64" ? "i64"
+								: "i32");
+				}
+			}
+		}
+		std::vector<std::string> out = { "i32" };
+		out.insert(out.end(), payload.begin(), payload.end());
+		return out;
+	}
+	if (kind.contains("handle") || kind.contains("resource")
+			|| kind.contains("stream") || kind.contains("future"))
+		return { "i32" };
+	return { "i32" };
+}
+
+std::vector<std::string> flattenWitType(const Json& type, const Json& document,
+		unsigned depth)
+{
+	if (depth > 32)
+		return { "i32" };
+	if (type.is_null())
+		return {};
+	if (type.is_string()) {
+		const std::string name = type.get<std::string>();
+		if (name == "unit" || name == "void")
+			return {};
+		if (name == "string")
+			return { "i32", "i32" };
+		if (name == "error-context" || name == "bool" || name == "u8"
+				|| name == "s8" || name == "u16" || name == "s16"
+				|| name == "u32" || name == "s32" || name == "char")
+			return { "i32" };
+		if (name == "u64" || name == "s64")
+			return { "i64" };
+		if (name == "f32")
+			return { "f32" };
+		if (name == "f64")
+			return { "f64" };
+		return { "i32" };
+	}
+	if (type.is_number_integer()) {
+		const auto id = type.get<std::size_t>();
+		const auto types = document.find("types");
+		if (types == document.end() || !types->is_array()
+				|| id >= types->size())
+			return { "i32" };
+		const Json& definition = types->at(id);
+		if (definition.contains("kind"))
+			return flattenWitKind(definition.at("kind"), document, depth + 1);
+		return { "i32" };
+	}
+	if (type.is_object() && type.contains("type"))
+		return flattenWitType(type.at("type"), document, depth + 1);
+	return { "i32" };
+}
+
+Json coreWitAbiType(const std::string& type)
+{
+	return Json{ { "type", type } };
+}
+
+Json canonicalWitAbi(const Json& function, const Json& document)
+{
+	Json abi;
+	abi["params"] = Json::array();
+	abi["results"] = Json::array();
+	std::vector<std::string> params;
+	if (function.contains("params") && function.at("params").is_array()) {
+		for (const Json& parameter : function.at("params")) {
+			if (!parameter.is_object())
+				continue;
+			const std::vector<std::string> flat = flattenWitType(
+					parameter.value("type", Json{}), document, 0);
+			params.insert(params.end(), flat.begin(), flat.end());
+		}
+	}
+	std::vector<std::string> results;
+	if (function.contains("result") && !function.at("result").is_null())
+		results = flattenWitType(function.at("result"), document, 0);
+
+	abi["indirectParams"] = params.size() > 16u;
+	if (params.size() > 16u)
+		params = { "i32" };
+	abi["indirectResults"] = results.size() > 1u;
+	if (results.size() > 1u)
+		results = { "i32" };
+	for (const std::string& type : params)
+		abi["params"].push_back(coreWitAbiType(type));
+	for (const std::string& type : results)
+		abi["results"].push_back(coreWitAbiType(type));
+	return abi;
+}
+
 bool witFunctionIsAsync(const Json& function)
 {
 	if (!function.is_object() || !function.contains("kind"))
@@ -186,6 +369,9 @@ void appendFunction(const Json& function, const Json& document,
 		{ "argNames", entry.argNames },
 		{ "type", std::move(type) },
 	};
+	entry.raw["abi"] = canonicalWitAbi(function, document);
+	if (function.contains("stability"))
+		entry.raw["stability"] = function.at("stability");
 	if (witFunctionIsAsync(function)) {
 		entry.raw["witAsync"] = true;
 		schema.extras["witAsync"] = true;
@@ -316,9 +502,15 @@ Schema witSchema(const Json& document, Direction direction,
 
 	std::string schemaName(moduleName);
 	if (schemaName.empty()) {
-		if (document.contains("packages") && document.at("packages").is_array()
-				&& !document.at("packages").empty())
-			schemaName = stringAt(document.at("packages").at(0), "name");
+		const int packageId = selected->value("package", -1);
+		if (document.contains("packages") && document.at("packages").is_array()) {
+			const Json& packages = document.at("packages");
+			if (packageId >= 0 && static_cast<std::size_t>(packageId) < packages.size())
+				schemaName = stringAt(packages.at(static_cast<std::size_t>(packageId)),
+						"name");
+			if (schemaName.empty() && !packages.empty())
+				schemaName = stringAt(packages.at(0), "name");
+		}
 		if (schemaName.empty())
 			schemaName = stringAt(*selected, "name");
 		if (schemaName.empty())

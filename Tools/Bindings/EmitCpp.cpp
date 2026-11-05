@@ -191,10 +191,18 @@ void emitWitCppTypeDefinitions(std::ostringstream& out, const Json& schema)
 				|| !definition.contains("kind"))
 			continue;
 		const Json& kind = definition.at("kind");
-		if (!kind.is_object())
-			continue;
 		const std::string name = witCppDefinitionName(definition, index - 1);
 		if (!emitted.insert(name).second)
+			continue;
+		if (kind.is_string()) {
+			if (kind.get<std::string>() == "resource") {
+				out << "// WIT resource handle; ownership is tracked by the\n"
+					   "// backend resource table.\n"
+					<< "struct " << name << " {\n\tuint32_t handle;\n};\n";
+			}
+			continue;
+		}
+		if (!kind.is_object())
 			continue;
 		if (kind.contains("enum")) {
 			const auto cases = kind.at("enum").find("cases");
@@ -216,6 +224,12 @@ void emitWitCppTypeDefinitions(std::ostringstream& out, const Json& schema)
 				|| kind.contains("tuple") || kind.contains("list")
 				|| kind.contains("option") || kind.contains("result")
 				|| kind.contains("handle")) {
+			if (kind.contains("handle")) {
+				const Json& handle = kind.at("handle");
+				out << (handle.contains("own")
+						? "// owned WIT handle; release through the backend resource table.\n"
+						: "// borrowed WIT handle; valid for the enclosing call scope.\n");
+			}
 			out << "struct " << name << " {\n";
 			if (kind.contains("record"))
 				emitWitCppRecord(out, document, kind);

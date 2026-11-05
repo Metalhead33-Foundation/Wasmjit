@@ -1760,6 +1760,10 @@ TEST_CASE("WIT type aliases resolve through the type table", "[bindings]")
 	REQUIRE(schema.imports[0].function.results.size() == 1u);
 	REQUIRE(schema.imports[0].function.results[0].kind
 			== WASM::Bindings::ValueKind::U64);
+	REQUIRE(schema.imports[0].raw.at("abi").at("params")[0].at("type")
+			== "i64");
+	REQUIRE(schema.imports[0].raw.at("abi").at("results")[0].at("type")
+			== "i64");
 }
 
 TEST_CASE("WIT records get named C++ declarations", "[bindings]")
@@ -1785,7 +1789,9 @@ TEST_CASE("WIT records get named C++ declarations", "[bindings]")
 			{ "kind": { "list": "u8" } },
 			{ "kind": { "variant": { "cases": [
 				{ "name": "point", "type": 0 },
-				{ "name": "empty", "type": null }] } } }
+				{ "name": "empty", "type": null }] } } },
+			{ "name": "descriptor", "kind": "resource" },
+			{ "kind": { "handle": { "own": 5 } } }
 		],
 		"packages": [{
 			"name": "test:demo@0.1.0",
@@ -1798,14 +1804,17 @@ TEST_CASE("WIT records get named C++ declarations", "[bindings]")
 			WASM::Bindings::Direction::Complete, "demo", "demo", error);
 	REQUIRE(error.empty());
 	REQUIRE(schema.imports.size() == 1u);
-	REQUIRE(schema.imports[0].function.params[0].wit);
+	REQUIRE(schema.imports[0].raw.at("type").at("params")[0].at("wit"));
+	REQUIRE(schema.imports[0].raw.at("abi").at("params")[0].at("type")
+			== "i32");
+	REQUIRE(schema.imports[0].raw.at("abi").at("results")[0].at("type")
+			== "i32");
 	const std::string header = WASM::Bindings::emit(schema,
 			WASM::Bindings::Language::CppTypedefs);
 	REQUIRE(header.find("struct wasmjit_wit_point;") != std::string::npos);
 	REQUIRE(header.find("struct wasmjit_wit_point {") != std::string::npos);
 	REQUIRE(header.find("int32_t x;") != std::string::npos);
-	REQUIRE(header.find("wasmjit_wit_point* value")
-			!= std::string::npos);
+	REQUIRE(header.find("int32_t value") != std::string::npos);
 	REQUIRE(header.find("enum class wasmjit_wit_color") != std::string::npos);
 	REQUIRE(header.find("red = 0") != std::string::npos);
 	REQUIRE(header.find("using wasmjit_wit_perms = std::uint32_t;")
@@ -1816,6 +1825,86 @@ TEST_CASE("WIT records get named C++ declarations", "[bindings]")
 	REQUIRE(header.find("struct wasmjit_wit_type_4 {") != std::string::npos);
 	REQUIRE(header.find("Tag tag;") != std::string::npos);
 	REQUIRE(header.find("wasmjit_wit_point* point;") != std::string::npos);
+	REQUIRE(header.find("struct wasmjit_wit_descriptor {\n\tuint32_t handle;")
+			!= std::string::npos);
+	REQUIRE(header.find("struct wasmjit_wit_type_6 {\n\tuint32_t handle;")
+			!= std::string::npos);
+	REQUIRE(header.find("owned WIT handle; release through the backend")
+			!= std::string::npos);
+}
+
+TEST_CASE("WIT functions carry canonical ABI flat signatures", "[bindings]")
+{
+	const Json wit = Json::parse(R"({
+		"worlds": [{
+			"name": "demo",
+			"imports": {
+				"takes-string": { "function": {
+					"name": "takes-string",
+					"params": [{ "name": "s", "type": "string" }] } },
+				"returns-string": { "function": {
+					"name": "returns-string", "result": "string" } },
+				"takes-record": { "function": {
+					"name": "takes-record",
+					"params": [{ "name": "p", "type": 0 }] } },
+				"takes-variant": { "function": {
+					"name": "takes-variant",
+					"params": [{ "name": "v", "type": 1 }] } }
+			},
+			"exports": {},
+			"package": 0
+		}],
+		"interfaces": [],
+		"types": [
+			{ "name": "point", "kind": { "record": {
+				"fields": [
+					{ "name": "x", "type": "s32" },
+					{ "name": "y", "type": "s64" }] } } },
+			{ "kind": { "variant": { "cases": [
+				{ "name": "point", "type": 0 },
+				{ "name": "empty", "type": null }] } } }
+		],
+		"packages": [{
+			"name": "test:demo@0.1.0",
+			"interfaces": {},
+			"worlds": { "demo": 0 }
+		}]
+	})");
+	std::string error;
+	const auto schema = WASM::Bindings::witSchema(wit,
+			WASM::Bindings::Direction::Complete, "demo", "demo", error);
+	REQUIRE(error.empty());
+	const auto find = [&](const std::string& name) -> const WASM::Bindings::Entry* {
+		for (const auto& entry : schema.imports)
+			if (entry.name == name)
+				return &entry;
+		return nullptr;
+	};
+	const auto stringParam = find("takes-string");
+	REQUIRE(stringParam != nullptr);
+	REQUIRE(stringParam->raw.at("type").at("params")[0].at("type") == "string");
+	REQUIRE(stringParam->raw.at("abi").at("params").size() == 2u);
+	REQUIRE(stringParam->raw.at("abi").at("params")[0].at("type") == "i32");
+	REQUIRE(stringParam->raw.at("abi").at("params")[1].at("type") == "i32");
+
+	const auto stringResult = find("returns-string");
+	REQUIRE(stringResult != nullptr);
+	REQUIRE(stringResult->raw.at("abi").at("results").size() == 1u);
+	REQUIRE(stringResult->raw.at("abi").at("results")[0].at("type") == "i32");
+	REQUIRE(stringResult->raw.at("abi").at("indirectResults") == true);
+
+	const auto record = find("takes-record");
+	REQUIRE(record != nullptr);
+	REQUIRE(record->raw.at("abi").at("params").size() == 2u);
+	REQUIRE(record->raw.at("abi").at("params")[0].at("type") == "i32");
+	REQUIRE(record->raw.at("abi").at("params")[1].at("type") == "i64");
+
+	const auto variant = find("takes-variant");
+	REQUIRE(variant != nullptr);
+	REQUIRE(variant->raw.at("abi").at("params").size() == 3u);
+	REQUIRE(variant->raw.at("abi").at("params")[0].at("type") == "i32");
+	REQUIRE(variant->raw.at("abi").at("params")[1].at("type") == "i32");
+	REQUIRE(variant->raw.at("abi").at("params")[2].at("type") == "i64");
 }
 
 TEST_CASE("WIT interface functions use qualified package modules", "[bindings]")
@@ -1857,6 +1946,40 @@ TEST_CASE("WIT interface functions use qualified package modules", "[bindings]")
 			!= std::string::npos);
 	REQUIRE(header.find("WIT async functions are emitted as synchronous")
 			!= std::string::npos);
+}
+
+TEST_CASE("WIT selects the world package and keeps stability", "[bindings]")
+{
+	const Json wit = Json::parse(R"({
+		"worlds": [{
+			"name": "demo",
+			"imports": { "versioned": { "function": {
+				"name": "versioned",
+				"kind": "freestanding",
+				"params": [],
+				"result": "u32",
+				"stability": { "stable": { "since": "0.3.0" } } } } },
+			"exports": {},
+			"package": 1
+		}],
+		"interfaces": [],
+		"types": [],
+		"packages": [
+			{ "name": "other:pkg@0.1.0", "interfaces": {}, "worlds": {} },
+			{ "name": "test:demo@0.1.0", "interfaces": {},
+			  "worlds": { "demo": 0 } }
+		]
+	})");
+	std::string error;
+	const auto schema = WASM::Bindings::witSchema(wit,
+			WASM::Bindings::Direction::Complete, "", "demo", error);
+	REQUIRE(error.empty());
+	REQUIRE(schema.module == "test:demo@0.1.0");
+	REQUIRE(schema.imports.size() == 1u);
+	REQUIRE(schema.imports[0].raw.at("stability").at("stable").at("since")
+			== "0.3.0");
+	REQUIRE(schema.imports[0].raw.at("abi").at("results")[0].at("type")
+			== "i32");
 }
 
 TEST_CASE("WIT JSON names agree with the component schema", "[bindings]")
@@ -1910,6 +2033,36 @@ TEST_CASE("WIT JSON names agree with the component schema", "[bindings]")
 			== schemaImport->at("type").at("params").size());
 	REQUIRE(witImport.at("result").get<std::string>()
 			== schemaImport->at("type").at("results")[0].at("type").get<std::string>());
+
+	std::string witError;
+	const auto derived = WASM::Bindings::witSchema(wit,
+			WASM::Bindings::Direction::Complete, "component_runtime_import", "",
+			witError);
+	REQUIRE(witError.empty());
+	const auto find = [](const auto& entries, const std::string& name) {
+		for (const auto& entry : entries)
+			if (entry.name == name)
+				return &entry;
+		return decltype(&entries.front())(nullptr);
+	};
+	const auto* derivedImport = find(derived.imports, "host-add");
+	const auto* derivedExport = find(derived.exports, "host-add");
+	REQUIRE(derivedImport != nullptr);
+	REQUIRE(derivedExport != nullptr);
+	REQUIRE(derivedImport->raw.at("abi").at("params").size()
+			== schemaImport->at("abi").at("params").size());
+	REQUIRE(derivedImport->raw.at("abi").at("params")[0].at("type")
+			== schemaImport->at("abi").at("params")[0].at("type"));
+	REQUIRE(derivedImport->raw.at("abi").at("results")[0].at("type")
+			== schemaImport->at("abi").at("results")[0].at("type"));
+	REQUIRE(derivedImport->raw.at("abi").at("indirectResults")
+			== schemaImport->at("abi").at("indirectResults"));
+	REQUIRE(derivedExport->raw.at("abi").at("params").size()
+			== schemaExport->at("abi").at("params").size());
+	REQUIRE(derivedExport->raw.at("abi").at("results")[0].at("type")
+			== schemaExport->at("abi").at("results")[0].at("type"));
+	REQUIRE(derivedExport->raw.at("abi").at("indirectResults")
+			== schemaExport->at("abi").at("indirectResults"));
 }
 
 TEST_CASE("duplicate function entries are emitted once in every language",
