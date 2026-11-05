@@ -271,6 +271,46 @@ protected:
 	void dispatchV128Xor() override; //!< `v128.xor`.
 	void dispatchV128Bitselect() override; //!< `v128.bitselect`.
 	void dispatchV128AnyTrue() override; //!< `v128.any_true`.
+	void dispatchI8x16Shl() override; //!< `i8x16.shl`.
+	void dispatchI8x16ShrS() override; //!< `i8x16.shr_s`.
+	void dispatchI8x16ShrU() override; //!< `i8x16.shr_u`.
+	void dispatchI16x8Shl() override; //!< `i16x8.shl`.
+	void dispatchI16x8ShrS() override; //!< `i16x8.shr_s`.
+	void dispatchI16x8ShrU() override; //!< `i16x8.shr_u`.
+	void dispatchI32x4Shl() override; //!< `i32x4.shl`.
+	void dispatchI32x4ShrS() override; //!< `i32x4.shr_s`.
+	void dispatchI32x4ShrU() override; //!< `i32x4.shr_u`.
+	void dispatchI64x2Shl() override; //!< `i64x2.shl`.
+	void dispatchI64x2ShrS() override; //!< `i64x2.shr_s`.
+	void dispatchI64x2ShrU() override; //!< `i64x2.shr_u`.
+	void dispatchI8x16MinS() override; //!< `i8x16.min_s`.
+	void dispatchI8x16MinU() override; //!< `i8x16.min_u`.
+	void dispatchI8x16MaxS() override; //!< `i8x16.max_s`.
+	void dispatchI8x16MaxU() override; //!< `i8x16.max_u`.
+	void dispatchI16x8MinS() override; //!< `i16x8.min_s`.
+	void dispatchI16x8MinU() override; //!< `i16x8.min_u`.
+	void dispatchI16x8MaxS() override; //!< `i16x8.max_s`.
+	void dispatchI16x8MaxU() override; //!< `i16x8.max_u`.
+	void dispatchI32x4MinS() override; //!< `i32x4.min_s`.
+	void dispatchI32x4MinU() override; //!< `i32x4.min_u`.
+	void dispatchI32x4MaxS() override; //!< `i32x4.max_s`.
+	void dispatchI32x4MaxU() override; //!< `i32x4.max_u`.
+	void dispatchI8x16AddSatS() override; //!< `i8x16.add_sat_s`.
+	void dispatchI8x16AddSatU() override; //!< `i8x16.add_sat_u`.
+	void dispatchI8x16SubSatS() override; //!< `i8x16.sub_sat_s`.
+	void dispatchI8x16SubSatU() override; //!< `i8x16.sub_sat_u`.
+	void dispatchI16x8AddSatS() override; //!< `i16x8.add_sat_s`.
+	void dispatchI16x8AddSatU() override; //!< `i16x8.add_sat_u`.
+	void dispatchI16x8SubSatS() override; //!< `i16x8.sub_sat_s`.
+	void dispatchI16x8SubSatU() override; //!< `i16x8.sub_sat_u`.
+	void dispatchI16x8Q15MulRSatS() override; //!< `i16x8.q15mulr_sat_s`.
+	void dispatchI8x16AvgrU() override; //!< `i8x16.avgr_u`.
+	void dispatchI16x8AvgrU() override; //!< `i16x8.avgr_u`.
+	void dispatchI8x16Abs() override; //!< `i8x16.abs`.
+	void dispatchI16x8Abs() override; //!< `i16x8.abs`.
+	void dispatchI32x4Abs() override; //!< `i32x4.abs`.
+	void dispatchI64x2Abs() override; //!< `i64x2.abs`.
+	void dispatchI8x16Popcnt() override; //!< `i8x16.popcnt`.
 	void dispatchI8x16Add() override; //!< `i8x16.add`.
 	void dispatchI8x16Sub() override; //!< `i8x16.sub`.
 	void dispatchI16x8Add() override; //!< `i16x8.add`.
@@ -704,6 +744,11 @@ private:
 	 * \param address Helper entry point.
 	 */
 	void emitV128Reduce(sljit_sw address);
+	/*!
+	 * \brief Calls a shift helper over the top vector and its scalar count.
+	 * \param address Helper entry point.
+	 */
+	void emitV128Shift(sljit_sw address);
 	/*!
 	 * \brief Calls a binary v128 helper over the top two slots.
 	 * \param address Helper entry point.

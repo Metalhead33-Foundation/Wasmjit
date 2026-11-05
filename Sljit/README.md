@@ -45,8 +45,9 @@ The emitter lowers:
   `i32x4.splat`/`extract_lane`/`replace_lane`, the bitwise family
   (`not`/`and`/`andnot`/`or`/`xor`/`bitselect`), `any_true`, the integer lane
   arithmetic (`add`/`sub` for every shape, `mul` where the spec has it), the
-  comparison families and the four `all_true` reductions, all through the core's
-  shared helper ABI.
+  comparison families, the four `all_true` reductions, the twelve shifts, the
+  saturating `add`/`sub` and `q15mulr`, `min`/`max`, `avgr_u`, `abs` and
+  `popcnt`, all through the core's shared helper ABI.
 
 A unit test exercises the same `asmjit_i32_basic`/`asmjit_i64_basic` fixtures
 that the AsmJit suite uses (`[sljit][module][parity]`), so the shared slice is
@@ -115,9 +116,9 @@ Generated code **is** released on `Runtime::unload` and runtime teardown through
 
 ## Next steps
 
-1. The remaining `v128` families (shifts, saturating/narrowing/widening, float
-   lanes, extending/lane loads, `shuffle`/`swizzle`), then `v128` in signatures
-   and block types. What landed is recorded in
+1. The remaining `v128` families (narrowing/widening/pairwise/dot, float lanes,
+   extending/lane loads, `shuffle`/`swizzle`), then `v128` in signatures and
+   block types. What landed is recorded in
    [`docs/backends/ASMJIT_SLJIT_P3_SIMD1.md`](../docs/backends/ASMJIT_SLJIT_P3_SIMD1.md)
    and [`docs/backends/ASMJIT_SLJIT_P3_SIMD2.md`](../docs/backends/ASMJIT_SLJIT_P3_SIMD2.md).
 2. References/GC, `ref.*`, GC barriers and exceptions (P4), following

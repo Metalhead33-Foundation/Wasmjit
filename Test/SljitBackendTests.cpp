@@ -1257,3 +1257,117 @@ TEST_CASE("asmjit and sljit agree on the shared v128 lane module", "[sljit][asmj
 	sameUnary("i32x4_all_true", 7);
 }
 
+
+
+TEST_CASE("sljit: the shared v128 shift and saturation module executes",
+"[sljit][module][parity][simd]")
+{
+	auto session = Sljit::createSession();
+	REQUIRE(session != nullptr);
+	WASM::RegistryImportResolver imports;
+	LoadedModule loaded = loadAndInstantiateTestModule("simd_int2", imports, *session);
+	REQUIRE(loaded.instance != nullptr);
+	WASM::ModuleInstance& instance = *loaded.instance;
+	const auto call = [&](const char* name) -> WASM::Callable {
+		const std::optional<WASM::Callable> callable = instance.exportedFunction(name);
+		INFO("export " << name);
+		REQUIRE(callable.has_value());
+		REQUIRE(callable->fnPtr != nullptr);
+		return *callable;
+	};
+	const auto unary = [&](const char* name, std::int32_t x) {
+		return WASM::callCallable<std::int32_t>(call(name), x);
+	};
+	const auto binary = [&](const char* name, std::int32_t x, std::int32_t y) {
+		return WASM::callCallable<std::int32_t>(call(name), x, y);
+	};
+
+	CHECK(binary("i8x16_shl", 0x01010101, 1) == 0x02020202);
+	CHECK(binary("i8x16_shr_u", 0x02020202, 1) == 0x01010101);
+	CHECK(binary("i16x8_shl", 0x00010001, 1) == 0x00020002);
+	CHECK(binary("i32x4_shr_s", -8, 1) == -4);
+	CHECK(binary("i32x4_shr_u", -1, 1) == std::int32_t{0x7FFFFFFF});
+	CHECK(WASM::callCallable<std::int32_t>(call("i64x2_shr_u")) == std::int32_t{0x7FFFFFFF});
+
+	CHECK(binary("i8x16_add_sat_s", 0x78787878, 0x78787878) == 0x7F7F7F7F);
+	CHECK(binary("i8x16_sub_sat_u", 0x01010101, 0x02020202) == 0);
+	CHECK(binary("i16x8_add_sat_u", -1, 0x01010101) == -1);
+	CHECK(binary("i16x8_q15mulr_sat_s", 0x40004000, 0x40004000) == 0x20002000);
+
+	CHECK(binary("i8x16_min_s", 0x01010101, 0x02020202) == 0x01010101);
+	CHECK(binary("i8x16_max_u", -1, 0x01010101) == -1);
+	CHECK(binary("i32x4_min_s", -5, 3) == -5);
+	CHECK(binary("i32x4_max_u", -1, 3) == -1);
+	CHECK(binary("i8x16_avgr_u", 0x01010101, 0x02020202) == 0x02020202);
+	CHECK(binary("i16x8_avgr_u", 0x00010001, 0x00020002) == 0x00020002);
+
+	CHECK(unary("i8x16_abs", -1) == 0x01010101);
+	CHECK(unary("i32x4_abs", -5) == 5);
+	CHECK(unary("i8x16_popcnt", 0x01010101) == 0x01010101);
+	CHECK(unary("i8x16_popcnt", -1) == 0x08080808);
+}
+
+
+TEST_CASE("asmjit and sljit agree on the shared v128 shift module",
+"[sljit][asmjit][parity][simd]")
+{
+	WASM::Module module = loadTestModule("simd_int2");
+	AsmJitBackend::Context asmContext;
+	AsmJitBackend::ModuleCompiler asmCompiler(asmContext);
+	Sljit::ModuleCompiler sljitCompiler;
+	WASM::RegistryImportResolver asmImports;
+	WASM::RegistryImportResolver sljitImports;
+	std::unique_ptr<WASM::ModuleInstance> asmInstance =
+			asmCompiler.instantiate(module, asmImports);
+	std::unique_ptr<WASM::ModuleInstance> sljitInstance =
+			sljitCompiler.instantiate(module, sljitImports);
+	REQUIRE(asmInstance != nullptr);
+	REQUIRE(sljitInstance != nullptr);
+
+	const auto both = [&](const char* name) {
+		const std::optional<WASM::Callable> asmCallable = asmInstance->exportedFunction(name);
+		const std::optional<WASM::Callable> sljitCallable = sljitInstance->exportedFunction(name);
+		REQUIRE(asmCallable.has_value());
+		REQUIRE(sljitCallable.has_value());
+		return std::pair<WASM::Callable, WASM::Callable>{*asmCallable, *sljitCallable};
+	};
+	const auto sameUnary = [&](const char* name, std::int32_t x) {
+		const auto calls = both(name);
+		INFO("export " << name);
+		CHECK(WASM::callCallable<std::int32_t>(calls.first, x)
+				== WASM::callCallable<std::int32_t>(calls.second, x));
+	};
+	const auto sameBinary = [&](const char* name, std::int32_t x, std::int32_t y) {
+		const auto calls = both(name);
+		INFO("export " << name);
+		CHECK(WASM::callCallable<std::int32_t>(calls.first, x, y)
+				== WASM::callCallable<std::int32_t>(calls.second, x, y));
+	};
+	const auto sameNiladic = [&](const char* name) {
+		const auto calls = both(name);
+		INFO("export " << name);
+		CHECK(WASM::callCallable<std::int32_t>(calls.first)
+				== WASM::callCallable<std::int32_t>(calls.second));
+	};
+
+	sameBinary("i8x16_shl", 0x01010101, 1);
+	sameBinary("i8x16_shr_u", 0x02020202, 1);
+	sameBinary("i16x8_shl", 0x00010001, 1);
+	sameBinary("i32x4_shr_s", -8, 1);
+	sameBinary("i32x4_shr_u", -1, 1);
+	sameNiladic("i64x2_shr_u");
+	sameBinary("i8x16_add_sat_s", 0x78787878, 0x78787878);
+	sameBinary("i8x16_sub_sat_u", 0x01010101, 0x02020202);
+	sameBinary("i16x8_add_sat_u", -1, 0x01010101);
+	sameBinary("i16x8_q15mulr_sat_s", 0x40004000, 0x40004000);
+	sameBinary("i8x16_min_s", 0x01010101, 0x02020202);
+	sameBinary("i8x16_max_u", -1, 0x01010101);
+	sameBinary("i32x4_min_s", -5, 3);
+	sameBinary("i32x4_max_u", -1, 3);
+	sameBinary("i8x16_avgr_u", 0x01010101, 0x02020202);
+	sameBinary("i16x8_avgr_u", 0x00010001, 0x00020002);
+	sameUnary("i8x16_abs", -1);
+	sameUnary("i32x4_abs", -5);
+	sameUnary("i8x16_popcnt", 0x01010101);
+	sameUnary("i8x16_popcnt", -1);
+}

@@ -135,8 +135,7 @@ Do not copy:
 
 | Opcode family | Refusal | Test |
 |---|---|---|
-| shifts (`shl`, `shr_s`, `shr_u` per shape) | `onUnhandledOpcode` | needs the `(a, count, out)` emitter |
-| saturating add/sub, `avgr`, `abs`, `min`/`max`, `popcnt` | `onUnhandledOpcode` | same two-pointer signature; next table edit |
+| shifts, saturating add/sub, `avgr`, `abs`, `min`/`max`, `popcnt` | **landed in slice 3** ([`ASMJIT_SLJIT_P3_SIMD3.md`](ASMJIT_SLJIT_P3_SIMD3.md)) | `simd_int2.wat` |
 | narrowing, widening, pairwise, dot, `extmul`, `extadd` | `onUnhandledOpcode` | op list already declares the helpers |
 | `f32x4`/`f64x2` lanes | `onUnhandledOpcode` | float SIMD slice |
 | `shuffle`/`swizzle` and relaxed SIMD | `onUnhandledOpcode` | transport-only helpers already exist |

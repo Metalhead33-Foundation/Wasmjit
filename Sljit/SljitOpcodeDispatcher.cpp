@@ -2525,6 +2525,24 @@ void OpcodeDispatcher::emitV128Reduce(sljit_sw address)
 	stackWidths_.back() = 4;
 }
 
+void OpcodeDispatcher::emitV128Shift(sljit_sw address)
+{
+	if (!reachable_)
+		return;
+	requireStack(2);
+	const std::size_t vectorDepth = stackWidths_.size() - 2;
+	const std::size_t countDepth = stackWidths_.size() - 1;
+	if (!measureOnly_) {
+		// R0 is the helper's first argument, and sljit_get_local_base clobbers
+		// it on x86, so it is materialised last.
+		slotAddress(SLJIT_R2, vectorDepth);
+		loadSlot(SLJIT_R1, countDepth, 4);
+		slotAddress(SLJIT_R0, vectorDepth);
+		emitHelper(SLJIT_ARGS3V(P, 32, P), address);
+	}
+	pop();
+}
+
 void OpcodeDispatcher::emitV128Binary(sljit_sw address)
 {
 	if (!reachable_)
@@ -2587,6 +2605,49 @@ void OpcodeDispatcher::dispatchV128AnyTrue()
 	}
 	stackWidths_.back() = 4;
 }
+
+void OpcodeDispatcher::dispatchI8x16Shl() { emitV128Shift(codeAddress(&wasm_i8x16_shl)); }
+void OpcodeDispatcher::dispatchI8x16ShrS() { emitV128Shift(codeAddress(&wasm_i8x16_shr_s)); }
+void OpcodeDispatcher::dispatchI8x16ShrU() { emitV128Shift(codeAddress(&wasm_i8x16_shr_u)); }
+void OpcodeDispatcher::dispatchI16x8Shl() { emitV128Shift(codeAddress(&wasm_i16x8_shl)); }
+void OpcodeDispatcher::dispatchI16x8ShrS() { emitV128Shift(codeAddress(&wasm_i16x8_shr_s)); }
+void OpcodeDispatcher::dispatchI16x8ShrU() { emitV128Shift(codeAddress(&wasm_i16x8_shr_u)); }
+void OpcodeDispatcher::dispatchI32x4Shl() { emitV128Shift(codeAddress(&wasm_i32x4_shl)); }
+void OpcodeDispatcher::dispatchI32x4ShrS() { emitV128Shift(codeAddress(&wasm_i32x4_shr_s)); }
+void OpcodeDispatcher::dispatchI32x4ShrU() { emitV128Shift(codeAddress(&wasm_i32x4_shr_u)); }
+void OpcodeDispatcher::dispatchI64x2Shl() { emitV128Shift(codeAddress(&wasm_i64x2_shl)); }
+void OpcodeDispatcher::dispatchI64x2ShrS() { emitV128Shift(codeAddress(&wasm_i64x2_shr_s)); }
+void OpcodeDispatcher::dispatchI64x2ShrU() { emitV128Shift(codeAddress(&wasm_i64x2_shr_u)); }
+
+void OpcodeDispatcher::dispatchI8x16MinS() { emitV128Binary(codeAddress(&wasm_i8x16_min_s)); }
+void OpcodeDispatcher::dispatchI8x16MinU() { emitV128Binary(codeAddress(&wasm_i8x16_min_u)); }
+void OpcodeDispatcher::dispatchI8x16MaxS() { emitV128Binary(codeAddress(&wasm_i8x16_max_s)); }
+void OpcodeDispatcher::dispatchI8x16MaxU() { emitV128Binary(codeAddress(&wasm_i8x16_max_u)); }
+void OpcodeDispatcher::dispatchI16x8MinS() { emitV128Binary(codeAddress(&wasm_i16x8_min_s)); }
+void OpcodeDispatcher::dispatchI16x8MinU() { emitV128Binary(codeAddress(&wasm_i16x8_min_u)); }
+void OpcodeDispatcher::dispatchI16x8MaxS() { emitV128Binary(codeAddress(&wasm_i16x8_max_s)); }
+void OpcodeDispatcher::dispatchI16x8MaxU() { emitV128Binary(codeAddress(&wasm_i16x8_max_u)); }
+void OpcodeDispatcher::dispatchI32x4MinS() { emitV128Binary(codeAddress(&wasm_i32x4_min_s)); }
+void OpcodeDispatcher::dispatchI32x4MinU() { emitV128Binary(codeAddress(&wasm_i32x4_min_u)); }
+void OpcodeDispatcher::dispatchI32x4MaxS() { emitV128Binary(codeAddress(&wasm_i32x4_max_s)); }
+void OpcodeDispatcher::dispatchI32x4MaxU() { emitV128Binary(codeAddress(&wasm_i32x4_max_u)); }
+void OpcodeDispatcher::dispatchI8x16AddSatS() { emitV128Binary(codeAddress(&wasm_i8x16_add_sat_s)); }
+void OpcodeDispatcher::dispatchI8x16AddSatU() { emitV128Binary(codeAddress(&wasm_i8x16_add_sat_u)); }
+void OpcodeDispatcher::dispatchI8x16SubSatS() { emitV128Binary(codeAddress(&wasm_i8x16_sub_sat_s)); }
+void OpcodeDispatcher::dispatchI8x16SubSatU() { emitV128Binary(codeAddress(&wasm_i8x16_sub_sat_u)); }
+void OpcodeDispatcher::dispatchI16x8AddSatS() { emitV128Binary(codeAddress(&wasm_i16x8_add_sat_s)); }
+void OpcodeDispatcher::dispatchI16x8AddSatU() { emitV128Binary(codeAddress(&wasm_i16x8_add_sat_u)); }
+void OpcodeDispatcher::dispatchI16x8SubSatS() { emitV128Binary(codeAddress(&wasm_i16x8_sub_sat_s)); }
+void OpcodeDispatcher::dispatchI16x8SubSatU() { emitV128Binary(codeAddress(&wasm_i16x8_sub_sat_u)); }
+void OpcodeDispatcher::dispatchI16x8Q15MulRSatS() { emitV128Binary(codeAddress(&wasm_i16x8_q15mulr_sat_s)); }
+void OpcodeDispatcher::dispatchI8x16AvgrU() { emitV128Binary(codeAddress(&wasm_i8x16_avgr_u)); }
+void OpcodeDispatcher::dispatchI16x8AvgrU() { emitV128Binary(codeAddress(&wasm_i16x8_avgr_u)); }
+
+void OpcodeDispatcher::dispatchI8x16Abs() { emitV128Unary(codeAddress(&wasm_i8x16_abs)); }
+void OpcodeDispatcher::dispatchI16x8Abs() { emitV128Unary(codeAddress(&wasm_i16x8_abs)); }
+void OpcodeDispatcher::dispatchI32x4Abs() { emitV128Unary(codeAddress(&wasm_i32x4_abs)); }
+void OpcodeDispatcher::dispatchI64x2Abs() { emitV128Unary(codeAddress(&wasm_i64x2_abs)); }
+void OpcodeDispatcher::dispatchI8x16Popcnt() { emitV128Unary(codeAddress(&wasm_i8x16_popcnt)); }
 
 void OpcodeDispatcher::dispatchI8x16Add() { emitV128Binary(codeAddress(&wasm_i8x16_add)); }
 void OpcodeDispatcher::dispatchI8x16Sub() { emitV128Binary(codeAddress(&wasm_i8x16_sub)); }
