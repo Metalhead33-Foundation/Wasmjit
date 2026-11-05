@@ -15,12 +15,36 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <vector>
 
 // The vendored Euphemy library expects the host executable to define its
 // configuration object; the test harness and consumer satisfy the same contract.
 Euph::Conf::Configuration GLOBAL_CONFIGURATION;
 
 namespace {
+
+std::string rejectedWitFeature(const WASM::Bindings::Schema& schema,
+		bool rejectAsync, bool rejectUnstable)
+{
+	const auto check = [&](const std::vector<WASM::Bindings::Entry>& entries)
+			-> std::string {
+		for (const WASM::Bindings::Entry& entry : entries) {
+			if (rejectAsync && entry.raw.value("witAsync", false))
+				return "async WIT function '" + entry.name
+						+ "' rejected by --wit-reject-async";
+			if (rejectUnstable && entry.raw.contains("stability")
+					&& entry.raw.at("stability").is_object()
+					&& entry.raw.at("stability").contains("unstable"))
+				return "unstable WIT function '" + entry.name
+						+ "' rejected by --wit-reject-unstable";
+		}
+		return {};
+	};
+	std::string error = check(schema.imports);
+	if (error.empty())
+		error = check(schema.exports);
+	return error;
+}
 
 void usage(std::ostream& out)
 {
@@ -42,6 +66,9 @@ void usage(std::ostream& out)
 		   "                           wasm-tools component wit --json)\n"
 		   "  --wit-json FILE          WIT JSON input produced by wasm-tools\n"
 		   "  --wit-world NAME         select a WIT world (default: first)\n"
+		   "  --wit-reject-async       reject async WIT functions instead of\n"
+		   "                           emitting synchronous stubs\n"
+		   "  --wit-reject-unstable    reject WIT entries marked @unstable\n"
 		   "  --frontend-schema        with --candidates/--glue-candidates, derive a\n"
 		   "                           G2H imports schema (or emit any --emit target)\n"
 		   "  --output FILE            write to FILE instead of stdout\n";
@@ -61,6 +88,8 @@ int main(int argc, char** argv)
 	std::string witWorld;
 	bool frontendSchema = false;
 	bool schemaInput = false;
+	bool rejectAsync = false;
+	bool rejectUnstable = false;
 	std::string emit = "schema";
 	WASM::Bindings::Direction direction = WASM::Bindings::Direction::GuestToHost;
 
@@ -91,6 +120,10 @@ int main(int argc, char** argv)
 			witJsonPath = argv[++i];
 		} else if (arg == "--wit-world" && i + 1 < argc) {
 			witWorld = argv[++i];
+		} else if (arg == "--wit-reject-async") {
+			rejectAsync = true;
+		} else if (arg == "--wit-reject-unstable") {
+			rejectUnstable = true;
 		} else if (arg == "--schema" && i + 1 < argc) {
 			input = argv[++i];
 			schemaInput = true;
@@ -113,6 +146,11 @@ int main(int argc, char** argv)
 	const bool witInput = !witPath.empty() || !witJsonPath.empty();
 	if (!witPath.empty() && !witJsonPath.empty()) {
 		std::cerr << "wasmjit-bindings: choose --wit or --wit-json, not both\n";
+		return 2;
+	}
+	if ((rejectAsync || rejectUnstable) && !witInput) {
+		std::cerr << "wasmjit-bindings: --wit-reject-async and "
+				 "--wit-reject-unstable require WIT input\n";
 		return 2;
 	}
 	if (witInput && (!input.empty() || schemaInput || !candidatesPath.empty()
@@ -171,6 +209,14 @@ int main(int argc, char** argv)
 			if (!error.empty()) {
 				std::cerr << "wasmjit-bindings: " << error << "\n";
 				return 1;
+			}
+			if (rejectAsync || rejectUnstable) {
+				const std::string rejected =
+						rejectedWitFeature(schema, rejectAsync, rejectUnstable);
+				if (!rejected.empty()) {
+					std::cerr << "wasmjit-bindings: " << rejected << "\n";
+					return 1;
+				}
 			}
 			text = wantSchema ? schema.toJson().dump(2) + "\n"
 						  : WASM::Bindings::emit(schema, language);

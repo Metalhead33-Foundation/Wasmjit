@@ -79,12 +79,9 @@ void emitCppImportStub(std::ostringstream &out, const Json &entry) {
 	out << "}\n\n";
 }
 
-std::string witCppDefinitionName(const Json& definition, std::size_t index)
+std::string witCppDefinitionName(const Json& document, std::size_t index)
 {
-	if (definition.is_object() && definition.contains("name")
-			&& definition.at("name").is_string())
-		return witOpaqueTypeName(definition.at("name").get<std::string>());
-	return witOpaqueTypeName("type-" + std::to_string(index));
+	return witOpaqueTypeName(witTypeDisplayName(document, index));
 }
 
 std::string witCppType(const Json& document, const Json& type)
@@ -191,7 +188,7 @@ void emitWitCppTypeDefinitions(std::ostringstream& out, const Json& schema)
 				|| !definition.contains("kind"))
 			continue;
 		const Json& kind = definition.at("kind");
-		const std::string name = witCppDefinitionName(definition, index - 1);
+		const std::string name = witCppDefinitionName(document, index - 1);
 		if (!emitted.insert(name).second)
 			continue;
 		if (kind.is_string()) {

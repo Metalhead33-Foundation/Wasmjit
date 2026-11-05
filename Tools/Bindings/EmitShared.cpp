@@ -1,6 +1,7 @@
 #include "EmitShared.hpp"
 
 #include "BindingModel.hpp"
+#include "frontend/wit/WitFrontend.hpp"
 
 #include <cctype>
 #include <cstddef>
@@ -150,16 +151,15 @@ void emitWitOpaqueTypes(std::ostringstream& out, const Json& schema, bool cpp)
 		return;
 	std::size_t index = 0;
 	for (const Json& type : schema.at("types")) {
-		std::string sourceName;
 		if (type.is_object() && witTypeIsAlias(type)) {
 			++index;
 			continue;
 		}
-		if (type.is_object() && type.contains("name")
-				&& type.at("name").is_string())
-			sourceName = type.at("name").get<std::string>();
-		else if (type.is_object() && type.contains("kind"))
-			sourceName = "type-" + std::to_string(index);
+		if (!type.is_object() || !type.contains("kind")) {
+			++index;
+			continue;
+		}
+		const std::string sourceName = witTypeDisplayName(schema, index);
 		++index;
 		if (sourceName.empty())
 			continue;

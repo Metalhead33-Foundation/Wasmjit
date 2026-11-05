@@ -35,6 +35,20 @@ nlohmann::ordered_json witResolveType(const nlohmann::ordered_json& document,
 		const nlohmann::ordered_json& type);
 
 /*!
+ * \brief Returns a deterministic target-language name for one WIT type id.
+ *
+ * A named WIT type keeps its WIT spelling. An anonymous structured type gets a
+ * semantic name derived from its kind and children, with the type-table id
+ * appended so that duplicate structural types remain distinct identifiers.
+ *
+ * \param document A document containing a `types` array.
+ * \param id The WIT type-table id.
+ * \return The unsanitized display name.
+ */
+std::string witTypeDisplayName(const nlohmann::ordered_json& document,
+		std::size_t id);
+
+/*!
  * \brief Selects and converts one WIT world from a WIT JSON document.
  *
  * The first world is used when \p worldName is empty. A world function becomes

@@ -1820,14 +1820,15 @@ TEST_CASE("WIT records get named C++ declarations", "[bindings]")
 	REQUIRE(header.find("using wasmjit_wit_perms = std::uint32_t;")
 			!= std::string::npos);
 	REQUIRE(header.find("wasmjit_wit_perms_read") != std::string::npos);
-	REQUIRE(header.find("struct wasmjit_wit_type_3 {") != std::string::npos);
+	REQUIRE(header.find("struct wasmjit_wit_list_u8_3 {") != std::string::npos);
 	REQUIRE(header.find("uint8_t* data;") != std::string::npos);
-	REQUIRE(header.find("struct wasmjit_wit_type_4 {") != std::string::npos);
+	REQUIRE(header.find("struct wasmjit_wit_variant_point_empty_4 {")
+			!= std::string::npos);
 	REQUIRE(header.find("Tag tag;") != std::string::npos);
 	REQUIRE(header.find("wasmjit_wit_point* point;") != std::string::npos);
 	REQUIRE(header.find("struct wasmjit_wit_descriptor {\n\tuint32_t handle;")
 			!= std::string::npos);
-	REQUIRE(header.find("struct wasmjit_wit_type_6 {\n\tuint32_t handle;")
+	REQUIRE(header.find("struct wasmjit_wit_own_descriptor_6 {\n\tuint32_t handle;")
 			!= std::string::npos);
 	REQUIRE(header.find("owned WIT handle; release through the backend")
 			!= std::string::npos);
@@ -1980,6 +1981,47 @@ TEST_CASE("WIT selects the world package and keeps stability", "[bindings]")
 			== "0.3.0");
 	REQUIRE(schema.imports[0].raw.at("abi").at("results")[0].at("type")
 			== "i32");
+}
+
+TEST_CASE("WIT named types are qualified by their owning interface", "[bindings]")
+{
+	const Json wit = Json::parse(R"({
+		"worlds": [{
+			"name": "demo",
+			"imports": { "interface-0": { "interface": { "id": 0 } } },
+			"exports": {},
+			"package": 0
+		}],
+		"interfaces": [{
+			"name": "types",
+			"package": 0,
+			"functions": { "echo": {
+				"name": "echo",
+				"params": [{ "name": "p", "type": 0 }],
+				"result": 0 } }
+		}],
+		"types": [{
+			"name": "point",
+			"owner": { "interface": 0 },
+			"kind": { "record": { "fields": [
+				{ "name": "x", "type": "s32" }] } }
+		}],
+		"packages": [{
+			"name": "wasi:filesystem@0.3.2",
+			"interfaces": { "types": 0 },
+			"worlds": {}
+		}]
+	})");
+	std::string error;
+	const auto schema = WASM::Bindings::witSchema(wit,
+			WASM::Bindings::Direction::Complete, "demo", "demo", error);
+	REQUIRE(error.empty());
+	const std::string header = WASM::Bindings::emit(schema,
+			WASM::Bindings::Language::CppTypedefs);
+	REQUIRE(header.find("struct wasmjit_wit_wasi_filesystem_types_0_3_2_point {")
+			!= std::string::npos);
+	REQUIRE(header.find("wasmjit_wit_wasi_filesystem_types_0_3_2_point")
+			!= std::string::npos);
 }
 
 TEST_CASE("WIT JSON names agree with the component schema", "[bindings]")

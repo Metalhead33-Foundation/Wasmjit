@@ -56,6 +56,162 @@ Json scalarWitType(const std::string& type)
 	return {};
 }
 
+std::string witNamePart(std::string_view text)
+{
+	std::string out;
+	for (const char c : text)
+		out.push_back(std::isalnum(static_cast<unsigned char>(c)) ? c : '_');
+	if (out.empty() || std::isdigit(static_cast<unsigned char>(out.front())))
+		out.insert(0, "x_");
+	return out;
+}
+
+std::string qualifiedInterfaceName(std::string packageName,
+		const std::string& interfaceName);
+
+std::string witTypeReferenceName(const Json& type, const Json& document,
+		unsigned depth);
+
+std::string witTypeOwnerPrefix(const Json& definition, const Json& document)
+{
+	if (!definition.is_object() || !definition.contains("owner")
+			|| !definition.at("owner").is_object())
+		return {};
+	const Json& owner = definition.at("owner");
+	if (!owner.contains("interface") || !owner.at("interface").is_number_integer())
+		return {};
+	const int interfaceId = owner.at("interface").get<int>();
+	const auto interfaces = document.find("interfaces");
+	if (interfaces == document.end() || !interfaces->is_array()
+			|| interfaceId < 0
+			|| static_cast<std::size_t>(interfaceId) >= interfaces->size())
+		return {};
+	const Json& interfaceEntry = interfaces->at(static_cast<std::size_t>(interfaceId));
+	const std::string interfaceName = stringAt(interfaceEntry, "name");
+	const int packageId = interfaceEntry.value("package", -1);
+	std::string packageName;
+	if (packageId >= 0 && document.contains("packages")
+			&& document.at("packages").is_array()
+			&& static_cast<std::size_t>(packageId) < document.at("packages").size())
+		packageName = stringAt(document.at("packages").at(
+				static_cast<std::size_t>(packageId)), "name");
+	if (packageName.empty() || interfaceName.empty())
+		return {};
+	return witNamePart(qualifiedInterfaceName(packageName, interfaceName));
+}
+
+std::string witKindName(const Json& kind, const Json& document, unsigned depth)
+{
+	if (depth > 32)
+		return "recursive";
+	if (kind.is_string())
+		return witNamePart(kind.get<std::string>());
+	if (!kind.is_object())
+		return "unknown";
+	if (kind.contains("type"))
+		return witTypeReferenceName(kind.at("type"), document, depth + 1);
+	if (kind.contains("record")) {
+		std::string out = "record";
+		const auto fields = kind.at("record").find("fields");
+		if (fields != kind.at("record").end() && fields->is_array())
+			for (const Json& field : *fields)
+				out += "_" + witNamePart(field.value("name", std::string()));
+		return out;
+	}
+	if (kind.contains("tuple")) {
+		std::string out = "tuple";
+		const auto types = kind.at("tuple").find("types");
+		if (types != kind.at("tuple").end() && types->is_array())
+			for (const Json& item : *types)
+				out += "_" + witTypeReferenceName(item, document, depth + 1);
+		return out;
+	}
+	if (kind.contains("list"))
+		return "list_" + witTypeReferenceName(kind.at("list"), document,
+				depth + 1);
+	if (kind.contains("option"))
+		return "option_" + witTypeReferenceName(kind.at("option"), document,
+				depth + 1);
+	if (kind.contains("result")) {
+		std::string out = "result";
+		const Json& result = kind.at("result");
+		out += "_" + (result.contains("ok") && !result.at("ok").is_null()
+				? witTypeReferenceName(result.at("ok"), document, depth + 1)
+				: std::string("none"));
+		out += "_" + (result.contains("err") && !result.at("err").is_null()
+				? witTypeReferenceName(result.at("err"), document, depth + 1)
+				: std::string("none"));
+		return out;
+	}
+	if (kind.contains("variant")) {
+		std::string out = "variant";
+		const auto cases = kind.at("variant").find("cases");
+		if (cases != kind.at("variant").end() && cases->is_array())
+			for (const Json& alternative : *cases)
+				out += "_" + witNamePart(alternative.value("name", std::string()));
+		return out;
+	}
+	if (kind.contains("handle")) {
+		const Json& handle = kind.at("handle");
+		if (handle.contains("own"))
+			return "own_" + witTypeReferenceName(handle.at("own"), document,
+					depth + 1);
+		if (handle.contains("borrow"))
+			return "borrow_" + witTypeReferenceName(handle.at("borrow"), document,
+					depth + 1);
+		return "handle";
+	}
+	if (kind.contains("stream"))
+		return "stream_" + witTypeReferenceName(kind.at("stream"), document,
+				depth + 1);
+	if (kind.contains("future"))
+		return "future_" + witTypeReferenceName(kind.at("future"), document,
+				depth + 1);
+	if (kind.contains("enum"))
+		return "enum";
+	if (kind.contains("flags"))
+		return "flags";
+	return "anonymous";
+}
+
+std::string witTypeReferenceName(const Json& type, const Json& document,
+		unsigned depth)
+{
+	if (depth > 32)
+		return "recursive";
+	if (type.is_null())
+		return "none";
+	if (type.is_string())
+		return witNamePart(type.get<std::string>());
+	if (type.is_number_integer()) {
+		const auto id = type.get<std::size_t>();
+		const auto types = document.find("types");
+		if (types == document.end() || !types->is_array()
+				|| id >= types->size())
+			return "type_" + std::to_string(id);
+		const Json& definition = types->at(id);
+		if (definition.contains("witName") && definition.at("witName").is_string())
+			return definition.at("witName").get<std::string>();
+		if (definition.contains("kind") && definition.at("kind").is_object()
+				&& definition.at("kind").contains("type"))
+			return witTypeReferenceName(definition.at("kind").at("type"),
+					document, depth + 1);
+		const std::string name = stringAt(definition, "name");
+		if (!name.empty()) {
+			const std::string prefix = witTypeOwnerPrefix(definition, document);
+			return prefix.empty() ? witNamePart(name)
+					: prefix + "_" + witNamePart(name);
+		}
+		if (definition.contains("kind"))
+			return witKindName(definition.at("kind"), document, depth + 1)
+					+ "_" + std::to_string(id);
+		return "type_" + std::to_string(id);
+	}
+	if (type.is_object() && type.contains("type"))
+		return witTypeReferenceName(type.at("type"), document, depth + 1);
+	return "anonymous";
+}
+
 Json resolveWitType(const Json& type, const Json& document, unsigned depth);
 
 Json resolveWitKind(const Json& kind, const Json& document, unsigned depth)
@@ -83,19 +239,17 @@ Json resolveWitType(const Json& type, const Json& document, unsigned depth)
 				|| id >= types->size())
 			return opaqueWitType("type-" + std::to_string(id));
 		const Json& definition = types->at(id);
-		const std::string name = stringAt(definition, "name");
 		if (definition.contains("kind")) {
 			const Json resolved = resolveWitKind(definition.at("kind"),
 					document, depth + 1);
 			// An alias to a scalar keeps the scalar type; a structured type
-			// keeps its name (or a stable synthetic name) instead of leaking
-			// an internal id into a target-language identifier.
+			// keeps its semantic name instead of leaking an internal id into a
+			// target-language identifier.
 			if (resolved.value("type", "") != "ref")
 				return resolved;
-			return opaqueWitType(name.empty() ? "type-" + std::to_string(id)
-											  : name);
+			return opaqueWitType(witTypeReferenceName(type, document, depth + 1));
 		}
-		return opaqueWitType(name.empty() ? "type-" + std::to_string(id) : name);
+		return opaqueWitType(witTypeReferenceName(type, document, depth + 1));
 	}
 	if (type.is_object() && type.contains("type"))
 		return resolveWitType(type.at("type"), document, depth + 1);
@@ -473,6 +627,12 @@ Json witResolveType(const Json& document, const Json& type)
 	return resolveWitType(type, document, 0);
 }
 
+std::string witTypeDisplayName(const Json& document, std::size_t id)
+{
+	return witTypeReferenceName(Json(static_cast<std::uint64_t>(id)), document,
+			0);
+}
+
 Schema witSchema(const Json& document, Direction direction,
 		std::string_view moduleName, std::string_view worldName,
 		std::string& error)
@@ -544,8 +704,11 @@ Schema witSchema(const Json& document, Direction direction,
 	schema.direction = Direction::Complete;
 	schema.extras = { { "kind", "component" }, { "frontend", "wit" },
 		{ "world", stringAt(*selected, "name") } };
-	if (document.contains("types"))
+	if (document.contains("types")) {
 		schema.types = document.at("types");
+		for (std::size_t i = 0; i < schema.types.size(); ++i)
+			schema.types[i]["witName"] = witTypeDisplayName(document, i);
+	}
 
 	if (selected->contains("imports") && selected->at("imports").is_object()) {
 		for (const auto& [name, node] : selected->at("imports").items())
