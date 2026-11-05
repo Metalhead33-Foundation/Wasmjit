@@ -15,7 +15,7 @@ LibJit.depends   = WasmBase
 # executing backend: it links the shared core the same way LibJit does,
 # registers as `sljit`, and refuses what it does not lower
 # (docs/WRITING_A_BACKEND.md §11). `Asmjit/` is experimental: it owns its code
-# generator, executes the same P0-P2 integer slice, and registers as `asmjit`
+# generator, executes the same P0-P3 scalar slice, and registers as `asmjit`
 # (Asmjit/README.md).
 Asmjit.depends   = WasmBase
 Sljit.depends    = WasmBase

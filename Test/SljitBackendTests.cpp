@@ -17,8 +17,10 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <span>
 #include <string>
@@ -58,14 +60,17 @@ const std::vector<std::uint8_t> kAddModule = {
 	0x0a, 0x09, 0x01, 0x07, 0x00, 0x20, 0x00, 0x20, 0x01, 0x6a, 0x0b,
 };
 
-// (module (func (export "fadd") (param f32 f32) (result f32)
-//   local.get 0 local.get 1 f32.add))  -- outside the integer subset
-const std::vector<std::uint8_t> kFloatAddModule = {
+// (module (func (export "vec") (result v128) v128.const i32x4 0 0 0 0))
+// -- a v128 signature is outside the scalar subset
+const std::vector<std::uint8_t> kVectorModule = {
 	0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
-	0x01, 0x07, 0x01, 0x60, 0x02, 0x7d, 0x7d, 0x01, 0x7d,
+	0x01, 0x05, 0x01, 0x60, 0x00, 0x01, 0x7b,
 	0x03, 0x02, 0x01, 0x00,
-	0x07, 0x08, 0x01, 0x04, 0x66, 0x61, 0x64, 0x64, 0x00, 0x00,
-	0x0a, 0x09, 0x01, 0x07, 0x00, 0x20, 0x00, 0x20, 0x01, 0x92, 0x0b,
+	0x07, 0x07, 0x01, 0x03, 0x76, 0x65, 0x63, 0x00, 0x00,
+	0x0a, 0x16, 0x01, 0x14, 0x00, 0xfd, 0x0c,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x0b,
 };
 
 // The harness pattern of Test/helper.cpp, but from bytes: a store, a module
@@ -121,21 +126,21 @@ TEST_CASE("sljit: parameters flow through the frame slots", "[sljit]")
 			== -2147483647 - 1);
 }
 
-TEST_CASE("sljit: an unsupported opcode is refused, never miscompiled", "[sljit]")
+TEST_CASE("sljit: an unsupported type is refused, never miscompiled", "[sljit]")
 {
 	auto runtime = WASM::Runtime::create("sljit");
-	auto module = runtime->loadBytes(bytesOf(kFloatAddModule));
+	auto module = runtime->loadBytes(bytesOf(kVectorModule));
 	WASM::RegistryImportResolver imports;
 	WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
 
 	// The export exists and the callable is declared; only the entry point is
 	// absent, which is exactly the contract (Callable::fnPtr is null until a
 	// body is compiled).
-	const std::optional<WASM::Callable> callable = instance.exportedFunction("fadd");
+	const std::optional<WASM::Callable> callable = instance.exportedFunction("vec");
 	REQUIRE(callable.has_value());
 	REQUIRE(callable->fnPtr == nullptr);
 
-	REQUIRE_THROWS_WITH(runtime->callExport<float>(instance, "fadd", 1.0f, 2.0f),
+	REQUIRE_THROWS_WITH(runtime->callExport<std::int32_t>(instance, "vec"),
 			Catch::Matchers::ContainsSubstring("no compiled body"));
 }
 
@@ -235,7 +240,9 @@ TEST_CASE("sljit: the shared integer module executes", "[sljit][module][parity]"
 	WASM::ModuleInstance& instance = *loaded.instance;
 	const auto call = [&](const char* name) -> WASM::Callable {
 		const std::optional<WASM::Callable> callable = instance.exportedFunction(name);
+		INFO("export " << name);
 		REQUIRE(callable.has_value());
+		REQUIRE(callable->fnPtr != nullptr);
 		return *callable;
 	};
 
@@ -315,7 +322,9 @@ TEST_CASE("sljit: select, tables and memory32 execute", "[sljit][module][parity]
 	WASM::ModuleInstance& instance = *loaded.instance;
 	const auto call = [&](const char* name) -> WASM::Callable {
 		const std::optional<WASM::Callable> callable = instance.exportedFunction(name);
+		INFO("export " << name);
 		REQUIRE(callable.has_value());
+		REQUIRE(callable->fnPtr != nullptr);
 		return *callable;
 	};
 
@@ -369,7 +378,9 @@ TEST_CASE("sljit: the shared i64 module executes", "[sljit][module][parity][i64]
 	WASM::ModuleInstance& instance = *loaded.instance;
 	const auto call = [&](const char* name) -> WASM::Callable {
 		const std::optional<WASM::Callable> callable = instance.exportedFunction(name);
+		INFO("export " << name);
 		REQUIRE(callable.has_value());
+		REQUIRE(callable->fnPtr != nullptr);
 		return *callable;
 	};
 
@@ -452,7 +463,9 @@ TEST_CASE("sljit: i64 bitwise, comparison and checked arithmetic execute",
 	WASM::ModuleInstance& instance = *loaded.instance;
 	const auto call = [&](const char* name) -> WASM::Callable {
 		const std::optional<WASM::Callable> callable = instance.exportedFunction(name);
+		INFO("export " << name);
 		REQUIRE(callable.has_value());
+		REQUIRE(callable->fnPtr != nullptr);
 		return *callable;
 	};
 
@@ -588,5 +601,328 @@ TEST_CASE("asmjit and sljit agree on the shared integer module", "[sljit][asmjit
 			[](const WASM::Callable& c) { return outcomeOf<std::int32_t>(c, 64, 0x12345678); });
 	same("load_oob", [](const WASM::Callable& c) { return outcomeOf<std::int32_t>(c, -1); });
 	same("memory_size", [](const WASM::Callable& c) { return outcomeOf<std::int32_t>(c); });
+}
+
+
+TEST_CASE("sljit: the shared floating-point module executes",
+		"[sljit][module][parity][float]")
+{
+	auto session = Sljit::createSession();
+	REQUIRE(session != nullptr);
+	WASM::RegistryImportResolver imports;
+	LoadedModule loaded = loadAndInstantiateTestModule("float_basic", imports, *session);
+	REQUIRE(loaded.instance != nullptr);
+	WASM::ModuleInstance& instance = *loaded.instance;
+	const auto call = [&](const char* name) -> WASM::Callable {
+		const std::optional<WASM::Callable> callable = instance.exportedFunction(name);
+		INFO("export " << name);
+		REQUIRE(callable.has_value());
+		REQUIRE(callable->fnPtr != nullptr);
+		return *callable;
+	};
+
+	CHECK(WASM::callCallable<float>(call("f32_add"), 1.5f, 2.25f) == 3.75f);
+	CHECK(WASM::callCallable<float>(call("f32_sub"), 5.5f, 2.25f) == 3.25f);
+	CHECK(WASM::callCallable<float>(call("f32_mul"), 1.5f, 4.0f) == 6.0f);
+	CHECK(WASM::callCallable<float>(call("f32_div"), 7.5f, 2.5f) == 3.0f);
+	CHECK(std::signbit(WASM::callCallable<float>(call("f32_min"), -0.0f, 0.0f)));
+	CHECK(!std::signbit(WASM::callCallable<float>(call("f32_max"), -0.0f, 0.0f)));
+	CHECK(std::isnan(WASM::callCallable<float>(call("f32_min"),
+			std::numeric_limits<float>::quiet_NaN(), 1.0f)));
+	CHECK(WASM::callCallable<float>(call("f32_copysign"), 3.0f, -1.0f) == -3.0f);
+	CHECK(WASM::callCallable<double>(call("f64_add"), 1.5, 2.25) == 3.75);
+	CHECK(WASM::callCallable<double>(call("f64_sub"), 5.5, 2.25) == 3.25);
+	CHECK(WASM::callCallable<double>(call("f64_mul"), 1.5, 4.0) == 6.0);
+	CHECK(WASM::callCallable<double>(call("f64_div"), 7.5, 2.5) == 3.0);
+	CHECK(std::signbit(WASM::callCallable<double>(call("f64_min"), -0.0, 0.0)));
+	CHECK(!std::signbit(WASM::callCallable<double>(call("f64_max"), -0.0, 0.0)));
+	CHECK(WASM::callCallable<double>(call("f64_copysign"), 3.0, -1.0) == -3.0);
+
+	CHECK(WASM::callCallable<float>(call("f32_abs"), -2.5f) == 2.5f);
+	CHECK(WASM::callCallable<float>(call("f32_neg"), 2.5f) == -2.5f);
+	CHECK(WASM::callCallable<float>(call("f32_sqrt"), 9.0f) == 3.0f);
+	CHECK(WASM::callCallable<float>(call("f32_ceil"), 1.25f) == 2.0f);
+	CHECK(WASM::callCallable<float>(call("f32_floor"), -1.25f) == -2.0f);
+	CHECK(WASM::callCallable<float>(call("f32_trunc"), -1.75f) == -1.0f);
+	CHECK(WASM::callCallable<float>(call("f32_nearest"), 2.5f) == 2.0f);
+	CHECK(WASM::callCallable<float>(call("f32_nearest"), 3.5f) == 4.0f);
+	CHECK(WASM::callCallable<double>(call("f64_abs"), -2.5) == 2.5);
+	CHECK(WASM::callCallable<double>(call("f64_neg"), 2.5) == -2.5);
+	CHECK(WASM::callCallable<double>(call("f64_sqrt"), 9.0) == 3.0);
+	CHECK(WASM::callCallable<double>(call("f64_ceil"), 1.25) == 2.0);
+	CHECK(WASM::callCallable<double>(call("f64_floor"), -1.25) == -2.0);
+	CHECK(WASM::callCallable<double>(call("f64_trunc"), -1.75) == -1.0);
+	CHECK(WASM::callCallable<double>(call("f64_nearest"), 2.5) == 2.0);
+	CHECK(WASM::callCallable<double>(call("f64_nearest"), 3.5) == 4.0);
+
+	CHECK(WASM::callCallable<float>(call("f32_const")) == 3.5f);
+	CHECK(WASM::callCallable<double>(call("f64_const")) == -7.25);
+	CHECK(WASM::callCallable<float>(call("f32_local"), 4.25f) == 4.25f);
+	CHECK(WASM::callCallable<double>(call("f64_local"), -4.25) == -4.25);
+
+	CHECK(WASM::callCallable<std::int32_t>(call("f32_eq"), 1.0f, 1.0f) == 1);
+	CHECK(WASM::callCallable<std::int32_t>(call("f32_eq"),
+			std::numeric_limits<float>::quiet_NaN(),
+			std::numeric_limits<float>::quiet_NaN()) == 0);
+	CHECK(WASM::callCallable<std::int32_t>(call("f32_ne"),
+			std::numeric_limits<float>::quiet_NaN(),
+			std::numeric_limits<float>::quiet_NaN()) == 1);
+	CHECK(WASM::callCallable<std::int32_t>(call("f32_lt"), -1.0f, 0.0f) == 1);
+	CHECK(WASM::callCallable<std::int32_t>(call("f32_gt"), 1.0f, 0.0f) == 1);
+	CHECK(WASM::callCallable<std::int32_t>(call("f32_le"), 1.0f, 1.0f) == 1);
+	CHECK(WASM::callCallable<std::int32_t>(call("f32_ge"), 0.0f, 1.0f) == 0);
+	CHECK(WASM::callCallable<std::int32_t>(call("f64_eq"), 1.0, 1.0) == 1);
+	CHECK(WASM::callCallable<std::int32_t>(call("f64_ne"),
+			std::numeric_limits<double>::quiet_NaN(), 1.0) == 1);
+	CHECK(WASM::callCallable<std::int32_t>(call("f64_lt"), -1.0, 0.0) == 1);
+	CHECK(WASM::callCallable<std::int32_t>(call("f64_gt"), 1.0, 0.0) == 1);
+	CHECK(WASM::callCallable<std::int32_t>(call("f64_le"), 1.0, 1.0) == 1);
+	CHECK(WASM::callCallable<std::int32_t>(call("f64_ge"), 0.0, 1.0) == 0);
+
+	CHECK(WASM::callCallable<float>(call("f32_get_global")) == 1.5f);
+	CHECK(WASM::callCallable<float>(call("f32_set_global"), 9.5f) == 9.5f);
+	CHECK(WASM::callCallable<float>(call("f32_get_global")) == 9.5f);
+	CHECK(WASM::callCallable<double>(call("f64_get_global")) == 2.25);
+	CHECK(WASM::callCallable<double>(call("f64_set_global"), -9.5) == -9.5);
+	CHECK(WASM::callCallable<double>(call("f64_get_global")) == -9.5);
+
+	CHECK(WASM::callCallable<float>(call("f32_store_load"), 16, 3.25f) == 3.25f);
+	CHECK(WASM::callCallable<double>(call("f64_store_load"), 32, 6.5) == 6.5);
+	CHECK_THROWS(WASM::callCallable<float>(call("f32_load_oob"), 65533));
+	CHECK_THROWS(WASM::callCallable<double>(call("f64_load_oob"), 65532));
+	CHECK_THROWS(WASM::callCallable<float>(call("f32_load_oob"), -1));
+}
+
+
+TEST_CASE("sljit: floating-point conversions, reinterpretation and mixed calls",
+		"[sljit][module][parity][float]")
+{
+	auto session = Sljit::createSession();
+	REQUIRE(session != nullptr);
+	WASM::RegistryImportResolver imports;
+	LoadedModule loaded = loadAndInstantiateTestModule("float_basic", imports, *session);
+	REQUIRE(loaded.instance != nullptr);
+	WASM::ModuleInstance& instance = *loaded.instance;
+	const auto call = [&](const char* name) -> WASM::Callable {
+		const std::optional<WASM::Callable> callable = instance.exportedFunction(name);
+		INFO("export " << name);
+		REQUIRE(callable.has_value());
+		REQUIRE(callable->fnPtr != nullptr);
+		return *callable;
+	};
+
+	CHECK(WASM::callCallable<std::int32_t>(call("i32_trunc_f32_s"), 3.9f) == 3);
+	CHECK(WASM::callCallable<std::int32_t>(call("i32_trunc_f32_s"), -3.9f) == -3);
+	CHECK(WASM::callCallable<std::int32_t>(call("i32_trunc_f32_u"), 3.9f) == 3);
+	CHECK(WASM::callCallable<std::int32_t>(call("i32_trunc_f64_s"), -2.75) == -2);
+	CHECK(static_cast<std::uint32_t>(
+			WASM::callCallable<std::int32_t>(call("i32_trunc_f64_u"), 4000000000.0))
+			== 4000000000u);
+	CHECK(WASM::callCallable<std::int64_t>(call("i64_trunc_f32_s"), 1.0e9f) == 1000000000);
+	CHECK(WASM::callCallable<std::int64_t>(call("i64_trunc_f32_u"), 1.0e9f) == 1000000000);
+	CHECK(WASM::callCallable<std::int64_t>(call("i64_trunc_f64_s"), -1.0e15)
+			== -1000000000000000);
+	CHECK(WASM::callCallable<std::int64_t>(call("i64_trunc_f64_u"), 1.0e18)
+			== 1000000000000000000);
+	CHECK_THROWS(WASM::callCallable<std::int32_t>(call("i32_trunc_f32_s"),
+			std::numeric_limits<float>::quiet_NaN()));
+	CHECK_THROWS(WASM::callCallable<std::int32_t>(call("i32_trunc_f32_s"), 1.0e30f));
+	CHECK_THROWS(WASM::callCallable<std::int32_t>(call("i32_trunc_f32_u"), -1.5f));
+	CHECK_THROWS(WASM::callCallable<std::int64_t>(call("i64_trunc_f64_s"), 1.0e30));
+
+	CHECK(WASM::callCallable<std::int32_t>(call("i32_trunc_sat_f32_s"),
+			std::numeric_limits<float>::quiet_NaN()) == 0);
+	CHECK(WASM::callCallable<std::int32_t>(call("i32_trunc_sat_f32_s"), 1.0e30f)
+			== INT32_MAX);
+	CHECK(WASM::callCallable<std::int32_t>(call("i32_trunc_sat_f32_s"), -1.0e30f)
+			== INT32_MIN);
+	CHECK(WASM::callCallable<std::int32_t>(call("i32_trunc_sat_f32_u"), -1.0f) == 0);
+	CHECK(static_cast<std::uint32_t>(
+			WASM::callCallable<std::int32_t>(call("i32_trunc_sat_f32_u"), 1.0e30f))
+			== UINT32_MAX);
+	CHECK(WASM::callCallable<std::int64_t>(call("i64_trunc_sat_f64_s"), 1.0e30)
+			== INT64_MAX);
+	CHECK(WASM::callCallable<std::int64_t>(call("i64_trunc_sat_f64_s"), -1.0e30)
+			== INT64_MIN);
+	CHECK(WASM::callCallable<std::int64_t>(call("i64_trunc_sat_f64_u"), -1.0) == 0);
+
+	CHECK(WASM::callCallable<float>(call("f32_convert_i32_s"), -7) == -7.0f);
+	CHECK(WASM::callCallable<float>(call("f32_convert_i32_u"), -1) == 4294967296.0f);
+	CHECK(WASM::callCallable<float>(call("f32_convert_i64_s"), INT64_C(1073741824))
+			== 1073741824.0f);
+	CHECK(WASM::callCallable<float>(call("f32_convert_i64_u"), INT64_C(1) << 40)
+			== 1099511627776.0f);
+	CHECK(WASM::callCallable<double>(call("f64_convert_i32_s"), -7) == -7.0);
+	CHECK(WASM::callCallable<double>(call("f64_convert_i32_u"), -1) == 4294967295.0);
+	CHECK(WASM::callCallable<double>(call("f64_convert_i64_s"), INT64_C(-7)) == -7.0);
+	CHECK(WASM::callCallable<double>(call("f64_convert_i64_u"), static_cast<std::int64_t>(-1))
+			== 18446744073709551616.0);
+	CHECK(WASM::callCallable<float>(call("f32_demote_f64"), 1.5) == 1.5f);
+	CHECK(WASM::callCallable<double>(call("f64_promote_f32"), 1.5f) == 1.5);
+
+	CHECK(static_cast<std::uint32_t>(
+			WASM::callCallable<std::int32_t>(call("i32_reinterpret_f32"), 1.0f))
+			== 0x3F800000u);
+	CHECK(WASM::callCallable<float>(call("f32_reinterpret_i32"),
+			static_cast<std::int32_t>(0x3F800000u)) == 1.0f);
+	CHECK(static_cast<std::uint64_t>(
+			WASM::callCallable<std::int64_t>(call("i64_reinterpret_f64"), 1.0))
+			== UINT64_C(0x3FF0000000000000));
+	CHECK(WASM::callCallable<double>(call("f64_reinterpret_i64"),
+			static_cast<std::int64_t>(UINT64_C(0x3FF0000000000000))) == 1.0);
+
+	CHECK(WASM::callCallable<float>(call("f32_select"), 1.5f, 2.5f, 1) == 1.5f);
+	CHECK(WASM::callCallable<float>(call("f32_select"), 1.5f, 2.5f, 0) == 2.5f);
+	CHECK(WASM::callCallable<double>(call("f64_select"), 1.5, 2.5, 1) == 1.5);
+	CHECK(WASM::callCallable<double>(call("f64_select_t"), 1.5, 2.5, 0) == 2.5);
+
+	// Structured block/if/branch results carry float values through the same
+	// result-slot path the integer slice uses.
+	CHECK(WASM::callCallable<float>(call("f32_block_result")) == 1.25f);
+	CHECK(WASM::callCallable<double>(call("f64_if_result"), 1) == 1.5);
+	CHECK(WASM::callCallable<double>(call("f64_if_result"), 0) == 2.5);
+	CHECK(WASM::callCallable<float>(call("f32_br_result")) == 3.5f);
+
+	CHECK(WASM::callCallable<double>(call("call_mixed"), 3, 1.75) == 3.5);
+	CHECK(WASM::callCallable<double>(call("call_indirect_mixed"), 5, 2.25, 0) == 4.5);
+	CHECK_THROWS(WASM::callCallable<double>(call("call_indirect_mixed"), 5, 2.25, 1));
+}
+
+
+namespace {
+
+//! Result of one float-returning call on one backend.
+struct FloatCallOutcome {
+	bool trapped = false; //!< True when the call reported a trap.
+	double value = 0.0; //!< The returned value when it did not trap.
+};
+
+template <typename Ret, typename... Args>
+FloatCallOutcome floatOutcomeOf(const WASM::Callable& callable, Args... args)
+{
+	try {
+		return FloatCallOutcome{ false,
+				static_cast<double>(WASM::callCallable<Ret>(callable, args...)) };
+	} catch (...) {
+		return FloatCallOutcome{ true, 0.0 };
+	}
+}
+
+//! NaN-aware equality: the two backends may produce different NaN payloads.
+bool sameFloatValue(double lhs, double rhs)
+{
+	if (std::isnan(lhs) && std::isnan(rhs))
+		return true;
+	if (lhs == 0.0 && rhs == 0.0)
+		return std::signbit(lhs) == std::signbit(rhs);
+	return lhs == rhs;
+}
+
+} // namespace
+
+/*
+ * The P3 conformance matrix: the same float module, both generators, compared
+ * outcomes. The exact-value cases live in each backend's own suite; this case
+ * is what catches a *divergence* between them.
+ */
+TEST_CASE("asmjit and sljit agree on the shared floating-point module",
+		"[sljit][asmjit][parity][float]")
+{
+	WASM::Module module = loadTestModule("float_basic");
+	AsmJitBackend::Context asmContext;
+	AsmJitBackend::ModuleCompiler asmCompiler(asmContext);
+	Sljit::ModuleCompiler sljitCompiler;
+	WASM::RegistryImportResolver asmImports;
+	WASM::RegistryImportResolver sljitImports;
+	std::unique_ptr<WASM::ModuleInstance> asmInstance =
+			asmCompiler.instantiate(module, asmImports);
+	std::unique_ptr<WASM::ModuleInstance> sljitInstance =
+			sljitCompiler.instantiate(module, sljitImports);
+	REQUIRE(asmInstance != nullptr);
+	REQUIRE(sljitInstance != nullptr);
+
+	const auto sameFloat = [&](const char* name, auto&& call) {
+		const std::optional<WASM::Callable> asmCallable = asmInstance->exportedFunction(name);
+		const std::optional<WASM::Callable> sljitCallable = sljitInstance->exportedFunction(name);
+		REQUIRE(asmCallable.has_value());
+		REQUIRE(sljitCallable.has_value());
+		const FloatCallOutcome asmOutcome = call(*asmCallable);
+		const FloatCallOutcome sljitOutcome = call(*sljitCallable);
+		INFO("export " << name);
+		CHECK(asmOutcome.trapped == sljitOutcome.trapped);
+		if (!asmOutcome.trapped && !sljitOutcome.trapped)
+			CHECK(sameFloatValue(asmOutcome.value, sljitOutcome.value));
+	};
+
+	const auto sameInteger = [&](const char* name, auto&& call) {
+		const std::optional<WASM::Callable> asmCallable = asmInstance->exportedFunction(name);
+		const std::optional<WASM::Callable> sljitCallable = sljitInstance->exportedFunction(name);
+		REQUIRE(asmCallable.has_value());
+		REQUIRE(sljitCallable.has_value());
+		const CallOutcome asmOutcome = call(*asmCallable);
+		const CallOutcome sljitOutcome = call(*sljitCallable);
+		INFO("export " << name);
+		CHECK(asmOutcome.trapped == sljitOutcome.trapped);
+		if (!asmOutcome.trapped && !sljitOutcome.trapped)
+			CHECK(asmOutcome.value == sljitOutcome.value);
+	};
+
+	sameFloat("f32_add",
+			[](const WASM::Callable& c) { return floatOutcomeOf<float>(c, 1.5f, 2.25f); });
+	sameFloat("f64_add",
+			[](const WASM::Callable& c) { return floatOutcomeOf<double>(c, 1.5, 2.25); });
+	sameFloat("f32_min",
+			[](const WASM::Callable& c) { return floatOutcomeOf<float>(c, -0.0f, 0.0f); });
+	sameFloat("f64_max",
+			[](const WASM::Callable& c) { return floatOutcomeOf<double>(c, -0.0, 0.0); });
+	sameFloat("f32_copysign",
+			[](const WASM::Callable& c) { return floatOutcomeOf<float>(c, 3.0f, -1.0f); });
+	sameFloat("f32_nearest",
+			[](const WASM::Callable& c) { return floatOutcomeOf<float>(c, 2.5f); });
+	sameFloat("f64_sqrt",
+			[](const WASM::Callable& c) { return floatOutcomeOf<double>(c, 9.0); });
+	sameFloat("f64_promote_f32",
+			[](const WASM::Callable& c) { return floatOutcomeOf<double>(c, 1.5f); });
+
+	sameInteger("f32_eq", [](const WASM::Callable& c) {
+		return outcomeOf<std::int32_t>(c, std::numeric_limits<float>::quiet_NaN(),
+				std::numeric_limits<float>::quiet_NaN());
+	});
+	sameInteger("f64_lt",
+			[](const WASM::Callable& c) { return outcomeOf<std::int32_t>(c, -1.0, 0.0); });
+	sameInteger("i32_trunc_f32_s",
+			[](const WASM::Callable& c) { return outcomeOf<std::int32_t>(c, 3.9f); });
+	sameInteger("i32_trunc_f32_s", [](const WASM::Callable& c) {
+		return outcomeOf<std::int32_t>(c, std::numeric_limits<float>::quiet_NaN());
+	});
+	sameInteger("i32_trunc_sat_f32_s",
+			[](const WASM::Callable& c) { return outcomeOf<std::int32_t>(c, 1.0e30f); });
+	sameInteger("i64_trunc_f64_u",
+			[](const WASM::Callable& c) { return outcomeOf<std::int64_t>(c, 1.0e18); });
+	sameInteger("i32_reinterpret_f32",
+			[](const WASM::Callable& c) { return outcomeOf<std::int32_t>(c, 1.0f); });
+
+	sameFloat("f32_convert_i64_u",
+			[](const WASM::Callable& c) { return floatOutcomeOf<float>(c, INT64_C(1) << 40); });
+	sameFloat("f64_convert_i32_u",
+			[](const WASM::Callable& c) { return floatOutcomeOf<double>(c, -1); });
+
+	sameFloat("f32_select",
+			[](const WASM::Callable& c) { return floatOutcomeOf<float>(c, 1.5f, 2.5f, 1); });
+	sameFloat("f64_select_t",
+			[](const WASM::Callable& c) { return floatOutcomeOf<double>(c, 1.5, 2.5, 0); });
+	sameFloat("f32_block_result",
+			[](const WASM::Callable& c) { return floatOutcomeOf<float>(c); });
+	sameFloat("f64_if_result",
+			[](const WASM::Callable& c) { return floatOutcomeOf<double>(c, 0); });
+	sameFloat("f32_br_result",
+			[](const WASM::Callable& c) { return floatOutcomeOf<float>(c); });
+	sameFloat("call_mixed",
+			[](const WASM::Callable& c) { return floatOutcomeOf<double>(c, 3, 1.75); });
+	sameFloat("call_indirect_mixed", [](const WASM::Callable& c) {
+		return floatOutcomeOf<double>(c, 5, 2.25, 0);
+	});
+	sameFloat("f32_store_load",
+			[](const WASM::Callable& c) { return floatOutcomeOf<float>(c, 16, 3.25f); });
 }
 

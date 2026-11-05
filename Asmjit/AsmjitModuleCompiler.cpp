@@ -10,8 +10,10 @@
 
 #include <Euphemy/Io/EuphConstBufferDevice.hpp>
 
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <cstring>
 #include <span>
 #include <stdexcept>
@@ -38,16 +40,293 @@ void requireInteger(const WASM::ValueType& type, const char* role)
 				+ role);
 }
 
+//! True for the two scalar floating-point value types.
+bool isFloatKind(WASM::ValueTypeCode kind) noexcept
+{
+	return kind == WASM::ValueTypeCode::F32 || kind == WASM::ValueTypeCode::F64;
+}
+
+//! Slot width of one declared scalar value kind, or 0 when it is outside the
+//! scalar subset (references, v128).
+int kindWidth(WASM::ValueTypeCode kind) noexcept
+{
+	switch (kind) {
+	case WASM::ValueTypeCode::I32:
+	case WASM::ValueTypeCode::F32:
+		return 4;
+	case WASM::ValueTypeCode::I64:
+	case WASM::ValueTypeCode::F64:
+		return 8;
+	default:
+		return 0;
+	}
+}
+
+//! Refuses a parameter/local/result outside the scalar subset.
+void requireScalar(const WASM::ValueType& type, const char* role)
+{
+	if (kindWidth(type.opcode) == 0)
+		throw std::runtime_error(std::string("AsmJit supports only i32/i64/f32/f64 ")
+				+ role);
+}
+
 void requireI32(const WASM::ValueType& type, const char* role)
 {
 	if (type.opcode != WASM::ValueTypeCode::I32)
 		throw std::runtime_error(std::string("AsmJit currently supports only i32 ") + role);
 }
 
+// ── Scalar floating-point helpers (shared semantics with the SLJIT backend) ──
+// The rules are the ones the LibJIT backend defines for this engine: min/max
+// return a quiet NaN when either operand is NaN and are sign-of-zero aware;
+// trunc/nearest quiet a NaN; nearest is ties-to-even.
+
+extern "C" float asmjitF32Min(float a, float b) noexcept
+{
+	if (std::isnan(a) || std::isnan(b))
+		return std::numeric_limits<float>::quiet_NaN();
+	if (a == 0.0f && b == 0.0f)
+		return (std::signbit(a) || std::signbit(b)) ? -0.0f : 0.0f;
+	return a < b ? a : b;
+}
+
+extern "C" float asmjitF32Max(float a, float b) noexcept
+{
+	if (std::isnan(a) || std::isnan(b))
+		return std::numeric_limits<float>::quiet_NaN();
+	if (a == 0.0f && b == 0.0f)
+		return (std::signbit(a) && std::signbit(b)) ? -0.0f : 0.0f;
+	return a > b ? a : b;
+}
+
+extern "C" double asmjitF64Min(double a, double b) noexcept
+{
+	if (std::isnan(a) || std::isnan(b))
+		return std::numeric_limits<double>::quiet_NaN();
+	if (a == 0.0 && b == 0.0)
+		return (std::signbit(a) || std::signbit(b)) ? -0.0 : 0.0;
+	return a < b ? a : b;
+}
+
+extern "C" double asmjitF64Max(double a, double b) noexcept
+{
+	if (std::isnan(a) || std::isnan(b))
+		return std::numeric_limits<double>::quiet_NaN();
+	if (a == 0.0 && b == 0.0)
+		return (std::signbit(a) && std::signbit(b)) ? -0.0 : 0.0;
+	return a > b ? a : b;
+}
+
+extern "C" float asmjitF32Sqrt(float x) noexcept { return std::sqrt(x); }
+extern "C" float asmjitF32Ceil(float x) noexcept { return std::ceil(x); }
+extern "C" float asmjitF32Floor(float x) noexcept { return std::floor(x); }
+
+extern "C" float asmjitF32Trunc(float x) noexcept
+{
+	if (std::isnan(x))
+		return std::numeric_limits<float>::quiet_NaN();
+	return std::trunc(x);
+}
+
+extern "C" float asmjitF32Nearest(float x) noexcept
+{
+	if (std::isnan(x))
+		return std::numeric_limits<float>::quiet_NaN();
+	return std::nearbyint(x);
+}
+
+extern "C" double asmjitF64Sqrt(double x) noexcept { return std::sqrt(x); }
+extern "C" double asmjitF64Ceil(double x) noexcept { return std::ceil(x); }
+extern "C" double asmjitF64Floor(double x) noexcept { return std::floor(x); }
+
+extern "C" double asmjitF64Trunc(double x) noexcept
+{
+	if (std::isnan(x))
+		return std::numeric_limits<double>::quiet_NaN();
+	return std::trunc(x);
+}
+
+extern "C" double asmjitF64Nearest(double x) noexcept
+{
+	if (std::isnan(x))
+		return std::numeric_limits<double>::quiet_NaN();
+	return std::nearbyint(x);
+}
+
+//! The spec splits an unusable truncation into NaN and range failures.
+void trapInvalidConversion() noexcept
+{
+	WASM::reportTrap(WASM::TrapKind::InvalidConversionToInteger);
+}
+
+void trapIntegerOverflow() noexcept
+{
+	WASM::reportTrap(WASM::TrapKind::IntegerOverflow);
+}
+
+extern "C" int32_t asmjitI32TruncF32S(float x) noexcept
+{
+	if (std::isnan(x)) { trapInvalidConversion(); return 0; }
+	const double d = x;
+	if (!(d > -2147483649.0 && d < 2147483648.0))
+		trapIntegerOverflow();
+	return static_cast<int32_t>(x);
+}
+
+extern "C" uint32_t asmjitI32TruncF32U(float x) noexcept
+{
+	if (std::isnan(x)) { trapInvalidConversion(); return 0; }
+	const double d = x;
+	if (!(d > -1.0 && d < 4294967296.0))
+		trapIntegerOverflow();
+	return static_cast<uint32_t>(x);
+}
+
+extern "C" int32_t asmjitI32TruncF64S(double x) noexcept
+{
+	if (std::isnan(x)) { trapInvalidConversion(); return 0; }
+	if (!(x > -2147483649.0 && x < 2147483648.0))
+		trapIntegerOverflow();
+	return static_cast<int32_t>(x);
+}
+
+extern "C" uint32_t asmjitI32TruncF64U(double x) noexcept
+{
+	if (std::isnan(x)) { trapInvalidConversion(); return 0; }
+	if (!(x > -1.0 && x < 4294967296.0))
+		trapIntegerOverflow();
+	return static_cast<uint32_t>(x);
+}
+
+extern "C" int64_t asmjitI64TruncF32S(float x) noexcept
+{
+	if (std::isnan(x)) { trapInvalidConversion(); return 0; }
+	const double d = x;
+	if (!(d >= -9223372036854775808.0 && d < 9223372036854775808.0))
+		trapIntegerOverflow();
+	return static_cast<int64_t>(x);
+}
+
+extern "C" uint64_t asmjitI64TruncF32U(float x) noexcept
+{
+	if (std::isnan(x)) { trapInvalidConversion(); return 0; }
+	const double d = x;
+	if (!(d > -1.0 && d < 18446744073709551616.0))
+		trapIntegerOverflow();
+	return static_cast<uint64_t>(x);
+}
+
+extern "C" int64_t asmjitI64TruncF64S(double x) noexcept
+{
+	if (std::isnan(x)) { trapInvalidConversion(); return 0; }
+	if (!(x >= -9223372036854775808.0 && x < 9223372036854775808.0))
+		trapIntegerOverflow();
+	return static_cast<int64_t>(x);
+}
+
+extern "C" uint64_t asmjitI64TruncF64U(double x) noexcept
+{
+	if (std::isnan(x)) { trapInvalidConversion(); return 0; }
+	if (!(x > -1.0 && x < 18446744073709551616.0))
+		trapIntegerOverflow();
+	return static_cast<uint64_t>(x);
+}
+
+// ── Saturating truncation (non-trapping proposal) ──────────────────────────
+// These clamp instead of reporting; NaN maps to zero.
+
+extern "C" int32_t asmjitI32TruncSatF32S(float x) noexcept
+{
+	if (std::isnan(x)) return 0;
+	const double d = x;
+	if (d >= 2147483648.0) return INT32_MAX;
+	if (d < -2147483648.0) return INT32_MIN;
+	return static_cast<int32_t>(x);
+}
+
+extern "C" uint32_t asmjitI32TruncSatF32U(float x) noexcept
+{
+	if (std::isnan(x)) return 0;
+	const double d = x;
+	if (d >= 4294967296.0) return UINT32_MAX;
+	if (d <= -1.0) return 0;
+	return static_cast<uint32_t>(x);
+}
+
+extern "C" int32_t asmjitI32TruncSatF64S(double x) noexcept
+{
+	if (std::isnan(x)) return 0;
+	if (x >= 2147483648.0) return INT32_MAX;
+	if (x < -2147483648.0) return INT32_MIN;
+	return static_cast<int32_t>(x);
+}
+
+extern "C" uint32_t asmjitI32TruncSatF64U(double x) noexcept
+{
+	if (std::isnan(x)) return 0;
+	if (x >= 4294967296.0) return UINT32_MAX;
+	if (x <= -1.0) return 0;
+	return static_cast<uint32_t>(x);
+}
+
+extern "C" int64_t asmjitI64TruncSatF32S(float x) noexcept
+{
+	if (std::isnan(x)) return 0;
+	const double d = x;
+	if (d >= 9223372036854775808.0) return INT64_MAX;
+	if (d < -9223372036854775808.0) return INT64_MIN;
+	return static_cast<int64_t>(x);
+}
+
+extern "C" uint64_t asmjitI64TruncSatF32U(float x) noexcept
+{
+	if (std::isnan(x)) return 0;
+	const double d = x;
+	if (d >= 18446744073709551616.0) return UINT64_MAX;
+	if (d <= -1.0) return 0;
+	return static_cast<uint64_t>(x);
+}
+
+extern "C" int64_t asmjitI64TruncSatF64S(double x) noexcept
+{
+	if (std::isnan(x)) return 0;
+	if (x >= 9223372036854775808.0) return INT64_MAX;
+	if (x < -9223372036854775808.0) return INT64_MIN;
+	return static_cast<int64_t>(x);
+}
+
+extern "C" uint64_t asmjitI64TruncSatF64U(double x) noexcept
+{
+	if (std::isnan(x)) return 0;
+	if (x >= 18446744073709551616.0) return UINT64_MAX;
+	if (x <= -1.0) return 0;
+	return static_cast<uint64_t>(x);
+}
+
+// ── Integer-to-float and float-to-float conversions ────────────────────────
+// These are C casts rather than SSE conversions so both partial backends share
+// one rounding rule (the host's round-to-nearest-even, which is what Wasm
+// requires) and unsigned 64-bit inputs need no target-specific sequence.
+
+extern "C" float asmjitF32FromI32S(int32_t x) noexcept { return static_cast<float>(x); }
+extern "C" float asmjitF32FromI32U(uint32_t x) noexcept { return static_cast<float>(x); }
+extern "C" float asmjitF32FromI64S(int64_t x) noexcept { return static_cast<float>(x); }
+extern "C" float asmjitF32FromI64U(uint64_t x) noexcept { return static_cast<float>(x); }
+extern "C" double asmjitF64FromI32S(int32_t x) noexcept { return static_cast<double>(x); }
+extern "C" double asmjitF64FromI32U(uint32_t x) noexcept { return static_cast<double>(x); }
+extern "C" double asmjitF64FromI64S(int64_t x) noexcept { return static_cast<double>(x); }
+extern "C" double asmjitF64FromI64U(uint64_t x) noexcept { return static_cast<double>(x); }
+extern "C" float asmjitF32DemoteF64(double x) noexcept { return static_cast<float>(x); }
+extern "C" double asmjitF64PromoteF32(float x) noexcept { return static_cast<double>(x); }
+
+
 asmjit::x86::Gp newIntegerRegister(asmjit::x86::Compiler& compiler,
 		const WASM::ValueType& type, const char* name)
 {
-	return type.opcode == WASM::ValueTypeCode::I64
+	// A float value travels as its bit pattern in a Gp (4 bytes for f32, 8 for
+	// f64); materialising it in an Xmm happens at the instruction or ABI
+	// boundary. The width rule is therefore the same for both classes.
+	return kindWidth(type.opcode) == 8
 			? compiler.new_gp64(name) : compiler.new_gp32(name);
 }
 
@@ -442,11 +721,11 @@ public:
 		if (type.results.size() > 1)
 			throw std::runtime_error("AsmJit initial compiler does not support multi-value results");
 		for (const auto& parameter : type.params)
-			requireInteger(parameter.val, "parameters");
+			requireScalar(parameter.val, "parameters");
 		for (const auto& result : type.results)
-			requireInteger(result.val, "results");
+			requireScalar(result.val, "results");
 		for (const auto& local : stack.allLocals)
-			requireInteger(local, "locals");
+			requireScalar(local, "locals");
 		resultType = type.results.empty()
 				? WASM::ValueTypeCode::Void : type.results.front().val.opcode;
 
@@ -482,8 +761,12 @@ public:
 		checkError(compiler.jz(bodyLabel), "AsmJit pending-trap branch emission failed");
 		if (type.results.empty()) {
 			checkError(compiler.ret(), "AsmJit trap-path void return emission failed");
+		} else if (isFloatKind(resultType)) {
+			auto zero = compiler.new_xmm("trapFloatResult");
+			checkError(compiler.xorps(zero, zero), "AsmJit trap float result zeroing failed");
+			checkError(compiler.ret(zero), "AsmJit trap-path float return emission failed");
 		} else {
-			asmjit::x86::Gp zero = resultType == WASM::ValueTypeCode::I64
+			asmjit::x86::Gp zero = kindWidth(resultType) == 8
 					? compiler.new_gp64("trapResult") : compiler.new_gp32("trapResult");
 			checkError(compiler.xor_(zero, zero), "AsmJit trap-result zeroing failed");
 			checkError(compiler.ret(zero), "AsmJit trap-path result return emission failed");
@@ -491,9 +774,27 @@ public:
 		checkError(compiler.bind(bodyLabel), "AsmJit body label binding failed");
 
 		for (uint32_t i = 0; i < stack.parameterCount; ++i) {
-			asmjit::x86::Gp parameter = newIntegerRegister(compiler, stack.allLocals[i], "parameter");
-			function.set_arg(i + 1, parameter);
-			locals.push_back(parameter);
+			const WASM::ValueType& declared = stack.allLocals[i];
+			if (isFloatKind(declared.opcode)) {
+				// The ABI argument is an Xmm; the body works on its bit pattern.
+				auto parameter = compiler.new_xmm("parameter");
+				function.set_arg(i + 1, parameter);
+				const int width = kindWidth(declared.opcode);
+				auto bits = width == 4
+						? compiler.new_gp32("parameterBits")
+						: compiler.new_gp64("parameterBits");
+				if (width == 4)
+					checkError(compiler.movd(bits, parameter),
+							"AsmJit f32 parameter copy failed");
+				else
+					checkError(compiler.movq(bits, parameter),
+							"AsmJit f64 parameter copy failed");
+				locals.push_back(bits);
+			} else {
+				asmjit::x86::Gp parameter = newIntegerRegister(compiler, declared, "parameter");
+				function.set_arg(i + 1, parameter);
+				locals.push_back(parameter);
+			}
 		}
 		for (uint32_t i = 0; i < stack.localCount; ++i) {
 			asmjit::x86::Gp local = newIntegerRegister(compiler,
@@ -518,8 +819,14 @@ public:
 			checkError(compiler.ret(), "AsmJit void function return emission failed");
 		} else {
 			if (values.size() != 1)
-				throw std::runtime_error("AsmJit integer function must end with exactly one result");
-			checkError(compiler.ret(values.back()), "AsmJit i32 function return emission failed");
+				throw std::runtime_error("AsmJit function must end with exactly one result");
+			if (isFloatKind(resultType))
+				checkError(compiler.ret(
+						materializeFloat(values.back(), kindWidth(resultType))),
+						"AsmJit float function return emission failed");
+			else
+				checkError(compiler.ret(values.back()),
+						"AsmJit function return emission failed");
 		}
 		(void)type;
 	}
@@ -574,8 +881,8 @@ protected:
     void dispatchSelectT(std::vector<WASM::ValueType>&& types) override
     {
         if (types.size() != 1)
-            throw std::runtime_error("AsmJit select_t currently supports exactly one integer value type");
-        requireInteger(types.front(), "select_t values");
+            throw std::runtime_error("AsmJit select_t currently supports exactly one value type");
+        requireScalar(types.front(), "select_t values");
         emitSelect();
     }
 
@@ -660,7 +967,7 @@ protected:
 			if (resultCount == 0)
 				checkError(compiler.ret(), "AsmJit conditional function branch return failed");
 			else
-				checkError(compiler.ret(values.back()), "AsmJit conditional function branch return failed");
+				emitFunctionReturn(values.back());
 			checkError(compiler.bind(skip), "AsmJit conditional function branch label binding failed");
 			return;
 		}
@@ -692,7 +999,7 @@ protected:
 			if (resultCount == 0)
 				checkError(compiler.ret(), "AsmJit function branch return failed");
 			else
-				checkError(compiler.ret(values.back()), "AsmJit function branch return failed");
+				emitFunctionReturn(values.back());
 			return;
 		}
 		ControlFrame& target = controls[controls.size() - 1 - depth];
@@ -747,7 +1054,7 @@ protected:
 				if (resultCount == 0)
 					checkError(compiler.ret(), "AsmJit br_table function return failed");
 				else
-					checkError(compiler.ret(values.back()), "AsmJit br_table function return failed");
+					emitFunctionReturn(values.back());
 				return;
 			}
 			ControlFrame& target = controls[controls.size() - 1 - depth];
@@ -819,9 +1126,9 @@ protected:
 		if (calledType.results.size() > 1)
 			throw std::runtime_error("AsmJit call_indirect currently supports at most one result");
 		for (const auto& parameter : calledType.params)
-			requireInteger(parameter.val, "indirect-call parameters");
+			requireScalar(parameter.val, "indirect-call parameters");
 		for (const auto& result : calledType.results)
-			requireInteger(result.val, "indirect-call results");
+			requireScalar(result.val, "indirect-call results");
 		if (values.size() < calledType.params.size() + 1)
 			throw std::runtime_error("AsmJit call_indirect operand stack underflow");
 
@@ -870,18 +1177,13 @@ protected:
 		checkError(compiler.mov(calleeContext, vmContext), "AsmJit native indirect context selection failed");
 		checkError(compiler.bind(callerContext), "AsmJit indirect context label binding failed");
 
+		auto preparedArguments = prepareCallArguments(calledType, arguments);
 		asmjit::InvokeNode* invoke = nullptr;
 		checkError(compiler.invoke(asmjit::Out(invoke), target, *signatures[typeIndex]),
 				"AsmJit indirect function invocation emission failed");
 		invoke->set_arg(0, calleeContext);
-		for (size_t i = 0; i < arguments.size(); ++i)
-			invoke->set_arg(i + 1, arguments[i]);
-		if (!calledType.results.empty()) {
-			auto result = newIntegerRegister(compiler, calledType.results.front().val,
-					"indirectCallResult");
-			invoke->set_ret(0, result);
-			values.push_back(result);
-		}
+		setCallArguments(invoke, preparedArguments);
+		emitCallResult(invoke, calledType, "indirectCallResult");
 		emitPendingTrapReturn();
 	}
 
@@ -914,9 +1216,9 @@ protected:
 		if (calledType.results.size() > 1)
 			throw std::runtime_error("AsmJit calls currently support at most one result");
 		for (const auto& parameter : calledType.params)
-			requireInteger(parameter.val, "call parameters");
+			requireScalar(parameter.val, "call parameters");
 		for (const auto& result : calledType.results)
-			requireInteger(result.val, "call results");
+			requireScalar(result.val, "call results");
 		if (values.size() < calledType.params.size())
 			throw std::runtime_error("AsmJit call operand stack underflow");
 
@@ -940,6 +1242,7 @@ protected:
 					"AsmJit imported VMContext materialisation failed");
 		}
 
+		auto preparedArguments = prepareCallArguments(calledType, arguments);
 		asmjit::InvokeNode* invoke = nullptr;
 		const asmjit::Error error = isInternal
 				? compiler.invoke(asmjit::Out(invoke), targetLabel, *signatures[typeIndex])
@@ -949,13 +1252,8 @@ protected:
 			invoke->set_arg(0, vmContext);
 		else
 			invoke->set_arg(0, importedContext);
-		for (size_t i = 0; i < arguments.size(); ++i)
-			invoke->set_arg(i + 1, arguments[i]);
-		if (!calledType.results.empty()) {
-			auto result = newIntegerRegister(compiler, calledType.results.front().val, "callResult");
-			invoke->set_ret(0, result);
-			values.push_back(result);
-		}
+		setCallArguments(invoke, preparedArguments);
+		emitCallResult(invoke, calledType, "callResult");
 		emitPendingTrapReturn();
 	}
 
@@ -978,9 +1276,16 @@ protected:
 		checkError(compiler.jz(noTrap), "AsmJit post-call trap branch failed");
 		if (resultCount == 0) {
 			checkError(compiler.ret(), "AsmJit post-call void trap return failed");
+		} else if (isFloatKind(resultType)) {
+			auto zero = compiler.new_xmm("postCallTrapFloatResult");
+			checkError(compiler.xorps(zero, zero),
+					"AsmJit post-call trap float result initialisation failed");
+			checkError(compiler.ret(zero),
+					"AsmJit post-call trap float result return failed");
 		} else {
-			auto zero = resultType == WASM::ValueTypeCode::I64
-					? compiler.new_gp64("postCallTrapResult") : compiler.new_gp32("postCallTrapResult");
+			auto zero = kindWidth(resultType) == 8
+					? compiler.new_gp64("postCallTrapResult")
+					: compiler.new_gp32("postCallTrapResult");
 			checkError(compiler.xor_(zero, zero), "AsmJit post-call trap result initialisation failed");
 			checkError(compiler.ret(zero), "AsmJit post-call trap result return failed");
 		}
@@ -1277,6 +1582,159 @@ protected:
 	void dispatchI32Sub() override { emitBinary(BinaryOp::Sub); }
 	void dispatchI32Mul() override { emitBinary(BinaryOp::Mul); }
 
+	void dispatchF32Const(float value) override
+	{
+		uint32_t bits = 0;
+		std::memcpy(&bits, &value, sizeof(bits));
+		auto reg = compiler.new_gp32("f32Constant");
+		checkError(compiler.mov(reg, bits), "AsmJit f32.const emission failed");
+		values.push_back(reg);
+	}
+
+	void dispatchF64Const(double value) override
+	{
+		uint64_t bits = 0;
+		std::memcpy(&bits, &value, sizeof(bits));
+		auto reg = compiler.new_gp64("f64Constant");
+		checkError(compiler.mov(reg, bits), "AsmJit f64.const emission failed");
+		values.push_back(reg);
+	}
+
+	void dispatchF32Abs() override { emitFloatAbs(); }
+	void dispatchF32Neg() override { emitFloatNeg(4); }
+	void dispatchF32Sqrt() override
+	{ emitFloatHelper1(reinterpret_cast<uint64_t>(&asmjitF32Sqrt), 4); }
+	void dispatchF32Ceil() override
+	{ emitFloatHelper1(reinterpret_cast<uint64_t>(&asmjitF32Ceil), 4); }
+	void dispatchF32Floor() override
+	{ emitFloatHelper1(reinterpret_cast<uint64_t>(&asmjitF32Floor), 4); }
+	void dispatchF32Trunc() override
+	{ emitFloatHelper1(reinterpret_cast<uint64_t>(&asmjitF32Trunc), 4); }
+	void dispatchF32Nearest() override
+	{ emitFloatHelper1(reinterpret_cast<uint64_t>(&asmjitF32Nearest), 4); }
+	void dispatchF32Add() override
+	{ emitFloatBinary(asmjit::x86::Inst::kIdAddss, asmjit::x86::Inst::kIdAddsd, 4); }
+	void dispatchF32Sub() override
+	{ emitFloatBinary(asmjit::x86::Inst::kIdSubss, asmjit::x86::Inst::kIdSubsd, 4); }
+	void dispatchF32Mul() override
+	{ emitFloatBinary(asmjit::x86::Inst::kIdMulss, asmjit::x86::Inst::kIdMulsd, 4); }
+	void dispatchF32Div() override
+	{ emitFloatBinary(asmjit::x86::Inst::kIdDivss, asmjit::x86::Inst::kIdDivsd, 4); }
+	void dispatchF32Min() override
+	{ emitFloatHelper2(reinterpret_cast<uint64_t>(&asmjitF32Min), 4); }
+	void dispatchF32Max() override
+	{ emitFloatHelper2(reinterpret_cast<uint64_t>(&asmjitF32Max), 4); }
+	void dispatchF32Copysign() override { emitFloatCopysign(4); }
+
+	void dispatchF64Abs() override { emitFloatAbs(); }
+	void dispatchF64Neg() override { emitFloatNeg(8); }
+	void dispatchF64Sqrt() override
+	{ emitFloatHelper1(reinterpret_cast<uint64_t>(&asmjitF64Sqrt), 8); }
+	void dispatchF64Ceil() override
+	{ emitFloatHelper1(reinterpret_cast<uint64_t>(&asmjitF64Ceil), 8); }
+	void dispatchF64Floor() override
+	{ emitFloatHelper1(reinterpret_cast<uint64_t>(&asmjitF64Floor), 8); }
+	void dispatchF64Trunc() override
+	{ emitFloatHelper1(reinterpret_cast<uint64_t>(&asmjitF64Trunc), 8); }
+	void dispatchF64Nearest() override
+	{ emitFloatHelper1(reinterpret_cast<uint64_t>(&asmjitF64Nearest), 8); }
+	void dispatchF64Add() override
+	{ emitFloatBinary(asmjit::x86::Inst::kIdAddss, asmjit::x86::Inst::kIdAddsd, 8); }
+	void dispatchF64Sub() override
+	{ emitFloatBinary(asmjit::x86::Inst::kIdSubss, asmjit::x86::Inst::kIdSubsd, 8); }
+	void dispatchF64Mul() override
+	{ emitFloatBinary(asmjit::x86::Inst::kIdMulss, asmjit::x86::Inst::kIdMulsd, 8); }
+	void dispatchF64Div() override
+	{ emitFloatBinary(asmjit::x86::Inst::kIdDivss, asmjit::x86::Inst::kIdDivsd, 8); }
+	void dispatchF64Min() override
+	{ emitFloatHelper2(reinterpret_cast<uint64_t>(&asmjitF64Min), 8); }
+	void dispatchF64Max() override
+	{ emitFloatHelper2(reinterpret_cast<uint64_t>(&asmjitF64Max), 8); }
+	void dispatchF64Copysign() override { emitFloatCopysign(8); }
+
+	void dispatchF32Eq() override { emitFloatCompare(FloatCompareOp::Eq, 4); }
+	void dispatchF32Ne() override { emitFloatCompare(FloatCompareOp::Ne, 4); }
+	void dispatchF32Lt() override { emitFloatCompare(FloatCompareOp::Lt, 4); }
+	void dispatchF32Gt() override { emitFloatCompare(FloatCompareOp::Gt, 4); }
+	void dispatchF32Le() override { emitFloatCompare(FloatCompareOp::Le, 4); }
+	void dispatchF32Ge() override { emitFloatCompare(FloatCompareOp::Ge, 4); }
+	void dispatchF64Eq() override { emitFloatCompare(FloatCompareOp::Eq, 8); }
+	void dispatchF64Ne() override { emitFloatCompare(FloatCompareOp::Ne, 8); }
+	void dispatchF64Lt() override { emitFloatCompare(FloatCompareOp::Lt, 8); }
+	void dispatchF64Gt() override { emitFloatCompare(FloatCompareOp::Gt, 8); }
+	void dispatchF64Le() override { emitFloatCompare(FloatCompareOp::Le, 8); }
+	void dispatchF64Ge() override { emitFloatCompare(FloatCompareOp::Ge, 8); }
+
+	void dispatchF32ConvertI32S() override
+	{ emitIntToFloat(reinterpret_cast<uint64_t>(&asmjitF32FromI32S), 4, 4); }
+	void dispatchF32ConvertI32U() override
+	{ emitIntToFloat(reinterpret_cast<uint64_t>(&asmjitF32FromI32U), 4, 4); }
+	void dispatchF32ConvertI64S() override
+	{ emitIntToFloat(reinterpret_cast<uint64_t>(&asmjitF32FromI64S), 8, 4); }
+	void dispatchF32ConvertI64U() override
+	{ emitIntToFloat(reinterpret_cast<uint64_t>(&asmjitF32FromI64U), 8, 4); }
+	void dispatchF64ConvertI32S() override
+	{ emitIntToFloat(reinterpret_cast<uint64_t>(&asmjitF64FromI32S), 4, 8); }
+	void dispatchF64ConvertI32U() override
+	{ emitIntToFloat(reinterpret_cast<uint64_t>(&asmjitF64FromI32U), 4, 8); }
+	void dispatchF64ConvertI64S() override
+	{ emitIntToFloat(reinterpret_cast<uint64_t>(&asmjitF64FromI64S), 8, 8); }
+	void dispatchF64ConvertI64U() override
+	{ emitIntToFloat(reinterpret_cast<uint64_t>(&asmjitF64FromI64U), 8, 8); }
+	void dispatchF32DemoteF64() override
+	{ emitFloatToFloat(reinterpret_cast<uint64_t>(&asmjitF32DemoteF64), 8, 4); }
+	void dispatchF64PromoteF32() override
+	{ emitFloatToFloat(reinterpret_cast<uint64_t>(&asmjitF64PromoteF32), 4, 8); }
+
+	void dispatchI32TruncF32S() override
+	{ emitFloatToInt(reinterpret_cast<uint64_t>(&asmjitI32TruncF32S), 4, 4); }
+	void dispatchI32TruncF32U() override
+	{ emitFloatToInt(reinterpret_cast<uint64_t>(&asmjitI32TruncF32U), 4, 4); }
+	void dispatchI32TruncF64S() override
+	{ emitFloatToInt(reinterpret_cast<uint64_t>(&asmjitI32TruncF64S), 8, 4); }
+	void dispatchI32TruncF64U() override
+	{ emitFloatToInt(reinterpret_cast<uint64_t>(&asmjitI32TruncF64U), 8, 4); }
+	void dispatchI64TruncF32S() override
+	{ emitFloatToInt(reinterpret_cast<uint64_t>(&asmjitI64TruncF32S), 4, 8); }
+	void dispatchI64TruncF32U() override
+	{ emitFloatToInt(reinterpret_cast<uint64_t>(&asmjitI64TruncF32U), 4, 8); }
+	void dispatchI64TruncF64S() override
+	{ emitFloatToInt(reinterpret_cast<uint64_t>(&asmjitI64TruncF64S), 8, 8); }
+	void dispatchI64TruncF64U() override
+	{ emitFloatToInt(reinterpret_cast<uint64_t>(&asmjitI64TruncF64U), 8, 8); }
+
+	void dispatchI32TruncSatF32S() override
+	{ emitFloatToInt(reinterpret_cast<uint64_t>(&asmjitI32TruncSatF32S), 4, 4); }
+	void dispatchI32TruncSatF32U() override
+	{ emitFloatToInt(reinterpret_cast<uint64_t>(&asmjitI32TruncSatF32U), 4, 4); }
+	void dispatchI32TruncSatF64S() override
+	{ emitFloatToInt(reinterpret_cast<uint64_t>(&asmjitI32TruncSatF64S), 8, 4); }
+	void dispatchI32TruncSatF64U() override
+	{ emitFloatToInt(reinterpret_cast<uint64_t>(&asmjitI32TruncSatF64U), 8, 4); }
+	void dispatchI64TruncSatF32S() override
+	{ emitFloatToInt(reinterpret_cast<uint64_t>(&asmjitI64TruncSatF32S), 4, 8); }
+	void dispatchI64TruncSatF32U() override
+	{ emitFloatToInt(reinterpret_cast<uint64_t>(&asmjitI64TruncSatF32U), 4, 8); }
+	void dispatchI64TruncSatF64S() override
+	{ emitFloatToInt(reinterpret_cast<uint64_t>(&asmjitI64TruncSatF64S), 8, 8); }
+	void dispatchI64TruncSatF64U() override
+	{ emitFloatToInt(reinterpret_cast<uint64_t>(&asmjitI64TruncSatF64U), 8, 8); }
+
+	// A reinterpretation keeps the same width and the same bit pattern; the Gp
+	// already carries it, so there is nothing to emit.
+	void dispatchI32ReinterpretF32() override {}
+	void dispatchI64ReinterpretF64() override {}
+	void dispatchF32ReinterpretI32() override {}
+	void dispatchF64ReinterpretI64() override {}
+
+	void dispatchF32Load(WASM::MemArg arg) override
+	{ emitMemoryLoad(arg, 4, LoadKind::F32); }
+	void dispatchF64Load(WASM::MemArg arg) override
+	{ emitMemoryLoad(arg, 8, LoadKind::F64); }
+	void dispatchF32Store(WASM::MemArg arg) override { emitMemoryStore(arg, 4); }
+	void dispatchF64Store(WASM::MemArg arg) override { emitMemoryStore(arg, 8); }
+
+
 	void dispatchReturn() override
 	{
 		if (resultCount == 0) {
@@ -1285,7 +1743,12 @@ protected:
 		}
 		if (values.empty())
 			throw std::runtime_error("AsmJit return operand stack underflow");
-		checkError(compiler.ret(values.back()), "AsmJit return emission failed");
+		if (isFloatKind(resultType))
+			checkError(compiler.ret(
+					materializeFloat(values.back(), kindWidth(resultType))),
+					"AsmJit float return emission failed");
+		else
+			checkError(compiler.ret(values.back()), "AsmJit return emission failed");
 	}
 
 private:
@@ -1293,8 +1756,10 @@ private:
 	enum class LoadKind {
 		I32, I8Signed, I8Unsigned, I16Signed, I16Unsigned,
 		I64, I64I8Signed, I64I8Unsigned, I64I16Signed, I64I16Unsigned,
-		I64I32Signed, I64I32Unsigned
+		I64I32Signed, I64I32Unsigned,
+		F32, F64
 	};
+	enum class FloatCompareOp { Eq, Ne, Lt, Le, Gt, Ge };
 
 	enum class ControlKind { Block, Loop, If };
 	struct ControlFrame {
@@ -1312,8 +1777,319 @@ private:
 	enum class BinaryOp { Add, Sub, Mul, And, Or, Xor };
 	enum class ShiftOp { Left, ArithmeticRight, LogicalRight, RotateLeft, RotateRight };
 
+	// ── Float materialisation ───────────────────────────────────────────────
+	// A float value travels through the value stack as its IEEE bit pattern in
+	// a Gp. These two helpers are the only places a scalar float becomes an
+	// Xmm register (or goes back), which keeps the register-based emitter and
+	// its block/select bookkeeping unchanged.
 
-    void emitSelect()
+	//! Moves a float bit pattern into an Xmm register.
+	asmjit::x86::Vec materializeFloat(const asmjit::x86::Gp& bits, int width)
+	{
+		asmjit::x86::Vec xmm = compiler.new_xmm("floatValue");
+		if (width == 4)
+			checkError(compiler.movd(xmm, bits), "AsmJit f32 materialisation failed");
+		else
+			checkError(compiler.movq(xmm, bits), "AsmJit f64 materialisation failed");
+		return xmm;
+	}
+
+	//! Copies a float value out of an Xmm into a fresh Gp slot.
+	asmjit::x86::Gp bitsOfFloat(const asmjit::x86::Vec& xmm, int width)
+	{
+		asmjit::x86::Gp bits = width == 4
+				? compiler.new_gp32("floatBits") : compiler.new_gp64("floatBits");
+		if (width == 4)
+			checkError(compiler.movd(bits, xmm), "AsmJit f32 result move failed");
+		else
+			checkError(compiler.movq(bits, xmm), "AsmJit f64 result move failed");
+		return bits;
+	}
+
+	//! Returns one value from the function, materialising a float result.
+	void emitFunctionReturn(const asmjit::x86::Gp& value)
+	{
+		if (isFloatKind(resultType))
+			checkError(compiler.ret(materializeFloat(value, kindWidth(resultType))),
+					"AsmJit float function-branch return failed");
+		else
+			checkError(compiler.ret(value), "AsmJit function-branch return failed");
+	}
+
+	//! Sets a call's value arguments from prepared operands.
+	void setCallArguments(asmjit::InvokeNode* invoke,
+			const std::vector<asmjit::Reg>& prepared)
+	{
+		for (size_t i = 0; i < prepared.size(); ++i)
+			invoke->set_arg(i + 1, prepared[i]);
+	}
+
+	//! Materialises every call argument before the invoke node is appended.
+	std::vector<asmjit::Reg> prepareCallArguments(const WASM::FuncType& type,
+			const std::vector<asmjit::x86::Gp>& arguments)
+	{
+		std::vector<asmjit::Reg> prepared;
+		prepared.reserve(arguments.size());
+		for (size_t i = 0; i < arguments.size(); ++i) {
+			const WASM::ValueType& declared = type.params[i].val;
+			if (isFloatKind(declared.opcode))
+				prepared.emplace_back(
+						materializeFloat(arguments[i], kindWidth(declared.opcode)));
+			else
+				prepared.emplace_back(arguments[i]);
+		}
+		return prepared;
+	}
+
+	//! Publishes a call's single result, moving a float result out of its Xmm.
+	void emitCallResult(asmjit::InvokeNode* invoke, const WASM::FuncType& type,
+			const char* name)
+	{
+		if (type.results.empty())
+			return;
+		const WASM::ValueType& declared = type.results.front().val;
+		if (isFloatKind(declared.opcode)) {
+			auto result = compiler.new_xmm("callFloatResult");
+			invoke->set_ret(0, result);
+			values.push_back(bitsOfFloat(result, kindWidth(declared.opcode)));
+		} else {
+			auto result = newIntegerRegister(compiler, declared, name);
+			invoke->set_ret(0, result);
+			values.push_back(result);
+		}
+	}
+	void emitFloatBinary(asmjit::x86::Inst::Id op32, asmjit::x86::Inst::Id op64, int width)
+	{
+		if (values.size() < 2)
+			throw std::runtime_error("AsmJit float binary operand stack underflow");
+		const auto second = values.back(); values.pop_back();
+		const auto first = values.back(); values.pop_back();
+		const auto lhs = materializeFloat(first, width);
+		const auto rhs = materializeFloat(second, width);
+		checkError(compiler.emit(width == 4 ? op32 : op64, lhs, rhs),
+				"AsmJit float binary emission failed");
+		values.push_back(bitsOfFloat(lhs, width));
+	}
+
+	//! Calls a one-argument float helper over the top slot.
+	void emitFloatHelper1(uint64_t function, int width)
+	{
+		if (values.empty())
+			throw std::runtime_error("AsmJit float helper operand stack underflow");
+		const auto bits = values.back(); values.pop_back();
+		// The argument must be materialised before the invoke node is appended:
+		// AsmJit emits nodes in program order, so instructions created after the
+		// call would run after it.
+		const auto argument = materializeFloat(bits, width);
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(width == 4 ? asmjit::TypeId::kFloat32 : asmjit::TypeId::kFloat64);
+		signature.add_arg(width == 4 ? asmjit::TypeId::kFloat32 : asmjit::TypeId::kFloat64);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke), function, signature),
+				"AsmJit float helper call emission failed");
+		invoke->set_arg(0, argument);
+		auto result = compiler.new_xmm("floatHelperResult");
+		invoke->set_ret(0, result);
+		values.push_back(bitsOfFloat(result, width));
+	}
+
+	//! Calls a two-argument float helper over the top two slots.
+	void emitFloatHelper2(uint64_t function, int width)
+	{
+		if (values.size() < 2)
+			throw std::runtime_error("AsmJit float helper operand stack underflow");
+		const auto second = values.back(); values.pop_back();
+		const auto first = values.back(); values.pop_back();
+		const auto firstArgument = materializeFloat(first, width);
+		const auto secondArgument = materializeFloat(second, width);
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(width == 4 ? asmjit::TypeId::kFloat32 : asmjit::TypeId::kFloat64);
+		signature.add_arg(width == 4 ? asmjit::TypeId::kFloat32 : asmjit::TypeId::kFloat64);
+		signature.add_arg(width == 4 ? asmjit::TypeId::kFloat32 : asmjit::TypeId::kFloat64);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke), function, signature),
+				"AsmJit float helper call emission failed");
+		invoke->set_arg(0, firstArgument);
+		invoke->set_arg(1, secondArgument);
+		auto result = compiler.new_xmm("floatHelperResult");
+		invoke->set_ret(0, result);
+		values.push_back(bitsOfFloat(result, width));
+	}
+
+	//! Emits a float comparison of the top two slots, producing an i32 0/1.
+	void emitFloatCompare(FloatCompareOp operation, int width)
+	{
+		if (values.size() < 2)
+			throw std::runtime_error("AsmJit float compare operand stack underflow");
+		const auto second = values.back(); values.pop_back();
+		const auto first = values.back(); values.pop_back();
+		const auto lhs = materializeFloat(first, width);
+		const auto rhs = materializeFloat(second, width);
+
+		// Zero the flag registers *before* the compare: `xor_` sets flags, and
+		// `setcc` must read the comparison's flags, not the zeroing's.
+		auto primary = compiler.new_gp32("floatFlag");
+		auto secondary = compiler.new_gp32("floatFlag");
+		checkError(compiler.xor_(primary, primary), "AsmJit float flag zeroing failed");
+		checkError(compiler.xor_(secondary, secondary), "AsmJit float flag zeroing failed");
+		checkError(width == 4 ? compiler.ucomiss(lhs, rhs) : compiler.ucomisd(lhs, rhs),
+				"AsmJit float compare emission failed");
+		const auto set = [&](asmjit::x86::CondCode condition, asmjit::x86::Gp& reg) {
+			checkError(compiler.set(condition, reg.r8()),
+					"AsmJit float condition emission failed");
+		};
+		switch (operation) {
+		case FloatCompareOp::Eq:
+			set(asmjit::x86::CondCode::kE, primary);
+			set(asmjit::x86::CondCode::kNP, secondary);
+			checkError(compiler.and_(primary, secondary),
+					"AsmJit float eq ordered mask failed");
+			values.push_back(primary);
+			break;
+		case FloatCompareOp::Ne:
+			set(asmjit::x86::CondCode::kNE, primary);
+			set(asmjit::x86::CondCode::kP, secondary);
+			checkError(compiler.or_(primary, secondary),
+					"AsmJit float ne unordered mask failed");
+			values.push_back(primary);
+			break;
+		case FloatCompareOp::Lt:
+			set(asmjit::x86::CondCode::kB, primary);
+			set(asmjit::x86::CondCode::kNP, secondary);
+			checkError(compiler.and_(primary, secondary),
+					"AsmJit float lt ordered mask failed");
+			values.push_back(primary);
+			break;
+		case FloatCompareOp::Le:
+			set(asmjit::x86::CondCode::kBE, primary);
+			set(asmjit::x86::CondCode::kNP, secondary);
+			checkError(compiler.and_(primary, secondary),
+					"AsmJit float le ordered mask failed");
+			values.push_back(primary);
+			break;
+		case FloatCompareOp::Gt:
+			set(asmjit::x86::CondCode::kA, primary);
+			values.push_back(primary);
+			break;
+		case FloatCompareOp::Ge:
+			set(asmjit::x86::CondCode::kAE, primary);
+			values.push_back(primary);
+			break;
+		}
+	}
+
+	//! Absolute value as a bit operation (clear the sign bit).
+	void emitFloatAbs()
+	{
+		if (values.empty())
+			throw std::runtime_error("AsmJit f32.abs operand stack underflow");
+		const auto bits = values.back(); values.pop_back();
+		checkError(compiler.shl(bits, 1), "AsmJit float abs shift failed");
+		checkError(compiler.shr(bits, 1), "AsmJit float abs restore failed");
+		values.push_back(bits);
+	}
+
+	//! Negation as a bit operation (toggle the sign bit).
+	void emitFloatNeg(int width)
+	{
+		if (values.empty())
+			throw std::runtime_error("AsmJit f32.neg operand stack underflow");
+		const auto bits = values.back(); values.pop_back();
+		const auto sign = width == 4
+				? compiler.new_gp32("floatSign") : compiler.new_gp64("floatSign");
+		checkError(compiler.mov(sign, 1), "AsmJit float sign initialisation failed");
+		checkError(compiler.shl(sign, width == 4 ? 31 : 63),
+				"AsmJit float sign shift failed");
+		checkError(compiler.xor_(bits, sign), "AsmJit float neg emission failed");
+		values.push_back(bits);
+	}
+
+	//! `copysign` as bit operations: keep x's magnitude and y's sign.
+	void emitFloatCopysign(int width)
+	{
+		if (values.size() < 2)
+			throw std::runtime_error("AsmJit f32.copysign operand stack underflow");
+		const auto y = values.back(); values.pop_back();
+		const auto x = values.back(); values.pop_back();
+		const auto sign = width == 4
+				? compiler.new_gp32("copySign") : compiler.new_gp64("copySign");
+		const auto mask = width == 4
+				? compiler.new_gp32("signMask") : compiler.new_gp64("signMask");
+		checkError(compiler.mov(mask, 1), "AsmJit copysign mask initialisation failed");
+		checkError(compiler.shl(mask, width == 4 ? 31 : 63),
+				"AsmJit copysign mask shift failed");
+		checkError(compiler.mov(sign, y), "AsmJit copysign sign copy failed");
+		checkError(compiler.and_(sign, mask), "AsmJit copysign sign extraction failed");
+		checkError(compiler.shl(x, 1), "AsmJit copysign magnitude shift failed");
+		checkError(compiler.shr(x, 1), "AsmJit copysign magnitude restore failed");
+		checkError(compiler.or_(x, sign), "AsmJit copysign combine failed");
+		values.push_back(x);
+	}
+
+	//! Calls a checked float-to-integer helper over the top slot.
+	void emitFloatToInt(uint64_t function, int floatWidth, int intWidth)
+	{
+		if (values.empty())
+			throw std::runtime_error("AsmJit float-to-int operand stack underflow");
+		const auto bits = values.back(); values.pop_back();
+		const auto argument = materializeFloat(bits, floatWidth);
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(intWidth == 4 ? asmjit::TypeId::kInt32 : asmjit::TypeId::kInt64);
+		signature.add_arg(floatWidth == 4 ? asmjit::TypeId::kFloat32
+										  : asmjit::TypeId::kFloat64);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke), function, signature),
+				"AsmJit float-to-int helper emission failed");
+		invoke->set_arg(0, argument);
+		auto result = intWidth == 4
+				? compiler.new_gp32("truncResult") : compiler.new_gp64("truncResult");
+		invoke->set_ret(0, result);
+		values.push_back(result);
+		emitPendingTrapReturn();
+	}
+
+	//! Calls an integer-to-float helper over the top slot.
+	void emitIntToFloat(uint64_t function, int intWidth, int floatWidth)
+	{
+		if (values.empty())
+			throw std::runtime_error("AsmJit int-to-float operand stack underflow");
+		const auto source = values.back(); values.pop_back();
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(floatWidth == 4 ? asmjit::TypeId::kFloat32
+										  : asmjit::TypeId::kFloat64);
+		signature.add_arg(intWidth == 4 ? asmjit::TypeId::kInt32 : asmjit::TypeId::kInt64);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke), function, signature),
+				"AsmJit int-to-float helper emission failed");
+		invoke->set_arg(0, source);
+		auto result = compiler.new_xmm("convertResult");
+		invoke->set_ret(0, result);
+		values.push_back(bitsOfFloat(result, floatWidth));
+	}
+
+	//! Calls a float-to-float helper (demote/promote).
+	void emitFloatToFloat(uint64_t function, int sourceWidth, int resultWidth)
+	{
+		if (values.empty())
+			throw std::runtime_error("AsmJit float conversion operand stack underflow");
+		const auto bits = values.back(); values.pop_back();
+		const auto argument = materializeFloat(bits, sourceWidth);
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(resultWidth == 4 ? asmjit::TypeId::kFloat32
+										   : asmjit::TypeId::kFloat64);
+		signature.add_arg(sourceWidth == 4 ? asmjit::TypeId::kFloat32
+										   : asmjit::TypeId::kFloat64);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke), function, signature),
+				"AsmJit float conversion helper emission failed");
+		invoke->set_arg(0, argument);
+		auto result = compiler.new_xmm("convertResult");
+		invoke->set_ret(0, result);
+		values.push_back(bitsOfFloat(result, resultWidth));
+	}
+
+
+	void emitSelect()
     {
         if (values.size() < 3)
             throw std::runtime_error("AsmJit select operand stack underflow");
@@ -1325,7 +2101,7 @@ private:
         values.pop_back();
         if (condition.size() != 4 || first.size() != second.size()
                 || (first.size() != 4 && first.size() != 8))
-            throw std::runtime_error("AsmJit select requires an i32 condition and matching i32/i64 values");
+            throw std::runtime_error("AsmJit select requires an i32 condition and matching i32/i64/f32/f64 values");
         auto result = first.size() == 8
                 ? compiler.new_gp64("selectResult") : compiler.new_gp32("selectResult");
         auto chooseSecond = compiler.new_label();
@@ -1437,7 +2213,7 @@ private:
 		frame.resultType = blockResultType(type);
 		frame.resultCount = frame.resultType == WASM::ValueTypeCode::Void ? 0 : 1;
 		if (frame.resultCount != 0) {
-			frame.result = frame.resultType == WASM::ValueTypeCode::I64
+			frame.result = kindWidth(frame.resultType) == 8
 					? compiler.new_gp64("blockResult") : compiler.new_gp32("blockResult");
 		}
 		if (kind == ControlKind::Loop) {
@@ -1463,12 +2239,11 @@ private:
 				throw std::runtime_error("AsmJit block multi-value results are not supported yet");
 			if (blockType.results.empty())
 				return WASM::ValueTypeCode::Void;
-			requireInteger(blockType.results.front().val, "block results");
+			requireScalar(blockType.results.front().val, "block results");
 			return blockType.results.front().val.opcode;
 		}
-		if (type.valType != WASM::ValueTypeCode::I32
-				&& type.valType != WASM::ValueTypeCode::I64)
-			throw std::runtime_error("AsmJit structured control flow supports only i32/i64 block results");
+		if (kindWidth(type.valType) == 0)
+			throw std::runtime_error("AsmJit structured control flow supports only scalar block results");
 		return type.valType;
 	}
 
@@ -1519,7 +2294,7 @@ private:
 		if (index >= module.globals.size())
 			throw std::runtime_error("AsmJit global instruction references an unknown global");
 		const WASM::GlobalType& type = module.globals[index].type;
-		requireInteger(type.contentType, "globals");
+		requireScalar(type.contentType, "globals");
 		return type;
 	}
 
@@ -1542,14 +2317,14 @@ private:
 		auto cell = emitGlobalCell(index);
 		const auto& type = validateGlobalIndex(index);
 		auto value = newIntegerRegister(compiler, type.contentType, "globalValue");
-		if (type.contentType.opcode == WASM::ValueTypeCode::I64) {
+		if (kindWidth(type.contentType.opcode) == 8) {
 			checkError(compiler.mov(value, asmjit::x86::qword_ptr(cell,
 					static_cast<int32_t>(offsetof(WASM::Value, i64)))),
-					"AsmJit i64 global.get load failed");
+					"AsmJit 64-bit global.get load failed");
 		} else {
 			checkError(compiler.mov(value, asmjit::x86::dword_ptr(cell,
 					static_cast<int32_t>(offsetof(WASM::Value, i32)))),
-					"AsmJit i32 global.get load failed");
+					"AsmJit 32-bit global.get load failed");
 		}
 		values.push_back(value);
 	}
@@ -1563,14 +2338,14 @@ private:
 			throw std::runtime_error("AsmJit global.set operand stack underflow");
 		auto value = values.back(); values.pop_back();
 		auto cell = emitGlobalCell(index);
-		if (type.contentType.opcode == WASM::ValueTypeCode::I64) {
+		if (kindWidth(type.contentType.opcode) == 8) {
 			checkError(compiler.mov(asmjit::x86::qword_ptr(cell,
 					static_cast<int32_t>(offsetof(WASM::Value, i64))), value),
-					"AsmJit i64 global.set store failed");
+					"AsmJit 64-bit global.set store failed");
 		} else {
 			checkError(compiler.mov(asmjit::x86::dword_ptr(cell,
 					static_cast<int32_t>(offsetof(WASM::Value, i32))), value),
-					"AsmJit i32 global.set store failed");
+					"AsmJit 32-bit global.set store failed");
 		}
 	}
 
@@ -1686,7 +2461,7 @@ private:
 		const bool wide = kind == LoadKind::I64 || kind == LoadKind::I64I8Signed
 				|| kind == LoadKind::I64I8Unsigned || kind == LoadKind::I64I16Signed
 				|| kind == LoadKind::I64I16Unsigned || kind == LoadKind::I64I32Signed
-				|| kind == LoadKind::I64I32Unsigned;
+				|| kind == LoadKind::I64I32Unsigned || kind == LoadKind::F64;
 		auto result = wide ? compiler.new_gp64("memoryLoad64") : compiler.new_gp32("memoryLoad32");
 		switch (kind) {
 		case LoadKind::I32:
@@ -1713,6 +2488,10 @@ private:
 			checkError(compiler.movsxd(result, asmjit::x86::dword_ptr(pointer)), "AsmJit i64.load32_s emission failed"); break;
 		case LoadKind::I64I32Unsigned:
 			checkError(compiler.mov(result.r32(), asmjit::x86::dword_ptr(pointer)), "AsmJit i64.load32_u emission failed"); break;
+		case LoadKind::F32:
+			checkError(compiler.mov(result.r32(), asmjit::x86::dword_ptr(pointer)), "AsmJit f32.load emission failed"); break;
+		case LoadKind::F64:
+			checkError(compiler.mov(result, asmjit::x86::qword_ptr(pointer)), "AsmJit f64.load emission failed"); break;
 		}
 		values.push_back(result);
 	}

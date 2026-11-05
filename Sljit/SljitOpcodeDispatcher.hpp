@@ -181,6 +181,83 @@ protected:
 	void dispatchI64ExtendI32S() override; //!< `i64.extend_i32_s`.
 	void dispatchI64ExtendI32U() override; //!< `i64.extend_i32_u`.
 
+	void dispatchF32Const(float arg) override; //!< `f32.const`.
+	void dispatchF64Const(double arg) override; //!< `f64.const`.
+	void dispatchF32Abs() override; //!< `f32.abs`.
+	void dispatchF32Neg() override; //!< `f32.neg`.
+	void dispatchF32Sqrt() override; //!< `f32.sqrt`.
+	void dispatchF32Ceil() override; //!< `f32.ceil`.
+	void dispatchF32Floor() override; //!< `f32.floor`.
+	void dispatchF32Trunc() override; //!< `f32.trunc`.
+	void dispatchF32Nearest() override; //!< `f32.nearest`.
+	void dispatchF32Add() override; //!< `f32.add`.
+	void dispatchF32Sub() override; //!< `f32.sub`.
+	void dispatchF32Mul() override; //!< `f32.mul`.
+	void dispatchF32Div() override; //!< `f32.div`.
+	void dispatchF32Min() override; //!< `f32.min`.
+	void dispatchF32Max() override; //!< `f32.max`.
+	void dispatchF32Copysign() override; //!< `f32.copysign`.
+	void dispatchF32Eq() override; //!< `f32.eq`.
+	void dispatchF32Ne() override; //!< `f32.ne`.
+	void dispatchF32Lt() override; //!< `f32.lt`.
+	void dispatchF32Gt() override; //!< `f32.gt`.
+	void dispatchF32Le() override; //!< `f32.le`.
+	void dispatchF32Ge() override; //!< `f32.ge`.
+	void dispatchF64Abs() override; //!< `f64.abs`.
+	void dispatchF64Neg() override; //!< `f64.neg`.
+	void dispatchF64Sqrt() override; //!< `f64.sqrt`.
+	void dispatchF64Ceil() override; //!< `f64.ceil`.
+	void dispatchF64Floor() override; //!< `f64.floor`.
+	void dispatchF64Trunc() override; //!< `f64.trunc`.
+	void dispatchF64Nearest() override; //!< `f64.nearest`.
+	void dispatchF64Add() override; //!< `f64.add`.
+	void dispatchF64Sub() override; //!< `f64.sub`.
+	void dispatchF64Mul() override; //!< `f64.mul`.
+	void dispatchF64Div() override; //!< `f64.div`.
+	void dispatchF64Min() override; //!< `f64.min`.
+	void dispatchF64Max() override; //!< `f64.max`.
+	void dispatchF64Copysign() override; //!< `f64.copysign`.
+	void dispatchF64Eq() override; //!< `f64.eq`.
+	void dispatchF64Ne() override; //!< `f64.ne`.
+	void dispatchF64Lt() override; //!< `f64.lt`.
+	void dispatchF64Gt() override; //!< `f64.gt`.
+	void dispatchF64Le() override; //!< `f64.le`.
+	void dispatchF64Ge() override; //!< `f64.ge`.
+	void dispatchF32ConvertI32S() override; //!< `f32.convert_i32_s`.
+	void dispatchF32ConvertI32U() override; //!< `f32.convert_i32_u`.
+	void dispatchF32ConvertI64S() override; //!< `f32.convert_i64_s`.
+	void dispatchF32ConvertI64U() override; //!< `f32.convert_i64_u`.
+	void dispatchF64ConvertI32S() override; //!< `f64.convert_i32_s`.
+	void dispatchF64ConvertI32U() override; //!< `f64.convert_i32_u`.
+	void dispatchF64ConvertI64S() override; //!< `f64.convert_i64_s`.
+	void dispatchF64ConvertI64U() override; //!< `f64.convert_i64_u`.
+	void dispatchF32DemoteF64() override; //!< `f32.demote_f64`.
+	void dispatchF64PromoteF32() override; //!< `f64.promote_f32`.
+	void dispatchI32TruncF32S() override; //!< `i32.trunc_f32_s`.
+	void dispatchI32TruncF32U() override; //!< `i32.trunc_f32_u`.
+	void dispatchI32TruncF64S() override; //!< `i32.trunc_f64_s`.
+	void dispatchI32TruncF64U() override; //!< `i32.trunc_f64_u`.
+	void dispatchI64TruncF32S() override; //!< `i64.trunc_f32_s`.
+	void dispatchI64TruncF32U() override; //!< `i64.trunc_f32_u`.
+	void dispatchI64TruncF64S() override; //!< `i64.trunc_f64_s`.
+	void dispatchI64TruncF64U() override; //!< `i64.trunc_f64_u`.
+	void dispatchI32TruncSatF32S() override; //!< `i32.trunc_sat_f32_s`.
+	void dispatchI32TruncSatF32U() override; //!< `i32.trunc_sat_f32_u`.
+	void dispatchI32TruncSatF64S() override; //!< `i32.trunc_sat_f64_s`.
+	void dispatchI32TruncSatF64U() override; //!< `i32.trunc_sat_f64_u`.
+	void dispatchI64TruncSatF32S() override; //!< `i64.trunc_sat_f32_s`.
+	void dispatchI64TruncSatF32U() override; //!< `i64.trunc_sat_f32_u`.
+	void dispatchI64TruncSatF64S() override; //!< `i64.trunc_sat_f64_s`.
+	void dispatchI64TruncSatF64U() override; //!< `i64.trunc_sat_f64_u`.
+	void dispatchI32ReinterpretF32() override; //!< `i32.reinterpret_f32`.
+	void dispatchI64ReinterpretF64() override; //!< `i64.reinterpret_f64`.
+	void dispatchF32ReinterpretI32() override; //!< `f32.reinterpret_i32`.
+	void dispatchF64ReinterpretI64() override; //!< `f64.reinterpret_i64`.
+	void dispatchF32Load(WASM::MemArg arg) override; //!< `f32.load`.
+	void dispatchF64Load(WASM::MemArg arg) override; //!< `f64.load`.
+	void dispatchF32Store(WASM::MemArg arg) override; //!< `f32.store`.
+	void dispatchF64Store(WASM::MemArg arg) override; //!< `f64.store`.
+
 	void dispatchI32Load(WASM::MemArg arg) override; //!< `i32.load`.
 	void dispatchI32Load8S(WASM::MemArg arg) override; //!< `i32.load8_s`.
 	void dispatchI32Load8U(WASM::MemArg arg) override; //!< `i32.load8_u`.
@@ -393,6 +470,89 @@ private:
 	 * \param operation Human-readable opcode name for diagnostics.
 	 */
 	void emitCheckedBinary(sljit_sw address, int width, const char* operation);
+	/*!
+	 * \brief Loads one operand-stack float slot into an `FR` register.
+	 * \param freg Destination floating-point register.
+	 * \param depth Zero-based operand-stack depth.
+	 * \param width 4 for f32, 8 for f64.
+	 */
+	void loadFloatSlot(int freg, std::size_t depth, int width);
+	/*!
+	 * \brief Stores an `FR` register into one operand-stack float slot.
+	 * \param freg Source floating-point register.
+	 * \param depth Zero-based operand-stack depth.
+	 * \param width 4 for f32, 8 for f64.
+	 */
+	void storeFloatSlot(int freg, std::size_t depth, int width);
+	/*!
+	 * \brief Emits a one-operand float operation over the top slot.
+	 * \param wordOp Word-width SLJIT FOP1 operation; the 32-bit form is derived.
+	 * \param width 4 for f32, 8 for f64.
+	 */
+	void emitFloatUnary(sljit_s32 wordOp, int width);
+	/*!
+	 * \brief Emits a two-operand float operation over the top two slots.
+	 * \param wordOp Word-width SLJIT FOP2 operation; the 32-bit form is derived.
+	 * \param width 4 for f32, 8 for f64.
+	 */
+	void emitFloatBinary(sljit_s32 wordOp, int width);
+	/*!
+	 * \brief Calls a one-argument float helper over the top slot.
+	 * \param address Helper entry point.
+	 * \param width 4 for f32, 8 for f64.
+	 */
+	void emitFloatHelper1(sljit_sw address, int width);
+	/*!
+	 * \brief Calls a two-argument float helper over the top two slots.
+	 * \param address Helper entry point.
+	 * \param width 4 for f32, 8 for f64.
+	 */
+	void emitFloatHelper2(sljit_sw address, int width);
+	/*!
+	 * \brief Emits a float comparison of the top two slots, producing an i32 0/1.
+	 * \param condition SLJIT comparison for "true".
+	 * \param width 4 for f32, 8 for f64.
+	 */
+	void emitFloatCompare(sljit_s32 condition, int width);
+	/*!
+	 * \brief Writes a float constant into one operand-stack slot.
+	 * \param value The constant.
+	 * \param width 4 for f32, 8 for f64.
+	 * \param depth Zero-based operand-stack depth.
+	 */
+	void emitFloatConst(double value, int width, std::size_t depth);
+	/*!
+	 * \brief Emits one checked float memory load.
+	 * \param arg Memory immediate.
+	 * \param width 4 for f32, 8 for f64.
+	 */
+	void emitMemoryLoadFloat(const WASM::MemArg& arg, int width);
+	/*!
+	 * \brief Emits one checked float memory store.
+	 * \param arg Memory immediate.
+	 * \param width 4 for f32, 8 for f64.
+	 */
+	void emitMemoryStoreFloat(const WASM::MemArg& arg, int width);
+	/*!
+	 * \brief Emits an integer-to-float conversion over the top slot.
+	 * \param conversion SLJIT FOP1 conversion opcode.
+	 * \param sourceWidth Width of the integer operand (4 or 8).
+	 * \param resultWidth Width of the float result (4 or 8).
+	 */
+	void emitIntToFloat(sljit_s32 conversion, int sourceWidth, int resultWidth);
+	/*!
+	 * \brief Emits a checked float-to-integer conversion over the top slot.
+	 * \param address Checked helper entry point.
+	 * \param sourceWidth Width of the float operand (4 or 8).
+	 * \param resultWidth Width of the integer result (4 or 8).
+	 */
+	void emitFloatToInt(sljit_sw address, int sourceWidth, int resultWidth);
+	/*!
+	 * \brief Emits a bit-reinterpretation of the top slot.
+	 * \param width Slot width in bytes (4 or 8); both reinterpreting types
+	 *        always have the same width.
+	 */
+	void emitReinterpret(int width);
 
 	/*!
 	 * \brief Resolves a block type into parameter and result widths.
@@ -468,11 +628,14 @@ private:
 	std::uint32_t functionIndex_; //!< Module function index (trap-site annotation).
 	const char* functionName_ = nullptr; //!< Name-section name, or null.
 
-	std::vector<int> localWidths_; //!< 4 (i32) or 8 (i64) per local, parameters first.
-	std::vector<int> paramWidths_; //!< Width of each parameter, in order.
+	std::vector<int> localWidths_; //!< Slot width per local, parameters first.
+	std::vector<WASM::ValueTypeCode> localKinds_; //!< Value kind per local, parameters first.
+	std::vector<WASM::ValueTypeCode> paramKinds_; //!< Value kind of each parameter.
+	std::vector<int> paramWidths_; //!< Slot width of each parameter.
 	std::uint32_t parameterCount_ = 0; //!< Number of Wasm parameters.
 	std::size_t localSlots_ = 0; //!< Parameters plus declared locals.
-	int resultWidth_ = 0; //!< 0 (void), 4 (i32) or 8 (i64).
+	int resultWidth_ = 0; //!< 0 (void), 4 (i32/f32) or 8 (i64/f64).
+	WASM::ValueTypeCode resultKind_ = WASM::ValueTypeCode::Void; //!< Declared result kind.
 
 	std::vector<int> stackWidths_; //!< Widths of the live operand stack, bottom first.
 	std::size_t maxStackDepth_ = 0; //!< High-water mark of the operand stack.

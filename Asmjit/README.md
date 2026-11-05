@@ -3,8 +3,8 @@
 *Experimental AsmJit backend*
 
 This directory contains an experimental, deliberately limited WebAssembly
-backend. It implements the four `ModuleInstantiator` hooks and executes an
-initial i32/i64 integer subset. It is not feature-complete and must not be treated as a
+backend. It implements the four `ModuleInstantiator` hooks and executes a
+scalar `i32`/`i64`/`f32`/`f64` subset. It is not feature-complete and must not be treated as a
 drop-in replacement for GNU LibJIT.
 
 ## What exists
@@ -26,27 +26,34 @@ drop-in replacement for GNU LibJIT.
 the two-pass instantiation contract and enabling forward and mutually recursive
 direct calls. Each generated function emits the required
   `wasm_stack_check(VMContext*)` prologue call.
-- The body compiler currently supports i32/i64 parameters, results, and locals;
-  i32/i64 constants and local access; i32.wrap_i64, i64.extend_i32_s/u and i64.extend8/16/32_s; i64 arithmetic (`add/sub/mul/div/rem`),
+- The body compiler currently supports i32/i64/f32/f64 parameters, results, and
+  locals; i32/i64 constants and local access; i32.wrap_i64, i64.extend_i32_s/u and i64.extend8/16/32_s; i64 arithmetic (`add/sub/mul/div/rem`),
   bitwise operations, shifts, rotations, comparisons, and `eqz`; i32 arithmetic,
   bit counts, sign extension, comparisons, bitwise operations, shifts, and rotations;
-  `drop`, untyped and typed i32/i64 `select`; i32/i64 globals; void and single-i32/i64-result `block`/`loop`/`if`/`else`, `br`/`br_if`/`br_table`,
+  scalar `f32`/`f64` constants, arithmetic, `min`/`max`, `abs`/`neg`/`sqrt`,
+  rounding (`ceil`/`floor`/`trunc`/`nearest`), `copysign`, all comparisons, the
+  checked and saturating integer conversions, `demote`/`promote`, and
+  reinterpretation. A float travels through the value stack as its IEEE bit
+  pattern in a Gp and materialises in an Xmm only at an arithmetic/compare/ABI
+  boundary, so `select`, block transfer and locals are the same code as for
+  integers;
+  `drop`, untyped and typed scalar `select`; i32/i64/f32/f64 globals; void and single-scalar-result `block`/`loop`/`if`/`else`, `br`/`br_if`/`br_table`,
   branches to the implicit function label, and explicit/implicit returns; direct calls
   (native imports, forward calls and mutual recursion), typed `call_indirect`,
-  with i32/i64 signatures including native and cross-instance Wasm imports;
+  with scalar signatures including native and cross-instance Wasm imports;
   i32-only direct/indirect tail-call opcodes (currently lowered to call+return;
   true tail-call stack semantics and machine-level elimination remain outstanding);
-  and memory32 i32/i64 loads/stores, including signed/unsigned narrow extensions,
+  and memory32 i32/i64/f32/f64 loads/stores, including signed/unsigned narrow extensions,
   plus `memory.size`/`memory.grow`, checked memory32 `memory.copy` (with overlap-safe `memmove` semantics), `memory.fill`, `memory.init`, `data.drop`, `table.init`, `elem.drop`, `table.size`, and checked overlap-safe `table.copy`.
   Memory accesses use a checked helper that observes the shared-memory size
   accessor and reports out-of-bounds traps through the pending-trap protocol.
   Function nodes are declared in one CodeHolder before any bodies are emitted,
   so direct-call labels resolve across the entire module. Result-bearing blocks
-  currently support only one i32 or i64 result and no block parameters; `br_table`
+  currently support only one scalar result and no block parameters; `br_table`
   requires identical target stack heights/signatures. The `unreachable`
   instruction reports a trap and supplies a limited single-result placeholder,
-  but general unreachable-stack polymorphism remains unsupported. Cross-instance i32/i64 Wasm imports are covered by tests. I32/i64 globals are lowered; Memory64, floating-point values, references, and
-most remaining instructions are still unsupported and fail explicitly.
+  but general unreachable-stack polymorphism remains unsupported. Cross-instance scalar Wasm imports are covered by tests. Scalar globals are lowered; Memory64, `v128`/SIMD, references, `f16` and
+  most remaining instructions are still unsupported and fail explicitly.
 - `Test/TestBackend.cpp` exposes an `AsmJitSession` through
   `WASMJIT_BACKEND=asmjit`, including i32 invocation marshalling, aggregate
   layout calculation, and the existing lane-wise SIMD diagnostic interface.
@@ -108,9 +115,8 @@ target-architecture check).
 
 ## Next implementation stages
 
-1. Floating-point arithmetic and conversions, then `v128` load/store and native
-   SIMD lowering (P3). SLJIT is entering the same slice, so the shared
-   `[sljit][module][parity]` fixtures should grow with it.
+1. `v128`/SIMD lowering (the remaining part of P3); SLJIT is entering the same
+   slice, so the shared `[sljit][module][parity]` fixtures should grow with it.
 2. Extend structured control flow to general unreachable-stack polymorphism
    (SLJIT already covers block parameters and multi-value block results, so the
    two backends currently differ there).

@@ -368,9 +368,10 @@ layering violation with extra steps.
 ## 11. The SLJIT backend — a worked example, and its honest limits
 
 `Sljit/` is the second executing backend. As of **snapshot 2026-11-05** it
-covers the same integer/control/call/memory slice as `Asmjit/`, so the two can
-act as each other's oracle; it still claims no parity with LibJIT, which is the
-next target (floating point, references/GC, exceptions, continuations).
+covers the same scalar integer and floating-point slice as `Asmjit/` — P0–P3
+(scalar) in the plan's terms — so the two can act as each other's oracle; it
+still claims no parity with LibJIT, whose references/GC, exceptions and
+continuations are the next target.
 
 | File | Role |
 |---|---|
@@ -393,13 +394,17 @@ next target (floating point, references/GC, exceptions, continuations).
   `unreachable`, `drop`, `nop`, `return` and the implicit `end`;
 - direct and indirect calls, forward/mutually recursive targets, native and
   cross-instance imports, and `return_call*` lowered to call + return;
-- `i32`/`i64` globals, memory32 loads/stores at every integer width,
+- `f32`/`f64` constants, locals, globals, arithmetic, `min`/`max`,
+  `abs`/`neg`/`sqrt`, rounding, `copysign`, comparisons, checked and saturating
+  integer conversions, `demote`/`promote` and reinterpretation;
+- `i32`/`i64` globals, memory32 loads/stores at every integer width and both
+  float widths,
   `memory.size`/`grow`, `memory.copy`/`fill`/`init`, `data.drop`,
   `table.init`/`copy`/`size` and `elem.drop`;
 - the stack guard and a pending-trap epilogue, so a call reports a
   `CallStackExhausted` trap as a pending status rather than crashing.
 
-**What it refuses, loudly and safely:** floating point, `v128`/SIMD,
+**What it refuses, loudly and safely:** `v128`/SIMD, the `f16` proposal,
 references/GC, exceptions, continuations, atomics, memory64, a call with more
 than three parameters and a function with more than one result. Each leaves
 that function's `Callable::fnPtr` **null**. The core then refuses the call at
@@ -411,7 +416,7 @@ miscompiled, nothing is interpreted, and no half-emitted code is ever installed.
 | Limitation | Why | What replaces it |
 |---|---|---|
 | three parameters, one result | SLJIT's `sljit_emit_enter`/`sljit_emit_icall` take at most four integer arguments, and `VMContext*` is one of them | LibJIT for wider signatures |
-| no floating point/SIMD | the helper layer is the next slice (P3); a half-lowered float is worse than a refused one | LibJIT |
+| no `v128`/SIMD | the vector helper layer is the next slice; a half-lowered vector is worse than a refused one | LibJIT |
 | no references/GC/exceptions | the GC layout and ownership model are whole projects of their own | LibJIT (`emitReferenceParameterRetains`) |
 | references are refused, not half-owned | neither this backend nor Asmjit lowers `ref.*`/`struct.*`/`array.*`; a reference it moves without counting is worse than one it refuses. When either adds them, §6 “Reference ownership” is the rule to implement, not an optional refinement | LibJIT |
 | one executable mapping per function | the W^X allocator maps each block separately | acceptable for a second backend; the default pooled allocator trades W^X for density |
@@ -508,17 +513,18 @@ every semantic question unless a row below explicitly says otherwise.
 
 - `LibJit/` is the complete backend: all lowered opcodes, references/GC,
   exceptions, continuations, SIMD helpers and the full test corpus.
-- `Asmjit/` and `Sljit/` execute the same **P0–P2 integer slice**: i32/i64
-  arithmetic and conversions, globals, structured control flow (block
-  parameters and multi-value results on SLJIT), direct/indirect/tail calls,
-  memory32 loads/stores, `memory.size`/`grow`, bulk memory and the table
-  operations. Both register under their own name, both implement
-  `releaseInstance`, and both pass `[backendabi]`, `[asmjit]`/`[sljit]` and the
-  shared `[sljit][module][parity]` fixtures over the same `.wat` modules.
-- Neither lowers floating point, `v128`/SIMD, references/GC, exceptions,
-  continuations or atomics; those stay refused at the call boundary. SLJIT
-  additionally caps generated functions at three parameters and one result
-  (SLJIT's four-argument call ABI).
+- `Asmjit/` and `Sljit/` execute the same **P0–P3 scalar slice**: i32/i64 and
+  f32/f64 arithmetic, conversions, globals, structured control flow (block
+  parameters and multi-value block results on SLJIT), direct/indirect/tail
+  calls, memory32 loads/stores at every scalar width, `memory.size`/`grow`,
+  bulk memory and the table operations. Both register under their own name,
+  both implement `releaseInstance`, and both pass `[backendabi]`,
+  `[asmjit]`/`[sljit]` and the shared `[sljit][module][parity]` fixtures over
+  the same `.wat` modules.
+- Neither lowers `v128`/SIMD, references/GC, exceptions, continuations, atomics
+  or `f16`; those stay refused at the call boundary. SLJIT additionally caps
+  generated functions at three parameters and one result (SLJIT's four-argument
+  call ABI).
 - Neither is a replacement for LibJIT.
 
 ### 14.2 Why they ship together
@@ -550,9 +556,9 @@ that is borrowed there, a tuple offset that disagrees by four bytes. Therefore:
 | **P5 — calls, tail calls, continuations** | `call_ref`, cross-instance imports, `return_call*` where applicable, the continuation invoker and the stack-switching fixtures. | `[continuation]`, tail-call fixtures, TSan narrowed runs and the unload/re-instantiate test pass. | tail-call elimination may be call+return if documented |
 | **P6 — hardening and performance** | ASan/TSan, unload/release, plugin ABI, W^X, benchmark parity, refusal inventory, documentation. | The full §12 definition-of-done table is green for both; every remaining refusal is named in the backend README and a test. | none |
 
-Each slice is a **review gate**, not a calendar promise. P0–P2 are green for
-both backends against the shared fixtures (2026-11-05 snapshot); P3 (floating
-point and SIMD) is the next gap in both, and P4/P5 stay LibJIT-only until it
+Each slice is a **review gate**, not a calendar promise. P0–P3 (scalar) are
+green for both backends against the shared fixtures (2026-11-05 snapshot);
+`v128`/SIMD is the remaining P3 item, and P4/P5 stay LibJIT-only until it
 lands. Extend the `[sljit][module][parity]` fixture set before moving a row to
 green, and do not merge the "complete" label for either until its row is green
 on both.
@@ -562,7 +568,8 @@ on both.
 - `[backendabi]` — tuple/layout and calling-convention conformance.
 - `[parity]` — one module instantiated with both generators, outcomes compared
   (`asmjit and sljit agree on the shared integer module` over
-  `asmjit_i32_basic`). Duplicated expectation tables are not a substitute.
+  `asmjit_i32_basic`, and `... floating-point module` over `float_basic`).
+  Duplicated expectation tables are not a substitute.
 - `Test/install-check.sh` — installed headers plus the selected backend.
 - `[runtime]` unload/re-instantiate — executable memory is returned.
 - `[plugin]` — the backend behind the C descriptor, if the plugin build is
@@ -602,8 +609,9 @@ it is still provisional. It must contain:
 
 The post-mortem is written by the implementer, reviewed by the backend
 reviewer, and kept current: when a later slice invalidates a paragraph, update
-the paragraph rather than appending a correction footnote. The first one is
-[`docs/backends/ASMJIT_SLJIT_P0_P2.md`](backends/ASMJIT_SLJIT_P0_P2.md).
+the paragraph rather than appending a correction footnote. The first two are
+[`docs/backends/ASMJIT_SLJIT_P0_P2.md`](backends/ASMJIT_SLJIT_P0_P2.md) and
+[`docs/backends/ASMJIT_SLJIT_P3.md`](backends/ASMJIT_SLJIT_P3.md).
 
 ### 14.6 Candidate backends for a fourth implementation
 

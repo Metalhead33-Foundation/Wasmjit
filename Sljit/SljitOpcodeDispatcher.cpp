@@ -10,9 +10,12 @@
 
 #include <Euphemy/Io/EuphConstBufferDevice.hpp>
 
+#include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <span>
 #include <stdexcept>
 #include <utility>
@@ -36,11 +39,30 @@ int widthOf(const WASM::ValueType& type)
 {
 	switch (type.opcode) {
 	case WASM::ValueTypeCode::I32:
+	case WASM::ValueTypeCode::F32:
 		return 4;
 	case WASM::ValueTypeCode::I64:
+	case WASM::ValueTypeCode::F64:
 		return 8;
 	default:
 		return 0;
+	}
+}
+
+//! True for the two floating-point value types.
+bool isFloatKind(WASM::ValueTypeCode kind) noexcept
+{
+	return kind == WASM::ValueTypeCode::F32 || kind == WASM::ValueTypeCode::F64;
+}
+
+//! SLJIT argument-type token for one declared value kind.
+sljit_s32 argTypeOf(WASM::ValueTypeCode kind) noexcept
+{
+	switch (kind) {
+	case WASM::ValueTypeCode::F32: return SLJIT_ARG_TYPE_F32;
+	case WASM::ValueTypeCode::F64: return SLJIT_ARG_TYPE_F64;
+	case WASM::ValueTypeCode::I32: return SLJIT_ARG_TYPE_32;
+	default: return SLJIT_ARG_TYPE_W;
 	}
 }
 
@@ -163,6 +185,234 @@ extern "C" uint64_t sljitI64RemU(uint64_t lhs, uint64_t rhs) noexcept
 	}
 	return lhs % rhs;
 }
+
+// ── Floating-point helpers ─────────────────────────────────────────────────
+// The rules are the ones the LibJIT backend defines for this engine: min/max
+// return a quiet NaN when either operand is NaN and are sign-of-zero aware;
+// trunc/nearest quiet a NaN; nearest is ties-to-even.
+
+extern "C" float sljitF32Min(float a, float b) noexcept
+{
+	if (std::isnan(a) || std::isnan(b))
+		return std::numeric_limits<float>::quiet_NaN();
+	if (a == 0.0f && b == 0.0f)
+		return (std::signbit(a) || std::signbit(b)) ? -0.0f : 0.0f;
+	return a < b ? a : b;
+}
+
+extern "C" float sljitF32Max(float a, float b) noexcept
+{
+	if (std::isnan(a) || std::isnan(b))
+		return std::numeric_limits<float>::quiet_NaN();
+	if (a == 0.0f && b == 0.0f)
+		return (std::signbit(a) && std::signbit(b)) ? -0.0f : 0.0f;
+	return a > b ? a : b;
+}
+
+extern "C" double sljitF64Min(double a, double b) noexcept
+{
+	if (std::isnan(a) || std::isnan(b))
+		return std::numeric_limits<double>::quiet_NaN();
+	if (a == 0.0 && b == 0.0)
+		return (std::signbit(a) || std::signbit(b)) ? -0.0 : 0.0;
+	return a < b ? a : b;
+}
+
+extern "C" double sljitF64Max(double a, double b) noexcept
+{
+	if (std::isnan(a) || std::isnan(b))
+		return std::numeric_limits<double>::quiet_NaN();
+	if (a == 0.0 && b == 0.0)
+		return (std::signbit(a) && std::signbit(b)) ? -0.0 : 0.0;
+	return a > b ? a : b;
+}
+
+extern "C" float sljitF32Sqrt(float x) noexcept { return std::sqrt(x); }
+extern "C" float sljitF32Ceil(float x) noexcept { return std::ceil(x); }
+extern "C" float sljitF32Floor(float x) noexcept { return std::floor(x); }
+
+extern "C" float sljitF32Trunc(float x) noexcept
+{
+	if (std::isnan(x))
+		return std::numeric_limits<float>::quiet_NaN();
+	return std::trunc(x);
+}
+
+extern "C" float sljitF32Nearest(float x) noexcept
+{
+	if (std::isnan(x))
+		return std::numeric_limits<float>::quiet_NaN();
+	return std::nearbyint(x);
+}
+
+extern "C" double sljitF64Sqrt(double x) noexcept { return std::sqrt(x); }
+extern "C" double sljitF64Ceil(double x) noexcept { return std::ceil(x); }
+extern "C" double sljitF64Floor(double x) noexcept { return std::floor(x); }
+
+extern "C" double sljitF64Trunc(double x) noexcept
+{
+	if (std::isnan(x))
+		return std::numeric_limits<double>::quiet_NaN();
+	return std::trunc(x);
+}
+
+extern "C" double sljitF64Nearest(double x) noexcept
+{
+	if (std::isnan(x))
+		return std::numeric_limits<double>::quiet_NaN();
+	return std::nearbyint(x);
+}
+
+//! The spec splits an unusable truncation into NaN and range failures.
+void trapInvalidConversion() noexcept
+{
+	WASM::reportTrap(WASM::TrapKind::InvalidConversionToInteger);
+}
+
+void trapIntegerOverflow() noexcept
+{
+	WASM::reportTrap(WASM::TrapKind::IntegerOverflow);
+}
+
+extern "C" int32_t sljitI32TruncF32S(float x) noexcept
+{
+	if (std::isnan(x)) { trapInvalidConversion(); return 0; }
+	const double d = x;
+	if (!(d > -2147483649.0 && d < 2147483648.0))
+		trapIntegerOverflow();
+	return static_cast<int32_t>(x);
+}
+
+extern "C" uint32_t sljitI32TruncF32U(float x) noexcept
+{
+	if (std::isnan(x)) { trapInvalidConversion(); return 0; }
+	const double d = x;
+	if (!(d > -1.0 && d < 4294967296.0))
+		trapIntegerOverflow();
+	return static_cast<uint32_t>(x);
+}
+
+extern "C" int32_t sljitI32TruncF64S(double x) noexcept
+{
+	if (std::isnan(x)) { trapInvalidConversion(); return 0; }
+	if (!(x > -2147483649.0 && x < 2147483648.0))
+		trapIntegerOverflow();
+	return static_cast<int32_t>(x);
+}
+
+extern "C" uint32_t sljitI32TruncF64U(double x) noexcept
+{
+	if (std::isnan(x)) { trapInvalidConversion(); return 0; }
+	if (!(x > -1.0 && x < 4294967296.0))
+		trapIntegerOverflow();
+	return static_cast<uint32_t>(x);
+}
+
+extern "C" int64_t sljitI64TruncF32S(float x) noexcept
+{
+	if (std::isnan(x)) { trapInvalidConversion(); return 0; }
+	const double d = x;
+	if (!(d >= -9223372036854775808.0 && d < 9223372036854775808.0))
+		trapIntegerOverflow();
+	return static_cast<int64_t>(x);
+}
+
+extern "C" uint64_t sljitI64TruncF32U(float x) noexcept
+{
+	if (std::isnan(x)) { trapInvalidConversion(); return 0; }
+	const double d = x;
+	if (!(d > -1.0 && d < 18446744073709551616.0))
+		trapIntegerOverflow();
+	return static_cast<uint64_t>(x);
+}
+
+extern "C" int64_t sljitI64TruncF64S(double x) noexcept
+{
+	if (std::isnan(x)) { trapInvalidConversion(); return 0; }
+	if (!(x >= -9223372036854775808.0 && x < 9223372036854775808.0))
+		trapIntegerOverflow();
+	return static_cast<int64_t>(x);
+}
+
+extern "C" uint64_t sljitI64TruncF64U(double x) noexcept
+{
+	if (std::isnan(x)) { trapInvalidConversion(); return 0; }
+	if (!(x > -1.0 && x < 18446744073709551616.0))
+		trapIntegerOverflow();
+	return static_cast<uint64_t>(x);
+}
+
+// ── Saturating truncation (non-trapping proposal) ──────────────────────────
+// These clamp instead of reporting; NaN maps to zero.
+
+extern "C" int32_t sljitI32TruncSatF32S(float x) noexcept
+{
+	if (std::isnan(x)) return 0;
+	const double d = x;
+	if (d >= 2147483648.0) return INT32_MAX;
+	if (d < -2147483648.0) return INT32_MIN;
+	return static_cast<int32_t>(x);
+}
+
+extern "C" uint32_t sljitI32TruncSatF32U(float x) noexcept
+{
+	if (std::isnan(x)) return 0;
+	const double d = x;
+	if (d >= 4294967296.0) return UINT32_MAX;
+	if (d <= -1.0) return 0;
+	return static_cast<uint32_t>(x);
+}
+
+extern "C" int32_t sljitI32TruncSatF64S(double x) noexcept
+{
+	if (std::isnan(x)) return 0;
+	if (x >= 2147483648.0) return INT32_MAX;
+	if (x < -2147483648.0) return INT32_MIN;
+	return static_cast<int32_t>(x);
+}
+
+extern "C" uint32_t sljitI32TruncSatF64U(double x) noexcept
+{
+	if (std::isnan(x)) return 0;
+	if (x >= 4294967296.0) return UINT32_MAX;
+	if (x <= -1.0) return 0;
+	return static_cast<uint32_t>(x);
+}
+
+extern "C" int64_t sljitI64TruncSatF32S(float x) noexcept
+{
+	if (std::isnan(x)) return 0;
+	const double d = x;
+	if (d >= 9223372036854775808.0) return INT64_MAX;
+	if (d < -9223372036854775808.0) return INT64_MIN;
+	return static_cast<int64_t>(x);
+}
+
+extern "C" uint64_t sljitI64TruncSatF32U(float x) noexcept
+{
+	if (std::isnan(x)) return 0;
+	const double d = x;
+	if (d >= 18446744073709551616.0) return UINT64_MAX;
+	if (d <= -1.0) return 0;
+	return static_cast<uint64_t>(x);
+}
+
+extern "C" int64_t sljitI64TruncSatF64S(double x) noexcept
+{
+	if (std::isnan(x)) return 0;
+	if (x >= 9223372036854775808.0) return INT64_MAX;
+	if (x < -9223372036854775808.0) return INT64_MIN;
+	return static_cast<int64_t>(x);
+}
+
+extern "C" uint64_t sljitI64TruncSatF64U(double x) noexcept
+{
+	if (std::isnan(x)) return 0;
+	if (x >= 18446744073709551616.0) return UINT64_MAX;
+	if (x <= -1.0) return 0;
+	return static_cast<uint64_t>(x);
+}
+
 
 //! Checked address of a memory32 access. The immediate offset and the access
 //! width travel packed in one word, because an SLJIT call carries at most four
@@ -446,18 +696,18 @@ extern "C" WASM::Callable* sljitResolveIndirectCallable(WASM::VMContext* vm,
 }
 
 //! SLJIT argument description for a Wasm call: a pointer context followed by
-//! the declared value widths.
-sljit_s32 callArgTypes(const WASM::FuncType& type, int resultWidth)
+//! the declared value kinds. Integer and floating-point arguments occupy
+//! independent register sequences.
+sljit_s32 callArgTypes(const WASM::FuncType& type, WASM::ValueTypeCode resultKind,
+		int resultWidth)
 {
 	sljit_s32 types = resultWidth == 0
 			? SLJIT_ARG_RETURN(SLJIT_ARG_TYPE_RET_VOID)
-			: SLJIT_ARG_RETURN(resultWidth == 4 ? SLJIT_ARG_TYPE_32 : SLJIT_ARG_TYPE_W);
+			: SLJIT_ARG_RETURN(argTypeOf(resultKind));
 	types |= SLJIT_ARG_VALUE(SLJIT_ARG_TYPE_P, 1);
-	for (std::size_t i = 0; i < type.params.size(); ++i) {
-		types |= SLJIT_ARG_VALUE(
-				widthOf(type.params[i].val) == 4 ? SLJIT_ARG_TYPE_32 : SLJIT_ARG_TYPE_W,
-				static_cast<int>(i) + 2);
-	}
+	for (std::size_t i = 0; i < type.params.size(); ++i)
+		types |= SLJIT_ARG_VALUE(argTypeOf(type.params[i].val.opcode),
+				static_cast<sljit_s32>(i) + 2);
 	return types;
 }
 
@@ -489,12 +739,18 @@ OpcodeDispatcher::OpcodeDispatcher(const WASM::Module& module, const WASM::FuncT
 	localSlots_ = prepared.allLocals.size();
 
 	paramWidths_.reserve(parameterCount_);
-	for (std::uint32_t i = 0; i < parameterCount_; ++i)
+	paramKinds_.reserve(parameterCount_);
+	for (std::uint32_t i = 0; i < parameterCount_; ++i) {
 		paramWidths_.push_back(widthOf(prepared.allLocals[i]));
+		paramKinds_.push_back(prepared.allLocals[i].opcode);
+	}
 
 	localWidths_.reserve(localSlots_);
-	for (const WASM::ValueType& local : prepared.allLocals)
+	localKinds_.reserve(localSlots_);
+	for (const WASM::ValueType& local : prepared.allLocals) {
 		localWidths_.push_back(widthOf(local));
+		localKinds_.push_back(local.opcode);
+	}
 
 	if (parameterCount_ > kMaxWasmParameters) {
 		unsupportedReason_ = "the SLJIT backend supports at most three parameters";
@@ -502,7 +758,7 @@ OpcodeDispatcher::OpcodeDispatcher(const WASM::Module& module, const WASM::FuncT
 	}
 	for (int width : localWidths_) {
 		if (width == 0) {
-			unsupportedReason_ = "the SLJIT backend only models i32 and i64 locals";
+			unsupportedReason_ = "the SLJIT backend only models i32, i64, f32 and f64 locals";
 			return;
 		}
 	}
@@ -511,9 +767,11 @@ OpcodeDispatcher::OpcodeDispatcher(const WASM::Module& module, const WASM::FuncT
 		return;
 	}
 	if (prepared.allReturns.size() == 1) {
+		resultKind_ = prepared.allReturns[0].opcode;
 		resultWidth_ = widthOf(prepared.allReturns[0]);
 		if (resultWidth_ == 0) {
-			unsupportedReason_ = "the SLJIT backend only returns i32 and i64";
+			unsupportedReason_ = "the SLJIT backend only returns i32, i64, f32 and f64";
+			resultKind_ = WASM::ValueTypeCode::Void;
 			resultWidth_ = 0;
 			return;
 		}
@@ -582,23 +840,29 @@ bool OpcodeDispatcher::beginFunction()
 		return false;
 	}
 
-	// The argument list is `VMContext*` followed by the Wasm parameters. Without
-	// the `_R` suffix the arguments arrive in S0, S1, ... and survive nested
-	// helper calls.
+	// The argument list is `VMContext*` followed by the Wasm parameters. Integer
+	// arguments arrive in S0, S1, ... and floating-point arguments in FR0, FR1,
+	// ... ; the counters are independent, as the SLJIT call ABI specifies.
 	sljit_s32 argTypes = resultWidth_ == 0
 			? SLJIT_ARG_RETURN(SLJIT_ARG_TYPE_RET_VOID)
-			: SLJIT_ARG_RETURN(resultWidth_ == 4 ? SLJIT_ARG_TYPE_32 : SLJIT_ARG_TYPE_W);
+			: SLJIT_ARG_RETURN(argTypeOf(resultKind_));
 	argTypes |= SLJIT_ARG_VALUE(SLJIT_ARG_TYPE_P, 1);
-	for (std::uint32_t i = 0; i < parameterCount_; ++i) {
-		argTypes |= SLJIT_ARG_VALUE(
-				paramWidths_[i] == 4 ? SLJIT_ARG_TYPE_32 : SLJIT_ARG_TYPE_W, i + 2);
-	}
+	for (std::uint32_t i = 0; i < parameterCount_; ++i)
+		argTypes |= SLJIT_ARG_VALUE(argTypeOf(paramKinds_[i]), static_cast<sljit_s32>(i) + 2);
 
-	// Four scratch registers: R0-R3 carry a helper call with up to four integer
-	// arguments, which is the widest call this backend emits.
+	// Four integer scratch registers: R0-R3 carry a helper call with up to four
+	// integer arguments. Floating-point scratch registers are counted
+	// separately by SLJIT; three cover FR0/FR1 for the emitted operations and
+	// any call's float arguments.
+	std::uint32_t floatParameters = 0;
+	for (WASM::ValueTypeCode kind : paramKinds_)
+		if (isFloatKind(kind))
+			++floatParameters;
+	const std::uint32_t floatScratch = std::max<std::uint32_t>(3, floatParameters);
 	const sljit_s32 savedCount = static_cast<sljit_s32>(1 + parameterCount_);
-	emit(sljit_emit_enter(compiler_, 0, argTypes, 4, savedCount,
-			static_cast<sljit_s32>(frameSlots * kSlotBytes)));
+	emit(sljit_emit_enter(compiler_, 0, argTypes,
+			4 | SLJIT_ENTER_FLOAT(static_cast<sljit_s32>(floatScratch)),
+			savedCount, static_cast<sljit_s32>(frameSlots * kSlotBytes)));
 	if (!ok_) {
 		// A failed prologue leaves SLJIT in its error state; emitting more would
 		// only trip its own argument checks.
@@ -617,9 +881,21 @@ bool OpcodeDispatcher::beginFunction()
 	emitHelper(SLJIT_ARGS1V(P), &WASM::wasm_stack_check);
 	emitPendingTrapCheck();
 
+	std::uint32_t integerIndex = 0;
+	std::uint32_t floatIndex = 0;
 	for (std::uint32_t i = 0; i < parameterCount_; ++i) {
-		emit(sljit_emit_op1(compiler_, paramWidths_[i] == 4 ? SLJIT_MOV32 : SLJIT_MOV,
-				SLJIT_MEM1(SLJIT_SP), localSlotOffset(i), SLJIT_S(1 + i), 0));
+		if (isFloatKind(paramKinds_[i])) {
+			emit(sljit_emit_fop1(compiler_,
+					paramWidths_[i] == 4 ? SLJIT_MOV_F32 : SLJIT_MOV_F64,
+					SLJIT_MEM1(SLJIT_SP), localSlotOffset(i),
+					SLJIT_FR(static_cast<sljit_s32>(floatIndex)), 0));
+			++floatIndex;
+		} else {
+			emit(sljit_emit_op1(compiler_, paramWidths_[i] == 4 ? SLJIT_MOV32 : SLJIT_MOV,
+					SLJIT_MEM1(SLJIT_SP), localSlotOffset(i),
+					SLJIT_S(static_cast<sljit_s32>(1 + integerIndex)), 0));
+			++integerIndex;
+		}
 	}
 	// Declared locals start at zero, as the spec requires.
 	for (std::size_t i = parameterCount_; i < localSlots_; ++i) {
@@ -657,6 +933,12 @@ bool OpcodeDispatcher::finish(void*& entry)
 	emitHelper(SLJIT_ARGS3V(32, 32, P), &WASM::wasm_trap_annotate);
 	if (resultWidth_ == 0) {
 		emit(sljit_emit_return_void(compiler_));
+	} else if (isFloatKind(resultKind_)) {
+		emit(resultWidth_ == 4
+				? sljit_emit_fset32(compiler_, SLJIT_FR0, 0.0f)
+				: sljit_emit_fset64(compiler_, SLJIT_FR0, 0.0));
+		emit(sljit_emit_return(compiler_,
+				resultWidth_ == 4 ? SLJIT_MOV_F32 : SLJIT_MOV_F64, SLJIT_FR0, 0));
 	} else {
 		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0, SLJIT_IMM, 0));
 		emit(sljit_emit_return(compiler_, resultWidth_ == 4 ? SLJIT_MOV32 : SLJIT_MOV,
@@ -800,6 +1082,12 @@ void OpcodeDispatcher::emitReturnValue()
 		return;
 	}
 	requireStack(1);
+	if (isFloatKind(resultKind_)) {
+		loadFloatSlot(SLJIT_FR0, stackWidths_.size() - 1, resultWidth_);
+		emit(sljit_emit_return(compiler_,
+				resultWidth_ == 4 ? SLJIT_MOV_F32 : SLJIT_MOV_F64, SLJIT_FR0, 0));
+		return;
+	}
 	// An i32 comes back zero-extended from MOV_U32, and the C ABI of the caller
 	// reads only the low 32 bits of the return register. The *operation* passed
 	// to `sljit_emit_return` must match the declared return width, though: SLJIT
@@ -859,10 +1147,18 @@ OpcodeDispatcher::BlockSignature OpcodeDispatcher::blockSignature(const WASM::Bl
 	if (type.isVoid())
 		return signature;
 	if (!type.isTypeIndex) {
-		require(type.valType == WASM::ValueTypeCode::I32
-						|| type.valType == WASM::ValueTypeCode::I64,
-				"the SLJIT backend only models i32 and i64 block types");
-		signature.results.push_back(type.valType == WASM::ValueTypeCode::I32 ? 4 : 8);
+		switch (type.valType) {
+		case WASM::ValueTypeCode::I32:
+		case WASM::ValueTypeCode::F32:
+			signature.results.push_back(4);
+			break;
+		case WASM::ValueTypeCode::I64:
+		case WASM::ValueTypeCode::F64:
+			signature.results.push_back(8);
+			break;
+		default:
+			require(false, "the SLJIT backend only models i32, i64, f32 and f64 block types");
+		}
 		return signature;
 	}
 	require(type.typeIndex >= 0
@@ -871,12 +1167,12 @@ OpcodeDispatcher::BlockSignature OpcodeDispatcher::blockSignature(const WASM::Bl
 	const WASM::FuncType blockType = module_.funcTypeAt(static_cast<std::uint32_t>(type.typeIndex));
 	for (const WASM::StorageType& parameter : blockType.params) {
 		const int width = widthOf(parameter.val);
-		require(width != 0, "the SLJIT backend only models i32 and i64 block parameters");
+		require(width != 0, "the SLJIT backend only models i32, i64, f32 and f64 block parameters");
 		signature.params.push_back(width);
 	}
 	for (const WASM::StorageType& result : blockType.results) {
 		const int width = widthOf(result.val);
-		require(width != 0, "the SLJIT backend only models i32 and i64 block results");
+		require(width != 0, "the SLJIT backend only models i32, i64, f32 and f64 block results");
 		signature.results.push_back(width);
 	}
 	return signature;
@@ -987,9 +1283,18 @@ void OpcodeDispatcher::dispatchEnd()
 			if (reachable_)
 				emitReturnValue();
 			else if (resultWidth_ != 0) {
-				emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0, SLJIT_IMM, 0));
-				emit(sljit_emit_return(compiler_,
-						resultWidth_ == 4 ? SLJIT_MOV32 : SLJIT_MOV, SLJIT_R0, 0));
+				if (isFloatKind(resultKind_)) {
+					emit(resultWidth_ == 4
+							? sljit_emit_fset32(compiler_, SLJIT_FR0, 0.0f)
+							: sljit_emit_fset64(compiler_, SLJIT_FR0, 0.0));
+					emit(sljit_emit_return(compiler_,
+							resultWidth_ == 4 ? SLJIT_MOV_F32 : SLJIT_MOV_F64,
+							SLJIT_FR0, 0));
+				} else {
+					emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0, SLJIT_IMM, 0));
+					emit(sljit_emit_return(compiler_,
+							resultWidth_ == 4 ? SLJIT_MOV32 : SLJIT_MOV, SLJIT_R0, 0));
+				}
 			} else {
 				emit(sljit_emit_return_void(compiler_));
 			}
@@ -1269,15 +1574,32 @@ void OpcodeDispatcher::emitResolvedCall(const WASM::FuncType& type, int callable
 
 	const std::size_t base = stackWidths_.size() - type.params.size();
 	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0, SLJIT_R2, 0));
-	for (std::size_t i = 0; i < type.params.size(); ++i)
-		loadSlot(SLJIT_R(static_cast<int>(i) + 1), base + i,
-				widthOf(type.params[i].val));
+	std::uint32_t integerIndex = 0;
+	std::uint32_t floatIndex = 0;
+	for (std::size_t i = 0; i < type.params.size(); ++i) {
+		const WASM::ValueTypeCode kind = type.params[i].val.opcode;
+		const int width = widthOf(type.params[i].val);
+		if (isFloatKind(kind)) {
+			loadFloatSlot(SLJIT_FR(static_cast<sljit_s32>(floatIndex)), base + i, width);
+			++floatIndex;
+		} else {
+			loadSlot(SLJIT_R(static_cast<int>(integerIndex) + 1), base + i, width);
+			++integerIndex;
+		}
+	}
 
 	const int resultWidth = type.results.empty() ? 0 : widthOf(type.results.front().val);
-	emit(sljit_emit_icall(compiler_, SLJIT_CALL, callArgTypes(type, resultWidth),
+	const WASM::ValueTypeCode resultKind = type.results.empty()
+			? WASM::ValueTypeCode::Void : type.results.front().val.opcode;
+	emit(sljit_emit_icall(compiler_, SLJIT_CALL,
+			callArgTypes(type, resultKind, resultWidth),
 			SLJIT_MEM1(SLJIT_SP), targetSlotOffset()));
-	if (resultWidth != 0)
-		storeSlot(SLJIT_R0, base, resultWidth);
+	if (resultWidth != 0) {
+		if (isFloatKind(resultKind))
+			storeFloatSlot(SLJIT_FR0, base, resultWidth);
+		else
+			storeSlot(SLJIT_R0, base, resultWidth);
+	}
 	emitPendingTrapCheck();
 }
 
@@ -1435,7 +1757,8 @@ void OpcodeDispatcher::dispatchSelect()
 void OpcodeDispatcher::dispatchSelectT(std::vector<WASM::ValueType>&& types)
 {
 	require(types.size() == 1, "select_t requires exactly one value type");
-	require(widthOf(types.front()) != 0, "select_t only supports i32 and i64 values");
+	require(widthOf(types.front()) != 0,
+			"select_t only supports i32, i64, f32 and f64 values");
 	dispatchSelect();
 }
 
@@ -1602,7 +1925,400 @@ void OpcodeDispatcher::emitCheckedBinary(sljit_sw address, int width,
 	stackWidths_.back() = width;
 }
 
+void OpcodeDispatcher::loadFloatSlot(int freg, std::size_t depth, int width)
+{
+	emit(sljit_emit_fop1(compiler_, width == 4 ? SLJIT_MOV_F32 : SLJIT_MOV_F64,
+			freg, 0, SLJIT_MEM1(SLJIT_SP), stackSlotOffset(depth)));
+}
+
+void OpcodeDispatcher::storeFloatSlot(int freg, std::size_t depth, int width)
+{
+	emit(sljit_emit_fop1(compiler_, width == 4 ? SLJIT_MOV_F32 : SLJIT_MOV_F64,
+			SLJIT_MEM1(SLJIT_SP), stackSlotOffset(depth), freg, 0));
+}
+
+void OpcodeDispatcher::emitFloatUnary(sljit_s32 wordOp, int width)
+{
+	if (!reachable_)
+		return;
+	requireStack(1);
+	if (measureOnly_)
+		return;
+	const sljit_s32 op = width == 4 ? (wordOp | SLJIT_32) : wordOp;
+	loadFloatSlot(SLJIT_FR0, stackWidths_.size() - 1, width);
+	emit(sljit_emit_fop1(compiler_, op, SLJIT_FR0, 0, SLJIT_FR0, 0));
+	storeFloatSlot(SLJIT_FR0, stackWidths_.size() - 1, width);
+}
+
+void OpcodeDispatcher::emitFloatBinary(sljit_s32 wordOp, int width)
+{
+	if (!reachable_)
+		return;
+	requireStack(2);
+	pop();
+	if (measureOnly_)
+		return;
+	const sljit_s32 op = width == 4 ? (wordOp | SLJIT_32) : wordOp;
+	loadFloatSlot(SLJIT_FR0, stackWidths_.size() - 1, width);
+	loadFloatSlot(SLJIT_FR1, stackWidths_.size(), width);
+	emit(sljit_emit_fop2(compiler_, op, SLJIT_FR0, 0, SLJIT_FR0, 0, SLJIT_FR1, 0));
+	storeFloatSlot(SLJIT_FR0, stackWidths_.size() - 1, width);
+}
+
+void OpcodeDispatcher::emitFloatHelper1(sljit_sw address, int width)
+{
+	if (!reachable_)
+		return;
+	requireStack(1);
+	if (measureOnly_)
+		return;
+	loadFloatSlot(SLJIT_FR0, stackWidths_.size() - 1, width);
+	emitHelper(width == 4 ? SLJIT_ARGS1(F32, F32) : SLJIT_ARGS1(F64, F64), address);
+	storeFloatSlot(SLJIT_FR0, stackWidths_.size() - 1, width);
+}
+
+void OpcodeDispatcher::emitFloatHelper2(sljit_sw address, int width)
+{
+	if (!reachable_)
+		return;
+	requireStack(2);
+	pop();
+	if (measureOnly_)
+		return;
+	loadFloatSlot(SLJIT_FR0, stackWidths_.size() - 1, width);
+	loadFloatSlot(SLJIT_FR1, stackWidths_.size(), width);
+	emitHelper(width == 4 ? SLJIT_ARGS2(F32, F32, F32)
+						  : SLJIT_ARGS2(F64, F64, F64), address);
+	storeFloatSlot(SLJIT_FR0, stackWidths_.size() - 1, width);
+}
+
+void OpcodeDispatcher::emitFloatCompare(sljit_s32 condition, int width)
+{
+	if (!reachable_)
+		return;
+	requireStack(2);
+	pop();
+	if (measureOnly_)
+		return;
+	const sljit_s32 type = width == 4 ? (condition | SLJIT_32) : condition;
+	loadFloatSlot(SLJIT_FR0, stackWidths_.size() - 1, width);
+	loadFloatSlot(SLJIT_FR1, stackWidths_.size(), width);
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R2, 0, SLJIT_IMM, 1));
+	sljit_jump* taken = sljit_emit_fcmp(compiler_, type,
+			SLJIT_FR0, 0, SLJIT_FR1, 0);
+	if (taken == nullptr)
+		ok_ = false;
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R2, 0, SLJIT_IMM, 0));
+	sljit_label* done = sljit_emit_label(compiler_);
+	if (done == nullptr)
+		ok_ = false;
+	else if (taken != nullptr)
+		sljit_set_label(taken, done);
+	storeSlot(SLJIT_R2, stackWidths_.size() - 1, 4);
+	stackWidths_.back() = 4;
+}
+
+void OpcodeDispatcher::emitFloatConst(double value, int width, std::size_t depth)
+{
+	if (measureOnly_)
+		return;
+	if (width == 4)
+		emit(sljit_emit_fset32(compiler_, SLJIT_FR0, static_cast<float>(value)));
+	else
+		emit(sljit_emit_fset64(compiler_, SLJIT_FR0, value));
+	storeFloatSlot(SLJIT_FR0, depth, width);
+}
+
+void OpcodeDispatcher::emitMemoryLoadFloat(const WASM::MemArg& arg, int width)
+{
+	if (!reachable_)
+		return;
+	(void)requireMemoryIndex(arg.memidx);
+	require(!arg.isArray, "the SLJIT backend does not lower GC-array access");
+	require(arg.offset <= UINT32_MAX, "the memory32 offset exceeds the encoded u32 range");
+	requireStack(1);
+	if (!measureOnly_) {
+		loadContext(SLJIT_R0);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R1, 0, SLJIT_IMM,
+				static_cast<sljit_sw>(arg.memidx)));
+		loadSlot(SLJIT_R2, stackWidths_.size() - 1, 4);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R3, 0, SLJIT_IMM,
+				static_cast<sljit_sw>((static_cast<std::uint64_t>(width) << 32)
+						| arg.offset)));
+		emitHelper(SLJIT_ARGS4(P, P, 32, 32, W), &sljitMemoryAddress);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+				scratchSlotOffset(), SLJIT_R0, 0));
+		emitPendingTrapCheck();
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0, SLJIT_MEM1(SLJIT_SP),
+				scratchSlotOffset()));
+		emit(sljit_emit_fop1(compiler_, width == 4 ? SLJIT_MOV_F32 : SLJIT_MOV_F64,
+				SLJIT_FR0, 0, SLJIT_MEM1(SLJIT_R0), 0));
+		storeFloatSlot(SLJIT_FR0, stackWidths_.size() - 1, width);
+	}
+	stackWidths_.back() = width;
+}
+
+void OpcodeDispatcher::emitMemoryStoreFloat(const WASM::MemArg& arg, int width)
+{
+	if (!reachable_)
+		return;
+	(void)requireMemoryIndex(arg.memidx);
+	require(!arg.isArray, "the SLJIT backend does not lower GC-array access");
+	require(arg.offset <= UINT32_MAX, "the memory32 offset exceeds the encoded u32 range");
+	requireStack(2);
+	pop();
+	pop();
+	if (measureOnly_)
+		return;
+	const std::size_t addressDepth = stackWidths_.size();
+	const std::size_t valueDepth = stackWidths_.size() + 1;
+	loadContext(SLJIT_R0);
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R1, 0, SLJIT_IMM,
+			static_cast<sljit_sw>(arg.memidx)));
+	loadSlot(SLJIT_R2, addressDepth, 4);
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R3, 0, SLJIT_IMM,
+			static_cast<sljit_sw>((static_cast<std::uint64_t>(width) << 32)
+					| arg.offset)));
+	emitHelper(SLJIT_ARGS4(P, P, 32, 32, W), &sljitMemoryAddress);
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+			scratchSlotOffset(), SLJIT_R0, 0));
+	emitPendingTrapCheck();
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0, SLJIT_MEM1(SLJIT_SP),
+			scratchSlotOffset()));
+	loadFloatSlot(SLJIT_FR0, valueDepth, width);
+	emit(sljit_emit_fop1(compiler_, width == 4 ? SLJIT_MOV_F32 : SLJIT_MOV_F64,
+			SLJIT_MEM1(SLJIT_R0), 0, SLJIT_FR0, 0));
+}
+
+void OpcodeDispatcher::emitIntToFloat(sljit_s32 conversion, int sourceWidth,
+		int resultWidth)
+{
+	if (!reachable_)
+		return;
+	requireStack(1);
+	if (measureOnly_)
+		return;
+	loadSlot(SLJIT_R0, stackWidths_.size() - 1, sourceWidth);
+	emit(sljit_emit_fop1(compiler_, conversion, SLJIT_FR0, 0, SLJIT_R0, 0));
+	storeFloatSlot(SLJIT_FR0, stackWidths_.size() - 1, resultWidth);
+	stackWidths_.back() = resultWidth;
+}
+
+void OpcodeDispatcher::emitFloatToInt(sljit_sw address, int sourceWidth,
+		int resultWidth)
+{
+	if (!reachable_)
+		return;
+	requireStack(1);
+	if (measureOnly_)
+		return;
+	loadFloatSlot(SLJIT_FR0, stackWidths_.size() - 1, sourceWidth);
+	if (resultWidth == 4)
+		emitHelper(sourceWidth == 4 ? SLJIT_ARGS1(32, F32) : SLJIT_ARGS1(32, F64),
+				address);
+	else
+		emitHelper(sourceWidth == 4 ? SLJIT_ARGS1(W, F32) : SLJIT_ARGS1(W, F64),
+				address);
+	storeSlot(SLJIT_R0, stackWidths_.size() - 1, resultWidth);
+	emitPendingTrapCheck();
+	stackWidths_.back() = resultWidth;
+}
+
+void OpcodeDispatcher::emitReinterpret(int width)
+{
+	if (!reachable_)
+		return;
+	requireStack(1);
+	if (measureOnly_)
+		return;
+	loadSlot(SLJIT_R0, stackWidths_.size() - 1, width);
+	storeSlot(SLJIT_R0, stackWidths_.size() - 1, width);
+	stackWidths_.back() = width;
+}
+
+
+void OpcodeDispatcher::dispatchF32Const(float arg)
+{
+	if (!reachable_)
+		return;
+	push(4);
+	if (measureOnly_)
+		return;
+	emitFloatConst(arg, 4, stackWidths_.size() - 1);
+}
+
+void OpcodeDispatcher::dispatchF64Const(double arg)
+{
+	if (!reachable_)
+		return;
+	push(8);
+	if (measureOnly_)
+		return;
+	emitFloatConst(arg, 8, stackWidths_.size() - 1);
+}
+
+void OpcodeDispatcher::dispatchF32Abs() { emitFloatUnary(SLJIT_ABS_F64, 4); }
+void OpcodeDispatcher::dispatchF32Neg() { emitFloatUnary(SLJIT_NEG_F64, 4); }
+void OpcodeDispatcher::dispatchF32Sqrt() { emitFloatHelper1(codeAddress(&sljitF32Sqrt), 4); }
+void OpcodeDispatcher::dispatchF32Ceil() { emitFloatHelper1(codeAddress(&sljitF32Ceil), 4); }
+void OpcodeDispatcher::dispatchF32Floor() { emitFloatHelper1(codeAddress(&sljitF32Floor), 4); }
+void OpcodeDispatcher::dispatchF32Trunc() { emitFloatHelper1(codeAddress(&sljitF32Trunc), 4); }
+void OpcodeDispatcher::dispatchF32Nearest() { emitFloatHelper1(codeAddress(&sljitF32Nearest), 4); }
+void OpcodeDispatcher::dispatchF32Add() { emitFloatBinary(SLJIT_ADD_F64, 4); }
+void OpcodeDispatcher::dispatchF32Sub() { emitFloatBinary(SLJIT_SUB_F64, 4); }
+void OpcodeDispatcher::dispatchF32Mul() { emitFloatBinary(SLJIT_MUL_F64, 4); }
+void OpcodeDispatcher::dispatchF32Div() { emitFloatBinary(SLJIT_DIV_F64, 4); }
+void OpcodeDispatcher::dispatchF32Min() { emitFloatHelper2(codeAddress(&sljitF32Min), 4); }
+void OpcodeDispatcher::dispatchF32Max() { emitFloatHelper2(codeAddress(&sljitF32Max), 4); }
+
+void OpcodeDispatcher::dispatchF32Copysign()
+{
+	if (!reachable_)
+		return;
+	requireStack(2);
+	pop();
+	if (measureOnly_)
+		return;
+	loadFloatSlot(SLJIT_FR0, stackWidths_.size() - 1, 4);
+	loadFloatSlot(SLJIT_FR1, stackWidths_.size(), 4);
+	emit(sljit_emit_fop2r(compiler_, SLJIT_COPYSIGN_F32, SLJIT_FR0,
+			SLJIT_FR0, 0, SLJIT_FR1, 0));
+	storeFloatSlot(SLJIT_FR0, stackWidths_.size() - 1, 4);
+}
+
+void OpcodeDispatcher::dispatchF64Abs() { emitFloatUnary(SLJIT_ABS_F64, 8); }
+void OpcodeDispatcher::dispatchF64Neg() { emitFloatUnary(SLJIT_NEG_F64, 8); }
+void OpcodeDispatcher::dispatchF64Sqrt() { emitFloatHelper1(codeAddress(&sljitF64Sqrt), 8); }
+void OpcodeDispatcher::dispatchF64Ceil() { emitFloatHelper1(codeAddress(&sljitF64Ceil), 8); }
+void OpcodeDispatcher::dispatchF64Floor() { emitFloatHelper1(codeAddress(&sljitF64Floor), 8); }
+void OpcodeDispatcher::dispatchF64Trunc() { emitFloatHelper1(codeAddress(&sljitF64Trunc), 8); }
+void OpcodeDispatcher::dispatchF64Nearest() { emitFloatHelper1(codeAddress(&sljitF64Nearest), 8); }
+void OpcodeDispatcher::dispatchF64Add() { emitFloatBinary(SLJIT_ADD_F64, 8); }
+void OpcodeDispatcher::dispatchF64Sub() { emitFloatBinary(SLJIT_SUB_F64, 8); }
+void OpcodeDispatcher::dispatchF64Mul() { emitFloatBinary(SLJIT_MUL_F64, 8); }
+void OpcodeDispatcher::dispatchF64Div() { emitFloatBinary(SLJIT_DIV_F64, 8); }
+void OpcodeDispatcher::dispatchF64Min() { emitFloatHelper2(codeAddress(&sljitF64Min), 8); }
+void OpcodeDispatcher::dispatchF64Max() { emitFloatHelper2(codeAddress(&sljitF64Max), 8); }
+
+void OpcodeDispatcher::dispatchF64Copysign()
+{
+	if (!reachable_)
+		return;
+	requireStack(2);
+	pop();
+	if (measureOnly_)
+		return;
+	loadFloatSlot(SLJIT_FR0, stackWidths_.size() - 1, 8);
+	loadFloatSlot(SLJIT_FR1, stackWidths_.size(), 8);
+	emit(sljit_emit_fop2r(compiler_, SLJIT_COPYSIGN_F64, SLJIT_FR0,
+			SLJIT_FR0, 0, SLJIT_FR1, 0));
+	storeFloatSlot(SLJIT_FR0, stackWidths_.size() - 1, 8);
+}
+
+void OpcodeDispatcher::dispatchF32Eq() { emitFloatCompare(SLJIT_ORDERED_EQUAL, 4); }
+void OpcodeDispatcher::dispatchF32Ne() { emitFloatCompare(SLJIT_UNORDERED_OR_NOT_EQUAL, 4); }
+void OpcodeDispatcher::dispatchF32Lt() { emitFloatCompare(SLJIT_ORDERED_LESS, 4); }
+void OpcodeDispatcher::dispatchF32Gt() { emitFloatCompare(SLJIT_ORDERED_GREATER, 4); }
+void OpcodeDispatcher::dispatchF32Le() { emitFloatCompare(SLJIT_ORDERED_LESS_EQUAL, 4); }
+void OpcodeDispatcher::dispatchF32Ge() { emitFloatCompare(SLJIT_ORDERED_GREATER_EQUAL, 4); }
+void OpcodeDispatcher::dispatchF64Eq() { emitFloatCompare(SLJIT_ORDERED_EQUAL, 8); }
+void OpcodeDispatcher::dispatchF64Ne() { emitFloatCompare(SLJIT_UNORDERED_OR_NOT_EQUAL, 8); }
+void OpcodeDispatcher::dispatchF64Lt() { emitFloatCompare(SLJIT_ORDERED_LESS, 8); }
+void OpcodeDispatcher::dispatchF64Gt() { emitFloatCompare(SLJIT_ORDERED_GREATER, 8); }
+void OpcodeDispatcher::dispatchF64Le() { emitFloatCompare(SLJIT_ORDERED_LESS_EQUAL, 8); }
+void OpcodeDispatcher::dispatchF64Ge() { emitFloatCompare(SLJIT_ORDERED_GREATER_EQUAL, 8); }
+
+void OpcodeDispatcher::dispatchF32ConvertI32S()
+{ emitIntToFloat(SLJIT_CONV_F32_FROM_S32, 4, 4); }
+void OpcodeDispatcher::dispatchF32ConvertI32U()
+{ emitIntToFloat(SLJIT_CONV_F32_FROM_U32, 4, 4); }
+void OpcodeDispatcher::dispatchF32ConvertI64S()
+{ emitIntToFloat(SLJIT_CONV_F32_FROM_SW, 8, 4); }
+void OpcodeDispatcher::dispatchF32ConvertI64U()
+{ emitIntToFloat(SLJIT_CONV_F32_FROM_UW, 8, 4); }
+void OpcodeDispatcher::dispatchF64ConvertI32S()
+{ emitIntToFloat(SLJIT_CONV_F64_FROM_S32, 4, 8); }
+void OpcodeDispatcher::dispatchF64ConvertI32U()
+{ emitIntToFloat(SLJIT_CONV_F64_FROM_U32, 4, 8); }
+void OpcodeDispatcher::dispatchF64ConvertI64S()
+{ emitIntToFloat(SLJIT_CONV_F64_FROM_SW, 8, 8); }
+void OpcodeDispatcher::dispatchF64ConvertI64U()
+{ emitIntToFloat(SLJIT_CONV_F64_FROM_UW, 8, 8); }
+
+void OpcodeDispatcher::dispatchF32DemoteF64()
+{
+	if (!reachable_)
+		return;
+	requireStack(1);
+	if (measureOnly_)
+		return;
+	loadFloatSlot(SLJIT_FR0, stackWidths_.size() - 1, 8);
+	emit(sljit_emit_fop1(compiler_, SLJIT_CONV_F32_FROM_F64, SLJIT_FR0, 0,
+			SLJIT_FR0, 0));
+	storeFloatSlot(SLJIT_FR0, stackWidths_.size() - 1, 4);
+	stackWidths_.back() = 4;
+}
+
+void OpcodeDispatcher::dispatchF64PromoteF32()
+{
+	if (!reachable_)
+		return;
+	requireStack(1);
+	if (measureOnly_)
+		return;
+	loadFloatSlot(SLJIT_FR0, stackWidths_.size() - 1, 4);
+	emit(sljit_emit_fop1(compiler_, SLJIT_CONV_F64_FROM_F32, SLJIT_FR0, 0,
+			SLJIT_FR0, 0));
+	storeFloatSlot(SLJIT_FR0, stackWidths_.size() - 1, 8);
+	stackWidths_.back() = 8;
+}
+
+void OpcodeDispatcher::dispatchI32TruncF32S()
+{ emitFloatToInt(codeAddress(&sljitI32TruncF32S), 4, 4); }
+void OpcodeDispatcher::dispatchI32TruncF32U()
+{ emitFloatToInt(codeAddress(&sljitI32TruncF32U), 4, 4); }
+void OpcodeDispatcher::dispatchI32TruncF64S()
+{ emitFloatToInt(codeAddress(&sljitI32TruncF64S), 8, 4); }
+void OpcodeDispatcher::dispatchI32TruncF64U()
+{ emitFloatToInt(codeAddress(&sljitI32TruncF64U), 8, 4); }
+void OpcodeDispatcher::dispatchI64TruncF32S()
+{ emitFloatToInt(codeAddress(&sljitI64TruncF32S), 4, 8); }
+void OpcodeDispatcher::dispatchI64TruncF32U()
+{ emitFloatToInt(codeAddress(&sljitI64TruncF32U), 4, 8); }
+void OpcodeDispatcher::dispatchI64TruncF64S()
+{ emitFloatToInt(codeAddress(&sljitI64TruncF64S), 8, 8); }
+void OpcodeDispatcher::dispatchI64TruncF64U()
+{ emitFloatToInt(codeAddress(&sljitI64TruncF64U), 8, 8); }
+
+void OpcodeDispatcher::dispatchI32TruncSatF32S()
+{ emitFloatToInt(codeAddress(&sljitI32TruncSatF32S), 4, 4); }
+void OpcodeDispatcher::dispatchI32TruncSatF32U()
+{ emitFloatToInt(codeAddress(&sljitI32TruncSatF32U), 4, 4); }
+void OpcodeDispatcher::dispatchI32TruncSatF64S()
+{ emitFloatToInt(codeAddress(&sljitI32TruncSatF64S), 8, 4); }
+void OpcodeDispatcher::dispatchI32TruncSatF64U()
+{ emitFloatToInt(codeAddress(&sljitI32TruncSatF64U), 8, 4); }
+void OpcodeDispatcher::dispatchI64TruncSatF32S()
+{ emitFloatToInt(codeAddress(&sljitI64TruncSatF32S), 4, 8); }
+void OpcodeDispatcher::dispatchI64TruncSatF32U()
+{ emitFloatToInt(codeAddress(&sljitI64TruncSatF32U), 4, 8); }
+void OpcodeDispatcher::dispatchI64TruncSatF64S()
+{ emitFloatToInt(codeAddress(&sljitI64TruncSatF64S), 8, 8); }
+void OpcodeDispatcher::dispatchI64TruncSatF64U()
+{ emitFloatToInt(codeAddress(&sljitI64TruncSatF64U), 8, 8); }
+
+void OpcodeDispatcher::dispatchI32ReinterpretF32() { emitReinterpret(4); }
+void OpcodeDispatcher::dispatchI64ReinterpretF64() { emitReinterpret(8); }
+void OpcodeDispatcher::dispatchF32ReinterpretI32() { emitReinterpret(4); }
+void OpcodeDispatcher::dispatchF64ReinterpretI64() { emitReinterpret(8); }
+
+void OpcodeDispatcher::dispatchF32Load(WASM::MemArg arg) { emitMemoryLoadFloat(arg, 4); }
+void OpcodeDispatcher::dispatchF64Load(WASM::MemArg arg) { emitMemoryLoadFloat(arg, 8); }
+void OpcodeDispatcher::dispatchF32Store(WASM::MemArg arg) { emitMemoryStoreFloat(arg, 4); }
+void OpcodeDispatcher::dispatchF64Store(WASM::MemArg arg) { emitMemoryStoreFloat(arg, 8); }
+
 void OpcodeDispatcher::dispatchI32Add() { emitIntegerBinary(SLJIT_ADD, 4); }
+
 void OpcodeDispatcher::dispatchI32Sub() { emitIntegerBinary(SLJIT_SUB, 4); }
 void OpcodeDispatcher::dispatchI32Mul() { emitIntegerBinary(SLJIT_MUL, 4); }
 void OpcodeDispatcher::dispatchI32And() { emitIntegerBinary(SLJIT_AND, 4); }
@@ -1726,7 +2442,7 @@ const WASM::GlobalType& OpcodeDispatcher::requireGlobalIndex(WASM::GlobalIdx ind
 	require(index < module_.globals.size(), "the global index is out of range");
 	const WASM::GlobalType& type = module_.globals[index].type;
 	require(widthOf(type.contentType) != 0,
-			"the SLJIT backend only models i32 and i64 globals");
+			"the SLJIT backend only models i32, i64, f32 and f64 globals");
 	return type;
 }
 

@@ -114,5 +114,7 @@ SLJIT registrations are in-process. A plugin build for either is a P6 item
   `./WasmJit '[asmjit]'` — 417 assertions in 19 test cases (the A/B case is
   tagged with both); the full suite — 19052 assertions in 667 test cases (the
   A/B case contributes 138 assertions); the shared-slice cases contribute 337
-  assertions across four `[parity]` cases.
+  assertions across four `[parity]` cases. (These are the counts at this
+  slice's sign-off; the P3 slice added float cases and extra pre-call
+  assertions, so the current totals are larger.)
 - Doxygen: exit 0, no warnings.

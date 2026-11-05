@@ -2,10 +2,10 @@
 
 *The SLJIT backend*
 
-Status: **Snapshot (2026-11-05):** the backend executes the shared integer
-slice and is at feature parity with `Asmjit/`; the next target is the LibJIT
-backend's floating-point/SIMD, reference/GC and exception slices. It is not a
-replacement for `LibJit/`.
+Status: **Snapshot (2026-11-05):** the backend executes the shared scalar
+integer and floating-point slice and is at feature parity with `Asmjit/`; the
+next target is the LibJIT backend's `v128`/SIMD, reference/GC and exception
+slices. It is not a replacement for `LibJit/`.
 
 ## What executes today
 
@@ -20,19 +20,23 @@ WASMJIT_BACKEND=sljit ./Test/WasmJit '[sljit]'  // harness path
 
 The emitter lowers:
 
-- up to **three** Wasm parameters and zero or one `i32`/`i64` result (SLJIT's
-  `sljit_emit_enter` and its C call ABI accept at most four arguments, and
-  `VMContext*` is the first);
+- up to **three** Wasm parameters and zero or one result, each `i32`, `i64`,
+  `f32` or `f64` (SLJIT's `sljit_emit_enter` and its C call ABI accept at most
+  four arguments, and `VMContext*` is the first);
 - `i32`/`i64` constants, locals, globals; `add`/`sub`/`mul`, checked
   `div`/`rem`, `and`/`or`/`xor`, `shl`/`shr_s`/`shr_u`, `rotl`/`rotr`,
   `clz`/`ctz`/`popcnt`, all comparisons, `eqz`, sign-extension and
   `i32.wrap_i64`;
+- `f32`/`f64` constants, locals, globals; `add`/`sub`/`mul`/`div`,
+  `abs`/`neg`/`sqrt`/`ceil`/`floor`/`trunc`/`nearest`, `min`/`max`,
+  `copysign`, all comparisons, the integer/float conversions (checked and
+  saturating), `demote`/`promote` and reinterpretation;
 - `block`/`loop`/`if`/`else`, `br`/`br_if`/`br_table`, including block
   parameters and multi-value block results;
 - direct and indirect calls, forward and mutually recursive calls, native and
   cross-instance Wasm imports, and `return_call*` lowered to call + return;
 - memory32 loads and stores (all integer widths, signed/unsigned narrow
-  extensions), `memory.size`/`grow`, `memory.copy`/`fill`/`init`,
+  extensions, plus `f32`/`f64`), `memory.size`/`grow`, `memory.copy`/`fill`/`init`,
   `data.drop`, `table.init`/`copy`/`size` and `elem.drop`;
 - `select`/`select_t`, `drop`, `nop`, `return`, `unreachable`, and the guest
   stack guard with the pending-trap epilogue.
@@ -43,8 +47,8 @@ checked against one fixture set rather than two drifting ones.
 
 ## What it still refuses
 
-Floating point, `v128`/SIMD, references/GC, exceptions, continuations,
-atomics, memory64, functions with more than three parameters, and functions
+`v128`/SIMD, references/GC, exceptions, continuations, atomics, memory64,
+`f16` load/store, functions with more than three parameters, and functions
 with more than one result. Each refusal leaves that function's
 `Callable::fnPtr` **null**; the core then reports "no compiled body" at the
 call boundary. Nothing is miscompiled, nothing is interpreted, and no
@@ -100,7 +104,7 @@ Generated code **is** released on `Runtime::unload` and runtime teardown through
 
 ## Next steps
 
-1. Floating point and conversions (P3), then `v128` load/store and native SIMD.
+1. `v128`/SIMD loading and native vector operations (the remaining part of P3).
 2. References/GC, `ref.*`, GC barriers and exceptions (P4), following
    [`docs/WRITING_A_BACKEND.md`](../docs/WRITING_A_BACKEND.md) §6 "Reference
    ownership" — the initialiser-shape test is the gate, not an optional
