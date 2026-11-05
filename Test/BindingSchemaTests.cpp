@@ -1730,6 +1730,38 @@ TEST_CASE("WIT JSON and WIT text are binding-schema inputs", "[bindings]")
 	}
 }
 
+TEST_CASE("WIT type aliases resolve through the type table", "[bindings]")
+{
+	const Json wit = {
+		{ "worlds", Json::array({
+			{ { "name", "demo" },
+				{ "imports", { { "now", { { "function", {
+					{ "name", "now" }, { "kind", "freestanding" },
+					{ "params", Json::array({ { { "name", "duration" },
+						{ "type", 1 } } }) },
+					{ "result", 0 } } } } } } },
+				{ "exports", Json::object() }, { "package", 0 } } }) },
+		{ "interfaces", Json::array() },
+		{ "types", Json::array({
+			{ { "name", "mark" }, { "kind", { { "type", "u64" } } } },
+			{ { "name", "duration" }, { "kind", { { "type", 0 } } } } }) },
+		{ "packages", Json::array({ { { "name", "test:demo@0.1.0" },
+			{ "interfaces", Json::object() },
+			{ "worlds", { { "demo", 0 } } } } }) },
+	};
+	std::string error;
+	const auto schema = WASM::Bindings::witSchema(wit,
+			WASM::Bindings::Direction::Complete, "demo", "demo", error);
+	REQUIRE(error.empty());
+	REQUIRE(schema.imports.size() == 1u);
+	REQUIRE(schema.imports[0].function.params.size() == 1u);
+	REQUIRE(schema.imports[0].function.params[0].kind
+			== WASM::Bindings::ValueKind::U64);
+	REQUIRE(schema.imports[0].function.results.size() == 1u);
+	REQUIRE(schema.imports[0].function.results[0].kind
+			== WASM::Bindings::ValueKind::U64);
+}
+
 TEST_CASE("WIT JSON names agree with the component schema", "[bindings]")
 {
 	if (!haveTool("command -v wasm-tools > /dev/null 2>&1")) {

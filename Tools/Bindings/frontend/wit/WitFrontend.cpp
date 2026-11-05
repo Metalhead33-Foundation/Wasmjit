@@ -34,22 +34,17 @@ std::string stringAt(const Json& object, std::string_view key)
 			: found->get<std::string>();
 }
 
-std::string typeSpelling(const Json& type)
+Json opaqueWitType(const std::string& name)
 {
-	if (type.is_string())
-		return type.get<std::string>();
-	if (!type.is_object())
-		return type.dump();
-	if (type.contains("type") && type.at("type").is_string())
-		return type.at("type").get<std::string>();
-	if (type.contains("name") && type.at("name").is_string())
-		return type.at("name").get<std::string>();
-	return type.dump();
+	Json out = { { "type", "ref" }, { "heap", "extern" },
+		{ "nullable", true } };
+	if (!name.empty())
+		out["name"] = name;
+	return out;
 }
 
-Json schemaTypeForWit(const std::string& spelling)
+Json scalarWitType(const std::string& type)
 {
-	const std::string type = spelling;
 	for (const char* scalar : { "bool", "u8", "s8", "u16", "s16", "u32",
 			"s32", "u64", "s64", "f32", "f64", "char", "string",
 			"error-context" })
@@ -57,12 +52,52 @@ Json schemaTypeForWit(const std::string& spelling)
 			return Json{ { "type", type } };
 	if (type == "unit")
 		return Json{ { "type", "void" } };
+	return {};
+}
 
-	// Structured WIT values (records, variants, lists, resources, handles,
-	// streams and futures) do not have a core scalar spelling. Keep them
-	// opaque and preserve the WIT spelling as tooling metadata.
-	return Json{ { "type", "ref" }, { "heap", "extern" },
-		{ "nullable", true }, { "name", type } };
+Json resolveWitType(const Json& type, const Json& document, unsigned depth);
+
+Json resolveWitKind(const Json& kind, const Json& document, unsigned depth)
+{
+	if (!kind.is_object())
+		return resolveWitType(kind, document, depth + 1);
+	if (kind.contains("type"))
+		return resolveWitType(kind.at("type"), document, depth + 1);
+	return opaqueWitType(kind.value("name", std::string()));
+}
+
+Json resolveWitType(const Json& type, const Json& document, unsigned depth)
+{
+	if (depth > 32)
+		return opaqueWitType("recursive");
+	if (type.is_string()) {
+		const Json scalar = scalarWitType(type.get<std::string>());
+		return scalar.is_null() ? opaqueWitType(type.get<std::string>())
+								: scalar;
+	}
+	if (type.is_number_integer()) {
+		const auto id = type.get<std::size_t>();
+		const auto types = document.find("types");
+		if (types == document.end() || !types->is_array()
+				|| id >= types->size())
+			return opaqueWitType("type-" + std::to_string(id));
+		const Json& definition = types->at(id);
+		const std::string name = stringAt(definition, "name");
+		if (definition.contains("kind")) {
+			const Json resolved = resolveWitKind(definition.at("kind"),
+					document, depth + 1);
+			// An alias to a scalar keeps the scalar type; a structured type
+			// keeps its own name instead of leaking an internal id.
+			if (resolved.value("type", "") != "ref" || name.empty())
+				return resolved;
+			return opaqueWitType(name);
+		}
+		return opaqueWitType(name.empty() ? "type-" + std::to_string(id) : name);
+	}
+	if (type.is_object() && type.contains("type"))
+		return resolveWitType(type.at("type"), document, depth + 1);
+	return opaqueWitType(type.is_object()
+			? type.value("name", std::string()) : type.dump());
 }
 
 std::string documentation(const Json& function)
@@ -81,8 +116,9 @@ std::string documentation(const Json& function)
 	return {};
 }
 
-void appendFunction(const Json& function, const std::string& fallbackName,
-		bool import, const std::string& module, Schema& schema)
+void appendFunction(const Json& function, const Json& document,
+		const std::string& fallbackName, bool import, const std::string& module,
+		Schema& schema)
 {
 	Entry entry;
 	entry.kind = EntryKind::Function;
@@ -102,8 +138,8 @@ void appendFunction(const Json& function, const std::string& fallbackName,
 		for (const Json& parameter : function.at("params")) {
 			if (!parameter.is_object())
 				continue;
-			const Json type = schemaTypeForWit(
-					typeSpelling(parameter.value("type", Json{})));
+			const Json type = resolveWitType(
+					parameter.value("type", Json{}), document, 0);
 			params.push_back(type);
 			entry.function.params.push_back(ValueType::fromJson(type));
 			std::string name = stringAt(parameter, "name");
@@ -116,7 +152,7 @@ void appendFunction(const Json& function, const std::string& fallbackName,
 	if (function.contains("result")) {
 		const Json& result = function.at("result");
 		if (!result.is_null()) {
-			const Json type = schemaTypeForWit(typeSpelling(result));
+			const Json type = resolveWitType(result, document, 0);
 			results.push_back(type);
 			entry.function.results.push_back(ValueType::fromJson(type));
 		}
@@ -139,8 +175,8 @@ void appendFunction(const Json& function, const std::string& fallbackName,
 		schema.exports.push_back(std::move(entry));
 }
 
-void appendInterface(const Json& interfaceEntry, bool import,
-		const std::string& fallbackModule, Schema& schema)
+void appendInterface(const Json& interfaceEntry, const Json& document,
+		bool import, const std::string& fallbackModule, Schema& schema)
 {
 	const std::string interfaceName = stringAt(interfaceEntry, "name");
 	const std::string module = import
@@ -150,7 +186,7 @@ void appendInterface(const Json& interfaceEntry, bool import,
 	if (functions == interfaceEntry.end() || !functions->is_object())
 		return;
 	for (const auto& [name, function] : functions->items())
-		appendFunction(function, name, import, module, schema);
+		appendFunction(function, document, name, import, module, schema);
 }
 
 const Json* resolveInterface(const Json& reference,
@@ -170,17 +206,17 @@ const Json* resolveInterface(const Json& reference,
 	return found->second;
 }
 
-void appendWorldEntry(const Json& node, const std::string& key,
+void appendWorldEntry(const Json& node, const Json& document, const std::string& key,
 		bool import, const std::string& moduleName,
 		std::map<int, const Json*>& interfaces, Schema& schema, std::string& error)
 {
 	if (node.contains("function")) {
-		appendFunction(node.at("function"), key, import,
+		appendFunction(node.at("function"), document, key, import,
 				import ? moduleName : std::string(), schema);
 		return;
 	}
 	if (const Json* interfaceEntry = resolveInterface(node, interfaces, error)) {
-		appendInterface(*interfaceEntry, import, key, schema);
+		appendInterface(*interfaceEntry, document, import, key, schema);
 		return;
 	}
 	if (!error.empty())
@@ -256,12 +292,12 @@ Schema witSchema(const Json& document, Direction direction,
 
 	if (selected->contains("imports") && selected->at("imports").is_object()) {
 		for (const auto& [name, node] : selected->at("imports").items())
-			appendWorldEntry(node, name, true, schemaName, interfaces,
+			appendWorldEntry(node, document, name, true, schemaName, interfaces,
 					schema, error);
 	}
 	if (selected->contains("exports") && selected->at("exports").is_object()) {
 		for (const auto& [name, node] : selected->at("exports").items())
-			appendWorldEntry(node, name, false, schemaName, interfaces,
+			appendWorldEntry(node, document, name, false, schemaName, interfaces,
 					schema, error);
 	}
 	if (!error.empty())
