@@ -1815,20 +1815,27 @@ TEST_CASE("WIT records get named C++ declarations", "[bindings]")
 	REQUIRE(header.find("struct wasmjit_wit_point {") != std::string::npos);
 	REQUIRE(header.find("int32_t x;") != std::string::npos);
 	REQUIRE(header.find("int32_t value") != std::string::npos);
+	REQUIRE(schema.types[0].at("witLayout").at("size") == 4);
+	REQUIRE(schema.types[0].at("witLayout").at("align") == 4);
+	REQUIRE(schema.types[5].at("witOwnership").at("kind") == "resource");
+	REQUIRE(schema.types[5].at("witOwnership").at("drop") == "resource.drop");
+	REQUIRE(schema.types[6].at("witOwnership").at("kind") == "own");
+	REQUIRE(schema.types[6].at("witOwnership").at("table")
+			== "component-runtime");
 	REQUIRE(header.find("enum class wasmjit_wit_color") != std::string::npos);
 	REQUIRE(header.find("red = 0") != std::string::npos);
 	REQUIRE(header.find("using wasmjit_wit_perms = std::uint32_t;")
 			!= std::string::npos);
 	REQUIRE(header.find("wasmjit_wit_perms_read") != std::string::npos);
-	REQUIRE(header.find("struct wasmjit_wit_list_u8_3 {") != std::string::npos);
+	REQUIRE(header.find("struct wasmjit_wit_list_u8 {") != std::string::npos);
 	REQUIRE(header.find("uint8_t* data;") != std::string::npos);
-	REQUIRE(header.find("struct wasmjit_wit_variant_point_empty_4 {")
+	REQUIRE(header.find("struct wasmjit_wit_variant_point_point_empty {")
 			!= std::string::npos);
 	REQUIRE(header.find("Tag tag;") != std::string::npos);
 	REQUIRE(header.find("wasmjit_wit_point* point;") != std::string::npos);
 	REQUIRE(header.find("struct wasmjit_wit_descriptor {\n\tuint32_t handle;")
 			!= std::string::npos);
-	REQUIRE(header.find("struct wasmjit_wit_own_descriptor_6 {\n\tuint32_t handle;")
+	REQUIRE(header.find("struct wasmjit_wit_own_descriptor {\n\tuint32_t handle;")
 			!= std::string::npos);
 	REQUIRE(header.find("owned WIT handle; release through the backend")
 			!= std::string::npos);
@@ -1850,7 +1857,10 @@ TEST_CASE("WIT functions carry canonical ABI flat signatures", "[bindings]")
 					"params": [{ "name": "p", "type": 0 }] } },
 				"takes-variant": { "function": {
 					"name": "takes-variant",
-					"params": [{ "name": "v", "type": 1 }] } }
+					"params": [{ "name": "v", "type": 1 }] } },
+				"takes-mixed": { "function": {
+					"name": "takes-mixed",
+					"params": [{ "name": "v", "type": 2 }] } }
 			},
 			"exports": {},
 			"package": 0
@@ -1863,7 +1873,10 @@ TEST_CASE("WIT functions carry canonical ABI flat signatures", "[bindings]")
 					{ "name": "y", "type": "s64" }] } } },
 			{ "kind": { "variant": { "cases": [
 				{ "name": "point", "type": 0 },
-				{ "name": "empty", "type": null }] } } }
+				{ "name": "empty", "type": null }] } } },
+			{ "kind": { "variant": { "cases": [
+				{ "name": "wide", "type": "f64" },
+				{ "name": "narrow", "type": "i32" }] } } }
 		],
 		"packages": [{
 			"name": "test:demo@0.1.0",
@@ -1887,18 +1900,24 @@ TEST_CASE("WIT functions carry canonical ABI flat signatures", "[bindings]")
 	REQUIRE(stringParam->raw.at("abi").at("params").size() == 2u);
 	REQUIRE(stringParam->raw.at("abi").at("params")[0].at("type") == "i32");
 	REQUIRE(stringParam->raw.at("abi").at("params")[1].at("type") == "i32");
+	REQUIRE(stringParam->raw.at("abi").at("paramLayout").at("size") == 8);
+	REQUIRE(stringParam->raw.at("abi").at("paramLayout").at("align") == 4);
 
 	const auto stringResult = find("returns-string");
 	REQUIRE(stringResult != nullptr);
 	REQUIRE(stringResult->raw.at("abi").at("results").size() == 1u);
 	REQUIRE(stringResult->raw.at("abi").at("results")[0].at("type") == "i32");
 	REQUIRE(stringResult->raw.at("abi").at("indirectResults") == true);
+	REQUIRE(stringResult->raw.at("abi").at("resultLayout").at("size") == 8);
+	REQUIRE(stringResult->raw.at("abi").at("resultLayout").at("align") == 4);
 
 	const auto record = find("takes-record");
 	REQUIRE(record != nullptr);
 	REQUIRE(record->raw.at("abi").at("params").size() == 2u);
 	REQUIRE(record->raw.at("abi").at("params")[0].at("type") == "i32");
 	REQUIRE(record->raw.at("abi").at("params")[1].at("type") == "i64");
+	REQUIRE(record->raw.at("abi").at("paramLayout").at("size") == 16);
+	REQUIRE(record->raw.at("abi").at("paramLayout").at("align") == 8);
 
 	const auto variant = find("takes-variant");
 	REQUIRE(variant != nullptr);
@@ -1906,6 +1925,16 @@ TEST_CASE("WIT functions carry canonical ABI flat signatures", "[bindings]")
 	REQUIRE(variant->raw.at("abi").at("params")[0].at("type") == "i32");
 	REQUIRE(variant->raw.at("abi").at("params")[1].at("type") == "i32");
 	REQUIRE(variant->raw.at("abi").at("params")[2].at("type") == "i64");
+	REQUIRE(variant->raw.at("abi").at("paramLayout").at("size") == 24);
+	REQUIRE(variant->raw.at("abi").at("paramLayout").at("align") == 8);
+
+	const auto mixed = find("takes-mixed");
+	REQUIRE(mixed != nullptr);
+	REQUIRE(mixed->raw.at("abi").at("params").size() == 2u);
+	REQUIRE(mixed->raw.at("abi").at("params")[0].at("type") == "i32");
+	REQUIRE(mixed->raw.at("abi").at("params")[1].at("type") == "i64");
+	REQUIRE(mixed->raw.at("abi").at("paramLayout").at("size") == 16);
+	REQUIRE(mixed->raw.at("abi").at("paramLayout").at("align") == 8);
 }
 
 TEST_CASE("WIT interface functions use qualified package modules", "[bindings]")

@@ -220,7 +220,8 @@ void emitWitCppTypeDefinitions(std::ostringstream& out, const Json& schema)
 		} else if (kind.contains("record") || kind.contains("variant")
 				|| kind.contains("tuple") || kind.contains("list")
 				|| kind.contains("option") || kind.contains("result")
-				|| kind.contains("handle")) {
+				|| kind.contains("handle") || kind.contains("stream")
+				|| kind.contains("future")) {
 			if (kind.contains("handle")) {
 				const Json& handle = kind.at("handle");
 				out << (handle.contains("own")
@@ -252,6 +253,9 @@ void emitWitCppTypeDefinitions(std::ostringstream& out, const Json& schema)
 							kind.at("result").value("err", Json{})) << " err;\n";
 			} else if (kind.contains("handle"))
 				out << "\tuint32_t handle;\n";
+			else if (kind.contains("stream") || kind.contains("future"))
+				out << "// stream/future endpoint; drop both ends through the backend.\n"
+					<< "\tuint32_t handle;\n";
 			out << "};\n";
 		}
 	}

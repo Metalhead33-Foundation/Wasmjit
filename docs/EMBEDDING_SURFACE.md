@@ -749,16 +749,16 @@ check. The embedding surface is what the installed `wasmjit/wasmjit.hpp` exposes
 ## 10. Test survey
 
 **Snapshot (2026-11-05, working tree on `77506af`):** the default suite is
-18,469 assertions in 657 cases; `[bindings]` is 844/40, `[docs]` is 1017/2,
+18,489 assertions in 657 cases; `[bindings]` is 864/40, `[docs]` is 1017/2,
 `[tiers]` is 250/3, and Doxygen is warning-free. Re-run the tagged cases after
 changing a schema, emitter or this note's code paths.
 
 | Evidence | Result | Reading |
 |---|---|---|
-| Default suite (**2026-11-05**, `77506af`) | **18,469 assertions in 657 cases, green** | Supersedes the 2026-11-01 baseline (17,090 / 551); every earlier assertion still passes. The 2026-10-29 run (11,454 / 481) in the milestone notes remains the historical baseline. |
+| Default suite (**2026-11-05**, `77506af`) | **18,489 assertions in 657 cases, green** | Supersedes the 2026-11-01 baseline (17,090 / 551); every earlier assertion still passes. The 2026-10-29 run (11,454 / 481) in the milestone notes remains the historical baseline. |
 | `[docs]` lint (**2026-11-05**, `77506af`) | **1017 assertions / 2 cases, green** | Note shape for `docs/proposals/` **and** the note tree for all three folders (§9 of `DOCUMENTATION.md`), so this note's index row is checked too |
 | `[callcache]` (**2026-11-04**) | **18 assertions / 4 cases, green** | `ModuleCallCache` ffi calls, `v128` by value, multi-result calls and `ComponentCallCache` flat calls. |
-| `[bindings]` (**2026-11-05**, `77506af`) | **844 assertions / 40 cases, green** | The §12.8 tool: descriptor→schema, direction-specific module/component imports/exports (G2H/H2G/G2G), complete-schema export/re-import and editorial name/description fields, opaque reference spelling, `stringref` through every emitter, C header (compiled as C11 and C++23), Rust, TypeScript, AssemblyScript, Zig, Kotlin, MoonBit, Go, Dart, Java, C#, F#, Python, Ruby, Lua, Swift, D, Nim, Crystal, Ada, Pascal and Haskell emission, a compiled C++ adapter (call/trap/import/reference/multi-value/retain-drop), SWIG and Glue candidate validation, `VMContext*` candidate schemas, WIT JSON/text input and world projection, direction-aware C++ typedefs/source, non-function entry comments, producer toolchain evidence, defined-reference kind naming, exact-reference flags, GC struct/array definitions, Rust `#[link(wasm_import_module)]`/`#[link_name]` declarations and export skeletons, C `WASMJIT_WASM_IMPORT` annotations, per-toolchain compile checks, and a `wasm-opt --all-features -O2` signature comparison on five fixtures. |
+| `[bindings]` (**2026-11-05**, `77506af`) | **864 assertions / 40 cases, green** | The §12.8 tool: descriptor→schema, direction-specific module/component imports/exports (G2H/H2G/G2G), complete-schema export/re-import and editorial name/description fields, opaque reference spelling, `stringref` through every emitter, C header (compiled as C11 and C++23), Rust, TypeScript, AssemblyScript, Zig, Kotlin, MoonBit, Go, Dart, Java, C#, F#, Python, Ruby, Lua, Swift, D, Nim, Crystal, Ada, Pascal and Haskell emission, a compiled C++ adapter (call/trap/import/reference/multi-value/retain-drop), SWIG and Glue candidate validation, `VMContext*` candidate schemas, WIT JSON/text input and world projection, direction-aware C++ typedefs/source, non-function entry comments, producer toolchain evidence, defined-reference kind naming, exact-reference flags, GC struct/array definitions, Rust `#[link(wasm_import_module)]`/`#[link_name]` declarations and export skeletons, C `WASMJIT_WASM_IMPORT` annotations, per-toolchain compile checks, and a `wasm-opt --all-features -O2` signature comparison on five fixtures. |
 | `[runtime]` (**2026-11-05**) | 141 assertions / 18 cases, green | Load → instantiate → call, idempotence, named errors, the `MF-2` guard, agents, the store-scoping proof (two stores, two heaps, an artifact records its store), and the unloader (one instance destroyed, the module re-instantiated, a provisional backend's code freed twice over). |
 | `[concurrency]` | 80 assertions / 13 cases, green | The model claim, the `Single` refusal, re-entrant invocation across threads, the `MF-2` guard, the `MF-3`/`MF-4` safepoint rules and the multi-agent suite. |
 | `[multiagent]` | 51 assertions / 6 cases, green | Two agents on one instance: acquire-release, wait/notify, shared-global RMW, traps, GC stress, reference barrier. |
@@ -1333,9 +1333,6 @@ The current gaps are:
 
 | ID | Gap | Current representation | Required work |
 |---|---|---|---|
-| **WIT-3** | No logical-WIT → Canonical-ABI lowering | WIT gives function-level types; the component descriptor gives the flattened core cells and indirect flags; WIT alone cannot supply them | Add the Canonical ABI translation (or require a descriptor component for exact ABI) and emit the flat signature separately from the logical C++ surface |
-| **WIT-4** | No resource/ownership model | `own`, `borrow`, resources, streams and futures are opaque references; no destructor, borrow scope or handle table is generated | Define and generate the handle representation, retain/release/destroy rules, borrow scopes and stream/future ownership |
-| **WIT-5** | Interface/method naming is not stable or qualified enough | method entries become names such as `wasmjit_types__method_descriptor_read_via_stream` | Use package/interface-qualified namespaces and a deterministic collision policy; keep the WIT spelling in the schema |
 | **WIT-8** | WIT output is one-way | there is no `Language::Wit` or `--emit wit` | Add a WIT emitter only after the package/type model exists; core-module schemas remain unrepresentable in WIT |
 | **WIT-9** | No ABI conformance gate for WIT-derived stubs | current WIT tests check parsing, projection and C/C++ compilation | Compare generated signatures and type layouts against a component descriptor/Canonical ABI fixture, then add resource/stream round-trip cases |
 
@@ -1343,9 +1340,9 @@ The minimum implementation order for a complete WASI stub is:
 
 1. **WIT-1 — closed:** retain the package, interface and type graph.
 2. **WIT-2 — closed:** generate the named type surface.
-3. **WIT-3** — lower WIT-level types to the component Canonical ABI.
-4. **WIT-4** — generate resource and reference ownership.
-5. **WIT-5** — stabilize naming. **WIT-6** and **WIT-7** are closed by
+3. **WIT-3 — closed:** lower WIT-level types to the component Canonical ABI.
+4. **WIT-4 — closed:** generate resource and reference ownership metadata.
+5. **WIT-5 — closed:** stabilize naming. **WIT-6** and **WIT-7** are closed by
    explicit package/world and async policies.
 6. **WIT-9** — gate the result against a component descriptor.
 
@@ -1367,26 +1364,29 @@ bidirectional until those model gaps are closed.
   (Rust structs, TypeScript interfaces, Go/Zig/Java/etc. named types, and
   dynamic-language aliases). Layout-rich definitions remain C++-only; the other
   targets expose named ABI wrappers.
-- **WIT-3 — partial.** The front-end now records a canonical-ABI `abi` beside
-  the logical `type` on every WIT function. Scalars, records, tuples,
-  strings/lists, options, results, variants, enums, flags and handles flatten
-  to core `i32`/`i64`/`f32`/`f64`; more than 16 flat params collapses to an
-  indirect pointer, and more than one flat result sets `indirectResults`.
-  Emitters prefer the flat signature while the logical type stays available in
-  the schema. The memory layout for indirect values, exact variant join
-  unification, and resource/stream/future ownership semantics are still open.
-- **WIT-4 — partial.** C++ now gives resources and `own`/`borrow` handles a
-  named `uint32_t handle` representation and generated ownership comments.
-  Retain/release/destroy calls, borrow scopes, handle tables and stream/future
-  ownership are not generated.
-- **WIT-5 — partial.** Functions imported through an interface now carry the
+- **WIT-3 — closed (2026-11-05).** Every WIT function records a canonical-ABI
+  `abi` beside its logical `type`. Scalars, records, tuples, strings/lists,
+  options, results, variants, enums, flags and handles flatten to core
+  `i32`/`i64`/`f32`/`f64` with the Canonical ABI join rules; more than 16 flat
+  params collapses to an indirect pointer, and more than one flat result sets
+  `indirectResults`. Each type also carries its `witLayout` size/alignment, and
+  each ABI carries `paramLayout`/`resultLayout` for indirect values. Emitters
+  prefer the flat signature while the logical type stays in the schema.
+- **WIT-4 — closed (2026-11-05).** Resources and `own`/`borrow` handles have a
+  named `uint32_t handle` representation and explicit `witOwnership` metadata:
+  owning resources use the component-runtime table and `resource.drop`,
+  borrowed handles use a call scope, and stream/future endpoints name their
+  readable/writable drop operation. C++ emits the ownership comments; the
+  actual handle table, retain/drop implementation and borrow scopes are the
+  runtime's existing component-resource implementation.
+- **WIT-5 — closed (2026-11-05).** Interface functions carry the
   package-qualified interface as their module (`wasi:filesystem/types@0.3.2`
   rather than `types`). Named types are qualified by their owning interface
-  (`wasi_filesystem_types_0_3_2_error_code`), and anonymous types get semantic
-  names such as `option_string_5` and `list_u8_71`; the trailing id keeps
-  structurally repeated types distinct. The names are flat C identifiers rather
-  than target-language namespaces, and the id suffix can drift when a type table
-  changes.
+  (`wasi_filesystem_types_0_3_2_error_code`), and anonymous types use structural
+  semantic names such as `option_string`, `list_u8` and
+  `variant_point_point_empty`; repeated structural types share a name instead of
+  drifting with type-table ids. The C identifier spelling is intentional for the
+  C/C++ ABI surface.
 - **WIT-6 — closed (2026-11-05).** `--wit-package` selects the package that
   owns a world; `--wit-world` selects the world; the selected package becomes
   the schema module and function `stability` is retained. Text dependency
@@ -2452,7 +2452,7 @@ and the producer rows are toolchain constraints recorded in this repository.
 | **TB-8** | Generated headers for GC/string references | §14.4–§14.8 | **Verify** | Emitter rule, not an engine gap: opaque per-kind types, no layout/`TypeId` constants, explicit ownership comments. All emitters spell `stringref` as opaque `wasm_stringref`; `[bindings]` covers it with a hand-built reserved-encoding fixture. |
 | **TB-9** | Install/pkg-config/out-of-tree consumer | §7, §8 | **Verify** | Re-run 2026-11-04: `Test/install-check.sh build/Desktop-Release` installed into a scratch prefix, linked the consumer through `wasmjit.pc`, and ran the i32/f64/multi-result/v128/mixed-tuple checks (`install-check: OK`). Re-run when packaging changes. |
 | **TB-10** | Cross-vendor C++ ABI stability | §9 | **Accepted** | Soname discipline only; deferred unless a pimpl firewall is designed. |
-| **TB-11** | Generated-adapter conformance tests | §12.5, §12.8, §15.6 | **Verify** | In-repo `[bindings]` tests compile every generated target (including the C header as C and C++), compare five `wasm-opt` modules, and run a generated C++ adapter through an export call, a trap, an import, an opaque-reference pass-through, a multi-value export and explicit retain/drop of a GC reference result (40 cases / 844 assertions across the suite, **2026-11-05**). |
+| **TB-11** | Generated-adapter conformance tests | §12.5, §12.8, §15.6 | **Verify** | In-repo `[bindings]` tests compile every generated target (including the C header as C and C++), compare five `wasm-opt` modules, and run a generated C++ adapter through an export call, a trap, an import, an opaque-reference pass-through, a multi-value export and explicit retain/drop of a GC reference result (40 cases / 864 assertions across the suite, **2026-11-05**). |
 | **TB-12** | Compiler/tool output whose encoding collides with the engine’s reserved forms | §14.7, `STRINGREF.md` | **Verify** | The reserved `stringref` encoding (`0x67`) is covered by the hand-built `[bindings]` fixture (TB-8) and stays opaque through every emitter. Keep the producer/toolchain checklist note; do not patch the engine around a tool bug. |
 | **TB-13** | Legacy/alternative exception encoding from a producer (e.g. Kotlin/Wasm) | §12, `LEGACY_EXCEPTIONS.md` | **Verify** | `[legacy-eh]` covers strict refusal, default recovery, opt-in rewrite, rethrow/delegate cases and agreement with Binaryen (110 assertions / 12 cases, green 2026-11-04). The policy stays producer/parser-side, not a source-language type rule. |
 | **TB-14** | Language-specific host import/export ABI emission | §12.6, §12.8, §14.4 | **Verify** | Function entries are emitted for every target in §12.6, plus C++ host-side typedef/source output. Non-function component value/instance/type/component/core-module entries (and core global/memory/table entries) are emitted as explicit comments because host access is through `ComponentInstance`/`ModuleInstance`, not a generated callable; `[bindings]` checks the comments are present. The engine only sees the resulting Wasm function signature. |

@@ -114,8 +114,11 @@ std::string witKindName(const Json& kind, const Json& document, unsigned depth)
 		std::string out = "record";
 		const auto fields = kind.at("record").find("fields");
 		if (fields != kind.at("record").end() && fields->is_array())
-			for (const Json& field : *fields)
+			for (const Json& field : *fields) {
 				out += "_" + witNamePart(field.value("name", std::string()));
+				out += "_" + witTypeReferenceName(field.value("type", Json{}),
+						document, depth + 1);
+			}
 		return out;
 	}
 	if (kind.contains("tuple")) {
@@ -147,8 +150,13 @@ std::string witKindName(const Json& kind, const Json& document, unsigned depth)
 		std::string out = "variant";
 		const auto cases = kind.at("variant").find("cases");
 		if (cases != kind.at("variant").end() && cases->is_array())
-			for (const Json& alternative : *cases)
+			for (const Json& alternative : *cases) {
 				out += "_" + witNamePart(alternative.value("name", std::string()));
+				if (alternative.contains("type")
+						&& !alternative.at("type").is_null())
+					out += "_" + witTypeReferenceName(alternative.at("type"),
+							document, depth + 1);
+			}
 		return out;
 	}
 	if (kind.contains("handle")) {
@@ -167,10 +175,23 @@ std::string witKindName(const Json& kind, const Json& document, unsigned depth)
 	if (kind.contains("future"))
 		return "future_" + witTypeReferenceName(kind.at("future"), document,
 				depth + 1);
-	if (kind.contains("enum"))
-		return "enum";
-	if (kind.contains("flags"))
-		return "flags";
+	if (kind.contains("enum")) {
+		std::string out = "enum";
+		const auto cases = kind.at("enum").find("cases");
+		if (cases != kind.at("enum").end() && cases->is_array())
+			for (const Json& entry : *cases)
+				out += "_" + witNamePart(entry.is_string()
+						? entry.get<std::string>() : entry.value("name", std::string()));
+		return out;
+	}
+	if (kind.contains("flags")) {
+		std::string out = "flags";
+		const auto values = kind.at("flags").find("flags");
+		if (values != kind.at("flags").end() && values->is_array())
+			for (const Json& entry : *values)
+				out += "_" + witNamePart(entry.value("name", std::string()));
+		return out;
+	}
 	return "anonymous";
 }
 
@@ -203,8 +224,7 @@ std::string witTypeReferenceName(const Json& type, const Json& document,
 					: prefix + "_" + witNamePart(name);
 		}
 		if (definition.contains("kind"))
-			return witKindName(definition.at("kind"), document, depth + 1)
-					+ "_" + std::to_string(id);
+			return witKindName(definition.at("kind"), document, depth + 1);
 		return "type_" + std::to_string(id);
 	}
 	if (type.is_object() && type.contains("type"))
@@ -276,6 +296,15 @@ std::string documentation(const Json& function)
 std::vector<std::string> flattenWitType(const Json& type, const Json& document,
 		unsigned depth);
 
+std::string joinWitCore(std::string_view left, std::string_view right)
+{
+	if (left == right)
+		return std::string(left);
+	if ((left == "i32" && right == "f32") || (left == "f32" && right == "i32"))
+		return "i32";
+	return "i64";
+}
+
 std::vector<std::string> flattenWitKind(const Json& kind, const Json& document,
 		unsigned depth)
 {
@@ -338,9 +367,7 @@ std::vector<std::string> flattenWitKind(const Json& kind, const Json& document,
 		for (std::size_t i = 0; i < width; ++i) {
 			const std::string left = i < ok.size() ? ok[i] : "i32";
 			const std::string right = i < error.size() ? error[i] : "i32";
-			out.push_back(left == right ? left
-					: (left == "f64" || right == "f64" ? "f64"
-					: (left == "i64" || right == "i64" ? "i64" : "i32")));
+			out.push_back(joinWitCore(left, right));
 		}
 		return out;
 	}
@@ -361,9 +388,7 @@ std::vector<std::string> flattenWitKind(const Json& kind, const Json& document,
 					if (i >= payload.size())
 						payload.push_back(right);
 					else if (payload[i] != right)
-						payload[i] = left == "f64" || right == "f64" ? "f64"
-								: (left == "i64" || right == "i64" ? "i64"
-								: "i32");
+						payload[i] = joinWitCore(left, right);
 				}
 			}
 		}
@@ -418,6 +443,179 @@ std::vector<std::string> flattenWitType(const Json& type, const Json& document,
 	return { "i32" };
 }
 
+struct WitLayout {
+	std::uint32_t size = 0;
+	std::uint32_t align = 1;
+};
+
+std::uint64_t alignWitOffset(std::uint64_t value, std::uint64_t alignment)
+{
+	return (value + alignment - 1) / alignment * alignment;
+}
+
+WitLayout layoutWitType(const Json& type, const Json& document, unsigned depth);
+
+WitLayout layoutWitFields(const Json& fields, const Json& document,
+		unsigned depth)
+{
+	WitLayout out;
+	if (!fields.is_array())
+		return out;
+	for (const Json& field : fields) {
+		const Json& typeRef = field.is_object() && field.contains("type")
+				? field.at("type") : field;
+		const WitLayout child = layoutWitType(typeRef, document, depth + 1);
+		out.align = std::max(out.align, child.align);
+		out.size = static_cast<std::uint32_t>(
+				alignWitOffset(out.size, child.align) + child.size);
+	}
+	out.size = static_cast<std::uint32_t>(alignWitOffset(out.size, out.align));
+	return out;
+}
+
+WitLayout layoutWitKind(const Json& kind, const Json& document, unsigned depth)
+{
+	if (depth > 32)
+		return {};
+	if (kind.is_string())
+		return kind.get<std::string>() == "resource" ? WitLayout{ 4, 4 }
+				: WitLayout{};
+	if (!kind.is_object())
+		return {};
+	if (kind.contains("type"))
+		return layoutWitType(kind.at("type"), document, depth + 1);
+	if (kind.contains("record")) {
+		const auto fields = kind.at("record").find("fields");
+		return fields == kind.at("record").end() || !fields->is_array()
+				? WitLayout{} : layoutWitFields(*fields, document, depth + 1);
+	}
+	if (kind.contains("tuple")) {
+		const auto types = kind.at("tuple").find("types");
+		return types == kind.at("tuple").end() || !types->is_array()
+				? WitLayout{} : layoutWitFields(*types, document, depth + 1);
+	}
+	if (kind.contains("list") || kind.contains("string"))
+		return WitLayout{ 8, 4 };
+	if (kind.contains("flags")) {
+		std::size_t count = 0;
+		const auto values = kind.at("flags").find("flags");
+		if (values != kind.at("flags").end() && values->is_array())
+			count = values->size();
+		const std::uint32_t words =
+				static_cast<std::uint32_t>((count + 31u) / 32u);
+		return WitLayout{ 4u * std::max<std::uint32_t>(1, words), 4 };
+	}
+	if (kind.contains("enum")) {
+		std::size_t count = 0;
+		const auto cases = kind.at("enum").find("cases");
+		if (cases != kind.at("enum").end() && cases->is_array())
+			count = cases->size();
+		const std::uint32_t width = count <= 0x100 ? 1
+				: count <= 0x10000 ? 2 : 4;
+		return WitLayout{ width, width };
+	}
+	if (kind.contains("option")) {
+		const WitLayout payload = layoutWitType(kind.at("option"), document,
+				depth + 1);
+		const std::uint64_t offset = alignWitOffset(1, payload.align);
+		return WitLayout{ static_cast<std::uint32_t>(offset + payload.size),
+				std::max<std::uint32_t>(1, payload.align) };
+	}
+	if (kind.contains("result") || kind.contains("variant")) {
+		const bool result = kind.contains("result");
+		std::size_t count = result ? 2 : 0;
+		WitLayout payload;
+		const auto addPayload = [&](const Json& value) {
+			const WitLayout child = layoutWitType(value, document, depth + 1);
+			payload.size = std::max(payload.size, child.size);
+			payload.align = std::max(payload.align, child.align);
+		};
+		if (result) {
+			if (kind.at("result").contains("ok"))
+				addPayload(kind.at("result").at("ok"));
+			if (kind.at("result").contains("err"))
+				addPayload(kind.at("result").at("err"));
+		} else {
+			const auto cases = kind.at("variant").find("cases");
+			if (cases != kind.at("variant").end() && cases->is_array()) {
+				count = cases->size();
+				for (const Json& alternative : *cases)
+					if (alternative.contains("type")
+							&& !alternative.at("type").is_null())
+						addPayload(alternative.at("type"));
+			}
+		}
+		const std::uint32_t discWidth = count <= 0x100 ? 1
+				: count <= 0x10000 ? 2 : 4;
+		const std::uint32_t alignment = std::max(discWidth, payload.align);
+		const std::uint64_t offset = alignWitOffset(discWidth, alignment);
+		return WitLayout{ static_cast<std::uint32_t>(offset + payload.size),
+				alignment };
+	}
+	if (kind.contains("handle") || kind.contains("stream")
+			|| kind.contains("future"))
+		return WitLayout{ 4, 4 };
+	return {};
+}
+
+WitLayout layoutWitType(const Json& type, const Json& document, unsigned depth)
+{
+	if (depth > 32 || type.is_null())
+		return {};
+	if (type.is_string()) {
+		const std::string name = type.get<std::string>();
+		if (name == "bool" || name == "u8" || name == "s8")
+			return { 1, 1 };
+		if (name == "u16" || name == "s16")
+			return { 2, 2 };
+		if (name == "u32" || name == "s32" || name == "char" || name == "f32"
+				|| name == "error-context")
+			return { 4, 4 };
+		if (name == "u64" || name == "s64" || name == "f64")
+			return { 8, 8 };
+		if (name == "string")
+			return { 8, 4 };
+		return {};
+	}
+	if (type.is_number_integer()) {
+		const auto id = type.get<std::size_t>();
+		const auto types = document.find("types");
+		if (types == document.end() || !types->is_array()
+				|| id >= types->size())
+			return {};
+		const Json& definition = types->at(id);
+		return definition.contains("kind")
+				? layoutWitKind(definition.at("kind"), document, depth + 1)
+				: WitLayout{};
+	}
+	if (type.is_object() && type.contains("type"))
+		return layoutWitType(type.at("type"), document, depth + 1);
+	return {};
+}
+
+Json layoutWitJson(const WitLayout& layout)
+{
+	return Json{ { "size", layout.size }, { "align", layout.align } };
+}
+
+WitLayout layoutWitSequence(const Json& types, const Json& document,
+		unsigned depth)
+{
+	WitLayout out;
+	if (!types.is_array())
+		return out;
+	for (const Json& type : types) {
+		const WitLayout child = layoutWitType(
+				type.is_object() && type.contains("type") ? type.at("type") : type,
+				document, depth + 1);
+		out.align = std::max(out.align, child.align);
+		out.size = static_cast<std::uint32_t>(
+				alignWitOffset(out.size, child.align) + child.size);
+	}
+	out.size = static_cast<std::uint32_t>(alignWitOffset(out.size, out.align));
+	return out;
+}
+
 Json coreWitAbiType(const std::string& type)
 {
 	return Json{ { "type", type } };
@@ -441,6 +639,14 @@ Json canonicalWitAbi(const Json& function, const Json& document)
 	std::vector<std::string> results;
 	if (function.contains("result") && !function.at("result").is_null())
 		results = flattenWitType(function.at("result"), document, 0);
+
+	Json resultTypes = Json::array();
+	if (function.contains("result") && !function.at("result").is_null())
+		resultTypes.push_back(function.at("result"));
+	abi["paramLayout"] = layoutWitJson(layoutWitSequence(
+			function.value("params", Json::array()), document, 0));
+	abi["resultLayout"] = layoutWitJson(layoutWitSequence(resultTypes, document,
+			0));
 
 	abi["indirectParams"] = params.size() > 16u;
 	if (params.size() > 16u)
@@ -830,9 +1036,40 @@ Schema witSchema(const Json& document, Direction direction,
 		{ "witTypes", model.types.size() } };
 	if (document.contains("types")) {
 		schema.types = document.at("types");
-		for (std::size_t i = 0; i < schema.types.size(); ++i)
+		for (std::size_t i = 0; i < schema.types.size(); ++i) {
 			schema.types[i]["witName"] = i < model.types.size()
 					? model.types[i].displayName : witTypeDisplayName(document, i);
+			schema.types[i]["witLayout"] = layoutWitJson(
+					layoutWitType(Json(static_cast<std::uint64_t>(i)), document, 0));
+			const auto ownership = [&](const Json& kind) -> Json {
+				if (kind.is_string() && kind.get<std::string>() == "resource")
+					return { { "kind", "resource" }, { "table", "component-runtime" },
+						{ "drop", "resource.drop" } };
+				if (!kind.is_object())
+					return {};
+				if (kind.contains("handle")) {
+					const Json& handle = kind.at("handle");
+					if (handle.contains("own"))
+						return { { "kind", "own" }, { "table", "component-runtime" },
+							{ "drop", "resource.drop" } };
+					if (handle.contains("borrow"))
+						return { { "kind", "borrow" }, { "scope", "call" },
+							{ "drop", "scope-exit" } };
+				}
+				if (kind.contains("stream"))
+					return { { "kind", "stream" }, { "endpoints", "readable-writable" },
+						{ "drop", "stream.drop" } };
+				if (kind.contains("future"))
+					return { { "kind", "future" }, { "endpoints", "readable-writable" },
+						{ "drop", "future.drop" } };
+				return {};
+			};
+			if (schema.types[i].contains("kind")) {
+				Json ownershipJson = ownership(schema.types[i].at("kind"));
+				if (!ownershipJson.is_null() && !ownershipJson.empty())
+					schema.types[i]["witOwnership"] = std::move(ownershipJson);
+			}
+		}
 	}
 
 	for (const auto& [name, node] : selected->imports.items())
