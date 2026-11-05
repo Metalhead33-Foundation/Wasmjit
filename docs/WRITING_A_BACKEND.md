@@ -397,16 +397,16 @@ continuations are the next target.
 - `f32`/`f64` constants, locals, globals, arithmetic, `min`/`max`,
   `abs`/`neg`/`sqrt`, rounding, `copysign`, comparisons, checked and saturating
   integer conversions, `demote`/`promote` and reinterpretation;
-- `i32`/`i64` globals, memory32 loads/stores at every integer width and both
-  float widths,
-  `memory.size`/`grow`, `memory.copy`/`fill`/`init`, `data.drop`,
-  `table.init`/`copy`/`size` and `elem.drop`;
+- `i32`/`i64` globals, memory32 and memory64 loads/stores at every integer and
+  float width, `memory.size`/`grow` at both index widths, `memory.copy`/`fill`/`init`
+  (memory32), `data.drop`, `table.init`/`copy`/`size` and `elem.drop`;
 - the stack guard and a pending-trap epilogue, so a call reports a
   `CallStackExhausted` trap as a pending status rather than crashing.
 
 **What it refuses, loudly and safely:** `v128`/SIMD, the `f16` proposal,
-references/GC, exceptions, continuations, atomics, memory64, a call with more
-than three parameters and a function with more than one result. Each leaves
+references/GC, exceptions, continuations, atomics, bulk memory on a memory64,
+a call with more than three parameters and a function with more than one result.
+Each leaves
 that function's `Callable::fnPtr` **null**. The core then refuses the call at
 the boundary with the existing "no compiled body" error. Nothing is
 miscompiled, nothing is interpreted, and no half-emitted code is ever installed.
@@ -516,15 +516,15 @@ every semantic question unless a row below explicitly says otherwise.
 - `Asmjit/` and `Sljit/` execute the same **P0–P3 scalar slice**: i32/i64 and
   f32/f64 arithmetic, conversions, globals, structured control flow (block
   parameters and multi-value block results on SLJIT), direct/indirect/tail
-  calls, memory32 loads/stores at every scalar width, `memory.size`/`grow`,
-  bulk memory and the table operations. Both register under their own name,
-  both implement `releaseInstance`, and both pass `[backendabi]`,
-  `[asmjit]`/`[sljit]` and the shared `[sljit][module][parity]` fixtures over
-  the same `.wat` modules.
+  calls, memory32 and memory64 loads/stores at every scalar width,
+  `memory.size`/`grow` at both index widths, bulk memory32 and the table
+  operations. Both register under their own name, both implement
+  `releaseInstance`, and both pass `[backendabi]`, `[asmjit]`/`[sljit]` and the
+  shared `[sljit][module][parity]` fixtures over the same `.wat` modules.
 - Neither lowers `v128`/SIMD, references/GC, exceptions, continuations, atomics
-  or `f16`; those stay refused at the call boundary. SLJIT additionally caps
-  generated functions at three parameters and one result (SLJIT's four-argument
-  call ABI).
+  or `f16`, and bulk memory on a memory64 is refused; those stay refused at the
+  call boundary. SLJIT additionally caps generated functions at three
+  parameters and one result (SLJIT's four-argument call ABI).
 - Neither is a replacement for LibJIT.
 
 ### 14.2 Why they ship together
@@ -557,18 +557,18 @@ that is borrowed there, a tuple offset that disagrees by four bytes. Therefore:
 | **P6 — hardening and performance** | ASan/TSan, unload/release, plugin ABI, W^X, benchmark parity, refusal inventory, documentation. | The full §12 definition-of-done table is green for both; every remaining refusal is named in the backend README and a test. | none |
 
 Each slice is a **review gate**, not a calendar promise. P0–P3 (scalar) are
-green for both backends against the shared fixtures (2026-11-05 snapshot);
-`v128`/SIMD is the remaining P3 item, and P4/P5 stay LibJIT-only until it
-lands. Extend the `[sljit][module][parity]` fixture set before moving a row to
-green, and do not merge the "complete" label for either until its row is green
-on both.
+green for both backends against the shared fixtures (2026-11-05 snapshot), with
+one documented P2 residual: bulk memory on a memory64 is refused. `v128`/SIMD is
+the remaining P3 item, and P4/P5 stay LibJIT-only until it lands. Extend the
+`[sljit][module][parity]` fixture set before moving a row to green, and do not
+merge the "complete" label for either until its row is green on both.
 
 ### 14.4 Tests that are part of every slice
 
 - `[backendabi]` — tuple/layout and calling-convention conformance.
 - `[parity]` — one module instantiated with both generators, outcomes compared
-  (`asmjit and sljit agree on the shared integer module` over
-  `asmjit_i32_basic`, and `... floating-point module` over `float_basic`).
+  (`... integer module` over `asmjit_i32_basic`, `... floating-point module`
+  over `float_basic`, `... memory64 module` over `memory64_basic`).
   Duplicated expectation tables are not a substitute.
 - `Test/install-check.sh` — installed headers plus the selected backend.
 - `[runtime]` unload/re-instantiate — executable memory is returned.
@@ -609,9 +609,10 @@ it is still provisional. It must contain:
 
 The post-mortem is written by the implementer, reviewed by the backend
 reviewer, and kept current: when a later slice invalidates a paragraph, update
-the paragraph rather than appending a correction footnote. The first two are
-[`docs/backends/ASMJIT_SLJIT_P0_P2.md`](backends/ASMJIT_SLJIT_P0_P2.md) and
-[`docs/backends/ASMJIT_SLJIT_P3.md`](backends/ASMJIT_SLJIT_P3.md).
+the paragraph rather than appending a correction footnote. The three so far are
+[`docs/backends/ASMJIT_SLJIT_P0_P2.md`](backends/ASMJIT_SLJIT_P0_P2.md),
+[`docs/backends/ASMJIT_SLJIT_P3.md`](backends/ASMJIT_SLJIT_P3.md) and
+[`docs/backends/ASMJIT_SLJIT_P2_MEMORY64.md`](backends/ASMJIT_SLJIT_P2_MEMORY64.md).
 
 ### 14.6 Candidate backends for a fourth implementation
 

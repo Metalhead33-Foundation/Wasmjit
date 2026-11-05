@@ -510,6 +510,65 @@ uint32_t asmjitMemoryGrow(WASM::VMContext* vm, uint32_t memoryIndex, uint32_t de
 	}
 }
 
+uint64_t asmjitMemorySize64(WASM::VMContext* vm, uint32_t memoryIndex) noexcept
+{
+	if (vm == nullptr || vm->memories == nullptr || memoryIndex >= vm->memoryCount) {
+		WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit memory64.size index is invalid");
+		return 0;
+	}
+	const WASM::LinearMemory* memory = vm->memories[memoryIndex];
+	if (memory == nullptr || memory->pageSize == 0) {
+		WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit memory64.size memory is invalid");
+		return 0;
+	}
+	return WASM::wasm_memory_size(memory) / memory->pageSize;
+}
+
+uint64_t asmjitMemoryGrow64(WASM::VMContext* vm, uint32_t memoryIndex,
+		uint64_t delta) noexcept
+{
+	if (vm == nullptr || vm->memories == nullptr || memoryIndex >= vm->memoryCount) {
+		WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit memory64.grow index is invalid");
+		return UINT64_MAX;
+	}
+	auto* instance = reinterpret_cast<WASM::ModuleInstance*>(vm);
+	try {
+		const int64_t previous = instance->growMemory(memoryIndex, delta);
+		return previous < 0 ? UINT64_MAX : static_cast<uint64_t>(previous);
+	} catch (...) {
+		return UINT64_MAX;
+	}
+}
+
+void* asmjitMemoryAddress64(WASM::VMContext* vm, uint32_t memoryIndex,
+		uint64_t address, uint64_t offset, uint32_t width) noexcept
+{
+	if (vm == nullptr || vm->memories == nullptr || memoryIndex >= vm->memoryCount) {
+		WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit memory64 index is invalid");
+		return nullptr;
+	}
+	WASM::LinearMemory* memory = vm->memories[memoryIndex];
+	if (memory == nullptr) {
+		WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit memory64 memory is null");
+		return nullptr;
+	}
+	if (address > UINT64_MAX - offset) {
+		WASM::reportTrap(WASM::TrapKind::OutOfBoundsMemoryAccess);
+		return nullptr;
+	}
+	const uint64_t effective = address + offset;
+	const uint64_t size = WASM::wasm_memory_size(memory);
+	if (effective > size || width > size - effective) {
+		WASM::reportTrap(WASM::TrapKind::OutOfBoundsMemoryAccess);
+		return nullptr;
+	}
+	if (memory->memoryBase == nullptr) {
+		WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit memory64 base is null");
+		return nullptr;
+	}
+	return memory->memoryBase + effective;
+}
+
 void* asmjitMemoryAddress(WASM::VMContext* vm, uint32_t memoryIndex,
 		uint32_t address, uint32_t offset, uint32_t width) noexcept
 {
@@ -2118,8 +2177,9 @@ private:
 
     void emitMemoryCopy(WASM::MemIdx destination, WASM::MemIdx source)
     {
-        validateMemoryIndex(destination);
-        validateMemoryIndex(source);
+        if (validateMemoryIndex(destination).indexType != WASM::MemoryIndexType::I32
+                || validateMemoryIndex(source).indexType != WASM::MemoryIndexType::I32)
+            throw std::runtime_error("AsmJit does not lower bulk memory on memory64 yet");
         if (values.size() < 3)
             throw std::runtime_error("AsmJit memory.copy operand stack underflow");
         const auto length = values.back(); values.pop_back();
@@ -2148,7 +2208,8 @@ private:
 
     void emitMemoryInit(uint32_t dataIndex, WASM::MemIdx memoryIndex)
     {
-        validateMemoryIndex(memoryIndex);
+        if (validateMemoryIndex(memoryIndex).indexType != WASM::MemoryIndexType::I32)
+            throw std::runtime_error("AsmJit does not lower bulk memory on memory64 yet");
         if (values.size() < 3)
             throw std::runtime_error("AsmJit memory.init operand stack underflow");
         const auto length = values.back(); values.pop_back();
@@ -2177,7 +2238,8 @@ private:
 
     void emitMemoryFill(WASM::MemIdx index)
     {
-        validateMemoryIndex(index);
+        if (validateMemoryIndex(index).indexType != WASM::MemoryIndexType::I32)
+            throw std::runtime_error("AsmJit does not lower bulk memory on memory64 yet");
         if (values.size() < 3)
             throw std::runtime_error("AsmJit memory.fill operand stack underflow");
         const auto length = values.back(); values.pop_back();
@@ -2349,31 +2411,38 @@ private:
 		}
 	}
 
-	void validateMemoryIndex(WASM::MemIdx index) const
+	const WASM::MemoryType& validateMemoryIndex(WASM::MemIdx index) const
 	{
 		// Module::memories is the complete memory index space, imports first.
 		if (index >= module.memories.size())
 			throw std::runtime_error("AsmJit memory instruction references an unknown memory");
-		const WASM::MemoryType& type = module.memories[index];
-		if (type.indexType != WASM::MemoryIndexType::I32)
-			throw std::runtime_error("AsmJit initial memory lowering supports memory32 only");
+		return module.memories[index];
 	}
 
 	void emitMemorySize(WASM::MemIdx index)
 	{
-		validateMemoryIndex(index);
+		const bool is64 = validateMemoryIndex(index).indexType
+				== WASM::MemoryIndexType::I64;
 		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
-		signature.set_ret(asmjit::TypeId::kUInt32);
+		signature.set_ret(is64 ? asmjit::TypeId::kUInt64 : asmjit::TypeId::kUInt32);
 		signature.add_arg(asmjit::TypeId::kUIntPtr);
 		signature.add_arg(asmjit::TypeId::kUInt32);
 		asmjit::InvokeNode* invoke = nullptr;
 		auto memoryIndex = compiler.new_gp32("memorySizeIndex");
-		checkError(compiler.mov(memoryIndex, static_cast<uint32_t>(index)), "AsmJit memory.size index materialisation failed");
-		checkError(compiler.invoke(asmjit::Out(invoke), reinterpret_cast<uint64_t>(&asmjitMemorySize), signature),
-				"AsmJit memory.size helper call emission failed");
+		checkError(compiler.mov(memoryIndex, static_cast<uint32_t>(index)),
+				"AsmJit memory.size index materialisation failed");
+		if (is64)
+			checkError(compiler.invoke(asmjit::Out(invoke),
+					reinterpret_cast<uint64_t>(&asmjitMemorySize64), signature),
+					"AsmJit memory64.size helper call emission failed");
+		else
+			checkError(compiler.invoke(asmjit::Out(invoke),
+					reinterpret_cast<uint64_t>(&asmjitMemorySize), signature),
+					"AsmJit memory32.size helper call emission failed");
 		invoke->set_arg(0, vmContext);
 		invoke->set_arg(1, memoryIndex);
-		auto result = compiler.new_gp32("memorySize");
+		auto result = is64
+				? compiler.new_gp64("memorySize") : compiler.new_gp32("memorySize");
 		invoke->set_ret(0, result);
 		values.push_back(result);
 		emitPendingTrapReturn();
@@ -2381,24 +2450,33 @@ private:
 
 	void emitMemoryGrow(WASM::MemIdx index)
 	{
-		validateMemoryIndex(index);
+		const bool is64 = validateMemoryIndex(index).indexType
+				== WASM::MemoryIndexType::I64;
 		if (values.empty())
 			throw std::runtime_error("AsmJit memory.grow operand stack underflow");
 		auto delta = values.back(); values.pop_back();
 		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
-		signature.set_ret(asmjit::TypeId::kUInt32);
+		signature.set_ret(is64 ? asmjit::TypeId::kUInt64 : asmjit::TypeId::kUInt32);
 		signature.add_arg(asmjit::TypeId::kUIntPtr);
 		signature.add_arg(asmjit::TypeId::kUInt32);
-		signature.add_arg(asmjit::TypeId::kUInt32);
+		signature.add_arg(is64 ? asmjit::TypeId::kUInt64 : asmjit::TypeId::kUInt32);
 		asmjit::InvokeNode* invoke = nullptr;
 		auto memoryIndex = compiler.new_gp32("memoryGrowIndex");
-		checkError(compiler.mov(memoryIndex, static_cast<uint32_t>(index)), "AsmJit memory.grow index materialisation failed");
-		checkError(compiler.invoke(asmjit::Out(invoke), reinterpret_cast<uint64_t>(&asmjitMemoryGrow), signature),
-				"AsmJit memory.grow helper call emission failed");
+		checkError(compiler.mov(memoryIndex, static_cast<uint32_t>(index)),
+				"AsmJit memory.grow index materialisation failed");
+		if (is64)
+			checkError(compiler.invoke(asmjit::Out(invoke),
+					reinterpret_cast<uint64_t>(&asmjitMemoryGrow64), signature),
+					"AsmJit memory64.grow helper call emission failed");
+		else
+			checkError(compiler.invoke(asmjit::Out(invoke),
+					reinterpret_cast<uint64_t>(&asmjitMemoryGrow), signature),
+					"AsmJit memory32.grow helper call emission failed");
 		invoke->set_arg(0, vmContext);
 		invoke->set_arg(1, memoryIndex);
 		invoke->set_arg(2, delta);
-		auto result = compiler.new_gp32("memoryGrowResult");
+		auto result = is64
+				? compiler.new_gp64("memoryGrowResult") : compiler.new_gp32("memoryGrowResult");
 		invoke->set_ret(0, result);
 		values.push_back(result);
 		emitPendingTrapReturn();
@@ -2408,8 +2486,8 @@ private:
 	{
 		if (arg.isArray)
 			throw std::runtime_error("AsmJit scalar loads/stores do not support GC-array memargs");
-		validateMemoryIndex(arg.memidx);
-		if (arg.offset > UINT32_MAX)
+		const WASM::MemoryType& memory = validateMemoryIndex(arg.memidx);
+		if (memory.indexType == WASM::MemoryIndexType::I32 && arg.offset > UINT32_MAX)
 			throw std::runtime_error("AsmJit memory32 offset exceeds the encoded u32 range");
 		(void)width;
 	}
@@ -2418,12 +2496,14 @@ private:
 			const asmjit::x86::Gp& wasmAddress)
 	{
 		validateMemoryArg(arg, width);
+		const bool is64 = validateMemoryIndex(arg.memidx).indexType
+				== WASM::MemoryIndexType::I64;
 		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
 		signature.set_ret(asmjit::TypeId::kUIntPtr);
 		signature.add_arg(asmjit::TypeId::kUIntPtr);
 		signature.add_arg(asmjit::TypeId::kUInt32);
-		signature.add_arg(asmjit::TypeId::kUInt32);
-		signature.add_arg(asmjit::TypeId::kUInt32);
+		signature.add_arg(is64 ? asmjit::TypeId::kUInt64 : asmjit::TypeId::kUInt32);
+		signature.add_arg(is64 ? asmjit::TypeId::kUInt64 : asmjit::TypeId::kUInt32);
 		signature.add_arg(asmjit::TypeId::kUInt32);
 		// Materialise every argument *before* appending the invoke node: an
 		// operand must be defined at the call site, not after it, or the
@@ -2431,15 +2511,27 @@ private:
 		auto memoryIndex = compiler.new_gp32("memoryIndex");
 		checkError(compiler.mov(memoryIndex, static_cast<uint32_t>(arg.memidx)),
 				"AsmJit memory-index materialisation failed");
-		auto offset = compiler.new_gp32("memoryOffset");
-		checkError(compiler.mov(offset, static_cast<uint32_t>(arg.offset)),
-				"AsmJit memory-offset materialisation failed");
 		auto accessWidth = compiler.new_gp32("memoryWidth");
 		checkError(compiler.mov(accessWidth, width), "AsmJit memory-width materialisation failed");
+		asmjit::x86::Gp offset;
+		if (is64) {
+			offset = compiler.new_gp64("memoryOffset");
+			checkError(compiler.mov(offset, static_cast<uint64_t>(arg.offset)),
+					"AsmJit memory64-offset materialisation failed");
+		} else {
+			offset = compiler.new_gp32("memoryOffset");
+			checkError(compiler.mov(offset, static_cast<uint32_t>(arg.offset)),
+					"AsmJit memory32-offset materialisation failed");
+		}
 		asmjit::InvokeNode* invoke = nullptr;
-		checkError(compiler.invoke(asmjit::Out(invoke),
-				reinterpret_cast<uint64_t>(&asmjitMemoryAddress), signature),
-				"AsmJit memory-address helper call emission failed");
+		if (is64)
+			checkError(compiler.invoke(asmjit::Out(invoke),
+					reinterpret_cast<uint64_t>(&asmjitMemoryAddress64), signature),
+					"AsmJit memory64-address helper call emission failed");
+		else
+			checkError(compiler.invoke(asmjit::Out(invoke),
+					reinterpret_cast<uint64_t>(&asmjitMemoryAddress), signature),
+					"AsmJit memory32-address helper call emission failed");
 		invoke->set_arg(0, vmContext);
 		invoke->set_arg(1, memoryIndex);
 		invoke->set_arg(2, wasmAddress);

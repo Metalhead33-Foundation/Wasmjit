@@ -926,3 +926,132 @@ TEST_CASE("asmjit and sljit agree on the shared floating-point module",
 			[](const WASM::Callable& c) { return floatOutcomeOf<float>(c, 16, 3.25f); });
 }
 
+
+TEST_CASE("sljit: the shared memory64 module executes", "[sljit][module][parity][m64]")
+{
+	auto session = Sljit::createSession();
+	REQUIRE(session != nullptr);
+	WASM::RegistryImportResolver imports;
+	LoadedModule loaded = loadAndInstantiateTestModule("memory64_basic", imports, *session);
+	REQUIRE(loaded.instance != nullptr);
+	WASM::ModuleInstance& instance = *loaded.instance;
+	const auto call = [&](const char* name) -> WASM::Callable {
+		const std::optional<WASM::Callable> callable = instance.exportedFunction(name);
+		INFO("export " << name);
+		REQUIRE(callable.has_value());
+		REQUIRE(callable->fnPtr != nullptr);
+		return *callable;
+	};
+
+	CHECK(WASM::callCallable<std::int64_t>(call("size")) == 1);
+	CHECK(WASM::callCallable<std::int64_t>(call("grow"), INT64_C(1)) == 1);
+	CHECK(WASM::callCallable<std::int64_t>(call("size")) == 2);
+	CHECK(WASM::callCallable<std::int64_t>(call("grow"), INT64_C(1)) == -1);
+	CHECK(WASM::callCallable<std::int64_t>(call("grow"), INT64_C(0)) == 2);
+	// A 33-bit delta must not be truncated to a successful 32-bit request.
+	CHECK(WASM::callCallable<std::int64_t>(call("grow"), INT64_C(0x100000000)) == -1);
+	CHECK(WASM::callCallable<std::int64_t>(call("grow"),
+			static_cast<std::int64_t>(UINT64_C(0xFFFFFFFFFFFFFFFF))) == -1);
+
+	CHECK(WASM::callCallable<std::int32_t>(call("store_load_i32"), INT64_C(0),
+			0x7ABCDEF0) == 0x7ABCDEF0);
+	CHECK(WASM::callCallable<std::int64_t>(call("store_load_i64"), INT64_C(100),
+			INT64_C(0x123456789ABCDEF0)) == INT64_C(0x123456789ABCDEF0));
+	CHECK(WASM::callCallable<float>(call("store_load_f32"), INT64_C(200), 3.25f) == 3.25f);
+	CHECK(WASM::callCallable<double>(call("store_load_f64"), INT64_C(300), 6.5) == 6.5);
+
+	// Address 0 holds a sentinel. A 2^32 address must trap, not wrap to it.
+	CHECK_THROWS(WASM::callCallable<std::int32_t>(call("load_at"),
+			INT64_C(0x100000000)));
+	CHECK_THROWS(WASM::callCallable<std::int32_t>(call("load_at"), INT64_C(-1)));
+	CHECK_THROWS(WASM::callCallable<std::int32_t>(call("load_at"), INT64_C(131072)));
+
+	// `offset=65532` is added to the 64-bit address, not truncated.
+	CHECK(WASM::callCallable<std::int32_t>(call("store_offset"), INT64_C(65536),
+			0x1234) == 0x1234);
+	CHECK_THROWS(WASM::callCallable<std::int32_t>(call("store_offset"), INT64_C(65537), 1));
+}
+
+
+
+TEST_CASE("asmjit and sljit agree on the shared memory64 module",
+		"[sljit][asmjit][parity][m64]")
+{
+	WASM::Module module = loadTestModule("memory64_basic");
+	AsmJitBackend::Context asmContext;
+	AsmJitBackend::ModuleCompiler asmCompiler(asmContext);
+	Sljit::ModuleCompiler sljitCompiler;
+	WASM::RegistryImportResolver asmImports;
+	WASM::RegistryImportResolver sljitImports;
+	std::unique_ptr<WASM::ModuleInstance> asmInstance =
+			asmCompiler.instantiate(module, asmImports);
+	std::unique_ptr<WASM::ModuleInstance> sljitInstance =
+			sljitCompiler.instantiate(module, sljitImports);
+	REQUIRE(asmInstance != nullptr);
+	REQUIRE(sljitInstance != nullptr);
+
+	const auto sameInt = [&](const char* name, auto&& call) {
+		const std::optional<WASM::Callable> asmCallable = asmInstance->exportedFunction(name);
+		const std::optional<WASM::Callable> sljitCallable = sljitInstance->exportedFunction(name);
+		REQUIRE(asmCallable.has_value());
+		REQUIRE(sljitCallable.has_value());
+		const CallOutcome asmOutcome = call(*asmCallable);
+		const CallOutcome sljitOutcome = call(*sljitCallable);
+		INFO("export " << name);
+		CHECK(asmOutcome.trapped == sljitOutcome.trapped);
+		if (!asmOutcome.trapped && !sljitOutcome.trapped)
+			CHECK(asmOutcome.value == sljitOutcome.value);
+	};
+	const auto sameFloat = [&](const char* name, auto&& call) {
+		const std::optional<WASM::Callable> asmCallable = asmInstance->exportedFunction(name);
+		const std::optional<WASM::Callable> sljitCallable = sljitInstance->exportedFunction(name);
+		REQUIRE(asmCallable.has_value());
+		REQUIRE(sljitCallable.has_value());
+		const FloatCallOutcome asmOutcome = call(*asmCallable);
+		const FloatCallOutcome sljitOutcome = call(*sljitCallable);
+		INFO("export " << name);
+		CHECK(asmOutcome.trapped == sljitOutcome.trapped);
+		if (!asmOutcome.trapped && !sljitOutcome.trapped)
+			CHECK(sameFloatValue(asmOutcome.value, sljitOutcome.value));
+	};
+
+	sameInt("size", [](const WASM::Callable& c) { return outcomeOf<std::int64_t>(c); });
+	sameInt("grow", [](const WASM::Callable& c) {
+		return outcomeOf<std::int64_t>(c, INT64_C(1));
+	});
+	sameInt("size", [](const WASM::Callable& c) { return outcomeOf<std::int64_t>(c); });
+	sameInt("grow", [](const WASM::Callable& c) {
+		return outcomeOf<std::int64_t>(c, INT64_C(0x100000000));
+	});
+	sameInt("store_load_i32", [](const WASM::Callable& c) {
+		return outcomeOf<std::int32_t>(c, INT64_C(0), 0x7ABCDEF0);
+	});
+	sameInt("load_at", [](const WASM::Callable& c) {
+		return outcomeOf<std::int32_t>(c, INT64_C(0x100000000));
+	});
+	sameInt("store_offset", [](const WASM::Callable& c) {
+		return outcomeOf<std::int32_t>(c, INT64_C(65536), 0x1234);
+	});
+	sameInt("store_offset", [](const WASM::Callable& c) {
+		return outcomeOf<std::int32_t>(c, INT64_C(65537), 1);
+	});
+	sameFloat("store_load_f64", [](const WASM::Callable& c) {
+		return floatOutcomeOf<double>(c, INT64_C(300), 6.5);
+	});
+}
+
+TEST_CASE("sljit: bulk memory on a memory64 is refused per function",
+		"[sljit][m64][refusal]")
+{
+	auto session = Sljit::createSession();
+	REQUIRE(session != nullptr);
+	WASM::RegistryImportResolver imports;
+	LoadedModule loaded = loadAndInstantiateTestModule("memory64_bulk", imports, *session);
+	REQUIRE(loaded.instance != nullptr);
+	// The module still instantiates; only the one unsupported function has no
+	// entry point, which is SLJIT's refusal granularity.
+	const std::optional<WASM::Callable> copy = loaded.instance->exportedFunction("copy");
+	REQUIRE(copy.has_value());
+	CHECK(copy->fnPtr == nullptr);
+}
+

@@ -444,6 +444,39 @@ extern "C" void* sljitMemoryAddress(WASM::VMContext* vm, uint32_t memoryIndex,
 	return memory->memoryBase + effective;
 }
 
+//! Checked address of a memory64 access. The memory index and width travel in
+//! one word; the 64-bit address and the 64-bit immediate offset are separate.
+extern "C" void* sljitMemoryAddress64(WASM::VMContext* vm, uint64_t memoryAndWidth,
+		uint64_t address, uint64_t offset) noexcept
+{
+	const uint32_t memoryIndex = static_cast<uint32_t>(memoryAndWidth);
+	const uint32_t width = static_cast<uint32_t>(memoryAndWidth >> 32);
+	if (vm == nullptr || vm->memories == nullptr || memoryIndex >= vm->memoryCount) {
+		WASM::reportTrap(WASM::TrapKind::Internal, "SLJIT memory64 index is invalid");
+		return nullptr;
+	}
+	WASM::LinearMemory* memory = vm->memories[memoryIndex];
+	if (memory == nullptr) {
+		WASM::reportTrap(WASM::TrapKind::Internal, "SLJIT memory64 memory is null");
+		return nullptr;
+	}
+	if (address > UINT64_MAX - offset) {
+		WASM::reportTrap(WASM::TrapKind::OutOfBoundsMemoryAccess);
+		return nullptr;
+	}
+	const uint64_t effective = address + offset;
+	const uint64_t size = WASM::wasm_memory_size(memory);
+	if (effective > size || width > size - effective) {
+		WASM::reportTrap(WASM::TrapKind::OutOfBoundsMemoryAccess);
+		return nullptr;
+	}
+	if (memory->memoryBase == nullptr) {
+		WASM::reportTrap(WASM::TrapKind::Internal, "SLJIT memory64 base is null");
+		return nullptr;
+	}
+	return memory->memoryBase + effective;
+}
+
 extern "C" uint32_t sljitMemorySize(WASM::VMContext* vm, uint32_t memoryIndex) noexcept
 {
 	if (vm == nullptr || vm->memories == nullptr || memoryIndex >= vm->memoryCount) {
@@ -456,6 +489,36 @@ extern "C" uint32_t sljitMemorySize(WASM::VMContext* vm, uint32_t memoryIndex) n
 		return 0;
 	}
 	return static_cast<uint32_t>(WASM::wasm_memory_size(memory) / memory->pageSize);
+}
+
+extern "C" uint64_t sljitMemorySize64(WASM::VMContext* vm, uint32_t memoryIndex) noexcept
+{
+	if (vm == nullptr || vm->memories == nullptr || memoryIndex >= vm->memoryCount) {
+		WASM::reportTrap(WASM::TrapKind::Internal, "SLJIT memory64.size index is invalid");
+		return 0;
+	}
+	const WASM::LinearMemory* memory = vm->memories[memoryIndex];
+	if (memory == nullptr || memory->pageSize == 0) {
+		WASM::reportTrap(WASM::TrapKind::Internal, "SLJIT memory64.size memory is invalid");
+		return 0;
+	}
+	return WASM::wasm_memory_size(memory) / memory->pageSize;
+}
+
+extern "C" uint64_t sljitMemoryGrow64(WASM::VMContext* vm, uint32_t memoryIndex,
+		uint64_t delta) noexcept
+{
+	if (vm == nullptr || vm->memories == nullptr || memoryIndex >= vm->memoryCount) {
+		WASM::reportTrap(WASM::TrapKind::Internal, "SLJIT memory64.grow index is invalid");
+		return UINT64_MAX;
+	}
+	auto* instance = reinterpret_cast<WASM::ModuleInstance*>(vm);
+	try {
+		const int64_t previous = instance->growMemory(memoryIndex, delta);
+		return previous < 0 ? UINT64_MAX : static_cast<uint64_t>(previous);
+	} catch (...) {
+		return UINT64_MAX;
+	}
 }
 
 extern "C" uint32_t sljitMemoryGrow(WASM::VMContext* vm, uint32_t memoryIndex,
@@ -2033,24 +2096,10 @@ void OpcodeDispatcher::emitMemoryLoadFloat(const WASM::MemArg& arg, int width)
 {
 	if (!reachable_)
 		return;
-	(void)requireMemoryIndex(arg.memidx);
-	require(!arg.isArray, "the SLJIT backend does not lower GC-array access");
-	require(arg.offset <= UINT32_MAX, "the memory32 offset exceeds the encoded u32 range");
 	requireStack(1);
 	if (!measureOnly_) {
-		loadContext(SLJIT_R0);
-		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R1, 0, SLJIT_IMM,
-				static_cast<sljit_sw>(arg.memidx)));
-		loadSlot(SLJIT_R2, stackWidths_.size() - 1, 4);
-		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R3, 0, SLJIT_IMM,
-				static_cast<sljit_sw>((static_cast<std::uint64_t>(width) << 32)
-						| arg.offset)));
-		emitHelper(SLJIT_ARGS4(P, P, 32, 32, W), &sljitMemoryAddress);
-		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
-				scratchSlotOffset(), SLJIT_R0, 0));
-		emitPendingTrapCheck();
-		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0, SLJIT_MEM1(SLJIT_SP),
-				scratchSlotOffset()));
+		emitCheckedMemoryAddress(arg, static_cast<std::uint32_t>(width),
+				stackWidths_.size() - 1);
 		emit(sljit_emit_fop1(compiler_, width == 4 ? SLJIT_MOV_F32 : SLJIT_MOV_F64,
 				SLJIT_FR0, 0, SLJIT_MEM1(SLJIT_R0), 0));
 		storeFloatSlot(SLJIT_FR0, stackWidths_.size() - 1, width);
@@ -2062,30 +2111,13 @@ void OpcodeDispatcher::emitMemoryStoreFloat(const WASM::MemArg& arg, int width)
 {
 	if (!reachable_)
 		return;
-	(void)requireMemoryIndex(arg.memidx);
-	require(!arg.isArray, "the SLJIT backend does not lower GC-array access");
-	require(arg.offset <= UINT32_MAX, "the memory32 offset exceeds the encoded u32 range");
 	requireStack(2);
 	pop();
 	pop();
 	if (measureOnly_)
 		return;
-	const std::size_t addressDepth = stackWidths_.size();
-	const std::size_t valueDepth = stackWidths_.size() + 1;
-	loadContext(SLJIT_R0);
-	emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R1, 0, SLJIT_IMM,
-			static_cast<sljit_sw>(arg.memidx)));
-	loadSlot(SLJIT_R2, addressDepth, 4);
-	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R3, 0, SLJIT_IMM,
-			static_cast<sljit_sw>((static_cast<std::uint64_t>(width) << 32)
-					| arg.offset)));
-	emitHelper(SLJIT_ARGS4(P, P, 32, 32, W), &sljitMemoryAddress);
-	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
-			scratchSlotOffset(), SLJIT_R0, 0));
-	emitPendingTrapCheck();
-	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0, SLJIT_MEM1(SLJIT_SP),
-			scratchSlotOffset()));
-	loadFloatSlot(SLJIT_FR0, valueDepth, width);
+	emitCheckedMemoryAddress(arg, static_cast<std::uint32_t>(width), stackWidths_.size());
+	loadFloatSlot(SLJIT_FR0, stackWidths_.size() + 1, width);
 	emit(sljit_emit_fop1(compiler_, width == 4 ? SLJIT_MOV_F32 : SLJIT_MOV_F64,
 			SLJIT_MEM1(SLJIT_R0), 0, SLJIT_FR0, 0));
 }
@@ -2493,10 +2525,42 @@ void OpcodeDispatcher::dispatchGlobalSet(WASM::GlobalIdx arg)
 const WASM::MemoryType& OpcodeDispatcher::requireMemoryIndex(WASM::MemIdx index)
 {
 	require(index < module_.memories.size(), "the memory index is out of range");
-	const WASM::MemoryType& type = module_.memories[index];
-	require(type.indexType == WASM::MemoryIndexType::I32,
-			"the SLJIT backend only lowers memory32");
-	return type;
+	return module_.memories[index];
+}
+
+void OpcodeDispatcher::emitCheckedMemoryAddress(const WASM::MemArg& arg,
+		std::uint32_t width, std::size_t addressDepth)
+{
+	const WASM::MemoryType& memory = requireMemoryIndex(arg.memidx);
+	const bool is64 = memory.indexType == WASM::MemoryIndexType::I64;
+	require(!arg.isArray, "the SLJIT backend does not lower GC-array access");
+	if (!is64)
+		require(arg.offset <= UINT32_MAX, "the memory32 offset exceeds the encoded u32 range");
+
+	loadContext(SLJIT_R0);
+	if (is64) {
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R1, 0, SLJIT_IMM,
+				static_cast<sljit_sw>((static_cast<std::uint64_t>(width) << 32)
+						| static_cast<std::uint64_t>(arg.memidx))));
+		loadSlot(SLJIT_R2, addressDepth, 8);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R3, 0, SLJIT_IMM,
+				static_cast<sljit_sw>(arg.offset)));
+		emitHelper(SLJIT_ARGS4(P, P, W, W, W), &sljitMemoryAddress64);
+	} else {
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R1, 0, SLJIT_IMM,
+				static_cast<sljit_sw>(arg.memidx)));
+		loadSlot(SLJIT_R2, addressDepth, 4);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R3, 0, SLJIT_IMM,
+				static_cast<sljit_sw>((static_cast<std::uint64_t>(width) << 32)
+						| arg.offset)));
+		emitHelper(SLJIT_ARGS4(P, P, 32, 32, W), &sljitMemoryAddress);
+	}
+	// The pointer survives the pending-trap probe in the scratch slot.
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+			scratchSlotOffset(), SLJIT_R0, 0));
+	emitPendingTrapCheck();
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0, SLJIT_MEM1(SLJIT_SP),
+			scratchSlotOffset()));
 }
 
 void OpcodeDispatcher::emitMemoryLoad(const WASM::MemArg& arg, std::uint32_t width,
@@ -2504,24 +2568,9 @@ void OpcodeDispatcher::emitMemoryLoad(const WASM::MemArg& arg, std::uint32_t wid
 {
 	if (!reachable_)
 		return;
-	(void)requireMemoryIndex(arg.memidx);
-	require(!arg.isArray, "the SLJIT backend does not lower GC-array access");
-	require(arg.offset <= UINT32_MAX, "the memory32 offset exceeds the encoded u32 range");
 	requireStack(1);
 	if (!measureOnly_) {
-		loadContext(SLJIT_R0);
-		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R1, 0, SLJIT_IMM,
-				static_cast<sljit_sw>(arg.memidx)));
-		loadSlot(SLJIT_R2, stackWidths_.size() - 1, 4);
-		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R3, 0, SLJIT_IMM,
-				static_cast<sljit_sw>((static_cast<std::uint64_t>(width) << 32)
-						| arg.offset)));
-		emitHelper(SLJIT_ARGS4(P, P, 32, 32, W), &sljitMemoryAddress);
-		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
-				scratchSlotOffset(), SLJIT_R0, 0));
-		emitPendingTrapCheck();
-		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0, SLJIT_MEM1(SLJIT_SP),
-				scratchSlotOffset()));
+		emitCheckedMemoryAddress(arg, width, stackWidths_.size() - 1);
 		emit(sljit_emit_op1(compiler_, loadOp, SLJIT_R1, 0, SLJIT_MEM1(SLJIT_R0), 0));
 		storeSlot(SLJIT_R1, stackWidths_.size() - 1, resultWidth);
 	}
@@ -2533,30 +2582,13 @@ void OpcodeDispatcher::emitMemoryStore(const WASM::MemArg& arg, std::uint32_t wi
 {
 	if (!reachable_)
 		return;
-	(void)requireMemoryIndex(arg.memidx);
-	require(!arg.isArray, "the SLJIT backend does not lower GC-array access");
-	require(arg.offset <= UINT32_MAX, "the memory32 offset exceeds the encoded u32 range");
 	requireStack(2);
 	pop();
 	pop();
 	if (measureOnly_)
 		return;
-	const std::size_t addressDepth = stackWidths_.size();
-	const std::size_t valueDepth = stackWidths_.size() + 1;
-	loadContext(SLJIT_R0);
-	emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R1, 0, SLJIT_IMM,
-			static_cast<sljit_sw>(arg.memidx)));
-	loadSlot(SLJIT_R2, addressDepth, 4);
-	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R3, 0, SLJIT_IMM,
-			static_cast<sljit_sw>((static_cast<std::uint64_t>(width) << 32)
-					| arg.offset)));
-	emitHelper(SLJIT_ARGS4(P, P, 32, 32, W), &sljitMemoryAddress);
-	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
-			scratchSlotOffset(), SLJIT_R0, 0));
-	emitPendingTrapCheck();
-	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0, SLJIT_MEM1(SLJIT_SP),
-			scratchSlotOffset()));
-	loadSlot(SLJIT_R1, valueDepth, static_cast<int>(width));
+	emitCheckedMemoryAddress(arg, width, stackWidths_.size());
+	loadSlot(SLJIT_R1, stackWidths_.size() + 1, static_cast<int>(width));
 	emit(sljit_emit_op1(compiler_, storeOp, SLJIT_MEM1(SLJIT_R0), 0, SLJIT_R1, 0));
 }
 
@@ -2603,35 +2635,42 @@ void OpcodeDispatcher::dispatchMemorySize(WASM::MemIdx arg)
 {
 	if (!reachable_)
 		return;
-	(void)requireMemoryIndex(arg);
+	const bool is64 = requireMemoryIndex(arg).indexType == WASM::MemoryIndexType::I64;
 	if (!measureOnly_) {
 		loadContext(SLJIT_R0);
 		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R1, 0, SLJIT_IMM,
 				static_cast<sljit_sw>(arg)));
-		emitHelper(SLJIT_ARGS2(32, P, 32), &sljitMemorySize);
-		storeSlot(SLJIT_R0, stackWidths_.size(), 4);
+		if (is64)
+			emitHelper(SLJIT_ARGS2(W, P, 32), &sljitMemorySize64);
+		else
+			emitHelper(SLJIT_ARGS2(32, P, 32), &sljitMemorySize);
+		storeSlot(SLJIT_R0, stackWidths_.size(), is64 ? 8 : 4);
 		emitPendingTrapCheck();
 	}
-	push(4);
+	push(is64 ? 8 : 4);
 }
 
 void OpcodeDispatcher::dispatchMemoryGrow(WASM::MemIdx arg)
 {
 	if (!reachable_)
 		return;
-	(void)requireMemoryIndex(arg);
+	const bool is64 = requireMemoryIndex(arg).indexType == WASM::MemoryIndexType::I64;
+	const int width = is64 ? 8 : 4;
 	requireStack(1);
 	pop();
 	if (!measureOnly_) {
 		loadContext(SLJIT_R0);
 		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R1, 0, SLJIT_IMM,
 				static_cast<sljit_sw>(arg)));
-		loadSlot(SLJIT_R2, stackWidths_.size(), 4);
-		emitHelper(SLJIT_ARGS3(32, P, 32, 32), &sljitMemoryGrow);
-		storeSlot(SLJIT_R0, stackWidths_.size(), 4);
+		loadSlot(SLJIT_R2, stackWidths_.size(), width);
+		if (is64)
+			emitHelper(SLJIT_ARGS3(W, P, 32, W), &sljitMemoryGrow64);
+		else
+			emitHelper(SLJIT_ARGS3(32, P, 32, 32), &sljitMemoryGrow);
+		storeSlot(SLJIT_R0, stackWidths_.size(), width);
 		emitPendingTrapCheck();
 	}
-	push(4);
+	push(width);
 }
 
 void OpcodeDispatcher::dispatchMemoryCopy(WASM::MemIdx arg1, WASM::MemIdx arg2)
@@ -2640,6 +2679,9 @@ void OpcodeDispatcher::dispatchMemoryCopy(WASM::MemIdx arg1, WASM::MemIdx arg2)
 		return;
 	(void)requireMemoryIndex(arg1);
 	(void)requireMemoryIndex(arg2);
+	require(requireMemoryIndex(arg1).indexType == WASM::MemoryIndexType::I32
+					&& requireMemoryIndex(arg2).indexType == WASM::MemoryIndexType::I32,
+			"the SLJIT backend does not lower bulk memory on memory64 yet");
 	requireStack(3);
 	if (!measureOnly_) {
 		const std::size_t base = stackWidths_.size() - 3;
@@ -2664,6 +2706,8 @@ void OpcodeDispatcher::dispatchMemoryFill(WASM::MemIdx arg)
 	if (!reachable_)
 		return;
 	(void)requireMemoryIndex(arg);
+	require(requireMemoryIndex(arg).indexType == WASM::MemoryIndexType::I32,
+			"the SLJIT backend does not lower bulk memory on memory64 yet");
 	requireStack(3);
 	if (!measureOnly_) {
 		const std::size_t base = stackWidths_.size() - 3;
@@ -2686,6 +2730,8 @@ void OpcodeDispatcher::dispatchMemoryInit(uint32_t arg1, WASM::MemIdx arg2)
 	if (!reachable_)
 		return;
 	(void)requireMemoryIndex(arg2);
+	require(requireMemoryIndex(arg2).indexType == WASM::MemoryIndexType::I32,
+			"the SLJIT backend does not lower bulk memory on memory64 yet");
 	require(arg1 < module_.dataSegments.size(), "the data segment index is out of range");
 	requireStack(3);
 	if (!measureOnly_) {

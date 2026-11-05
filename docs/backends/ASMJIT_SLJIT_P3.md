@@ -190,4 +190,5 @@ Do not copy:
 - Commit: working tree on `backendsMh33` (not committed in this session).
 - Commands and counts: `[sljit]` 1093 assertions in 15 cases, `[asmjit]` 806 in
   22, the float A/B case 101 assertions, the full suite 19928 assertions in 672
-  cases, and Doxygen exit 0 with no warnings.
+  cases, and Doxygen exit 0 with no warnings. (Counts at this slice's sign-off;
+  the later memory64 slice added cases.)

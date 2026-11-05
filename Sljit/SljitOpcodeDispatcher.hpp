@@ -594,6 +594,20 @@ private:
 	 */
 	const WASM::MemoryType& requireMemoryIndex(WASM::MemIdx index);
 	/*!
+	 * \brief Emits the checked effective address of a memory access into R0.
+	 *
+	 * The helper follows the memory's index type: memory32 packs the immediate
+	 * offset with the access width, memory64 passes the 64-bit address and
+	 * offset separately. A pending trap branches to the epilogue, so the caller
+	 * must use R0 only when execution continues.
+	 *
+	 * \param arg Memory immediate.
+	 * \param width Access width in bytes.
+	 * \param addressDepth Operand-stack depth holding the address.
+	 */
+	void emitCheckedMemoryAddress(const WASM::MemArg& arg, std::uint32_t width,
+			std::size_t addressDepth);
+	/*!
 	 * \brief Emits one checked memory load.
 	 * \param arg Memory immediate.
 	 * \param width Access width in bytes.

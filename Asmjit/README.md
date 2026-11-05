@@ -43,8 +43,8 @@ direct calls. Each generated function emits the required
   with scalar signatures including native and cross-instance Wasm imports;
   i32-only direct/indirect tail-call opcodes (currently lowered to call+return;
   true tail-call stack semantics and machine-level elimination remain outstanding);
-  and memory32 i32/i64/f32/f64 loads/stores, including signed/unsigned narrow extensions,
-  plus `memory.size`/`memory.grow`, checked memory32 `memory.copy` (with overlap-safe `memmove` semantics), `memory.fill`, `memory.init`, `data.drop`, `table.init`, `elem.drop`, `table.size`, and checked overlap-safe `table.copy`.
+  and memory32/memory64 i32/i64/f32/f64 loads/stores, including signed/unsigned narrow extensions,
+  `memory.size`/`memory.grow` at both index widths, checked memory32 `memory.copy` (with overlap-safe `memmove` semantics), `memory.fill`, `memory.init`, `data.drop`, `table.init`, `elem.drop`, `table.size`, and checked overlap-safe `table.copy`.
   Memory accesses use a checked helper that observes the shared-memory size
   accessor and reports out-of-bounds traps through the pending-trap protocol.
   Function nodes are declared in one CodeHolder before any bodies are emitted,
@@ -52,7 +52,7 @@ direct calls. Each generated function emits the required
   currently support only one scalar result and no block parameters; `br_table`
   requires identical target stack heights/signatures. The `unreachable`
   instruction reports a trap and supplies a limited single-result placeholder,
-  but general unreachable-stack polymorphism remains unsupported. Cross-instance scalar Wasm imports are covered by tests. Scalar globals are lowered; Memory64, `v128`/SIMD, references, `f16` and
+  but general unreachable-stack polymorphism remains unsupported. Cross-instance scalar Wasm imports are covered by tests. Scalar globals are lowered; `v128`/SIMD, references, `f16`, bulk memory on a memory64 and
   most remaining instructions are still unsupported and fail explicitly.
 - `Test/TestBackend.cpp` exposes an `AsmJitSession` through
   `WASMJIT_BACKEND=asmjit`, including i32 invocation marshalling, aggregate

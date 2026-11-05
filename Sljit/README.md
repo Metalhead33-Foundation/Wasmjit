@@ -35,9 +35,10 @@ The emitter lowers:
   parameters and multi-value block results;
 - direct and indirect calls, forward and mutually recursive calls, native and
   cross-instance Wasm imports, and `return_call*` lowered to call + return;
-- memory32 loads and stores (all integer widths, signed/unsigned narrow
-  extensions, plus `f32`/`f64`), `memory.size`/`grow`, `memory.copy`/`fill`/`init`,
-  `data.drop`, `table.init`/`copy`/`size` and `elem.drop`;
+- memory32 and memory64 loads and stores (all integer widths, signed/unsigned
+  narrow extensions, plus `f32`/`f64`), `memory.size`/`grow` at both index
+  widths, `memory.copy`/`fill`/`init` (memory32), `data.drop`,
+  `table.init`/`copy`/`size` and `elem.drop`;
 - `select`/`select_t`, `drop`, `nop`, `return`, `unreachable`, and the guest
   stack guard with the pending-trap epilogue.
 
@@ -47,9 +48,10 @@ checked against one fixture set rather than two drifting ones.
 
 ## What it still refuses
 
-`v128`/SIMD, references/GC, exceptions, continuations, atomics, memory64,
-`f16` load/store, functions with more than three parameters, and functions
-with more than one result. Each refusal leaves that function's
+`v128`/SIMD, references/GC, exceptions, continuations, atomics,
+`f16` load/store, bulk memory on a memory64, functions with more than three
+parameters, and functions with more than one result. Each refusal leaves that
+function's
 `Callable::fnPtr` **null**; the core then reports "no compiled body" at the
 call boundary. Nothing is miscompiled, nothing is interpreted, and no
 partially emitted code is installed. The per-function reasons are available

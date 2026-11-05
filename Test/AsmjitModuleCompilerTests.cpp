@@ -541,3 +541,60 @@ TEST_CASE("AsmJit float conversions, reinterpretation and mixed calls",
 	CHECK_THROWS(WASM::callCallable<double>(call("call_indirect_mixed"), 5, 2.25, 1));
 }
 
+
+TEST_CASE("AsmJit compiles the shared memory64 module", "[asmjit][module][m64]")
+{
+	WASM::Module module = loadTestModule("memory64_basic");
+	WASM::RegistryImportResolver imports;
+	AsmJitBackend::Context context;
+	AsmJitBackend::ModuleCompiler compiler(context);
+	auto instance = compiler.instantiate(module, imports);
+	const auto call = [&](const char* name) -> WASM::Callable {
+		const std::optional<WASM::Callable> callable = instance->exportedFunction(name);
+		INFO("export " << name);
+		REQUIRE(callable.has_value());
+		REQUIRE(callable->fnPtr != nullptr);
+		return *callable;
+	};
+
+	CHECK(WASM::callCallable<std::int64_t>(call("size")) == 1);
+	CHECK(WASM::callCallable<std::int64_t>(call("grow"), INT64_C(1)) == 1);
+	CHECK(WASM::callCallable<std::int64_t>(call("size")) == 2);
+	CHECK(WASM::callCallable<std::int64_t>(call("grow"), INT64_C(1)) == -1);
+	CHECK(WASM::callCallable<std::int64_t>(call("grow"), INT64_C(0)) == 2);
+	CHECK(WASM::callCallable<std::int64_t>(call("grow"), INT64_C(0x100000000)) == -1);
+	CHECK(WASM::callCallable<std::int64_t>(call("grow"),
+			static_cast<std::int64_t>(UINT64_C(0xFFFFFFFFFFFFFFFF))) == -1);
+
+	CHECK(WASM::callCallable<std::int32_t>(call("store_load_i32"), INT64_C(0),
+			0x7ABCDEF0) == 0x7ABCDEF0);
+	CHECK(WASM::callCallable<std::int64_t>(call("store_load_i64"), INT64_C(100),
+			INT64_C(0x123456789ABCDEF0)) == INT64_C(0x123456789ABCDEF0));
+	CHECK(WASM::callCallable<float>(call("store_load_f32"), INT64_C(200), 3.25f) == 3.25f);
+	CHECK(WASM::callCallable<double>(call("store_load_f64"), INT64_C(300), 6.5) == 6.5);
+
+	CHECK_THROWS(WASM::callCallable<std::int32_t>(call("load_at"),
+			INT64_C(0x100000000)));
+	CHECK_THROWS(WASM::callCallable<std::int32_t>(call("load_at"), INT64_C(-1)));
+	CHECK_THROWS(WASM::callCallable<std::int32_t>(call("load_at"), INT64_C(131072)));
+
+	CHECK(WASM::callCallable<std::int32_t>(call("store_offset"), INT64_C(65536),
+			0x1234) == 0x1234);
+	CHECK_THROWS(WASM::callCallable<std::int32_t>(call("store_offset"), INT64_C(65537), 1));
+}
+
+
+TEST_CASE("AsmJit refuses bulk memory on a memory64 transactionally",
+		"[asmjit][m64][refusal]")
+{
+	WASM::Module module = loadTestModule("memory64_bulk");
+	WASM::RegistryImportResolver imports;
+	AsmJitBackend::Context context;
+	AsmJitBackend::ModuleCompiler compiler(context);
+
+	// AsmJit's long-standing model is a transactional module refusal: the
+	// unsupported body aborts instantiation and its allocations are returned.
+	CHECK_THROWS(compiler.instantiate(module, imports));
+	CHECK(context.allocationCheckpoint() == 0);
+}
+
