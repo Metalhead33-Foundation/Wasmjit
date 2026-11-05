@@ -2680,6 +2680,8 @@ void OpcodeDispatcher::dispatchI64x2ExtMulHighI32x4U() { emitV128Binary(codeAddr
 
 void OpcodeDispatcher::dispatchI8x16NarrowI16x8S() { emitV128Binary(codeAddress(&wasm_i8x16_narrow_i16x8_s)); }
 void OpcodeDispatcher::dispatchI8x16NarrowI16x8U() { emitV128Binary(codeAddress(&wasm_i8x16_narrow_i16x8_u)); }
+void OpcodeDispatcher::dispatchI16x8NarrowI32x4S() { emitV128Binary(codeAddress(&wasm_i16x8_narrow_i32x4_s)); }
+void OpcodeDispatcher::dispatchI16x8NarrowI32x4U() { emitV128Binary(codeAddress(&wasm_i16x8_narrow_i32x4_u)); }
 void OpcodeDispatcher::dispatchI32x4DotI16x8S() { emitV128Binary(codeAddress(&wasm_i32x4_dot_i16x8_s)); }
 
 void OpcodeDispatcher::dispatchI8x16Add() { emitV128Binary(codeAddress(&wasm_i8x16_add)); }

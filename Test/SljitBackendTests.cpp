@@ -1074,6 +1074,10 @@ TEST_CASE("sljit: the shared v128 module executes", "[sljit][module][parity][sim
 	};
 
 	CHECK(WASM::callCallable<std::int32_t>(call("const_extract")) == 3);
+	// Lanes 1 and 3 cover the second word of the low immediate and the high
+	// immediate: a lossy 32-bit immediate store keeps lane 0 and lane 2 only.
+	CHECK(WASM::callCallable<std::int32_t>(call("const_lane1")) == 2);
+	CHECK(WASM::callCallable<std::int32_t>(call("const_lane3")) == 4);
 	CHECK(WASM::callCallable<std::int32_t>(call("splat_extract"), 5) == 5);
 	CHECK(WASM::callCallable<std::int32_t>(call("store_load"), 64, 0x01020304) == 0x01020304);
 	CHECK(WASM::callCallable<std::int32_t>(call("replace_extract"), 9) == 9);
@@ -1118,6 +1122,8 @@ TEST_CASE("asmjit and sljit agree on the shared v128 module", "[sljit][asmjit][p
 	};
 
 	same("const_extract", [](const WASM::Callable& c) { return outcomeOf<std::int32_t>(c); });
+	same("const_lane1", [](const WASM::Callable& c) { return outcomeOf<std::int32_t>(c); });
+	same("const_lane3", [](const WASM::Callable& c) { return outcomeOf<std::int32_t>(c); });
 	same("splat_extract", [](const WASM::Callable& c) { return outcomeOf<std::int32_t>(c, 5); });
 	same("store_load", [](const WASM::Callable& c) {
 		return outcomeOf<std::int32_t>(c, 64, 0x01020304);
@@ -1416,6 +1422,8 @@ TEST_CASE("sljit: the shared v128 widening and narrowing module executes",
 	// the third i32 lane is 0x00000303 rather than a byte fill.
 	CHECK(niladic("i8x16_narrow_i16x8_s") == 0x00000303);
 	// `narrow_i16x8_u` clamps a *signed* i16 input to u8, so -1 saturates to 0.
+	CHECK(niladic("i16x8_narrow_i32x4_s_lane0") == 0x00020002);
+	CHECK(niladic("i16x8_narrow_i32x4_s") == 0x00030003);
 	CHECK(niladic("i8x16_narrow_i16x8_u") == 0);
 	// `a` occupies the low four i16 lanes and `b` the high four, so lane 0 is
 	// `a`'s pair and lane 2 starts `b`'s.
@@ -1477,6 +1485,8 @@ TEST_CASE("asmjit and sljit agree on the shared v128 widening module",
 	sameUnary("i16x8_extadd_pairwise_i8x16_s", 0x01010101);
 	sameUnary("i32x4_extadd_pairwise_i16x8_s", 0x00010001);
 	sameNiladic("i8x16_narrow_i16x8_s");
+	sameNiladic("i16x8_narrow_i32x4_s_lane0");
+	sameNiladic("i16x8_narrow_i32x4_s");
 	sameNiladic("i8x16_narrow_i16x8_u");
 	sameNiladic("i32x4_dot_i16x8_s");
 }

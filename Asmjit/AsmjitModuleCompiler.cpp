@@ -770,6 +770,8 @@ asmjit::FuncSignature stackCheckSignature()
 	return signature;
 }
 
+
+
 class IntegerFunctionEmitter final : public WASM::OpcodeDispatcher
 {
 public:
@@ -1537,9 +1539,15 @@ protected:
 		std::memcpy(&lo, arg.data(), sizeof(lo));
 		std::memcpy(&hi, arg.data() + sizeof(lo), sizeof(hi));
 		auto buffer = newVectorBuffer("v128Constant");
-		checkError(compiler.mov(asmjit::x86::qword_ptr(buffer, 0), lo),
+		// A 64-bit immediate needs a register: `mov r/m64, imm64` does not exist on
+		// x86, so storing a qword immediate straight into memory is lossy.
+		auto low = compiler.new_gp64("v128ConstLow");
+		checkError(compiler.mov(low, lo), "AsmJit v128.const low materialisation failed");
+		checkError(compiler.mov(asmjit::x86::qword_ptr(buffer, 0), low),
 				"AsmJit v128.const low word failed");
-		checkError(compiler.mov(asmjit::x86::qword_ptr(buffer, 8), hi),
+		auto high = compiler.new_gp64("v128ConstHigh");
+		checkError(compiler.mov(high, hi), "AsmJit v128.const high materialisation failed");
+		checkError(compiler.mov(asmjit::x86::qword_ptr(buffer, 8), high),
 				"AsmJit v128.const high word failed");
 		values.push_back(buffer);
 	}
@@ -1854,6 +1862,8 @@ protected:
 
 	void dispatchI8x16NarrowI16x8S() override { emitVectorHelper2(&wasm_i8x16_narrow_i16x8_s); }
 	void dispatchI8x16NarrowI16x8U() override { emitVectorHelper2(&wasm_i8x16_narrow_i16x8_u); }
+	void dispatchI16x8NarrowI32x4S() override { emitVectorHelper2(&wasm_i16x8_narrow_i32x4_s); }
+	void dispatchI16x8NarrowI32x4U() override { emitVectorHelper2(&wasm_i16x8_narrow_i32x4_u); }
 	void dispatchI32x4DotI16x8S() override { emitVectorHelper2(&wasm_i32x4_dot_i16x8_s); }
 
 	void dispatchI8x16Add() override { emitVectorHelper2(&wasm_i8x16_add); }

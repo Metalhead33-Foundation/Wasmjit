@@ -341,6 +341,8 @@ protected:
 	void dispatchI64x2ExtMulHighI32x4U() override; //!< `64x2.extmul_high_32x4_u`.
 	void dispatchI8x16NarrowI16x8S() override; //!< `i8x16.narrow_i16x8_s`.
 	void dispatchI8x16NarrowI16x8U() override; //!< `i8x16.narrow_i16x8_u`.
+	void dispatchI16x8NarrowI32x4S() override; //!< `i16x8.narrow_i32x4_s`.
+	void dispatchI16x8NarrowI32x4U() override; //!< `i16x8.narrow_i32x4_u`.
 	void dispatchI32x4DotI16x8S() override; //!< `i32x4.dot_i16x8_s`.
 	void dispatchI8x16Add() override; //!< `i8x16.add`.
 	void dispatchI8x16Sub() override; //!< `i8x16.sub`.

@@ -47,8 +47,8 @@ The emitter lowers:
   arithmetic (`add`/`sub` for every shape, `mul` where the spec has it), the
   comparison families, the four `all_true` reductions, the twelve shifts, the
   saturating `add`/`sub` and `q15mulr`, `min`/`max`, `avgr_u`, `abs`/`popcnt`,
-  the widening/`extmul`/`extadd_pairwise`/`dot` families and
-  `i8x16.narrow_i16x8_s/u`, all through the core's shared helper ABI.
+  the widening/`extmul`/`extadd_pairwise`/`dot` families and the two narrowing
+  families, all through the core's shared helper ABI.
 
 A unit test exercises the same `asmjit_i32_basic`/`asmjit_i64_basic` fixtures
 that the AsmJit suite uses (`[sljit][module][parity]`), so the shared slice is
@@ -56,11 +56,8 @@ checked against one fixture set rather than two drifting ones.
 
 ## What it still refuses
 
-`v128` in signatures, block types or `select`, `i16x8.narrow_i32x4_s/u`
-(quarantined while the AsmJit lowering disagrees — see
-[`docs/backends/ASMJIT_SLJIT_P3_SIMD4.md`](../docs/backends/ASMJIT_SLJIT_P3_SIMD4.md)),
-the float lane shapes, extending/lane loads, lane stores, `shuffle`/`swizzle`
-and relaxed SIMD,
+`v128` in signatures, block types or `select`, the float lane shapes,
+extending/lane loads, lane stores, `shuffle`/`swizzle` and relaxed SIMD,
 references/GC, exceptions, continuations, atomics, `f16` load/store, bulk
 memory on a memory64, functions with more than three parameters, and functions
 with more than one result. Each refusal leaves that
@@ -119,9 +116,8 @@ Generated code **is** released on `Runtime::unload` and runtime teardown through
 
 ## Next steps
 
-1. Fix the quarantined `i16x8.narrow_i32x4_s/u` on AsmJit, then the float lane
-   shapes, extending/lane loads and `shuffle`/`swizzle`, then `v128` in
-   signatures and block types. What landed is recorded in
+1. The float lane shapes, extending/lane loads and `shuffle`/`swizzle`, then
+   `v128` in signatures and block types. What landed is recorded in
    [`docs/backends/ASMJIT_SLJIT_P3_SIMD1.md`](../docs/backends/ASMJIT_SLJIT_P3_SIMD1.md)
    and [`docs/backends/ASMJIT_SLJIT_P3_SIMD2.md`](../docs/backends/ASMJIT_SLJIT_P3_SIMD2.md).
 2. References/GC, `ref.*`, GC barriers and exceptions (P4), following

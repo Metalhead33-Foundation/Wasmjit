@@ -59,6 +59,16 @@
     v128.const i32x4 0 0 0 0
     i8x16.narrow_i16x8_u
     i32x4.extract_lane 0)
+  (func (export "i16x8_narrow_i32x4_s_lane0") (result i32)
+    v128.const i32x4 2 2 0 0
+    v128.const i32x4 3 3 0 0
+    i16x8.narrow_i32x4_s
+    i32x4.extract_lane 0)
+  (func (export "i16x8_narrow_i32x4_s") (result i32)
+    v128.const i32x4 2 2 0 0
+    v128.const i32x4 3 3 0 0
+    i16x8.narrow_i32x4_s
+    i32x4.extract_lane 2)
   (func (export "i32x4_dot_i16x8_s") (result i32)
     v128.const i32x4 0x00030002 0 0 0
     v128.const i32x4 0x00050004 0 0 0

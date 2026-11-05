@@ -180,7 +180,7 @@ Do not copy:
 
 | Opcode family | Refusal | Test |
 |---|---|---|
-| `v128`/SIMD | **partially lowered** — transport, bitwise, `i32x4` lane access, the integer lane arithmetic/comparison families, shifts, saturating arithmetic, min/max, abs/popcnt, widening, `extmul`, `extadd_pairwise`, `dot` and `i8x16.narrow_i16x8_*`; float lanes, shuffle, `v128` signatures and the quarantined `i16x8.narrow_i32x4_*` are still unhandled | see [`ASMJIT_SLJIT_P3_SIMD1.md`](ASMJIT_SLJIT_P3_SIMD1.md), [`ASMJIT_SLJIT_P3_SIMD2.md`](ASMJIT_SLJIT_P3_SIMD2.md) and [`ASMJIT_SLJIT_P3_SIMD3.md`](ASMJIT_SLJIT_P3_SIMD3.md) |
+| `v128`/SIMD | **partially lowered** — transport, bitwise, `i32x4` lane access, the integer lane arithmetic/comparison families, shifts, saturating arithmetic, min/max, abs/popcnt, widening, `extmul`, `extadd_pairwise`, `dot`, `i8x16.narrow_i16x8_*` and `i16x8.narrow_i32x4_*`; float lanes, shuffle and `v128` signatures are still unhandled | see [`ASMJIT_SLJIT_P3_SIMD1.md`](ASMJIT_SLJIT_P3_SIMD1.md), [`ASMJIT_SLJIT_P3_SIMD2.md`](ASMJIT_SLJIT_P3_SIMD2.md) and [`ASMJIT_SLJIT_P3_SIMD3.md`](ASMJIT_SLJIT_P3_SIMD3.md) |
 | `f16` load/store | function left without `fnPtr` | `f32.load_f16`/`store_f16` stay unhandled |
 | references/GC, exceptions, continuations, atomics | function left without `fnPtr` | unchanged from P0–P2 |
 

@@ -6,6 +6,12 @@
   (func (export "const_extract") (result i32)
     v128.const i32x4 1 2 3 4
     i32x4.extract_lane 2)
+  (func (export "const_lane1") (result i32)
+    v128.const i32x4 1 2 3 4
+    i32x4.extract_lane 1)
+  (func (export "const_lane3") (result i32)
+    v128.const i32x4 1 2 3 4
+    i32x4.extract_lane 3)
   (func (export "splat_extract") (param i32) (result i32)
     local.get 0
     i32x4.splat

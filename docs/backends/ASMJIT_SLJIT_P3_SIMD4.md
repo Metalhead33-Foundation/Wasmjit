@@ -96,25 +96,14 @@ See the table in entry 2. Every one is a lane-map mistake, none a lowering bug.
 The corrected values are asserted in the SLJIT case and mirrored by the A/B
 case, which compares the two backends rather than a constant.
 
-### 2.2 The quarantined AsmJit defect (two opcodes)
+### 2.2 The AsmJit defect (fixed in slice 5)
 
-See entry 3 for the evidence. What is *not* known yet:
-
-- **Why AsmJit's call differs.** The helper, the constants, the emitter and the
-  buffer alignment are all ruled out; the remaining candidates are the
-  `InvokeNode`'s argument list for this helper specifically, or a register
-  allocator interaction that materialises one of the two input addresses after
-  the call (the P3 bug class) for this shape only.
-- **Whether the `_u` variant fails identically.** It was quarantined together
-  with `_s` on the assumption that the cause is shared; that assumption is
-  untested.
-- **Whether other helpers with the same "two vectors in, 8 narrow lanes out"
-  shape are affected.** `i8x16.narrow_i16x8_s/u` are correct, so the shape alone
-  does not predict the failure.
-
-The next session should start from the direct-helper probe and dump the
-`InvokeNode` argument list (or the generated machine code) for the AsmJit
-function, rather than re-running the fixture.
+See entry 3 for the evidence. **Resolved:** the cause was not the narrow
+lowering but the constant store — `mov(qword_ptr, uint64_t)` truncated to 32
+bits, so bytes 4–7 of a `v128.const` were lost. See
+[`ASMJIT_SLJIT_P3_SIMD5.md`](ASMJIT_SLJIT_P3_SIMD5.md); both opcodes are enabled
+again and covered by `simd_widen.wat` plus the new `const_lane1`/`const_lane3`
+regression in the slice-1 fixture.
 
 ## 3. What the toolkit could not express
 
@@ -166,7 +155,7 @@ Do not copy:
 
 | Opcode family | Refusal | Status |
 |---|---|---|
-| `i16x8.narrow_i32x4_s/u` | `onUnhandledOpcode` in **both** backends | **open defect**: AsmJit disagrees with the reference, quarantined (§2.2) |
+| `i16x8.narrow_i32x4_s/u` | **none** — enabled again | fixed in slice 5: the constant store, not the narrow lowering |
 | `f32x4`/`f64x2` lanes, conversions, `f16` | `onUnhandledOpcode` | float SIMD slice, not started |
 | `i8x16.shuffle`/`swizzle`, relaxed SIMD | `onUnhandledOpcode` | transport-only helpers exist |
 | extending/splat/lane loads, lane stores | `onUnhandledOpcode` | transport-only helpers exist |
@@ -183,5 +172,6 @@ Do not copy:
   `[sljit]` 1632 in 26, `[asmjit]` 1114 in 29; the full suite — 20517
   assertions in 685 cases; `./Test/WasmJit '[headerdoc]'` — green;
   `doxygen Doxyfile` — exit 0 with no warnings.
-- **Open item carried forward:** `i16x8.narrow_i32x4_s/u` on AsmJit. It must be
-  fixed, not re-enabled by inspection.
+- **Open item resolved:** `i16x8.narrow_i32x4_s/u` on AsmJit — fixed in slice 5
+  ([`ASMJIT_SLJIT_P3_SIMD5.md`](ASMJIT_SLJIT_P3_SIMD5.md)), not re-enabled by
+  inspection.
