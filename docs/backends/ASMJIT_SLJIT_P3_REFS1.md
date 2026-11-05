@@ -147,6 +147,25 @@ Both backends carry a path for `ref.func` on an **imported** index — SLJIT's
   `ref.func` fixture only referenced *exported* functions, which are declared by
   their export — so the rule was invisible until an import was referenced.
 
+### 2026-11-05 — entry 8: a negative result — the SLJIT parameter bound
+
+SLJIT refuses functions with more than three parameters. The bound is a single
+  constant (`kMaxWasmParameters = 3`) and the argument types are built by hand
+  with `SLJIT_ARG_VALUE`, so it looked like a cheap win: raise it to five and add
+  a fixture. **It crashed the process** (`SIGILL`, 2 assertions in, before any
+  assertion failed). The likely cause is the saved-register side: the prologue
+  keeps the context in `S0` and one saved register per parameter, so five
+  parameters need six saved registers plus the separate float count, and the
+  toolkit does not take that naively — the prologue either succeeds with an
+  invalid mapping or the encoding truncates.
+
+Reverted in full: constant, messages, fixture and the two test cases. The suite
+  is back to its pre-attempt count. The item is recorded in the closure table as
+  **attempted-and-reverted** so nobody spends the same hour twice; the next
+  attempt should start by checking `SLJIT_NUMBER_OF_SAVED_REGISTERS` against
+  `1 + parameterCount` and by reading what `sljit_emit_enter` actually validates,
+  rather than by raising the constant.
+
 ## 1. What the shared ABI forced
 
 Nothing — no helper is involved. The reference ops are pure register/slot work,
@@ -175,7 +194,8 @@ The `v128` function-boundary work was analysed and **deliberately deferred**; th
 | exceptions | not started | P4 |
 | `call_ref`, continuations | not started | P5 |
 | atomics, `f16`, relaxed SIMD, bulk memory on a memory64 | refused by name | proposal-level, still open |
-| SLJIT: >3 parameters; AsmJit: multi-value block results | refused by name | pre-existing capability gaps that predate this saga |
+| SLJIT: >3 parameters | refused by name | **attempted and reverted** (entry 8): raising the constant crashes; start from the saved-register count |
+| AsmJit: multi-value block results; block parameters | refused by name | pre-existing capability gaps that predate this saga; also blocks `br_on_non_null` |
 
 **Closure rule for whoever writes the final saga post-mortem:** every row above
   must appear in it with one of two verdicts — *implemented, with the test that
