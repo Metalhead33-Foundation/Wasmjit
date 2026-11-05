@@ -424,6 +424,9 @@ protected:
 	void dispatchV128Store64Lane(WASM::MemArg arg1, uint8_t arg2) override; //!< `v128.store64_lane`.
 	void dispatchI8x16Shuffle(std::span<uint8_t> arg) override; //!< `i8x16.shuffle`.
 	void dispatchI8x16Swizzle() override; //!< `i8x16.swizzle`.
+	void dispatchRefNull(const WASM::HeapType& arg) override; //!< `ref.null`.
+	void dispatchRefIsNull() override; //!< `ref.is_null`.
+	void dispatchRefEq() override; //!< `ref.eq`.
 	void dispatchI8x16Add() override; //!< `i8x16.add`.
 	void dispatchI8x16Sub() override; //!< `i8x16.sub`.
 	void dispatchI16x8Add() override; //!< `i16x8.add`.

@@ -2124,6 +2124,45 @@ protected:
 
 	void dispatchI8x16Swizzle() override { emitVectorHelper2(&wasm_i8x16_swizzle); }
 
+	void dispatchRefNull(const WASM::HeapType&) override
+	{
+		// A reference is one null word: the backend does not model typed nulls.
+		auto reference = compiler.new_gp64("nullRef");
+		checkError(compiler.xor_(reference, reference), "AsmJit ref.null zeroing failed");
+		values.push_back(reference);
+	}
+
+	void dispatchRefIsNull() override
+	{
+		if (values.empty())
+			throw std::runtime_error("AsmJit ref.is_null operand underflow");
+		auto reference = values.back();
+		values.pop_back();
+		// The result is zeroed before the flags are set (the P3 lesson).
+		auto result = compiler.new_gp32("refIsNull");
+		checkError(compiler.xor_(result, result), "AsmJit ref.is_null zeroing failed");
+		checkError(compiler.test(reference, reference), "AsmJit ref.is_null test failed");
+		checkError(compiler.set(asmjit::x86::CondCode::kE, result.r8()),
+				"AsmJit ref.is_null set failed");
+		values.push_back(result);
+	}
+
+	void dispatchRefEq() override
+	{
+		if (values.size() < 2)
+			throw std::runtime_error("AsmJit ref.eq operand underflow");
+		auto rhs = values.back();
+		values.pop_back();
+		auto lhs = values.back();
+		values.pop_back();
+		auto result = compiler.new_gp32("refEq");
+		checkError(compiler.xor_(result, result), "AsmJit ref.eq zeroing failed");
+		checkError(compiler.cmp(lhs, rhs), "AsmJit ref.eq compare failed");
+		checkError(compiler.set(asmjit::x86::CondCode::kE, result.r8()),
+				"AsmJit ref.eq set failed");
+		values.push_back(result);
+	}
+
 	void dispatchI8x16Shuffle(std::span<uint8_t> selectors) override
 	{
 		if (selectors.size() != 16)

@@ -2947,6 +2947,65 @@ void OpcodeDispatcher::dispatchV128Store64Lane(WASM::MemArg arg1, uint8_t arg2) 
 void OpcodeDispatcher::dispatchI8x16Shuffle(std::span<uint8_t> selectors) { emitV128Shuffle(selectors, codeAddress(&sljitShuffleAdapter)); }
 void OpcodeDispatcher::dispatchI8x16Swizzle() { emitV128Binary(codeAddress(&wasm_i8x16_swizzle)); }
 
+void OpcodeDispatcher::dispatchRefNull(const WASM::HeapType&)
+{
+	if (!reachable_)
+		return;
+	// A reference is one null word: the backend does not model typed nulls.
+	push(8);
+	if (measureOnly_)
+		return;
+	storeSlot(SLJIT_IMM, stackWidths_.size() - 1, 8);
+}
+
+void OpcodeDispatcher::dispatchRefIsNull()
+{
+	if (!reachable_)
+		return;
+	requireStack(1);
+	require(stackWidths_.back() == 8, "ref.is_null requires a reference operand");
+	if (!measureOnly_) {
+		loadSlot(SLJIT_R0, stackWidths_.size() - 1, 8);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R1, 0, SLJIT_IMM, 0));
+		sljit_jump* taken = sljit_emit_cmp(compiler_, SLJIT_NOT_EQUAL, SLJIT_R0, 0, SLJIT_IMM, 0);
+		if (taken == nullptr)
+			ok_ = false;
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R1, 0, SLJIT_IMM, 1));
+		sljit_label* done = sljit_emit_label(compiler_);
+		if (done == nullptr)
+			ok_ = false;
+		else if (taken != nullptr)
+			sljit_set_label(taken, done);
+		storeSlot(SLJIT_R1, stackWidths_.size() - 1, 4);
+	}
+	stackWidths_.back() = 4;
+}
+
+void OpcodeDispatcher::dispatchRefEq()
+{
+	if (!reachable_)
+		return;
+	requireStack(2);
+	require(stackWidths_.back() == 8 && stackWidths_[stackWidths_.size() - 2] == 8,
+			"ref.eq requires two reference operands");
+	if (!measureOnly_) {
+		loadSlot(SLJIT_R0, stackWidths_.size() - 2, 8);
+		loadSlot(SLJIT_R1, stackWidths_.size() - 1, 8);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R2, 0, SLJIT_IMM, 0));
+		sljit_jump* taken = sljit_emit_cmp(compiler_, SLJIT_NOT_EQUAL, SLJIT_R0, 0, SLJIT_R1, 0);
+		if (taken == nullptr)
+			ok_ = false;
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R2, 0, SLJIT_IMM, 1));
+		sljit_label* done = sljit_emit_label(compiler_);
+		if (done == nullptr)
+			ok_ = false;
+		else if (taken != nullptr)
+			sljit_set_label(taken, done);
+		storeSlot(SLJIT_R2, stackWidths_.size() - 2, 4);
+	}
+	pop();
+}
+
 void OpcodeDispatcher::dispatchI8x16Add() { emitV128Binary(codeAddress(&wasm_i8x16_add)); }
 void OpcodeDispatcher::dispatchI8x16Sub() { emitV128Binary(codeAddress(&wasm_i8x16_sub)); }
 void OpcodeDispatcher::dispatchI16x8Add() { emitV128Binary(codeAddress(&wasm_i16x8_add)); }

@@ -52,7 +52,8 @@ The emitter lowers:
   families, float lane access (`f32x4`/`f64x2`
   `splat`/`extract_lane`/`replace_lane`), and the transport families (extending,
   splatting and zeroing loads, lane loads and lane stores, `i8x16.swizzle` and
-  `i8x16.shuffle`), all through the core's shared helper ABI.
+  `i8x16.shuffle`), all through the core's shared helper ABI;
+- `ref.null`, `ref.is_null` and `ref.eq` (typed nulls are not modelled).
 
 A unit test exercises the same `asmjit_i32_basic`/`asmjit_i64_basic` fixtures
 that the AsmJit suite uses (`[sljit][module][parity]`), so the shared slice is
@@ -119,8 +120,10 @@ Generated code **is** released on `Runtime::unload` and runtime teardown through
 
 ## Next steps
 
-1. `v128` in signatures, block types and `select_t` — the last P3 item, and an
-   ABI decision as much as a lowering one. What landed is recorded in
+1. `ref.func` (which also unlocks a `ref.eq` fixture), then the remaining
+   reference/exception/continuation work. `v128` in signatures is **deferred by
+   decision** — see [`docs/backends/V128_SIGNATURE_DECISION.md`](../docs/backends/V128_SIGNATURE_DECISION.md);
+   it must be revisited before the saga closes. What landed is recorded in
    [`docs/backends/ASMJIT_SLJIT_P3_SIMD1.md`](../docs/backends/ASMJIT_SLJIT_P3_SIMD1.md)
    and [`docs/backends/ASMJIT_SLJIT_P3_SIMD2.md`](../docs/backends/ASMJIT_SLJIT_P3_SIMD2.md).
 2. References/GC, `ref.*`, GC barriers and exceptions (P4), following

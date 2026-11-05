@@ -609,7 +609,7 @@ it is still provisional. It must contain:
 
 The post-mortem is written by the implementer, reviewed by the backend
 reviewer, and kept current: when a later slice invalidates a paragraph, update
-the paragraph rather than appending a correction footnote. The twelve so far are
+the paragraph rather than appending a correction footnote. The thirteen so far are
 [`docs/backends/ASMJIT_SLJIT_P0_P2.md`](backends/ASMJIT_SLJIT_P0_P2.md),
 [`docs/backends/ASMJIT_SLJIT_P3.md`](backends/ASMJIT_SLJIT_P3.md),
 [`docs/backends/ASMJIT_SLJIT_P2_MEMORY64.md`](backends/ASMJIT_SLJIT_P2_MEMORY64.md),
@@ -620,8 +620,12 @@ the paragraph rather than appending a correction footnote. The twelve so far are
 [`docs/backends/ASMJIT_SLJIT_P3_SIMD5.md`](backends/ASMJIT_SLJIT_P3_SIMD5.md),
 [`docs/backends/ASMJIT_SLJIT_P3_SIMD6.md`](backends/ASMJIT_SLJIT_P3_SIMD6.md),
 [`docs/backends/ASMJIT_SLJIT_P3_SIMD7.md`](backends/ASMJIT_SLJIT_P3_SIMD7.md),
-[`docs/backends/ASMJIT_SLJIT_P3_SIMD8.md`](backends/ASMJIT_SLJIT_P3_SIMD8.md) and
-[`docs/backends/ASMJIT_SLJIT_P3_SIMD9.md`](backends/ASMJIT_SLJIT_P3_SIMD9.md).
+[`docs/backends/ASMJIT_SLJIT_P3_SIMD8.md`](backends/ASMJIT_SLJIT_P3_SIMD8.md),
+[`docs/backends/ASMJIT_SLJIT_P3_SIMD9.md`](backends/ASMJIT_SLJIT_P3_SIMD9.md) and
+[`docs/backends/ASMJIT_SLJIT_P3_REFS1.md`](backends/ASMJIT_SLJIT_P3_REFS1.md).
+The `v128` signature seam is analysed in
+[`docs/backends/V128_SIGNATURE_DECISION.md`](backends/V128_SIGNATURE_DECISION.md)
+and is deferred; it must be revisited before the AsmJit/SLJIT saga can close.
 
 ### 14.6 Candidate backends for a fourth implementation
 

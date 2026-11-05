@@ -1867,3 +1867,56 @@ TEST_CASE("asmjit and sljit agree on the shared v128 shuffle module",
 	sameNiladic("shuffle_reverse");
 	sameNiladic("shuffle_twice");
 }
+
+
+TEST_CASE("sljit: the shared reference module executes",
+"[sljit][module][parity][ref]")
+{
+	auto session = Sljit::createSession();
+	REQUIRE(session != nullptr);
+	WASM::RegistryImportResolver imports;
+	LoadedModule loaded = loadAndInstantiateTestModule("ref_null", imports, *session);
+	REQUIRE(loaded.instance != nullptr);
+	WASM::ModuleInstance& instance = *loaded.instance;
+	const auto niladic = [&](const char* name) -> std::int32_t {
+		const std::optional<WASM::Callable> callable = instance.exportedFunction(name);
+		INFO("export " << name);
+		REQUIRE(callable.has_value());
+		REQUIRE(callable->fnPtr != nullptr);
+		return WASM::callCallable<std::int32_t>(*callable);
+	};
+
+	CHECK(niladic("null_is_null") == 1);
+	CHECK(niladic("null_extern_is_null") == 1);
+}
+
+
+TEST_CASE("asmjit and sljit agree on the shared reference module",
+"[sljit][asmjit][parity][ref]")
+{
+	WASM::Module module = loadTestModule("ref_null");
+	AsmJitBackend::Context asmContext;
+	AsmJitBackend::ModuleCompiler asmCompiler(asmContext);
+	Sljit::ModuleCompiler sljitCompiler;
+	WASM::RegistryImportResolver asmImports;
+	WASM::RegistryImportResolver sljitImports;
+	std::unique_ptr<WASM::ModuleInstance> asmInstance =
+			asmCompiler.instantiate(module, asmImports);
+	std::unique_ptr<WASM::ModuleInstance> sljitInstance =
+			sljitCompiler.instantiate(module, sljitImports);
+	REQUIRE(asmInstance != nullptr);
+	REQUIRE(sljitInstance != nullptr);
+
+	const auto sameNiladic = [&](const char* name) {
+		const std::optional<WASM::Callable> asmCallable = asmInstance->exportedFunction(name);
+		const std::optional<WASM::Callable> sljitCallable = sljitInstance->exportedFunction(name);
+		REQUIRE(asmCallable.has_value());
+		REQUIRE(sljitCallable.has_value());
+		INFO("export " << name);
+		CHECK(WASM::callCallable<std::int32_t>(*asmCallable)
+				== WASM::callCallable<std::int32_t>(*sljitCallable));
+	};
+
+	sameNiladic("null_is_null");
+	sameNiladic("null_extern_is_null");
+}
