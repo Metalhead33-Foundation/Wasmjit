@@ -2066,3 +2066,36 @@ TEST_CASE("asmjit and sljit agree on select over v128", "[sljit][asmjit][parity]
 		same("select_v128_untyped", condition);
 	}
 }
+
+
+namespace {
+
+//! The host-side shape of a v128 argument (two INTEGER eightbytes).
+struct AbiV128Arg { std::uint32_t lane[4]; };
+
+} // namespace
+
+
+TEST_CASE("sljit: a v128 parameter crosses the host boundary",
+"[sljit][module][parity][simd]")
+{
+	auto session = Sljit::createSession();
+	REQUIRE(session != nullptr);
+	WASM::RegistryImportResolver imports;
+	LoadedModule loaded = loadAndInstantiateTestModule("v128_param", imports, *session);
+	REQUIRE(loaded.instance != nullptr);
+	WASM::ModuleInstance& instance = *loaded.instance;
+
+	const std::optional<WASM::Callable> one = instance.exportedFunction("lane1");
+	REQUIRE(one.has_value());
+	REQUIRE(one->fnPtr != nullptr);
+	using OneVector = std::int32_t (*)(void*, AbiV128Arg);
+	CHECK(reinterpret_cast<OneVector>(one->fnPtr)(one->context, AbiV128Arg{{1, 2, 3, 4}}) == 2);
+
+	const std::optional<WASM::Callable> two = instance.exportedFunction("lane3_after_scalar");
+	REQUIRE(two.has_value());
+	REQUIRE(two->fnPtr != nullptr);
+	using ScalarThenVector = std::int32_t (*)(void*, std::int32_t, AbiV128Arg);
+	CHECK(reinterpret_cast<ScalarThenVector>(two->fnPtr)(two->context, 7,
+			AbiV128Arg{{5, 6, 7, 8}}) == 8);
+}

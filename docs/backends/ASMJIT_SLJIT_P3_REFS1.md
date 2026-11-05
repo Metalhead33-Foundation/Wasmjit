@@ -200,8 +200,8 @@ The `v128` function-boundary work was analysed and **deliberately deferred**; th
 
 | Item | State | Why it blocks closure |
 |---|---|---|
-| `v128` parameters (both backends) | deferred, analysed | needs the two-slot parameter mapping (two GPRs per Wasm parameter) in the prologue, the call path and the signature cache |
-| `v128` results | deferred; **SLJIT cannot express it** | SysV returns the 16-byte struct in RAX:RDX; SLJIT's return is one register and its R1 is not RDX |
+| `v128` parameters | **SLJIT landed** (two argument slots); AsmJit pending | the AsmJit half needs two `kUInt64` signature entries per parameter and the two-slot index mapping |
+| `v128` results | **SLJIT permanently refused** (LibJIT returns it directly via a struct type; SLJIT has neither aggregates nor RAX:RDX); AsmJit pending two return registers | see [`V128_SIGNATURE_DECISION.md`](V128_SIGNATURE_DECISION.md) §7 and §9 |
 | Wasm→Wasm calls with `v128` | deferred | SLJIT's `SLJIT_ARGS*` are fixed-arity; AsmJit's per-type signature cache needs the two-slot form |
 | `ref.eq` fixture | lowered, unfixtured | needs a `(ref null eq)` value, which only **GC construction** can produce |
 | `br_on_non_null` | `onUnhandledOpcode` | needs a label carrying the reference, i.e. **block parameters** (AsmJit gap) |

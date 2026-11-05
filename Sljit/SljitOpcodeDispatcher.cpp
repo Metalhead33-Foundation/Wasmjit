@@ -828,10 +828,6 @@ OpcodeDispatcher::OpcodeDispatcher(const WASM::Module& module, const WASM::FuncT
 	for (std::uint32_t i = 0; i < parameterCount_; ++i) {
 		paramWidths_.push_back(widthOf(prepared.allLocals[i]));
 		paramKinds_.push_back(prepared.allLocals[i].opcode);
-		if (prepared.allLocals[i].opcode == WASM::ValueTypeCode::V128) {
-			unsupportedReason_ = "the SLJIT backend does not lower v128 parameters yet";
-			return;
-		}
 	}
 
 	localWidths_.reserve(localSlots_);
@@ -941,9 +937,20 @@ bool OpcodeDispatcher::beginFunction()
 	sljit_s32 argTypes = resultWidth_ == 0
 			? SLJIT_ARG_RETURN(SLJIT_ARG_TYPE_RET_VOID)
 			: SLJIT_ARG_RETURN(argTypeOf(resultKind_));
+	// A v128 parameter is a 16-byte integer pair on the SysV boundary, so it
+	// occupies two argument slots and every later parameter shifts by two.
 	argTypes |= SLJIT_ARG_VALUE(SLJIT_ARG_TYPE_P, 1);
-	for (std::uint32_t i = 0; i < parameterCount_; ++i)
-		argTypes |= SLJIT_ARG_VALUE(argTypeOf(paramKinds_[i]), static_cast<sljit_s32>(i) + 2);
+	sljit_s32 nextSlot = 2;
+	for (std::uint32_t i = 0; i < parameterCount_; ++i) {
+		if (paramWidths_[i] == 16) {
+			argTypes |= SLJIT_ARG_VALUE(SLJIT_ARG_TYPE_W, nextSlot);
+			argTypes |= SLJIT_ARG_VALUE(SLJIT_ARG_TYPE_W, nextSlot + 1);
+			nextSlot += 2;
+		} else {
+			argTypes |= SLJIT_ARG_VALUE(argTypeOf(paramKinds_[i]), nextSlot);
+			++nextSlot;
+		}
+	}
 
 	// Four integer scratch registers: R0-R3 carry a helper call with up to four
 	// integer arguments. Floating-point scratch registers are counted
@@ -954,7 +961,7 @@ bool OpcodeDispatcher::beginFunction()
 		if (isFloatKind(kind))
 			++floatParameters;
 	const std::uint32_t floatScratch = std::max<std::uint32_t>(3, floatParameters);
-	const sljit_s32 savedCount = static_cast<sljit_s32>(1 + parameterCount_);
+	const sljit_s32 savedCount = nextSlot - 1;
 	emit(sljit_emit_enter(compiler_, 0, argTypes,
 			4 | SLJIT_ENTER_FLOAT(static_cast<sljit_s32>(floatScratch)),
 			savedCount, static_cast<sljit_s32>(frameSlots * kSlotBytes)));
@@ -976,7 +983,7 @@ bool OpcodeDispatcher::beginFunction()
 	emitHelper(SLJIT_ARGS1V(P), &WASM::wasm_stack_check);
 	emitPendingTrapCheck();
 
-	std::uint32_t integerIndex = 0;
+	std::uint32_t integerSlot = 1;
 	std::uint32_t floatIndex = 0;
 	for (std::uint32_t i = 0; i < parameterCount_; ++i) {
 		if (isFloatKind(paramKinds_[i])) {
@@ -985,11 +992,20 @@ bool OpcodeDispatcher::beginFunction()
 					SLJIT_MEM1(SLJIT_SP), localSlotOffset(i),
 					SLJIT_FR(static_cast<sljit_s32>(floatIndex)), 0));
 			++floatIndex;
+		} else if (paramWidths_[i] == 16) {
+			// The two halves arrive in two consecutive argument registers.
+			emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+					localSlotOffset(i),
+					SLJIT_S(static_cast<sljit_s32>(integerSlot)), 0));
+			emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+					localSlotOffset(i) + 8,
+					SLJIT_S(static_cast<sljit_s32>(integerSlot + 1)), 0));
+			integerSlot += 2;
 		} else {
 			emit(sljit_emit_op1(compiler_, paramWidths_[i] == 4 ? SLJIT_MOV32 : SLJIT_MOV,
 					SLJIT_MEM1(SLJIT_SP), localSlotOffset(i),
-					SLJIT_S(static_cast<sljit_s32>(1 + integerIndex)), 0));
-			++integerIndex;
+					SLJIT_S(static_cast<sljit_s32>(integerSlot)), 0));
+			++integerSlot;
 		}
 	}
 	// Declared locals start at zero, as the spec requires.
