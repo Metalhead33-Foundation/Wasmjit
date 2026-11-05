@@ -52,7 +52,7 @@ direct calls. Each generated function emits the required
   currently support only one scalar result and no block parameters; `br_table`
   requires identical target stack heights/signatures. The `unreachable`
   instruction reports a trap and supplies a limited single-result placeholder,
-  but general unreachable-stack polymorphism remains unsupported. Cross-instance scalar Wasm imports are covered by tests. Scalar globals are lowered; `v128`/SIMD, references, `f16`, bulk memory on a memory64 and
+  but general unreachable-stack polymorphism remains unsupported. Cross-instance scalar Wasm imports are covered by tests. Scalar globals are lowered; the first `v128` slice (const/load/store, locals, `i32x4` lane access, the bitwise family and `any_true`, through the shared helper ABI) is lowered, while the remaining SIMD families, references, `f16`, bulk memory on a memory64 and
   most remaining instructions are still unsupported and fail explicitly.
 - `Test/TestBackend.cpp` exposes an `AsmJitSession` through
   `WASMJIT_BACKEND=asmjit`, including i32 invocation marshalling, aggregate
@@ -95,9 +95,10 @@ direct calls. Each generated function emits the required
   backend-agnostic and does not include or link AsmJit.
 
 The module compiler is an initial execution slice, not full Wasm ABI or semantic
-coverage. In particular, the SIMD and packed-storage probes are still native
-code-generation diagnostics; the module compiler does not yet lower Wasm SIMD
-instructions or packed GC field operations.
+coverage. It lowers the first Wasm SIMD slice (value transport, bitwise
+operations and `i32x4` lane access) by calling the core's shared `wasm_v128_*`
+helper ABI; the packed-storage probes are still native code-generation
+diagnostics, and packed GC field operations are not lowered.
 
 ## Build dependency
 
@@ -115,8 +116,11 @@ target-architecture check).
 
 ## Next implementation stages
 
-1. `v128`/SIMD lowering (the remaining part of P3); SLJIT is entering the same
-   slice, so the shared `[sljit][module][parity]` fixtures should grow with it.
+1. The remaining `v128` families (lane arithmetic/comparisons, the other lane
+   widths and float shapes, extending/lane loads, `shuffle`/`swizzle`), then
+   `v128` in signatures; SLJIT landed the same first slice, so the shared
+   `[sljit][asmjit][parity][simd]` fixture grows with both. See
+   [`docs/backends/ASMJIT_SLJIT_P3_SIMD1.md`](../docs/backends/ASMJIT_SLJIT_P3_SIMD1.md).
 2. Extend structured control flow to general unreachable-stack polymorphism
    (SLJIT already covers block parameters and multi-value block results, so the
    two backends currently differ there).

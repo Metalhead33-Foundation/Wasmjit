@@ -40,7 +40,11 @@ The emitter lowers:
   widths, `memory.copy`/`fill`/`init` (memory32), `data.drop`,
   `table.init`/`copy`/`size` and `elem.drop`;
 - `select`/`select_t`, `drop`, `nop`, `return`, `unreachable`, and the guest
-  stack guard with the pending-trap epilogue.
+  stack guard with the pending-trap epilogue;
+- the first `v128` slice: `v128.const`/`load`/`store`, `v128` locals,
+  `i32x4.splat`/`extract_lane`/`replace_lane`, and the bitwise family
+  (`not`/`and`/`andnot`/`or`/`xor`/`bitselect`) plus `any_true`, all through the
+  core's shared helper ABI.
 
 A unit test exercises the same `asmjit_i32_basic`/`asmjit_i64_basic` fixtures
 that the AsmJit suite uses (`[sljit][module][parity]`), so the shared slice is
@@ -48,9 +52,12 @@ checked against one fixture set rather than two drifting ones.
 
 ## What it still refuses
 
-`v128`/SIMD, references/GC, exceptions, continuations, atomics,
-`f16` load/store, bulk memory on a memory64, functions with more than three
-parameters, and functions with more than one result. Each refusal leaves that
+`v128` in signatures, block types or `select`, the remaining `v128` families
+(lane arithmetic/comparisons, the other lane widths and both float shapes,
+extending/lane loads, lane stores, `shuffle`/`swizzle`, relaxed SIMD),
+references/GC, exceptions, continuations, atomics, `f16` load/store, bulk
+memory on a memory64, functions with more than three parameters, and functions
+with more than one result. Each refusal leaves that
 function's
 `Callable::fnPtr` **null**; the core then reports "no compiled body" at the
 call boundary. Nothing is miscompiled, nothing is interpreted, and no
@@ -106,7 +113,10 @@ Generated code **is** released on `Runtime::unload` and runtime teardown through
 
 ## Next steps
 
-1. `v128`/SIMD loading and native vector operations (the remaining part of P3).
+1. The remaining `v128` families (lane arithmetic/comparisons, the other lane
+   widths and float shapes, extending/lane loads, `shuffle`/`swizzle`), then
+   `v128` in signatures and block types. What landed is recorded in
+   [`docs/backends/ASMJIT_SLJIT_P3_SIMD1.md`](../docs/backends/ASMJIT_SLJIT_P3_SIMD1.md).
 2. References/GC, `ref.*`, GC barriers and exceptions (P4), following
    [`docs/WRITING_A_BACKEND.md`](../docs/WRITING_A_BACKEND.md) §6 "Reference
    ownership" — the initialiser-shape test is the gate, not an optional

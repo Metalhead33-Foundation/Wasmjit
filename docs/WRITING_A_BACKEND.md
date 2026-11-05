@@ -609,10 +609,11 @@ it is still provisional. It must contain:
 
 The post-mortem is written by the implementer, reviewed by the backend
 reviewer, and kept current: when a later slice invalidates a paragraph, update
-the paragraph rather than appending a correction footnote. The three so far are
+the paragraph rather than appending a correction footnote. The four so far are
 [`docs/backends/ASMJIT_SLJIT_P0_P2.md`](backends/ASMJIT_SLJIT_P0_P2.md),
-[`docs/backends/ASMJIT_SLJIT_P3.md`](backends/ASMJIT_SLJIT_P3.md) and
-[`docs/backends/ASMJIT_SLJIT_P2_MEMORY64.md`](backends/ASMJIT_SLJIT_P2_MEMORY64.md).
+[`docs/backends/ASMJIT_SLJIT_P3.md`](backends/ASMJIT_SLJIT_P3.md),
+[`docs/backends/ASMJIT_SLJIT_P2_MEMORY64.md`](backends/ASMJIT_SLJIT_P2_MEMORY64.md) and
+[`docs/backends/ASMJIT_SLJIT_P3_SIMD1.md`](backends/ASMJIT_SLJIT_P3_SIMD1.md).
 
 ### 14.6 Candidate backends for a fourth implementation
 

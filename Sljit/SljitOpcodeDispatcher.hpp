@@ -258,6 +258,20 @@ protected:
 	void dispatchF32Store(WASM::MemArg arg) override; //!< `f32.store`.
 	void dispatchF64Store(WASM::MemArg arg) override; //!< `f64.store`.
 
+	void dispatchV128Const(std::span<uint8_t> arg) override; //!< `v128.const`.
+	void dispatchV128Load(WASM::MemArg arg) override; //!< `v128.load`.
+	void dispatchV128Store(WASM::MemArg arg) override; //!< `v128.store`.
+	void dispatchI32x4Splat() override; //!< `i32x4.splat`.
+	void dispatchI32x4ExtractLane(uint8_t arg) override; //!< `i32x4.extract_lane`.
+	void dispatchI32x4ReplaceLane(uint8_t arg) override; //!< `i32x4.replace_lane`.
+	void dispatchV128Not() override; //!< `v128.not`.
+	void dispatchV128And() override; //!< `v128.and`.
+	void dispatchV128AndNot() override; //!< `v128.andnot`.
+	void dispatchV128Or() override; //!< `v128.or`.
+	void dispatchV128Xor() override; //!< `v128.xor`.
+	void dispatchV128Bitselect() override; //!< `v128.bitselect`.
+	void dispatchV128AnyTrue() override; //!< `v128.any_true`.
+
 	void dispatchI32Load(WASM::MemArg arg) override; //!< `i32.load`.
 	void dispatchI32Load8S(WASM::MemArg arg) override; //!< `i32.load8_s`.
 	void dispatchI32Load8U(WASM::MemArg arg) override; //!< `i32.load8_u`.
@@ -607,6 +621,29 @@ private:
 	 */
 	void emitCheckedMemoryAddress(const WASM::MemArg& arg, std::uint32_t width,
 			std::size_t addressDepth);
+	/*!
+	 * \brief Loads the address of one operand-stack slot into a register.
+	 * \param reg Destination register.
+	 * \param depth Zero-based operand-stack depth.
+	 */
+	void slotAddress(int reg, std::size_t depth);
+	/*!
+	 * \brief Copies 16 bytes from a local slot to an operand-stack slot.
+	 * \param localIndex Local index.
+	 * \param depth Operand-stack destination.
+	 */
+	void copyLocalToStack(std::size_t localIndex, std::size_t depth);
+	/*!
+	 * \brief Copies 16 bytes from an operand-stack slot to a local slot.
+	 * \param depth Operand-stack source.
+	 * \param localIndex Local index.
+	 */
+	void copyStackToLocal(std::size_t depth, std::size_t localIndex);
+	/*!
+	 * \brief Calls a binary v128 helper over the top two slots.
+	 * \param address Helper entry point.
+	 */
+	void emitV128Binary(sljit_sw address);
 	/*!
 	 * \brief Emits one checked memory load.
 	 * \param arg Memory immediate.

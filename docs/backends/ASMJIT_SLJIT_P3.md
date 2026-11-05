@@ -180,7 +180,7 @@ Do not copy:
 
 | Opcode family | Refusal | Test |
 |---|---|---|
-| `v128`/SIMD | function left without `fnPtr` | P3 does not touch it |
+| `v128`/SIMD | **partially lowered** — transport, bitwise and `i32x4` lanes; the rest is still unhandled | see [`ASMJIT_SLJIT_P3_SIMD1.md`](ASMJIT_SLJIT_P3_SIMD1.md) |
 | `f16` load/store | function left without `fnPtr` | `f32.load_f16`/`store_f16` stay unhandled |
 | references/GC, exceptions, continuations, atomics | function left without `fnPtr` | unchanged from P0–P2 |
 

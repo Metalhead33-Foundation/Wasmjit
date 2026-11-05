@@ -7,6 +7,7 @@
 #include "../WasmBase/WasmStore.hpp"
 #include "../WasmBase/WasmTrap.hpp"
 #include "../WasmBase/WasmVMContext.hpp"
+#include "../WasmBase/wasm_simd_scalar.hpp"
 
 #include <Euphemy/Io/EuphConstBufferDevice.hpp>
 
@@ -28,8 +29,10 @@ namespace {
 struct UnsupportedBody {
 };
 
-//! Every frame slot is one SLJIT machine word.
-constexpr std::size_t kSlotBytes = sizeof(sljit_sw);
+//! Every frame slot is one 16-byte cell. Scalars use the low word; the extra
+//! room is what lets a `v128` operand and a scalar share one addressing rule
+//! (a `v128` is the whole cell, a scalar its first word).
+constexpr std::size_t kSlotBytes = 16;
 
 //! Reserved frame slots that follow the locals and precede the operand stack.
 constexpr std::size_t kReservedSlots = 3;
@@ -44,6 +47,8 @@ int widthOf(const WASM::ValueType& type)
 	case WASM::ValueTypeCode::I64:
 	case WASM::ValueTypeCode::F64:
 		return 8;
+	case WASM::ValueTypeCode::V128:
+		return 16;
 	default:
 		return 0;
 	}
@@ -806,6 +811,10 @@ OpcodeDispatcher::OpcodeDispatcher(const WASM::Module& module, const WASM::FuncT
 	for (std::uint32_t i = 0; i < parameterCount_; ++i) {
 		paramWidths_.push_back(widthOf(prepared.allLocals[i]));
 		paramKinds_.push_back(prepared.allLocals[i].opcode);
+		if (prepared.allLocals[i].opcode == WASM::ValueTypeCode::V128) {
+			unsupportedReason_ = "the SLJIT backend does not lower v128 parameters yet";
+			return;
+		}
 	}
 
 	localWidths_.reserve(localSlots_);
@@ -832,6 +841,12 @@ OpcodeDispatcher::OpcodeDispatcher(const WASM::Module& module, const WASM::FuncT
 	if (prepared.allReturns.size() == 1) {
 		resultKind_ = prepared.allReturns[0].opcode;
 		resultWidth_ = widthOf(prepared.allReturns[0]);
+		if (resultKind_ == WASM::ValueTypeCode::V128) {
+			unsupportedReason_ = "the SLJIT backend does not lower v128 results yet";
+			resultKind_ = WASM::ValueTypeCode::Void;
+			resultWidth_ = 0;
+			return;
+		}
 		if (resultWidth_ == 0) {
 			unsupportedReason_ = "the SLJIT backend only returns i32, i64, f32 and f64";
 			resultKind_ = WASM::ValueTypeCode::Void;
@@ -962,8 +977,16 @@ bool OpcodeDispatcher::beginFunction()
 	}
 	// Declared locals start at zero, as the spec requires.
 	for (std::size_t i = parameterCount_; i < localSlots_; ++i) {
-		emit(sljit_emit_op1(compiler_, localWidths_[i] == 4 ? SLJIT_MOV32 : SLJIT_MOV,
-				SLJIT_MEM1(SLJIT_SP), localSlotOffset(i), SLJIT_IMM, 0));
+		if (localWidths_[i] == 16) {
+			// A v128 local occupies the whole 16-byte cell.
+			emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+					localSlotOffset(i), SLJIT_IMM, 0));
+			emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+					localSlotOffset(i) + 8, SLJIT_IMM, 0));
+		} else {
+			emit(sljit_emit_op1(compiler_, localWidths_[i] == 4 ? SLJIT_MOV32 : SLJIT_MOV,
+					SLJIT_MEM1(SLJIT_SP), localSlotOffset(i), SLJIT_IMM, 0));
+		}
 	}
 	return ok_;
 }
@@ -1219,6 +1242,9 @@ OpcodeDispatcher::BlockSignature OpcodeDispatcher::blockSignature(const WASM::Bl
 		case WASM::ValueTypeCode::F64:
 			signature.results.push_back(8);
 			break;
+		case WASM::ValueTypeCode::V128:
+			require(false, "the SLJIT backend does not lower v128 block types yet");
+			break;
 		default:
 			require(false, "the SLJIT backend only models i32, i64, f32 and f64 block types");
 		}
@@ -1230,12 +1256,14 @@ OpcodeDispatcher::BlockSignature OpcodeDispatcher::blockSignature(const WASM::Bl
 	const WASM::FuncType blockType = module_.funcTypeAt(static_cast<std::uint32_t>(type.typeIndex));
 	for (const WASM::StorageType& parameter : blockType.params) {
 		const int width = widthOf(parameter.val);
-		require(width != 0, "the SLJIT backend only models i32, i64, f32 and f64 block parameters");
+		require(width != 0 && width != 16,
+				"the SLJIT backend does not lower v128 block parameters yet");
 		signature.params.push_back(width);
 	}
 	for (const WASM::StorageType& result : blockType.results) {
 		const int width = widthOf(result.val);
-		require(width != 0, "the SLJIT backend only models i32, i64, f32 and f64 block results");
+		require(width != 0 && width != 16,
+				"the SLJIT backend does not lower v128 block results yet");
 		signature.results.push_back(width);
 	}
 	return signature;
@@ -1802,6 +1830,7 @@ void OpcodeDispatcher::dispatchSelect()
 	const int valueWidth = stackWidths_[stackWidths_.size() - 3];
 	require(stackWidths_[stackWidths_.size() - 2] == valueWidth,
 			"select requires two values of the same type");
+	require(valueWidth != 16, "the SLJIT backend does not lower v128 select yet");
 	require(stackWidths_.back() == 4, "select requires an i32 condition");
 	if (!measureOnly_) {
 		loadSlot(SLJIT_R1, stackWidths_.size() - 3, valueWidth);
@@ -1820,8 +1849,8 @@ void OpcodeDispatcher::dispatchSelect()
 void OpcodeDispatcher::dispatchSelectT(std::vector<WASM::ValueType>&& types)
 {
 	require(types.size() == 1, "select_t requires exactly one value type");
-	require(widthOf(types.front()) != 0,
-			"select_t only supports i32, i64, f32 and f64 values");
+	require(widthOf(types.front()) != 0 && widthOf(types.front()) != 16,
+			"select_t only supports scalar values");
 	dispatchSelect();
 }
 
@@ -1833,6 +1862,10 @@ void OpcodeDispatcher::dispatchLocalGet(WASM::LocalIdx arg)
 	push(localWidths_[arg]);
 	if (measureOnly_)
 		return;
+	if (localWidths_[arg] == 16) {
+		copyLocalToStack(arg, stackWidths_.size() - 1);
+		return;
+	}
 	emit(sljit_emit_op1(compiler_, localWidths_[arg] == 4 ? SLJIT_MOV_U32 : SLJIT_MOV,
 			SLJIT_R0, 0, SLJIT_MEM1(SLJIT_SP), localSlotOffset(arg)));
 	storeSlot(SLJIT_R0, stackWidths_.size() - 1, localWidths_[arg]);
@@ -1847,6 +1880,10 @@ void OpcodeDispatcher::dispatchLocalSet(WASM::LocalIdx arg)
 	pop();
 	if (measureOnly_)
 		return;
+	if (localWidths_[arg] == 16) {
+		copyStackToLocal(stackWidths_.size(), arg);
+		return;
+	}
 	loadSlot(SLJIT_R0, stackWidths_.size(), localWidths_[arg]);
 	emit(sljit_emit_op1(compiler_, localWidths_[arg] == 4 ? SLJIT_MOV32 : SLJIT_MOV,
 			SLJIT_MEM1(SLJIT_SP), localSlotOffset(arg), SLJIT_R0, 0));
@@ -1860,6 +1897,10 @@ void OpcodeDispatcher::dispatchLocalTee(WASM::LocalIdx arg)
 	requireStack(1);
 	if (measureOnly_)
 		return;
+	if (localWidths_[arg] == 16) {
+		copyStackToLocal(stackWidths_.size() - 1, arg);
+		return;
+	}
 	loadSlot(SLJIT_R0, stackWidths_.size() - 1, localWidths_[arg]);
 	emit(sljit_emit_op1(compiler_, localWidths_[arg] == 4 ? SLJIT_MOV32 : SLJIT_MOV,
 			SLJIT_MEM1(SLJIT_SP), localSlotOffset(arg), SLJIT_R0, 0));
@@ -2349,6 +2390,187 @@ void OpcodeDispatcher::dispatchF64Load(WASM::MemArg arg) { emitMemoryLoadFloat(a
 void OpcodeDispatcher::dispatchF32Store(WASM::MemArg arg) { emitMemoryStoreFloat(arg, 4); }
 void OpcodeDispatcher::dispatchF64Store(WASM::MemArg arg) { emitMemoryStoreFloat(arg, 8); }
 
+void OpcodeDispatcher::dispatchV128Const(std::span<uint8_t> arg)
+{
+	if (!reachable_)
+		return;
+	require(arg.size() == 16, "the v128 constant is not 16 bytes");
+	push(16);
+	if (measureOnly_)
+		return;
+	std::uint64_t lo = 0;
+	std::uint64_t hi = 0;
+	std::memcpy(&lo, arg.data(), sizeof(lo));
+	std::memcpy(&hi, arg.data() + sizeof(lo), sizeof(hi));
+	const sljit_sw offset = stackSlotOffset(stackWidths_.size() - 1);
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP), offset,
+			SLJIT_IMM, static_cast<sljit_sw>(lo)));
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP), offset + 8,
+			SLJIT_IMM, static_cast<sljit_sw>(hi)));
+}
+
+void OpcodeDispatcher::dispatchV128Load(WASM::MemArg arg)
+{
+	if (!reachable_)
+		return;
+	requireStack(1);
+	const std::size_t depth = stackWidths_.size() - 1;
+	if (!measureOnly_) {
+		emitCheckedMemoryAddress(arg, 16, depth);
+		const sljit_sw offset = stackSlotOffset(depth);
+		for (int word = 0; word < 2; ++word) {
+			emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R1, 0,
+					SLJIT_MEM1(SLJIT_R0), word * 8));
+			emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+					offset + word * 8, SLJIT_R1, 0));
+		}
+	}
+	pop();
+	push(16);
+}
+
+void OpcodeDispatcher::dispatchV128Store(WASM::MemArg arg)
+{
+	if (!reachable_)
+		return;
+	requireStack(2);
+	const std::size_t addressDepth = stackWidths_.size() - 2;
+	const std::size_t valueDepth = stackWidths_.size() - 1;
+	if (!measureOnly_) {
+		emitCheckedMemoryAddress(arg, 16, addressDepth);
+		const sljit_sw offset = stackSlotOffset(valueDepth);
+		for (int word = 0; word < 2; ++word) {
+			emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R1, 0,
+					SLJIT_MEM1(SLJIT_SP), offset + word * 8));
+			emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_R0),
+					word * 8, SLJIT_R1, 0));
+		}
+	}
+	pop();
+	pop();
+}
+
+void OpcodeDispatcher::dispatchI32x4Splat()
+{
+	if (!reachable_)
+		return;
+	requireStack(1);
+	const std::size_t depth = stackWidths_.size() - 1;
+	pop();
+	push(16);
+	if (measureOnly_)
+		return;
+	slotAddress(SLJIT_R1, depth);
+	loadSlot(SLJIT_R0, depth, 4);
+	emitHelper(SLJIT_ARGS2V(32, P), &wasm_i32x4_splat);
+}
+
+void OpcodeDispatcher::dispatchI32x4ExtractLane(uint8_t lane)
+{
+	if (!reachable_)
+		return;
+	requireStack(1);
+	if (!measureOnly_) {
+		slotAddress(SLJIT_R0, stackWidths_.size() - 1);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R1, 0, SLJIT_IMM, lane));
+		emitHelper(SLJIT_ARGS2(32, P, 32), &wasm_i32x4_extract_lane);
+		storeSlot(SLJIT_R0, stackWidths_.size() - 1, 4);
+	}
+	stackWidths_.back() = 4;
+}
+
+void OpcodeDispatcher::dispatchI32x4ReplaceLane(uint8_t lane)
+{
+	if (!reachable_)
+		return;
+	requireStack(2);
+	const std::size_t vectorDepth = stackWidths_.size() - 2;
+	const std::size_t scalarDepth = stackWidths_.size() - 1;
+	if (!measureOnly_) {
+		slotAddress(SLJIT_R0, vectorDepth);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R1, 0, SLJIT_IMM, lane));
+		loadSlot(SLJIT_R2, scalarDepth, 4);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R3, 0, SLJIT_R0, 0));
+		emitHelper(SLJIT_ARGS4V(P, 32, 32, P), &wasm_i32x4_replace_lane);
+	}
+	pop();
+}
+
+void OpcodeDispatcher::dispatchV128Not()
+{
+	if (!reachable_)
+		return;
+	requireStack(1);
+	if (!measureOnly_) {
+		slotAddress(SLJIT_R1, stackWidths_.size() - 1);
+		slotAddress(SLJIT_R0, stackWidths_.size() - 1);
+		emitHelper(SLJIT_ARGS2V(P, P), &wasm_v128_not);
+	}
+}
+
+void OpcodeDispatcher::emitV128Binary(sljit_sw address)
+{
+	if (!reachable_)
+		return;
+	requireStack(2);
+	if (!measureOnly_) {
+		slotAddress(SLJIT_R1, stackWidths_.size() - 1);
+		slotAddress(SLJIT_R2, stackWidths_.size() - 2);
+		slotAddress(SLJIT_R0, stackWidths_.size() - 2);
+		emitHelper(SLJIT_ARGS3V(P, P, P), address);
+	}
+	pop();
+}
+
+void OpcodeDispatcher::dispatchV128And() { emitV128Binary(codeAddress(&wasm_v128_and)); }
+void OpcodeDispatcher::dispatchV128AndNot() { emitV128Binary(codeAddress(&wasm_v128_andnot)); }
+void OpcodeDispatcher::dispatchV128Or() { emitV128Binary(codeAddress(&wasm_v128_or)); }
+void OpcodeDispatcher::dispatchV128Xor() { emitV128Binary(codeAddress(&wasm_v128_xor)); }
+
+void OpcodeDispatcher::dispatchV128Bitselect()
+{
+	if (!reachable_)
+		return;
+	requireStack(3);
+	if (!measureOnly_) {
+		slotAddress(SLJIT_R1, stackWidths_.size() - 2);
+		slotAddress(SLJIT_R2, stackWidths_.size() - 1);
+		slotAddress(SLJIT_R3, stackWidths_.size() - 3);
+		slotAddress(SLJIT_R0, stackWidths_.size() - 3);
+		emitHelper(SLJIT_ARGS4V(P, P, P, P), &wasm_v128_bitselect);
+	}
+	pop();
+	pop();
+}
+
+void OpcodeDispatcher::dispatchV128AnyTrue()
+{
+	if (!reachable_)
+		return;
+	requireStack(1);
+	if (!measureOnly_) {
+		const sljit_sw offset = stackSlotOffset(stackWidths_.size() - 1);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0,
+				SLJIT_MEM1(SLJIT_SP), offset));
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R1, 0,
+				SLJIT_MEM1(SLJIT_SP), offset + 8));
+		emit(sljit_emit_op2(compiler_, SLJIT_OR, SLJIT_R0, 0, SLJIT_R0, 0, SLJIT_R1, 0));
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R2, 0, SLJIT_IMM, 1));
+		sljit_jump* taken = sljit_emit_cmp(compiler_, SLJIT_NOT_EQUAL,
+				SLJIT_R0, 0, SLJIT_IMM, 0);
+		if (taken == nullptr)
+			ok_ = false;
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R2, 0, SLJIT_IMM, 0));
+		sljit_label* done = sljit_emit_label(compiler_);
+		if (done == nullptr)
+			ok_ = false;
+		else if (taken != nullptr)
+			sljit_set_label(taken, done);
+		storeSlot(SLJIT_R2, stackWidths_.size() - 1, 4);
+	}
+	stackWidths_.back() = 4;
+}
+
 void OpcodeDispatcher::dispatchI32Add() { emitIntegerBinary(SLJIT_ADD, 4); }
 
 void OpcodeDispatcher::dispatchI32Sub() { emitIntegerBinary(SLJIT_SUB, 4); }
@@ -2561,6 +2783,31 @@ void OpcodeDispatcher::emitCheckedMemoryAddress(const WASM::MemArg& arg,
 	emitPendingTrapCheck();
 	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0, SLJIT_MEM1(SLJIT_SP),
 			scratchSlotOffset()));
+}
+
+void OpcodeDispatcher::slotAddress(int reg, std::size_t depth)
+{
+	emit(sljit_get_local_base(compiler_, reg, 0, stackSlotOffset(depth)));
+}
+
+void OpcodeDispatcher::copyLocalToStack(std::size_t localIndex, std::size_t depth)
+{
+	for (int word = 0; word < 2; ++word) {
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0, SLJIT_MEM1(SLJIT_SP),
+				localSlotOffset(localIndex) + word * 8));
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+				stackSlotOffset(depth) + word * 8, SLJIT_R0, 0));
+	}
+}
+
+void OpcodeDispatcher::copyStackToLocal(std::size_t depth, std::size_t localIndex)
+{
+	for (int word = 0; word < 2; ++word) {
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0, SLJIT_MEM1(SLJIT_SP),
+				stackSlotOffset(depth) + word * 8));
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+				localSlotOffset(localIndex) + word * 8, SLJIT_R0, 0));
+	}
 }
 
 void OpcodeDispatcher::emitMemoryLoad(const WASM::MemArg& arg, std::uint32_t width,

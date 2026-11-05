@@ -6,6 +6,7 @@
 #include "../WasmBase/WasmStore.hpp"
 #include "../WasmBase/WasmTrap.hpp"
 #include "../WasmBase/WasmVMContext.hpp"
+#include "../WasmBase/wasm_simd_scalar.hpp"
 #include "../WasmBase/WasmType.hpp"
 
 #include <Euphemy/Io/EuphConstBufferDevice.hpp>
@@ -60,6 +61,12 @@ int kindWidth(WASM::ValueTypeCode kind) noexcept
 	default:
 		return 0;
 	}
+}
+
+//! Frame/lane width of a local: a v128 occupies a whole 16-byte buffer.
+int slotWidthOf(WASM::ValueTypeCode kind) noexcept
+{
+	return kind == WASM::ValueTypeCode::V128 ? 16 : kindWidth(kind);
 }
 
 //! Refuses a parameter/local/result outside the scalar subset.
@@ -783,8 +790,10 @@ public:
 			requireScalar(parameter.val, "parameters");
 		for (const auto& result : type.results)
 			requireScalar(result.val, "results");
-		for (const auto& local : stack.allLocals)
-			requireScalar(local, "locals");
+		for (const auto& local : stack.allLocals) {
+			if (local.opcode != WASM::ValueTypeCode::V128)
+				requireScalar(local, "locals");
+		}
 		resultType = type.results.empty()
 				? WASM::ValueTypeCode::Void : type.results.front().val.opcode;
 
@@ -856,11 +865,21 @@ public:
 			}
 		}
 		for (uint32_t i = 0; i < stack.localCount; ++i) {
-			asmjit::x86::Gp local = newIntegerRegister(compiler,
-					stack.allLocals[stack.parameterCount + i], "local");
-			checkError(compiler.xor_(local, local), "AsmJit local zero-initialisation failed");
-			locals.push_back(local);
+			const WASM::ValueTypeCode kind = stack.allLocals[stack.parameterCount + i].opcode;
+			if (kind == WASM::ValueTypeCode::V128) {
+				asmjit::x86::Gp local = newVectorBuffer("v128Local");
+				zeroVector(local);
+				locals.push_back(local);
+			} else {
+				asmjit::x86::Gp local = newIntegerRegister(compiler,
+						stack.allLocals[stack.parameterCount + i], "local");
+				checkError(compiler.xor_(local, local), "AsmJit local zero-initialisation failed");
+				locals.push_back(local);
+			}
 		}
+		localWidths.reserve(stack.allLocals.size());
+		for (const auto& local : stack.allLocals)
+			localWidths.push_back(slotWidthOf(local.opcode));
 		resultCount = static_cast<uint32_t>(type.results.size());
 	}
 
@@ -903,6 +922,12 @@ protected:
 		const size_t i = static_cast<size_t>(index);
 		if (i >= locals.size())
 			throw std::runtime_error("AsmJit local.get index is out of range");
+		if (localWidths[i] == 16) {
+			asmjit::x86::Gp copy = newVectorBuffer("v128Copy");
+			copyVector(copy, locals[i]);
+			values.push_back(copy);
+			return;
+		}
 		asmjit::x86::Gp copy = locals[i].size() == 8
 				? compiler.new_gp64("localCopy") : compiler.new_gp32("localCopy");
 		checkError(compiler.mov(copy, locals[i]), "AsmJit local.get emission failed");
@@ -916,6 +941,10 @@ protected:
 			throw std::runtime_error("AsmJit local.set stack/index underflow");
 		const asmjit::x86::Gp value = values.back();
 		values.pop_back();
+		if (localWidths[i] == 16) {
+			copyVector(locals[i], value);
+			return;
+		}
 		checkError(compiler.mov(locals[i], value), "AsmJit local.set emission failed");
 	}
 
@@ -924,6 +953,10 @@ protected:
 		const size_t i = static_cast<size_t>(index);
 		if (i >= locals.size() || values.empty())
 			throw std::runtime_error("AsmJit local.tee stack/index underflow");
+		if (localWidths[i] == 16) {
+			copyVector(locals[i], values.back());
+			return;
+		}
 		asmjit::x86::Gp copy = locals[i].size() == 8
 				? compiler.new_gp64("teeCopy") : compiler.new_gp32("teeCopy");
 		checkError(compiler.mov(copy, values.back()), "AsmJit local.tee emission failed");
@@ -1491,6 +1524,217 @@ protected:
     }
 
 
+	// ── v128 (first SIMD slice) ─────────────────────────────────────────────
+	// Every operation calls the core's shared helper ABI; the backend only
+	// transports 16-byte buffers.
+
+	void dispatchV128Const(std::span<uint8_t> arg) override
+	{
+		if (arg.size() != 16)
+			throw std::runtime_error("AsmJit v128.const payload is not 16 bytes");
+		uint64_t lo = 0;
+		uint64_t hi = 0;
+		std::memcpy(&lo, arg.data(), sizeof(lo));
+		std::memcpy(&hi, arg.data() + sizeof(lo), sizeof(hi));
+		auto buffer = newVectorBuffer("v128Constant");
+		checkError(compiler.mov(asmjit::x86::qword_ptr(buffer, 0), lo),
+				"AsmJit v128.const low word failed");
+		checkError(compiler.mov(asmjit::x86::qword_ptr(buffer, 8), hi),
+				"AsmJit v128.const high word failed");
+		values.push_back(buffer);
+	}
+
+	void dispatchV128Load(WASM::MemArg arg) override
+	{
+		if (values.empty())
+			throw std::runtime_error("AsmJit v128.load address underflow");
+		auto address = values.back();
+		values.pop_back();
+		auto pointer = emitMemoryAddress(arg, 16, address);
+		auto buffer = newVectorBuffer("v128Load");
+		copyVector(buffer, pointer);
+		values.push_back(buffer);
+	}
+
+	void dispatchV128Store(WASM::MemArg arg) override
+	{
+		if (values.size() < 2)
+			throw std::runtime_error("AsmJit v128.store operand underflow");
+		auto value = values.back();
+		values.pop_back();
+		auto address = values.back();
+		values.pop_back();
+		auto pointer = emitMemoryAddress(arg, 16, address);
+		copyVector(pointer, value);
+	}
+
+	void dispatchI32x4Splat() override
+	{
+		if (values.empty())
+			throw std::runtime_error("AsmJit i32x4.splat operand underflow");
+		auto scalar = values.back();
+		values.pop_back();
+		auto buffer = newVectorBuffer("i32x4Splat");
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kVoid);
+		signature.add_arg(asmjit::TypeId::kInt32);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke),
+				reinterpret_cast<uint64_t>(&wasm_i32x4_splat), signature),
+				"AsmJit i32x4.splat helper call failed");
+		invoke->set_arg(0, scalar);
+		invoke->set_arg(1, buffer);
+		values.push_back(buffer);
+	}
+
+	void dispatchI32x4ExtractLane(uint8_t lane) override
+	{
+		if (values.empty())
+			throw std::runtime_error("AsmJit i32x4.extract_lane operand underflow");
+		auto vector = values.back();
+		values.pop_back();
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kInt32);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke),
+				reinterpret_cast<uint64_t>(&wasm_i32x4_extract_lane), signature),
+				"AsmJit i32x4.extract_lane helper call failed");
+		invoke->set_arg(0, vector);
+		invoke->set_arg(1, asmjit::Imm(lane));
+		auto result = compiler.new_gp32("i32x4Lane");
+		invoke->set_ret(0, result);
+		values.push_back(result);
+	}
+
+	void dispatchI32x4ReplaceLane(uint8_t lane) override
+	{
+		if (values.size() < 2)
+			throw std::runtime_error("AsmJit i32x4.replace_lane operand underflow");
+		auto scalar = values.back();
+		values.pop_back();
+		auto vector = values.back();
+		values.pop_back();
+		auto buffer = newVectorBuffer("i32x4Replace");
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kVoid);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		signature.add_arg(asmjit::TypeId::kInt32);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke),
+				reinterpret_cast<uint64_t>(&wasm_i32x4_replace_lane), signature),
+				"AsmJit i32x4.replace_lane helper call failed");
+		invoke->set_arg(0, vector);
+		invoke->set_arg(1, asmjit::Imm(lane));
+		invoke->set_arg(2, scalar);
+		invoke->set_arg(3, buffer);
+		values.push_back(buffer);
+	}
+
+	void dispatchV128Not() override { emitVectorHelper1(&wasm_v128_not); }
+	void dispatchV128And() override { emitVectorHelper2(&wasm_v128_and); }
+	void dispatchV128AndNot() override { emitVectorHelper2(&wasm_v128_andnot); }
+	void dispatchV128Or() override { emitVectorHelper2(&wasm_v128_or); }
+	void dispatchV128Xor() override { emitVectorHelper2(&wasm_v128_xor); }
+
+	void dispatchV128Bitselect() override
+	{
+		if (values.size() < 3)
+			throw std::runtime_error("AsmJit v128.bitselect operand underflow");
+		asmjit::x86::Gp c = values.back();
+		values.pop_back();
+		asmjit::x86::Gp b = values.back();
+		values.pop_back();
+		asmjit::x86::Gp a = values.back();
+		values.pop_back();
+		auto buffer = newVectorBuffer("v128Bitselect");
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kVoid);
+		for (int i = 0; i < 4; ++i)
+			signature.add_arg(asmjit::TypeId::kUIntPtr);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke),
+				reinterpret_cast<uint64_t>(&wasm_v128_bitselect), signature),
+				"AsmJit v128.bitselect helper call failed");
+		invoke->set_arg(0, a);
+		invoke->set_arg(1, b);
+		invoke->set_arg(2, c);
+		invoke->set_arg(3, buffer);
+		values.push_back(buffer);
+	}
+
+	void dispatchV128AnyTrue() override
+	{
+		if (values.empty())
+			throw std::runtime_error("AsmJit v128.any_true operand underflow");
+		auto vector = values.back();
+		values.pop_back();
+		auto low = compiler.new_gp64("v128AnyLow");
+		auto high = compiler.new_gp64("v128AnyHigh");
+		checkError(compiler.mov(low, asmjit::x86::qword_ptr(vector, 0)),
+				"AsmJit v128.any_true low word failed");
+		checkError(compiler.mov(high, asmjit::x86::qword_ptr(vector, 8)),
+				"AsmJit v128.any_true high word failed");
+		checkError(compiler.or_(low, high), "AsmJit v128.any_true merge failed");
+		auto result = compiler.new_gp32("v128AnyResult");
+		checkError(compiler.xor_(result, result),
+				"AsmJit v128.any_true result zeroing failed");
+		checkError(compiler.test(low, low), "AsmJit v128.any_true test failed");
+		checkError(compiler.set(asmjit::x86::CondCode::kNE, result.r8()),
+				"AsmJit v128.any_true set failed");
+		values.push_back(result);
+	}
+
+	//! Calls a unary v128 helper (`a`, `out`) and pushes `out`.
+	void emitVectorHelper1(void (*helper)(const void*, void*))
+	{
+		if (values.empty())
+			throw std::runtime_error("AsmJit v128 helper operand underflow");
+		auto a = values.back();
+		values.pop_back();
+		auto buffer = newVectorBuffer("v128Result");
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kVoid);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke),
+				reinterpret_cast<uint64_t>(helper), signature),
+				"AsmJit v128 helper call failed");
+		invoke->set_arg(0, a);
+		invoke->set_arg(1, buffer);
+		values.push_back(buffer);
+	}
+
+	//! Calls a binary v128 helper (`a`, `b`, `out`) and pushes `out`.
+	void emitVectorHelper2(void (*helper)(const void*, const void*, void*))
+	{
+		if (values.size() < 2)
+			throw std::runtime_error("AsmJit v128 helper operand underflow");
+		auto b = values.back();
+		values.pop_back();
+		auto a = values.back();
+		values.pop_back();
+		auto buffer = newVectorBuffer("v128Result");
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kVoid);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke),
+				reinterpret_cast<uint64_t>(helper), signature),
+				"AsmJit v128 helper call failed");
+		invoke->set_arg(0, a);
+		invoke->set_arg(1, b);
+		invoke->set_arg(2, buffer);
+		values.push_back(buffer);
+	}
+
 	void dispatchI32Load(WASM::MemArg arg) override { emitMemoryLoad(arg, 4, LoadKind::I32); }
 	void dispatchI32Load8S(WASM::MemArg arg) override { emitMemoryLoad(arg, 1, LoadKind::I8Signed); }
 	void dispatchI32Load8U(WASM::MemArg arg) override { emitMemoryLoad(arg, 1, LoadKind::I8Unsigned); }
@@ -1873,6 +2117,44 @@ private:
 					"AsmJit float function-branch return failed");
 		else
 			checkError(compiler.ret(value), "AsmJit function-branch return failed");
+	}
+
+	// ── v128 as a 16-byte stack buffer ──────────────────────────────────────
+	// A v128 value is the address of a 16-byte stack buffer in a Gp, so the
+	// register-based value stack, block transfer, select and locals keep their
+	// existing shape. The buffer is immutable once produced; every operation
+	// allocates a fresh one, which is what makes the representation safe across
+	// loop iterations (one buffer per emission, rewritten before each use).
+
+	//! Allocates a 16-byte stack buffer and returns its address.
+	asmjit::x86::Gp newVectorBuffer(const char* name)
+	{
+		asmjit::x86::Mem storage = compiler.new_stack(16, 16, name);
+		auto address = compiler.new_gp_ptr(name);
+		checkError(compiler.lea(address, storage), "AsmJit v128 buffer address failed");
+		return address;
+	}
+
+	//! Copies 16 bytes between two buffer addresses.
+	void copyVector(const asmjit::x86::Gp& destination, const asmjit::x86::Gp& source)
+	{
+		for (int word = 0; word < 2; ++word) {
+			auto value = compiler.new_gp64("v128Word");
+			checkError(compiler.mov(value,
+					asmjit::x86::qword_ptr(source, word * 8)),
+					"AsmJit v128 word load failed");
+			checkError(compiler.mov(asmjit::x86::qword_ptr(destination, word * 8), value),
+					"AsmJit v128 word store failed");
+		}
+	}
+
+	//! Writes 16 zero bytes to a buffer.
+	void zeroVector(const asmjit::x86::Gp& buffer)
+	{
+		for (int word = 0; word < 2; ++word) {
+			checkError(compiler.mov(asmjit::x86::qword_ptr(buffer, word * 8),
+					static_cast<uint64_t>(0)), "AsmJit v128 zeroing failed");
+		}
 	}
 
 	//! Sets a call's value arguments from prepared operands.
@@ -2837,6 +3119,8 @@ private:
 	const std::vector<std::unique_ptr<asmjit::FuncSignature>>& signatures;
 	asmjit::x86::Gp vmContext;
 	std::vector<asmjit::x86::Gp> locals;
+	//! Slot width of every local (4/8, or 16 for a v128 buffer).
+	std::vector<int> localWidths;
 	std::vector<asmjit::x86::Gp> values;
 	std::vector<ControlFrame> controls;
 	uint32_t resultCount = 0;

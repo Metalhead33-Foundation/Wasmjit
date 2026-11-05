@@ -1055,3 +1055,81 @@ TEST_CASE("sljit: bulk memory on a memory64 is refused per function",
 	CHECK(copy->fnPtr == nullptr);
 }
 
+
+
+TEST_CASE("sljit: the shared v128 module executes", "[sljit][module][parity][simd]")
+{
+	auto session = Sljit::createSession();
+	REQUIRE(session != nullptr);
+	WASM::RegistryImportResolver imports;
+	LoadedModule loaded = loadAndInstantiateTestModule("simd_basic", imports, *session);
+	REQUIRE(loaded.instance != nullptr);
+	WASM::ModuleInstance& instance = *loaded.instance;
+	const auto call = [&](const char* name) -> WASM::Callable {
+		const std::optional<WASM::Callable> callable = instance.exportedFunction(name);
+		INFO("export " << name);
+		REQUIRE(callable.has_value());
+		REQUIRE(callable->fnPtr != nullptr);
+		return *callable;
+	};
+
+	CHECK(WASM::callCallable<std::int32_t>(call("const_extract")) == 3);
+	CHECK(WASM::callCallable<std::int32_t>(call("splat_extract"), 5) == 5);
+	CHECK(WASM::callCallable<std::int32_t>(call("store_load"), 64, 0x01020304) == 0x01020304);
+	CHECK(WASM::callCallable<std::int32_t>(call("replace_extract"), 9) == 9);
+	CHECK(WASM::callCallable<std::int32_t>(call("and_value")) == 0x03030303);
+	CHECK(WASM::callCallable<std::int32_t>(call("or_value")) == 0x3F3F3F3F);
+	CHECK(WASM::callCallable<std::int32_t>(call("xor_value")) == 0x3C3C3C3C);
+	CHECK(WASM::callCallable<std::int32_t>(call("andnot_value")) == static_cast<std::int32_t>(0xF0F0F0F0u));
+	CHECK(WASM::callCallable<std::int32_t>(call("not_value")) == static_cast<std::int32_t>(0xF0F0F0F0u));
+	CHECK(WASM::callCallable<std::int32_t>(call("bitselect_value")) == static_cast<std::int32_t>(0xAAAA5555u));
+	CHECK(WASM::callCallable<std::int32_t>(call("any_true"), 0) == 0);
+	CHECK(WASM::callCallable<std::int32_t>(call("any_true"), 5) == 1);
+	CHECK(WASM::callCallable<std::int32_t>(call("local_roundtrip"), 7) == 7);
+}
+
+
+TEST_CASE("asmjit and sljit agree on the shared v128 module", "[sljit][asmjit][parity][simd]")
+{
+	WASM::Module module = loadTestModule("simd_basic");
+	AsmJitBackend::Context asmContext;
+	AsmJitBackend::ModuleCompiler asmCompiler(asmContext);
+	Sljit::ModuleCompiler sljitCompiler;
+	WASM::RegistryImportResolver asmImports;
+	WASM::RegistryImportResolver sljitImports;
+	std::unique_ptr<WASM::ModuleInstance> asmInstance =
+			asmCompiler.instantiate(module, asmImports);
+	std::unique_ptr<WASM::ModuleInstance> sljitInstance =
+			sljitCompiler.instantiate(module, sljitImports);
+	REQUIRE(asmInstance != nullptr);
+	REQUIRE(sljitInstance != nullptr);
+
+	const auto same = [&](const char* name, auto&& call) {
+		const std::optional<WASM::Callable> asmCallable = asmInstance->exportedFunction(name);
+		const std::optional<WASM::Callable> sljitCallable = sljitInstance->exportedFunction(name);
+		REQUIRE(asmCallable.has_value());
+		REQUIRE(sljitCallable.has_value());
+		const CallOutcome asmOutcome = call(*asmCallable);
+		const CallOutcome sljitOutcome = call(*sljitCallable);
+		INFO("export " << name);
+		CHECK(asmOutcome.trapped == sljitOutcome.trapped);
+		if (!asmOutcome.trapped && !sljitOutcome.trapped)
+			CHECK(asmOutcome.value == sljitOutcome.value);
+	};
+
+	same("const_extract", [](const WASM::Callable& c) { return outcomeOf<std::int32_t>(c); });
+	same("splat_extract", [](const WASM::Callable& c) { return outcomeOf<std::int32_t>(c, 5); });
+	same("store_load", [](const WASM::Callable& c) {
+		return outcomeOf<std::int32_t>(c, 64, 0x01020304);
+	});
+	same("replace_extract", [](const WASM::Callable& c) { return outcomeOf<std::int32_t>(c, 9); });
+	same("and_value", [](const WASM::Callable& c) { return outcomeOf<std::int32_t>(c); });
+	same("or_value", [](const WASM::Callable& c) { return outcomeOf<std::int32_t>(c); });
+	same("xor_value", [](const WASM::Callable& c) { return outcomeOf<std::int32_t>(c); });
+	same("andnot_value", [](const WASM::Callable& c) { return outcomeOf<std::int32_t>(c); });
+	same("not_value", [](const WASM::Callable& c) { return outcomeOf<std::int32_t>(c); });
+	same("bitselect_value", [](const WASM::Callable& c) { return outcomeOf<std::int32_t>(c); });
+	same("any_true", [](const WASM::Callable& c) { return outcomeOf<std::int32_t>(c, 0); });
+	same("any_true", [](const WASM::Callable& c) { return outcomeOf<std::int32_t>(c, 5); });
+	same("local_roundtrip", [](const WASM::Callable& c) { return outcomeOf<std::int32_t>(c, 7); });
+}
