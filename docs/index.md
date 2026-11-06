@@ -28,6 +28,7 @@ row here. A note missing from this table builds as a *sibling* and fails the
 | emit, call or embed compiled code | \subpage doc_abi | `VMContext*` as arg0, `Callable`, result tuples, `v128`, references, the embedder guide |
 | change a signature, a function prolog, or a GC object layout | \subpage doc_abi_portability | C linkage and the host C ABI on every target, portability over performance, what a backend may not do, the target matrix, the GC object/allocator ABI |
 | plan the `v128` / register-and-stack ABI refactor | \subpage doc_abi_refactor_study | the blast radius by layer (L1-L9), the five change classes, the waterfall phases with an exit criterion each, and the portability-first two-tier rule |
+| learn how that refactor went after it merged | \subpage doc_abi_refactor_post_mortem | what shipped per backend, what went well, the seven failures with root causes, the numbers at merge, and the four follow-ups in recommended order |
 | embed the engine, or change its install/version story | \subpage doc_embedding_surface | `WASM::Runtime`, the three header tiers, soname/visibility, the install layout |
 | change an embedder-facing surface or the backend seam | \subpage doc_api_abi_stability | the milestone and its four gates, the frozen surfaces, the break classes, the merge readiness |
 | add or change SIMD support | \subpage doc_simd_backends | what each backend can do for vectors, and the helper-based lowering every backend starts from |
