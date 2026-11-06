@@ -744,3 +744,71 @@ What this list is *for*: the measure of a backend is not how many opcodes it low
 It is whether its **refusal inventory is explicit**, whether its **trap kinds match**
 the other backends, and whether its **post-mortem was opened on day one** — so that the
 next author inherits the failures instead of the debugging.
+
+## 16. Post-mortem: the parity arc, and what it hands the ABI refactor
+
+**Snapshot (2026-11-06, branch `AbiRefactor`, commit `d7b628e`):** 51 entries in
+[`backends/ASMJIT_SLJIT_P3_GC1.md`](backends/ASMJIT_SLJIT_P3_GC1.md), 14 commits on the refactor branch,
+**21591 assertions in 728 test cases**, `abi-check.sh` OK, Doxygen 0 warnings.
+
+### The numbers that matter more than the opcode count
+
+| Measure | Value | Why it is the interesting number |
+|---|---|---|
+| Opcodes brought to parity | ~60 | the part everyone measures |
+| Corruption investigations | 3 (§30, §44, §49) | one root cause, three symptoms |
+| Reverted changes with reasons recorded | 4 (§25, §34, §45-part, emitter ×2) | each cost a build, none cost a wrong answer |
+| Audits that found a real defect | **6 of 6** | and two were defects in the author's own work |
+| Fixtures that had not built when a result was read | 2 (§37, §38) | both produced confident, fictitious answers |
+
+### The five recurring families
+
+1. **Positional ABI arithmetic.** `SLJIT_ARGSn` is a descriptor, not a type check. Getting an argument
+   index wrong is silent: §30 put `actual` where `expected` belonged and every pair answered `false`;
+   §25's eighteen-site sweep looked "semantically non-neutral" and was simply clobbering. The fix that
+   holds is a **shared, tested mapping** (`argSlotCount`/`mapArgSlots`), not per-site care.
+2. **Helper calls clobber registers.** §22, §44, §49: a call destroys `R0`–`R3`, so anything a caller
+   still needs must be parked — and `emitCheckedMemoryAddress` had known this locally for months while
+   `emitPendingTrapCheck` did not. The lesson generalises: **an invariant that lives at a call site is
+   a rumour; one that lives in the primitive is a guarantee.**
+3. **Fixtures that did not build.** §37/§38: a failed `.wat` conversion left yesterday's `.wasm` in
+   place, and the test reported a stable, reproducible, entirely fictitious pass. The fix is a build
+   rule (`rm -f` before parsing), not discipline.
+4. **Gates whose output went unread.** §46/§48: three hypotheses were disproved by experiment and the
+   fourth question was answered by *reading `compile.log`*. The cheapest diagnostic is the message the
+   failing gate already printed.
+5. **Bundled changes.** A correct edit (the C typedef rename) looked guilty for two rounds because it
+   was tested together with a Rust change (§48, §50). One variable per build, or the result is
+   uninterpretable.
+
+### The rules, each with the evidence that produced it
+
+| Rule | Evidence |
+|---|---|
+| **Contracts first, tests at the seam** — prove the predicate/layout *before* touching a backend | a predicate tested without a backend cost one patch; the same work started at a backend cost three rewrites (§12, §30, §37) |
+| **Invariants in primitives, not call sites** | §45 made `emitPendingTrapCheck` non-destructive and fixed all 21 sites at once |
+| **One variable per build; bisect by subset** | converting 3 of 4 sites localised a fault in one build; converting 4 twice said only "somewhere in four" (§49) |
+| **Anchor edits on unique content, never on structure** | §34's deletion matched a brace in the wrong function; §43's filter deleted 21 lines when 6 were intended |
+| **A failed fixture is not a result** | §37, §38 — and the fix is in the build, because discipline had already failed twice |
+| **Read the gate's output before hypothesising** | the union was disproved and the struct cleared in one build, after two rounds of guessing (§50) |
+| **A reverted experiment is only as general as its evidence** | "the C header cannot move alone" was wrong; only the *union* could not (§50) |
+| **The additive-only rule measures symbols, not layouts** | B1: `ModuleFfiEntry` grew, `abi-check.sh` passed, an embedder's offsets would not (§record B1) |
+
+### What the ABI refactor inherits, and why it is starting well
+
+Three artefacts exist before a single backend is touched: a **frozen decision** (two `uint64_t`, low word
+first, with the MS x64 reason recorded), a **proof that needs no codegen** (`[v128][abi][layout]`), and a
+**shared mapping already in use** by the libffi cache with a cache-versus-compiled parity case.
+
+That ordering is the post-mortem's whole content: the arc's expensive failures were never in the place
+the feature was. Four times a "missing" capability sat on a defect one level down — the layout contract,
+the trap kinds, the operand-stack height, the reference merge — and the refactor's phases are arranged so
+that the same discovery is cheap: **audit the records, prove the contract, then port.**
+
+### The one open thread worth naming
+
+The emitter unification is a single commit (§14 of
+[`ABI_REFACTOR_STUDY.md`](ABI_REFACTOR_STUDY.md)) that could not be finished in this session. Every piece
+of it has now been shown to be *pinned by a test* — declarations moved alone; parameters did not — which is
+itself the evidence that the tests are doing their job. The next author inherits a line-numbered
+inventory, not a half-applied sweep.
