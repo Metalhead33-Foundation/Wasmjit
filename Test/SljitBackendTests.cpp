@@ -2925,9 +2925,9 @@ TEST_CASE("a refused allocation traps on both backends",
 }
 
 
-// SLJIT's declared-argument ceiling is its saved-register count: an argument
-// needs a saved register, and there is no way to name one that has none
-// (measured 2026-11-06; see the post-mortem). The backend refuses at the same
+// SLJIT's declared-argument ceiling is its saved-register count: an argument needs
+// a saved register and there is no way to name one that has none (measured
+// 2026-11-06; docs/ABI_REFACTOR_POST_MORTEM.md). The backend refuses at the same
 // threshold, so the two cannot drift apart.
 TEST_CASE("SLJIT: the argument-slot ceiling is its saved-register count",
 		"[sljit][args][abi]")

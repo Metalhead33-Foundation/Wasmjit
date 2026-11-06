@@ -166,6 +166,17 @@ the arguments); declare only what fits, let the C caller pass seven, and sweep
 incoming-argument region, sweep from `sljit_get_local_base` instead. Exit gate
 unchanged: `[sljit][v128][abi][shapes]` flips from refused to `three_lanes` = 6.
 
+*Probe attempted again 2026-11-06 and still inconclusive, with a sharper
+question.* With six declared slots, `saveds = 6`, four scratches and
+`SLJIT_ENTER_FLOAT(3)`, `sljit_emit_enter` still aborts in
+`function_check_arguments` -- yet the arithmetic that check is assumed to do
+`scratches + saveds = 10 <= SLJIT_NUMBER_OF_REGISTERS = 12` passes. So the contract
+of `function_check_arguments` is **not** what this study has been modelling, and
+the next move is to read that function's body in `sljitLir.c` rather than keep
+varying the numbers. Note that the backend itself compiles five-slot signatures
+with `saveds = 5`, which is why the two-vector pins pass while this probe does
+not.
+
 *The name is the warning.* SLJIT is the **Stack-less** Just-In-Time compiler: it
 does not own a stack of the kind that carries arguments, so a callee reaching its
 caller argument area is exactly what one must not assume. That is why this stays
