@@ -1304,3 +1304,53 @@ That reframing is the deliverable of this step: **SLJIT's `v128` result and SLJI
 same project**, and the decision's results-buffer rule is what unifies them.
 
 Suite **21625 assertions in 731 cases**, green; `abi-check.sh` OK; Doxygen 0 warnings; tree clean.
+
+## 23. Step 2's template is already in the tree — and the trigger needs generalizing, not inventing (2026-11-06)
+
+Step 2 was scoped as "introduce the results buffer into SLJIT". Reading `WasmBase/WasmValue.hpp:70-131` and
+`LibjitModuleCompiler.cpp:540-575` shows the buffer **already exists** and is already documented:
+
+- `Callable::tailEntry`'s thunk takes `(VMContext*, void*, uint64_t* argSlots, uint64_t* resultSlots,
+  void* resultBuffer)`;
+- `TailCallState::resultBuffer` is the out-buffer, published once by the driver;
+- **a multi-result function returns via a trailing `void*` parameter** and returns void —
+  `docs/proposals/MULTI_VALUE.md` MV5, already implemented by LibJIT.
+
+So SLJIT does not need new machinery. It needs to **adopt an existing convention** — and the one thing the
+convention gets wrong for our purposes is its **trigger**:
+
+```cpp
+const bool hasResultBuffer = ft.results.size() > 1;   // LibJIT, everywhere
+```
+
+### The generalization, and why it is the right one
+
+The buffer is not about *count*; it is about **a result that does not fit one return word**. Multi-value is the
+case that first forced it; a `v128` is the same case with one element:
+
+```cpp
+// contract predicate, backend-agnostic (WasmBase):
+//   a result tuple needs the out-buffer when it has more than one element,
+//   or when any element is wider than one return word (v128).
+bool needsResultBuffer(const FuncType& ft);
+```
+
+With that predicate, `v128`-result support is **the multi-value path applied to a single 16-byte value**: the
+signature gains a trailing `void*`, the callee writes 16 bytes at that address, the caller supplies it. Nothing
+about registers, nothing about a second return register, nothing per-backend except where the 16 bytes land.
+
+### This unifies the decision with MV5 — the strongest result of the session
+
+`V128_SIGNATURE_DECISION.md` §28's results rule ("a `v128` result goes through the results buffer") and MV5
+("a multi-result tuple is written into the caller's buffer") are **the same rule**, because a `v128` is a tuple
+of one that does not fit. That is why no backend needs a divergent return path, and why "v128 returns are
+permanently deferred" was never a property of the ABI — only of the *trigger* the implementations chose.
+
+### Step 2, restated as an executable brief
+
+1. Add `needsResultBuffer(ft)` to `WasmBase` (replacing LibJIT's three inline `results.size() > 1` sites).
+2. SLJIT: emit the trailing `void*`, write the 16 bytes at it, `sljit_emit_return` with `RET_VOID`.
+3. SLJIT caller side: pass the buffer in `dispatchCall`.
+4. Pin: a `v128`-result fixture, both backends, appended to `v128_boundary_order.wasm`'s module.
+
+Suite **21625 assertions in 731 cases**, green; `abi-check.sh` OK; Doxygen 0 warnings; tree clean.
