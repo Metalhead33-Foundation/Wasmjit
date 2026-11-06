@@ -479,3 +479,44 @@ rather than a copy of it.
 
 It also removed the last hand-written `2` from the ABI path: the number now lives in exactly one place,
 where the decision note's prose points.
+
+## 14. Emitter unification: the complete edit list (2026-11-06)
+
+This is the gate to backend conversion, and it is a *single* commit because three tests generate the C
+header, compile it with gcc **and run a generated conformance program against it**. Splitting it
+produces exactly the failure the tests are there to catch — demonstrated once, reverted once (§11).
+
+### The inventory, with line numbers
+
+| File | Sites | Change |
+|---|---|---|
+| `Tools/Bindings/EmitShared.cpp` | 205, 468, 577 (`ValueKind::V128` → `"wasm_v128"`) | map to **two** parameter types, not one |
+| | 416 (the C typedef) | `{ uint64_t lo; uint64_t hi; }` |
+| | 372, 481, 915, 1044 (the four `params` loops) | emit a vector parameter as **two scalars** |
+| `Tools/Bindings/EmitDynamic.cpp` | 25, 111, 232, 292, 351 | five type spellings: `ctypes.c_ubyte * 16`, `uint8_t[16]`, `ubyte[16]`, `array[16, uint8]`, `StaticArray(UInt8, 16)` — each must become the language's `uint64` pair |
+| `Tools/Bindings/EmitRust.cpp` | 30 | `pub struct wasm_v128 { pub lo: u64, pub hi: u64 }` |
+| `Tools/Bindings/EmitWeb.cpp` | the kind→type map | same rule |
+| `Tools/Bindings/EmitCpp.cpp` | 287, 452 | **already canonical** (§11) |
+| `Test/BindingSchemaTests.cpp` | `write("main.cpp", mainSource)` (~135) | the conformance program's vector argument and its checks |
+| | 1439 | the pinned C++ typedef expectation — already updated |
+
+### Order inside the commit
+
+1. `EmitShared` typedef + kind→type + the four parameter loops (the C and generic paths).
+2. `EmitCpp` — verify the already-canonical declaration still matches what the shared path emits.
+3. `EmitDynamic`, `EmitWeb`, `EmitRust` — the language-specific spellings.
+4. `mainSource` in the test: construct two `uint64_t` per vector argument and check the same values.
+5. Regenerate and run: `[bindings]` must pass the compile-and-run gate, then the full suite.
+
+### The acceptance gate
+
+> `[bindings]` passes **including the gcc compile-and-run conformance cases**; the generated C header
+declares a vector parameter as two `uint64_t`; and `[callcache][v128][abi][parity]` still passes, so the
+cache, the generated header and the compiled function all speak one convention.
+
+### Why this is written rather than started
+
+It is five files plus a generated program, and its own gate iterates (generate → compile → run). A
+half-applied version leaves either a red tree or a green tree that no longer tests the convention — the
+two outcomes this phase exists to avoid. The inventory above is what makes the next pass a single
+mechanical sweep instead of a second investigation.
