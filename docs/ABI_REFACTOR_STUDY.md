@@ -1799,3 +1799,54 @@ sites 1-3 from §31 unchanged.
 
 Suite **21642 assertions in 733 test cases**, green (up 6 assertions and 1 case from the split test);
 `[headerdoc]` green; `[docs]` green; `abi-check.sh` OK; Doxygen 0 warnings; tree clean.
+
+## 33. Attempt 6: call sites converted, and the failure moved to a narrower place (2026-11-06)
+
+Everything §32 called for was implemented: a shared `appendNativeCallArgs` / `nativeParamSlotCount` pair, all **six**
+`jit_insn_call*` sites converted to push-back argument building, both `translateFunctionSignature` overloads
+changed, the `address_of` prologue, and the `paramSlots` driver.
+
+### Results
+
+| Gate | Result |
+|---|---|
+| `[libjit][v128][order]` | **passes** |
+| `[sljit][v128][order][abi]` | passes |
+| full suite | **33 failures -- all SIMD spec suites** |
+
+The 33 failures are *not* the call paths that were converted. Two details pin it down:
+
+- the failing set is entirely `simd_*` and `relaxed_*` suites (`simd_select`, `simd_align`, `simd_bitwise`,
+  `simd_i8x16_arith` ...), not the `call`/`call_indirect` suites a call-site bug would hit;
+- `simd_select` reports **"terminated by signal 11 after 0 passing commands"** -- it dies before completing a
+  single command, i.e. at instantiation, not in the middle of a call chain.
+
+### The hypothesis this leaves, and why it is testable
+
+The split helper does:
+
+```cpp
+jit_value_t temp = jit_value_create(function, jit_value_get_type(value));
+jit_insn_store(function, temp, value);
+```
+
+The IR test that proved this used a **parameter** as `value`, which is addressable. A SIMD body typically
+produces a vector from `v128.const` -- a **struct constant**, not an addressable value. Storing a struct constant
+into a temp, then taking the temp's address, is the one step still unverified, and it is exactly what the failing
+suites exercise and the passing ones do not.
+
+### The next step is one test, not a redesign
+
+Extend `[libjit][v128][ir]` with a case that does `jit_value_create_nint_constant`-style aggregate constant ->
+`jit_insn_store(temp, constant)` -> `address_of` -> two loads. If that fails (or produces junk), the helper must
+change shape rather than the ABI: candidates are materialising the constant through
+`jit_insn_store_relative(address, 0/8, ...)` on a temp-taken address directly (no whole-struct `store`), or
+keeping a 16-byte address-based carrier for vector values inside the dispatcher.
+
+Either way the conclusion is the same as §19's: **the representation is not in question**. Only the *conversion*
+route is, and it is now a single IR question with a five-line test.
+
+### State
+
+Backend changes reverted again; the two `[libjit][v128][ir]` tests and every finding above are kept.
+Suite **21642 assertions in 733 test cases**, green; `abi-check.sh` OK; Doxygen 0 warnings; tree clean.
