@@ -10,6 +10,8 @@
 #include <span>
 #include <vector>
 
+#include <jit/jit.h>
+
 #include "helper.hpp"
 #include "TestStore.hpp"
 #include "LibJit/LibJitTypeTranslation.hpp"
@@ -134,3 +136,53 @@ TEST_CASE("GC layout: the JIT's struct field offsets match the shared layout hel
 	}
 }
 
+
+// ── The v128 boundary primitive sequence, at the IR level ──────────────────
+//
+// The backend's prologue has to turn two 64-bit boundary words into a 16-byte
+// aggregate, and libjit gives no `extract` and no byte-cast. This test pins the
+// only route the API supports: take the *address* of the aggregate and store
+// each word through it (docs/ABI_REFACTOR_STUDY.md §29/§31). Storing «relative
+// to the struct value» is what crashed attempt 4.
+TEST_CASE("libjit: two ulong words assemble a 4x i32 aggregate through an address",
+"[libjit][v128][ir]")
+{
+jit_context_t context = jit_context_create();
+REQUIRE(context != nullptr);
+jit_context_build_start(context);
+
+jit_type_t params[2] = {jit_type_ulong, jit_type_ulong};
+jit_type_t signature =
+jit_type_create_signature(jit_abi_cdecl, jit_type_int, params, 2, 1);
+jit_function_t function = jit_function_create(context, signature);
+
+// The canonical stored form: 16 bytes, 16-byte aligned (WasmGcHeader.hpp).
+jit_type_t fields[4] = {jit_type_int, jit_type_int, jit_type_int, jit_type_int};
+jit_type_t aggregate = jit_type_create_struct(fields, 4, 0);
+jit_type_set_size_and_alignment(aggregate, 16, 16);
+
+jit_value_t lo = jit_value_get_param(function, 0);
+jit_value_t hi = jit_value_get_param(function, 1);
+jit_value_t slot = jit_value_create(function, aggregate);
+jit_value_t address = jit_insn_address_of(function, slot);
+REQUIRE(jit_insn_store_relative(function, address, 0, lo) != 0);
+REQUIRE(jit_insn_store_relative(function, address, 8, hi) != 0);
+
+// Return lane 1: bits 32..63 of the low word.
+jit_value_t lane = jit_insn_load_relative(function, address, 4, jit_type_int);
+jit_insn_return(function, lane);
+jit_context_build_end(context);
+
+REQUIRE(jit_function_compile(function) == JIT_RESULT_OK);
+void* entry = nullptr;
+REQUIRE(jit_function_compile_entry(function, &entry) == JIT_RESULT_OK);
+REQUIRE(entry != nullptr);
+
+// lanes {11, 12, 13, 14}, low word first.
+const std::uint64_t loWord = 11ull | (12ull << 32);
+const std::uint64_t hiWord = 13ull | (14ull << 32);
+using Fn = std::int32_t (*)(std::uint64_t, std::uint64_t);
+CHECK(reinterpret_cast<Fn>(entry)(loWord, hiWord) == 12);
+
+jit_context_destroy(context);
+}

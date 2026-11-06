@@ -1695,3 +1695,67 @@ and one pin. The next attempt starts from the two remaining routes, both of whic
 `assembleAggregate` helper pair §29 calls for -- which is why that helper is the first artefact, not the last.
 
 Suite restored to **21629 assertions in 731 cases**, green; tree clean.
+
+## 31. Deep dive: libjit's primitives, a permanent IR test, and attempt 5's exact frontier (2026-11-06)
+
+Reading libjit's own headers (`/usr/local/include/jit/`) answered the questions this study had been guessing at.
+
+### What libjit actually provides
+
+| Primitive | Exists? | Signature / meaning |
+|---|---|---|
+| `jit_insn_shl` / `shr` / `ushr` | **yes** | `(func, value1, value2)` -- §20's open unknown is closed: halves can be shifted |
+| `jit_insn_extract` | **no** | there is no struct-field extraction in the public API |
+| `jit_insn_store_relative` | yes | `(func, dest, offset, value)` -- **infers the type from `value`**, no type argument |
+| `jit_insn_load_relative` | yes | `(func, value, offset, type)` -- **takes the type** |
+| `jit_insn_address_of` | yes | `(func, value)` |
+
+That asymmetry is the crux: **writing is untyped, reading is typed.** Storing a `ulong` at offset 0
+"relative to a struct value" asks libjit to reinterpret an `{int, int, int, int}` as an 8-byte write with no type
+to check against -- which is what crashed attempt 4. Storing through an **address** is an ordinary memory write
+and is well defined.
+
+### A permanent unit test for the sequence
+
+`Test/LibJitBackendTests.cpp` gains `[libjit][v128][ir]`, which builds the sequence directly: two `jit_type_ulong`
+params, a 16-byte/16-aligned aggregate temp, `jit_insn_address_of`, two `store_relative` calls, one
+`load_relative` of lane 1, and a call with `{11, 12, 13, 14}` expecting **12**. **7 assertions, green.**
+
+The file's own header says it exists to "reach into a backend's type/IR objects to validate the LibJIT lowering
+itself", which is exactly what this is: the boundary primitive, pinned at the IR level, independent of the
+backend's plumbing.
+
+### Attempt 5: two of three obstacles gone, and a second signature overload found
+
+With the proven sequence, sites 1-3 were re-applied, plus one discovery the earlier attempts never made:
+**there are two `translateFunctionSignature` overloads** -- `(const WASM::FuncType&)` at line 196 and
+`(WASM::CoreTypeView)` at line 304 -- and the **`CoreTypeView` one is what fills `translatedTypes`**. Attempts 1-4
+patched the former and the compiler used the latter, which is why the signature seemed not to change (the crash
+that revealed it was `jit_value_get_param` returning **NULL** for a slot that did not exist).
+
+With both overloads changed, the prologue assembling through `address_of`, and the driver walking `paramSlots`:
+
+| Gate | Result |
+|---|---|
+| `[libjit][v128][order]` | **passes** -- both export orders |
+| `[sljit][v128][order][abi]` | passes |
+| **full suite** | **33 failures**: `SIGSEGV` in several spec suites, plus one struct-field mismatch |
+
+So the *boundary* is right and the *call sites* are not: any function that passes a `v128` to another wasm
+function still hands over the aggregate while the callee now expects two words. That is site 4 of §29, and it is
+now measured rather than predicted -- **33 tests' worth of proof that the producer must not land before the
+consumer** (§24's rule, third instance).
+
+### State
+
+Backend changes reverted; the **IR test kept**. Suite **21636 assertions in 732 test cases**, green (up 7
+assertions and 1 case from the new test). `abi-check.sh` OK; Doxygen 0 warnings; tree clean.
+
+### What the next attempt must do, in order
+
+1. `splitAggregate(value)` -- `address_of` + two `load_relative(..., jit_type_ulong)`, used by nothing yet.
+2. Convert **every** call site's `callArgs` construction to use it (there are several: `call`, `call_indirect`,
+   imports, the direct tail-call fallback).
+3. Then re-apply sites 1-3 unchanged -- both overloads, the `address_of` prologue, the `paramSlots` driver.
+
+The prologue half is no longer research; it is a known-good sequence with a test behind it.
