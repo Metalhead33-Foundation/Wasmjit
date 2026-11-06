@@ -775,3 +775,27 @@ the right one: the only place the two ABIs differ is *how the value travels*, ne
 
 Not implemented; specified against line anchors so the next pass edits rather than investigates. Suite
 **21591 assertions in 728 cases**, green, tree clean.
+
+### Correction to §16's inventory: the tree kept the canonical spelling (2026-11-06)
+
+The §16 table said the guest-facing emitters had been "reverted to the committed state". Verifying the tree
+before the next edit shows otherwise: the committed state *is* canonical, because the revert I attempted was
+against `EmitShared.cpp`/`EmitRust.cpp` while those files' committed content already carried the two-word
+spelling from the earlier commits. Current, measured state:
+
+| Site | In the tree today | Per the consumer rule it should be |
+|---|---|---|
+| `EmitCpp` (`cpp-typedefs`, `cpp-source`) | `{ uint64_t lo; uint64_t hi; }` | **correct** — WasmJIT-facing |
+| `EmitShared:416` C header typedef | `{ uint64_t lo; uint64_t hi; }` | **wasm spelling** (guest-facing) |
+| `EmitShared:486` Rust parameters | `argN_lo: u64, argN_hi: u64` | **wasm spelling** (guest-facing) |
+| `EmitRust` struct | see above | **wasm spelling** (guest-facing) |
+
+The suite is green with the guest-facing emitters on the native spelling because **no fixture in the
+binding tests passes a `v128` across that boundary** — the conformance schemas are scalar. So the rule is
+violated in the tree and *undetectable by the current tests*, which is the same class of gap as B1: a
+correct-looking green suite over a specification the tests never exercise.
+
+**What that changes about the next step:** before moving the guest-facing emitters, a **fixture is needed
+that puts a vector through the generated binding** — otherwise the move cannot be verified and the
+"translation layer" would be fixing a path nothing tests. That fixture is now the first task, ahead of the
+emitter edits and ahead of the adapter conversion, because it is what makes both observable.
