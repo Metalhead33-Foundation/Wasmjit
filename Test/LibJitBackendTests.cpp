@@ -702,3 +702,31 @@ CHECK(got == 6);
 
 jit_context_destroy(context);
 }
+
+// The LibJIT deviation, pinned at the type level so it needs no module and
+// cannot disturb another backend's fixtures: a v128 parameter is spelled as ONE
+// 16-byte aggregate, not the canonical two words
+// (docs/backends/LIBJIT_ARGUMENT_DEFECT.md section 8.1).
+TEST_CASE("LibJIT spells a v128 parameter as one aggregate", "[libjit][v128][abi]")
+{
+WASM::StorageType vector;
+vector.isPacked = false;
+vector.val.opcode = WASM::ValueTypeCode::V128;
+vector.val.heapType = -1;
+
+WASM::StorageType scalar;
+scalar.isPacked = false;
+scalar.val.opcode = WASM::ValueTypeCode::I32;
+scalar.val.heapType = -1;
+
+WASM::FuncType type;
+type.params.assign(3, vector);
+type.results.push_back(scalar);
+
+LibJIT::LibJitTypeTranslator translator;
+jit_type_t signature = translator.translateFunctionSignature(type);
+REQUIRE(signature != nullptr);
+// VMContext* plus one aggregate per vector: four parameters, not seven.
+CHECK(jit_type_num_params(signature) == 4u);
+CHECK(jit_type_get_size(jit_type_get_param(signature, 1)) == 16u);
+}
