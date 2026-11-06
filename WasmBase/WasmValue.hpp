@@ -156,10 +156,12 @@ inline bool tailCallSlotsSupported(const FuncType& ft)
 //! The caller-supplied out-buffer is not about *count*: it is about a result
 //! that does not fit a single return register. A multi-result tuple is the case
 //! that first forced it (docs/proposals/MULTI_VALUE.md MV5); a `v128` is the
-//! same case with one element, because 16 bytes never fit one word. Keeping the
-//! two under one predicate is what lets a backend support a `v128` result
-//! through the path it already has for multi-value, with no divergent return
-//! mechanism (docs/ABI_REFACTOR_STUDY.md §23).
+//! same case with one element, because 16 bytes never fit one word.
+//!
+//! **No backend consumes this yet.** Each backend states its own result spelling
+//! and the call cache follows it; the predicate records the rule that unifies
+//! them for the day one of them is converted
+//! (`docs/backends/V128_SIGNATURE_DECISION.md`, "Compliance registry").
 /** \brief Tests whether a result tuple must be returned through the caller-supplied out-buffer. \param ft Function signature to inspect. \return true when the tuple has more than one element or any element is v128. */
 inline bool needsResultBuffer(const FuncType& ft)
 {
