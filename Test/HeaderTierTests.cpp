@@ -282,4 +282,27 @@ TEST_CASE("a v128 parameter occupies two C argument slots", "[v128][abi][layout]
 	// starts at slot 3, not 2. This assertion is the whole point of the mapping.
 	CHECK(slots[2].firstSlot == 3);
 	CHECK(slots[2].slots == 1);
+
+	// Every kind answers, so no caller has to remember a default.
+	CHECK(WASM::argSlotCount(ValueKind::Void) == 1);
+	CHECK(WASM::argSlotCount(ValueKind::F32) == 1);
+	CHECK(WASM::argSlotCount(ValueKind::F64) == 1);
+
+	// A vector in first position still starts at slot 0 and shifts the next.
+	const ValueKind vectorFirst[] = {ValueKind::V128, ValueKind::I32};
+	const std::vector<WASM::ArgSlot> first = WASM::mapArgSlots(vectorFirst);
+	REQUIRE(first.size() == 2);
+	CHECK(first[0].firstSlot == 0);
+	CHECK(first[0].slots == 2);
+	CHECK(first[1].firstSlot == 2);
+
+	// Two vectors are four slots, and the second one does not start at 1.
+	const ValueKind twoVectors[] = {ValueKind::V128, ValueKind::V128};
+	const std::vector<WASM::ArgSlot> both = WASM::mapArgSlots(twoVectors);
+	REQUIRE(both.size() == 2);
+	CHECK(both[0].firstSlot == 0);
+	CHECK(both[1].firstSlot == 2);
+
+	// No parameters is not an error: the context pointer is still argument 0.
+	CHECK(WASM::mapArgSlots({}).empty());
 }
