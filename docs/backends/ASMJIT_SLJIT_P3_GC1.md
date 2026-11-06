@@ -1232,3 +1232,85 @@ The fixture is written and was discarded with the revert; it only needs recreati
 Suite **21464 assertions in 719 cases**, green; `[headerdoc]` green; Doxygen 0 warnings.
 Uncommitted: `WasmModuleInstance.{hpp,cpp}` (the predicate), `Sljit/SljitOpcodeDispatcher.cpp`
 (the helper), this report.
+
+## 29. Gate C step 1, second attempt: three findings, all worth keeping (2026-11-06)
+
+### What landed
+
+`ModuleInstance::typeIdIsSubtype` and the SLJIT helper `sljitTypeIsSubtype` both compile
+and are in the tree. Nothing calls them yet, so they are **inert**: the subtype bug is
+still live, exactly as at the end of §28. That is stated plainly because an unused
+predicate looks like a fix in a diff.
+
+### Finding 1: the §28 lesson worked
+
+The rewrite was redone with **function-scoped** anchors (`body_range(name)` then edit inside
+it). All three sites resolved correctly on the first try, and the file compiled. The §28
+diagnosis was right, and the technique is now proven.
+
+### Finding 2: a supertype must be declared open
+
+The fixture was rejected at load with `type section: a supertype must not be final`.
+A type used as a supertype must be declared `(sub (struct …))`, not `(struct …)` — the bare
+form is *final* and cannot be extended. So the fixture needs:
+
+```wat
+(type $s (sub (struct (field i32))))                  ;; open, extendable
+(type $t (sub $s (struct (field i32) (field i32))))   ;; subtype of $s
+```
+
+Worth recording: this is a validation rule, not a backend limitation, and it will bite the
+next fixture author the same way.
+
+### Finding 3: the predicate answers `false` for a genuine subtype
+
+With the fixture corrected the test ran, and `test_super` returned **0** where the subtype
+relation requires **1**. So `typeIdIsSubtype($t, $s)` is wrong, and the rewiring is a
+behavioural no-op for the very case it exists to fix.
+
+Three candidate causes, in the order worth checking:
+
+1. **`typeIndexForId` may not accept ids produced by `typeId(LocalTypeIdx)`.** If it returns
+   `nullopt`, the predicate returns `false` for every pair. This is the cheapest to check
+   and the most likely.
+2. **`Module::isSubtype` may expect canonical/store-scoped indices**, not module-local ones.
+   Its documentation says module-local, but `TypeIdx` is a bare `unsigned int`, so the two
+   are interchangeable to the compiler and silent mixing is possible.
+3. **A `sub` relation may need the store to have canonicalised both types** before
+   `isSubtype` sees them.
+
+### Why the rewiring was reverted, not shipped
+
+With the predicate wrong, the rewiring could not fix anything — and it *did* break four
+pre-existing tests. Two plausible reasons, both worth knowing:
+
+- `emitRefCast` now calls a helper on the **success** path, which clobbers `R0`–`R3`. I
+  reloaded the object pointer into `R1`, but any later use of `R2`/`R3` in that function is
+  now reading garbage. The previous code called nothing on the success path, so it had no
+  reload to get wrong.
+- `ref.test` used `R2` for the result and `R3` for the actual id; the helper returns in
+  `R0`, and the result copy is one instruction later — any interleaving I mis-ordered shows
+  up as a wrong boolean, not a crash.
+
+So the dispatcher is back to exact identity and the suite is green at
+**21464 assertions in 719 cases**.
+
+### The post-mortem lesson this round produced
+
+Across §25 (Gate D sweep), §28 (first Gate C attempt) and §29 (second attempt) the same
+failure shape appeared three times, while every **additive** change in this whole arc
+landed first time:
+
+| Change kind | Examples | Outcome |
+|---|---|---|
+| **Additive** — a new dispatcher, helper, core method, fixture | `array.new_fixed`, `new_default`, `fill`, `copy`, `new_data`, the stack-height guard, this predicate | landed, green, first build |
+| **Rewiring** — replacing existing working code in place | Gate D sweep, `ref.test`/`ref.cast` switch | broke, twice, reverted |
+
+**The rule to carry forward: an additive change can be trusted to a build; a rewiring
+change needs a failing test at the seam *before* it is written.** For Gate C that means a
+core unit test that calls `typeIdIsSubtype` on a parsed module with a `sub` relation — no
+backend, no codegen, no register pressure — asserting `true` for `($t, $s)` and `false` for
+`($s, $t)`. Fix the predicate against that test, and only then touch a dispatcher.
+
+That is the same contract-first discipline that made the layout work cheap: settle the
+contract with a test, then let the backends follow.

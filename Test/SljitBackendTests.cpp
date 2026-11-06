@@ -2714,3 +2714,4 @@ TEST_CASE("both backends lower array.new_data", "[sljit][asmjit][parity][gc]")
 	same("data_zero", 0);
 	trapOf("data_oob", WASM::TrapKind::OutOfBoundsMemoryAccess);
 }
+
