@@ -461,3 +461,21 @@ literal, because a literal layout is stdlib- and platform-specific. The comment 
 "strengthens" them into a number that fails on the next toolchain. The one literal that *should*
 exist — a generated offsets baseline checked by `abi-check.sh` — remains the follow-up, and is the
 honest generalisation: **a symbol gate needs a layout companion, or PODs are unguarded by construction.**
+
+### The canonical mapping has its first consumer (2026-11-06)
+
+`WasmCallCache.cpp` no longer tests `== ValueTypeCode::V128` and pushes a literal `2`. Both loops —
+the argument-type expansion and the value marshalling — now ask the core:
+
+```cpp
+const std::uint32_t slots = argSlotCount(valueKindOf(parameter.value.opcode));
+```
+
+That matters beyond tidiness. A mapping that exists but has no consumer is an **untested claim**; a
+mapping with one consumer is a *contract*. The call cache is the right first consumer because it is the
+only place today that already had to know the rule, and its parity case (`[callcache][v128][abi][parity]`,
+cache versus compiled pointer, including a scalar-before-vector export) now exercises the shared function
+rather than a copy of it.
+
+It also removed the last hand-written `2` from the ABI path: the number now lives in exactly one place,
+where the decision note's prose points.

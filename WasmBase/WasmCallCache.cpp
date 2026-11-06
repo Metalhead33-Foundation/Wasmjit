@@ -1,5 +1,7 @@
 #include "WasmCallCache.hpp"
 
+#include "WasmBase/WasmBackendAbi.hpp"
+
 #include "WasmModule.hpp"
 #include "WasmStore.hpp"
 #include "WasmType.hpp"
@@ -112,13 +114,15 @@ ModuleCallCache::ModuleCallCache(ModuleInstance& instance)
 		entry.argTypes.push_back(&ffi_type_pointer); // VMContext*
 		for (const CanonStorageType& parameter : view.funcParams()) {
 			entry.paramKinds.push_back(parameter.value.opcode);
-			if (parameter.value.opcode == ValueTypeCode::V128) {
-				// The canonical convention is two scalar words, low first: an
-				// aggregate is passed *by reference* on MS x64 (decision note §28).
-				entry.argTypes.push_back(&ffi_type_uint64);
-				entry.argTypes.push_back(&ffi_type_uint64);
-			} else {
+			const std::uint32_t slots = argSlotCount(valueKindOf(parameter.value.opcode));
+			if (slots == 1) {
 				entry.argTypes.push_back(ffiTypeFor(parameter));
+			} else {
+				// `argSlotCount` decides how many C arguments a kind occupies; a vector
+				// occupies two scalar words (decision note §28), because a 16-byte
+				// aggregate is passed by reference on MS x64.
+				for (std::uint32_t slot = 0; slot < slots; ++slot)
+					entry.argTypes.push_back(&ffi_type_uint64);
 			}
 		}
 		if (entry.multiResult)
@@ -169,13 +173,14 @@ void ModuleCallCache::call(const ModuleFfiEntry& entry, void* result,
 	arguments[0] = &context;
 	std::size_t slot = 1; // argument 0 is the VMContext*
 	for (std::size_t i = 0; i < entry.paramCount; ++i) {
-		if (entry.paramKinds[i] == ValueTypeCode::V128) {
-			// Two argument slots, low word then high word.
-			auto* bytes = static_cast<std::uint8_t*>(args[i]);
-			arguments[slot++] = bytes;
-			arguments[slot++] = bytes + sizeof(std::uint64_t);
-		} else {
+		const std::uint32_t count = argSlotCount(valueKindOf(entry.paramKinds[i]));
+		if (count == 1) {
 			arguments[slot++] = args[i];
+		} else {
+			// A vector is handed over as its low word, then its high word.
+			auto* bytes = static_cast<std::uint8_t*>(args[i]);
+			for (std::uint32_t word = 0; word < count; ++word)
+				arguments[slot++] = bytes + word * sizeof(std::uint64_t);
 		}
 	}
 	void* resultBuffer = result;
