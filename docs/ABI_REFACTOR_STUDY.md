@@ -1134,3 +1134,43 @@ exactly what applying B to one backend without the lane-op rewrite looks like.
 
 **Consequence for unit 2+3:** the specified fix stands — keep LibJIT's `{ int, int, int, int }` and split each
 boundary word into two 32-bit halves in the prolog. No representation change anywhere.
+
+## 20. Second ordering correction: units 2, 3 and 4 are one unit (2026-11-06)
+
+The pin's exports make **no calls**, yet splitting the signature crashed it. That rules out the exports'
+bodies and points at the path every invocation traverses: LibJIT's **driver entry**, which `Callable::fnPtr`
+is set to for compiled functions and which reads parameters by index:
+
+```cpp
+jit_value_get_param(driver, paramCount + 1)   // LibjitModuleCompiler.cpp:465
+```
+
+With two slots per vector parameter, that index is wrong for **every function in the module**, whether or not
+it calls anything. So the driver/thunk is not "subtask 4, afterwards" — it is on the same critical path as the
+signature:
+
+| Unit | Contents | Why indivisible |
+|---|---|---|
+| **2+3+4** | signature split · prolog aggregate synthesis · driver/thunk indexing | the driver is on every call path, so a split signature breaks it before any export runs |
+
+Both corrections to this split have the same cause, and it is worth naming as a rule: **a subtask boundary
+drawn through edits that are simultaneous by construction produces an unreachable gate.** The first correction
+merged 2 and 3; this one merges 4 as well. The remaining sequence is therefore two units, not four:
+
+1. **2+3+4** — signature, prolog, driver/thunk; gate: pin green *and* `[libjit]` green.
+2. **SLJIT**, then **AsmJit**, each against the same pin extended per backend.
+
+### The implementation, now fully specified
+
+With the aggregate kept as `{ int, int, int, int }` (§19), the prolog converts **at the boundary only**:
+
+- parameter `lo` → aggregate offsets 0 and 4; parameter `hi` → offsets 8 and 12;
+- the halves come from shifts of each `jit_type_ulong` parameter, not from re-typing anything;
+- the driver duplicates the same walk so its index arithmetic matches;
+- nothing in the SIMD path changes, because the aggregate's shape and lane offsets are untouched.
+
+That is the third attempt's complete brief. Two attempts failed for reasons now understood; this one has no
+unknown left except whether libjit's shift insns behave as expected on the halves — which the pin answers in
+one build.
+
+Suite **21618 assertions in 730 cases**, green; `abi-check.sh` OK; Doxygen 0 warnings; tree clean.
