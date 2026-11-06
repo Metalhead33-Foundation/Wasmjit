@@ -96,6 +96,31 @@ suite is evidence of *what it tests*, never of what it does not.
    §36's plan restores that capability: cap the declared saved registers, and
    read the overflow slots from the incoming stack. The offset rule is per-target
    and must be verified, not assumed -- a wrong offset is a silent miscompile.
+
+   **Status 2026-11-06: not started, deliberately.** The two halves are not
+   separable: capping `savedCount` without a correct stack read turns a clean
+   refusal into a wrong answer, which is strictly worse. So the unit starts with
+   a probe, not an edit.
+
+   *Probe design (one stand-alone program, no backend changes).* Build a
+   seven-integer-argument function with SLJIT directly, return
+   `SLJIT_MEM1(SLJIT_SP)` at a candidate offset, and sweep the offset until the
+   call `fn(nullptr, 1, 2, 3, 4, 5, 42)` returns `42`. That gives:
+
+   * the offset of the **first stack-passed word** relative to `SLJIT_SP` after
+     `sljit_emit_enter(..., local_size)`,
+   * whether it moves with `local_size` (so the formula can be written in terms
+     of the frame the backend already computes),
+   * and whether a *scalar* stack word and the high half of a `v128` behave
+     identically -- the `r9` investigation taught that "plausible" is not
+     "measured".
+
+   Only then does `beginFunction` change: cap the declared saved registers at
+   `SLJIT_NUMBER_OF_SAVED_REGISTERS`, and for each parameter whose slots lie
+   beyond the budget, load from the measured offset instead of `SLJIT_S(n)`. The
+   exit gate is the existing `[sljit][v128][abi][shapes]` test flipping from
+   "refused" to "`three_lanes` returns 6".
+
 3. **libjit defect.** Report upstream with the closing experiment from the defect
    note (disassemble the entry, watch `r9` before the first store). If fixed,
    `D-L1` can be retired and the rehearsed patch set re-applied.
