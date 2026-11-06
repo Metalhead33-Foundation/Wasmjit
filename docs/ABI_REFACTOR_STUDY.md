@@ -1036,3 +1036,33 @@ is why nothing has ever exercised this adjacency.
 The second export is the important one: after the split, the scalar's own index moves, so a change that only
 fixes the vector's index passes the first export and fails the second. That is the pin doing for P4 what it
 did for the emitters — defining success before the edit exists.
+
+### Correction to the P4 split: subtasks 2 and 3 are one commit (2026-11-06)
+
+The split said subtask 2 (signature) had the gate "pin still green". **That gate is unreachable.**
+
+Splitting the signature changes what `jit_value_get_param(fn, index)` returns: a `v128` parameter becomes
+two slots, so every *subsequent* parameter shifts. If the prolog still reads one parameter per index — which
+it does, `for (i) locals.push_back(jit_value_get_param(fn, i + 1))` — then any function with a vector
+before another parameter reads garbage, and the pin fails on its **second** export while its first still
+passes. That is precisely the failure the pin was built to expose, and it means the two edits are one unit:
+
+| Unit | Change | Gate |
+|---|---|---|
+| **2+3** | signature split **and** the prolog's aggregate synthesis | pin green **and** `[libjit]` green |
+| 4 | import thunk | full suite + A/B |
+
+The lesson is the plan's, not the code's: **a subtask boundary drawn through a pair of edits that must be
+simultaneous produces an unreachable gate** — and an unreachable gate is worse than no gate, because it
+tempts a partial landing that the suite would not catch until the pin was already written.
+
+### Why this is where the session stops
+
+Unit 2+3 is: change the signature construction, and in the prolog build a 16-byte aggregate from two scalar
+parameters for every vector parameter (LibJIT's aggregate-construction path, plus loading each half into the
+right field at the right offset). It touches the prolog of *every* LibJIT function and its verification is a
+compile-run loop through libjit's own IR. That is not a change to start with no verify budget left, and the
+honest close is the same one this arc has used five times: specification and pin in the tree, edit not
+started.
+
+Suite **21618 assertions in 730 cases**, green; `abi-check.sh` OK; Doxygen 0 warnings; tree clean.
