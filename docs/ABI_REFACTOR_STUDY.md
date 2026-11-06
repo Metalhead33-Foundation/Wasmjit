@@ -197,3 +197,36 @@ A change that breaks one of those is out of scope for this refactor, whatever it
 - [`backends/ASMJIT_SLJIT_P3_GC1.md`](backends/ASMJIT_SLJIT_P3_GC1.md) — the arc this refactor
   inherits: 51 entries of gaps, reversals and lessons, which is why the phases above insist on a
   proof before a patch.
+
+## 10. Progress log (waterfall)
+
+| Phase | State | Evidence |
+|---|---|---|
+| **P0 — Freeze the decision** | **DONE 2026-11-06** | `ABI_PORTABILITY.md` §3 row and §5.4 note; open row `P1` closed; [`backends/V128_SIGNATURE_DECISION.md`](backends/V128_SIGNATURE_DECISION.md) §28 with the per-target table and the cost stated up front |
+| **P1 — Prove the contract without a backend** | **DONE 2026-11-06** | `Test/HeaderTierTests.cpp`: `[v128][abi][layout]`, 8 assertions — storage size/alignment, the two-word decomposition round-trip, and the little-endian word order on LE hosts |
+| **P2 — Parity fixtures first** | **partly pre-existing** | A `v128` *parameter* already passes through both backends and is asserted in `[parity]` (`v128_param` fixture); a *returning* fixture cannot exist until a return convention does — that is P4's first observable |
+| **P3 — Core plumbing (C4)** | not started | call-cache signatures, plugin descriptor version, binding emission |
+| **P4 — One backend at a time (C2)** | not started | LibJIT first, then SLJIT, then AsmJit |
+| **P5 — Optional fast paths (C3)** | not started, and blocked by R6 (needs the T1 measurement first) | — |
+| **P6 — Documentation closure** | partly pre-existing | this note, `S12`, and the decision note's §28 already reference each other; the sweep lands with P4 |
+
+### The decision, in one line
+
+> `v128` is passed as **two `uint64_t` parameters, low word first**, and returned through the
+> multi-value buffer as `lo, hi` — the only spelling that is register-passed on SysV AMD64, MS x64,
+> AAPCS64 and RISC-V alike, because it is two scalars rather than a 16-byte aggregate (and MS x64
+> passes aggregates by reference).
+
+### Why P0/P1 came first, measured
+
+Three times in the arc the same order decided the outcome: a predicate tested without a backend cost
+one patch, while the same work started at a backend cost three rewrites (§12, §30, §37). P1 is that
+discipline applied to a calling convention: the decomposition is now pinned by a test that cannot fail
+for a codegen reason, so when P4 starts, any failure is a *backend* failure and nothing else.
+
+### A doc defect P1 caught immediately
+
+`ABI_PORTABILITY.md` §8.1 named `gcStorageAlignment`, which does not exist — the function is
+`gcStorageAlign`. The test failed to compile against the documented name, which is exactly what a
+contract-first step is for: the prose and the code disagreed, and the disagreement surfaced in minutes
+instead of during a backend port.

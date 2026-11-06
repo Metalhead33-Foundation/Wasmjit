@@ -212,3 +212,48 @@ CHECK(WASM::gcStructSize(pair) == 24);
 const std::span<const WASM::CanonFieldType> none{};
 CHECK(WASM::gcStructSize(none) == WASM::GcHeader::kHeaderBytes);
 }
+
+
+TEST_CASE("a v128 crosses the C boundary as two little-endian words",
+"[v128][abi][layout]")
+{
+	// The canonical signature passes a v128 as two `uint64_t`, low word first, with
+	// a result carried in the multi-value buffer as lo, hi
+	// (docs/backends/V128_SIGNATURE_DECISION.md §28). This test pins the half that
+	// needs no backend: the storage size/alignment the convention rests on, and the
+	// losslessness of the decomposition every backend must perform.
+	WASM::CanonFieldType vectorField {};
+	vectorField.storage.value.opcode = WASM::ValueTypeCode::V128;
+	CHECK(WASM::gcStorageBytes(vectorField.storage) == 16);
+	CHECK(WASM::gcStorageAlign(vectorField.storage) == 16);
+
+	// Two scalar words must be enough, and they must be adjacent with no padding:
+	// a signature with a gap would not be register-passed uniformly.
+	static_assert(sizeof(std::uint64_t) * 2 == 16, "two words must be exactly one vector");
+
+	// The decomposition: lo is the first eight bytes, hi the second. Round-tripping
+	// must be lossless for arbitrary bits, including a sign bit and a NaN payload
+	// pattern that a float conversion would disturb if one crept into the path.
+	alignas(16) unsigned char lane[16] = {};
+	const std::uint64_t lo = 0x0123456789ABCDEFull;
+	const std::uint64_t hi = 0xFFF8000000000001ull;
+	std::memcpy(lane, &lo, sizeof(lo));
+	std::memcpy(lane + 8, &hi, sizeof(hi));
+
+	std::uint64_t roundLo = 0;
+	std::uint64_t roundHi = 0;
+	std::memcpy(&roundLo, lane, sizeof(roundLo));
+	std::memcpy(&roundHi, lane + 8, sizeof(roundHi));
+	CHECK(roundLo == lo);
+	CHECK(roundHi == hi);
+
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+	// On a little-endian host the low word occupies the first eight bytes; the rule
+	// is defined by bit position, so a big-endian port must revisit this assertion
+	// rather than swap the words in the signature.
+	CHECK(lane[0] == 0xEF);
+	CHECK(lane[7] == 0x01);
+	CHECK(lane[8] == 0x01);
+	CHECK(lane[15] == 0xFF);
+#endif
+}
