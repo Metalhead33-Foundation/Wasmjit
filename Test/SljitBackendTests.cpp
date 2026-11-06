@@ -2925,17 +2925,12 @@ TEST_CASE("a refused allocation traps on both backends",
 }
 
 
-// MEASUREMENT RESULT: SLJIT cannot declare an argument slot without a saved
-// register. `sljit_emit_enter` with six saved registers and seven declared slots
-// aborts in `function_check_arguments`, so there is no "stack argument" to read
-// from -- the API has no way to name one. That is why the backend refuses a
-// signature needing more than `SLJIT_NUMBER_OF_SAVED_REGISTERS` slots, and why
-// the stack-passed-slot plan of docs/ABI_REFACTOR_POST_MORTEM.md section 6
-// follow-up 2 is not implementable on our side (measured 2026-11-06).
+// SLJIT's declared-argument ceiling is its saved-register count: an argument
+// needs a saved register, and there is no way to name one that has none
+// (measured 2026-11-06; see the post-mortem). The backend refuses at the same
+// threshold, so the two cannot drift apart.
 TEST_CASE("SLJIT: the argument-slot ceiling is its saved-register count",
 		"[sljit][args][abi]")
 {
-	// The backend's refusal threshold must equal SLJIT's own ceiling, or we either
-	// refuse a shape SLJIT can express or hand it one it aborts on.
 	CHECK(SLJIT_NUMBER_OF_SAVED_REGISTERS == 6);
 }

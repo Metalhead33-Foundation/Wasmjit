@@ -111,6 +111,26 @@ suite is evidence of *what it tests*, never of what it does not.
    it needs a change in SLJIT itself. Pinned by `[sljit][args][abi]`, which
    asserts the refusal threshold equals `SLJIT_NUMBER_OF_SAVED_REGISTERS`.
 
+   **Correction, same day.** That measurement proves one thing precisely --
+   SLJIT cannot **declare** an argument that has no saved register -- and it does
+   **not** prove the seventh argument is unreadable. A second probe declared only
+   six slots (legal) while the C caller still passed seven, sweeping offsets from
+   `SLJIT_SP` for the value; it aborted in the same check for a *different*
+   reason: the register budget it requested (4 scratches + 6 saved) is itself
+   over the limit on this target. So the read path is **untested, not refuted**,
+   and the honest status is: the *declaration* route is closed, the
+   *read-the-incoming-stack* route is open and needs the budget tuned
+   (fewer scratches, or `sljit_get_local_base` if `SLJIT_MEM1(SLJIT_SP)` is not
+   the right base for the incoming-argument region).
+
+   *Third-party suggestion, considered.* "SLJIT allows at most three
+   parameters" comes from the old tutorial's `SLJIT_CALL0..3` macros. This build
+   exposes `SLJIT_ARGS0..4`, our backend already emits helper calls with three
+   and four arguments, and it compiles functions with up to six declared
+   argument slots -- so the claim does not describe the API we use. The
+   accompanying local-stack advice (`sljit_emit_enter(..., local_size)` plus
+   `SLJIT_MEM1(SLJIT_SP)`) is what the second probe above is built on.
+
    *Original probe design, kept for the record.* Build a
    seven-integer-argument function with SLJIT directly, return
    `SLJIT_MEM1(SLJIT_SP)` at a candidate offset, and sweep the offset until the
