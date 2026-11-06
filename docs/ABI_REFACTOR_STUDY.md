@@ -1492,3 +1492,57 @@ refusal); `[headerdoc]` 6/3; `[docs]` 1021/2; `abi-check.sh` OK; Doxygen 0 warni
 
 With steps 1 and 2 closed, SLJIT implements **both halves of the canonical rule** -- two scalar words in, a
 caller-supplied buffer out -- and it is the first backend to do so.
+
+## 27. AsmJit's boundary is a hardware vector register — a third convention, measured (2026-11-06)
+
+`Asmjit/AsmjitTypeTranslator.cpp:20` maps a `v128` to a **vector TypeId**, with a comment that states the
+current intent plainly:
+
+```cpp
+case ValueTypeCode::V128:
+    // WasmJit's ABI defines V128 as a 16-byte, 16-byte-aligned value.
+    // AsmJit's vector TypeId lets FuncSignature/FuncDetail apply the
+    // platform's native vector argument and return convention.
+    return asmjit::TypeId::kInt32x4;
+```
+
+That is neither two scalar words nor a 16-byte aggregate: it is an **XMM register** on x86-64. So the three
+backends implement three different boundaries, all measured now:
+
+| Backend | `v128` parameter crosses as | Integer-only? |
+|---|---|---|
+| **SLJIT** | two `W` argument slots (two GPRs) | **yes** -- now the canonical shape, and results go through the buffer |
+| **LibJIT** | one 16-byte aggregate `jit_type` (two GPRs on SysV) | yes by accident, by-ref on MS x64 |
+| **AsmJit** | `kInt32x4` -> a **vector register** | **no** |
+
+### Why this is the sharpest violation
+
+D-ABI-2/D-ABI-3 require an integer-only, non-degenerate boundary so that every target can implement it. A
+vector-register boundary is unspecified by the platform vector conventions in exactly the ways that matter: SysV
+and MS x64 disagree about whether the value is by-value in `XMM0` or spilled, AAPCS64 has its own rules, and
+none of it is expressible in LibJIT's or SLJIT's argument model at all. "Apply the platform's native vector
+convention" is the opposite of a canonical ABI -- it is the *absence* of one.
+
+It is also invisible to the test suite for the same reason every other vector defect was: a `v128` crossing to
+AsmJit is not called by any boundary test, so nothing compares the two spellings.
+
+### Step 3's edit plan
+
+| # | Site | Change |
+|---|---|---|
+| 1 | signature construction (`FuncSignature` for a function type) | expand one `V128` parameter into **two `kUInt64`** arguments; the same for the result only once the buffer path exists |
+| 2 | prologue | read the two argument words and store them into the 16-byte vector buffer the dispatcher already allocates (`newVectorBuffer`) -- AsmJit already represents a `v128` *internally* as a pointer to 16 bytes, so nothing inside the body changes |
+| 3 | `translateValueType`'s `V128` case | keep `kInt32x4` for *internal* type queries, or split it into a boundary-specific helper; the comment must stop saying the native vector convention is the ABI |
+| 4 | call sites | re-pack two words from the callee's buffer |
+
+Note how cleanly this fits §19: AsmJit's **internal** `v128` is already "a 16-byte buffer", which is exactly the
+stable representation the decision protects. Only the *boundary* spelling changes -- two `kUInt64` words in, the
+buffer inside. Nothing about lane access moves.
+
+### Consequence for the code comment
+
+`AsmjitTypeTranslator.cpp:20-23` is the one place in the tree that states the *wrong* ABI as if it were the
+decision. It must be corrected in the same commit that changes the signature, not before (the comment currently
+describes what the code does).
+
+Suite **21628 assertions in 731 cases**, green; `abi-check.sh` OK (0 removed); Doxygen 0 warnings; tree clean.
