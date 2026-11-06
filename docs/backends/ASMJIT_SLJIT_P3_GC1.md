@@ -918,3 +918,80 @@ entered twice.
 Remaining loop-based array ops: `new_data` and `new_elem`, which differ only in where
 the source values come from (a data segment and an element segment through
 `VMContext`).
+
+## 24. `array.new_data`: the helper-arity constraint again, and an ABI addition (2026-11-06)
+
+`array.new_data` landed on both backends, and it is the first GC op that needed a
+**new core entry point** rather than a new lowering shape. Everything else was reused:
+the allocation trampoline, the element-width table, the trap-then-reload discipline.
+
+### The gap filled, and what it costs
+
+**Gap:** a backend could allocate an array but had no way to copy a data segment into
+it. `ModuleInstance::memoryInit` copies into *linear memory* only, and re-implementing
+the segment access in a backend would mean a backend knowing the segment layout —
+exactly the kind of fork `ABI_PORTABILITY.md` D-ABI-7 forbids.
+
+**Addition (additive, no existing surface changes):**
+
+```c
+void ModuleInstance::arrayInitFromData(void* array, uint32_t localTypeIdx,
+                                       uint32_t dataIdx, uint32_t srcOffset);
+```
+
+It reads the length from the object header and the element width from the type, so the
+caller supplies only the two things it knows. Bounds and dropped-segment semantics
+mirror `memory.init`: a dropped segment behaves as *empty*, and the source range is
+checked before anything is written.
+
+### The four-argument helper ABI bites a second time
+
+The copy needs five inputs (context, object, type index, segment index, byte offset).
+SLJIT helpers carry at most four arguments, and §22 already established that the answer
+is not "a fifth register". Two 32-bit values were packed into one 64-bit argument:
+
+```
+packed = (uint64)dataIndex << 32 | byteOffset
+```
+
+Both halves are unsigned 32-bit quantities with no sentinel meaning, so the packing is
+lossless and the helper unpacks it in one line. On SLJIT the packing costs three
+instructions (`MOV32`, `SHL 32`, `OR`) and uses R1 as scratch before it becomes the
+object argument; on AsmJit the register allocator handles the same three nodes.
+
+**Rule of thumb, now twice-earned:** before adding a helper, count the arguments. Four
+is the ceiling; anything beyond it gets derived from the object or packed.
+
+### Trap kind: `OutOfBoundsMemoryAccess`, deliberately
+
+An out-of-range data-segment read reports `OutOfBoundsMemoryAccess`, matching
+`memory.init`'s source check, rather than an array kind: the fault is in the *segment
+range*, not in an array index. Recorded here because §19's lesson is that trap kinds
+are easy to get subtly wrong, and this one is a choice rather than an obvious default.
+
+### A fixture bug, and a fidelity gap it exposed
+
+`data_oob` originally read
+
+```wat
+(array.new_data $a $d (i32.const 6) (i32.const 4))   ;; produces a value
+(i32.const 0)                                        ;; leaves two on the stack
+```
+
+`array.new_data` *produces* a reference, so that function ends with two values — an
+invalid module. AsmJit rejected it at compile time (`AsmJit function must end with
+exactly one result`); **SLJIT accepted it and compiled happily**.
+
+That asymmetry is a real gap, recorded here rather than fixed: the SLJIT dispatcher has
+no end-of-function operand-stack check, so a module that should never have been
+instantiated is compiled instead. AsmJit's check is the behaviour to copy — a stack-height
+assertion at function end in every backend, plus a negative test that instantiates such a
+module and expects a refusal. The fixture now uses `drop`, which is what a valid module
+looks like.
+
+### Counts
+
+`[gc]` **379 assertions in 20 cases** (both backends, all six exports); `[headerdoc]`
+green; Doxygen 0 warnings. Remaining loop-based array op: `array.new_elem` — the same
+shape with an element segment, whose entries may be references and therefore need
+ownership handling rather than a plain byte copy.

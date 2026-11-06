@@ -1491,6 +1491,34 @@ bool ModuleInstance::growTable(uint32_t tableIdx, uint64_t deltaEntries) {
 	return store().growTable(internals.tableRefs[tableIdx], deltaEntries);
 }
 
+void ModuleInstance::arrayInitFromData(void* array, uint32_t localTypeIdx, uint32_t dataIdx, uint32_t srcOffset)
+{
+	if (dataIdx >= module->dataSegments.size()) {
+		reportTrap(TrapKind::Internal, "data segment index out of range");
+		return;
+	}
+	const CoreTypeView view = module->typeView(localTypeIdx);
+	const CanonFieldType& element = view.arrayElement();
+	const uint32_t storageBytes = static_cast<uint32_t>(gcStorageBytes(element.storage));
+	const uint32_t length = *reinterpret_cast<const uint32_t*>(
+			static_cast<const std::uint8_t*>(array) + GcHeader::kArrayLengthOffset);
+	const uint64_t byteLength = static_cast<uint64_t>(length) * storageBytes;
+
+	// Same rule as `memory.init`: a dropped segment behaves as empty, and the
+	// source range is checked before anything is written.
+	const DataSegment& seg = module->dataSegments[dataIdx];
+	const uint64_t segmentSize =
+			internals.dataSegmentDropped[dataIdx].load(std::memory_order_acquire) ? 0 : seg.data.size();
+	if (static_cast<uint64_t>(srcOffset) + byteLength > segmentSize) {
+		reportTrap(TrapKind::OutOfBoundsMemoryAccess, "out of bounds array.new_data source");
+		return;
+	}
+	if (byteLength == 0)
+		return;
+	std::memcpy(static_cast<std::uint8_t*>(array) + gcArrayDataOffset(element.storage),
+			seg.data.data() + srcOffset, static_cast<std::size_t>(byteLength));
+}
+
 void ModuleInstance::memoryInit(uint32_t memIdx, uint32_t dataIdx, uint32_t dstOffset, uint32_t srcOffset, uint32_t len)
 {
 	if (memIdx >= internals.memoryRefs.size()) {

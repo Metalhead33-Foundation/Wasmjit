@@ -140,6 +140,20 @@ extern "C" void* sljitArrayNew(WASM::VMContext* vm, uint32_t typeIndex, uint32_t
 	return reinterpret_cast<WASM::ModuleInstance*>(vm)->allocateArrayObject(typeIndex, length);
 }
 
+//! Copies a data segment into an array allocated by `sljitArrayNew`.
+//! \param vm Instance context.
+//! \param array The array object.
+//! \param typeIndex The array's module-local type index.
+//! \param packedOffsetAndIndex `dataIndex << 32 | byteOffset`, packed because the
+//!        helper ABI carries at most four arguments.
+extern "C" void sljitArrayInitFromData(WASM::VMContext* vm, void* array, uint32_t typeIndex,
+uint64_t packedOffsetAndIndex) noexcept
+{
+reinterpret_cast<WASM::ModuleInstance*>(vm)->arrayInitFromData(array, typeIndex,
+static_cast<uint32_t>(packedOffsetAndIndex >> 32),
+static_cast<uint32_t>(packedOffsetAndIndex & 0xFFFFFFFFu));
+}
+
 extern "C" void* sljitStructNew(WASM::VMContext* vm, uint32_t size, uint32_t typeIndex) noexcept
 {
 	return reinterpret_cast<WASM::ModuleInstance*>(vm)->allocateStructObject(size, typeIndex);
@@ -3638,6 +3652,54 @@ void OpcodeDispatcher::dispatchArrayFill(WASM::TypeIdx arg)
 		sljit_set_label(loopEnd, loopDone);
 	for (int i = 0; i < 4; ++i)
 		pop();
+}
+
+void OpcodeDispatcher::dispatchArrayNewData(WASM::TypeIdx arg1, uint32_t arg2)
+{
+if (!reachable_)
+return;
+const WASM::CoreTypeView view = module_.typeView(arg1);
+require(view.kind() == WASM::CanonTypeKind::Array, "array.new_data requires an array type");
+const WASM::CanonFieldType& element = view.arrayElement();
+require(element.storage.isPacked || element.storage.value.opcode != WASM::ValueTypeCode::V128,
+"the SLJIT backend does not lower v128 array elements yet");
+requireStack(2);
+const std::size_t offsetDepth = stackWidths_.size() - 2;
+const std::size_t lenDepth = stackWidths_.size() - 1;
+if (measureOnly_) {
+pop();
+pop();
+push(8);
+return;
+}
+// (vm, type index, length)
+loadSlot(SLJIT_R2, lenDepth, 4);
+emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R1, 0, SLJIT_IMM,
+static_cast<sljit_sw>(arg1)));
+loadContext(SLJIT_R0);
+emitHelper(SLJIT_ARGS3(P, P, 32, 32), &sljitArrayNew);
+// The object has to survive the copy call, so it is parked in the length
+// slot; that slot's value is dead once the allocation has used it.
+	storeSlot(SLJIT_R0, lenDepth, 8);
+	// Pack `dataIndex << 32 | byteOffset` because the helper ABI carries four
+	// arguments at most: R1 is scratch until the packed value moves to R3.
+	loadSlot(SLJIT_R1, offsetDepth, 4);
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R2, 0, SLJIT_IMM,
+static_cast<sljit_sw>(arg2)));
+	emit(sljit_emit_op2(compiler_, SLJIT_SHL, SLJIT_R2, 0, SLJIT_R2, 0, SLJIT_IMM, 32));
+	emit(sljit_emit_op2(compiler_, SLJIT_OR, SLJIT_R1, 0, SLJIT_R1, 0, SLJIT_R2, 0));
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R3, 0, SLJIT_R1, 0));
+	// (vm, array, type index, packed offset and index)
+	loadSlot(SLJIT_R1, lenDepth, 8);
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R2, 0, SLJIT_IMM,
+static_cast<sljit_sw>(arg1)));
+	loadContext(SLJIT_R0);
+	emitHelper(SLJIT_ARGS4V(P, P, 32, W), &sljitArrayInitFromData);
+	loadSlot(SLJIT_R0, lenDepth, 8);
+	pop();
+	pop();
+	push(8);
+	storeSlot(SLJIT_R0, stackWidths_.size() - 1, 8);
 }
 
 void OpcodeDispatcher::dispatchArrayNewDefault(WASM::TypeIdx arg)

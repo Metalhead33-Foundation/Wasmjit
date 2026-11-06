@@ -341,6 +341,12 @@ public:
 	void* allocateArrayObject(uint32_t dataOffset, uint32_t elementSize, uint32_t length, uint32_t localTypeIdx);
 	/** \brief Allocates an array of a declared type, deriving its element layout from the type. \param localTypeIdx Module-local array type index. \param length Element count. \return The new object, or nullptr after reporting a trap. */
 	void* allocateArrayObject(uint32_t localTypeIdx, uint32_t length);
+//! Copies a data segment into an allocated GC array object.
+//! \param array Object from `allocateArrayObject`, already of the right length.
+//! \param localTypeIdx The array's module-local type index.
+	//! \param dataIdx Data segment index.
+	//! \param srcOffset Byte offset inside the data segment.
+	void arrayInitFromData(void* array, uint32_t localTypeIdx, uint32_t dataIdx, uint32_t srcOffset);
 	//! Custom Descriptors: the RTT/descriptor reference stored in a struct's
 	//! header, or nullptr for a null/non-struct reference. `ref.get_desc` traps
 	//! when this returns nullptr.

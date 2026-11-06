@@ -2671,3 +2671,46 @@ TEST_CASE("both backends lower array.copy with the memmove overlap rule",
 	trapOf("copy_src_oob", WASM::TrapKind::OutOfBoundsArrayAccess);
 	trapOf("copy_null", WASM::TrapKind::NullArrayReference);
 }
+
+
+TEST_CASE("both backends lower array.new_data", "[sljit][asmjit][parity][gc]")
+{
+	WASM::Module module = loadTestModule("gc_array_data");
+	AsmJitBackend::Context asmContext;
+	AsmJitBackend::ModuleCompiler asmCompiler(asmContext);
+	Sljit::ModuleCompiler sljitCompiler;
+	WASM::RegistryImportResolver asmImports;
+	WASM::RegistryImportResolver sljitImports;
+	std::unique_ptr<WASM::ModuleInstance> asmInstance =
+			asmCompiler.instantiate(module, asmImports);
+	std::unique_ptr<WASM::ModuleInstance> sljitInstance =
+			sljitCompiler.instantiate(module, sljitImports);
+	REQUIRE(asmInstance != nullptr);
+	REQUIRE(sljitInstance != nullptr);
+
+	const auto same = [&](const char* name, std::int32_t expected) {
+		const std::optional<WASM::Callable> asmCallable = asmInstance->exportedFunction(name);
+		const std::optional<WASM::Callable> sljitCallable = sljitInstance->exportedFunction(name);
+		REQUIRE(asmCallable.has_value());
+		REQUIRE(sljitCallable.has_value());
+		INFO("export " << name);
+		CHECK(WASM::callCallable<std::int32_t>(*asmCallable) == expected);
+		CHECK(WASM::callCallable<std::int32_t>(*sljitCallable) == expected);
+	};
+	const auto trapOf = [&](const char* name, WASM::TrapKind expected) {
+		const std::optional<WASM::Callable> asmCallable = asmInstance->exportedFunction(name);
+		const std::optional<WASM::Callable> sljitCallable = sljitInstance->exportedFunction(name);
+		REQUIRE(asmCallable.has_value());
+		REQUIRE(sljitCallable.has_value());
+		INFO("export " << name);
+		CHECK(trapKindOf([&] { WASM::callCallable<std::int32_t>(*asmCallable); }) == expected);
+		CHECK(trapKindOf([&] { WASM::callCallable<std::int32_t>(*sljitCallable); }) == expected);
+	};
+
+	same("data_i8", 3);
+	same("data_i8_last", 6);
+	same("data_i32", 67305985);
+	same("data_len", 5);
+	same("data_zero", 0);
+	trapOf("data_oob", WASM::TrapKind::OutOfBoundsMemoryAccess);
+}
