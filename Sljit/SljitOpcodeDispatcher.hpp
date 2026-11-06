@@ -436,6 +436,8 @@ protected:
 	void dispatchArrayNew(WASM::TypeIdx arg) override; //!< `array.new`.
 	void dispatchArrayGet(WASM::TypeIdx arg) override; //!< `array.get`.
 	void dispatchArraySet(WASM::TypeIdx arg) override; //!< `array.set`.
+	void dispatchArrayGetS(WASM::TypeIdx arg) override; //!< `array.get_s`.
+	void dispatchArrayGetU(WASM::TypeIdx arg) override; //!< `array.get_u`.
 	void dispatchArrayLen() override; //!< `array.len`.
 	void dispatchRefFunc(WASM::FuncIdx arg) override; //!< `ref.func`.
 	void dispatchRefAsNonNull() override; //!< `ref.as_non_null`.
@@ -951,6 +953,12 @@ private:
 	 * \param signExtend Whether the field is sign-extended.
 	 */
 	void emitStructGetPacked(WASM::TypeIdx arg1, uint32_t arg2, bool signExtend);
+	/*!
+	 * \brief Emits a sign- or zero-extending read of a packed array element.
+	 * \param arg Array type index.
+	 * \param signExtend Whether the element is sign-extended.
+	 */
+	void emitArrayGetPacked(WASM::TypeIdx arg, bool signExtend);
 	/*!
 	 * \brief Emits one checked memory load.
 	 * \param arg Memory immediate.

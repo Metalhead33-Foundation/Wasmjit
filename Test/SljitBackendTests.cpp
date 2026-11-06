@@ -2405,3 +2405,107 @@ TEST_CASE("asmjit and sljit agree on packed struct fields",
 	same("packed_roundtrip", 127);
 }
 
+
+
+TEST_CASE("sljit: packed array elements load and store as bytes",
+"[sljit][module][parity][gc]")
+{
+	auto session = Sljit::createSession();
+	REQUIRE(session != nullptr);
+	WASM::RegistryImportResolver imports;
+	LoadedModule loaded = loadAndInstantiateTestModule("gc_packed_array", imports, *session);
+	REQUIRE(loaded.instance != nullptr);
+	WASM::ModuleInstance& instance = *loaded.instance;
+	const auto call = [&](const char* name) -> WASM::Callable {
+		const std::optional<WASM::Callable> callable = instance.exportedFunction(name);
+		INFO("export " << name);
+		REQUIRE(callable.has_value());
+		REQUIRE(callable->fnPtr != nullptr);
+		return *callable;
+	};
+
+	CHECK(WASM::callCallable<std::int32_t>(call("array_packed_get_s")) == -1);
+	CHECK(WASM::callCallable<std::int32_t>(call("array_packed_get_u")) == 255);
+	CHECK(WASM::callCallable<std::int32_t>(call("array_packed_set")) == -2);
+}
+
+
+TEST_CASE("asmjit and sljit agree on packed array elements",
+"[sljit][asmjit][parity][gc]")
+{
+	WASM::Module module = loadTestModule("gc_packed_array");
+	AsmJitBackend::Context asmContext;
+	AsmJitBackend::ModuleCompiler asmCompiler(asmContext);
+	Sljit::ModuleCompiler sljitCompiler;
+	WASM::RegistryImportResolver asmImports;
+	WASM::RegistryImportResolver sljitImports;
+	std::unique_ptr<WASM::ModuleInstance> asmInstance =
+			asmCompiler.instantiate(module, asmImports);
+	std::unique_ptr<WASM::ModuleInstance> sljitInstance =
+			sljitCompiler.instantiate(module, sljitImports);
+	REQUIRE(asmInstance != nullptr);
+	REQUIRE(sljitInstance != nullptr);
+
+	const auto same = [&](const char* name, std::int32_t expected) {
+		const std::optional<WASM::Callable> asmCallable = asmInstance->exportedFunction(name);
+		const std::optional<WASM::Callable> sljitCallable = sljitInstance->exportedFunction(name);
+		REQUIRE(asmCallable.has_value());
+		REQUIRE(sljitCallable.has_value());
+		INFO("export " << name);
+		CHECK(WASM::callCallable<std::int32_t>(*asmCallable) == expected);
+		CHECK(WASM::callCallable<std::int32_t>(*sljitCallable) == expected);
+	};
+
+	same("array_packed_get_s", -1);
+	same("array_packed_get_u", 255);
+	same("array_packed_set", -2);
+}
+
+
+namespace {
+
+//! Runs a call and returns the trap kind it raised, if any.
+std::optional<WASM::TrapKind> trapKindOf(const std::function<void()>& call)
+{
+	try {
+		call();
+	} catch (const WASM::Trap& trap) {
+		return trap.kind();
+	}
+	return std::nullopt;
+}
+
+} // namespace
+
+
+TEST_CASE("both backends report the same trap kinds for GC failures",
+"[sljit][asmjit][parity][gc]")
+{
+	WASM::Module module = loadTestModule("gc_traps");
+	AsmJitBackend::Context asmContext;
+	AsmJitBackend::ModuleCompiler asmCompiler(asmContext);
+	Sljit::ModuleCompiler sljitCompiler;
+	WASM::RegistryImportResolver asmImports;
+	WASM::RegistryImportResolver sljitImports;
+	std::unique_ptr<WASM::ModuleInstance> asmInstance =
+			asmCompiler.instantiate(module, asmImports);
+	std::unique_ptr<WASM::ModuleInstance> sljitInstance =
+			sljitCompiler.instantiate(module, sljitImports);
+	REQUIRE(asmInstance != nullptr);
+	REQUIRE(sljitInstance != nullptr);
+
+	const auto check = [&](const char* name, WASM::TrapKind expected) {
+		const std::optional<WASM::Callable> asmCallable = asmInstance->exportedFunction(name);
+		const std::optional<WASM::Callable> sljitCallable = sljitInstance->exportedFunction(name);
+		REQUIRE(asmCallable.has_value());
+		REQUIRE(sljitCallable.has_value());
+		INFO("export " << name);
+		CHECK(trapKindOf([&] { WASM::callCallable<std::int32_t>(*asmCallable); }) == expected);
+		CHECK(trapKindOf([&] { WASM::callCallable<std::int32_t>(*sljitCallable); }) == expected);
+	};
+
+	check("struct_null", WASM::TrapKind::NullStructureReference);
+	check("array_null", WASM::TrapKind::NullArrayReference);
+	check("array_oob", WASM::TrapKind::OutOfBoundsArrayAccess);
+	check("cast_fail", WASM::TrapKind::CastFailure);
+}

@@ -529,3 +529,157 @@ series.
 `array.set`), `v128` fields/elements, `array.fill`/`copy`/`new_fixed`/`new_data`/
 `new_elem`, `br_on_cast`/`br_on_cast_fail`/`br_on_non_null` (AsmJit block
 parameters), and abstract heap types in `ref.test`/`ref.cast`.
+
+## 17. Packed array elements — SLJIT first, AsmJit carried forward (2026-11-06)
+
+Packed (`i8`/`i16`) **array** elements are lowered on SLJIT, deliberately isolated
+before mirroring (§13's lesson: isolate, then compare).
+
+| Piece | SLJIT shape |
+|---|---|
+| `array.new` / `array.set` element store | `SLJIT_MOV_U8` / `MOV_U16`, value loaded as 4 bytes and stored narrow |
+| `array.get_s` / `array.get_u` | one emitter `emitArrayGetPacked(arg, signExtend)`: null trap → bounds trap → reload → `MOV_S8/U8/S16/U16` |
+
+Fixture `gc_packed_array.wat`: `array_packed_get_s` → −1, `array_packed_get_u` → 255,
+`array_packed_set` → −2 (a byte written through `array.set` and read back signed).
+Counts: `[gc]` **221 assertions in 13 cases**; full suite **21304 in 712**.
+
+**The pattern that keeps paying off:** the packed reads are the *same* lowering as
+`array.get` with a different load op, and the packed store is the same address
+computation with a narrow store op. The only new decision was the signedness, which
+is an emitter argument, not a second function — the third use of the
+fold-two-opcodes-into-one rule (§15 `ref.cast`, §16 `struct.get_s/u`, here).
+
+### Carried forward: the AsmJit mirror
+
+Not done in this pass, and the exact shape is recorded so it is mechanical:
+
+- `array.new` / `array.set`: `mov byte_ptr(object, byteOffset), value.r8()` and
+  `word_ptr(..., value.r16())` — the `.r8()`/`.r16()` views from §16.
+- `array.get_s`/`get_u`: `movsx`/`movzx` from `byte_ptr`/`word_ptr` at
+  `object + byteOffset`, after the same two traps.
+
+The reason for stopping here is the one §13 established: the SLJIT half is verified,
+so the mirror cannot hide a shared mistake — and the A/B case for packed arrays
+should be added *with* the mirror, not before it.
+
+**Remaining non-`v128` work, in the order the evidence suggests:**
+
+1. AsmJit packed arrays (above), then the A/B case for `gc_packed_array`.
+2. `array.fill` / `copy` / `new_fixed` / `new_data` / `new_elem` — the first ops in
+   this series that need a loop body emitted by the backend.
+3. Abstract heap types in `ref.test`/`ref.cast` — needs the core's subtype
+   hierarchy consulted at run time.
+4. `br_on_cast` / `br_on_cast_fail` / `br_on_non_null` — all three now wait on the
+   *same* thing: **AsmJit block parameters**, which is the single largest capability
+   blocker left and not a GC-specific one.
+5. A trap-kind assertion helper, so the §16 fidelity class cannot recur silently.
+6. `wasm_trap(kind)` in the core — thirteen per-kind wrappers at last count.
+
+## 18. Packed arrays complete: the AsmJit mirror landed (2026-11-06)
+
+The carry-forward from §17 is closed in the same session, which is the sequence
+that section asked for: SLJIT verified first, then the mirror, then the A/B case.
+
+| Piece | AsmJit shape |
+|---|---|
+| `array.new` / `array.set` packed store | `mov byte_ptr`, `value.r8()` / `word_ptr`, `.r16()` |
+| `array.get_s` / `array.get_u` | one emitter `emitArrayGetPacked(arg, signExtend)`: two traps, then `movsx`/`movzx` from `byte_ptr`/`word_ptr` |
+| index scaling | `shl(byteOffset, isI8 ? 0 : 1)` — a byte element needs none |
+
+The `.r8()`/`.r16()` views (from §16) and the `.r32()` widening (from §11) now
+cover every narrow store the backends make; that trio is the complete answer to
+"which register view does a narrow memory operand need".
+
+Fixture `gc_packed_array.wat` is now asserted **per backend and as an A/B pair**
+(`−1`, `255`, `−2`). Counts: `[gc]` **235 assertions in 14 cases**; full suite
+**21318 in 713**; `[headerdoc]` green; Doxygen 0 warnings.
+
+**What the mirror cost:** one patch, no debugging cycle — because the SLJIT half had
+already settled the semantics (which traps, in which order, with which reloads), and
+because every layout constant came from the core. That is §1's contract-first rule
+paying off for the fourth time in this arc (structs, references, packed fields,
+packed arrays).
+
+### Remaining non-`v128` work, current state
+
+1. **`array.fill` / `copy` / `new_fixed` / `new_data` / `new_elem`** — the first ops
+   in the series that need a **loop body** emitted by the backend (bounds traps in a
+   counted loop). This is now the largest pure-lowering gap.
+2. **Abstract heap types** in `ref.test`/`ref.cast` — the core models the subtype
+   hierarchy; the lowering does not consult it yet.
+3. **`br_on_cast` / `br_on_cast_fail` / `br_on_non_null`** — all three wait on
+   **AsmJit block parameters**, which remains the single largest capability blocker
+   and is not GC-specific.
+4. **Trap-kind assertions** — the §16 fidelity class still has no automated guard; a
+   helper that asserts the `TrapKind`, not just that a trap occurred, is the top test
+   gap of the series.
+5. **`wasm_trap(kind)`** in the core — thirteen per-kind wrappers and counting.
+
+## 19. The pattern in the remaining work, and the trap-kind gap closed (2026-11-06)
+
+### The two kinds of remaining work
+
+After eleven GC entries the remaining non-`v128` work falls into two classes that
+behave completely differently, and the distinction is the most useful thing this
+arc has produced:
+
+| Class | Examples | Cost per item | Risk |
+|---|---|---|---|
+| **Mechanical lowering on a proven contract** | packed elements, `array.get_s/u`, `struct.get_s/u`, `array.fill`/`copy` once the loop shape exists | one patch, usually **no** debugging cycle | low — the semantics are settled by an earlier op |
+| **Gated on one structural capability** | `br_on_cast`, `br_on_cast_fail`, `br_on_non_null` | zero until the gate is opened | **the gate is the work** |
+
+Every mechanical item in this arc was cheap for the same three reasons: the layout
+came from the core (`gcStructFieldOffset`, `gcArrayDataOffset`), the trap and reload
+discipline came from an earlier op, and the second backend mirrored the first
+without a debugging pass. Every instance of the second class waited on **AsmJit
+block parameters** — one capability gating three opcodes, none of them GC-specific.
+
+**The strategic conclusion, recorded for the saga post-mortem:** continue the
+mechanical items in bulk, but do **not** pick off gated opcodes one at a time — open
+the gate once. For the remaining surface that gate is AsmJit block parameters;
+fixing it retires three entries at once and removes the reason they are refused.
+
+### The trap-kind gap is closed — and it caught a real bug
+
+The §16 lesson (trap *kinds* are observable, and the core distinguishes them per
+aggregate) had no automated guard; `[gc]` had only “something threw”. This entry adds
+one:
+
+```c
+std::optional<WASM::TrapKind> trapKindOf(const std::function<void()>& call);
+```
+
+with a fixture (`gc_traps.wat`) exporting one function per kind and a case that
+asserts, **per backend**, the exact kind:
+
+| Export | Expected kind |
+|---|---|
+| `struct.get` on a null | `NullStructureReference` |
+| `array.len` on a null | `NullArrayReference` |
+| `array.get` out of bounds | `OutOfBoundsArrayAccess` |
+| `ref.cast` to the wrong type | `CastFailure` |
+
+**The guard immediately earned its keep**: it found that `array.len` was trapping
+`NullStructureReference` in *both* backends — a residue of §16's global
+`&…ReportNullReference` → `&…ReportNullStructure` substitution, which had also
+rewritten the array-length helper. Both now trap `NullArrayReference`, and the
+test pins all four kinds.
+
+That is also the lesson in miniature: **a global textual substitution across trap
+helpers is unsafe**, because the ReportNullReference spelling appeared in code whose correct
+kind was not the generic one. The kind-per-op rule now has a test, not a comment.
+
+Counts: `[gc]` **253 assertions in 15 cases**; full suite **21336 in 714**;
+`[headerdoc]` green; Doxygen 0 warnings.
+
+### Remaining non-`v128` work (unchanged order)
+
+1. **AsmJit block parameters** — the one gate; retires `br_on_cast`,
+   `br_on_cast_fail`, `br_on_non_null`.
+2. **`array.fill`/`copy`/`new_fixed`/`new_data`/`new_elem`** — mechanical once a
+   loop-emitting helper exists; note the loop shape is itself a small capability.
+3. **Abstract heap types** in `ref.test`/`ref.cast` — needs the core subtype
+   hierarchy consulted at run time.
+4. **`wasm_trap(kind)`** in the core — thirteen per-kind wrappers, and §19 just
+   showed that hand-maintaining the kind per call site is error-prone.
