@@ -491,6 +491,21 @@ public:
 	/** \brief Tests whether any agent is currently inside this instance. \return true when active call count is non-zero. */
 	bool inCall() const noexcept { return activeCalls.load(std::memory_order_acquire) != 0; }
 
+	//! How this module's backend spells a `v128` parameter at the C boundary.
+	//! `false` (the canonical default) means two 64-bit words, low first
+	//! (`docs/backends/V128_SIGNATURE_DECISION.md` §28). A backend that cannot
+	//! implement that rule sets this to true and passes the value as one 16-byte
+	//! aggregate instead; the call cache then describes the same shape to libffi
+	//! (`docs/backends/LIBJIT_ARGUMENT_DEFECT.md` §12). The two spellings are the
+	//! same ABI on SysV and differ on MS x64, where an aggregate is passed by
+	//! reference.
+	bool v128ParameterIsAggregate_ = false;
+
+	/** \brief Records how the backend spells a `v128` parameter. \param aggregate true when it is one 16-byte aggregate. */
+	void setV128ParameterIsAggregate(bool aggregate) noexcept { v128ParameterIsAggregate_ = aggregate; }
+	/** \brief Reports how the backend spells a `v128` parameter. \return true when a vector crosses as one 16-byte aggregate. */
+	bool v128ParameterIsAggregate() const noexcept { return v128ParameterIsAggregate_; }
+
 	//! Objects whose count reached zero are only *queued*; `gcCollect()` does
 	//! the actual recycling. Call it only at a safepoint where no Wasm frame is
 	//! live and the embedder holds no un-counted references — then any queued

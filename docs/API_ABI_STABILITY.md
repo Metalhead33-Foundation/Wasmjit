@@ -67,6 +67,7 @@ without a deliberate version bump**. For this milestone the frozen set is:
 | S9 | The diagnostic record/id/schema contract (`wasmjit.diagnostic.v1`) | [`DIAGNOSTICS.md`](DIAGNOSTICS.md) §1 |
 | S11 | The optional libffi export precache: `ModuleCallCache`, `ComponentCallCache`, their entry records, and `ComponentInstanceHandle::exportedFunctionNames()` | [`WasmCallCache.hpp`](../WasmBase/WasmCallCache.hpp); [`WasmComponentInstance.hpp`](../WasmBase/WasmComponentInstance.hpp) |
 | S12 | The C ABI contract: C linkage for every compiled function, the host C ABI as the convention, portability over performance, the target matrix (`tested` vs `provisional`), and the GC object layout plus allocator call shape | [`ABI_PORTABILITY.md`](ABI_PORTABILITY.md) §1–§8 |
+| **B1** | **Deliberate break, 2026-11-06, branch `AbiRefactor`:** `WASM::ModuleFfiEntry` (part of `S11`) gained a `paramKinds` member, so its size and layout change. Required by the `v128` two-word decision ([`ABI_PORTABILITY.md`](ABI_PORTABILITY.md) §3): the libffi cache must know which parameters occupy **two** argument slots. `abi-check.sh` is unaffected (0 symbols removed; 149 added, all of them inline helpers from `WasmBackendAbi.hpp`), but a struct layout is not a symbol, which is why the break is recorded here. Any embedder that constructs a `ModuleFfiEntry` by aggregate initialisation without designated fields must be rebuilt. |
 
 Stability here means **source and ABI compatibility for those ten surfaces
 across one release series**, with three permitted changes: (a) additive fields

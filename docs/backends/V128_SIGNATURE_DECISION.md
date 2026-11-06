@@ -1,17 +1,9 @@
-> **DEFERRED by decision (2026-11-05).** This note must be revisited at the
-> end of the saga, before the SLJIT/AsmJit saga can be closed and the final
-> saga post-mortem written. §11 records the long-term, ABI-breaking plan (treat
-> `v128` returns as lowered multi-returns on every backend, LibJIT included) and
-> the deferred `v128` block types. See
-> [`ASMJIT_SLJIT_P3_REFS1.md`](ASMJIT_SLJIT_P3_REFS1.md) §2 for the closure
-> checklist.
->
-> **Added 2026-11-06:** the signature contract this decision is a member of now
-> exists — [`ABI_PORTABILITY.md`](../ABI_PORTABILITY.md) §3 (`v128` is the only
-> kind without a settled C spelling) and §5.4 (why: the aggregate spelling is
-> register-passed on SysV/AAPCS64/RISC-V but **by reference** on MS x64, and the
-> vector spelling has no RISC-V base-psABI support and no portable C name). That
-> document carries the item as open row **P1**; this note is where it is decided.
+> **DECIDED 2026-11-06** (was deferred 2025-11-05). The canonical shape is **two `uint64_t`
+> parameters, low word first**, with a `v128` result carried in the multi-value buffer as
+> `lo, hi`. See §28 for the decision, its per-target justification and the migration plan;
+> the analysis in Parts I-III is kept as the record of why the alternatives were rejected.
+> The ABI refactor's work breakdown is in
+> [`../ABI_REFACTOR_STUDY.md`](../ABI_REFACTOR_STUDY.md) (phases P0-P6).
 
 # Decision note: `v128` across the function boundary (P3's last item)
 
@@ -687,3 +679,88 @@ touch anyway.
    makes the boundary case portable by construction.
 4. Do **not** build a dual-ABI (§24): the identity and call-site costs outweigh a
    benefit that the single portable ABI already provides.
+
+## 28. Decision (2026-11-06): two scalar words, not an aggregate
+
+### The decision
+
+A `v128` crosses the C boundary as:
+
+| Position | Spelling |
+|---|---|
+| **parameter** | **two `uint64_t` parameters**, low word first, immediately after the previous parameter |
+| **result** | the existing multi-value buffer, first word `lo`, second `hi` |
+
+A Wasm function `(param v128 v128) (result v128)` therefore compiles to a C signature equivalent to
+`void f(VMContext*, uint64_t, uint64_t, uint64_t, uint64_t, void* results)` — five scalar arguments
+and the result buffer.
+
+### Why this shape and not the other three
+
+The four candidates from §5.4 of [`../ABI_PORTABILITY.md`](../ABI_PORTABILITY.md) were:
+
+| Candidate | SysV | AAPCS64 | RISC-V | **MS x64** | Verdict |
+|---|---|---|---|---|---|
+| `struct {uint64_t, uint64_t;}` | 2 GPRs | 2 `x` regs | 2 `a` regs | **by reference** | rejected: one target diverges |
+| 16-byte vector type | 1 `xmm` | 1 `v` | no vector class | `xmm0` | rejected: no portable C name, and RISC-V has no class |
+| pointer to 16 bytes | pointer | pointer | pointer | pointer | rejected: portable but forces a copy at every call and an owner for the temporary |
+| **two `uint64_t` scalars** | **2 GPRs** | **2 `x` regs** | **2 `a` regs** | **2 GPRs** | **chosen** |
+
+The chosen shape is the only one that is **register-passed on all four** and has a **portable C
+name**. It wins by removing the aggregate category from the question entirely: MS x64 passes
+*aggregates* by reference, but two separate scalars are just two integer arguments, and every ABI in
+the survey passes those in registers.
+
+### The cost, stated up front
+
+- **No vector register is used.** A `v128` argument occupies two integer registers even where the
+  target has a vector register free. That is the T1 price, and it is why
+  [`../ABI_REFACTOR_STUDY.md`](../ABI_REFACTOR_STUDY.md) §5 exists: a backend may optimise this
+  (T2) only where its target's ABI allows, behind a capability flag, with the portable path still
+  passing the parity case.
+- **A `v128` result costs a store.** It goes through the buffer like any multi-value return, so a
+  vector-returning op stores two words and the caller reloads them.
+- **Ordering must be pinned.** Low word first, always, on every target — including any big-endian
+  port, which would otherwise be tempted to swap the halves. The words are defined by *bit position
+  in the little-endian layout*, not by register number.
+
+### Migration plan
+
+This decision is P0 of the study's waterfall. The migration is P4, one backend at a time; the
+phases, their exit criteria and the two-tier rule are in
+[`../ABI_REFACTOR_STUDY.md`](../ABI_REFACTOR_STUDY.md) §4-§5.
+
+### Compliance registry (2026-11-06)
+
+The migration has run. What each backend actually does, and where the record lives:
+
+| Backend | `v128` parameter | `v128` result | Status |
+|---|---|---|---|
+| **SLJIT** | two `W` slots, low first | caller-supplied 16-byte buffer | **canonical**, pinned by `[sljit][v128][order][abi]` and the `v128` result test |
+| **AsmJIT** | two `kUInt64`, low first | native vector register (not yet the buffer) | parameter **canonical** and asserted; result is a recorded gap |
+| **LibJIT** | one 16-byte aggregate | aggregate | **recorded deviation**, see below |
+
+**LibJIT deviation (D-L1).** libjit loses the sixth integer argument — the last one SysV passes
+in a register — so a three-vector signature (`ctx` + six words) corrupts the third parameter's low
+word. The defect is isolated and documented in
+[`LIBJIT_ARGUMENT_DEFECT.md`](LIBJIT_ARGUMENT_DEFECT.md), including the evidence that our IR is
+correct and the loss happens in libjit's code generation. LibJIT therefore keeps its own 16-byte
+aggregate spelling. On SysV that is the same ABI as two words, so nothing observable differs
+there; on MS x64 the aggregate is passed by reference, which is a divergence that holds only
+because of the policy below. The host boundary follows it: `WasmCallCache` asks the module
+instance for the spelling and describes the matching shape to libffi.
+
+**Policy (2026-11-06): cross-backend calls are illegal.** No call may have its caller compiled by
+one backend and its callee by another. This is what lets the three spellings above coexist: no
+call ever crosses between them, so the parameter rules never have to agree across backends. A
+backend-side guard for that case is therefore unnecessary; the policy is the guard.
+
+### What is now closed
+
+- Open row **P1** in [`../ABI_PORTABILITY.md`](../ABI_PORTABILITY.md) §10.
+- The banner deferral on this note.
+- The question "is the aggregate spelling portable?" — it is not, on MS x64, and that is now the
+  recorded reason the aggregate was rejected as the *canonical* rule rather than a reason to wait.
+- "Does every backend implement the rule?" — yes, canonically (SLJIT, AsmJIT parameters) or by
+  recorded deviation (LibJIT, AsmJIT results).
+

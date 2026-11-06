@@ -1,5 +1,7 @@
 #include <catch2/catch_all.hpp>
 
+#include "WasmBase/WasmBackendAbi.hpp"
+
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
@@ -211,4 +213,96 @@ CHECK(WASM::gcStructSize(pair) == 24);
 // An empty struct is exactly its header.
 const std::span<const WASM::CanonFieldType> none{};
 CHECK(WASM::gcStructSize(none) == WASM::GcHeader::kHeaderBytes);
+}
+
+
+TEST_CASE("a v128 crosses the C boundary as two little-endian words",
+"[v128][abi][layout]")
+{
+	// The canonical signature passes a v128 as two `uint64_t`, low word first, with
+	// a result carried in the multi-value buffer as lo, hi
+	// (docs/backends/V128_SIGNATURE_DECISION.md §28). This test pins the half that
+	// needs no backend: the storage size/alignment the convention rests on, and the
+	// losslessness of the decomposition every backend must perform.
+	WASM::CanonFieldType vectorField {};
+	vectorField.storage.value.opcode = WASM::ValueTypeCode::V128;
+	CHECK(WASM::gcStorageBytes(vectorField.storage) == 16);
+	CHECK(WASM::gcStorageAlign(vectorField.storage) == 16);
+
+	// Two scalar words must be enough, and they must be adjacent with no padding:
+	// a signature with a gap would not be register-passed uniformly.
+	static_assert(sizeof(std::uint64_t) * 2 == 16, "two words must be exactly one vector");
+
+	// The decomposition: lo is the first eight bytes, hi the second. Round-tripping
+	// must be lossless for arbitrary bits, including a sign bit and a NaN payload
+	// pattern that a float conversion would disturb if one crept into the path.
+	alignas(16) unsigned char lane[16] = {};
+	const std::uint64_t lo = 0x0123456789ABCDEFull;
+	const std::uint64_t hi = 0xFFF8000000000001ull;
+	std::memcpy(lane, &lo, sizeof(lo));
+	std::memcpy(lane + 8, &hi, sizeof(hi));
+
+	std::uint64_t roundLo = 0;
+	std::uint64_t roundHi = 0;
+	std::memcpy(&roundLo, lane, sizeof(roundLo));
+	std::memcpy(&roundHi, lane + 8, sizeof(roundHi));
+	CHECK(roundLo == lo);
+	CHECK(roundHi == hi);
+
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+	// On a little-endian host the low word occupies the first eight bytes; the rule
+	// is defined by bit position, so a big-endian port must revisit this assertion
+	// rather than swap the words in the signature.
+	CHECK(lane[0] == 0xEF);
+	CHECK(lane[7] == 0x01);
+	CHECK(lane[8] == 0x01);
+	CHECK(lane[15] == 0xFF);
+#endif
+}
+
+
+TEST_CASE("a v128 parameter occupies two C argument slots", "[v128][abi][layout]")
+{
+	using WASM::ValueKind;
+
+	// The canonical rule, as a number rather than as prose.
+	CHECK(WASM::argSlotCount(ValueKind::I32) == 1);
+	CHECK(WASM::argSlotCount(ValueKind::I64) == 1);
+	CHECK(WASM::argSlotCount(ValueKind::Ref) == 1);
+	CHECK(WASM::argSlotCount(ValueKind::V128) == 2);
+
+	const ValueKind kinds[] = {ValueKind::I32, ValueKind::V128, ValueKind::I64};
+	const std::vector<WASM::ArgSlot> slots = WASM::mapArgSlots(kinds);
+	REQUIRE(slots.size() == 3);
+	CHECK(slots[0].firstSlot == 0);
+	CHECK(slots[0].slots == 1);
+	CHECK(slots[1].firstSlot == 1);
+	CHECK(slots[1].slots == 2);
+	// The parameter *after* the vector is the one a hand-written walk gets wrong: it
+	// starts at slot 3, not 2. This assertion is the whole point of the mapping.
+	CHECK(slots[2].firstSlot == 3);
+	CHECK(slots[2].slots == 1);
+
+	// Every kind answers, so no caller has to remember a default.
+	CHECK(WASM::argSlotCount(ValueKind::Void) == 1);
+	CHECK(WASM::argSlotCount(ValueKind::F32) == 1);
+	CHECK(WASM::argSlotCount(ValueKind::F64) == 1);
+
+	// A vector in first position still starts at slot 0 and shifts the next.
+	const ValueKind vectorFirst[] = {ValueKind::V128, ValueKind::I32};
+	const std::vector<WASM::ArgSlot> first = WASM::mapArgSlots(vectorFirst);
+	REQUIRE(first.size() == 2);
+	CHECK(first[0].firstSlot == 0);
+	CHECK(first[0].slots == 2);
+	CHECK(first[1].firstSlot == 2);
+
+	// Two vectors are four slots, and the second one does not start at 1.
+	const ValueKind twoVectors[] = {ValueKind::V128, ValueKind::V128};
+	const std::vector<WASM::ArgSlot> both = WASM::mapArgSlots(twoVectors);
+	REQUIRE(both.size() == 2);
+	CHECK(both[0].firstSlot == 0);
+	CHECK(both[1].firstSlot == 2);
+
+	// No parameters is not an error: the context pointer is still argument 0.
+	CHECK(WASM::mapArgSlots({}).empty());
 }

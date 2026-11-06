@@ -18,6 +18,7 @@ WASMJIT_VISIBLE_BEGIN
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <vector>
 #include <type_traits>
 
 namespace WASM {
@@ -194,6 +195,45 @@ static_assert(std::is_standard_layout_v<SignatureView>);
 static_assert(std::is_standard_layout_v<FieldLayout>);
 static_assert(std::is_standard_layout_v<AggregateLayout>);
 static_assert(sizeof(FieldLayout) == 12, "the C plugin view pins the layout");
+
+/** \brief Number of C argument slots one value kind occupies at the canonical boundary.
+\param kind The value kind.
+\return 2 for `v128`, 1 for every other kind.
+This is the single source of truth for the rule in
+[`docs/backends/V128_SIGNATURE_DECISION.md`](../docs/backends/V128_SIGNATURE_DECISION.md) §28: a vector
+crosses as **two scalar words, low first**, because MS x64 passes 16-byte aggregates by reference.
+*/
+inline constexpr std::uint32_t argSlotCount(ValueKind kind) noexcept
+{
+	return kind == ValueKind::V128 ? 2u : 1u;
+}
+
+/** \brief One wasm parameter's placement in the canonical C argument list. */
+struct ArgSlot {
+	std::uint32_t parameter = 0; //!< Index of the wasm parameter.
+	std::uint32_t firstSlot = 0; //!< First C argument slot, counting from the first wasm parameter.
+	std::uint32_t slots = 1; //!< Slots occupied: 2 for a vector, 1 otherwise.
+};
+
+/** \brief Maps wasm parameters onto C argument slots.
+\param kinds The parameter kinds, in declaration order.
+\return One entry per parameter, with cumulative first-slot indices.
+Every backend that indexes parameters positionally must use this instead of recomputing the
+walk by hand: a vector occupying two slots shifts every later parameter, and hand arithmetic
+for that mapping produced three separate corruption investigations in a positional backend.
+*/
+inline std::vector<ArgSlot> mapArgSlots(std::span<const ValueKind> kinds)
+{
+	std::vector<ArgSlot> slots;
+	slots.reserve(kinds.size());
+	std::uint32_t next = 0;
+	for (std::uint32_t i = 0; i < kinds.size(); ++i) {
+		const std::uint32_t count = argSlotCount(kinds[i]);
+		slots.push_back(ArgSlot {i, next, count});
+		next += count;
+	}
+	return slots;
+}
 
 } // namespace WASM
 

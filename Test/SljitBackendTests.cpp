@@ -126,22 +126,30 @@ TEST_CASE("sljit: parameters flow through the frame slots", "[sljit]")
 			== -2147483647 - 1);
 }
 
-TEST_CASE("sljit: an unsupported type is refused, never miscompiled", "[sljit]")
+TEST_CASE("sljit: a v128 result arrives through the caller's buffer", "[sljit][v128]")
 {
+	// The compiled signature is (VMContext*, void* out): 16 bytes cannot come
+	// back in one return register, so the caller supplies the out-buffer and the
+	// function returns void (docs/ABI_REFACTOR_STUDY.md §23/§25). The fixture's
+	// body is `v128.const i32x4 0 0 0 0`, so a pre-filled buffer must come back
+	// zeroed -- which is what distinguishes a real write from a no-op.
 	auto runtime = WASM::Runtime::create("sljit");
 	auto module = runtime->loadBytes(bytesOf(kVectorModule));
 	WASM::RegistryImportResolver imports;
 	WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
 
-	// The export exists and the callable is declared; only the entry point is
-	// absent, which is exactly the contract (Callable::fnPtr is null until a
-	// body is compiled).
 	const std::optional<WASM::Callable> callable = instance.exportedFunction("vec");
 	REQUIRE(callable.has_value());
-	REQUIRE(callable->fnPtr == nullptr);
+	REQUIRE(callable->fnPtr != nullptr);
 
-	REQUIRE_THROWS_WITH(runtime->callExport<std::int32_t>(instance, "vec"),
-			Catch::Matchers::ContainsSubstring("no compiled body"));
+	alignas(16) std::uint32_t lanes[4] = {0xffffffffu, 0xffffffffu, 0xffffffffu,
+			0xffffffffu};
+	using Entry = void (*)(void*, void*);
+	reinterpret_cast<Entry>(callable->fnPtr)(callable->context, lanes);
+	REQUIRE(lanes[0] == 0u);
+	REQUIRE(lanes[1] == 0u);
+	REQUIRE(lanes[2] == 0u);
+	REQUIRE(lanes[3] == 0u);
 }
 
 TEST_CASE("sljit: the session applies the tuple rule", "[sljit]")
