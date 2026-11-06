@@ -254,3 +254,26 @@ REQUIRE(vectorFirst->fnPtr != nullptr);
 using VectorFirst = std::int32_t (*)(void*, std::uint64_t, std::uint64_t, std::int32_t);
 CHECK(reinterpret_cast<VectorFirst>(vectorFirst->fnPtr)(vectorFirst->context, lo, hi, 21) == 21);
 }
+
+TEST_CASE("the call cache follows the backend's v128 spelling", "[callcache][v128][abi]")
+{
+	// The call cache describes a `v128` parameter to libffi as two scalar words by
+	// default and as one 16-byte aggregate when the backend says so. The two are
+	// the same ABI on SysV and differ on MS x64, where an aggregate is passed by
+	// reference (docs/backends/LIBJIT_ARGUMENT_DEFECT.md §12). This pins the flag
+	// the cache reads; the cif shape follows from it by construction.
+	auto libjit = WASM::Runtime::create("libjit");
+	REQUIRE(libjit != nullptr);
+	auto libjitModule = libjit->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "v128_boundary_order.wasm");
+	WASM::RegistryImportResolver imports;
+	WASM::ModuleInstance& libjitInstance = libjit->instantiate(*libjitModule, imports);
+	CHECK(libjitInstance.v128ParameterIsAggregate());
+
+	auto sljit = WASM::Runtime::create("sljit");
+	REQUIRE(sljit != nullptr);
+	auto sljitModule = sljit->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "v128_boundary_order.wasm");
+	WASM::ModuleInstance& sljitInstance = sljit->instantiate(*sljitModule, imports);
+	CHECK_FALSE(sljitInstance.v128ParameterIsAggregate());
+}

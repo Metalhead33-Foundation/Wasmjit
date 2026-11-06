@@ -346,6 +346,31 @@ carries in its signature translator -- a capability query, not a new concept.
 Until then: LibJIT on MS x64 is **provisional**, correct for direct calls, and
 wrong for `v128` parameters passed through the call cache.
 
+### 12.1 Implemented (2026-11-06): the cache asks the backend
+
+The gap above is closed, provisionally, by making the host boundary follow the
+same rule the rest of the seam already uses -- *ask the backend*:
+
+* `WasmModuleInstance` carries `v128ParameterIsAggregate` (default `false`, the
+  canonical two words) with a setter and a getter.
+* The LibJIT backend sets it to `true` in `ModuleCompiler::compileFunctions`,
+  immediately before it compiles anything, with the reason in the comment.
+* `WasmCallCache` reads it: for a `v128` parameter it emits two
+  `ffi_type_uint64` by default, and one 16-byte `FFI_TYPE_STRUCT` of two
+  `uint64` eightbytes when the backend spells it as an aggregate. libffi then
+  classifies that struct exactly as the target ABI requires -- INTEGER, INTEGER
+  on SysV, by reference on MS x64.
+
+Pinned by `[callcache][v128][abi]`: a LibJIT instance reports the aggregate
+spelling, an SLJIT instance reports the canonical one.
+
+**Provisional**: no MS x64 machine is available, so the *behaviour* of the MS x64
+path is untested; only its *shape* is now correct by construction. What can be
+said without a Windows host is that both sides of a LibJIT host call now agree on
+one spelling instead of two, and that the flag is the single place that decides
+it.
+
+
 
 
 
