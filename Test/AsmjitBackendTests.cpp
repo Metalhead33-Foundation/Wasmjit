@@ -125,3 +125,20 @@ TEST_CASE("AsmJit extends packed i8 and i16 storage to i32", "[asmjit][storage]"
 	CHECK(i16Signed(&i16) == 0xFFFF8001u);
 	CHECK(i16Unsigned(&i16) == 0x00008001u);
 }
+
+TEST_CASE("AsmJIT refuses a v128 result rather than miscompiling it", "[asmjit][v128][abi]")
+{
+// The canonical rule says a v128 result crosses through a caller-supplied
+// 16-byte buffer (docs/backends/V128_SIGNATURE_DECISION.md). The backend does not
+// implement that path yet, and it *refuses* the shape at instantiation with a
+// diagnostic instead of returning the vector's buffer address where the signature
+	// declares a vector register. This pins the refusal until the buffer path lands
+	// (docs/ABI_REFACTOR_POST_MORTEM.md section 6, follow-up 1).
+	auto runtime = WASM::Runtime::create("asmjit");
+	REQUIRE(runtime != nullptr);
+	auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "asmjit_vec_result.wasm");
+	WASM::RegistryImportResolver imports;
+	CHECK_THROWS_WITH(runtime->instantiate(*module, imports),
+			Catch::Matchers::ContainsSubstring("AsmJit supports only"));
+}

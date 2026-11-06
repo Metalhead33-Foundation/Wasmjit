@@ -83,6 +83,12 @@ suite is evidence of *what it tests*, never of what it does not.
    SLJIT's implementation: trailing pointer argument, `void` return, body copies
    16 bytes. Test it the way SLJIT's was tested -- a pre-filled buffer that must
    come back zeroed, so a no-op fails.
+   *Measured 2026-11-06:* the backend does not miscompile the shape today, it
+   **refuses** it at instantiation ("AsmJit supports only i32/i64/f32/f64
+   results"), pinned by `[asmjit][v128][abi]`. So this is a **capability
+   addition, not a bug fix**, and the refusal is the correct interim behaviour --
+   the `compile()` return path that looks like it would hand back a buffer
+   address is unreachable for vectors.
 2. **SLJIT stack-passed argument slots.** SLJIT currently *refuses* signatures
    needing more than six argument words (three `v128` parameters). Implementing
    §36's plan restores that capability: cap the declared saved registers, and
