@@ -1218,3 +1218,37 @@ needs the most work, and the reason it was scheduled first — that it cannot ge
 it did not need to be first.
 
 Suite **21618 assertions in 730 cases**, green; `abi-check.sh` OK; Doxygen 0 warnings; tree clean.
+
+### P4 step 1 done: SLJIT's parameter boundary already is the canonical rule (2026-11-06)
+
+`[sljit][v128][order][abi]` calls `v128_boundary_order.wasm` through a pointer declared with the **canonical**
+shapes:
+
+```cpp
+using ScalarFirst = std::int32_t (*)(void*, std::int32_t, std::uint64_t, std::uint64_t);
+using VectorFirst = std::int32_t (*)(void*, std::uint64_t, std::uint64_t, std::int32_t);
+```
+
+Both pass — `13` from lane 2 of `{11,12,13,14}` and `21` from the scalar after the vector. That is the
+strongest form of the claim available: the test does not pass *because* a 16-byte aggregate happens to share
+SysV's register pair (which is how every earlier vector test passed); it passes because SLJIT's `beginFunction`
+really does describe a vector parameter as **two word slots**.
+
+So **SLJIT needs no code change for `v128` parameters.** The rule that was an internal convention is now the
+documented one, and it is asserted.
+
+### What remains for SLJIT
+
+Only the **result** path: a `v128` result through the multi-value buffer (the decision's half that no backend
+implements). Everything else in P4 for SLJIT is done by having been right already.
+
+### The pin's value, stated once more
+
+Two backend pins now exist and both were written *before* the corresponding change:
+
+| Pin | Proves | Cost |
+|---|---|---|
+| `[libjit][v128][order]` | LibJIT's current one-slot boundary, in both orders | 7 assertions |
+| `[sljit][v128][order][abi]` | SLJIT **already** matches the canonical two-word boundary | 7 assertions |
+
+Suite **21625 assertions in 731 cases**, green.

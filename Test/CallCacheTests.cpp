@@ -221,3 +221,36 @@ std::filesystem::path(WASM_TEST_DIR) / "v128_boundary_order.wasm");
 	CHECK(reinterpret_cast<VectorFirst>(vectorFirst->fnPtr)(vectorFirst->context,
 			AbiBoundaryVector {{11, 12, 13, 14}}, 21) == 21);
 }
+
+
+TEST_CASE("SLJIT already passes a v128 parameter as two scalar words",
+"[sljit][v128][order][abi]")
+{
+	// P4's revised order puts SLJIT first because its `beginFunction` describes a
+// vector parameter as two word slots already. This pins that with the canonical
+// declaration -- two uint64_t -- so it fails unless the compiled code really
+// reads two words, rather than passing because a 16-byte aggregate happens to
+// share the SysV register pair.
+auto runtime = WASM::Runtime::create("sljit");
+REQUIRE(runtime != nullptr);
+auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "v128_boundary_order.wasm");
+WASM::RegistryImportResolver imports;
+WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+
+// lanes {11, 12, 13, 14} in the canonical low-first order.
+const std::uint64_t lo = 11ull | (12ull << 32);
+const std::uint64_t hi = 13ull | (14ull << 32);
+
+const std::optional<WASM::Callable> scalarFirst = instance.exportedFunction("scalar_then_vector");
+REQUIRE(scalarFirst.has_value());
+REQUIRE(scalarFirst->fnPtr != nullptr);
+using ScalarFirst = std::int32_t (*)(void*, std::int32_t, std::uint64_t, std::uint64_t);
+CHECK(reinterpret_cast<ScalarFirst>(scalarFirst->fnPtr)(scalarFirst->context, 0, lo, hi) == 13);
+
+const std::optional<WASM::Callable> vectorFirst = instance.exportedFunction("vector_then_scalar");
+REQUIRE(vectorFirst.has_value());
+REQUIRE(vectorFirst->fnPtr != nullptr);
+using VectorFirst = std::int32_t (*)(void*, std::uint64_t, std::uint64_t, std::int32_t);
+CHECK(reinterpret_cast<VectorFirst>(vectorFirst->fnPtr)(vectorFirst->context, lo, hi, 21) == 21);
+}
