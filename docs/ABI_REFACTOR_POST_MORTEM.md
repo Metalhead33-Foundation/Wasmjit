@@ -102,7 +102,16 @@ suite is evidence of *what it tests*, never of what it does not.
    refusal into a wrong answer, which is strictly worse. So the unit starts with
    a probe, not an edit.
 
-   *Probe design (one stand-alone program, no backend changes).* Build a
+   **Measured 2026-11-06: the plan is not implementable.** The probe was run --
+   with SLJIT directly, seven declared integer arguments, six saved registers --
+   and `sljit_emit_enter` **aborts** in `function_check_arguments`. SLJIT cannot
+   *declare* an argument slot that has no saved register, so there is no stack
+   slot to read from: the API has no way to name one. The backend's refusal at
+   that same threshold is therefore the ceiling, not a temporary gap, and lifting
+   it needs a change in SLJIT itself. Pinned by `[sljit][args][abi]`, which
+   asserts the refusal threshold equals `SLJIT_NUMBER_OF_SAVED_REGISTERS`.
+
+   *Original probe design, kept for the record.* Build a
    seven-integer-argument function with SLJIT directly, return
    `SLJIT_MEM1(SLJIT_SP)` at a candidate offset, and sweep the offset until the
    call `fn(nullptr, 1, 2, 3, 4, 5, 42)` returns `42`. That gives:

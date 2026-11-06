@@ -42,6 +42,9 @@ include(../WasmBase/WasmBase.pri)
 
 INCLUDEPATH += $$PWD/..
 INCLUDEPATH += $$PWD/../Tools/Bindings
+# The SLJIT-derived backend include (sljitLir.h); the [sljit] unit tests that
+# measure SLJIT’s own ABI need it.
+INCLUDEPATH += $$PWD/../extern/sljit/sljit_src
 
 # Compile every AssemblyScript test module found under Test/wasm into its own .wasm output
 # using a single shared node_modules install under Test/, not one per module.
