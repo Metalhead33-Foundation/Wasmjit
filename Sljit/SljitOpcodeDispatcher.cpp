@@ -115,6 +115,16 @@ extern "C" sljit_sw sljitTrapPending()
 }
 
 //! Reports the spec's `unreachable` trap without returning through a Wasm frame.
+extern "C" void sljitReportCastFailure() noexcept
+{
+	WASM::reportTrap(WASM::TrapKind::CastFailure);
+}
+
+extern "C" void sljitReportNullStructure() noexcept
+{
+	WASM::reportTrap(WASM::TrapKind::NullStructureReference);
+}
+
 extern "C" void sljitReportNullArray() noexcept
 {
 	WASM::reportTrap(WASM::TrapKind::NullArrayReference);
@@ -3177,9 +3187,14 @@ void OpcodeDispatcher::dispatchStructNew(WASM::TypeIdx arg)
 		for (std::size_t i = fields.size(); i-- > 0;) {
 			const std::size_t offset = WASM::gcStructFieldOffset(fields, i);
 			const std::size_t depth = stackWidths_.size() - 1;
-			const int width = stackWidths_.back();
-			loadSlot(SLJIT_R1, depth, width == 4 ? 4 : 8);
-			emit(sljit_emit_op1(compiler_, width == 4 ? SLJIT_MOV32 : SLJIT_MOV,
+			// A packed field stores only its low byte or word.
+			sljit_s32 storeOp = SLJIT_MOV;
+			if (fields[i].storage.isPacked)
+				storeOp = fields[i].storage.packed == WASM::ValueTypeCode::I8 ? SLJIT_MOV_U8 : SLJIT_MOV_U16;
+			else if (stackWidths_.back() == 4)
+				storeOp = SLJIT_MOV32;
+			loadSlot(SLJIT_R1, depth, 4);
+			emit(sljit_emit_op1(compiler_, storeOp,
 					SLJIT_MEM1(SLJIT_R0), static_cast<sljit_sw>(offset), SLJIT_R1, 0));
 			pop();
 		}
@@ -3376,6 +3391,51 @@ void OpcodeDispatcher::dispatchArrayLen()
 	stackWidths_.back() = 4;
 }
 
+void OpcodeDispatcher::dispatchStructGetS(WASM::TypeIdx arg1, uint32_t arg2)
+{
+	emitStructGetPacked(arg1, arg2, true);
+}
+
+void OpcodeDispatcher::dispatchStructGetU(WASM::TypeIdx arg1, uint32_t arg2)
+{
+	emitStructGetPacked(arg1, arg2, false);
+}
+
+void OpcodeDispatcher::emitStructGetPacked(WASM::TypeIdx arg1, uint32_t arg2, bool signExtend)
+{
+	if (!reachable_)
+		return;
+	const WASM::CoreTypeView view = module_.typeView(arg1);
+	require(view.kind() == WASM::CanonTypeKind::Struct, "struct.get_s/u requires a struct type");
+	const std::span<const WASM::CanonFieldType> fields = view.structFields();
+	require(arg2 < fields.size(), "struct.get_s/u field index is out of range");
+	require(fields[arg2].storage.isPacked, "struct.get_s/u requires a packed field");
+	requireStack(1);
+	require(stackWidths_.back() == 8, "struct.get_s/u requires a reference operand");
+	if (!measureOnly_) {
+		loadSlot(SLJIT_R1, stackWidths_.size() - 1, 8);
+		sljit_jump* notNull = sljit_emit_cmp(compiler_, SLJIT_NOT_EQUAL, SLJIT_R1, 0, SLJIT_IMM, 0);
+		if (notNull == nullptr)
+			ok_ = false;
+		emitHelper(SLJIT_ARGS0V(), &sljitReportNullStructure);
+		emitTrapBranch();
+		sljit_label* done = sljit_emit_label(compiler_);
+		if (done == nullptr)
+			ok_ = false;
+		else if (notNull != nullptr)
+			sljit_set_label(notNull, done);
+		// The trap block clobbered R1: reload, then read the packed field.
+		loadSlot(SLJIT_R1, stackWidths_.size() - 1, 8);
+		const bool isI8 = fields[arg2].storage.packed == WASM::ValueTypeCode::I8;
+		const sljit_s32 loadOp = isI8 ? (signExtend ? SLJIT_MOV_S8 : SLJIT_MOV_U8)
+				: (signExtend ? SLJIT_MOV_S16 : SLJIT_MOV_U16);
+		emit(sljit_emit_op1(compiler_, loadOp, SLJIT_R2, 0, SLJIT_MEM1(SLJIT_R1),
+				static_cast<sljit_sw>(WASM::gcStructFieldOffset(fields, arg2))));
+		storeSlot(SLJIT_R2, stackWidths_.size() - 1, 4);
+	}
+	stackWidths_.back() = 4;
+}
+
 void OpcodeDispatcher::dispatchStructSet(WASM::TypeIdx arg1, uint32_t arg2)
 {
 	if (!reachable_)
@@ -3434,7 +3494,7 @@ void OpcodeDispatcher::dispatchStructGet(WASM::TypeIdx arg1, uint32_t arg2)
 		sljit_jump* notNull = sljit_emit_cmp(compiler_, SLJIT_NOT_EQUAL, SLJIT_R1, 0, SLJIT_IMM, 0);
 		if (notNull == nullptr)
 			ok_ = false;
-		emitHelper(SLJIT_ARGS0V(), &sljitReportNullReference);
+		emitHelper(SLJIT_ARGS0V(), &sljitReportNullStructure);
 		emitTrapBranch();
 		sljit_label* done = sljit_emit_label(compiler_);
 		if (done == nullptr)
@@ -3462,6 +3522,137 @@ void OpcodeDispatcher::dispatchRefFunc(WASM::FuncIdx arg)
 			static_cast<sljit_sw>(arg)));
 	emitHelper(SLJIT_ARGS2(P, P, 32), &ModuleCompiler::resolveCallable);
 	storeSlot(SLJIT_R0, stackWidths_.size() - 1, 8);
+}
+
+void OpcodeDispatcher::emitRefCast(const WASM::HeapType& arg, bool nullable)
+{
+	require(arg.isTypeIndex, "ref.cast on an abstract heap type is not lowered yet");
+	requireStack(1);
+	require(stackWidths_.back() == 8, "ref.cast requires a reference operand");
+	if (measureOnly_)
+		return;
+	const std::size_t depth = stackWidths_.size() - 1;
+	const std::uint32_t expected = module_.typeId(WASM::LocalTypeIdx{arg.typeIndex}).value;
+	loadSlot(SLJIT_R1, depth, 8);
+	// The nullable form passes null through; the non-null form traps on it.
+	sljit_jump* nullPasses = nullptr;
+	if (nullable) {
+		nullPasses = sljit_emit_cmp(compiler_, SLJIT_EQUAL, SLJIT_R1, 0, SLJIT_IMM, 0);
+		if (nullPasses == nullptr)
+			ok_ = false;
+	} else {
+		sljit_jump* notNull = sljit_emit_cmp(compiler_, SLJIT_NOT_EQUAL, SLJIT_R1, 0, SLJIT_IMM, 0);
+		if (notNull == nullptr)
+			ok_ = false;
+		emitHelper(SLJIT_ARGS0V(), &sljitReportNullReference);
+		emitTrapBranch();
+		sljit_label* afterNull = sljit_emit_label(compiler_);
+		if (afterNull == nullptr)
+			ok_ = false;
+		else if (notNull != nullptr)
+			sljit_set_label(notNull, afterNull);
+		// The trap block called a helper: reload the reference.
+		loadSlot(SLJIT_R1, depth, 8);
+	}
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R3, 0, SLJIT_MEM1(SLJIT_R1),
+			static_cast<sljit_sw>(WASM::GcHeader::kTypeIdOffset)));
+	sljit_jump* matches = sljit_emit_cmp(compiler_, SLJIT_EQUAL, SLJIT_R3, 0,
+			SLJIT_IMM, static_cast<sljit_sw>(expected));
+	if (matches == nullptr)
+		ok_ = false;
+	emitHelper(SLJIT_ARGS0V(), &sljitReportCastFailure);
+	emitTrapBranch();
+	sljit_label* afterCast = sljit_emit_label(compiler_);
+	if (afterCast == nullptr)
+		ok_ = false;
+	else if (matches != nullptr)
+		sljit_set_label(matches, afterCast);
+	if (nullable && nullPasses != nullptr)
+		sljit_set_label(nullPasses, afterCast);
+}
+
+void OpcodeDispatcher::dispatchRefCast(const WASM::HeapType& arg)
+{
+	if (!reachable_)
+		return;
+	emitRefCast(arg, false);
+}
+
+void OpcodeDispatcher::dispatchRefCastNull(const WASM::HeapType& arg)
+{
+	if (!reachable_)
+		return;
+	emitRefCast(arg, true);
+}
+
+void OpcodeDispatcher::dispatchRefTest(const WASM::HeapType& arg)
+{
+	if (!reachable_)
+		return;
+	require(arg.isTypeIndex, "ref.test on an abstract heap type is not lowered yet");
+	requireStack(1);
+	require(stackWidths_.back() == 8, "ref.test requires a reference operand");
+	const std::size_t depth = stackWidths_.size() - 1;
+	if (!measureOnly_) {
+		const std::uint32_t expected = module_.typeId(WASM::LocalTypeIdx{arg.typeIndex}).value;
+		loadSlot(SLJIT_R1, depth, 8);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R2, 0, SLJIT_IMM, 0));
+		sljit_jump* isNull = sljit_emit_cmp(compiler_, SLJIT_EQUAL, SLJIT_R1, 0, SLJIT_IMM, 0);
+		if (isNull == nullptr)
+			ok_ = false;
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R3, 0, SLJIT_MEM1(SLJIT_R1),
+				static_cast<sljit_sw>(WASM::GcHeader::kTypeIdOffset)));
+		sljit_jump* mismatch = sljit_emit_cmp(compiler_, SLJIT_NOT_EQUAL, SLJIT_R3, 0,
+				SLJIT_IMM, static_cast<sljit_sw>(expected));
+		if (mismatch == nullptr)
+			ok_ = false;
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R2, 0, SLJIT_IMM, 1));
+		sljit_label* done = sljit_emit_label(compiler_);
+		if (done == nullptr)
+			ok_ = false;
+		else {
+			if (isNull != nullptr) sljit_set_label(isNull, done);
+			if (mismatch != nullptr) sljit_set_label(mismatch, done);
+		}
+		storeSlot(SLJIT_R2, depth, 4);
+	}
+	stackWidths_.back() = 4;
+}
+
+void OpcodeDispatcher::dispatchRefTestNull(const WASM::HeapType& arg)
+{
+	if (!reachable_)
+		return;
+	require(arg.isTypeIndex, "ref.test on an abstract heap type is not lowered yet");
+	requireStack(1);
+	require(stackWidths_.back() == 8, "ref.test requires a reference operand");
+	const std::size_t depth = stackWidths_.size() - 1;
+	if (!measureOnly_) {
+		const std::uint32_t expected = module_.typeId(WASM::LocalTypeIdx{arg.typeIndex}).value;
+		loadSlot(SLJIT_R1, depth, 8);
+		// A null passes the nullable test; otherwise the type id decides.
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R2, 0, SLJIT_IMM, 1));
+		sljit_jump* isNull = sljit_emit_cmp(compiler_, SLJIT_EQUAL, SLJIT_R1, 0, SLJIT_IMM, 0);
+		if (isNull == nullptr)
+			ok_ = false;
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R2, 0, SLJIT_IMM, 0));
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R3, 0, SLJIT_MEM1(SLJIT_R1),
+				static_cast<sljit_sw>(WASM::GcHeader::kTypeIdOffset)));
+		sljit_jump* mismatch = sljit_emit_cmp(compiler_, SLJIT_NOT_EQUAL, SLJIT_R3, 0,
+				SLJIT_IMM, static_cast<sljit_sw>(expected));
+		if (mismatch == nullptr)
+			ok_ = false;
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R2, 0, SLJIT_IMM, 1));
+		sljit_label* done = sljit_emit_label(compiler_);
+		if (done == nullptr)
+			ok_ = false;
+		else {
+			if (isNull != nullptr) sljit_set_label(isNull, done);
+			if (mismatch != nullptr) sljit_set_label(mismatch, done);
+		}
+		storeSlot(SLJIT_R2, depth, 4);
+	}
+	stackWidths_.back() = 4;
 }
 
 void OpcodeDispatcher::dispatchRefAsNonNull()

@@ -431,12 +431,18 @@ protected:
 	void dispatchStructNewDefault(WASM::TypeIdx arg) override; //!< `struct.new_default`.
 	void dispatchStructGet(WASM::TypeIdx arg1, uint32_t arg2) override; //!< `struct.get`.
 	void dispatchStructSet(WASM::TypeIdx arg1, uint32_t arg2) override; //!< `struct.set`.
+	void dispatchStructGetS(WASM::TypeIdx arg1, uint32_t arg2) override; //!< `struct.get_s`.
+	void dispatchStructGetU(WASM::TypeIdx arg1, uint32_t arg2) override; //!< `struct.get_u`.
 	void dispatchArrayNew(WASM::TypeIdx arg) override; //!< `array.new`.
 	void dispatchArrayGet(WASM::TypeIdx arg) override; //!< `array.get`.
 	void dispatchArraySet(WASM::TypeIdx arg) override; //!< `array.set`.
 	void dispatchArrayLen() override; //!< `array.len`.
 	void dispatchRefFunc(WASM::FuncIdx arg) override; //!< `ref.func`.
 	void dispatchRefAsNonNull() override; //!< `ref.as_non_null`.
+	void dispatchRefTest(const WASM::HeapType& arg) override; //!< `ref.test`.
+	void dispatchRefTestNull(const WASM::HeapType& arg) override; //!< `ref.test (ref null ...)`.
+	void dispatchRefCast(const WASM::HeapType& arg) override; //!< `ref.cast`.
+	void dispatchRefCastNull(const WASM::HeapType& arg) override; //!< `ref.cast (ref null ...)`.
 	void dispatchRefEq() override; //!< `ref.eq`.
 	void dispatchI8x16Add() override; //!< `i8x16.add`.
 	void dispatchI8x16Sub() override; //!< `i8x16.sub`.
@@ -932,6 +938,19 @@ private:
 	 * \param address Helper entry point.
 	 */
 	void emitV128Binary(sljit_sw address);
+	/*!
+	 * \brief Emits a reference cast: null handling plus the type-id check.
+	 * \param arg Target heap type (must be a concrete type index).
+	 * \param nullable Whether null passes through instead of trapping.
+	 */
+	void emitRefCast(const WASM::HeapType& arg, bool nullable);
+	/*!
+	 * \brief Emits a sign- or zero-extending read of a packed struct field.
+	 * \param arg1 Struct type index.
+	 * \param arg2 Field index.
+	 * \param signExtend Whether the field is sign-extended.
+	 */
+	void emitStructGetPacked(WASM::TypeIdx arg1, uint32_t arg2, bool signExtend);
 	/*!
 	 * \brief Emits one checked memory load.
 	 * \param arg Memory immediate.

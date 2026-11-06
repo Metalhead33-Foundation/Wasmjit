@@ -412,3 +412,120 @@ mitigation that worked, in order: isolate the backend, then make read and write
 paths address identically rather than using a different memory-operand *form* for
 the same computation. Both halves of §12's advice earned their place — the
 isolation made the crash attributable, and the shape change made it disappear.
+
+## 14. `ref.test` (both backends), and structural canonicalisation (2026-11-06)
+
+`ref.test` and `ref.test (ref null …)` are lowered in both backends as a **type-id
+compare against the object header**:
+
+| | SLJIT | AsmJit |
+|---|---|---|
+| null handling | `cmp ref, 0` → result stays 0 (non-null form) or 1 (nullable form) | `test`/`jz` to the end label |
+| type check | `MOV32` from `[ref + kTypeIdOffset]`, `cmp` against `module.typeId(...)` | `mov dword_ptr`, `cmp` |
+| result | one word in the operand slot, widened to `i32` | one `gp32` |
+
+No helpers, no allocation, no traps: `ref.test` is a pure predicate, which is why
+it is the cheapest GC op in the series.
+
+Fixture `gc_ref_test.wat`: `test_same` → 1, `test_other` → 0, `test_null` → 0,
+`test_null_ok` → 1. Counts: `[gc]` **153 assertions in 8 cases**; full suite
+**21236 in 707**; `[headerdoc]` green; Doxygen 0 warnings.
+
+### The finding: type identity is *structural*, not syntactic
+
+The first fixture declared `$a` and `$b` as *structurally identical* structs
+(`(struct (field i32))` twice) and expected `ref.test (ref $b)` on an `$a` object to
+be **0**. It returns **1** — and correctly so: Wasm GC canonicalises structurally
+equal types, so the two declarations share one type id, and the header comparison
+cannot tell them apart.
+
+The fixture now makes `$b` carry an `i64` field, and the test is meaningful again.
+
+**Lesson for the saga post-mortem:** a type index is a *syntactic* handle; a type
+**id** is a canonical identity. Any lowering that compares identities must say
+which one it compares (this one compares ids, deliberately), and any fixture that
+claims two types are different must make them *structurally* different. This is the
+sixth input-side fixture mistake in the series, and the first whose cause was a
+*correct* semantic rule rather than a miscounted lane or a copy-paste.
+
+**Still refused, both backends:** `ref.cast` / `ref.cast (ref null …)` (needs the
+cast trap kinds and the same non-null handling), `br_on_cast`/`br_on_cast_fail`,
+packed (`i8`/`i16`) and `v128` elements, `array.fill`/`copy`/`new_fixed`/`new_data`/
+`new_elem`. `br_on_non_null` remains blocked on AsmJit block parameters.
+
+## 15. `ref.cast` (both backends), and a small design win (2026-11-06)
+
+`ref.cast` and `ref.cast (ref null …)` landed in both backends as a **type-id
+check** with the two trap kinds this needs:
+
+| | non-null target | nullable target |
+|---|---|---|
+| null operand | trap `NullReference` | passes through unchanged |
+| wrong type id | trap `CastFailure` | trap `CastFailure` |
+| right type id | the reference, unchanged | the reference, unchanged |
+
+**Design win: one emitter per backend, not two opcodes.** The two forms differ
+only in the null branch, so each backend has a single `emitRefCast(arg, nullable)`
+that both dispatchers call. That is the first place in the GC series where two
+opcodes were deliberately folded into one lowering instead of being written twice —
+worth copying for `br_on_cast`/`br_on_cast_fail`, which differ the same way.
+
+Two new trap helpers per backend (`…ReportCastFailure`), which brings the per-kind
+wrapper count to eleven and strengthens the `wasm_trap(kind)` argument from §11.
+
+**The register-liveness rule earned its place again.** In SLJIT the null branch
+calls a helper, so the reference is reloaded after that block before the type id is
+read; without the reload the comparison would read a clobbered register — the same
+failure §11 and the SIMD slices recorded.
+
+Fixture `gc_ref_cast.wat`: `cast_ok` → 0, `cast_fail` → trap, `cast_null_fail` →
+trap, `cast_null_ok` → 1, asserted per backend and as an A/B pair. Counts: `[gc]`
+**185 assertions in 10 cases**; full suite **21268 in 709**.
+
+**Still refused, both backends:** `br_on_cast`/`br_on_cast_fail`,
+`ref.cast`/`ref.test` against **abstract** heap types (they need the type-hierarchy
+subtyping the core models but the lowering does not consult yet), packed (`i8`/`i16`)
+and `v128` elements, `array.fill`/`copy`/`new_fixed`/`new_data`/`new_elem`, and
+`br_on_non_null` (AsmJit block parameters).
+
+## 16. Packed struct fields, and a trap-kind fidelity fix (2026-11-06)
+
+Packed (`i8`/`i16`) struct fields are lowered in both backends, which needed three
+pieces rather than one:
+
+| Piece | SLJIT | AsmJit |
+|---|---|---|
+| store (`struct.new`) | `SLJIT_MOV_U8` / `SLJIT_MOV_U16` | `mov byte_ptr`, `operands[i].r8()` / `word_ptr`, `.r16()` |
+| signed read (`struct.get_s`) | `SLJIT_MOV_S8` / `SLJIT_MOV_S16` | `movsx` from `byte_ptr` / `word_ptr` |
+| unsigned read (`struct.get_u`) | `SLJIT_MOV_U8` / `SLJIT_MOV_U16` | `movzx` |
+
+One emitter per backend for the two reads (`emitStructGetPacked(arg1, arg2,
+signExtend)`) — the same fold-two-opcodes-into-one pattern as `ref.cast` in §15.
+The `.r8()`/`.r16()` register views are the byte/word analogue of the `.r32()` fix
+in §11: **a store into a narrow memory operand needs the narrow register view, not
+the 64-bit one.**
+
+Fixture `gc_packed.wat`: `packed_get_s` → −1, `packed_get_u` → 255,
+`packed_roundtrip` → 127 (a positive byte), asserted per backend and as an A/B
+pair. Counts: `[gc]` **210 assertions in 12 cases**; full suite **21293 in 711**.
+
+### Fidelity fix found on the way: “null reference” is not one trap kind
+
+The reference lowering traps **`NullStructureReference`** for `struct.get`/`set`,
+and `NullArrayReference` for the array ops. My struct access had been using the
+generic `NullReference` — the *wrong kind*, and trap kinds are observable to an
+embedder. Both backends now have `…ReportNullStructure`, and `struct.get`/`set`
+(including the new packed reads) trap with it; the array ops already used the
+array kind.
+
+**Lesson for the saga post-mortem:** the core distinguishes null traps *per
+aggregate kind*, so a backend that emits the generic one produces a *differently
+reported* trap for the same program — a silent fidelity bug that no value-level
+test would catch, only a kind-level assertion. Worth a test that asserts the
+`TrapKind`, not merely that a trap occurred; that is now the top test gap of this
+series.
+
+**Still refused, both backends:** packed **array** elements (`array.get_s/u`, packed
+`array.set`), `v128` fields/elements, `array.fill`/`copy`/`new_fixed`/`new_data`/
+`new_elem`, `br_on_cast`/`br_on_cast_fail`/`br_on_non_null` (AsmJit block
+parameters), and abstract heap types in `ref.test`/`ref.cast`.
