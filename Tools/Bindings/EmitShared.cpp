@@ -482,18 +482,9 @@ void emitRustParams(std::ostringstream& out, const Json& entry, bool resultBuffe
 		if (!first)
 			out << ", ";
 		first = false;
-		const std::string rustTypeName = rustType(params[i]);
-		if (rustTypeName == "wasm_v128") {
-			// Generated declarations are native-side in both directions (a host
-			// function the JIT calls, or a pointer into JIT code), so the native
-			// two-word rule applies: lo then hi.
-			out << argumentName(entry, i) << "_lo: u64, "
-				<< argumentName(entry, i) << "_hi: u64";
-		} else {
-			out << argumentName(entry, i) << ": " << rustTypeName;
-			if (isReference(params[i]))
-				out << " /* borrowed */";
-		}
+		out << argumentName(entry, i) << ": " << rustType(params[i]);
+		if (isReference(params[i]))
+			out << " /* borrowed */";
 	}
 	if (resultBuffer) {
 		if (!first)

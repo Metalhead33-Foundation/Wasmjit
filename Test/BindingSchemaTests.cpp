@@ -2539,5 +2539,7 @@ testStore().types(), WASM::Bindings::Direction::HostToGuest, "v128_param");
 
 	const std::string rust = WASM::Bindings::emit(schema, WASM::Bindings::Language::Rust);
 	INFO(rust);
-	CHECK(rust.find("lane1") != std::string::npos);
+	// Guest-side Rust: one wasm vector parameter, not the native pair.
+	CHECK(rust.find("wasm_v128") != std::string::npos);
+	CHECK(rust.find("arg0_lo") == std::string::npos);
 }

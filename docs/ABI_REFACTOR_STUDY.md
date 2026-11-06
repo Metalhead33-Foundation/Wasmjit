@@ -862,3 +862,35 @@ adapter that must hand a guest-side vector onward), but it is not a precondition
 
 The two remaining sites are the Rust pair, and they now have a visible target: the same change that just
 worked for C, applied to Rust, with the `[bindings][v128][abi]` pin extended to assert the Rust spelling too.
+
+### Item 3 done: Rust is on the wasm side too, and the pin asserts it (2026-11-06)
+
+`EmitRust` emits the 16-byte type again (`pub struct wasm_v128 { pub bytes: [u8; 16] }`) and a vector
+parameter is **one** parameter, not a `lo`/`hi` pair. The pin grew the assertions that make the move
+permanent rather than incidental:
+
+```cpp
+CHECK(rust.find("wasm_v128") != std::string::npos);
+CHECK(rust.find("arg0_lo") == std::string::npos);
+```
+
+Suite: `[bindings][v128]` **6 assertions**, full suite **21597 in 729 cases**, green.
+
+### The two families, now aligned with the rule
+
+| Site | Spelling | Consumer | Correct? |
+|---|---|---|---|
+| `EmitCpp` `cpp-typedefs` / `cpp-source` | `{ uint64_t lo; uint64_t hi; }` | WasmJIT-facing | **yes** |
+| `EmitShared` C header | `{ uint8_t bytes[16]; }` | guest-facing | **yes** |
+| `EmitRust` type + parameters | `{ pub bytes: [u8; 16] }`, one param | guest-facing | **yes** |
+| `EmitDynamic` (5 spellings), `EmitWeb` | 16-byte arrays / `wasm_v128` | guest-facing | already the wasm shape — needs only the pin |
+
+Which means the emitter split your review demanded is **done for the two languages that had it wrong**, and
+the remaining two emitters were already on the correct side; what they lack is an assertion, not a change.
+
+### What this sequence demonstrated
+
+Three items, three builds, zero reverts: pin first (which *measured* the inconsistency), then the C header,
+then Rust — each one visible to the pin, each one verified by the same gate. Compare with the earlier
+attempts, which had no pin and no measurement and lost two rounds to guessing. **The fixture was not
+preparation for the work; it was the thing that made the work possible.**
