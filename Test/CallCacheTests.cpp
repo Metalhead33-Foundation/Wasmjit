@@ -183,3 +183,41 @@ CHECK(sizeof(Entry) >= offsetof(Entry, paramKinds) + sizeof(std::vector<WASM::Va
 // And the size is a multiple of the alignment the ABI promises for the record.
 CHECK(sizeof(Entry) % alignof(Entry) == 0u);
 }
+
+
+namespace {
+
+//! A 16-byte vector as the compiled convention spells it today.
+struct alignas(16) AbiBoundaryVector {
+	std::int32_t lanes[4];
+};
+
+} // namespace
+
+
+TEST_CASE("a v128 parameter keeps its position next to a scalar", "[libjit][v128][order]")
+{
+	// Subtask 1 of P4: pin the parameter layout before the signature changes, so the
+	// split cannot silently shift an index. Both orders are exercised because the
+	// second export is the one an index-only fix gets wrong.
+	auto runtime = WASM::Runtime::create("libjit");
+	REQUIRE(runtime != nullptr);
+	auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "v128_boundary_order.wasm");
+	WASM::RegistryImportResolver imports;
+	WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+
+	const std::optional<WASM::Callable> scalarFirst = instance.exportedFunction("scalar_then_vector");
+	REQUIRE(scalarFirst.has_value());
+	REQUIRE(scalarFirst->fnPtr != nullptr);
+	using ScalarFirst = std::int32_t (*)(void*, std::int32_t, AbiBoundaryVector);
+	CHECK(reinterpret_cast<ScalarFirst>(scalarFirst->fnPtr)(scalarFirst->context, 0,
+			AbiBoundaryVector {{11, 12, 13, 14}}) == 13);
+
+	const std::optional<WASM::Callable> vectorFirst = instance.exportedFunction("vector_then_scalar");
+	REQUIRE(vectorFirst.has_value());
+	REQUIRE(vectorFirst->fnPtr != nullptr);
+	using VectorFirst = std::int32_t (*)(void*, AbiBoundaryVector, std::int32_t);
+	CHECK(reinterpret_cast<VectorFirst>(vectorFirst->fnPtr)(vectorFirst->context,
+			AbiBoundaryVector {{11, 12, 13, 14}}, 21) == 21);
+}

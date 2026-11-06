@@ -1009,3 +1009,30 @@ side; `uint64_t arg0_lo, uint64_t arg0_hi` present and `wasm_v128 arg0` absent f
 Two mechanical mistakes on the way — the helper landed after its first use, and the brace-less `for`
 swallowed only one of two inserted statements — both caught immediately because the *pin* defined what
 success looked like.
+
+## 18. P4 split into subtasks, and subtask 1 landed (2026-11-06)
+
+P4 is not one change. Reading LibJIT's prolog showed why: with a split signature a `v128` parameter
+arrives as **two `jit_type_ulong`**, but a LibJIT local is **one 16-byte aggregate**, so the binding cannot
+merely pick a different index — it must **synthesise the aggregate from two scalars**. That makes four
+subtasks, each with its own gate:
+
+| # | Subtask | Gate | State |
+|---|---|---|---|
+| **1** | **the pin**: a fixture with a vector adjacent to a scalar in **both** orders | passes on today's convention | **done** |
+| 2 | signature: a `v128` parameter becomes two `jit_type_ulong` | pin still green | — |
+| 3 | prolog: build the 16-byte aggregate from the two halves | pin green, `[libjit]` green | — |
+| 4 | import thunk: the same walk and packing outward | full suite + A/B | — |
+
+### Subtask 1
+
+`v128_boundary_order.wat` has `(i32, v128)` and `(v128, i32)` exports; the test calls both through the
+compiled pointer and asserts the *other* parameter survives — `13` from lane 2 of `{11,12,13,14}`, and `21`
+from the scalar after the vector. Every existing vector fixture has the vector alone in its signature, which
+is why nothing has ever exercised this adjacency.
+
+`[libjit][v128][order]`: **7 assertions, green** on today's convention; full suite **21618 in 730 cases**.
+
+The second export is the important one: after the split, the scalar's own index moves, so a change that only
+fixes the vector's index passes the first export and fails the second. That is the pin doing for P4 what it
+did for the emitters — defining success before the edit exists.
