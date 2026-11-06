@@ -347,6 +347,16 @@ public:
 	//! \param dataIdx Data segment index.
 	//! \param srcOffset Byte offset inside the data segment.
 	void arrayInitFromData(void* array, uint32_t localTypeIdx, uint32_t dataIdx, uint32_t srcOffset);
+	//! Copies an element segment into an allocated GC array of function references.
+	//! \param array Object from `allocateArrayObject`, already of the right length.
+	//! \param localTypeIdx The array's module-local type index.
+	//! \param elemIdx Element segment index.
+	//! \param packedOffsetAndIndex `segmentElementIndex << 32 | elementIndex`, packed
+	//!        because the helper ABI carries four arguments at most.
+	//! Only `funcref` arrays are lowered: a GC reference element would need a
+	//! retain per element, and this path does not do ownership yet.
+	void arrayInitFromElem(void* array, uint32_t localTypeIdx, uint32_t elemIdx,
+			uint64_t packedOffsetAndIndex);
 	//! Tests whether one runtime type id is a subtype of another.
 	//! \param actualTypeId Type id stored in the object header.
 	//! \param expectedTypeId Type id of the target type.

@@ -2628,3 +2628,146 @@ Suite **21541 assertions in 724 cases**, green; `[headerdoc]` green; Doxygen 0 w
 five of six wrappers retired, 17 of 18 sites on the single entry point, one site named and diagnosed.
 
 `array.new_elem` remains next and untouched, with its plan unchanged.
+
+## 50. Third hypothesis disproved, and the design question answered (2026-11-06)
+
+### `Unreachable` resists conversion even without parking
+
+§49 predicted the last site failed because `emitTrap` parks into a frame the epilogue is tearing down,
+and proposed `emitTrapNoPark` for return sites. It was written — no parking, kind in `R0`, one-argument
+helper, unconditional branch — and the site **still faulted**.
+
+Three hypotheses are now excluded by experiment, not argument:
+
+| Hypothesis | Test | Result |
+|---|---|---|
+| The kind argument breaks the site | convert with a parked `R0` | failed (§49) |
+| Register clobbering breaks the site | park `R0`–`R3` | failed (§49) |
+| Frame parking is invalid at a return site | `emitTrapNoPark`, no frame stores at all | **failed (§50)** |
+
+What remains is that the site differs in a way none of these names — most likely that `unreachable`'s
+lowering is emitted **once for the whole function** rather than once per path, so it is reached from
+several control-flow points with different live-register sets, and any single convention for it is
+wrong for some caller. That is a testable statement, but it needs a code dump of that function, not a
+fourth guess: the next step is `sljit_dump` (or a disassembly of the compiled body) with the two
+variants side by side.
+
+Gate D stands where §49 left it: **two entry points, 17 of 18 sites on `sljitReportTrap`**, suite green.
+
+### The design question: would virtual registers or a virtual stack have prevented this class?
+
+Yes, and this arc contains the controlled experiment.
+
+**AsmJit versus SLJIT, same change, measured.** §31 wired the subtype predicate into both backends. On
+AsmJit it was one edit and zero debug cycles: `FuncSignature` names each argument, and the node-based
+register allocator knows what is live across an `invoke` and spills it. On SLJIT it took three failed
+rewrites, and the eventual bug (§30) was an argument assigned to the wrong physical register. §44's
+corruption is the same missing abstraction seen from another angle: **nothing knows which values must
+survive a call**, so each site must remember, and some did not.
+
+**A virtual operand stack is the cheaper fix, and it is half-built already.** The lowering tracks every
+Wasm value by *slot* (`stackWidths_` → frame offsets); the operand stack is virtual. The failures all
+come from the places that optimise a value into a register and then emit a helper call over it. The
+discipline "a value lives in its slot; a register is a temporary between two instructions" removes the
+entire class, at a load/store per operand — roughly 2–3× on arithmetic-heavy code. `payloadSlotOffset`
+is precisely a hand-rolled, per-primitive version of what an allocator does globally.
+
+**So the three backends sit on a deliberate spectrum:**
+
+| Backend | Has an allocator? | Consequence measured here |
+|---|---|---|
+| LibJIT | yes (stack-machine IR) | never had these bugs; owns both sides of every call |
+| AsmJit | yes (node RA) | one edit per change, zero debug cycles |
+| SLJIT | no — positional `SLJIT_ARGSn`, fixed `R0`–`R3` ABI | fast and small, but every helper call is a hand-assembled frame |
+
+That is a choice, not an accident, and it is documented in [`ABI_PORTABILITY.md`](../ABI_PORTABILITY.md)
+§7: a typed signature (AsmJit) versus a positional descriptor (SLJIT). The arc's mitigation is not to
+add an allocator to SLJIT but to make the invariants hold **in the primitive** — `emitPendingTrapCheck`
+and `emitTrap` park automatically, so no call site can be wrong.
+
+**And the "operating system" feeling is accurate.** A Wasm runtime with GC, an ABI contract, traps as
+statuses, continuations and threads is an operating system in miniature; the defence is the one this
+arc converged on — one owner per fact, contracts stated where the code cannot drift from them, and
+invariants enforced by construction rather than by review.
+
+### A restoration mishap, and the rule it re-teaches
+
+Restoring this step used `/tmp/sljh_gd.bak` for the header while the source came from a later backup —
+a stale pair. The build failed with three "no declaration matches" errors, and the fix was to rebuild
+the header from `HEAD` plus the two declarations added since.
+
+**Backups must be paired, or replaced by git.** A `.cpp` from step N and a `.hpp` from step N−2 compile
+into a lie; the fourth time this arc has had a restoration accident (§25, §34, §43, §50), and the only
+reliable baseline in all four was a commit.
+
+### Status
+
+Suite **21541 assertions in 724 cases**, green; `[headerdoc]` green; Doxygen 0 warnings. Gate D: 17 of
+18 sites converted, five wrappers retired, one site diagnosed to the limits of experiment and now
+requiring a code dump rather than a hypothesis.
+
+## 51. `array.new_elem`: the core contract landed, and the element type is not what it looked like (2026-11-06)
+
+### What landed
+
+`ModuleInstance::arrayInitFromElem(array, localTypeIdx, elemIdx, packedOffsetAndIndex)`:
+
+- resolves the segment through `module->elementSegments`, honouring the dropped-segment rule
+  (dropped ⇒ empty) exactly as `table.init` does;
+- checks `srcOffset + length <= entryCount` **before** writing, and reports
+  `OutOfBoundsTableAccess` on failure (the kind `table.init` uses for its source check);
+- copies `length` function references from `initIndices` into the array's element slots, resolving
+  imported and internal functions through `internals.importStorage` / `internals.internalCallables`;
+- refuses, by name, two cases it cannot do correctly: **`initExprs` segments** (needing const
+  expression evaluation, which no backend does yet) and **non-`funcref` element types** (a GC
+  reference would need a retain per element, and this path does ownership for nobody).
+
+The four-argument helper ABI is respected by the same packing trick as `array.new_data`:
+`segmentElementIndex << 32 | elementIndex`.
+
+### Where the wiring stopped, and the fact it produced
+
+The SLJIT dispatcher, helper and fixture were written and the fixture **built**, then the test failed
+with the refusal firing:
+
+```
+array.new_elem only lowers funcref elements
+```
+
+So the array's element type is **not** `ValueTypeCode::FuncRef`: a `funcref` element arrives as a
+*typed reference* (`Ref`/`RefNull` carrying an abstract heap type of `Func`). The predicate was written
+against the wrong representation, and the refusal — deliberately loud — is what surfaced it rather than
+a silent wrong answer. That is the refusal-by-name policy paying for itself again, in a place no test
+would have reached.
+
+Everything else about the lowering compiled and the fixture loaded, so what remains is small and
+exactly specified: match the element on **the heap type** (`AbstractHeapType::Func`) as well as on the
+`FuncRef` opcode, re-add the fixture and the three assertions (`elem_len == 1`,
+`elem_not_null == 0`, `elem_oob` traps `OutOfBoundsTableAccess`).
+
+The dispatcher, helper and fixture were reverted at the end of the pass; the core method stays. Suite
+**21541 assertions in 724 cases**, green.
+
+### Handover for the ABI refactor
+
+`array.new_elem` is the last item before the `v128` / register-and-stack refactor, and it is now a
+small, bounded piece of work with its contract already in place. Three properties of the arc should be
+carried into that refactor, because every one of them was earned the hard way:
+
+1. **Contracts first, tests at the seam** (§12, §30, §37): the predicate and layout work that was
+   *tested without a backend* cost one patch each; the work that started at the backend cost three
+   rewrites.
+2. **Invariants belong in primitives, not call sites** (§45, §47, §49): parking, probing and trapping
+   all became correct the moment they were `emitTrap`'s job instead of eighteen sites' job. The
+   `v128` signature decision is the same shape of problem at a larger scale — one canonical rule in the
+   core, not per-backend conventions.
+3. **A frame-resident primitive is not valid everywhere** (§49, §50): a register-and-stack refactor is
+   precisely the change that moves where values live, so every primitive that assumes "the frame is
+   addressable here" must be re-audited as part of it — including the one site (`Unreachable`) that
+   still resists, and which is now the best available test case for the new convention.
+
+### Status
+
+Suite **21541 assertions in 724 cases**, green; `[headerdoc]` green; Doxygen 0 warnings. Gate D: 17 of
+18 sites on the single entry point. `array.new_elem`: core contract done, backend wiring specified to
+the line. `v128` remains deferred, as instructed, and the ABI refactor now has a written handover.

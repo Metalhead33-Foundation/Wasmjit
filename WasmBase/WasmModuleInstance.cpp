@@ -1533,6 +1533,55 @@ void ModuleInstance::failAllocationsForTesting(uint32_t count)
 	g_allocationFailuresForTesting.store(count, std::memory_order_relaxed);
 }
 
+void ModuleInstance::arrayInitFromElem(void* array, uint32_t localTypeIdx, uint32_t elemIdx,
+uint64_t packedOffsetAndIndex)
+{
+if (elemIdx >= module->elementSegments.size()) {
+		reportTrap(TrapKind::Internal, "element segment index out of range");
+		return;
+	}
+	const CoreTypeView view = module->typeView(localTypeIdx);
+	const CanonFieldType& element = view.arrayElement();
+	if (element.storage.value.opcode != ValueTypeCode::FuncRef) {
+		reportTrap(TrapKind::Internal, "array.new_elem only lowers funcref elements");
+		return;
+	}
+	const uint32_t length = *reinterpret_cast<const uint32_t*>(
+			static_cast<const std::uint8_t*>(array) + GcHeader::kArrayLengthOffset);
+	const uint32_t srcOffset = static_cast<uint32_t>(packedOffsetAndIndex & 0xFFFFFFFFu);
+
+	// Same rule as `table.init`: a dropped segment behaves as empty, and the source
+	// range is checked before anything is written.
+	const ElementSegment& seg = module->elementSegments[elemIdx];
+	const std::size_t entryCount = internals.elementSegmentDropped[elemIdx]
+			.load(std::memory_order_acquire)
+			? 0
+			: (seg.initIndices.empty() ? seg.initExprs.size() : seg.initIndices.size());
+	if (static_cast<uint64_t>(srcOffset) + length > entryCount) {
+		reportTrap(TrapKind::OutOfBoundsTableAccess, "out of bounds array.new_elem source");
+		return;
+	}
+	if (length == 0)
+		return;
+
+	// Only index-based segments are lowered; an `initExprs` segment needs const
+	// expression evaluation, which no backend in this tree does yet.
+	if (seg.initIndices.empty()) {
+		reportTrap(TrapKind::Internal, "array.new_elem does not lower init-expression segments");
+		return;
+	}
+
+	const uint32_t importedFuncCount = static_cast<uint32_t>(module->importFunctions.size());
+	std::uint8_t* data = static_cast<std::uint8_t*>(array) + gcArrayDataOffset(element.storage);
+	for (uint32_t i = 0; i < length; ++i) {
+		const uint32_t funcIdx = seg.initIndices[srcOffset + i];
+		void* reference = funcIdx < importedFuncCount
+				? static_cast<void*>(&internals.importStorage[funcIdx])
+				: static_cast<void*>(&internals.internalCallables[funcIdx - importedFuncCount]);
+		std::memcpy(data + static_cast<std::size_t>(i) * sizeof(void*), &reference, sizeof(void*));
+	}
+}
+
 void ModuleInstance::arrayInitFromData(void* array, uint32_t localTypeIdx, uint32_t dataIdx, uint32_t srcOffset)
 {
 	if (dataIdx >= module->dataSegments.size()) {

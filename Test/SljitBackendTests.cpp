@@ -2913,3 +2913,4 @@ TEST_CASE("a refused allocation traps on both backends",
 	probe(*sljitInstance, "sljit");
 	probe(*asmInstance, "asmjit");
 }
+
