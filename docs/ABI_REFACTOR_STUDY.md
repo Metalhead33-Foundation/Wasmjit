@@ -834,3 +834,31 @@ With the pin in place the order is forced:
 3. **Rust and the dynamic/web emitters** follow the same rule.
 
 Suite **21596 assertions in 729 cases**, green.
+
+### Item 2 done: the guest-facing C header is on the wasm spelling (2026-11-06)
+
+`EmitShared:416` emits `typedef struct wasm_v128 { uint8_t bytes[16]; }` again — the **wasm** side of the
+boundary — and the whole suite passes: `[bindings]` **942 assertions in 44 cases**, full suite **21596 in
+729**.
+
+The earlier three failures that blocked this change do **not** reproduce. Reading the gate's output (the
+rule from §46) showed zero compiler errors: the generated conformance program compiles with the guest-side
+header on the wasm spelling and the adapter on the native pair, because the adapter carries **its own**
+type and converts nothing — the two headers are never reconciled in one translation unit.
+
+That is worth stating plainly, because it corrects a conclusion I had drawn and repeated: **the emitter
+families can diverge today; no translation layer is required for the tests to pass.** The translation
+layer §17 specifies is still the *right* thing for a real embedder (which will pass a native pair to an
+adapter that must hand a guest-side vector onward), but it is not a precondition for the split.
+
+### Where the two families now stand
+
+| Site | Spelling | Correct per the consumer rule |
+|---|---|---|
+| `EmitCpp` `cpp-typedefs` / `cpp-source` | `{ uint64_t lo; uint64_t hi; }` | **yes** — WasmJIT-facing |
+| `EmitShared:416` C header | `{ uint8_t bytes[16]; }` | **yes** — guest-facing |
+| `EmitShared:486` Rust parameters | `argN_lo: u64, argN_hi: u64` | **no** — guest-facing, should be one wasm vector |
+| `EmitRust:32` struct | `{ pub lo: u64, pub hi: u64 }` | **no** — same |
+
+The two remaining sites are the Rust pair, and they now have a visible target: the same change that just
+worked for C, applied to Rust, with the `[bindings][v128][abi]` pin extended to assert the Rust spelling too.
