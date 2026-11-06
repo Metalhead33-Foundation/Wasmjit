@@ -230,3 +230,81 @@ for a codegen reason, so when P4 starts, any failure is a *backend* failure and 
 `gcStorageAlign`. The test failed to compile against the documented name, which is exactly what a
 contract-first step is for: the prose and the code disagreed, and the disagreement surfaced in minutes
 instead of during a backend port.
+
+## 11. P3 findings: two places already record a *different* vector convention (2026-11-06)
+
+P3's job is to make the signature visible before changing it. It found two surfaces that already
+encode a vector convention — and both contradict the P0 decision.
+
+### F1 — the libffi call cache builds an aggregate, not two scalars
+
+`WasmBase/WasmCallCache.cpp` classifies a `v128` as a **16-byte, 16-aligned struct of four `i32`**:
+
+```cpp
+ffi_type* v128Type()
+{
+static ffi_type* const elements[] = {
+		&ffi_type_uint32, &ffi_type_uint32, &ffi_type_uint32, &ffi_type_uint32, nullptr };
+	static ffi_type type{16, 16, FFI_TYPE_STRUCT, const_cast<ffi_type**>(elements)};
+	return &type;
+}
+```
+
+On SysV this happens to land in the same two GPRs as two `uint64_t` — which is why nothing has broken.
+On **MS x64 it is passed by reference**, while the decision requires two registers. So the libffi fast
+path and the compiled-function path would use different conventions on Windows, and the fast path is
+the one an embedder reaches first through `ModuleCallCache`.
+
+**Why it was not fixed in this pass:** the fix is not `v128Type()`. A `v128` parameter must push **two**
+`ffi_type_uint64` entries into `argTypes` (two sites, `WasmCallCache.cpp` lines ~114 and ~219) **and**
+the `ffi_call` value marshalling must supply two `uint64_t` slots where it currently supplies one
+16-byte block. Changing the types without the marshalling produces a call that libffi cannot encode —
+a silent mismatch of exactly the kind this arc keeps finding. Both halves move together, with a test
+that calls a vector-taking export through the cache and compares against the compiled path.
+
+### F2 — the binding generator emits an aggregate too
+
+`Tools/Bindings` already emits a vector type, in four places:
+
+| File | Emission |
+|---|---|
+| `EmitCpp.cpp` (×2) | `struct wasm_v128 { std::uint8_t bytes[16]; };` |
+| `EmitDynamic.cpp` (×3) | `ctypes.c_ubyte * 16`, `uint8_t[16]`, `ubyte[16]` |
+
+That is the aggregate spelling the decision rejected, published to every binding consumer. It must
+become the canonical pair — two `uint64_t` (or the language's `uint64` pair) in `lo, hi` order — or the
+generated bindings will disagree with the runtime on Windows for the same reason as F1.
+
+### What F1 and F2 mean for the phase order
+
+P3 was scheduled as "mechanical, and they make the later change visible". It is visible: **two subsystems
+that are not backends already disagree with the decision.** That strengthens the study's §2.3 conclusion
+(the refactor is a core-and-test project, not a backend project) and adds a requirement to P4: a backend
+may not be converted until the call cache and the bindings emit the same convention, or the tests would
+compare two different ABIs and call the difference a parity failure.
+
+### Revised P3 exit criterion
+
+> The call cache and the binding generator emit the canonical **two-word** vector convention, and a test
+> calls one vector-taking export **through the libffi cache** and one **through the compiled path**,
+> asserting identical results. The plugin/runtime version constants are bumped with a recorded note.
+
+That is the gate P4 inherits; it is not yet met.
+
+### F1's exact fix, specified for the next pass
+
+Read against `WasmCallCache.cpp`, the change is five coordinated edits — which is why it is written
+down rather than half-applied:
+
+1. Add `std::vector<ValueTypeCode> paramKinds;` to `ModuleFfiEntry`.
+2. Populate it at both entry-construction sites (module cache ~line 114, component cache ~line 219).
+3. Expand the arg-type array: a `V128` parameter pushes **two** `&ffi_type_uint64` instead of one
+   aggregate (both sites).
+4. In `ModuleCallCache::call`, replace `arguments[i + 1u] = args[i]` with a slot-walking loop that
+   pushes `bytes` and `bytes + 8` for a vector parameter; `arguments` is already sized from
+   `entry.argTypes.size()`, so the count stays consistent once (3) and (4) move together.
+5. A test that calls a `v128`-taking export **through the cache** and **through the compiled path** and
+   asserts identical bits — the parity case P4 will otherwise be unable to interpret.
+
+Steps (3) and (4) are inseparable: types without marshalling is a call libffi cannot encode, and
+marshalling without types writes past the argument array.
