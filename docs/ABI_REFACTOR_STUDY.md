@@ -2594,3 +2594,49 @@ amend the decision note and is a milestone question, not a commit.
 ### State
 
 Everything reverted; suite **21648 assertions in 734 test cases**, green; tree clean.
+
+## 51. The seventh argument is fine in libjit -- so the defect is in our glue (2026-11-06)
+
+§50 concluded that the high half of the third vector "crosses on the stack" and, quoting the tree, that stack-passed
+aggregates are "damaged on this LibJIT". That conclusion was tested directly, with **no backend code involved**:
+
+```cpp
+jit_type_t params[7] = {jit_type_void_ptr, ulong, ulong, ulong, ulong, ulong, ulong};
+signature = (7 params) -> ulong;
+jit_insn_return(function, jit_value_get_param(function, 6));   // the 7th argument
+```
+
+called as `fn(nullptr, 1, 2, 3, 4, 5, 42)`.
+
+**It returns 42.** The new `[libjit][v128][ir]` case passes -- 24 assertions across four IR cases, all green.
+
+### What that rules out, and what it convicts
+
+| Candidate | Verdict |
+|---|---|
+| libjit mishandles stack-passed integer arguments | **false** -- measured |
+| the SysV register budget explanation from §50 | **incomplete** -- the boundary is real, the damage is not libjit's |
+| our own glue (prologue slot arithmetic or the driver's forwarding) | **the remaining suspect** |
+
+So the fix is ours to make. The 3-vector failure under the two-slot ABI is a defect in how *we* pass seven argument
+values through, not a limitation we have to design around -- which also means the "cap the signature at six words"
+option from §50 is unnecessary.
+
+### The one-line experiment that separates the two remaining sites
+
+`Callable` exposes both `fnPtr` (the driver) and `rawFnPtr` (the compiled body). The 3-vector `bitselect` test should
+be run against **`rawFnPtr`**:
+
+- if `rawFnPtr` gives `0xBABABABA`, the body and prologue are right and the defect is the **driver's forwarding**;
+- if it gives `0xBBBBBBAA` too, the defect is the **prologue's slot arithmetic** (or the signature itself).
+
+That is one line in the existing bisect test and it eliminates the last two candidates.
+
+### A permanent test was added
+
+`[libjit][v128][ir]` "the seventh integer argument arrives intact" stays in the tree: it is the measurement that keeps
+this from being re-blamed on libjit, and it is the smallest possible guard for the register-budget boundary.
+
+### State
+
+Suite **21654 assertions in 735 test cases**, green; tree clean.

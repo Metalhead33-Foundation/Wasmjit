@@ -295,3 +295,34 @@ jit_insn_ushr(function, hi, shift), jit_type_int, 0);
 
 	jit_context_destroy(context);
 }
+
+// Where does a seventh integer argument go? SysV gives six registers, so the
+// seventh crosses on the stack. This test contains no backend code at all: if it
+// fails, the damage is in libjit and no backend-side fix can recover it
+// (docs/ABI_REFACTOR_STUDY.md §50/§51).
+TEST_CASE("libjit: the seventh integer argument arrives intact", "[libjit][v128][ir]")
+{
+	jit_context_t context = jit_context_create();
+	REQUIRE(context != nullptr);
+	jit_context_build_start(context);
+
+	jit_type_t params[7] = {jit_type_void_ptr, jit_type_ulong, jit_type_ulong,
+			jit_type_ulong, jit_type_ulong, jit_type_ulong, jit_type_ulong};
+	jit_type_t signature =
+			jit_type_create_signature(jit_abi_cdecl, jit_type_ulong, params, 7, 1);
+	jit_function_t function = jit_function_create(context, signature);
+	// Return the last argument: the one SysV passes on the stack.
+	jit_insn_return(function, jit_value_get_param(function, 6));
+	jit_context_build_end(context);
+
+	REQUIRE(jit_function_compile(function) == JIT_RESULT_OK);
+	void* entry = nullptr;
+	REQUIRE(jit_function_compile_entry(function, &entry) == JIT_RESULT_OK);
+	REQUIRE(entry != nullptr);
+
+	using Fn = std::uint64_t (*)(void*, std::uint64_t, std::uint64_t, std::uint64_t,
+std::uint64_t, std::uint64_t, std::uint64_t);
+	CHECK(reinterpret_cast<Fn>(entry)(nullptr, 1, 2, 3, 4, 5, 42) == 42);
+
+	jit_context_destroy(context);
+}
