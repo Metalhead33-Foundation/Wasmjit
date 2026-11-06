@@ -2075,3 +2075,48 @@ operand as mutable storage, which is exactly the three families above and none o
 ### State
 
 Instrumentation removed, experiment reverted; suite **21648 assertions in 734 test cases**, green; tree clean.
+
+## 39. The instrumented index resolved to a source line, and to a real bug (2026-11-06)
+
+### Mapping `fn=22` to source
+
+The spec scripts are readable, so the index resolves exactly. The first module of `simd_bit_shift.wast` declares its
+exports in order; counting from zero puts **`fn=22` at line 38**:
+
+```wat
+(func (export "i64x2.shr_u_64") (param $0 v128) (result v128)
+  (i64x2.shr_u (local.get $0) (i32.const 64)))
+```
+
+A shift by the **full lane width** -- the degenerate count, where the spec says the result is all zeros. The
+instrumental run's shape (`params=1 v128params=1 results=1`, `type=1`) matches the one-parameter functions of that
+module, whose first member is `i8x16.shl_1` and whose 22nd is this one.
+
+### The minimal reproducer, and what it says
+
+A `(v128) -> v128` export with that exact body compiles and **returns non-zero where the spec requires zero**
+(two assertions failed; no crash). Two conclusions:
+
+1. `i8x16.shl` by 1 -- the op of the family's *head* function -- passes, so single-step shifts are fine.
+2. A shift count **equal to the lane width** produces a wrong value under the changed ABI. Because the suite is
+   green without the change and the spec expects zeros, the wrong value is introduced by the change, not
+   inherited.
+
+So the change has (at least) two defects: a wrong-result path on degenerate shift counts, and the segfault,
+which must be at a later function in the same module (`i64x2.shr_s_65`, shift by 65, is the next line).
+
+### Why a degenerate shift is a plausible casualty
+
+A lane-wise shift helper typically masks the count (`n & 63`) or computes `width - n`. At `n == width` this is the
+only input for which those two formulations disagree with the spec (which mandates zero), and it is also the only
+input where a synthesised operand slot changes which formulation the optimiser picks. That is exactly the profile
+of a bug that survives every ordinary test and appears only when the IR around the operand changes.
+
+### Next, in order
+1. `i64x2.shr_s` with count **65** -- the next function in the same script, one more export.
+2. Confirm the wrong-result boundary: counts 63, 64, 65.
+3. Only then the segfault, which is a *different* defect a few functions further on.
+
+### State
+
+Experiment reverted; suite **21648 assertions in 734 test cases**, green; tree clean.
