@@ -347,3 +347,46 @@ work, and it is specified here rather than half-applied.
 | plugin/runtime version bump | still to do with P4, when the compiled convention actually moves |
 
 Suite **21560 assertions in 726 cases**, green.
+
+## 12. P4, backend one: LibJIT — the exact migration (specified 2026-11-06)
+
+LibJIT is first because it owns both sides of every call and bridges with a closure
+([`ABI_PORTABILITY.md`](ABI_PORTABILITY.md) §7.1): it cannot get the *calling convention* wrong, so any
+failure it produces is a failure of the **core side** of the contract. That makes it the cheapest place
+to be told we are wrong.
+
+### What it has today
+
+- `OpcodeDispatcher::v128Type()` builds a 16-byte `jit_type_t`; a `v128` parameter, local and block
+  value are all that one struct type, and a vector-typed local is zeroed by a helper
+  (`wasm_v128_zero`) because a struct-typed slot is otherwise uninitialised.
+- Parameters are read **positionally**: `jit_value_get_param(fn, i + 1)` (index 0 is the context), and
+  the same positional assumption appears in the import thunk (`callArgs[1 + p] = get_param(thunk, p + 1)`).
+
+### The migration, in four parts
+
+| Part | Change | Hazard |
+|---|---|---|
+| **1. Signature** | a `v128` parameter contributes **two** `jit_type_ulong` entries instead of one 16-byte struct | none — it is construction |
+| **2. Parameter binding** | `locals.push_back(get_param(fn, i + 1))` becomes a **param-index walk**: each Wasm parameter advances the index by 2 for a vector and 1 otherwise; the two halves are combined into the internal 16-byte value | **this is the slot-numbering hazard**, and it is the one that cost SLJIT three rounds (§30, §44, §49) |
+| **3. Import thunk** | `callArgs[1 + p]` obeys the same walk in reverse: a vector argument supplies its two words | same hazard, mirrored |
+| **4. Proof** | `[libjit]` vector tests plus the existing A/B case; a fixture that puts a scalar *before* and *after* the vector (`lane3_after_scalar` is the model) | a wrong walk shifts every later parameter and is otherwise invisible |
+
+### Why the walk is written down as a *data* structure, not as arithmetic
+
+The SLJIT experience is unambiguous: three separate corruption investigations came from hand-maintained
+parameter/register arithmetic (§30 mis-packed arguments, §44 a clobbered pointer, §49 a park in the
+wrong place). The LibJIT migration must therefore precompute, once per function, a
+`std::vector<ParamSlot> { wasmIndex, isVector, firstIndex }` and use *it* in all three places (binding,
+thunk, and any later re-indexing) — one source of truth for a mapping that is otherwise recomputed by
+hand in three loops. That is the `payloadSlotOffset` lesson (invariant in one place) applied to
+parameter layout.
+
+### The gate
+
+> LibJIT passes its own tag, the A/B vector case, and a fixture with a scalar **after** a vector
+> parameter — with the internal struct representation unchanged, so the migration touches only the
+> boundary.
+
+Not started: this section is the specification the next pass executes, because the change is exactly the
+class of edit that must not be half-applied. Suite **21560 assertions in 726 cases**, green.
