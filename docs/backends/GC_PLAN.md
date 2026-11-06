@@ -84,3 +84,101 @@ pass; a half-landed `struct.new` is far worse than a refused one.
 3. Add `dispatchStructNew` + `dispatchStructGet` to SLJIT first (its slot model
    makes the field store one `MOV`), then mirror to AsmJit, and gate on the
    `two_structs_not_equal` fixture.
+
+## 7. API gaps found by reading the code (2026-11-06)
+
+The plan above assumed the core already exposes everything a backend needs. It
+does not; the survey found two concrete facts and one gap.
+
+**Fact 1 — allocation is a one-line wrapper, and it is core-owned.** LibJIT's
+helper is literally:
+
+```c
+static void* wasm_struct_new_default_impl(VMContext* vm, uint32_t size, uint32_t typeIndex)
+{
+    return reinterpret_cast<WASM::ModuleInstance*>(vm)->allocateStructObject(size, typeIndex);
+}
+```
+
+So a new backend adds its own three-argument trampoline around
+`ModuleInstance::allocateStructObject` (and `allocateStructObject(size, type,
+descriptor)` for the `_desc` form). There is **no** shared allocation entry
+point to add — the helper is backend-local by design, exactly like
+`sljitMemoryAddress`.
+
+**Fact 2 — the layout contract exists, but only for the pieces already used.**
+`WasmBase/WasmGcHeader.hpp` provides `gcAlignUp`, `gcStorageBytes` (including
+`v128` = 16 and pointers = `sizeof(void*)`), `gcStorageAlign`, and
+`gcArrayDataOffset` — the last with a comment saying it *must* be identical in the
+runtime and in a backend's array addressing (docs/proposals/GC.md §6.3 / H1).
+
+**Gap — there is no `gcStructFieldOffset`.** The header has the array case but not
+the struct case, so each backend would have to re-derive field offsets by walking
+`gcStorageAlign` over the field list. That is precisely the drift the H1 contract
+exists to prevent: LibJIT today derives offsets through its own `jit_type_t`
+layout, and a second implementation would be a third opinion about the same
+bytes.
+
+**The fix, before any backend code:** add to `WasmGcHeader.hpp`
+
+```c
+size_t gcStructFieldOffset(std::span<const StorageType> fields, size_t index);
+size_t gcStructSize(std::span<const StorageType> fields);
+```
+
+as inline helpers, and (ideally) switch LibJIT's `struct.get`/`struct.set`
+offsets onto them, so the runtime, the reference backend and the new backends all
+read the same two functions. That is a small, header-only core change with its own
+header-doc obligations, and it is the correct first commit of the GC slice.
+
+## 8. Revised first steps
+
+1. **Add `gcStructFieldOffset` / `gcStructSize`** to `WasmGcHeader.hpp` (inline,
+   documented, `[headerdoc]`-clean), plus a unit test that pins the offsets of a
+   mixed struct (`i32`, `i64`, `v128`, `externref`, packed `i8`) against the
+   alignment rules.
+2. Point LibJIT's struct field access at them (behaviour-preserving; the existing
+   GC tests are the check).
+3. Implement `dispatchStructNew`/`dispatchStructNewDefault`/`dispatchStructGet` in
+   **SLJIT** (allocation trampoline + `MOV` per field), then in **AsmJit**.
+4. Gate on the plan's §3 fixture, including `two_structs_not_equal` — which
+   retires the `ref.eq` gap.
+
+No GC code was written in this session: step 1 is a core-header change and step 3
+needs step 1, so the slice starts at the header, not at a backend.
+
+## 9. Progress: step 1 landed (2026-11-06)
+
+**`WasmBase/WasmGcHeader.hpp` now provides the struct-layout half of the H1
+contract**, next to the array helper:
+
+```c
+size_t gcStructFieldOffset(std::span<const CanonFieldType> fields, size_t index);
+size_t gcStructSize(std::span<const CanonFieldType> fields);
+```
+
+Both are inline, Doxygen-documented in the header style, and derive offsets from
+`GcHeader::kHeaderBytes` (16) + `gcStorageAlign`/`gcStorageBytes` — the same two
+helpers the runtime and LibJIT already agree on. `gcStructSize` pads the total to
+the strictest field alignment, matching `jit_type_create_struct`.
+
+Verified: the full suite (21110 assertions in 700 cases), `[headerdoc]` and
+`doxygen` (0 warnings) all pass, i.e. the header still compiles for every
+translation unit that includes it.
+
+**Still to do, in order:**
+
+1. The **offset unit test** (mixed struct: `i32`, `i64`, `v128`, reference,
+   packed `i8`) — the fixture that proves the two helpers and LibJIT's
+   `jit_type_t` layout agree. This is the gate for step 1, not the compile.
+2. Re-point LibJIT's `struct.get`/`struct.set` offsets at the helpers.
+3. `dispatchStructNew`/`NewDefault`/`Get` in SLJIT, then AsmJit.
+4. The `two_structs_not_equal` fixture, which retires the `ref.eq` gap.
+
+**Lesson recorded for the saga post-mortem.** The first edit of the header used
+`gcArrayDataOffset`'s *signature plus body* as its anchor and replaced it, deleting
+the function and leaving its closing brace behind — caught immediately by reading
+the region back, not by the build. The rule this reinforces: when appending a
+function to a header, anchor on the **closing brace plus a following line**, never
+on the declaration of the function above; and re-read the edited region before
+building, because a misplaced brace can still parse.
