@@ -665,3 +665,82 @@ Before writing a line of code, read §3, §6 and §12; then produce:
 The measure of success is not "it runs the benchmark". It is that another
 author can read this note, the new backend's README and its post-mortem, and
 write the next backend without rediscovering the same ABI or ownership failure.
+
+## 15. What the second-and-third-backend arc taught a fourth author
+
+Distilled from the AsmJit/SLJIT parity arc
+([`backends/ASMJIT_SLJIT_P3.md`](backends/ASMJIT_SLJIT_P3.md) and its `SIMD*`,
+`REFS1`, `GC1` companions). These are the things that cost real time once and
+would cost it again; each is cheaper to honour than to rediscover.
+
+**1. Put every shared contract in the core before the second backend needs it.**
+The GC layout functions (`gcStructFieldOffset`, `gcStructSize`, `gcArrayDataOffset`)
+plus one offset test were written *before* either backend lowered a struct access.
+The payoff was measurable: structs, references, packed struct fields and packed array
+elements each cost **one patch and zero debugging cycles**, because no backend ever
+had an opinion about an offset. A layout that lives in a backend is a layout that
+forks.
+
+**2. The narrow-register rule is not a tip, it is a class of bug.** `mov r64, r32` is
+invalid; moving an `i32` through a 64-bit register keeps whatever sits above bit 31.
+This bit the arc **twice**, the second time in freshly written code, and the second
+time it produced a crash (`SIGSEGV`) rather than a wrong value because the garbage
+became a loop counter. Use `.r32()`/`.r8()`/`.r16()` views; when a value becomes a
+loop bound, zero-extension is not cosmetic.
+
+**3. Silent mis-encoding beats loud failure for wasted time.** `SLJIT_MEM2` with a
+displacement mis-encoded a store on x86 without any error. The escape is to keep
+memories simple: a constant offset on `MEM1`, or the offset folded into a register
+first. Assume your toolkit's documented-but-rare addressing form is untested until a
+fixture proves otherwise.
+
+**4. Helper arity is an architectural constraint.** A five-argument helper cannot be
+called from a four-argument helper ABI. The fix was not a fifth register: it was a
+type-derived entry point (`allocateArrayObject(typeIdx, length)`) so the backend passes
+what it knows. Design helper signatures for the *narrowest* calling convention you
+support, not the widest you can emit.
+
+**5. Trap kinds are observable, per-aggregate, and easy to get wrong.** A generic
+`NullReference` where the core distinguishes `NullStructureReference` from
+`NullArrayReference` is a silent fidelity bug — and a global textual substitution across
+the per-kind wrappers then gave `array.len` the *structure* kind. Write one assertion
+per kind per backend (`trapKindOf`), and prefer a single entry point taking the kind as
+an argument over a wall of per-kind functions.
+
+**6. A limitation nobody asserts is a bug that looks like a feature.** `array.new`
+initialised element 0 only; it was recorded as a limitation and survived until a
+fixture happened to read element *1*. Assert the second element, not the first: reading
+index 0 is what everyone writes.
+
+**7. Loops: countdown counter plus walking pointer.** Not index-times-stride. It keeps
+every store at a zero displacement (see 3), needs no multiply, lets the element width
+stay a compile-time constant (packed elements become a store-opcode choice), and makes
+the termination condition a single `test`/`cmp` against zero.
+
+**8. Range checks belong in 64-bit arithmetic.** `index + length <= arrayLength` in 32
+bits wraps, and a wrapped bound walks off the object. Zero-extend both operands and sum
+in 64 bits: the trap then cannot be avoided.
+
+**9. Trap emission clobbers your scratch registers.** Reload the operands after the
+trap blocks (SLJIT: re-read the slots; AsmJit: let the register allocator re-materialise
+them). Anything held across a trap call must be re-derivable.
+
+**10. Parity is behaviour, not instruction sequences.** `ref.func` is a runtime resolver
+call on SLJIT and an address `lea` on AsmJit; both are correct. Compare exports' answers
+and trap kinds, never the emitted code — a second backend that emits different
+instructions is the normal case, not the suspicious one.
+
+**11. Classify the remaining work before starting it.** Every opcode is either
+*mechanical lowering on a proven contract* (one patch, no debug cycle) or *gated on one
+structural capability* (block parameters, a loop shape, a core subtype query). Open a
+gate **once**; never pick off gated opcodes one at a time, because each costs a full
+cycle and unlocks nothing else.
+
+**12. Documentation is compiled here.** A note that is not listed in
+[`index.md`](index.md) fails the `[docs]` test, and a header comment that is not
+Doxygen-shaped fails `[headerdoc]`. Treat a doc edit as a code change with a build.
+
+What this list is *for*: the measure of a backend is not how many opcodes it lowers.
+It is whether its **refusal inventory is explicit**, whether its **trap kinds match**
+the other backends, and whether its **post-mortem was opened on day one** — so that the
+next author inherits the failures instead of the debugging.

@@ -807,3 +807,114 @@ are where the wrong kind gets picked.
 | AsmJit block parameters | not started (3 opcodes) |
 | Abstract heap types in `ref.test`/`ref.cast` | not started |
 | One trap entry point per backend (Gate D) | deferred with reason above |
+
+## 22. `array.fill`, and a real bug found by the loop shape (2026-11-06)
+
+`array.fill` landed on both backends — the second user of the counted-loop shape, and
+the first that **has to trap inside the same lowering**: a null check, a range check,
+then a store loop.
+
+| Step | SLJIT | AsmJit |
+|---|---|---|
+| null | `sljitReportNullArray` + `emitTrapBranch()` | `test`/`jnz` past an `invoke` of `asmjitReportNullArray` |
+| range | `(u64)index + (u64)len <= (u64)arrayLength`, 64-bit so no wrap | same, in 64-bit GPs |
+| trap | `sljitReportArrayOob` + `emitTrapBranch()` | `invoke` of `asmjitReportArrayOob` + `emitPendingTrapReturn()` |
+| loop | cursor + countdown, constant-offset `MEM1` store | cursor + countdown, `ptr(cursor)` store |
+| scaling | `SLJIT_MUL index, elementBytes` | `shl` by `log2(elementBytes)` |
+
+Two details worth keeping:
+
+- **The range check is done in 64-bit arithmetic.** `index + len <= arrayLength` in 32
+  bits wraps: `index = 0xFFFF_FFFF, len = 2` would pass a 32-bit comparison and then
+  march off the array. Both operands are zero-extended 32-bit values, so the 64-bit sum
+  is exact and the trap is unavoidable.
+- **Everything is reloaded after the trap blocks.** Trap emission clobbers the integer
+  scratch registers, so the object, index, length and value are re-read from the
+  operand-stack slots (SLJIT) or re-materialised by the register allocator (AsmJit).
+
+### The bug the fixture found: `array.new` initialised one element
+
+The test that was supposed to prove `array.fill` instead failed on `array.new`:
+`fill_partial` returned 9 where 10 was expected, and `fill_zero_len` returned 0 where 5
+was expected. Both were the same defect — **`array.new` stored its initialiser into
+element 0 only**, leaving the rest as whatever the page contained. A previous arc knew
+this (it was recorded as a limitation), but nothing asserted it, so it read as a missing
+feature rather than a wrong answer.
+
+The loop shape is what fixed it: `array.new` is now *allocate + fill every element*, on
+both backends, and the assertions in `gc_array_fill.wat` (`fill_partial`, `fill_zero_len`)
+now pin the initialisation rather than the fill. That is the general form of the lesson
+repeated all arc: **a limitation nobody asserts is a bug that looks like a feature.**
+
+The cheapest way to have caught this a month earlier would have been one export reading
+element *n* after `array.new` — not element 0, which every fixture reads, because
+reading index 0 is what a hand-written test does first.
+
+### Counts and remaining surface
+
+`[gc]` **319 assertions in 18 cases**; `[headerdoc]` green; Doxygen 0 warnings. Remaining
+loop-based array ops (`copy`, `new_data`, `new_elem`) reuse this shape and differ only in
+where the source value comes from, so they are mechanical from here — `copy` additionally
+needs the memmove overlap case, and `new_data` reads a data segment through
+`VMContext`.
+
+## 23. `array.copy`, and a SLJIT label trap that cost a hung test (2026-11-06)
+
+`array.copy` landed on both backends: the first lowering here that needs the
+**memmove overlap rule**, because source and destination may be the same array.
+
+### The rule, implemented as two loops and a compare
+
+```
+  if (dstStart <= srcStart)  copy forward    (dst[i] = src[i], i ascending)
+  else                       copy backward   (from the last element, descending)
+```
+
+Forward and backward are each a counted loop of the shape §21 established. The
+direction is chosen at run time with one compare of the two start pointers — not by
+comparing the four indices, which is equivalent but needs two extra comparisons. Before
+the loops there are **four trap blocks**: destination null, source null, destination
+range, source range, each followed by a reload of the values it clobbers. The range
+checks use the same 64-bit sum as §22, for the same wrap reason.
+
+### The fixture has to distinguish the directions
+
+A copy test that passes with both directions is worthless, so the two overlap exports
+are chosen to give **different answers** if the direction is wrong:
+
+| Export | Setup | Correct | Wrong direction |
+|---|---|---|---|
+| `copy_down` (dst < src) | `[0,1,2,3]`, copy `src[1..4)` → `dst[0..3)` | `[1,2,3,3]` → 103 | `[3,3,3,3]` → 303 |
+| `copy_up` (dst > src) | `[0,1,2,3]`, copy `src[0..3)` → `dst[1..4)` | `[0,0,1,2]` → 2 | `[0,0,0,0]` → 0 |
+
+Plus distinct-array copy (78), a zero-length copy (must not move anything), a packed
+`i8` copy, and three trap exports asserting `OutOfBoundsArrayAccess` twice and
+`NullArrayReference` once, **per backend**.
+
+### The trap: in SLJIT a label is a position, not a handle
+
+The first version hung — the test ran past the 300-second cap. The cause is an SLJIT
+API asymmetry that is easy to carry over wrongly from AsmJit:
+
+| | AsmJit | SLJIT |
+|---|---|---|
+| Create | `new_label()` → unbound handle | *no such call* |
+| Position | `bind(label)` | `sljit_emit_label()` **binds where it is called** and returns it |
+| Jump to it | `jmp(label)` then `bind` | emit the jump, then `sljit_set_label(jump, label)` |
+
+The code created the join label before emitting the loops — in SLJIT that **placed** it
+there. So the backward loop's exit jumped to a position *before* the backward loop, ran
+it again, and looped for ever with a zero counter. The fix is structural: create the
+join label **after** both loops and back-patch every exit to it.
+
+The general lesson for a fourth backend: **port the control-flow shape, never the label
+idiom.** The two toolkits model a label oppositely, and a mechanical translation
+compiles cleanly, passes the non-overlapping cases, and hangs only when a loop is
+entered twice.
+
+### Counts
+
+`[gc]` **353 assertions in 19 cases**; `[headerdoc]` green; Doxygen 0 warnings.
+Remaining loop-based array ops: `new_data` and `new_elem`, which differ only in where
+the source values come from (a data segment and an element segment through
+`VMContext`).

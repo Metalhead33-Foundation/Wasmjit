@@ -2662,6 +2662,241 @@ protected:
 		values.push_back(object);
 	}
 
+	void dispatchArrayCopy(WASM::TypeIdx arg1, WASM::TypeIdx arg2) override
+	{
+		const WASM::CoreTypeView dstView = module.typeView(arg1);
+		if (dstView.kind() != WASM::CanonTypeKind::Array)
+			throw std::runtime_error("AsmJit array.copy requires an array type");
+		const WASM::CanonFieldType& element = dstView.arrayElement();
+		const bool packed = element.storage.isPacked;
+		const bool packedI8 = packed && element.storage.packed == WASM::ValueTypeCode::I8;
+		const int width = packed ? (packedI8 ? 1 : 2) : kindWidth(element.storage.value.opcode);
+		if (width != 1 && width != 2 && width != 4 && width != 8)
+			throw std::runtime_error("AsmJit array.copy does not lower this element type yet");
+		if (values.size() < 5)
+			throw std::runtime_error("AsmJit array.copy operand stack underflow");
+		auto length = values.back();
+		values.pop_back();
+		auto srcIndex = values.back();
+		values.pop_back();
+		auto srcObject = values.back();
+		values.pop_back();
+		auto dstIndex = values.back();
+		values.pop_back();
+		auto dstObject = values.back();
+		values.pop_back();
+		asmjit::FuncSignature voidSignature(asmjit::CallConvId::kCDecl);
+		voidSignature.set_ret(asmjit::TypeId::kVoid);
+		const auto trapCall = [&](const auto& reportFn) {
+			asmjit::InvokeNode* node = nullptr;
+			checkError(compiler.invoke(asmjit::Out(node),
+					reinterpret_cast<uint64_t>(reportFn), voidSignature),
+					"AsmJit array.copy trap emission failed");
+			emitPendingTrapReturn();
+		};
+		const auto nullCheck = [&](const asmjit::x86::Gp& object) {
+			asmjit::Label ok = compiler.new_label();
+			checkError(compiler.test(object, object), "AsmJit array.copy null test failed");
+			checkError(compiler.jnz(ok), "AsmJit array.copy null branch failed");
+			trapCall(&asmjitReportNullArray);
+			checkError(compiler.bind(ok), "AsmJit array.copy null label binding failed");
+		};
+		const auto rangeCheck = [&](const asmjit::x86::Gp& object, const asmjit::x86::Gp& index) {
+			auto arrayLength = compiler.new_gp64("arrayLength");
+			checkError(compiler.mov(arrayLength.r32(), asmjit::x86::dword_ptr(object,
+					static_cast<int32_t>(WASM::GcHeader::kArrayLengthOffset))),
+					"AsmJit array.copy length load failed");
+			auto endIndex = compiler.new_gp64("arrayCopyEndIndex");
+			checkError(compiler.mov(endIndex.r32(), index), "AsmJit array.copy index widening failed");
+			auto wideLength = compiler.new_gp64("arrayCopyLength");
+			checkError(compiler.mov(wideLength.r32(), length), "AsmJit array.copy length widening failed");
+			checkError(compiler.add(endIndex, wideLength), "AsmJit array.copy range sum failed");
+			asmjit::Label inBounds = compiler.new_label();
+			checkError(compiler.cmp(endIndex, arrayLength), "AsmJit array.copy range compare failed");
+			checkError(compiler.jbe(inBounds), "AsmJit array.copy range branch failed");
+			trapCall(&asmjitReportArrayOob);
+			checkError(compiler.bind(inBounds), "AsmJit array.copy range label binding failed");
+		};
+		nullCheck(dstObject);
+		nullCheck(srcObject);
+		rangeCheck(dstObject, dstIndex);
+		rangeCheck(srcObject, srcIndex);
+		const auto dataOffset = static_cast<int32_t>(WASM::gcArrayDataOffset(element.storage));
+		const auto elementBytes = static_cast<int32_t>(WASM::gcStorageBytes(element.storage));
+		int shift = 0;
+		for (int bytes = elementBytes; bytes > 1; bytes >>= 1)
+			++shift;
+		const auto cursorFor = [&](const asmjit::x86::Gp& object, const asmjit::x86::Gp& index,
+				const char* name) {
+			auto cursor = compiler.new_gp64(name);
+			checkError(compiler.mov(cursor, object), "AsmJit array.copy cursor setup failed");
+			checkError(compiler.add(cursor, asmjit::Imm(dataOffset)),
+					"AsmJit array.copy data offset failed");
+			auto offset = compiler.new_gp64("arrayCopyOffset");
+			checkError(compiler.mov(offset.r32(), index), "AsmJit array.copy offset widening failed");
+			if (shift != 0)
+				checkError(compiler.shl(offset, shift), "AsmJit array.copy offset scaling failed");
+			checkError(compiler.add(cursor, offset), "AsmJit array.copy index offset failed");
+			return cursor;
+		};
+		auto dstCursor = cursorFor(dstObject, dstIndex, "arrayCopyDst");
+		auto srcCursor = cursorFor(srcObject, srcIndex, "arrayCopySrc");
+		auto counter = compiler.new_gp64("arrayCopyCounter");
+		checkError(compiler.mov(counter.r32(), length), "AsmJit array.copy counter setup failed");
+		asmjit::Label forward = compiler.new_label();
+		asmjit::Label done = compiler.new_label();
+		// memmove rule: forward when the destination starts at or below the source.
+		checkError(compiler.cmp(dstCursor, srcCursor), "AsmJit array.copy direction compare failed");
+		checkError(compiler.jbe(forward), "AsmJit array.copy direction branch failed");
+		auto endOffset = compiler.new_gp64("arrayCopyEndOffset");
+		checkError(compiler.mov(endOffset.r32(), length), "AsmJit array.copy end offset failed");
+		if (shift != 0)
+			checkError(compiler.shl(endOffset, shift), "AsmJit array.copy end scaling failed");
+		checkError(compiler.add(dstCursor, endOffset), "AsmJit array.copy dst end failed");
+		checkError(compiler.add(srcCursor, endOffset), "AsmJit array.copy src end failed");
+		asmjit::Label back = compiler.new_label();
+		checkError(compiler.bind(back), "AsmJit array.copy back label failed");
+		checkError(compiler.test(counter, counter), "AsmJit array.copy back test failed");
+		checkError(compiler.jz(done), "AsmJit array.copy back exit failed");
+		checkError(compiler.sub(dstCursor, asmjit::Imm(elementBytes)), "AsmJit array.copy dst step failed");
+		checkError(compiler.sub(srcCursor, asmjit::Imm(elementBytes)), "AsmJit array.copy src step failed");
+		emitCopyTransfer(packed, packedI8, width, dstCursor, srcCursor);
+		checkError(compiler.dec(counter), "AsmJit array.copy back counter failed");
+		checkError(compiler.jmp(back), "AsmJit array.copy back edge failed");
+		checkError(compiler.bind(forward), "AsmJit array.copy forward label failed");
+		checkError(compiler.test(counter, counter), "AsmJit array.copy forward test failed");
+		checkError(compiler.jz(done), "AsmJit array.copy forward exit failed");
+		emitCopyTransfer(packed, packedI8, width, dstCursor, srcCursor);
+		checkError(compiler.add(dstCursor, asmjit::Imm(elementBytes)), "AsmJit array.copy dst advance failed");
+		checkError(compiler.add(srcCursor, asmjit::Imm(elementBytes)), "AsmJit array.copy src advance failed");
+		checkError(compiler.dec(counter), "AsmJit array.copy forward counter failed");
+		checkError(compiler.jmp(forward), "AsmJit array.copy forward edge failed");
+		checkError(compiler.bind(done), "AsmJit array.copy done label failed");
+	}
+
+	void emitCopyTransfer(bool packed, bool packedI8, int width, const asmjit::x86::Gp& dst,
+			const asmjit::x86::Gp& src)
+	{
+		auto value = compiler.new_gp64("arrayCopyValue");
+		if (packed) {
+			if (packedI8) {
+				checkError(compiler.mov(value.r32(), asmjit::x86::byte_ptr(src)),
+						"AsmJit array.copy packed load failed");
+				checkError(compiler.mov(asmjit::x86::byte_ptr(dst), value.r8()),
+						"AsmJit array.copy packed store failed");
+			} else {
+				checkError(compiler.mov(value.r32(), asmjit::x86::word_ptr(src)),
+						"AsmJit array.copy packed load failed");
+				checkError(compiler.mov(asmjit::x86::word_ptr(dst), value.r16()),
+						"AsmJit array.copy packed store failed");
+			}
+		} else if (width == 4) {
+			checkError(compiler.mov(value.r32(), asmjit::x86::dword_ptr(src)),
+					"AsmJit array.copy element load failed");
+			checkError(compiler.mov(asmjit::x86::dword_ptr(dst), value.r32()),
+					"AsmJit array.copy element store failed");
+		} else {
+			checkError(compiler.mov(value, asmjit::x86::qword_ptr(src)),
+					"AsmJit array.copy element load failed");
+			checkError(compiler.mov(asmjit::x86::qword_ptr(dst), value),
+					"AsmJit array.copy element store failed");
+		}
+	}
+
+	void dispatchArrayFill(WASM::TypeIdx arg) override
+	{
+		const WASM::CoreTypeView view = module.typeView(arg);
+		if (view.kind() != WASM::CanonTypeKind::Array)
+			throw std::runtime_error("AsmJit array.fill requires an array type");
+		const WASM::CanonFieldType& element = view.arrayElement();
+		const bool packed = element.storage.isPacked;
+		const bool packedI8 = packed && element.storage.packed == WASM::ValueTypeCode::I8;
+		const int width = packed ? (packedI8 ? 1 : 2) : kindWidth(element.storage.value.opcode);
+		if (width != 1 && width != 2 && width != 4 && width != 8)
+			throw std::runtime_error("AsmJit array.fill does not lower this element type yet");
+		if (values.size() < 4)
+			throw std::runtime_error("AsmJit array.fill operand stack underflow");
+		auto length = values.back();
+		values.pop_back();
+		auto index = values.back();
+		values.pop_back();
+		auto elementValue = values.back();
+		values.pop_back();
+		auto object = values.back();
+		values.pop_back();
+		asmjit::FuncSignature voidSignature(asmjit::CallConvId::kCDecl);
+		voidSignature.set_ret(asmjit::TypeId::kVoid);
+		// Null first, then the range, so a null array reports the array kind.
+		asmjit::Label notNull = compiler.new_label();
+		checkError(compiler.test(object, object), "AsmJit array.fill null test failed");
+		checkError(compiler.jnz(notNull), "AsmJit array.fill null branch failed");
+		asmjit::InvokeNode* nullCall = nullptr;
+		checkError(compiler.invoke(asmjit::Out(nullCall),
+				reinterpret_cast<uint64_t>(&asmjitReportNullArray), voidSignature),
+				"AsmJit array.fill null trap emission failed");
+		emitPendingTrapReturn();
+		checkError(compiler.bind(notNull), "AsmJit array.fill null label binding failed");
+		// Bounds: (u64)index + (u64)length <= (u64)arrayLength.
+		auto arrayLength = compiler.new_gp64("arrayLength");
+		checkError(compiler.mov(arrayLength.r32(), asmjit::x86::dword_ptr(object,
+				static_cast<int32_t>(WASM::GcHeader::kArrayLengthOffset))),
+				"AsmJit array.fill length load failed");
+		auto endIndex = compiler.new_gp64("arrayFillEndIndex");
+		checkError(compiler.mov(endIndex.r32(), index), "AsmJit array.fill index widening failed");
+		auto wideLength = compiler.new_gp64("arrayFillLength");
+		checkError(compiler.mov(wideLength.r32(), length), "AsmJit array.fill length widening failed");
+		checkError(compiler.add(endIndex, wideLength), "AsmJit array.fill range sum failed");
+		asmjit::Label inBounds = compiler.new_label();
+		checkError(compiler.cmp(endIndex, arrayLength), "AsmJit array.fill range compare failed");
+		checkError(compiler.jbe(inBounds), "AsmJit array.fill range branch failed");
+		asmjit::InvokeNode* oobCall = nullptr;
+		checkError(compiler.invoke(asmjit::Out(oobCall),
+				reinterpret_cast<uint64_t>(&asmjitReportArrayOob), voidSignature),
+				"AsmJit array.fill bounds trap emission failed");
+		emitPendingTrapReturn();
+		checkError(compiler.bind(inBounds), "AsmJit array.fill bounds label binding failed");
+		// Counted store loop: cursor advances, counter counts down.
+		const auto dataOffset = static_cast<int32_t>(WASM::gcArrayDataOffset(element.storage));
+		const auto elementBytes = static_cast<int32_t>(WASM::gcStorageBytes(element.storage));
+		auto byteOffset = compiler.new_gp64("arrayFillByteOffset");
+		checkError(compiler.mov(byteOffset.r32(), index), "AsmJit array.fill offset widening failed");
+		if (elementBytes != 1) {
+			int shift = 0;
+			for (int bytes = elementBytes; bytes > 1; bytes >>= 1)
+				++shift;
+			checkError(compiler.shl(byteOffset, shift), "AsmJit array.fill offset scaling failed");
+		}
+		auto cursor = compiler.new_gp64("arrayFillCursor");
+		checkError(compiler.mov(cursor, object), "AsmJit array.fill cursor setup failed");
+		checkError(compiler.add(cursor, asmjit::Imm(dataOffset)), "AsmJit array.fill data offset failed");
+		checkError(compiler.add(cursor, byteOffset), "AsmJit array.fill index offset failed");
+		auto counter = compiler.new_gp64("arrayFillCounter");
+		checkError(compiler.mov(counter.r32(), length), "AsmJit array.fill counter setup failed");
+		asmjit::Label loopStart = compiler.new_label();
+		asmjit::Label loopDone = compiler.new_label();
+		checkError(compiler.bind(loopStart), "AsmJit array.fill loop label failed");
+		checkError(compiler.test(counter, counter), "AsmJit array.fill loop test failed");
+		checkError(compiler.jz(loopDone), "AsmJit array.fill loop exit failed");
+		if (packed) {
+			if (packedI8)
+				checkError(compiler.mov(asmjit::x86::byte_ptr(cursor), elementValue.r8()),
+						"AsmJit array.fill packed store failed");
+			else
+				checkError(compiler.mov(asmjit::x86::word_ptr(cursor), elementValue.r16()),
+						"AsmJit array.fill packed store failed");
+		} else if (width == 4)
+			checkError(compiler.mov(asmjit::x86::dword_ptr(cursor), elementValue),
+					"AsmJit array.fill element store failed");
+		else
+			checkError(compiler.mov(asmjit::x86::qword_ptr(cursor), elementValue),
+					"AsmJit array.fill element store failed");
+		checkError(compiler.add(cursor, asmjit::Imm(elementBytes)),
+				"AsmJit array.fill cursor advance failed");
+		checkError(compiler.dec(counter), "AsmJit array.fill counter step failed");
+		checkError(compiler.jmp(loopStart), "AsmJit array.fill back edge failed");
+		checkError(compiler.bind(loopDone), "AsmJit array.fill loop label binding failed");
+	}
+
 	void dispatchArrayNew(WASM::TypeIdx arg) override
 	{
 		const WASM::CoreTypeView view = module.typeView(arg);
@@ -2695,20 +2930,40 @@ protected:
 		auto object = compiler.new_gp_ptr("arrayObject");
 		invoke->set_ret(0, object);
 		emitPendingTrapReturn();
-		const auto offset = static_cast<int32_t>(WASM::gcArrayDataOffset(element.storage));
+		// Every element must be initialised, not just element 0: the same counted
+		// store loop array.fill uses.
+		const auto dataOffset = static_cast<int32_t>(WASM::gcArrayDataOffset(element.storage));
+		const auto elementBytes = static_cast<int32_t>(WASM::gcStorageBytes(element.storage));
+		auto fillCursor = compiler.new_gp64("arrayNewCursor");
+		checkError(compiler.mov(fillCursor, object), "AsmJit array.new cursor setup failed");
+		checkError(compiler.add(fillCursor, asmjit::Imm(dataOffset)),
+				"AsmJit array.new data offset failed");
+		auto fillCounter = compiler.new_gp64("arrayNewCounter");
+		checkError(compiler.mov(fillCounter.r32(), length),
+				"AsmJit array.new counter setup failed");
+		asmjit::Label fillStart = compiler.new_label();
+		asmjit::Label fillDone = compiler.new_label();
+		checkError(compiler.bind(fillStart), "AsmJit array.new loop label failed");
+		checkError(compiler.test(fillCounter, fillCounter), "AsmJit array.new loop test failed");
+		checkError(compiler.jz(fillDone), "AsmJit array.new loop exit failed");
 		if (packed) {
 			if (packedI8)
-				checkError(compiler.mov(asmjit::x86::byte_ptr(object, offset),
-							elementValue.r8()), "AsmJit array.new packed store failed");
+				checkError(compiler.mov(asmjit::x86::byte_ptr(fillCursor), elementValue.r8()),
+						"AsmJit array.new packed store failed");
 			else
-				checkError(compiler.mov(asmjit::x86::word_ptr(object, offset),
-							elementValue.r16()), "AsmJit array.new packed store failed");
+				checkError(compiler.mov(asmjit::x86::word_ptr(fillCursor), elementValue.r16()),
+						"AsmJit array.new packed store failed");
 		} else if (width == 4)
-			checkError(compiler.mov(asmjit::x86::dword_ptr(object, offset), elementValue),
+			checkError(compiler.mov(asmjit::x86::dword_ptr(fillCursor), elementValue),
 					"AsmJit array.new element store failed");
 		else
-			checkError(compiler.mov(asmjit::x86::qword_ptr(object, offset), elementValue),
+			checkError(compiler.mov(asmjit::x86::qword_ptr(fillCursor), elementValue),
 					"AsmJit array.new element store failed");
+		checkError(compiler.add(fillCursor, asmjit::Imm(elementBytes)),
+				"AsmJit array.new cursor advance failed");
+		checkError(compiler.dec(fillCounter), "AsmJit array.new counter step failed");
+		checkError(compiler.jmp(fillStart), "AsmJit array.new back edge failed");
+		checkError(compiler.bind(fillDone), "AsmJit array.new loop label binding failed");
 		values.push_back(object);
 	}
 

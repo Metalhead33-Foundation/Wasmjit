@@ -2574,3 +2574,100 @@ TEST_CASE("both backends zero-fill array.new_default with a counted loop",
 	same("default_empty", 0);
 	same("default_packed", 0);
 }
+
+
+TEST_CASE("both backends lower array.fill with a store loop and both traps",
+		"[sljit][asmjit][parity][gc]")
+{
+	WASM::Module module = loadTestModule("gc_array_fill");
+	AsmJitBackend::Context asmContext;
+	AsmJitBackend::ModuleCompiler asmCompiler(asmContext);
+	Sljit::ModuleCompiler sljitCompiler;
+	WASM::RegistryImportResolver asmImports;
+	WASM::RegistryImportResolver sljitImports;
+	std::unique_ptr<WASM::ModuleInstance> asmInstance =
+			asmCompiler.instantiate(module, asmImports);
+	std::unique_ptr<WASM::ModuleInstance> sljitInstance =
+			sljitCompiler.instantiate(module, sljitImports);
+	REQUIRE(asmInstance != nullptr);
+	REQUIRE(sljitInstance != nullptr);
+
+	const auto call = [&](const char* name) {
+		const std::optional<WASM::Callable> asmCallable = asmInstance->exportedFunction(name);
+		const std::optional<WASM::Callable> sljitCallable = sljitInstance->exportedFunction(name);
+		REQUIRE(asmCallable.has_value());
+		REQUIRE(sljitCallable.has_value());
+		INFO("export " << name);
+		return std::pair<std::int32_t, std::int32_t> {
+			WASM::callCallable<std::int32_t>(*asmCallable),
+				WASM::callCallable<std::int32_t>(*sljitCallable)};
+	};
+	const auto trapOf = [&](const char* name, WASM::TrapKind expected) {
+		const std::optional<WASM::Callable> asmCallable = asmInstance->exportedFunction(name);
+		const std::optional<WASM::Callable> sljitCallable = sljitInstance->exportedFunction(name);
+		REQUIRE(asmCallable.has_value());
+		REQUIRE(sljitCallable.has_value());
+		INFO("export " << name);
+		CHECK(trapKindOf([&] { WASM::callCallable<std::int32_t>(*asmCallable); }) == expected);
+		CHECK(trapKindOf([&] { WASM::callCallable<std::int32_t>(*sljitCallable); }) == expected);
+	};
+
+	const auto same = [&](const char* name, std::int32_t expected) {
+		const auto [asmValue, sljitValue] = call(name);
+		CHECK(asmValue == expected);
+		CHECK(sljitValue == expected);
+	};
+	same("fill_all", 14);
+	same("fill_partial", 10);
+	same("fill_zero_len", 5);
+	same("fill_at_end", 3);
+	same("fill_packed", 44);
+	trapOf("fill_oob", WASM::TrapKind::OutOfBoundsArrayAccess);
+	trapOf("fill_null", WASM::TrapKind::NullArrayReference);
+}
+
+
+TEST_CASE("both backends lower array.copy with the memmove overlap rule",
+		"[sljit][asmjit][parity][gc]")
+{
+	WASM::Module module = loadTestModule("gc_array_copy");
+	AsmJitBackend::Context asmContext;
+	AsmJitBackend::ModuleCompiler asmCompiler(asmContext);
+	Sljit::ModuleCompiler sljitCompiler;
+	WASM::RegistryImportResolver asmImports;
+	WASM::RegistryImportResolver sljitImports;
+	std::unique_ptr<WASM::ModuleInstance> asmInstance =
+			asmCompiler.instantiate(module, asmImports);
+	std::unique_ptr<WASM::ModuleInstance> sljitInstance =
+			sljitCompiler.instantiate(module, sljitImports);
+	REQUIRE(asmInstance != nullptr);
+	REQUIRE(sljitInstance != nullptr);
+
+	const auto same = [&](const char* name, std::int32_t expected) {
+		const std::optional<WASM::Callable> asmCallable = asmInstance->exportedFunction(name);
+		const std::optional<WASM::Callable> sljitCallable = sljitInstance->exportedFunction(name);
+		REQUIRE(asmCallable.has_value());
+		REQUIRE(sljitCallable.has_value());
+		INFO("export " << name);
+		CHECK(WASM::callCallable<std::int32_t>(*asmCallable) == expected);
+		CHECK(WASM::callCallable<std::int32_t>(*sljitCallable) == expected);
+	};
+	const auto trapOf = [&](const char* name, WASM::TrapKind expected) {
+		const std::optional<WASM::Callable> asmCallable = asmInstance->exportedFunction(name);
+		const std::optional<WASM::Callable> sljitCallable = sljitInstance->exportedFunction(name);
+		REQUIRE(asmCallable.has_value());
+		REQUIRE(sljitCallable.has_value());
+		INFO("export " << name);
+		CHECK(trapKindOf([&] { WASM::callCallable<std::int32_t>(*asmCallable); }) == expected);
+		CHECK(trapKindOf([&] { WASM::callCallable<std::int32_t>(*sljitCallable); }) == expected);
+	};
+
+	same("copy_down", 103);
+	same("copy_up", 2);
+	same("copy_distinct", 78);
+	same("copy_zero", 4);
+	same("copy_packed", 5);
+	trapOf("copy_dst_oob", WASM::TrapKind::OutOfBoundsArrayAccess);
+	trapOf("copy_src_oob", WASM::TrapKind::OutOfBoundsArrayAccess);
+	trapOf("copy_null", WASM::TrapKind::NullArrayReference);
+}

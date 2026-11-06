@@ -3399,6 +3399,247 @@ void OpcodeDispatcher::dispatchArrayGet(WASM::TypeIdx arg)
 	push(width);
 }
 
+void OpcodeDispatcher::dispatchArrayCopy(WASM::TypeIdx arg1, WASM::TypeIdx arg2)
+{
+	if (!reachable_)
+		return;
+	const WASM::CoreTypeView dstView = module_.typeView(arg1);
+	require(dstView.kind() == WASM::CanonTypeKind::Array,
+			"array.copy requires an array type");
+	const WASM::CanonFieldType& element = dstView.arrayElement();
+	require(element.storage.isPacked || element.storage.value.opcode != WASM::ValueTypeCode::V128,
+			"the SLJIT backend does not lower v128 array elements yet");
+	const bool packed = element.storage.isPacked;
+	const bool packedI8 = packed && element.storage.packed == WASM::ValueTypeCode::I8;
+	const WASM::ValueTypeCode opcode = element.storage.value.opcode;
+	const int width = packed ? (packedI8 ? 1 : 2)
+			: ((opcode == WASM::ValueTypeCode::I32
+					|| opcode == WASM::ValueTypeCode::F32) ? 4 : 8);
+	requireStack(5);
+	const std::size_t dstDepth = stackWidths_.size() - 5;
+	const std::size_t dstIndexDepth = stackWidths_.size() - 4;
+	const std::size_t srcDepth = stackWidths_.size() - 3;
+	const std::size_t srcIndexDepth = stackWidths_.size() - 2;
+	const std::size_t lenDepth = stackWidths_.size() - 1;
+	if (measureOnly_) {
+		for (int i = 0; i < 5; ++i)
+			pop();
+		return;
+	}
+	const sljit_sw dataOffset = static_cast<sljit_sw>(WASM::gcArrayDataOffset(element.storage));
+	const sljit_sw elementBytes = static_cast<sljit_sw>(WASM::gcStorageBytes(element.storage));
+	const sljit_s32 loadOp = packed ? (packedI8 ? SLJIT_MOV_U8 : SLJIT_MOV_U16)
+			: (width == 4 ? SLJIT_MOV32 : SLJIT_MOV);
+	const sljit_s32 storeOp = loadOp;
+	// Four trap blocks, each followed by a reload: both references are non-null and
+	// both ranges are inside their array.
+	const auto emitNullCheck = [&](std::size_t depth) {
+		loadSlot(SLJIT_R0, depth, 8);
+		struct sljit_jump* notNull =
+				sljit_emit_cmp(compiler_, SLJIT_NOT_EQUAL, SLJIT_R0, 0, SLJIT_IMM, 0);
+		if (notNull == nullptr)
+			ok_ = false;
+		emitHelper(SLJIT_ARGS0V(), &sljitReportNullArray);
+		emitTrapBranch();
+		struct sljit_label* after = sljit_emit_label(compiler_);
+		if (after == nullptr)
+			ok_ = false;
+		else if (notNull != nullptr)
+			sljit_set_label(notNull, after);
+	};
+	const auto emitRangeCheck = [&](std::size_t arrayDepth, std::size_t indexDepth) {
+		loadSlot(SLJIT_R1, arrayDepth, 8);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV_U32, SLJIT_R2, 0, SLJIT_MEM1(SLJIT_R1),
+				static_cast<sljit_sw>(WASM::GcHeader::kArrayLengthOffset)));
+		loadSlot(SLJIT_R0, indexDepth, 4);
+		loadSlot(SLJIT_R3, lenDepth, 4);
+		emit(sljit_emit_op2(compiler_, SLJIT_ADD, SLJIT_R0, 0, SLJIT_R0, 0, SLJIT_R3, 0));
+		struct sljit_jump* inBounds =
+				sljit_emit_cmp(compiler_, SLJIT_LESS_EQUAL, SLJIT_R0, 0, SLJIT_R2, 0);
+		if (inBounds == nullptr)
+			ok_ = false;
+		emitHelper(SLJIT_ARGS0V(), &sljitReportArrayOob);
+		emitTrapBranch();
+		struct sljit_label* after = sljit_emit_label(compiler_);
+		if (after == nullptr)
+			ok_ = false;
+		else if (inBounds != nullptr)
+			sljit_set_label(inBounds, after);
+	};
+	emitNullCheck(dstDepth);
+	emitNullCheck(srcDepth);
+	emitRangeCheck(dstDepth, dstIndexDepth);
+	emitRangeCheck(srcDepth, srcIndexDepth);
+	// R0 = destination cursor, R1 = source cursor, R2 = element counter.
+	loadSlot(SLJIT_R0, dstDepth, 8);
+	loadSlot(SLJIT_R3, dstIndexDepth, 4);
+	if (elementBytes != 1)
+		emit(sljit_emit_op2(compiler_, SLJIT_MUL, SLJIT_R3, 0, SLJIT_R3, 0, SLJIT_IMM, elementBytes));
+	emit(sljit_emit_op2(compiler_, SLJIT_ADD, SLJIT_R0, 0, SLJIT_R0, 0, SLJIT_R3, 0));
+	emit(sljit_emit_op2(compiler_, SLJIT_ADD, SLJIT_R0, 0, SLJIT_R0, 0, SLJIT_IMM, dataOffset));
+	loadSlot(SLJIT_R1, srcDepth, 8);
+	loadSlot(SLJIT_R3, srcIndexDepth, 4);
+	if (elementBytes != 1)
+		emit(sljit_emit_op2(compiler_, SLJIT_MUL, SLJIT_R3, 0, SLJIT_R3, 0, SLJIT_IMM, elementBytes));
+	emit(sljit_emit_op2(compiler_, SLJIT_ADD, SLJIT_R1, 0, SLJIT_R1, 0, SLJIT_R3, 0));
+	emit(sljit_emit_op2(compiler_, SLJIT_ADD, SLJIT_R1, 0, SLJIT_R1, 0, SLJIT_IMM, dataOffset));
+	loadSlot(SLJIT_R2, lenDepth, 4);
+	// memmove rule: copy forward when the destination starts at or below the
+	// source, otherwise walk both pointers backwards from the end.
+	// A label in SLJIT is a *position*, not a handle: `sljit_emit_label` binds it
+	// where it is called, so the join label must be created after both loops.
+	struct sljit_jump* toForward =
+			sljit_emit_cmp(compiler_, SLJIT_LESS_EQUAL, SLJIT_R0, 0, SLJIT_R1, 0);
+	if (toForward == nullptr)
+		ok_ = false;
+	// --- backward loop (fallthrough) ---
+	emit(sljit_emit_op2(compiler_, SLJIT_MUL, SLJIT_R3, 0, SLJIT_R2, 0, SLJIT_IMM, elementBytes));
+	emit(sljit_emit_op2(compiler_, SLJIT_ADD, SLJIT_R0, 0, SLJIT_R0, 0, SLJIT_R3, 0));
+	emit(sljit_emit_op2(compiler_, SLJIT_ADD, SLJIT_R1, 0, SLJIT_R1, 0, SLJIT_R3, 0));
+	struct sljit_label* backStart = sljit_emit_label(compiler_);
+	struct sljit_jump* backEnd =
+			sljit_emit_cmp(compiler_, SLJIT_EQUAL, SLJIT_R2, 0, SLJIT_IMM, 0);
+	if (backEnd == nullptr)
+		ok_ = false;
+	emit(sljit_emit_op2(compiler_, SLJIT_SUB, SLJIT_R0, 0, SLJIT_R0, 0, SLJIT_IMM, elementBytes));
+	emit(sljit_emit_op2(compiler_, SLJIT_SUB, SLJIT_R1, 0, SLJIT_R1, 0, SLJIT_IMM, elementBytes));
+	emit(sljit_emit_op1(compiler_, loadOp, SLJIT_R3, 0, SLJIT_MEM1(SLJIT_R1), 0));
+	emit(sljit_emit_op1(compiler_, storeOp, SLJIT_MEM1(SLJIT_R0), 0, SLJIT_R3, 0));
+	emit(sljit_emit_op2(compiler_, SLJIT_SUB, SLJIT_R2, 0, SLJIT_R2, 0, SLJIT_IMM, 1));
+	struct sljit_jump* backEdge = sljit_emit_jump(compiler_, SLJIT_JUMP);
+	if (backEdge == nullptr)
+		ok_ = false;
+	else if (backStart != nullptr)
+		sljit_set_label(backEdge, backStart);
+	struct sljit_jump* skipForward = sljit_emit_jump(compiler_, SLJIT_JUMP);
+	if (skipForward == nullptr)
+		ok_ = false;
+	// --- forward loop ---
+	struct sljit_label* forwardStart = sljit_emit_label(compiler_);
+	if (toForward != nullptr && forwardStart != nullptr)
+		sljit_set_label(toForward, forwardStart);
+	struct sljit_jump* forwardEnd =
+			sljit_emit_cmp(compiler_, SLJIT_EQUAL, SLJIT_R2, 0, SLJIT_IMM, 0);
+	if (forwardEnd == nullptr)
+		ok_ = false;
+	emit(sljit_emit_op1(compiler_, loadOp, SLJIT_R3, 0, SLJIT_MEM1(SLJIT_R1), 0));
+	emit(sljit_emit_op1(compiler_, storeOp, SLJIT_MEM1(SLJIT_R0), 0, SLJIT_R3, 0));
+	emit(sljit_emit_op2(compiler_, SLJIT_ADD, SLJIT_R0, 0, SLJIT_R0, 0, SLJIT_IMM, elementBytes));
+	emit(sljit_emit_op2(compiler_, SLJIT_ADD, SLJIT_R1, 0, SLJIT_R1, 0, SLJIT_IMM, elementBytes));
+	emit(sljit_emit_op2(compiler_, SLJIT_SUB, SLJIT_R2, 0, SLJIT_R2, 0, SLJIT_IMM, 1));
+	struct sljit_jump* forwardBack = sljit_emit_jump(compiler_, SLJIT_JUMP);
+	if (forwardBack == nullptr)
+		ok_ = false;
+	else if (forwardStart != nullptr)
+		sljit_set_label(forwardBack, forwardStart);
+	struct sljit_label* doneLabel = sljit_emit_label(compiler_);
+	if (doneLabel != nullptr) {
+		if (backEnd != nullptr)
+			sljit_set_label(backEnd, doneLabel);
+		if (forwardEnd != nullptr)
+			sljit_set_label(forwardEnd, doneLabel);
+		if (skipForward != nullptr)
+			sljit_set_label(skipForward, doneLabel);
+	}
+	for (int i = 0; i < 5; ++i)
+		pop();
+}
+
+void OpcodeDispatcher::dispatchArrayFill(WASM::TypeIdx arg)
+{
+	if (!reachable_)
+		return;
+	const WASM::CoreTypeView view = module_.typeView(arg);
+	require(view.kind() == WASM::CanonTypeKind::Array, "array.fill requires an array type");
+	const WASM::CanonFieldType& element = view.arrayElement();
+	require(element.storage.isPacked || element.storage.value.opcode != WASM::ValueTypeCode::V128,
+			"the SLJIT backend does not lower v128 array elements yet");
+	const bool packed = element.storage.isPacked;
+	const bool packedI8 = packed && element.storage.packed == WASM::ValueTypeCode::I8;
+	const WASM::ValueTypeCode opcode = element.storage.value.opcode;
+	const int width = packed ? (packedI8 ? 1 : 2)
+			: ((opcode == WASM::ValueTypeCode::I32
+					|| opcode == WASM::ValueTypeCode::F32) ? 4 : 8);
+	requireStack(4);
+	const std::size_t arrayDepth = stackWidths_.size() - 4;
+	const std::size_t valueDepth = stackWidths_.size() - 3;
+	const std::size_t indexDepth = stackWidths_.size() - 2;
+	const std::size_t lenDepth = stackWidths_.size() - 1;
+	if (measureOnly_) {
+		for (int i = 0; i < 4; ++i)
+			pop();
+		return;
+	}
+	const sljit_sw dataOffset = static_cast<sljit_sw>(WASM::gcArrayDataOffset(element.storage));
+	const sljit_sw elementBytes = static_cast<sljit_sw>(WASM::gcStorageBytes(element.storage));
+	const sljit_s32 storeOp = packed ? (packedI8 ? SLJIT_MOV_U8 : SLJIT_MOV_U16)
+			: (width == 4 ? SLJIT_MOV32 : SLJIT_MOV);
+	// Null check first, so a null array reports the array kind and not a
+	// bounds failure (§8.3 of docs/ABI_PORTABILITY.md).
+	loadSlot(SLJIT_R0, arrayDepth, 8);
+	struct sljit_jump* notNull =
+			sljit_emit_cmp(compiler_, SLJIT_NOT_EQUAL, SLJIT_R0, 0, SLJIT_IMM, 0);
+	if (notNull == nullptr)
+		ok_ = false;
+	emitHelper(SLJIT_ARGS0V(), &sljitReportNullArray);
+	emitTrapBranch();
+	struct sljit_label* afterNull = sljit_emit_label(compiler_);
+	if (afterNull == nullptr)
+		ok_ = false;
+	else if (notNull != nullptr)
+		sljit_set_label(notNull, afterNull);
+	// Bounds: (u64)index + (u64)len <= (u64)arrayLength. Both operands are
+	// zero-extended 32-bit values, so the 64-bit sum cannot wrap.
+	loadSlot(SLJIT_R1, arrayDepth, 8);
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV_U32, SLJIT_R2, 0, SLJIT_MEM1(SLJIT_R1),
+			static_cast<sljit_sw>(WASM::GcHeader::kArrayLengthOffset)));
+	loadSlot(SLJIT_R0, indexDepth, 4);
+	loadSlot(SLJIT_R3, lenDepth, 4);
+	emit(sljit_emit_op2(compiler_, SLJIT_ADD, SLJIT_R0, 0, SLJIT_R0, 0, SLJIT_R3, 0));
+	struct sljit_jump* inBounds =
+			sljit_emit_cmp(compiler_, SLJIT_LESS_EQUAL, SLJIT_R0, 0, SLJIT_R2, 0);
+	if (inBounds == nullptr)
+		ok_ = false;
+	emitHelper(SLJIT_ARGS0V(), &sljitReportArrayOob);
+	emitTrapBranch();
+	struct sljit_label* afterBounds = sljit_emit_label(compiler_);
+	if (afterBounds == nullptr)
+		ok_ = false;
+	else if (inBounds != nullptr)
+		sljit_set_label(inBounds, afterBounds);
+	// Reload after the trap blocks (they clobber R0-R3), then the counted
+	// store loop: cursor advances, counter counts down.
+	loadSlot(SLJIT_R0, arrayDepth, 8);
+	loadSlot(SLJIT_R1, indexDepth, 4);
+	if (elementBytes != 1)
+		emit(sljit_emit_op2(compiler_, SLJIT_MUL, SLJIT_R1, 0, SLJIT_R1, 0, SLJIT_IMM,
+				elementBytes));
+	emit(sljit_emit_op2(compiler_, SLJIT_ADD, SLJIT_R0, 0, SLJIT_R0, 0, SLJIT_R1, 0));
+	emit(sljit_emit_op2(compiler_, SLJIT_ADD, SLJIT_R0, 0, SLJIT_R0, 0, SLJIT_IMM, dataOffset));
+	loadSlot(SLJIT_R1, lenDepth, 4);
+	loadSlot(SLJIT_R3, valueDepth, width == 8 ? 8 : 4);
+	struct sljit_label* loopStart = sljit_emit_label(compiler_);
+	struct sljit_jump* loopEnd =
+			sljit_emit_cmp(compiler_, SLJIT_EQUAL, SLJIT_R1, 0, SLJIT_IMM, 0);
+	if (loopEnd == nullptr)
+		ok_ = false;
+	emit(sljit_emit_op1(compiler_, storeOp, SLJIT_MEM1(SLJIT_R0), 0, SLJIT_R3, 0));
+	emit(sljit_emit_op2(compiler_, SLJIT_ADD, SLJIT_R0, 0, SLJIT_R0, 0, SLJIT_IMM, elementBytes));
+	emit(sljit_emit_op2(compiler_, SLJIT_SUB, SLJIT_R1, 0, SLJIT_R1, 0, SLJIT_IMM, 1));
+	struct sljit_jump* backEdge = sljit_emit_jump(compiler_, SLJIT_JUMP);
+	if (backEdge == nullptr)
+		ok_ = false;
+	else if (loopStart != nullptr)
+		sljit_set_label(backEdge, loopStart);
+	struct sljit_label* loopDone = sljit_emit_label(compiler_);
+	if (loopDone == nullptr)
+		ok_ = false;
+	else if (loopEnd != nullptr)
+		sljit_set_label(loopEnd, loopDone);
+	for (int i = 0; i < 4; ++i)
+		pop();
+}
+
 void OpcodeDispatcher::dispatchArrayNewDefault(WASM::TypeIdx arg)
 {
 	if (!reachable_)
@@ -3516,12 +3757,35 @@ void OpcodeDispatcher::dispatchArrayNew(WASM::TypeIdx arg)
 				static_cast<sljit_sw>(arg)));
 		loadContext(SLJIT_R0);
 		emitHelper(SLJIT_ARGS3(P, P, 32, 32), &sljitArrayNew);
-		// The helper clobbers R1-R3, so the element is loaded afterwards.
-		loadSlot(SLJIT_R1, elementDepth, 4);
+		// The helper clobbers R1-R3, so the initialiser and the length are
+		// reloaded afterwards. **Every** element must be initialised, not just
+		// element 0: this is the counted store loop, the same shape array.fill
+		// and array.new_default use.
+		const sljit_sw dataOffset = static_cast<sljit_sw>(WASM::gcArrayDataOffset(element.storage));
+		const sljit_sw elementBytes = static_cast<sljit_sw>(WASM::gcStorageBytes(element.storage));
 		const sljit_s32 storeOp = packed ? (packedI8 ? SLJIT_MOV_U8 : SLJIT_MOV_U16)
 				: (width == 4 ? SLJIT_MOV32 : SLJIT_MOV);
-		emit(sljit_emit_op1(compiler_, storeOp, SLJIT_MEM1(SLJIT_R0),
-				static_cast<sljit_sw>(WASM::gcArrayDataOffset(element.storage)), SLJIT_R1, 0));
+		loadSlot(SLJIT_R1, elementDepth, width == 8 ? 8 : 4);
+		loadSlot(SLJIT_R2, lengthDepth, 4);
+		emit(sljit_emit_op2(compiler_, SLJIT_ADD, SLJIT_R3, 0, SLJIT_R0, 0, SLJIT_IMM, dataOffset));
+		struct sljit_label* fillStart = sljit_emit_label(compiler_);
+		struct sljit_jump* fillEnd =
+				sljit_emit_cmp(compiler_, SLJIT_EQUAL, SLJIT_R2, 0, SLJIT_IMM, 0);
+		if (fillEnd == nullptr)
+			ok_ = false;
+		emit(sljit_emit_op1(compiler_, storeOp, SLJIT_MEM1(SLJIT_R3), 0, SLJIT_R1, 0));
+		emit(sljit_emit_op2(compiler_, SLJIT_ADD, SLJIT_R3, 0, SLJIT_R3, 0, SLJIT_IMM, elementBytes));
+		emit(sljit_emit_op2(compiler_, SLJIT_SUB, SLJIT_R2, 0, SLJIT_R2, 0, SLJIT_IMM, 1));
+		struct sljit_jump* fillBack = sljit_emit_jump(compiler_, SLJIT_JUMP);
+		if (fillBack == nullptr)
+			ok_ = false;
+		else if (fillStart != nullptr)
+			sljit_set_label(fillBack, fillStart);
+		struct sljit_label* fillDone = sljit_emit_label(compiler_);
+		if (fillDone == nullptr)
+			ok_ = false;
+		else if (fillEnd != nullptr)
+			sljit_set_label(fillEnd, fillDone);
 	}
 	pop();
 	pop();
