@@ -737,7 +737,7 @@ The migration has run. What each backend actually does, and where the record liv
 | Backend | `v128` parameter | `v128` result | Status |
 |---|---|---|---|
 | **SLJIT** | two `W` slots, low first | caller-supplied 16-byte buffer | **canonical**, pinned by `[sljit][v128][order][abi]` and the `v128` result test |
-| **AsmJIT** | two `kUInt64`, low first | native vector register (not yet the buffer) | parameter **canonical** and asserted; result is a recorded gap |
+| **AsmJIT** | two `kUInt64`, low first | caller-supplied 16-byte buffer | **canonical**, pinned by `[asmjit][v128][abi]` and the translator test |
 | **LibJIT** | one 16-byte aggregate | aggregate | **recorded deviation**, see below |
 
 **LibJIT deviation (D-L1).** libjit loses the sixth integer argument — the last one SysV passes
