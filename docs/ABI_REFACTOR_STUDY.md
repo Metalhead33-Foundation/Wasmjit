@@ -574,3 +574,27 @@ the generated adapter accepts, not by renaming the fields. Two lessons, both che
 
 The remaining work is now **parameter expansion only**: the type *declarations* agree everywhere they can,
 and what is left is emitting two scalars where one type is emitted today.
+
+### Rust parameters expand; the bug was my edit's span, not the design (2026-11-06)
+
+`emitRustParams` now emits a vector parameter as **two scalars**:
+
+```rust
+pub fn f(arg0_lo: u64, arg0_hi: u64) -> i32
+```
+
+Two failed attempts came first, both reporting four failures on **non-vector** signatures. The cause was
+the edit, not the emitter: the replacement span stopped one line short, orphaning the
+`out << " /* borrowed */"` statement — so *every* parameter, vector or not, gained a stray comment and
+the emitted text stopped matching. Reading `emitRustParams` showed `first = false;` sits **before** the
+name emission, which made the correct span exactly three lines (name, guard, comment) and the wrong span
+exactly two.
+
+That is the third time in this arc that a mechanical edit failed for a span or anchor reason rather than a
+design reason (§28's glued declarations, §34's wrong brace, §43's 21-for-6 deletion). The rule stands and
+is cheap: **after replacing a span, read the two lines on each side of it** — an orphan is invisible in a
+diff that looks right and fatal in a test that does not.
+
+Binding emitters after this pass: `EmitCpp` declarations canonical, `EmitShared` C typedef canonical,
+`EmitRust` type and **parameters** canonical. Remaining: `EmitShared`'s shared parameter loops (4),
+`EmitDynamic` (5 spellings), `EmitWeb`.
