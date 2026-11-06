@@ -1442,3 +1442,53 @@ compared against the four expected lanes. Add it beside the two boundary pins so
 same way the parameter rule is.
 
 Suite **21625 assertions in 731 cases**, green; `abi-check.sh` OK; Doxygen 0 warnings; tree clean.
+
+## 26. P4 step 2 done: SLJIT returns a `v128` through the caller's buffer (2026-11-06)
+
+The six edits of §25 are in, and a `v128` result now crosses SLJIT's boundary.
+
+### What changed
+
+| Site | Change |
+|---|---|
+| frame | `kReservedSlots` 7 -> 8; new `resultBufferSlotOffset()` (reserved slot 7) |
+| `checkSupported` | the `v128`-result refusal is gone |
+| prologue | `RET_VOID` when the result is 16 bytes; a trailing `SLJIT_ARG_TYPE_P` added **before** `savedCount`; the pointer parked in the frame slot |
+| `emitReturn` | width 16 first: the vector's single 16-byte operand slot is copied to the buffer as two words, then `return_void` |
+| trap epilogue | width 16 returns void, so the emitted return matches the declared one |
+
+### The bug SLJIT caught for us
+
+The first attempt aborted on `sljitLir.c:1709` -- `FUNCTION_CHECK_SRC`, an invalid source operand -- inside
+`beginFunction`. The cause was an **off-by-one in the register mapping**: argument index `i` arrives in
+`S(i - 1)`, and `nextSlot` had already been advanced past the buffer, so its register is `S(nextSlot - 2)`, not
+`S(nextSlot - 1)`. The latter is one past the highest register that `savedCount` preserves.
+
+Worth noting *how* it surfaced: SLJIT's own argument checks caught a register-index arithmetic error at compile
+time, in the test named by the assert, with the exact line in `sljitLir.c`. That is the value of a backend with
+`SLJIT_ARGUMENT_CHECKS` enabled -- the same class of error in a backend that trusts its input would have been a
+silent miscompile.
+
+### The test now asserts the capability, not the refusal
+
+`sljit: an unsupported type is refused, never miscompiled` becomes `sljit: a v128 result arrives through the
+caller's buffer`, calling `vec` (whose body is `v128.const i32x4 0 0 0 0`) through
+`void (*)(void*, void*)` with a buffer **pre-filled with `0xffffffff`** and requiring all four lanes zero. The
+pre-fill is what makes it a real test: a function that wrote nothing would fail it.
+
+### State
+
+Suite **21628 assertions in 731 cases**, green (up 3: six new assertions replacing three that encoded the old
+refusal); `[headerdoc]` 6/3; `[docs]` 1021/2; `abi-check.sh` OK; Doxygen 0 warnings.
+
+### P4 board after this step
+
+| Step | State |
+|---|---|
+| 1. SLJIT parameters | **closed** -- compliant, pinned |
+| 2. SLJIT results | **closed** -- `v128` result through the buffer, measured |
+| 3. AsmJit parameters | next -- typed split of the aggregate |
+| 4. LibJIT | driver arity rework, then the split; audit its working single-`v128` result path before widening the trigger |
+
+With steps 1 and 2 closed, SLJIT implements **both halves of the canonical rule** -- two scalar words in, a
+caller-supplied buffer out -- and it is the first backend to do so.

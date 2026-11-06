@@ -37,7 +37,7 @@ constexpr std::size_t kSlotBytes = 16;
 //! Reserved frame slots that follow the locals and precede the operand stack.
 //! Reserved frame cells: context, target, scratch, then the two-word selector
 //! block `i8x16.shuffle` passes to its adapter.
-constexpr std::size_t kReservedSlots = 7; //!< context, target, scratch, then four parked argument registers.
+constexpr std::size_t kReservedSlots = 8; //!< context, target, scratch, four parked argument registers, then the result buffer.
 
 //! Width of a local in bytes, or 0 when the type is outside the supported subset.
 bool isReferenceKind(WASM::ValueTypeCode kind) noexcept
@@ -945,12 +945,6 @@ OpcodeDispatcher::OpcodeDispatcher(const WASM::Module& module, const WASM::FuncT
 	if (prepared.allReturns.size() == 1) {
 		resultKind_ = prepared.allReturns[0].opcode;
 		resultWidth_ = widthOf(prepared.allReturns[0]);
-		if (resultKind_ == WASM::ValueTypeCode::V128) {
-			unsupportedReason_ = "the SLJIT backend does not lower v128 results yet";
-			resultKind_ = WASM::ValueTypeCode::Void;
-			resultWidth_ = 0;
-			return;
-		}
 		if (resultWidth_ == 0) {
 			unsupportedReason_ = "the SLJIT backend only returns i32, i64, f32 and f64";
 			resultKind_ = WASM::ValueTypeCode::Void;
@@ -1039,7 +1033,7 @@ bool OpcodeDispatcher::beginFunction()
 	// The argument list is `VMContext*` followed by the Wasm parameters. Integer
 	// arguments arrive in S0, S1, ... and floating-point arguments in FR0, FR1,
 	// ... ; the counters are independent, as the SLJIT call ABI specifies.
-	sljit_s32 argTypes = resultWidth_ == 0
+	sljit_s32 argTypes = resultWidth_ == 0 || resultWidth_ == 16
 			? SLJIT_ARG_RETURN(SLJIT_ARG_TYPE_RET_VOID)
 			: SLJIT_ARG_RETURN(argTypeOf(resultKind_));
 	// A v128 parameter is a 16-byte integer pair on the SysV boundary, so it
@@ -1055,6 +1049,16 @@ bool OpcodeDispatcher::beginFunction()
 			argTypes |= SLJIT_ARG_VALUE(argTypeOf(paramKinds_[i]), nextSlot);
 			++nextSlot;
 		}
+	}
+
+	// A `v128` result cannot come back in one return register, so the caller
+	// supplies a 16-byte out-buffer as a trailing pointer argument -- the same
+	// path multi-value takes (docs/ABI_REFACTOR_STUDY.md §25). It must be added
+	// *before* `savedCount`, which is derived from `nextSlot`.
+	const bool resultViaBuffer = resultWidth_ == 16;
+	if (resultViaBuffer) {
+		argTypes |= SLJIT_ARG_VALUE(SLJIT_ARG_TYPE_P, nextSlot);
+		++nextSlot;
 	}
 
 	// Four integer scratch registers: R0-R3 carry a helper call with up to four
@@ -1081,6 +1085,16 @@ bool OpcodeDispatcher::beginFunction()
 	// needed before every one of them.
 	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP), contextSlotOffset(),
 			SLJIT_S0, 0));
+
+	// Keep the out-buffer pointer too: the value is produced after helper calls,
+	// which clobber R0-R3 (the S registers are not held across one either).
+	if (resultViaBuffer) {
+		// Argument index i arrives in S(i - 1); `nextSlot` has already been
+		// advanced past the buffer, so its register is S(nextSlot - 2) -- the
+		// highest register `savedCount` preserves.
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+				resultBufferSlotOffset(), SLJIT_S(nextSlot - 2), 0));
+	}
 
 	// The guest stack guard (WasmStack.hpp): every compiled function calls it
 	// before its body runs.
@@ -1155,7 +1169,7 @@ bool OpcodeDispatcher::finish(void*& entry)
 	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R2, 0, SLJIT_IMM,
 			codeAddress(functionName_)));
 	emitHelper(SLJIT_ARGS3V(32, 32, P), &WASM::wasm_trap_annotate);
-	if (resultWidth_ == 0) {
+	if (resultWidth_ == 0 || resultWidth_ == 16) {
 		emit(sljit_emit_return_void(compiler_));
 	} else if (isFloatKind(resultKind_)) {
 		emit(resultWidth_ == 4
@@ -1274,6 +1288,13 @@ sljit_sw OpcodeDispatcher::payloadSlotOffset(std::size_t index) const
 	return static_cast<sljit_sw>((localSlots_ + 3 + index) * kSlotBytes);
 }
 
+sljit_sw OpcodeDispatcher::resultBufferSlotOffset() const
+{
+	// Reserved slot 7, after the four payload slots: the out-buffer pointer has
+	// to survive helper calls, which clobber R0-R3.
+	return static_cast<sljit_sw>((localSlots_ + 7) * kSlotBytes);
+}
+
 sljit_sw OpcodeDispatcher::selectorBlockOffset() const
 {
 	return static_cast<sljit_sw>((localSlots_ + 3) * kSlotBytes);
@@ -1318,6 +1339,23 @@ void OpcodeDispatcher::emitReturnValue()
 		return;
 	}
 	requireStack(1);
+	if (resultWidth_ == 16) {
+		// The vector occupies one 16-byte operand slot (kSlotBytes), so the two
+		// words are contiguous in the frame. R2/R3 are scratch here: the body is
+		// finished and nothing after this reads a live value.
+		const std::size_t top = stackWidths_.size() - 1;
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R2, 0, SLJIT_MEM1(SLJIT_SP),
+				resultBufferSlotOffset()));
+		emit(sljit_emit_op2(compiler_, SLJIT_ADD, SLJIT_R3, 0, SLJIT_R2, 0, SLJIT_IMM, 8));
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0, SLJIT_MEM1(SLJIT_SP),
+				stackSlotOffset(top)));
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_R2), 0, SLJIT_R0, 0));
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0, SLJIT_MEM1(SLJIT_SP),
+				stackSlotOffset(top) + 8));
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_R3), 0, SLJIT_R0, 0));
+		emit(sljit_emit_return_void(compiler_));
+		return;
+	}
 	if (isFloatKind(resultKind_)) {
 		loadFloatSlot(SLJIT_FR0, stackWidths_.size() - 1, resultWidth_);
 		emit(sljit_emit_return(compiler_,

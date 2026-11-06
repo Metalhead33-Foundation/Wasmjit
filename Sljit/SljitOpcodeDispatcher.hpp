@@ -641,6 +641,10 @@ private:
 	 * \return Offset from `SLJIT_SP`.
 	 */
 	sljit_sw scratchSlotOffset() const;
+	//! Reserved slot holding the caller-supplied out-buffer for a `v128` result
+	//! (docs/ABI_REFACTOR_STUDY.md §25).
+	/** \brief Offset of the reserved slot holding the caller-supplied result buffer. \return Frame offset in bytes. */
+	sljit_sw resultBufferSlotOffset() const;
 	sljit_sw payloadSlotOffset(std::size_t index = 0) const;
 	//! Offset of the two-word shuffle selector block.
 	sljit_sw selectorBlockOffset() const;
