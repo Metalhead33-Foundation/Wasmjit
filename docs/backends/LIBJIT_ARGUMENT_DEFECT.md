@@ -361,6 +361,12 @@ same rule the rest of the seam already uses -- *ask the backend*:
   classifies that struct exactly as the target ABI requires -- INTEGER, INTEGER
   on SysV, by reference on MS x64.
 
+The **result** side needed no change: `ffiTypeFor(V128)` already returned
+`v128Type()`, a 16-byte, 16-aligned `FFI_TYPE_STRUCT` of four `uint32`, which is
+the aggregate shape. So after this change both directions of a LibJIT host call
+describe one aggregate, and the file has a single definition of that type.
+
+
 Pinned by `[callcache][v128][abi]`: a LibJIT instance reports the aggregate
 spelling, an SLJIT instance reports the canonical one.
 

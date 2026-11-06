@@ -64,17 +64,6 @@ ffi_type* ffiTypeFor(const CanonStorageType& storage)
 	return ffiTypeFor(storage.value.opcode);
 }
 
-//! A `v128` spelled as one 16-byte aggregate (two `uint64` eightbytes).
-//! libffi classifies this as INTEGER, INTEGER on SysV and passes it by reference
-//! on MS x64 -- which is exactly what a backend that cannot use the canonical
-//! two-word rule produces (`docs/backends/LIBJIT_ARGUMENT_DEFECT.md` §12).
-ffi_type* ffiTypeForV128Aggregate()
-{
-	static ffi_type* elements[3] = {&ffi_type_uint64, &ffi_type_uint64, nullptr};
-	static ffi_type aggregate {0, 0, FFI_TYPE_STRUCT, elements};
-	return &aggregate;
-}
-
 ffi_type* ffiTypeFor(AbiCoreType type)
 {
 	switch (type) {
@@ -132,7 +121,7 @@ ModuleCallCache::ModuleCallCache(ModuleInstance& instance)
 				// This backend spells a vector as one 16-byte aggregate, so the
 				// cif must describe that shape or the call is misclassified on
 				// MS x64 (docs/backends/LIBJIT_ARGUMENT_DEFECT.md §12).
-				entry.argTypes.push_back(ffiTypeForV128Aggregate());
+				entry.argTypes.push_back(v128Type());
 			} else {
 				// `argSlotCount` decides how many C arguments a kind occupies; a vector
 				// occupies two scalar words (decision note §28), because a 16-byte
