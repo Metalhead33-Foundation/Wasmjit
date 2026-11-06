@@ -1944,3 +1944,51 @@ needs a separate `v128_multi.wat` -- a new fixture file, which the build picks u
 
 Suite **21648 assertions in 734 test cases**, green; fixture restored to its two exports; `abi-check.sh` OK;
 Doxygen 0 warnings; tree clean.
+
+## 36. SLJIT's stack plan, and LibJIT's three eliminated candidates (2026-11-06)
+
+### SLJIT: stop pretending every slot needs a register
+
+The ceiling measured in §35 is self-imposed by the backend, not by SLJIT: `beginFunction` computes
+`savedCount = nextSlot - 1`, i.e. **one saved register per argument slot**. SLJIT's `sljit_emit_enter` only
+*requires* declared slots to fit the register budget because the numbers passed to it say so -- argument slots
+beyond the saved registers arrive **on the stack**, which is what the host ABI does anyway.
+
+The plan:
+
+1. Cap the declared saved-register count at `SLJIT_NUMBER_OF_SAVED_REGISTERS` (6 on x86-64) instead of
+   `nextSlot - 1`.
+2. Keep `SLJIT_ARG_VALUE(..., nextSlot)` for every slot -- SLJIT then passes the overflow on the stack by the
+   platform ABI rather than asserting.
+3. For a parameter whose slot index exceeds the register budget, load it from the incoming stack
+   (`SLJIT_MEM1(SLJIT_SP)` at the ABI's offset for that slot) instead of `SLJIT_S(n)`.
+4. Re-run the multi-vector fixture (§35) -- `three_vectors` is exactly the case that must start passing.
+
+Step 3 needs the per-platform offset rule verified before it is written, which is why it is a separate change
+and not a patch: the offsets differ between SysV and MS x64, and getting them wrong is a silent miscompile rather
+than an assert.
+
+### LibJIT: three candidates tested, none of them the cause
+
+The full change was re-applied -- helpers, all six call sites, both `translateFunctionSignature` overloads, the
+`address_of` prologue, the `paramSlots` driver -- and then each surviving candidate was tested in turn:
+
+| # | Candidate | Test | Result |
+|---|---|---|---|
+| 1 | result-buffer index still `params.size() + 1` | changed to `nativeParamSlotCount()` in all four sites | **33 failures, unchanged** |
+| 2 | a stale one-slot signature from a second translator; `v128` matched by *identity* | changed to a structural test (`JIT_TYPE_STRUCT` && size 16) | **33 failures, unchanged** |
+| 3 | multi-vector parameters | fixture with two and three vectors | **eliminated earlier (§35)** -- passes |
+
+That invariance is the finding: the failure survives a call-site rewrite, a result-index fix and a signature-
+detection fix, while both boundary pins pass. So it is **not** in argument passing, result indexing or signature
+identity -- it is somewhere the pins and the spec suites differ, and the pins are tiny hand-written modules while
+the suites are spec scripts.
+
+The next step therefore needs *isolation*, not another hypothesis: find the per-suite filter in the spec runner so
+one `simd_*` script can be run alone under the changed ABI with a debugger, and reduce it to the smallest failing
+command. Every previous root cause in this study was found that way -- by making the failing case small enough to
+read.
+
+### State
+
+Backend unchanged; suite **21648 assertions in 734 test cases**, green; `abi-check.sh` OK; Doxygen 0 warnings.
