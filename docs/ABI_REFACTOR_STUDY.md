@@ -799,3 +799,38 @@ correct-looking green suite over a specification the tests never exercise.
 that puts a vector through the generated binding** — otherwise the move cannot be verified and the
 "translation layer" would be fixing a path nothing tests. That fixture is now the first task, ahead of the
 emitter edits and ahead of the adapter conversion, because it is what makes both observable.
+
+### Item 1 done: a vector now travels through the binding tests, and it exposed today's header
+
+`[bindings][v128][abi]` builds a schema from the **existing** `v128_param` fixture and pins the emitted
+text. The first run needed a deliberate mismatch to print the declaration, and the measurement is worth
+recording because it names the exact inconsistency:
+
+```c
+/* G2H import: lane1 */
+int32_t wasmjit_lane1(wasm_v128 arg0);
+```
+
+So today the **guest-facing** C header declares **one aggregate parameter** — `wasm_v128` — whose
+*definition* is the **native pair** (`{ uint64_t lo; uint64_t hi; }`). That is neither spelling done right:
+
+| Correct for the guest side | Correct for the native side | What the header does today |
+|---|---|---|
+| one parameter of the wasm `v128` type | **two** scalar parameters (`lo`, `hi`) | one parameter whose type is the native pair |
+
+It compiles and needs no conversion because an aggregate of two `u64` and a 16-byte vector share layout on
+SysV — the same coincidence that hid the MS x64 divergence in the libffi cache (§11).
+
+The test now pins `wasmjit_lane1(wasm_v128 arg0)`, so moving this header to the wasm side — or splitting the
+parameter into two scalars — **fails a test** instead of changing silently. That is what item 1 was for.
+
+### Revised order for the remaining items
+
+With the pin in place the order is forced:
+
+1. **Adopt the wasm spelling in the guest-facing header** (`EmitShared:416` back to a 16-byte type) — now
+   visible to the pin, and it is the *single* change that makes the header's parameter consistent.
+2. **Adapter translation** (`EmitCpp.cpp:414`) so the WasmJIT-side code converts at the call.
+3. **Rust and the dynamic/web emitters** follow the same rule.
+
+Suite **21596 assertions in 729 cases**, green.

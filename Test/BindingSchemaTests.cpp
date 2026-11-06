@@ -2513,3 +2513,31 @@ TEST_CASE("candidate schemas keep one entry per function name", "[bindings]")
 	REQUIRE(schema.at("imports")[0].at("name") == "host_add");
 }
 
+
+
+TEST_CASE("bindings spell a v128 parameter", "[bindings][v128][abi]")
+{
+	// Pins how the emitters spell a vector today, so moving a family to its own side
+	// of the boundary becomes a visible, deliberate change rather than a silent one.
+	// Per docs/ABI_REFACTOR_STUDY.md §16 the guest-facing emitters must end up on the
+	// wasm spelling; this case records where they are now.
+	const Json schema = WASM::Bindings::moduleSchema(loadTestModule("v128_param"),
+testStore().types(), WASM::Bindings::Direction::HostToGuest, "v128_param");
+	REQUIRE(!schema.is_null());
+
+	const std::string header = WASM::Bindings::emit(schema, WASM::Bindings::Language::CHeader);
+	const std::size_t lane = header.find("lane1");
+	INFO(header);
+	REQUIRE(lane != std::string::npos);
+	// The parameter as declared, whatever the spelling: this assertion is the record.
+	// Measured 2026-11-06. Today the guest-facing C header declares ONE
+	// aggregate parameter whose type is the NATIVE pair -- neither the wasm
+	// spelling (one wasm v128) nor the native one (two scalars). This pins the
+	// current text so moving the header to the wasm side is a visible change.
+	CHECK(header.find("wasmjit_lane1(wasm_v128 arg0)") != std::string::npos);
+	CHECK(header.find("lane1") != std::string::npos);
+
+	const std::string rust = WASM::Bindings::emit(schema, WASM::Bindings::Language::Rust);
+	INFO(rust);
+	CHECK(rust.find("lane1") != std::string::npos);
+}
