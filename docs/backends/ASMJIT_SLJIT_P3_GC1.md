@@ -1886,3 +1886,197 @@ lands on an unwritten slot — and the abort happens in the first GC operation t
 Suite **21529 assertions in 723 cases**, green; Doxygen 0 warnings. Gate A remains blocked, now on a
 precise and much smaller statement: **reference block results abort in SLJIT**, with the three
 obvious causes excluded and the next instrumented experiment named.
+
+## 39. Two findings: the value is mis-delivered, and any helper exception aborts the host (2026-11-06)
+
+### What reproduced, on a fixture that actually built
+
+Applying §38's rule (verify the `.wasm` exists before trusting a result), the failure reproduces
+with the reference result produced **inside** the block by a fresh allocation — no local, no branch:
+
+```wat
+(block $b (result (ref $a))
+  (array.new_default $a (i32.const 3)))
+(array.len)
+```
+
+So the origin of the value is irrelevant: the defect is in what happens to a **reference block
+result** between the block's body and its consumer. The i32 version of the same shape works.
+
+### Instrumentation was lost — a tooling lesson
+
+`std::fprintf(stderr, …)` at `dispatchBlock` and `dispatchEnd` produced **no output at all**, in two
+probe runs, because the process aborts and the captured test output does not survive it. Diagnosing
+by printing has to survive the crash: write to a **file**, and `fflush` after each line, or the run
+under study is the one whose evidence is discarded.
+
+### gdb: the abort is `std::terminate`, not a bad pointer
+
+```
+#3  __GI_abort ()
+#4  CATCH2_INTERNAL_TEST_195() [clone .cold]
+```
+
+The visible abort is Catch2's fatal-signal reporting path, and the underlying signal is **SIGABRT**,
+not SIGSEGV. Generated code that *aborts* rather than faulting points at C++ exception propagation:
+`std::terminate` is called when an exception escapes a `noexcept` function, and every JIT helper in
+both backends is declared `extern "C" … noexcept`.
+
+### F1 — the defect under study
+
+A block whose result is a reference mis-delivers the value: the consumer reads the wrong slot (a
+zero, most likely, given that the failure surfaces as a GC operation failing). This is what blocks
+`br_on_non_null`.
+
+### F2 — the more serious finding: any helper exception kills the host
+
+The helpers are `noexcept` **and** callable code that can throw — `allocateArrayObject`, the GC
+allocator, `reportTrap`. If any of them throws (an allocation refusal, a budget breach, a
+`std::bad_alloc`), the exception reaches the `noexcept` boundary and the process calls
+`std::terminate`. A trap is supposed to be a **returned status**, never a host kill
+([`SAFETY.md`](SAFETY.md) §2.6), so this violates the contract on every helper, on every backend,
+regardless of F1.
+
+It also explains the shape of this whole investigation: a miscoded slot produced a *process abort*
+instead of a trap or a wrong number, which is why three rounds of probes each looked like a different
+bug.
+
+### Order of work, and it inverts the previous plan
+
+1. **F2 first.** Make every `extern "C"` helper convert an escaping exception into a trap status
+   (a `try`/`catch (...) { reportInternalTrap(); }` wrapper, or a common template that does it).
+   Testable directly: force an allocation refusal and assert a `WASM::Trap` of the internal kind
+   rather than a crash.
+2. **Then F1**, with instrumentation that survives the crash (file + `fflush`).
+3. **Then** `br_on_non_null`, which has now been correctly deferred twice.
+
+F2 is worth doing first on its own merits: it is the difference between "a bug gives a wrong answer"
+and "a bug kills the embedder's process", and it applies to every helper that exists today.
+
+### Status
+
+Suite **21529 assertions in 723 cases**, green; Doxygen 0 warnings. The i32 merge probe remains as a
+regression test; the reference probes and the temporary instrumentation are removed.
+
+## 40. F2 landed: helpers no longer let an exception kill the host (2026-11-06)
+
+### What changed
+
+The helpers that allocate or copy GC storage — the ones that can genuinely throw — now convert an
+escaping exception into an **internal trap**:
+
+```cpp
+extern "C" void* sljitArrayNew(WASM::VMContext* vm, uint32_t typeIndex, uint32_t length) noexcept
+{
+	// An exception must never escape a helper: `std::terminate` would kill the
+	// host, and a trap is a returned status (docs/SAFETY.md §2.6).
+	try {
+		return reinterpret_cast<WASM::ModuleInstance*>(vm)->allocateArrayObject(typeIndex, length);
+	} catch (...) {
+		WASM::reportTrap(WASM::TrapKind::Internal);
+		return nullptr;
+	}
+}
+```
+
+Guarded on both backends: `sljitArrayNew`, `sljitStructNew`, `sljitArrayInitFromData`,
+`asmjitArrayNew`, `asmjitStructNew`, `asmjitArrayInitFromData`. On the returning helpers the
+failure value is `nullptr`, which the surrounding lowering already treats as "check the trap
+slot": a refused allocation now produces a `WASM::Trap` the caller can observe.
+
+### What is *not* done, stated plainly
+
+| Backend | Helpers | Guarded | Remaining |
+|---|---|---|---|
+| SLJIT | 68 | 3 | **65** |
+| AsmJit | 22 | 3 | **19** |
+
+The remaining 84 are mostly trap reporters, memory/table operations and SIMD entry points whose
+bodies call core code that reports rather than throws. They are **not proven** to be throw-free;
+they are simply not the ones we can name as throwing today. The mechanical completion is the same
+transformation applied to every helper — insert `try {` after the opening brace and a
+`catch (...) { reportTrap(Internal); }` before the closing one — and it is worth doing as one
+sweep rather than opportunistically, because a half-guarded set gives a false sense of safety.
+
+### Why this could not be tested directly
+
+There is no injection point: forcing `allocateArrayObject` to throw would need a test hook in the
+allocator (a budget override or a failing-allocator mode). Without one, a test can only exercise
+allocations that *report* rather than throw, so it would pass with or without the guard. Recorded
+as a gap: **the guard's behaviour is untested**, and the fix is to add an allocator test hook —
+the same shape as the existing budget knob — so a fixture can force the throwing path and assert a
+`WASM::Trap` instead of a process death.
+
+### Why it still matters for F1
+
+With the guard in place, a miscoded slot can no longer surface as `std::terminate`. The reference
+block-result defect (§39 F1) will now either return a wrong number or produce an **observable trap**
+— which is exactly the difference between "three probes, three different crashes" and "one trap kind,
+looked up in a table". The debugging of F1 is cheaper *because* F2 was fixed first, which is the
+argument for the inverted order in §39.
+
+### Status
+
+Suite **21529 assertions in 723 cases**, green; Doxygen 0 warnings.
+
+Next: **F1** — the reference block result — with crash-surviving instrumentation (file + `fflush`),
+and with the knowledge that a failure now yields a trap kind rather than an abort. Then
+`br_on_non_null`, which is waiting on F1.
+
+## 41. F1: the guard did not stop the abort, and the abort is not what we assumed (2026-11-06)
+
+### What was tried
+
+With F2's guard in place the probe was expected to return a wrong number or raise an observable trap.
+It still aborts (`SIGABRT`), so the guard changed nothing — which is itself informative.
+
+### Two facts now excluded
+
+- **`reportTrap` cannot be the thrower.** `reportTrap`/`reportTrapAt` are declared `noexcept` *and*
+  are non-throwing by construction: they set the trap slot and return, first-report-wins. So no
+  escaping exception from a trap reporter.
+- **The allocators cannot be the thrower either.** The probe allocates three elements; a three-element
+  allocation cannot fail, so no exception reaches the guard.
+
+What remains is that the abort comes from **generated code**, and it is `abort()` rather than a fault:
+`SIGABRT`, not `SIGSEGV`. That combination has a small set of explanations, and one of them is a much
+better fit than the others — **heap corruption**. A store to the wrong slot (the F1 hypothesis: an
+8-byte reference landing where a 4-byte value belongs, or vice versa) does not fault; it silently
+corrupts an adjacent slot or the allocator's metadata, and glibc's allocator **aborts** at the next
+allocation or free ("free(): invalid pointer", "corrupted size vs. prev_size").
+
+That also explains the whole investigation's shape: a mis-sized slot store is invisible until
+something allocates or frees, so the crash lands in an unrelated operation and every probe looked
+like a different bug.
+
+### The cheapest next action, and a mistake to avoid
+
+**Capture the full stderr of the failing run.** glibc prints its own diagnostic before aborting, and
+this investigation has filtered or lost that output twice — once by grepping for specific words, once
+because Catch2's fatal-signal path swallows what precedes it. The probe should be run as:
+
+```
+timeout 90 ./Test/WasmJit '[probe]' > /tmp/probe.log 2>&1; tail -40 /tmp/probe.log
+```
+
+and read in full. If glibc names the corruption, the slot bug is confirmed and located by *which*
+allocator check fires; if it prints nothing, the abort is ours and the next step is a breakpoint on
+`abort` with a backtrace into the *caller* of the JIT'ed function.
+
+### Where F1 stands
+
+| Question | Answer |
+|---|---|
+| Does the fixture build? | yes, verified |
+| Is it the branch? | no — the block result alone reproduces it |
+| Does the value's origin matter? | no — local or fresh allocation both fail |
+| i32 equivalent? | works (kept as a regression test) |
+| Is it an escaping exception? | no — reporters do not throw, allocators cannot fail here |
+| Is it a bad pointer dereference? | no — `SIGABRT`, not `SIGSEGV` |
+| Best remaining hypothesis | a mis-sized slot store corrupting heap metadata |
+
+### Status
+
+Suite **21529 assertions in 723 cases**, green; Doxygen 0 warnings. The probe is removed; the i32
+merge probe stays. Gate A remains blocked on F1, which is now a heap-corruption hypothesis with a
+named, cheap test (read glibc's own message) rather than a mystery.

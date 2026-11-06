@@ -154,7 +154,14 @@ extern "C" uint32_t sljitTypeIdMatchesKind(WASM::VMContext* vm, uint32_t typeId,
 
 extern "C" void* sljitArrayNew(WASM::VMContext* vm, uint32_t typeIndex, uint32_t length) noexcept
 {
-	return reinterpret_cast<WASM::ModuleInstance*>(vm)->allocateArrayObject(typeIndex, length);
+	// An exception must never escape a helper: `std::terminate` would kill the
+	// host, and a trap is a returned status (docs/SAFETY.md §2.6).
+	try {
+		return reinterpret_cast<WASM::ModuleInstance*>(vm)->allocateArrayObject(typeIndex, length);
+	} catch (...) {
+		WASM::reportTrap(WASM::TrapKind::Internal);
+		return nullptr;
+	}
 }
 
 //! Copies a data segment into an array allocated by `sljitArrayNew`.
@@ -166,14 +173,27 @@ extern "C" void* sljitArrayNew(WASM::VMContext* vm, uint32_t typeIndex, uint32_t
 extern "C" void sljitArrayInitFromData(WASM::VMContext* vm, void* array, uint32_t typeIndex,
 uint64_t packedOffsetAndIndex) noexcept
 {
-reinterpret_cast<WASM::ModuleInstance*>(vm)->arrayInitFromData(array, typeIndex,
-static_cast<uint32_t>(packedOffsetAndIndex >> 32),
-static_cast<uint32_t>(packedOffsetAndIndex & 0xFFFFFFFFu));
+	// An exception must never escape a helper: `std::terminate` would kill the
+	// host, and a trap is a returned status (docs/SAFETY.md §2.6).
+	try {
+	reinterpret_cast<WASM::ModuleInstance*>(vm)->arrayInitFromData(array, typeIndex,
+	static_cast<uint32_t>(packedOffsetAndIndex >> 32),
+	static_cast<uint32_t>(packedOffsetAndIndex & 0xFFFFFFFFu));
+	} catch (...) {
+		WASM::reportTrap(WASM::TrapKind::Internal);
+	}
 }
 
 extern "C" void* sljitStructNew(WASM::VMContext* vm, uint32_t size, uint32_t typeIndex) noexcept
 {
-	return reinterpret_cast<WASM::ModuleInstance*>(vm)->allocateStructObject(size, typeIndex);
+	// An exception must never escape a helper: `std::terminate` would kill the
+	// host, and a trap is a returned status (docs/SAFETY.md §2.6).
+	try {
+		return reinterpret_cast<WASM::ModuleInstance*>(vm)->allocateStructObject(size, typeIndex);
+	} catch (...) {
+		WASM::reportTrap(WASM::TrapKind::Internal);
+		return nullptr;
+	}
 }
 
 extern "C" void sljitReportNullReference() noexcept
