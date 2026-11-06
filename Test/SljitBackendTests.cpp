@@ -2796,3 +2796,49 @@ TEST_CASE("both backends follow the subtype relation in ref.test and ref.cast",
 	same("cast_super", 0);
 	trapOf("cast_fail", WASM::TrapKind::CastFailure);
 }
+
+
+TEST_CASE("both backends handle abstract heap kinds in ref.test and ref.cast",
+		"[sljit][asmjit][parity][gc][subtype][abstract]")
+{
+	WASM::Module module = loadTestModule("gc_subtype");
+	AsmJitBackend::Context asmContext;
+	AsmJitBackend::ModuleCompiler asmCompiler(asmContext);
+	Sljit::ModuleCompiler sljitCompiler;
+	WASM::RegistryImportResolver asmImports;
+	WASM::RegistryImportResolver sljitImports;
+	std::unique_ptr<WASM::ModuleInstance> asmInstance =
+			asmCompiler.instantiate(module, asmImports);
+	std::unique_ptr<WASM::ModuleInstance> sljitInstance =
+			sljitCompiler.instantiate(module, sljitImports);
+	REQUIRE(asmInstance != nullptr);
+	REQUIRE(sljitInstance != nullptr);
+
+	const auto same = [&](const char* name, std::int32_t expected) {
+		const std::optional<WASM::Callable> asmCallable = asmInstance->exportedFunction(name);
+		const std::optional<WASM::Callable> sljitCallable = sljitInstance->exportedFunction(name);
+		REQUIRE(asmCallable.has_value());
+		REQUIRE(sljitCallable.has_value());
+		INFO("export " << name);
+		CHECK(WASM::callCallable<std::int32_t>(*asmCallable) == expected);
+		CHECK(WASM::callCallable<std::int32_t>(*sljitCallable) == expected);
+	};
+	const auto trapOf = [&](const char* name, WASM::TrapKind expected) {
+		const std::optional<WASM::Callable> asmCallable = asmInstance->exportedFunction(name);
+		const std::optional<WASM::Callable> sljitCallable = sljitInstance->exportedFunction(name);
+		REQUIRE(asmCallable.has_value());
+		REQUIRE(sljitCallable.has_value());
+		INFO("export " << name);
+		CHECK(trapKindOf([&] { WASM::callCallable<std::int32_t>(*asmCallable); }) == expected);
+		CHECK(trapKindOf([&] { WASM::callCallable<std::int32_t>(*sljitCallable); }) == expected);
+	};
+
+	// A struct instance is any/eq/struct, never array.
+	same("test_any", 1);
+	same("test_struct_kind", 1);
+	same("test_array_kind", 0);
+	// The same relation through the cast: to struct succeeds, to array traps.
+	same("cast_struct_kind", 0);
+	trapOf("cast_array_kind_fail", WASM::TrapKind::CastFailure);
+}
+

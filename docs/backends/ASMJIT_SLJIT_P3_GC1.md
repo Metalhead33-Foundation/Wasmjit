@@ -1497,3 +1497,126 @@ Three times in this gate the same order was decisive:
 
 That is the re-usable answer for every remaining gate: A (`br_on_non_null`, then the cast
 branches), the loop-emitting array ops, and Gate D's sweep.
+
+## 33. Abstract heap kinds land on both backends (2026-11-06)
+
+`ref.test`, `ref.test null`, `ref.cast` and `ref.cast null` now accept the abstract heap
+types a GC object can have: `(ref any)`, `(ref eq)`, `(ref struct)`, `(ref array)`. Both
+backends, parity-tested: `[subtype]` is **60 assertions in 3 cases** including two A/B
+cases (concrete subtyping and abstract kinds).
+
+### One call site, two predicates
+
+Each site now picks a predicate on a single boolean:
+
+```cpp
+const bool kindQuery = !arg.isTypeIndex;
+const uint32_t expected = kindQuery ? kind(value) : module_.typeId(idx).value;
+```
+
+- **SLJIT** chooses between two `emitHelper` calls, because the helper pointer is an
+  argument to the emitter: `if (kindQuery) emitHelper(…, &sljitTypeIdMatchesKind); else
+  emitHelper(…, &sljitTypeIsSubtype);` — the same three-argument layout both times, so the
+  §30 packing lesson applies identically and was already satisfied.
+- **AsmJit** needs one line: `const auto predicate = kindQuery ? &asmjitTypeIdMatchesKind :
+  &asmjitTypeIsSubtype;` and the `invoke` takes `predicate`. It works because both
+  predicates have the *same signature* — if they had differed by even one argument type the
+  conditional would not compile.
+
+**That is a design property worth naming: give sibling predicates identical signatures.**
+Two functions that answer different questions about the same (object, target) pair cost one
+`?:` at the call site; two functions that differ in shape cost a duplicated call block. The
+core predicates were written that way by accident; they should be written that way on
+purpose.
+
+### The refusal is preserved, and it is the interesting half
+
+`(ref func)`, `(ref extern)` and `(ref i31)` are **still refused by name** on both backends.
+A function or external reference is not a header-tagged object — there is no type id to
+classify — so asking the predicate would answer `false`, which is the wrong answer for a
+`funcref` that *is* a `func`. The refusal is what keeps the gate honest:
+
+| Target | Answerable from the object header? | Behaviour |
+|---|---|---|
+| `(ref struct)`, `(ref array)` | yes — exact kind | lowered |
+| `(ref any)`, `(ref eq)` | yes — union of the two | lowered |
+| `(ref func)`, `(ref extern)` | **no** — not a tagged object | refused by name |
+| `(ref i31)` | **no** — an immediate, not an object | refused by name |
+
+### A small fixture lesson
+
+The `.wat` fixture's final line carried **two** closing parentheses (the last function and the
+module). A line-based insert "before the last line" therefore split the last function in half
+and produced `unknown operator or unexpected token`. The fixture was rewritten whole, and now
+keeps the module's closing paren on its own line.
+
+Rule for editing fixtures mechanically: a Wasm text file's last line is not a safe insertion
+point, because the module's and the function's closers share it. Either rewrite the file or
+anchor on a comment line.
+
+### Counting
+
+| Suite | Result |
+|---|---|
+| `[subtype]` (3 cases) | **60 assertions**, both A/B cases green |
+| full suite | **21524 assertions in 722 cases** |
+| `[headerdoc]`, Doxygen | green, 0 warnings |
+
+## 34. `br_on_non_null` attempted on SLJIT: malformed code, reverted (2026-11-06)
+
+Gate A's first slice was written and did **not** survive its own test, so it was removed.
+Recording it because the failure mode is more specific than "it did not work".
+
+### What was written
+
+A dispatcher following `dispatchBrOnNull`'s shape, using the primitives §27 identified:
+
+```cpp
+loadSlot(R0, top);                                  // the reference
+isNull = cmp(EQUAL, R0, 0, IMM 0);                  // null -> fall through
+emitBranchTo(target);                               // non-null: transfer + jump
+fallthrough = emit_label(); set_label(isNull, fallthrough);
+pop();                                              // the fallthrough consumes it
+```
+
+It compiled first time, and the fixture was designed so the two paths cannot be confused:
+`taken` must answer 3 (the branch carries a 3-element array) and `not_taken` must answer 9
+(the branch is skipped and the fallthrough array is measured).
+
+### What happened
+
+Calling `taken` raised a **fatal signal (SIGILL)**, not a wrong value. That distinction is the
+useful part: the emitted machine code is *malformed*, not merely semantically wrong. Three
+candidates, in the order worth instrumenting:
+
+1. **`emitBranchTo` may assume the code after it is unreachable.** It is only ever called
+   from `br`, which follows it with `markUnreachable()`. Emitting a reachable label directly
+   after its unconditional jump may break an invariant of the block/epilogue bookkeeping.
+2. **The fixture's fallthrough is `unreachable`**, so the block's entry path ends dead while
+   the branch path is live. `dispatchEnd` may then close the frame expecting a value in a
+   slot that no path stored.
+3. **`transferToBase(widths, baseDepth)`** moves the branch values down to the label's base
+   depth — a transformation that is only safe when the code path does not continue.
+
+Instrumenting one variable at a time is the cheap next step: emit *only* the branch (no
+fallthrough, fixture with `unreachable` after it), then *only* the fallthrough, and see which
+half produces the SIGILL. That isolates it to the branch machinery or to the frame bookkeeping
+without touching the other.
+
+### A removal lesson, briefly
+
+The first removal pass cut "from the function start to the first `}` in column 0" — and the
+file went red, because that `}` belonged to a different function than the code being removed.
+The deletion that worked anchors on a **unique comment string** and then cuts to the next
+closing brace. Same rule as §28/§30 for edits, now for deletions: **anchor on content that is
+unique, never on structural position.**
+
+### Status
+
+Gate A is **open**: `br_on_non_null` is absent, `br_on_cast`/`br_on_cast_fail` are absent, and
+nothing of this slice remains in the tree. The suite is back to **21524 assertions in 722
+cases**, green.
+
+The two prerequisites Gate A needed are in place and tested — subtype and abstract-kind
+predicates, both wired on both backends — so the remaining work is purely the branch lowering
+and its frame interaction, which is what this entry now narrows down.

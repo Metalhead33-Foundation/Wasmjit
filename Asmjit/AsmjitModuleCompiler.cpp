@@ -533,6 +533,11 @@ uint32_t asmjitTypeIsSubtype(WASM::VMContext* vm, uint32_t actual, uint32_t expe
 	return reinterpret_cast<WASM::ModuleInstance*>(vm)->typeIdIsSubtype(actual, expected) ? 1u : 0u;
 }
 
+uint32_t asmjitTypeIdMatchesKind(WASM::VMContext* vm, uint32_t typeId, uint32_t kind) noexcept
+{
+	return reinterpret_cast<WASM::ModuleInstance*>(vm)->typeIdMatchesAbstractKind(typeId, kind) ? 1u : 0u;
+}
+
 void asmjitArrayInitFromData(WASM::VMContext* vm, void* array, uint32_t typeIndex,
 		uint64_t packedOffsetAndIndex) noexcept
 {
@@ -3221,13 +3226,22 @@ protected:
 
 	void emitRefCast(const WASM::HeapType& arg, bool nullable)
 	{
-		if (!arg.isTypeIndex)
-			throw std::runtime_error("AsmJit ref.cast on an abstract heap type is not lowered yet");
+		if (!arg.isTypeIndex
+			&& arg.abstract != WASM::AbstractHeapType::Any
+			&& arg.abstract != WASM::AbstractHeapType::Eq
+			&& arg.abstract != WASM::AbstractHeapType::Struct
+			&& arg.abstract != WASM::AbstractHeapType::Array)
+			throw std::runtime_error("AsmJit ref.cast on this abstract heap type is not lowered yet");
 		if (values.empty())
 			throw std::runtime_error("AsmJit ref.cast operand stack underflow");
 		// A cast returns the reference, so it stays on the value stack.
 		auto reference = values.back();
-		const uint32_t expected = module.typeId(WASM::LocalTypeIdx{arg.typeIndex}).value;
+		const bool kindQuery = !arg.isTypeIndex;
+		const uint32_t expected = kindQuery
+				? static_cast<uint32_t>(static_cast<int32_t>(arg.abstract))
+				: module.typeId(WASM::LocalTypeIdx{arg.typeIndex}).value;
+		const auto predicate = kindQuery ? &asmjitTypeIdMatchesKind
+				: &asmjitTypeIsSubtype;
 		asmjit::FuncSignature voidSignature(asmjit::CallConvId::kCDecl);
 		voidSignature.set_ret(asmjit::TypeId::kVoid);
 		asmjit::Label afterCast = compiler.new_label();
@@ -3256,7 +3270,7 @@ protected:
 	subtypeSignature.add_arg(asmjit::TypeId::kUInt32);
 	asmjit::InvokeNode* subtypeCall = nullptr;
 	checkError(compiler.invoke(asmjit::Out(subtypeCall),
-		reinterpret_cast<uint64_t>(&asmjitTypeIsSubtype), subtypeSignature),
+		reinterpret_cast<uint64_t>(predicate), subtypeSignature),
 		"AsmJit subtype predicate call failed");
 	subtypeCall->set_arg(0, vmContext);
 	subtypeCall->set_arg(1, typeId);
@@ -3278,13 +3292,22 @@ protected:
 
 	void dispatchRefTest(const WASM::HeapType& arg) override
 	{
-		if (!arg.isTypeIndex)
-			throw std::runtime_error("AsmJit ref.test on an abstract heap type is not lowered yet");
+		if (!arg.isTypeIndex
+			&& arg.abstract != WASM::AbstractHeapType::Any
+			&& arg.abstract != WASM::AbstractHeapType::Eq
+			&& arg.abstract != WASM::AbstractHeapType::Struct
+			&& arg.abstract != WASM::AbstractHeapType::Array)
+			throw std::runtime_error("AsmJit ref.test on this abstract heap type is not lowered yet");
 		if (values.empty())
 			throw std::runtime_error("AsmJit ref.test operand stack underflow");
 		auto reference = values.back();
 		values.pop_back();
-		const uint32_t expected = module.typeId(WASM::LocalTypeIdx{arg.typeIndex}).value;
+		const bool kindQuery = !arg.isTypeIndex;
+		const uint32_t expected = kindQuery
+				? static_cast<uint32_t>(static_cast<int32_t>(arg.abstract))
+				: module.typeId(WASM::LocalTypeIdx{arg.typeIndex}).value;
+		const auto predicate = kindQuery ? &asmjitTypeIdMatchesKind
+				: &asmjitTypeIsSubtype;
 		auto result = compiler.new_gp32("refTest");
 		checkError(compiler.mov(result, static_cast<uint32_t>(0)), "AsmJit ref.test zeroing failed");
 		asmjit::Label done = compiler.new_label();
@@ -3301,7 +3324,7 @@ protected:
 		subtypeSignature.add_arg(asmjit::TypeId::kUInt32);
 		asmjit::InvokeNode* subtypeCall = nullptr;
 		checkError(compiler.invoke(asmjit::Out(subtypeCall),
-			reinterpret_cast<uint64_t>(&asmjitTypeIsSubtype), subtypeSignature),
+			reinterpret_cast<uint64_t>(predicate), subtypeSignature),
 			"AsmJit subtype predicate call failed");
 		subtypeCall->set_arg(0, vmContext);
 		subtypeCall->set_arg(1, typeId);
@@ -3315,13 +3338,22 @@ protected:
 
 	void dispatchRefTestNull(const WASM::HeapType& arg) override
 	{
-		if (!arg.isTypeIndex)
-			throw std::runtime_error("AsmJit ref.test on an abstract heap type is not lowered yet");
+		if (!arg.isTypeIndex
+			&& arg.abstract != WASM::AbstractHeapType::Any
+			&& arg.abstract != WASM::AbstractHeapType::Eq
+			&& arg.abstract != WASM::AbstractHeapType::Struct
+			&& arg.abstract != WASM::AbstractHeapType::Array)
+			throw std::runtime_error("AsmJit ref.test on this abstract heap type is not lowered yet");
 		if (values.empty())
 			throw std::runtime_error("AsmJit ref.test operand stack underflow");
 		auto reference = values.back();
 		values.pop_back();
-		const uint32_t expected = module.typeId(WASM::LocalTypeIdx{arg.typeIndex}).value;
+		const bool kindQuery = !arg.isTypeIndex;
+		const uint32_t expected = kindQuery
+				? static_cast<uint32_t>(static_cast<int32_t>(arg.abstract))
+				: module.typeId(WASM::LocalTypeIdx{arg.typeIndex}).value;
+		const auto predicate = kindQuery ? &asmjitTypeIdMatchesKind
+				: &asmjitTypeIsSubtype;
 		// Null passes the nullable test; otherwise the type id decides.
 		auto result = compiler.new_gp32("refTest");
 		checkError(compiler.mov(result, static_cast<uint32_t>(1)), "AsmJit ref.test initialisation failed");
@@ -3340,7 +3372,7 @@ protected:
 		subtypeSignature.add_arg(asmjit::TypeId::kUInt32);
 		asmjit::InvokeNode* subtypeCall = nullptr;
 		checkError(compiler.invoke(asmjit::Out(subtypeCall),
-			reinterpret_cast<uint64_t>(&asmjitTypeIsSubtype), subtypeSignature),
+			reinterpret_cast<uint64_t>(predicate), subtypeSignature),
 			"AsmJit subtype predicate call failed");
 		subtypeCall->set_arg(0, vmContext);
 		subtypeCall->set_arg(1, typeId);

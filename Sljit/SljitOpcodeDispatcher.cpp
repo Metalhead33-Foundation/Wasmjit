@@ -4047,13 +4047,23 @@ void OpcodeDispatcher::dispatchRefFunc(WASM::FuncIdx arg)
 
 void OpcodeDispatcher::emitRefCast(const WASM::HeapType& arg, bool nullable)
 {
-	require(arg.isTypeIndex, "ref.cast on an abstract heap type is not lowered yet");
+	if (!arg.isTypeIndex) {
+		// Only the kinds a GC object can have are answerable from its header.
+		require(arg.abstract == WASM::AbstractHeapType::Any
+			|| arg.abstract == WASM::AbstractHeapType::Eq
+			|| arg.abstract == WASM::AbstractHeapType::Struct
+			|| arg.abstract == WASM::AbstractHeapType::Array,
+			"this abstract heap type is not lowered yet");
+	}
 	requireStack(1);
 	require(stackWidths_.back() == 8, "ref.cast requires a reference operand");
 	if (measureOnly_)
 		return;
 	const std::size_t depth = stackWidths_.size() - 1;
-	const std::uint32_t expected = module_.typeId(WASM::LocalTypeIdx{arg.typeIndex}).value;
+	const bool kindQuery = !arg.isTypeIndex;
+	const std::uint32_t expected = kindQuery
+			? static_cast<std::uint32_t>(static_cast<std::int32_t>(arg.abstract))
+			: module_.typeId(WASM::LocalTypeIdx{arg.typeIndex}).value;
 	loadSlot(SLJIT_R1, depth, 8);
 	// The nullable form passes null through; the non-null form traps on it.
 	sljit_jump* nullPasses = nullptr;
@@ -4081,7 +4091,10 @@ void OpcodeDispatcher::emitRefCast(const WASM::HeapType& arg, bool nullable)
 	emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R2, 0, SLJIT_IMM,
 		static_cast<sljit_sw>(expected)));
 	loadContext(SLJIT_R0);
-	emitHelper(SLJIT_ARGS3(32, P, 32, 32), &sljitTypeIsSubtype);
+	if (kindQuery)
+		emitHelper(SLJIT_ARGS3(32, P, 32, 32), &sljitTypeIdMatchesKind);
+	else
+		emitHelper(SLJIT_ARGS3(32, P, 32, 32), &sljitTypeIsSubtype);
 	// The call clobbers the object pointer; restore it for the value push.
 	loadSlot(SLJIT_R1, depth, 8);
 	sljit_jump* matches = sljit_emit_cmp(compiler_, SLJIT_NOT_EQUAL, SLJIT_R0, 0,
@@ -4117,12 +4130,22 @@ void OpcodeDispatcher::dispatchRefTest(const WASM::HeapType& arg)
 {
 	if (!reachable_)
 		return;
-	require(arg.isTypeIndex, "ref.test on an abstract heap type is not lowered yet");
+	if (!arg.isTypeIndex) {
+		// Only the kinds a GC object can have are answerable from its header.
+		require(arg.abstract == WASM::AbstractHeapType::Any
+			|| arg.abstract == WASM::AbstractHeapType::Eq
+			|| arg.abstract == WASM::AbstractHeapType::Struct
+			|| arg.abstract == WASM::AbstractHeapType::Array,
+			"this abstract heap type is not lowered yet");
+	}
 	requireStack(1);
 	require(stackWidths_.back() == 8, "ref.test requires a reference operand");
 	const std::size_t depth = stackWidths_.size() - 1;
 	if (!measureOnly_) {
-		const std::uint32_t expected = module_.typeId(WASM::LocalTypeIdx{arg.typeIndex}).value;
+	const bool kindQuery = !arg.isTypeIndex;
+	const std::uint32_t expected = kindQuery
+			? static_cast<std::uint32_t>(static_cast<std::int32_t>(arg.abstract))
+			: module_.typeId(WASM::LocalTypeIdx{arg.typeIndex}).value;
 		loadSlot(SLJIT_R1, depth, 8);
 		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R2, 0, SLJIT_IMM, 0));
 		sljit_jump* isNull = sljit_emit_cmp(compiler_, SLJIT_EQUAL, SLJIT_R1, 0, SLJIT_IMM, 0);
@@ -4134,7 +4157,10 @@ void OpcodeDispatcher::dispatchRefTest(const WASM::HeapType& arg)
 		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R2, 0, SLJIT_IMM,
 			static_cast<sljit_sw>(expected)));
 		loadContext(SLJIT_R0);
-		emitHelper(SLJIT_ARGS3(32, P, 32, 32), &sljitTypeIsSubtype);
+		if (kindQuery)
+			emitHelper(SLJIT_ARGS3(32, P, 32, 32), &sljitTypeIdMatchesKind);
+		else
+			emitHelper(SLJIT_ARGS3(32, P, 32, 32), &sljitTypeIsSubtype);
 		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R2, 0, SLJIT_R0, 0));
 		sljit_label* done = sljit_emit_label(compiler_);
 		if (done == nullptr)
@@ -4151,12 +4177,22 @@ void OpcodeDispatcher::dispatchRefTestNull(const WASM::HeapType& arg)
 {
 	if (!reachable_)
 		return;
-	require(arg.isTypeIndex, "ref.test on an abstract heap type is not lowered yet");
+	if (!arg.isTypeIndex) {
+		// Only the kinds a GC object can have are answerable from its header.
+		require(arg.abstract == WASM::AbstractHeapType::Any
+			|| arg.abstract == WASM::AbstractHeapType::Eq
+			|| arg.abstract == WASM::AbstractHeapType::Struct
+			|| arg.abstract == WASM::AbstractHeapType::Array,
+			"this abstract heap type is not lowered yet");
+	}
 	requireStack(1);
 	require(stackWidths_.back() == 8, "ref.test requires a reference operand");
 	const std::size_t depth = stackWidths_.size() - 1;
 	if (!measureOnly_) {
-		const std::uint32_t expected = module_.typeId(WASM::LocalTypeIdx{arg.typeIndex}).value;
+	const bool kindQuery = !arg.isTypeIndex;
+	const std::uint32_t expected = kindQuery
+			? static_cast<std::uint32_t>(static_cast<std::int32_t>(arg.abstract))
+			: module_.typeId(WASM::LocalTypeIdx{arg.typeIndex}).value;
 		loadSlot(SLJIT_R1, depth, 8);
 		// A null passes the nullable test; otherwise the type id decides.
 		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R2, 0, SLJIT_IMM, 1));
@@ -4170,7 +4206,10 @@ void OpcodeDispatcher::dispatchRefTestNull(const WASM::HeapType& arg)
 		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R2, 0, SLJIT_IMM,
 			static_cast<sljit_sw>(expected)));
 		loadContext(SLJIT_R0);
-		emitHelper(SLJIT_ARGS3(32, P, 32, 32), &sljitTypeIsSubtype);
+		if (kindQuery)
+			emitHelper(SLJIT_ARGS3(32, P, 32, 32), &sljitTypeIdMatchesKind);
+		else
+			emitHelper(SLJIT_ARGS3(32, P, 32, 32), &sljitTypeIsSubtype);
 		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R2, 0, SLJIT_IMM, 1));
 		sljit_label* done = sljit_emit_label(compiler_);
 		if (done == nullptr)
