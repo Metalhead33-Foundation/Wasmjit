@@ -2266,3 +2266,39 @@ what it does for a `v128`: one 16-byte slot or two words. That is a code read an
 ### State
 
 Fixture and experiments removed; suite **21648 assertions in 734 test cases**, green; tree clean.
+
+## 44. Reading the harness invocation path: searched, and the obvious names are empty (2026-11-06)
+
+The last untested path is the one that turns a `WasmValue` into native arguments for the compiled entry. It was
+searched for under every name the codebase uses elsewhere, with these results:
+
+| Location | Searched for | Found |
+|---|---|---|
+| `Test/SpecSuite.cpp` | `invoke`, `v128`, `V128` | only the test-case wrapper (`void invoke()` calls `runOneScript`) -- **no marshalling** |
+| `Test/WastScript.cpp` | `callExport`, `callCallable`, `jit_apply`, `fnPtr` | **nothing** |
+| `Test/helper.hpp` | `std::vector<WasmValue>` | **nothing** |
+| `WasmBase/WasmModuleInstance.hpp`, `WasmRuntime.hpp` | `V128`, `invoke`, `std::vector<WasmValue>` | **nothing** |
+| `WasmBase/*.hpp`, `Test/` | `invokeCallable`, `applyCallable`, `dispatchInvoke`, `callWithValues` | **nothing** |
+
+So the marshalling exists (the suites obviously call exports) but under a name none of the idioms suggest. The
+useful outcome is a **map of exclusions**: it is not in the spec runner, not in the script parser, not in the test
+helper, and not among the runtime headers' invoke-shaped APIs.
+
+### Where that leaves the search
+
+Two shapes remain plausible, and both are cheap to check next:
+
+1. **A generated/typed dispatcher** -- something that switches on `ValueTypeCode` and casts `fnPtr` per signature,
+   which would be the one place a `v128` argument's native form is decided. The search terms to use are the type
+   codes rather than "invoke": `ValueKind::V128` (the enum `BackendAbiTests.cpp` already checks) and
+   `valueKindOf`, both of which appear in the runtime's vocabulary.
+2. **The backend's own `rawFnPtr` path** -- the `Callable` has `fnPtr` *and* `rawFnPtr`, and the doc comment says
+   `fnPtr` points at the trampoline driver. A harness that calls `rawFnPtr` directly would bypass everything the
+   pins exercised and could legitimately be the one caller that still assumes one slot per parameter.
+
+Option 2 is the more interesting hypothesis and needs no new search terms: `rawFnPtr` is the documented "real
+call" entry, and the pins never called it.
+
+### State
+
+No code changed; suite **21648 assertions in 734 test cases**, green; tree clean.
