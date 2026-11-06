@@ -894,3 +894,48 @@ Three items, three builds, zero reverts: pin first (which *measured* the inconsi
 then Rust — each one visible to the pin, each one verified by the same gate. Compare with the earlier
 attempts, which had no pin and no measurement and lost two rounds to guessing. **The fixture was not
 preparation for the work; it was the thing that made the work possible.**
+
+### The native side has the same inconsistency, and it now has an address (2026-11-06)
+
+With the guest side settled, the pin's logic applies symmetrically: `cpp-typedefs` and `cpp-source` emit
+
+```cpp
+struct wasm_v128 { std::uint64_t lo; std::uint64_t hi; };
+```
+
+and then declare a vector parameter as **one** `wasm_v128` — an aggregate whose type is the native pair. On
+SysV that is two GPRs; on **MS x64 it is passed by reference**, which is precisely the divergence the
+decision exists to remove. So the WasmJIT-facing emitters are *still* wrong in the way §28 was written to
+prevent, and it is invisible on this machine for the third time (the libffi cache, the C header, now this).
+
+### The exact change, in three places
+
+| Site | Today | Should be |
+|---|---|---|
+| `EmitCpp.cpp:33` (typedef parameter list) | `cType(param) << " " << name` | for a vector: `uint64_t name_lo, uint64_t name_hi` |
+| `EmitCpp.cpp:505` (adapter signature) | same | same |
+| the adapter's forwarding call | `target(context, arg0)` | `target(context, arg0_lo, arg0_hi)` |
+
+A single helper — `emitCppParam(out, entry, i, param)` — used at both declaration sites, plus the forwarding
+update, is the whole change. It is exactly the shape that worked four times today (pin → measure → one edit
+per site), which is why it is written down rather than attempted in the last minutes of a session: the
+**body** and the **declarations** must move together or the conformance compile fails, and that needs one
+full generate → compile → run cycle to verify.
+
+### Test to add first, per the lesson that keeps paying
+
+Extend `[bindings][v128][abi]` to emit `CppTypedefs` for `v128_param` and assert the parameter list
+contains **two** `uint64_t` and no `wasm_v128` parameter — the same two-sided assertion that made the Rust
+move safe (`wasm_v128` present, `arg0_lo` absent, then inverted here).
+
+### Session close: where the refactor stands
+
+| Phase | State |
+|---|---|
+| **P0** | decision and its **boundary**, normative |
+| **P1** | proof with no backend |
+| **P3** | cache fixed + parity-tested + consuming the shared rule; **guest-facing emitters correct and asserted across 14 languages**; the **native-facing parameter split** located in three places, with the test that must precede it |
+| **P4** | LibJIT specified; `argSlotCount`/`mapArgSlots` implemented, tested, in use |
+| **Post-mortem** | §16, four corrections, and the sequence that produced them |
+
+Suite **21609 assertions in 729 cases**, green; `abi-check.sh` OK; Doxygen 0 warnings.
