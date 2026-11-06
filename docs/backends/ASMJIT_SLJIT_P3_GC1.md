@@ -1763,3 +1763,57 @@ Recorded as the arc's clearest example of the general rule this whole saga keeps
 blocker is almost never where the feature is.** Four times now a "missing" GC feature turned out to
 sit on a defect or a gap one level down — the layout contract, the trap kinds, the operand-stack
 height, and now the reference merge.
+
+## 37. Corrected: the defect is the reference crossing the merge, not the drop (2026-11-06)
+
+### A correction first, because §36 got a conclusion wrong
+
+§36 reported that removing the fallthrough `drop` made the reference probe pass, and called
+hypothesis (c) confirmed. **That was a mis-read.** The probe module also contained a `funcref`
+export that needed an `elem declare` segment; the module failed to *compile*
+(`undeclared function reference 0 ($f)`), so `instantiate()` threw, the `REQUIRE` at the top of the
+case aborted it, and the two `CHECK(call(...))` below never executed. "10 passed, 1 failed" was
+therefore not evidence about the no-drop variant at all.
+
+**Process lesson, worth more than the bug:** a failing `REQUIRE` makes every following `CHECK` in
+the case vacuous, so a high pass count is not evidence that the interesting assertions ran. When a
+case reports a fatal condition or an unexpected exception, treat **every** assertion in it as
+unmeasured, and re-run the variant alone.
+
+### The corrected matrix (all actually measured)
+
+| Shape | Result |
+|---|---|
+| `br_if` carrying an **i32** block result, live fallthrough | **works** — 7 taken, -1 not; kept as a regression test |
+| `br_if` carrying a **reference** block result, fallthrough leaves the value | **SIGABRT** |
+| same, fallthrough drops the value and re-fetches it | **SIGABRT** |
+| `drop` of a reference operand, then reuse of the same local — **no branch** | **works** — 3 |
+| reference local used twice, **no branch** | **works** — 8 |
+
+So the trigger is neither `drop` nor ownership: it is **a conditional branch carrying a reference
+block result**, full stop. The scalar case proves the merge machinery itself is sound; the no-branch
+cases prove reference values and their locals are sound.
+
+### The leading hypothesis, and it is checkable in one place
+
+`transferToBase` uses `loadSlot`/`storeSlot` with `widths[i]`, where `widths` is the label's
+`resultWidths` (for a block) or `paramWidths` (for a loop). If the recorded width for a reference
+result were **4** rather than **8**, the transfer would half-write the destination slot: the merged
+code would then read a truncated pointer, and the first thing it does with it (`array.len`, a header
+load) would touch unmapped memory — an abort, which is exactly what is observed.
+
+That is one assertion away from being answered: assert in `transferToBase` (or in a debug build of
+it) that `widths[i]` equals the width the value's kind requires, or simply log the widths for the
+reference probe and compare them with the i32 probe. If the widths are right, the next suspect is
+the block's result pop in `dispatchEnd` doing the same thing at the merge point.
+
+### Consequence and status
+
+The defect is in **shipped functionality**: any Wasm program that branches conditionally out of a
+block carrying a reference hits it today. `br_on_non_null` is its first *new* customer, not its
+cause. Gate A stays blocked until this is fixed, and fixing it is now the highest-value item in the
+arc — it is a wrong answer, not a missing feature.
+
+Suite **21529 assertions in 723 cases**, green; Doxygen 0 warnings. The i32 probe remains as a
+permanent regression test so the working half of the merge cannot silently break while the
+reference half is repaired.
