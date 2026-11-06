@@ -186,3 +186,55 @@ CHECK(reinterpret_cast<Fn>(entry)(loWord, hiWord) == 12);
 
 jit_context_destroy(context);
 }
+
+// The *split* half of the boundary: an aggregate value becomes two words. A call
+// site holds an aggregate value, not an address, so the sequence is
+// store-into-a-temp, take its address, then two typed loads. This pins that the
+// copy and the address are sound before any call site uses them
+// (docs/ABI_REFACTOR_STUDY.md §32).
+TEST_CASE("libjit: an aggregate splits into two words through a temp's address",
+"[libjit][v128][ir]")
+{
+	jit_context_t context = jit_context_create();
+	REQUIRE(context != nullptr);
+	jit_context_build_start(context);
+
+	// 16 bytes, 16-byte aligned: the canonical stored form.
+	jit_type_t fields[4] = {jit_type_int, jit_type_int, jit_type_int, jit_type_int};
+	jit_type_t aggregate = jit_type_create_struct(fields, 4, 0);
+	jit_type_set_size_and_alignment(aggregate, 16, 16);
+
+	jit_type_t params[1] = {aggregate};
+	jit_type_t signature =
+			jit_type_create_signature(jit_abi_cdecl, jit_type_int, params, 1, 1);
+	jit_function_t function = jit_function_create(context, signature);
+
+	jit_value_t value = jit_value_get_param(function, 0);
+	jit_value_t temp = jit_value_create(function, aggregate);
+	REQUIRE(jit_insn_store(function, temp, value) != 0);
+	jit_value_t address = jit_insn_address_of(function, temp);
+	jit_value_t lo = jit_insn_load_relative(function, address, 0, jit_type_ulong);
+	jit_value_t hi = jit_insn_load_relative(function, address, 8, jit_type_ulong);
+
+	// Lane 1 = bits 32..63 of the low word; also touch the high word so both
+	// loads are live and neither can be optimised away.
+	jit_value_t shift = jit_value_create_nint_constant(function, jit_type_ulong, 32);
+	jit_value_t lane1 = jit_insn_convert(function,
+jit_insn_ushr(function, lo, shift), jit_type_int, 0);
+	jit_value_t lane3 = jit_insn_convert(function,
+jit_insn_ushr(function, hi, shift), jit_type_int, 0);
+	jit_insn_return(function, jit_insn_add(function, lane1, lane3));
+	jit_context_build_end(context);
+
+	REQUIRE(jit_function_compile(function) == JIT_RESULT_OK);
+	void* entry = nullptr;
+	REQUIRE(jit_function_compile_entry(function, &entry) == JIT_RESULT_OK);
+	REQUIRE(entry != nullptr);
+
+	// lanes {11, 12, 13, 14}: lane1 + lane3 = 12 + 14.
+	struct Lanes { std::uint32_t lane[4]; };
+	using SplitFn = std::int32_t (*)(Lanes);
+	CHECK(reinterpret_cast<SplitFn>(entry)(Lanes{{11, 12, 13, 14}}) == 26);
+
+	jit_context_destroy(context);
+}

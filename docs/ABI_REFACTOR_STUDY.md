@@ -1759,3 +1759,43 @@ assertions and 1 case from the new test). `abi-check.sh` OK; Doxygen 0 warnings;
 3. Then re-apply sites 1-3 unchanged -- both overloads, the `address_of` prologue, the `paramSlots` driver.
 
 The prologue half is no longer research; it is a known-good sequence with a test behind it.
+
+## 32. Both boundary primitives are now proven at the IR level (2026-11-06)
+
+§31 proved the *assemble* half. The second half -- an aggregate value becoming two words -- needs one more
+step, because a call site holds a **value**, not an address, and `jit_insn_address_of` wants storage. The
+sequence is therefore store-into-a-temp, take *its* address, then two typed loads.
+
+### The new test
+
+`[libjit][v128][ir]` (second case) builds exactly that and returns `lane1 + lane3` from a 16-byte parameter:
+
+| Step | Call |
+|---|---|
+| 1 | `jit_value_create(function, aggregate)` -- the temp |
+| 2 | `jit_insn_store(function, temp, value)` -- the copy |
+| 3 | `jit_insn_address_of(function, temp)` |
+| 4 | two `jit_insn_load_relative(..., 0 / 8, jit_type_ulong)` |
+| 5 | `jit_insn_ushr(..., 32)` + `jit_insn_convert(..., jit_type_int)` per lane |
+
+Called with `{11, 12, 13, 14}`, it returns **26** (`12 + 14`). **13 assertions across the two `[ir]` cases, green.**
+
+That also closes the last open question about libjit's instruction set: `store` on a whole aggregate, `address_of`
+on a temp, `ushr`, and `convert` all compose. Nothing in the conversion path is now guesswork.
+
+### The complete toolkit, and what remains
+
+| Half | Primitive sequence | Status |
+|---|---|---|
+| assemble (prologue) | two stores through a temp's address | **proven** (§31) |
+| split (call sites) | store-copy + address + two loads | **proven** (§32) |
+
+The remaining work is mechanical and enumerated: six `jit_insn_call*` sites in `LibjitOpcodeDispatcher.cpp`
+(2722, 4423, 4444, 4482, 4526, 4576), each with the same three-line shape
+(`1 + params.size() + buffer`, `args[1 + i] = stackArgs[i]`, `args.back() = outBuffer`), then re-apply
+sites 1-3 from §31 unchanged.
+
+### State
+
+Suite **21642 assertions in 733 test cases**, green (up 6 assertions and 1 case from the split test);
+`[headerdoc]` green; `[docs]` green; `abi-check.sh` OK; Doxygen 0 warnings; tree clean.
