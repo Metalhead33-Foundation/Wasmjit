@@ -1817,3 +1817,72 @@ arc — it is a wrong answer, not a missing feature.
 Suite **21529 assertions in 723 cases**, green; Doxygen 0 warnings. The i32 probe remains as a
 permanent regression test so the working half of the merge cannot silently break while the
 reference half is repaired.
+
+## 38. Corrected again: it is the reference **block result**, not the branch (2026-11-06)
+
+This entry corrects §37, and the correction is bigger than the earlier one.
+
+### What was measured, and how it was nearly measured wrongly — twice
+
+A probe that isolates the branch away entirely — a block with a **reference** result and **no
+branch anywhere** — appeared to pass ("block_ref == 3"). It did not. Its fixture contained a second
+export whose text was invalid (`error: expected valid module field`), so the `.wasm` target failed to
+build and the test ran against a **stale artifact**. When the invalid export was removed and the
+fixture genuinely rebuilt, the same probe **aborted**.
+
+That is the second time in two entries that a result was read off a fixture that had not built
+(§37's `func_taken` was the first). The pattern is now explicit enough to be a rule:
+
+> **A probe is evidence only if its fixture built.** After adding or editing a `.wat`, grep the build
+> output for that fixture's `.wasm` target before reading any test result. A silent make error plus a
+> stale binary produces a confident, reproducible, *wrong* answer — which is worse than a failure.
+
+The durable fix is in the harness rather than in discipline: the module loader should `REQUIRE` that
+the `.wasm` exists and is newer than its `.wat`, so a stale artifact fails the test instead of
+impersonating a passing one. That is a test-infrastructure gap, recorded here as such.
+
+### The corrected matrix
+
+| Shape | Result |
+|---|---|
+| block with an **i32** result, `br_if` carrying it, live fallthrough | **works** — 7 / -1, kept as a regression test |
+| block with a **reference** result, **no branch at all** | **SIGABRT** |
+| `br_if` carrying a **reference** result | **SIGABRT** |
+| `drop` of a reference / reference local reused, **no block** | **works** — 3, 8 |
+
+So the defect is not in the branch merge at all: **a block whose result is a reference is broken in
+SLJIT**, with or without a branch. `br_on_non_null` is simply the first feature that needs one, which
+is why every attempt to build it crashed: it was standing on a broken block result.
+
+### Where the cause is *not*
+
+Three hypotheses are now excluded by reading rather than guessing:
+
+- **Widths are right.** `widthOf` returns 8 for every reference kind (`isReferenceKind` → 8), and
+  `blockSignature` copies it into `resultWidths` unchanged.
+- **`dispatchEnd` looks correct.** It resizes the model to `frame.baseDepth`, binds `endJumps` to the
+  end label, and re-pushes `resultWidths` — for a block entered with an empty stack that is a
+  push at slot 0, exactly where the value already sits.
+- **`transferToBase` is a no-op** in the failing probes (source index equals destination index), so
+  it cannot be writing a half-slot.
+
+That leaves the *slot addressing itself* as the suspect: the value is produced inside the block (a
+`local.get`), the block closes without emitting code, and the consumer reads slot 0. If the block's
+entry allocates its frame area differently for an 8-byte result than the model believes, the read
+lands on an unwritten slot — and the abort happens in the first GC operation that dereferences it
+(`array.len`).
+
+### The next step, concretely
+
+1. Instrument `dispatchBlock`/`dispatchEnd` in a debug build to print `baseDepth`, the model size at
+   entry and at exit, and the slot index each result is pushed at — for the reference probe and the
+   i32 probe side by side.
+2. If the slots agree, dump the generated code for the reference probe (`SLJIT_DEBUG`/`sljit_dump`)
+   and look for a missing `storeSlot` between the `local.get` and the block close.
+3. Only then touch `br_on_non_null` again.
+
+### Status
+
+Suite **21529 assertions in 723 cases**, green; Doxygen 0 warnings. Gate A remains blocked, now on a
+precise and much smaller statement: **reference block results abort in SLJIT**, with the three
+obvious causes excluded and the next instrumented experiment named.
