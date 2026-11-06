@@ -390,3 +390,40 @@ parameter layout.
 
 Not started: this section is the specification the next pass executes, because the change is exactly the
 class of edit that must not be half-applied. Suite **21560 assertions in 726 cases**, green.
+
+### F2 second pass: the emitters and the conformance harness must move together (2026-11-06)
+
+The C typedef (`EmitShared.cpp`) and the Rust struct (`EmitRust.cpp`) were both changed to the
+canonical pair — `{ uint64_t lo; uint64_t hi; }` and `{ pub lo: u64, pub hi: u64 }` — with comments
+saying a vector parameter is emitted as two scalars, never as the struct.
+
+**Three tests failed, and they are the good kind:** they *generate* the C header, compile it with gcc
+and **run a conformance program** against it (`BindingSchemaTests.cpp` lines 157 and 497, reached from
+cases at 1116 and 1187). Changing the emitted type without changing what the conformance program does
+with a vector argument is exactly the "types moved, marshalling did not" mistake this whole phase
+exists to prevent — so the change was reverted rather than shipped with a broken gate.
+
+What the next pass must do, in one commit:
+
+1. Emit the canonical pair in `EmitShared.cpp` (the C typedef), `EmitRust.cpp`, and `EmitWeb.cpp`.
+2. Update the emitted parameter lists so a vector parameter is **two scalar parameters**, not one
+   struct-typed parameter — in `EmitShared.cpp`'s kind→type mapping (three sites), `EmitDynamic.cpp`
+   (five sites), `EmitWeb.cpp`, and `EmitRust.cpp`.
+3. Update the conformance program's vector handling in the same commit, so the compile-and-run gate
+   stays green *while* the spelling changes.
+
+### Inventory of vector spellings after this pass
+
+| Emitter | State |
+|---|---|
+| `EmitCpp.cpp` | **canonical** — emits `struct wasm_v128 { uint64_t lo, hi; }`, expectation updated |
+| `EmitShared.cpp` | aggregate (C typedef + three kind→type sites) — reverted, specified above |
+| `EmitRust.cpp` | aggregate — reverted, specified above |
+| `EmitWeb.cpp` | aggregate — not attempted |
+| `EmitDynamic.cpp` | aggregate in **five** sites — not attempted |
+
+The pattern across this phase is consistent and worth stating once: **every surface that records a
+signature must move with the surface that marshals it.** The call cache taught it with libffi (types
+and values), the emitters teach it with the conformance gate (declaration and program). That is why P4
+cannot begin until the emitters are consistent: a backend converted against a cache or a header that
+still speaks the old convention would pass its own tests and fail on the generated interface.
