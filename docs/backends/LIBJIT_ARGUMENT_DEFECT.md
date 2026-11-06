@@ -205,6 +205,91 @@ parameter shape with fewer register arguments keeps the sixth word out of `r9`
 entirely -- the same goal (do not put everything in registers) reached through
 the signature rather than through the prologue.
 
+## 10. MS x64: what is broken, and what is merely different
+
+### 10.1 The aggregate spelling is self-consistent everywhere
+
+On MS x64 a 16-byte aggregate is passed **by reference** (the caller allocates
+and passes a pointer). That is a different *rule*, not a different *shape*: a
+LibJIT-compiled function and a LibJIT-originated call site both speak it, because
+both take their signature from the same translator. So **inside LibJIT, the
+deviation is coherent on every target** -- it is not a SysV-only construct.
+
+*Provisional*: we have no MS x64 machine here, so "libjit implements by-reference
+aggregate arguments correctly on MS x64" is untested. It is labelled provisional
+in the same sense as the other untested targets in `docs/ABI_PORTABILITY.md`.
+
+### 10.2 The only real breakage is cross-backend, and it is narrow
+
+A `v128`-carrying signature means one thing to LibJIT (aggregate) and another to
+SLJIT/AsmJIT (two words). On SysV those are the *same ABI* by coincidence, which
+is why nothing has ever surfaced. On MS x64 they are not: aggregate means
+"pointer", two words mean "two registers".
+
+So the failure mode is exactly this: **a call whose caller and callee are
+compiled by different backends, where the signature carries a `v128`** -- a
+LibJIT module importing an SLJIT- or AsmJIT-compiled function (or the reverse).
+Everything else is fine.
+
+## 11. Options for MS x64
+
+### 11.1 Cheap workaround (recommended for now): refuse the cross-backend case
+
+Detect, when a callable from another backend is bound to a `v128`-carrying
+signature, and **refuse to compile the call site** with a diagnostic that names
+the signature and both backends. Cost: one check in the LibJIT call path (and
+the mirror check in SLJIT/AsmJIT for calls into LibJIT), no ABI change, no effect
+on any signature that has no `v128`.
+
+Why this is the right *cheap* answer rather than doing nothing: it converts a
+silent miscompile on Windows into an explicit, diagnosable refusal, and it is
+the only option that is honest about a target we cannot test here. It also
+leaves the fast path untouched: single-backend modules, which is every spec
+suite and every ordinary embedder, keep working.
+
+### 11.2 Canonical solution A: fix libjit, then re-enable the two-word rule
+
+The canonical spelling for LibJIT is already written and rehearsed
+(`docs/ABI_REFACTOR_STUDY.md` §29-§31): both `translateFunctionSignature`
+overloads, the `address_of` prologue, the `paramSlots` driver walk, the six
+call sites, and the harness expansion in `TestBackend.cpp`. It is blocked by one
+libjit defect -- the sixth integer argument being lost (`r9`) -- and §9 names the
+one experiment that would characterise it well enough to report upstream.
+
+If libjit is fixed (or patched), LibJIT returns to the canonical rule with no
+API change at all, and the MS x64 divergence disappears along with the
+deviation. Cost: an external dependency, with no schedule we control.
+
+### 11.3 Canonical solution B: amend the contract with a spill rule
+
+The portable fix -- and the one that matches the intuition behind the SLJIT
+workaround -- is to stop asking the register file to carry arbitrarily many
+vector words. A rule of the form:
+
+> A parameter list that needs more than *N* integer argument words passes the
+> **whole** `v128` parameter set through a caller-allocated, 16-byte-aligned
+> staging area, referenced by a trailing pointer parameter.
+
+is implementable by every backend (memory, not registers), removes the
+register-budget cliff entirely, and makes the LibJIT defect irrelevant because
+the shape it breaks no longer occurs. Cost: it is a **contract amendment**
+against `docs/backends/V128_SIGNATURE_DECISION.md` §28, needing a specified
+staging layout plus work in all three backends -- which is precisely the
+"20 turns of changing everything" the deviation exists to avoid. Worth doing
+when a second backend needs more than five argument words (SLJIT's own `§36`
+stack plan is the same problem from the other side).
+
+### 11.4 Summary
+
+| Target / situation | Status |
+|---|---|
+| LibJIT on SysV, any shape | **works** (aggregate == two words here) |
+| LibJIT on MS x64, single-backend module | **provisional** -- coherent, untested |
+| LibJIT on MS x64, cross-backend call with a `v128` | **broken** -- fix with §11.1 |
+| Any target, after libjit is fixed (§11.2) | canonical, no deviation |
+| Any target, after a §28 spill amendment (§11.3) | canonical, no register cliff |
+
+
 
 ## 9. What would close this properly
 
