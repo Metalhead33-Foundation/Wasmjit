@@ -2189,3 +2189,37 @@ not a wrong assertion.
 ### State
 
 Experiments reverted; suite **21648 assertions in 734 test cases**, green; tree clean.
+
+## 42. The crash is at invocation, not at compile -- both spec modules build cleanly (2026-11-06)
+
+`simd_bit_shift.wast` was lifted out of the suite and bisected directly: its **two** modules were extracted into
+fixtures, compiled by `wat2wasm`, and instantiated on LibJIT **with the full two-slot change applied**.
+
+| Module | Shape | Result under the changed ABI |
+|---|---|---|
+| 1 (lines 3-42, 24 functions) | 1- and 2-parameter shift exports | **instantiates cleanly** |
+| 2 (lines 658+, `(memory 1)`) | block-structured bodies (`i8x16.shl-in-block`) | **instantiates cleanly** |
+
+So the module that the suite reported as *"terminated by signal 11 after 0 passing commands"* compiles **fine**
+with the change. The crash therefore happens on the first **invocation**, not during compilation -- which is exactly
+what "0 passing commands" says once it is read carefully: zero commands *completed*, not zero commands *started*.
+
+### Why this matters more than another eliminated hypothesis
+
+Every step of this study so far has assumed the fault was in **code generation**, because the earlier crashes were
+(NULL `get_param`, SLJIT's argument check). This one is in the **call**, and the distinction changes what to look at:
+
+- code generation is cleared for this suite, on both of its modules;
+- the remaining suspect is the path that invokes a compiled function with a `v128` argument -- the harness's
+  declared C signature, or `jit_apply`-style invocation that builds its argument list from the *signature*
+  (two `ulong` slots) while the caller supplies one 16-byte value;
+- a direct C++ call with a 16-byte struct works (all six pins prove it), because SysV happens to pass it in the
+  same two registers -- so the defect would be invisible to a test that declares the parameter as an aggregate and
+  visible only to one that declares the canonical two words.
+
+That last point is testable in one build and is the next step: invoke `i8x16.shl` through the *canonical*
+declaration `(void*, uint64_t, uint64_t, int32_t)`, and through the harness path, and see which one faults.
+
+### State
+
+Fixtures and experiments removed; suite **21648 assertions in 734 test cases**, green; tree clean.
