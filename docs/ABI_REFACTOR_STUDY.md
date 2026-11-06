@@ -520,3 +520,27 @@ It is five files plus a generated program, and its own gate iterates (generate �
 half-applied version leaves either a red tree or a green tree that no longer tests the convention — the
 two outcomes this phase exists to avoid. The inventory above is what makes the next pass a single
 mechanical sweep instead of a second investigation.
+
+### A negative result worth recording: the union does not sidestep the sweep
+
+Hypothesis: `adapter.h` (C, still `bytes[16]`) and the C++ typedefs (now `lo, hi`) disagree, and a union
+providing **both** views would let the C header change without touching the conformance program:
+
+```c
+typedef union wasm_v128 { struct { uint64_t lo; uint64_t hi; }; uint8_t bytes[16]; } wasm_v128;
+```
+
+**It does not work.** With that emission the generated program fails to *compile*
+(`BindingSchemaTests.cpp:157`), so the disagreement is not about field names — something in the generated
+adapter or conformance source depends on the type in a way a union does not satisfy (the anonymous inner
+struct, the aggregate-ness of the value at the call, or the way the adapter's declaration is matched
+against the JIT's signature). Reverted.
+
+**What the next pass must do first, and it is one command:** read the compiler error from the generated
+program (the test writes it to `compile.log` under its temp directory and prints it via `INFO`). That
+message names the construct; everything after it is mechanical. Guessing at the cause — which this
+attempt did — costs a build and teaches nothing, while the error text costs nothing and teaches
+everything.
+
+That is the same rule this whole phase keeps producing, in its cheapest form: **when a gate fails, read
+what the gate printed.**
