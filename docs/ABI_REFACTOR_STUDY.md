@@ -1354,3 +1354,44 @@ permanently deferred" was never a property of the ABI — only of the *trigger* 
 4. Pin: a `v128`-result fixture, both backends, appended to `v128_boundary_order.wasm`'s module.
 
 Suite **21625 assertions in 731 cases**, green; `abi-check.sh` OK; Doxygen 0 warnings; tree clean.
+
+## 24. The trigger cannot be widened before the write path exists — measured (2026-11-06)
+
+Step 2's item 1 was "add `needsResultBuffer(ft)` to `WasmBase`, replacing LibJIT's three inline
+`results.size() > 1` sites". The predicate was added; **the three replacements were reverted**, and this
+section records why, because it is the fifth plan correction and the cleanest one yet.
+
+### What happened
+
+| Step | Result |
+|---|---|
+| `needsResultBuffer(ft)` added to `WasmBase/WasmValue.hpp`, beside `tailCallSlotsSupported` | builds clean |
+| three LibJIT sites switched to it (372, 436, `LibjitOpcodeDispatcher.cpp:4563`) | builds clean, **suite segfaults** |
+| the three sites reverted to `results.size() > 1` | **21625 assertions in 731 cases, green** |
+
+So the suite depends on the *old* trigger somewhere, and the segfault is not in the new predicate — it is in
+what the widened trigger routes. A widened trigger says "you need the out-buffer" **before the code that writes
+into that buffer for this case exists**, so a path that used to work (LibJIT returning the value through its own
+type system) is replaced by one that has not been written.
+
+### The rule this adds, and it is the general form of §20
+
+> **A predicate may be widened only when every newly-matched case has a complete path behind it.** Widening a
+trigger is not a refactor; it is a switch that re-routes values, and partially-implemented routing is worse than
+no routing.
+
+That is §20's rule ("a subtask boundary drawn through simultaneous edits produces an unreachable gate") applied
+to a *predicate* instead of a subtask: both are orderings, both fail by routing something before its
+destination exists.
+
+### What is kept, and what the next unit must do
+
+- **Kept:** `needsResultBuffer(ft)` in `WasmBase` — it states the contract correctly (§23) and names no backend.
+- **Next:** implement the *write* path for the newly-matched case first — in SLJIT, where nothing is routed to a
+  buffer today, so there is no working behaviour to displace; then, for LibJIT, only after its single-`v128`
+  result path is known to be redundant.
+
+That ordering is also why SLJIT remains step 2 and LibJIT last: SLJIT has the *least* working behaviour to
+break, which — inverted from the original plan's reasoning — is exactly the property that should determine order.
+
+Suite **21625 assertions in 731 cases**, green; `abi-check.sh` OK; Doxygen 0 warnings; tree clean.
