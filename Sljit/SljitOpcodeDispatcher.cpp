@@ -984,6 +984,20 @@ bool OpcodeDispatcher::run(bool measure)
 	} catch (const UnsupportedBody&) {
 		return false;
 	}
+	// Fidelity guard (docs/backends/ASMJIT_SLJIT_P3_GC1.md §24): a valid body ends
+	// with exactly the results its signature declares. AsmJit enforces the same rule
+	// and SLJIT did not, so an invalid module was compiled instead of refused. Dead
+	// code after an `unreachable` is exempt: Wasm makes the stack polymorphic there.
+	if (!measure && reachable_) {
+		const std::size_t expectedResults = resultWidth_ == 0 ? 0u : 1u;
+		if (stackWidths_.size() != expectedResults) {
+			unsupportedReason_ = "the function body leaves "
+				+ std::to_string(stackWidths_.size())
+				+ " operand-stack value(s) but the signature declares "
+				+ std::to_string(expectedResults);
+			ok_ = false;
+		}
+	}
 	return ok_;
 }
 

@@ -995,3 +995,113 @@ looks like.
 green; Doxygen 0 warnings. Remaining loop-based array op: `array.new_elem` — the same
 shape with an element segment, whose entries may be references and therefore need
 ownership handling rather than a plain byte copy.
+
+## 25. Gate D attempted, and reverted — the sweep is not semantics-free (2026-11-06)
+
+Gate D (one trap entry point per backend) was attempted on SLJIT and **reverted**.
+The attempt is recorded because the failure is more instructive than the plan was.
+
+### What was done
+
+- Six per-kind `extern "C"` wrappers (`NullReference`, `NullStructureReference`,
+  `NullArrayReference`, `OutOfBoundsArrayAccess`, `CastFailure`, and the sixth) were
+  replaced by one `sljitReportTrap(uint32_t kind)`, with the kind passed as an immediate.
+- The mapping was extracted **from the wrapper bodies themselves**, not typed by hand, so
+  no kind could be transcribed wrongly.
+- All **18 call sites** were rewritten mechanically: `emitHelper(SLJIT_ARGS0V(), …)` plus
+  `emitTrapBranch()` became one `emitTrap(WASM::TrapKind::…)`. Zero sites were skipped,
+  and the whole thing compiled first time.
+
+### What broke
+
+`[gc]` stayed green — all 20 cases, every trap kind intact. But the basic
+`sljit: the shared integer module executes` case failed and the suite then segfaulted.
+The tree was reverted to the previous state and the suite returned to
+**21464 assertions in 719 cases**, green.
+
+### Why it broke, and the lesson
+
+The change looks semantics-free and is not. A zero-argument helper and a one-argument
+helper differ **in the argument registers they set up**, and `emitTrap` has to materialise
+the kind into `R0` *before* the call. A helper call clobbers `R0`–`R3` either way, so a
+site that had already spilled everything is unaffected — but a site that was relying on the
+zero-argument form not touching `R0` until the branch bookkeeping ran is not. The blast
+radius is "every trap site in the backend", which is exactly why §21 deferred this and why
+that deferral is now **evidence-backed rather than cautious**.
+
+Two ways to do it properly next time:
+
+1. **Family by family.** Convert the GC sites only, run the *whole* suite, then the
+   reference sites, then the rest — so a failure localises to a family instead of to
+   "somewhere in 18 sites". The `[gc]` tag alone is insufficient coverage here, which the
+   integer-module failure proved.
+2. **Keep the argument count at zero** and pass the kind through a slot the trap helper
+   reads, if the register-setup interaction turns out to be the whole problem. That keeps
+   `emitTrapBranch`'s assumptions untouched but gives up the "kind is visible at the call
+   site" property that motivated Gate D in the first place.
+
+### Status
+
+Gate D is **open**. The mechanical part is proven (18 sites, six kinds, derived mapping,
+compiles clean); what is missing is a per-site review, and the test that catches a bad site
+is the full suite, not `[gc]`. The per-kind wrappers are back in place and every trap kind
+is still asserted per backend.
+
+## 26. The SLJIT stack-height guard — the two backends now agree (2026-11-06)
+
+§24 recorded the asymmetry: AsmJit refuses a function body that does not end with exactly
+the declared results (`AsmJit function must end with exactly one result`), while SLJIT
+compiled such a module without complaint. That gap is now closed.
+
+### The guard
+
+In `OpcodeDispatcher::run`, after the body has been dispatched and only on the emission
+pass (`!measure`):
+
+> if the body is reachable, the operand stack must hold exactly the declared result count
+> — zero for a void signature, one otherwise — or the function is refused with a reason
+> that names both numbers.
+
+Three details make this correct rather than approximate:
+
+- **`reachable_` is the exemption.** After an `unreachable`, Wasm makes the operand stack
+  polymorphic, so dead code legitimately ends with anything on it. Checking it would
+  produce false refusals in valid modules.
+- **`resultWidth_` is a faithful result count here**, and only here: the SLJIT backend
+  refuses multi-result signatures outright (`the SLJIT backend does not support multiple
+  results`), so non-zero width means exactly one result.
+- **Refusal, not a throw.** SLJIT's contract for "I cannot compile this" is
+  `unsupportedReason_` plus `ok_ = false`; the module is then refused like any other
+  unsupported construct, which is the behaviour `WRITING_A_BACKEND.md` §12 asks for.
+
+### The measurement that came with it
+
+The full suite is green **with** the guard in place: **21464 assertions in 719 cases**, no
+changes. That is a useful negative result — no existing SLJIT lowering has ever left the
+operand stack wrong at function end, so the guard closes a hole in *module acceptance*, not
+a latent miscompilation.
+
+### Why it has no test, and what that costs
+
+The guard cannot be reached through the public API today: the only module entry point is
+`Runtime::loadBytes`, which validates first, and an invalid stack shape is rejected there.
+There is no unvalidated constructor to feed the backend. So the guard is **defence in
+depth**: it protects the case where a module reaches a backend without having been
+validated — a component-model or plugin path, a future "trusted bytes" load, or a build
+with validation disabled.
+
+That is recorded as an open item rather than celebrated: a check nobody can trigger is a
+check nobody has verified. The follow-up is a test-only module constructor (parse without
+validate) so the refusal can be asserted, exactly as `kAddModule`/`kVectorModule` already
+build raw modules in `Test/SljitBackendTests.cpp`.
+
+### Where the trap gates stand
+
+| Item | State |
+|---|---|
+| `array.new_data` | **done**, both backends, A/B tested (§24) |
+| `array.new_elem` | not started — its entries are references with retain semantics, not bytes |
+| Stack-height guard (SLJIT) | **done** (§26), unverified by a test, reason recorded |
+| Gate D (one trap entry point) | **open**, attempt reverted with a finding (§25) |
+| Gate C (subtyping + abstract heap types) | open; needs the core runtime predicate, and fixes a live wrong answer |
+| Gate A (block parameters + three branch opcodes) | open; largest item, both backends |
