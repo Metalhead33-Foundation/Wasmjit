@@ -1066,3 +1066,38 @@ honest close is the same one this arc has used five times: specification and pin
 started.
 
 Suite **21618 assertions in 730 cases**, green; `abi-check.sh` OK; Doxygen 0 warnings; tree clean.
+
+### Unit 2+3 attempted: two crashes, and the second names the real fix (2026-11-06)
+
+Attempt 1 — split the signature and store the two `jit_type_ulong` parameters into the aggregate with
+`jit_insn_store_relative` at offsets 0 and 8:
+
+> **SIGSEGV.** The aggregate's declared type is `{ int, int, int, int }` (`v128_definition`), so an 8-byte
+> store does not match it.
+
+Attempt 2 — change the representation to `{ ulong, ulong }` so the stores match, keeping 16 bytes:
+
+> **SIGFPE**, and `[libjit]` too. The representation is not private to the prolog: **every lane access in
+> the backend reads the four 32-bit lanes of that aggregate**, so re-typing it as two 64-bit words breaks
+> the SIMD path wholesale, not just the boundary.
+
+Reverted. Suite **21618 assertions in 730 cases**, green.
+
+### What that proves about the fix
+
+The aggregate must **stay** `{ int, int, int, int }`. The boundary words must therefore be **split into
+32-bit halves inside the prolog** — `lo` into offsets 0 and 4, `hi` into 8 and 12 — rather than stored as
+whole 64-bit values. That is the inverse of the mistake both attempts made: they changed the *representation*
+to fit the boundary, when the representation is shared and only the *boundary* may change.
+
+That is the same rule as the emitter work, one layer down: **convert at the boundary, never in the thing the
+boundary touches.** The emitter translated a vector at the call rather than re-typing the ABI; the prolog
+must assemble a vector from words rather than re-type the aggregate.
+
+### Where P4 stands
+
+| Unit | State |
+|---|---|
+| 1 — the adjacency pin | **done**, 7 assertions, green |
+| 2+3 — signature + prolog | **attempted twice, reverted**; the fix is now known: keep the 4×i32 aggregate and split each boundary word into two halves |
+| 4 — import thunk | pending |
