@@ -1762,6 +1762,17 @@ void* ModuleInstance::descriptorPrototype(const void* ref) const
 			static_cast<const uint8_t*>(descriptor) + offset);
 }
 
+void* ModuleInstance::allocateArrayObject(uint32_t localTypeIdx, uint32_t length)
+{
+	// The element layout is a property of the type, not of the caller: deriving it
+	// here keeps every backend's call site inside a four-argument call ABI.
+	const WASM::CoreTypeView view = module->typeView(localTypeIdx);
+	const CanonFieldType& element = view.arrayElement();
+	const uint32_t elementSize = static_cast<uint32_t>(WASM::gcStorageBytes(element.storage));
+	const uint32_t dataOffset = static_cast<uint32_t>(WASM::gcArrayDataOffset(element.storage));
+	return allocateArrayObject(dataOffset, elementSize, length, localTypeIdx);
+}
+
 void* ModuleInstance::allocateArrayObject(uint32_t dataOffset, uint32_t elementSize, uint32_t length, uint32_t localTypeIdx)
 {
 	const TypeId typeId = module->typeId(LocalTypeIdx{localTypeIdx});

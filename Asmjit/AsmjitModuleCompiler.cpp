@@ -503,6 +503,21 @@ WASM::Callable* asmjitResolveIndirectCallable(WASM::VMContext* vm, uint32_t tabl
 	return callable;
 }
 
+void asmjitReportNullArray() noexcept
+{
+	WASM::reportTrap(WASM::TrapKind::NullArrayReference);
+}
+
+void asmjitReportArrayOob() noexcept
+{
+	WASM::reportTrap(WASM::TrapKind::OutOfBoundsArrayAccess);
+}
+
+void* asmjitArrayNew(WASM::VMContext* vm, uint32_t typeIndex, uint32_t length) noexcept
+{
+	return reinterpret_cast<WASM::ModuleInstance*>(vm)->allocateArrayObject(typeIndex, length);
+}
+
 void* asmjitStructNew(WASM::VMContext* vm, uint32_t size, uint32_t typeIndex) noexcept
 {
 	return reinterpret_cast<WASM::ModuleInstance*>(vm)->allocateStructObject(size, typeIndex);
@@ -2300,6 +2315,134 @@ protected:
 						"AsmJit struct.new field store failed");
 		}
 		values.push_back(object);
+	}
+
+	void dispatchArrayGet(WASM::TypeIdx arg) override
+	{
+		const WASM::CoreTypeView view = module.typeView(arg);
+		if (view.kind() != WASM::CanonTypeKind::Array)
+			throw std::runtime_error("AsmJit array.get requires an array type");
+		const WASM::CanonFieldType& element = view.arrayElement();
+		if (element.storage.isPacked)
+			throw std::runtime_error("AsmJit array.get does not lower packed elements yet");
+		const int width = kindWidth(element.storage.value.opcode);
+		if (width != 4 && width != 8)
+			throw std::runtime_error("AsmJit array.get does not lower this element type yet");
+		if (values.size() < 2)
+			throw std::runtime_error("AsmJit array.get operand stack underflow");
+		auto index = values.back();
+		values.pop_back();
+		auto object = values.back();
+		values.pop_back();
+		// Null reference first, then bounds.
+		asmjit::Label notNull = compiler.new_label();
+		checkError(compiler.test(object, object), "AsmJit array.get null test failed");
+		checkError(compiler.jnz(notNull), "AsmJit array.get null branch failed");
+		asmjit::FuncSignature voidSignature(asmjit::CallConvId::kCDecl);
+		voidSignature.set_ret(asmjit::TypeId::kVoid);
+		asmjit::InvokeNode* nullCall = nullptr;
+		checkError(compiler.invoke(asmjit::Out(nullCall),
+				reinterpret_cast<uint64_t>(&asmjitReportNullArray), voidSignature),
+				"AsmJit array.get null trap emission failed");
+		emitPendingTrapReturn();
+		checkError(compiler.bind(notNull), "AsmJit array.get null label binding failed");
+		auto length = compiler.new_gp32("arrayLength");
+		checkError(compiler.mov(length, asmjit::x86::dword_ptr(object,
+				static_cast<int32_t>(WASM::GcHeader::kArrayLengthOffset))),
+				"AsmJit array.get length load failed");
+		asmjit::Label inBounds = compiler.new_label();
+		checkError(compiler.cmp(index, length), "AsmJit array.get bounds compare failed");
+		checkError(compiler.jb(inBounds), "AsmJit array.get bounds branch failed");
+		asmjit::InvokeNode* oobCall = nullptr;
+		checkError(compiler.invoke(asmjit::Out(oobCall),
+				reinterpret_cast<uint64_t>(&asmjitReportArrayOob), voidSignature),
+				"AsmJit array.get bounds trap emission failed");
+		emitPendingTrapReturn();
+		checkError(compiler.bind(inBounds), "AsmJit array.get bounds label binding failed");
+		// Element address = object + dataOffset + index * elementSize, computed in a
+		// register so the memory operand stays a simple base+index form.
+		auto byteOffset = compiler.new_gp64("arrayByteOffset");
+		checkError(compiler.mov(byteOffset.r32(), index), "AsmJit array.get index widening failed");
+		checkError(compiler.shl(byteOffset, width == 4 ? 2 : 3),
+				"AsmJit array.get index scaling failed");
+		checkError(compiler.add(byteOffset,
+				static_cast<int32_t>(WASM::gcArrayDataOffset(element.storage))),
+				"AsmJit array.get data offset failed");
+		auto result = width == 4 ? compiler.new_gp32("arrayElementValue")
+				: compiler.new_gp64("arrayElementValue");
+		if (width == 4)
+			checkError(compiler.mov(result, asmjit::x86::dword_ptr(object, byteOffset)),
+					"AsmJit array.get element load failed");
+		else
+			checkError(compiler.mov(result, asmjit::x86::qword_ptr(object, byteOffset)),
+					"AsmJit array.get element load failed");
+		values.push_back(result);
+	}
+
+	void dispatchArrayNew(WASM::TypeIdx arg) override
+	{
+		const WASM::CoreTypeView view = module.typeView(arg);
+		if (view.kind() != WASM::CanonTypeKind::Array)
+			throw std::runtime_error("AsmJit array.new requires an array type");
+		const WASM::CanonFieldType& element = view.arrayElement();
+		if (element.storage.isPacked)
+			throw std::runtime_error("AsmJit array.new does not lower packed elements yet");
+		const int width = kindWidth(element.storage.value.opcode);
+		if (width != 4 && width != 8)
+			throw std::runtime_error("AsmJit array.new does not lower this element type yet");
+		if (values.size() < 2)
+			throw std::runtime_error("AsmJit array.new operand stack underflow");
+		auto length = values.back();
+		values.pop_back();
+		auto elementValue = values.back();
+		values.pop_back();
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke),
+				reinterpret_cast<uint64_t>(&asmjitArrayNew), signature),
+				"AsmJit array.new allocation call failed");
+		invoke->set_arg(0, vmContext);
+		invoke->set_arg(1, asmjit::Imm(static_cast<uint64_t>(arg)));
+		invoke->set_arg(2, length);
+		auto object = compiler.new_gp_ptr("arrayObject");
+		invoke->set_ret(0, object);
+		emitPendingTrapReturn();
+		const auto offset = static_cast<int32_t>(WASM::gcArrayDataOffset(element.storage));
+		if (width == 4)
+			checkError(compiler.mov(asmjit::x86::dword_ptr(object, offset), elementValue),
+					"AsmJit array.new element store failed");
+		else
+			checkError(compiler.mov(asmjit::x86::qword_ptr(object, offset), elementValue),
+					"AsmJit array.new element store failed");
+		values.push_back(object);
+	}
+
+	void dispatchArrayLen() override
+	{
+		if (values.empty())
+			throw std::runtime_error("AsmJit array.len operand stack underflow");
+		auto object = values.back();
+		values.pop_back();
+		asmjit::Label notNull = compiler.new_label();
+		checkError(compiler.test(object, object), "AsmJit array.len null test failed");
+		checkError(compiler.jnz(notNull), "AsmJit array.len null branch failed");
+		asmjit::FuncSignature nullSignature(asmjit::CallConvId::kCDecl);
+		nullSignature.set_ret(asmjit::TypeId::kVoid);
+		asmjit::InvokeNode* nullCall = nullptr;
+		checkError(compiler.invoke(asmjit::Out(nullCall),
+				reinterpret_cast<uint64_t>(&asmjitReportNullReference), nullSignature),
+				"AsmJit array.len null trap emission failed");
+		emitPendingTrapReturn();
+		checkError(compiler.bind(notNull), "AsmJit array.len label binding failed");
+		auto length = compiler.new_gp32("arrayLength");
+		checkError(compiler.mov(length, asmjit::x86::dword_ptr(object,
+				static_cast<int32_t>(WASM::GcHeader::kArrayLengthOffset))),
+				"AsmJit array.len load failed");
+		values.push_back(length);
 	}
 
 	void dispatchStructSet(WASM::TypeIdx arg1, uint32_t arg2) override

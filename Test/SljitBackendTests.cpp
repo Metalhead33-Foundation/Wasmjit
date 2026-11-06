@@ -2163,3 +2163,67 @@ TEST_CASE("asmjit and sljit agree on struct.new and struct.get",
 	same("struct_eq_self", 1);
 	same("two_structs_not_equal", 0);
 }
+
+
+TEST_CASE("sljit: array.new and array.len execute", "[sljit][module][parity][gc]")
+{
+	auto session = Sljit::createSession();
+	REQUIRE(session != nullptr);
+	WASM::RegistryImportResolver imports;
+	LoadedModule loaded = loadAndInstantiateTestModule("gc_array", imports, *session);
+	REQUIRE(loaded.instance != nullptr);
+	WASM::ModuleInstance& instance = *loaded.instance;
+	const auto call = [&](const char* name) -> WASM::Callable {
+		const std::optional<WASM::Callable> callable = instance.exportedFunction(name);
+		INFO("export " << name);
+		REQUIRE(callable.has_value());
+		REQUIRE(callable->fnPtr != nullptr);
+		return *callable;
+	};
+
+	CHECK(WASM::callCallable<std::int32_t>(call("array_len")) == 3);
+	CHECK(WASM::callCallable<std::int32_t>(call("array_len_zero")) == 0);
+	CHECK(WASM::callCallable<std::int32_t>(call("array_get")) == 42);
+	CHECK_THROWS(WASM::callCallable<std::int32_t>(call("array_get_oob")));
+}
+
+
+TEST_CASE("asmjit and sljit agree on array.new and array.len",
+"[sljit][asmjit][parity][gc]")
+{
+	WASM::Module module = loadTestModule("gc_array");
+	AsmJitBackend::Context asmContext;
+	AsmJitBackend::ModuleCompiler asmCompiler(asmContext);
+	Sljit::ModuleCompiler sljitCompiler;
+	WASM::RegistryImportResolver asmImports;
+	WASM::RegistryImportResolver sljitImports;
+	std::unique_ptr<WASM::ModuleInstance> asmInstance =
+			asmCompiler.instantiate(module, asmImports);
+	std::unique_ptr<WASM::ModuleInstance> sljitInstance =
+			sljitCompiler.instantiate(module, sljitImports);
+	REQUIRE(asmInstance != nullptr);
+	REQUIRE(sljitInstance != nullptr);
+
+	const auto same = [&](const char* name, std::int32_t expected) {
+		const std::optional<WASM::Callable> asmCallable = asmInstance->exportedFunction(name);
+		const std::optional<WASM::Callable> sljitCallable = sljitInstance->exportedFunction(name);
+		REQUIRE(asmCallable.has_value());
+		REQUIRE(sljitCallable.has_value());
+		INFO("export " << name);
+		CHECK(WASM::callCallable<std::int32_t>(*asmCallable) == expected);
+		CHECK(WASM::callCallable<std::int32_t>(*sljitCallable) == expected);
+	};
+
+	same("array_len", 3);
+	same("array_len_zero", 0);
+	same("array_get", 42);
+	// The bounds trap must fire on both backends, not just one.
+	{
+		const std::optional<WASM::Callable> asmFn = asmInstance->exportedFunction("array_get_oob");
+		const std::optional<WASM::Callable> sljitFn = sljitInstance->exportedFunction("array_get_oob");
+		REQUIRE(asmFn.has_value());
+		REQUIRE(sljitFn.has_value());
+		CHECK_THROWS(WASM::callCallable<std::int32_t>(*asmFn));
+		CHECK_THROWS(WASM::callCallable<std::int32_t>(*sljitFn));
+	}
+}

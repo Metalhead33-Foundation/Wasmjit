@@ -339,6 +339,8 @@ public:
 	void* allocateStructObject(uint32_t size, uint32_t localTypeIdx, void* descriptor = nullptr);
 	//! Allocates a GC array of `length` elements.
 	void* allocateArrayObject(uint32_t dataOffset, uint32_t elementSize, uint32_t length, uint32_t localTypeIdx);
+	/** \brief Allocates an array of a declared type, deriving its element layout from the type. \param localTypeIdx Module-local array type index. \param length Element count. \return The new object, or nullptr after reporting a trap. */
+	void* allocateArrayObject(uint32_t localTypeIdx, uint32_t length);
 	//! Custom Descriptors: the RTT/descriptor reference stored in a struct's
 	//! header, or nullptr for a null/non-struct reference. `ref.get_desc` traps
 	//! when this returns nullptr.

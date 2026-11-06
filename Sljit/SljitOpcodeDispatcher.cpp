@@ -115,6 +115,21 @@ extern "C" sljit_sw sljitTrapPending()
 }
 
 //! Reports the spec's `unreachable` trap without returning through a Wasm frame.
+extern "C" void sljitReportNullArray() noexcept
+{
+	WASM::reportTrap(WASM::TrapKind::NullArrayReference);
+}
+
+extern "C" void sljitReportArrayOob() noexcept
+{
+	WASM::reportTrap(WASM::TrapKind::OutOfBoundsArrayAccess);
+}
+
+extern "C" void* sljitArrayNew(WASM::VMContext* vm, uint32_t typeIndex, uint32_t length) noexcept
+{
+	return reinterpret_cast<WASM::ModuleInstance*>(vm)->allocateArrayObject(typeIndex, length);
+}
+
 extern "C" void* sljitStructNew(WASM::VMContext* vm, uint32_t size, uint32_t typeIndex) noexcept
 {
 	return reinterpret_cast<WASM::ModuleInstance*>(vm)->allocateStructObject(size, typeIndex);
@@ -3175,6 +3190,128 @@ void OpcodeDispatcher::dispatchStructNew(WASM::TypeIdx arg)
 	push(8);
 	if (!measureOnly_)
 		storeSlot(SLJIT_R0, stackWidths_.size() - 1, 8);
+}
+
+void OpcodeDispatcher::dispatchArrayGet(WASM::TypeIdx arg)
+{
+	if (!reachable_)
+		return;
+	const WASM::CoreTypeView view = module_.typeView(arg);
+	require(view.kind() == WASM::CanonTypeKind::Array, "array.get requires an array type");
+	const WASM::CanonFieldType& element = view.arrayElement();
+	require(!element.storage.isPacked, "the SLJIT backend does not lower packed array elements yet");
+	const WASM::ValueTypeCode opcode = element.storage.value.opcode;
+	require(opcode != WASM::ValueTypeCode::V128,
+			"the SLJIT backend does not lower v128 array elements yet");
+	const int width = (opcode == WASM::ValueTypeCode::I32
+			|| opcode == WASM::ValueTypeCode::F32) ? 4 : 8;
+	requireStack(2);
+	const std::size_t refDepth = stackWidths_.size() - 2;
+	const std::size_t indexDepth = stackWidths_.size() - 1;
+	if (!measureOnly_) {
+		loadSlot(SLJIT_R1, refDepth, 8);
+		// Null reference: trap before touching the header.
+		sljit_jump* notNull = sljit_emit_cmp(compiler_, SLJIT_NOT_EQUAL, SLJIT_R1, 0, SLJIT_IMM, 0);
+		if (notNull == nullptr)
+			ok_ = false;
+		emitHelper(SLJIT_ARGS0V(), &sljitReportNullArray);
+		emitTrapBranch();
+		sljit_label* afterNull = sljit_emit_label(compiler_);
+		if (afterNull == nullptr)
+			ok_ = false;
+		else if (notNull != nullptr)
+			sljit_set_label(notNull, afterNull);
+		// Bounds: index must be below the length word (both unsigned).
+		loadSlot(SLJIT_R2, indexDepth, 4);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R3, 0, SLJIT_MEM1(SLJIT_R1),
+				static_cast<sljit_sw>(WASM::GcHeader::kArrayLengthOffset)));
+		sljit_jump* inBounds = sljit_emit_cmp(compiler_, SLJIT_LESS, SLJIT_R2, 0, SLJIT_R3, 0);
+		if (inBounds == nullptr)
+			ok_ = false;
+		emitHelper(SLJIT_ARGS0V(), &sljitReportArrayOob);
+		emitTrapBranch();
+		sljit_label* afterBounds = sljit_emit_label(compiler_);
+		if (afterBounds == nullptr)
+			ok_ = false;
+		else if (inBounds != nullptr)
+			sljit_set_label(inBounds, afterBounds);
+		// The trap blocks above call helpers, which clobber R0-R3: reload the
+		// object and the index before computing the element address.
+		loadSlot(SLJIT_R1, refDepth, 8);
+		loadSlot(SLJIT_R2, indexDepth, 4);
+
+		emit(sljit_emit_op2(compiler_, SLJIT_MUL, SLJIT_R2, 0, SLJIT_R2, 0, SLJIT_IMM,
+				static_cast<sljit_sw>(WASM::gcStorageBytes(element.storage))));
+		emit(sljit_emit_op2(compiler_, SLJIT_ADD, SLJIT_R1, 0, SLJIT_R1, 0, SLJIT_R2, 0));
+		emit(sljit_emit_op1(compiler_, width == 4 ? SLJIT_MOV32 : SLJIT_MOV, SLJIT_R2, 0,
+				SLJIT_MEM1(SLJIT_R1),
+				static_cast<sljit_sw>(WASM::gcArrayDataOffset(element.storage))));
+		storeSlot(SLJIT_R2, refDepth, width);
+	}
+	pop();
+	pop();
+	push(width);
+}
+
+void OpcodeDispatcher::dispatchArrayNew(WASM::TypeIdx arg)
+{
+	if (!reachable_)
+		return;
+	const WASM::CoreTypeView view = module_.typeView(arg);
+	require(view.kind() == WASM::CanonTypeKind::Array, "array.new requires an array type");
+	const WASM::CanonFieldType& element = view.arrayElement();
+	require(!element.storage.isPacked, "the SLJIT backend does not lower packed array elements yet");
+	const WASM::ValueTypeCode opcode = element.storage.value.opcode;
+	require(opcode != WASM::ValueTypeCode::V128,
+			"the SLJIT backend does not lower v128 array elements yet");
+	const int width = (opcode == WASM::ValueTypeCode::I32
+			|| opcode == WASM::ValueTypeCode::F32) ? 4 : 8;
+	requireStack(2);
+	const std::size_t elementDepth = stackWidths_.size() - 2;
+	const std::size_t lengthDepth = stackWidths_.size() - 1;
+	if (!measureOnly_) {
+		// (vm, type index, length) — three arguments, inside SLJIT's limit.
+		loadSlot(SLJIT_R2, lengthDepth, 4);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R1, 0, SLJIT_IMM,
+				static_cast<sljit_sw>(arg)));
+		loadContext(SLJIT_R0);
+		emitHelper(SLJIT_ARGS3(P, P, 32, 32), &sljitArrayNew);
+		// The helper clobbers R1-R3, so the element is loaded afterwards.
+		loadSlot(SLJIT_R1, elementDepth, width);
+		emit(sljit_emit_op1(compiler_, width == 4 ? SLJIT_MOV32 : SLJIT_MOV,
+				SLJIT_MEM1(SLJIT_R0),
+				static_cast<sljit_sw>(WASM::gcArrayDataOffset(element.storage)), SLJIT_R1, 0));
+	}
+	pop();
+	pop();
+	push(8);
+	if (!measureOnly_)
+		storeSlot(SLJIT_R0, stackWidths_.size() - 1, 8);
+}
+
+void OpcodeDispatcher::dispatchArrayLen()
+{
+	if (!reachable_)
+		return;
+	requireStack(1);
+	require(stackWidths_.back() == 8, "array.len requires a reference operand");
+	if (!measureOnly_) {
+		loadSlot(SLJIT_R1, stackWidths_.size() - 1, 8);
+		sljit_jump* notNull = sljit_emit_cmp(compiler_, SLJIT_NOT_EQUAL, SLJIT_R1, 0, SLJIT_IMM, 0);
+		if (notNull == nullptr)
+			ok_ = false;
+		emitHelper(SLJIT_ARGS0V(), &sljitReportNullReference);
+		emitTrapBranch();
+		sljit_label* done = sljit_emit_label(compiler_);
+		if (done == nullptr)
+			ok_ = false;
+		else if (notNull != nullptr)
+			sljit_set_label(notNull, done);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R2, 0, SLJIT_MEM1(SLJIT_R1),
+				static_cast<sljit_sw>(WASM::GcHeader::kArrayLengthOffset)));
+		storeSlot(SLJIT_R2, stackWidths_.size() - 1, 4);
+	}
+	stackWidths_.back() = 4;
 }
 
 void OpcodeDispatcher::dispatchStructSet(WASM::TypeIdx arg1, uint32_t arg2)

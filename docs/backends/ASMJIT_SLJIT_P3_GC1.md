@@ -229,3 +229,106 @@ element size and alignment) is available to a backend.
 **Status: not started.** The repository is green (full suite 21165 assertions in 703
 cases; Doxygen 0 warnings); the gap above is the first thing the next session needs
 to implement, and it is documented here so the design is not rediscovered.
+
+## 10. Gap 1 fixed at its root, then array slice 1 (2026-11-06)
+
+### The fix: derive the layout from the type, in the core
+
+Instead of the SLJIT-only trampoline §9 sketched, the API itself was corrected:
+
+```c
+// WasmBase/WasmModuleInstance.hpp
+void* allocateArrayObject(uint32_t dataOffset, uint32_t elementSize,
+                          uint32_t length, uint32_t localTypeIdx);   // kept, LibJIT uses it
+void* allocateArrayObject(uint32_t localTypeIdx, uint32_t length);      // new: derives layout
+```
+
+The new overload reads the element field from the type, derives `elementSize`
+with `gcStorageBytes` and `dataOffset` with `gcArrayDataOffset`, and forwards. A
+backend now passes **`(vm, typeIndex, length)`** — three arguments, inside every
+call ABI — and no longer needs to know a layout constant at all.
+
+That is strictly better than the workaround: the trampoline would have duplicated
+the derivation in the backend and staged a parameter block in the frame; the
+overload removes the duplicated knowledge *and* the gap.
+
+### The pitfall this exposed (for the saga post-mortem)
+
+**The GC allocation entry points were shaped for one backend.**
+`allocateArrayObject(dataOffset, elementSize, length, typeIdx)` is a perfectly
+reasonable signature if the only caller is LibJIT, whose call ABI has no ceiling.
+It becomes an API/ABI *gap* the moment a backend with a four-argument call ABI
+must call it — and worse, it forced layout knowledge into every backend, which is
+exactly the drift H1 exists to prevent.
+
+The general lesson: **a core helper contract must be validated against every
+backend's call ABI before it is frozen, and it should not take values the core can
+derive itself.** Arity is part of the contract, not an implementation detail of the
+reference backend.
+
+### The layering gate caught me
+
+The first version of the new overload's comment said the change "keeps backend call
+sites inside a four-argument ABI (SLJIT)" — in `WasmBase/`. `[layering]`
+(`WasmBase names no backend`) failed the full suite immediately. The comment now
+states the contract without naming a toolkit ("every backend's call site inside a
+four-argument call ABI"). Worth recording because it is the rule working exactly as
+designed: the test, not review, enforced `LAYERING.md`.
+
+### Array slice 1 landed
+
+| | SLJIT | AsmJit |
+|---|---|---|
+| `array.new` | `(vm, typeIndex, length)` trampoline → element stored at `gcArrayDataOffset` | same call via a three-argument `invoke` |
+| `array.len` | null trap, then `MOV32` at `kArrayLengthOffset` | `test`/`jnz` + `mov dword_ptr` |
+
+Fixture `gc_array.wat`: `array_len` (3 elements) and `array_len_zero`; asserted in
+a SLJIT case and a paired A/B case. Counts: `[gc]` **100 assertions in 6 cases**;
+full suite **21183 in 705**; `[headerdoc]` green; Doxygen 0 warnings.
+
+Both backends still refuse **packed elements**, **`v128` elements** and
+**`array.get`/`set`/`fill`** (the latter needs the bounds trap §9 describes).
+
+## 11. Array slice 2: `array.get` with both traps (2026-11-06)
+
+`array.get` landed in both backends with the two traps the reference lowering
+performs, in this order: **null array reference** first, then **out of bounds**
+(`index` unsigned-compared against the length word at `kArrayLengthOffset`).
+Element address is `object + gcArrayDataOffset + index * gcStorageBytes(element)`.
+
+Counts: `[gc]` **114 assertions in 6 cases**; full suite **21197 in 705**.
+
+### Two implementation bugs worth recording
+
+1. **A trap block clobbers the registers that were loaded before it.** SLJIT's
+   helper calls use R0-R3, so the object pointer loaded before the null check was
+gone by the time the element address was computed — `array.get` returned 0. The
+   fix is to **reload the operands after the trap labels**, not to trust any
+   register across a helper call. This is the same class as the `sljit_get_local_base`
+   R0 clobber from the SIMD slices, generalised: *anything that calls a helper
+   invalidates the scratch file.*
+2. **`mov r64, r32` is not an x86 form.** AsmJit rejected the index widening at
+   finalisation (`compiler finalisation failed: 26`). Writing through the 32-bit
+   view (`byteOffset.r32()`) is the correct, zero-extending form.
+
+### Fixture mistake #5 — and it was the *correct* behaviour that looked wrong
+
+`array.get` at index 1 of `(array.new $a 42 2)` returned 0, and I called it a bug.
+It is not: `array.new` initialises **element 0 only**; the remaining elements are
+zero. The fixture now reads index 0 and the boundary case stays at `index == len`.
+The saga's running lesson holds — when an expectation and the lowering disagree,
+check what the *initialiser* is specified to write before assuming the read is
+wrong.
+
+### Small API gap observed (not blocking)
+
+There is **no shared `reportTrap(kind)` entry point** a backend can call with a
+runtime-independent constant; each backend writes one thin `extern "C"` wrapper per
+`TrapKind` it can produce (`sljitReportNullReference`, `sljitReportNullArray`,
+`sljitReportArrayOob`, `sljitReportUnreachable`, … and the AsmJit twins). It is
+harmless, but it is more glue than a contract — a single
+`wasm_trap(uint32_t kind)` would collapse eight wrappers into one call per backend,
+and it is exactly the shape that would have avoided the arity problem in §10.
+
+**Still refused, both backends:** `array.set`, `array.fill`, `array.copy`,
+`array.new_data`/`elem`, packed elements, `v128` elements, `ref.test`/`ref.cast`.
