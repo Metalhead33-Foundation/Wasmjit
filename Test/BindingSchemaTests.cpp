@@ -2542,4 +2542,20 @@ testStore().types(), WASM::Bindings::Direction::HostToGuest, "v128_param");
 	// Guest-side Rust: one wasm vector parameter, not the native pair.
 	CHECK(rust.find("wasm_v128") != std::string::npos);
 	CHECK(rust.find("arg0_lo") == std::string::npos);
+
+	// Every other guest-facing emitter must obey the same boundary rule: no
+	// language may adopt WasmJIT's native pair split, because the conversion
+	// happens at instantiation (study §16). Asserting an absence keeps this
+	// honest for emitters that refuse a schema rather than emit it.
+	for (const WASM::Bindings::Language language : {
+		WASM::Bindings::Language::TypeScript, WASM::Bindings::Language::AssemblyScript,
+		WASM::Bindings::Language::Zig, WASM::Bindings::Language::Kotlin,
+		WASM::Bindings::Language::MoonBit, WASM::Bindings::Language::Go,
+		WASM::Bindings::Language::Dart, WASM::Bindings::Language::Java,
+		WASM::Bindings::Language::CSharp, WASM::Bindings::Language::FSharp,
+		WASM::Bindings::Language::Python, WASM::Bindings::Language::Ruby}) {
+		const std::string text = WASM::Bindings::emit(schema, language);
+		INFO("language index " << static_cast<int>(language));
+		CHECK(text.find("arg0_lo") == std::string::npos);
+	}
 }
