@@ -2120,3 +2120,35 @@ of a bug that survives every ordinary test and appears only when the IR around t
 ### State
 
 Experiment reverted; suite **21648 assertions in 734 test cases**, green; tree clean.
+
+## 40. The degenerate boundary measured: counts are masked, not clamped -- and no crash (2026-11-06)
+
+Three exports with `i64x2.shr_u` / `i64x2.shr_s` at counts 63, 64 and 65, fed a lane of `0x8000000000000000` so the
+high bit is observable. Under the changed ABI: **13 assertions, 10 passed, 3 failed, no crash.**
+
+| Case | Spec | Measured |
+|---|---|---|
+| `shr_u` 63 | `1` | **`1`** -- correct |
+| `shr_u` 65 | `0` | wrong (count treated as 1) |
+| `shr_s` 65 | sign-fill (`-1`) | **`0xC000000000000000`** -- i.e. `0x8000...>>1` |
+
+The `shr_s` value is the giveaway: `0xC0000000` in the high half is exactly an **arithmetic shift by one**. So the shift
+count is being **masked to the lane width**, not clamped to the spec's "count >= width implies zero / sign-fill".
+
+### What that means
+
+1. **The degenerate-count defect is real and now has a number.** It affects counts `>= 64` only, which is why every
+   ordinary SIMD test passes and why the whole family looked healthy.
+2. **It is not the segfault.** Counts 63, 65 and signed 65 all return without crashing, so the fault the spec suites
+   hit is a *different* defect later in the same module.
+3. **Its independence is still unproven.** The suite is green *without* the change, so the change exposes it -- but
+   whether the pre-change path clamps correctly, or never reaches the masked path, is one build away: run this
+   same fixture **without** the ABI change. If it also fails there, the bug is pre-existing and merely *revealed*;
+   if it passes, the change routes the count through a form that masks.
+
+That single experiment is the next step, because it decides whether the count defect belongs to the boundary work
+or to the SIMD helper, and those are fixed in different places.
+
+### State
+
+Experiment reverted; suite **21648 assertions in 734 test cases**, green; tree clean.
