@@ -281,7 +281,10 @@ std::string emitCppTypedefsImpl(const Json& schema)
 		<< sanitize(schema.value("module", "module")) << "_CALLABLES_HPP\n\n";
 	out << "#include <cstdint>\n\n";
 	out << "namespace WASM { struct VMContext; struct ModuleInstance; class RegistryImportResolver; }\n";
-	out << "struct wasm_v128 { std::uint8_t bytes[16]; };\n";
+	// A v128 crosses the C boundary as two scalar words, low first (decision
+	// note §28); a parameter is emitted as two uint64_t, never as this struct,
+	// because MS x64 passes 16-byte aggregates by reference.
+	out << "struct wasm_v128 { std::uint64_t lo; std::uint64_t hi; };\n";
 	emitWitOpaqueTypes(out, schema, true);
 	emitWitCppTypeDefinitions(out, schema);
 	for (const std::string& ref : refs) {
@@ -443,7 +446,10 @@ std::string emitCppAdapterImpl(const Json& schema)
 	out << "#include <cstdint>\n";
 	out << "#include <stdexcept>\n";
 	out << "#include <string>\n\n";
-	out << "struct wasm_v128 { std::uint8_t bytes[16]; };\n";
+	// A v128 crosses the C boundary as two scalar words, low first (decision
+	// note §28); a parameter is emitted as two uint64_t, never as this struct,
+	// because MS x64 passes 16-byte aggregates by reference.
+	out << "struct wasm_v128 { std::uint64_t lo; std::uint64_t hi; };\n";
 	emitWitOpaqueTypes(out, schema, true);
 	for (const std::string& ref : refs)
 		out << "struct " << ref << ";\n";

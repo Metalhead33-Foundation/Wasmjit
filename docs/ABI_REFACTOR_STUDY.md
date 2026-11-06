@@ -308,3 +308,42 @@ down rather than half-applied:
 
 Steps (3) and (4) are inseparable: types without marshalling is a call libffi cannot encode, and
 marshalling without types writes past the argument array.
+
+### F1 and F2: what was fixed, and what remains (2026-11-06, later the same day)
+
+**F1 — the libffi call cache: fixed.** `ModuleFfiEntry` now carries `paramKinds`, the argument-type
+array expands a `V128` parameter into **two `ffi_type_uint64`** entries, and `ModuleCallCache::call`
+walks argument slots so a vector supplies `bytes` and `bytes + 8`. The five coordinated edits landed
+together, as §11 required.
+
+Proof, and it is a real one: `[callcache][v128][abi][parity]` calls `v128_param.wasm` **through the
+cache** and **through the compiled function pointer**, asserting equal results for `lane1` and for
+`lane3_after_scalar` — the latter chosen because a scalar precedes the vector, so a slot-numbering
+error cannot hide. The pre-existing `module call cache maps v128 by value` case still passes, which is
+the expected outcome on SysV: two integer words and a 16-byte integer-pair aggregate occupy the same
+registers there. **The change is observable on MS x64, which is exactly why it was worth making.**
+
+**F2 — the binding generator: half fixed, deliberately.** `EmitCpp` declared `struct wasm_v128` twice
+and **never used it in a signature**; both declarations now emit the canonical pair with a comment
+saying a parameter is two `uint64_t`, never the struct. One test pinned the old text
+(`BindingSchemaTests.cpp`, "host-side callable typedefs follow the engine ABI"); the expectation was
+updated **with a comment citing the decision**, because the test pins the ABI spelling and the ABI
+spelling changed by decision.
+
+**Still open:** `EmitDynamic.cpp` maps a vector in **five** places to a 16-byte array
+(`ctypes.c_ubyte * 16`, `uint8_t[16]`, `ubyte[16]`, `array[16, uint8]`, `StaticArray(UInt8, 16)`).
+Those are dynamically-typed FFI spellings and each needs its parameter *and* value marshalling moved
+together — the same rule as F1 — and there is no output test for them yet. That is the remaining P3
+work, and it is specified here rather than half-applied.
+
+### P3 status
+
+| Surface | State |
+|---|---|
+| libffi call cache (module) | **fixed**, parity-tested |
+| component call cache | unchanged — it has its own `AbiCoreType` ABI and no `v128` path |
+| C++ binding typedefs | **fixed** (canonical pair emitted, expectation updated) |
+| dynamic bindings (5 sites) | open, specified |
+| plugin/runtime version bump | still to do with P4, when the compiled convention actually moves |
+
+Suite **21560 assertions in 726 cases**, green.

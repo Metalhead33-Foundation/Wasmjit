@@ -1434,7 +1434,9 @@ TEST_CASE("host-side callable typedefs follow the engine ABI", "[bindings]")
 	REQUIRE(header.find("namespace WASM { struct VMContext; struct ModuleInstance; class RegistryImportResolver; }")
 			!= std::string::npos);
 	REQUIRE(header.find("#include <cstdint>") != std::string::npos);
-	REQUIRE(header.find("struct wasm_v128 { std::uint8_t bytes[16]; };")
+	// A v128 is two scalar words, low first: a single 16-byte aggregate would be
+	// passed by reference on MS x64 (docs/backends/V128_SIGNATURE_DECISION.md §28).
+	REQUIRE(header.find("struct wasm_v128 { std::uint64_t lo; std::uint64_t hi; };")
 			!= std::string::npos);
 	REQUIRE(header.find("#ifdef __cplusplus") == std::string::npos);
 	REQUIRE(header.find("extern \"C\" {") == std::string::npos);

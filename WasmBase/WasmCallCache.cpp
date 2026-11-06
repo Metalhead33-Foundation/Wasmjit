@@ -110,8 +110,17 @@ ModuleCallCache::ModuleCallCache(ModuleInstance& instance)
 		entry.argTypes.reserve(1u + entry.paramCount
 				+ (entry.multiResult ? 1u : 0u));
 		entry.argTypes.push_back(&ffi_type_pointer); // VMContext*
-		for (const CanonStorageType& parameter : view.funcParams())
-			entry.argTypes.push_back(ffiTypeFor(parameter));
+		for (const CanonStorageType& parameter : view.funcParams()) {
+			entry.paramKinds.push_back(parameter.value.opcode);
+			if (parameter.value.opcode == ValueTypeCode::V128) {
+				// The canonical convention is two scalar words, low first: an
+				// aggregate is passed *by reference* on MS x64 (decision note §28).
+				entry.argTypes.push_back(&ffi_type_uint64);
+				entry.argTypes.push_back(&ffi_type_uint64);
+			} else {
+				entry.argTypes.push_back(ffiTypeFor(parameter));
+			}
+		}
 		if (entry.multiResult)
 			entry.argTypes.push_back(&ffi_type_pointer); // result buffer
 		entry.returnType = view.funcResults().empty() || entry.multiResult
@@ -158,8 +167,17 @@ void ModuleCallCache::call(const ModuleFfiEntry& entry, void* result,
 			? static_cast<void*>(entry.callable.context)
 			: static_cast<void*>(instance_->context());
 	arguments[0] = &context;
-	for (std::size_t i = 0; i < entry.paramCount; ++i)
-		arguments[i + 1u] = args[i];
+	std::size_t slot = 1; // argument 0 is the VMContext*
+	for (std::size_t i = 0; i < entry.paramCount; ++i) {
+		if (entry.paramKinds[i] == ValueTypeCode::V128) {
+			// Two argument slots, low word then high word.
+			auto* bytes = static_cast<std::uint8_t*>(args[i]);
+			arguments[slot++] = bytes;
+			arguments[slot++] = bytes + sizeof(std::uint64_t);
+		} else {
+			arguments[slot++] = args[i];
+		}
+	}
 	void* resultBuffer = result;
 	if (entry.multiResult)
 		arguments.back() = &resultBuffer;
