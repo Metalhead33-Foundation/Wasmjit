@@ -3399,6 +3399,53 @@ void OpcodeDispatcher::dispatchArrayGet(WASM::TypeIdx arg)
 	push(width);
 }
 
+void OpcodeDispatcher::dispatchArrayNewDefault(WASM::TypeIdx arg)
+{
+	if (!reachable_)
+		return;
+	const WASM::CoreTypeView view = module_.typeView(arg);
+	require(view.kind() == WASM::CanonTypeKind::Array, "array.new_default requires an array type");
+	const WASM::CanonFieldType& element = view.arrayElement();
+	require(element.storage.isPacked || element.storage.value.opcode != WASM::ValueTypeCode::V128,
+			"the SLJIT backend does not lower v128 array elements yet");
+	const bool packed = element.storage.isPacked;
+	const bool packedI8 = packed && element.storage.packed == WASM::ValueTypeCode::I8;
+	const WASM::ValueTypeCode opcode = element.storage.value.opcode;
+	const int width = packed ? (packedI8 ? 1 : 2)
+			: ((opcode == WASM::ValueTypeCode::I32
+					|| opcode == WASM::ValueTypeCode::F32) ? 4 : 8);
+	requireStack(1);
+	if (!measureOnly_) {
+		loadSlot(SLJIT_R2, stackWidths_.size() - 1, 4);
+		loadContext(SLJIT_R0);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R1, 0, SLJIT_IMM,
+				static_cast<sljit_sw>(arg)));
+		emitHelper(SLJIT_ARGS3(P, P, 32, 32), &sljitArrayNew);
+		// Zero-fill loop. The count is a runtime value, so this is the first
+		// backend-emitted counted loop: R1 counts down to zero while R3 walks the
+		// data pointer, so every store is a constant-offset MEM1 (never MEM2).
+		const sljit_sw dataOffset = static_cast<sljit_sw>(WASM::gcArrayDataOffset(element.storage));
+		const sljit_sw elementBytes = static_cast<sljit_sw>(WASM::gcStorageBytes(element.storage));
+		const sljit_s32 storeOp = packed ? (packedI8 ? SLJIT_MOV_U8 : SLJIT_MOV_U16)
+				: (width == 4 ? SLJIT_MOV32 : SLJIT_MOV);
+		emit(sljit_emit_op2(compiler_, SLJIT_ADD, SLJIT_R3, 0, SLJIT_R0, 0, SLJIT_IMM, dataOffset));
+		loadSlot(SLJIT_R1, stackWidths_.size() - 1, 4);
+		struct sljit_label* loopStart = sljit_emit_label(compiler_);
+		struct sljit_jump* loopEnd =
+				sljit_emit_cmp(compiler_, SLJIT_EQUAL, SLJIT_R1, 0, SLJIT_IMM, 0);
+		emit(sljit_emit_op1(compiler_, storeOp, SLJIT_MEM1(SLJIT_R3), 0, SLJIT_IMM, 0));
+		emit(sljit_emit_op2(compiler_, SLJIT_ADD, SLJIT_R3, 0, SLJIT_R3, 0, SLJIT_IMM, elementBytes));
+		emit(sljit_emit_op2(compiler_, SLJIT_SUB, SLJIT_R1, 0, SLJIT_R1, 0, SLJIT_IMM, 1));
+		struct sljit_jump* backEdge = sljit_emit_jump(compiler_, SLJIT_JUMP);
+		sljit_set_label(backEdge, loopStart);
+		sljit_set_label(loopEnd, sljit_emit_label(compiler_));
+	}
+	pop();
+	push(8);
+	if (!measureOnly_)
+		storeSlot(SLJIT_R0, stackWidths_.size() - 1, 8);
+}
+
 void OpcodeDispatcher::dispatchArrayNewFixed(WASM::TypeIdx arg1, uint32_t arg2)
 {
 	if (!reachable_)

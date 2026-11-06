@@ -2540,3 +2540,37 @@ TEST_CASE("both backends lower array.new_fixed", "[sljit][asmjit][parity][gc]")
 	same("fixed_get2", 30);
 	same("fixed_len", 3);
 }
+
+
+TEST_CASE("both backends zero-fill array.new_default with a counted loop",
+		"[sljit][asmjit][parity][gc]")
+{
+	WASM::Module module = loadTestModule("gc_array_default");
+	AsmJitBackend::Context asmContext;
+	AsmJitBackend::ModuleCompiler asmCompiler(asmContext);
+	Sljit::ModuleCompiler sljitCompiler;
+	WASM::RegistryImportResolver asmImports;
+	WASM::RegistryImportResolver sljitImports;
+	std::unique_ptr<WASM::ModuleInstance> asmInstance =
+			asmCompiler.instantiate(module, asmImports);
+	std::unique_ptr<WASM::ModuleInstance> sljitInstance =
+			sljitCompiler.instantiate(module, sljitImports);
+	REQUIRE(asmInstance != nullptr);
+	REQUIRE(sljitInstance != nullptr);
+
+	const auto same = [&](const char* name, std::int32_t expected) {
+		const std::optional<WASM::Callable> asmCallable = asmInstance->exportedFunction(name);
+		const std::optional<WASM::Callable> sljitCallable = sljitInstance->exportedFunction(name);
+		REQUIRE(asmCallable.has_value());
+		REQUIRE(sljitCallable.has_value());
+		INFO("export " << name);
+		CHECK(WASM::callCallable<std::int32_t>(*asmCallable) == expected);
+		CHECK(WASM::callCallable<std::int32_t>(*sljitCallable) == expected);
+	};
+
+	same("default_get0", 0);
+	same("default_get3", 0);
+	same("default_len", 7);
+	same("default_empty", 0);
+	same("default_packed", 0);
+}

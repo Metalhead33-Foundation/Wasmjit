@@ -2537,6 +2537,76 @@ protected:
 		values.push_back(result);
 	}
 
+	void dispatchArrayNewDefault(WASM::TypeIdx arg) override
+	{
+		const WASM::CoreTypeView view = module.typeView(arg);
+		if (view.kind() != WASM::CanonTypeKind::Array)
+			throw std::runtime_error("AsmJit array.new_default requires an array type");
+		const WASM::CanonFieldType& element = view.arrayElement();
+		const bool packed = element.storage.isPacked;
+		const bool packedI8 = packed && element.storage.packed == WASM::ValueTypeCode::I8;
+		const int width = packed ? (packedI8 ? 1 : 2) : kindWidth(element.storage.value.opcode);
+		if (width != 1 && width != 2 && width != 4 && width != 8)
+			throw std::runtime_error("AsmJit array.new_default does not lower this element type yet");
+		if (values.empty())
+			throw std::runtime_error("AsmJit array.new_default operand stack underflow");
+		// The length operand stays live across the allocation call, the same way
+		// array.new keeps its initialiser live.
+		asmjit::x86::Gp length = values.back();
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke),
+				reinterpret_cast<uint64_t>(&asmjitArrayNew), signature),
+				"AsmJit array.new_default allocation call failed");
+		invoke->set_arg(0, vmContext);
+		invoke->set_arg(1, asmjit::Imm(static_cast<uint64_t>(arg)));
+		invoke->set_arg(2, length);
+		auto object = compiler.new_gp_ptr("arrayObject");
+		invoke->set_ret(0, object);
+		emitPendingTrapReturn();
+		// Counted zero-fill loop: counter counts down, cursor advances, so every
+		// store is a zero-displacement store through a walking pointer.
+		const auto dataOffset = static_cast<int32_t>(WASM::gcArrayDataOffset(element.storage));
+		const auto elementBytes = static_cast<int32_t>(WASM::gcStorageBytes(element.storage));
+		auto counter = compiler.new_gp_ptr("defaultCounter");
+		auto cursor = compiler.new_gp_ptr("defaultCursor");
+		// r32 -> r32 so the 32-bit length zero-extends: copying the whole 64-bit
+		// register would keep whatever garbage sits above bit 31 and turn the
+		// countdown into a runaway loop.
+		checkError(compiler.mov(counter.r32(), length.r32()),
+				"AsmJit array.new_default counter load failed");
+		checkError(compiler.lea(cursor, asmjit::x86::ptr(object, dataOffset)),
+				"AsmJit array.new_default cursor setup failed");
+		asmjit::Label loopStart = compiler.new_label();
+		asmjit::Label loopDone = compiler.new_label();
+		checkError(compiler.bind(loopStart), "AsmJit array.new_default label bind failed");
+		checkError(compiler.test(counter, counter), "AsmJit array.new_default loop test failed");
+		checkError(compiler.jz(loopDone), "AsmJit array.new_default loop exit failed");
+		if (width == 1)
+			checkError(compiler.mov(asmjit::x86::byte_ptr(cursor), asmjit::Imm(0)),
+					"AsmJit array.new_default zero store failed");
+		else if (width == 2)
+			checkError(compiler.mov(asmjit::x86::word_ptr(cursor), asmjit::Imm(0)),
+					"AsmJit array.new_default zero store failed");
+		else if (width == 4)
+			checkError(compiler.mov(asmjit::x86::dword_ptr(cursor), asmjit::Imm(0)),
+					"AsmJit array.new_default zero store failed");
+		else
+			checkError(compiler.mov(asmjit::x86::qword_ptr(cursor), asmjit::Imm(0)),
+					"AsmJit array.new_default zero store failed");
+		checkError(compiler.add(cursor, asmjit::Imm(elementBytes)),
+				"AsmJit array.new_default cursor advance failed");
+		checkError(compiler.dec(counter), "AsmJit array.new_default counter step failed");
+		checkError(compiler.jmp(loopStart), "AsmJit array.new_default back edge failed");
+		checkError(compiler.bind(loopDone), "AsmJit array.new_default label bind failed");
+		values.pop_back();
+		values.push_back(object);
+	}
+
 	void dispatchArrayNewFixed(WASM::TypeIdx arg1, uint32_t arg2) override
 	{
 		const WASM::CoreTypeView view = module.typeView(arg1);

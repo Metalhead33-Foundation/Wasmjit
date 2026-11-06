@@ -727,3 +727,83 @@ mechanism that produced `array.new_fixed`.
    consulted at run time.
 4. **`wasm_trap(kind)`** in the core — thirteen per-kind wrappers, and §19 showed a
    global substitution across them can silently pick the wrong kind.
+
+## 21. Gate B opened: the first backend-emitted counted loop (2026-11-06)
+
+`array.new_default` landed on **both** backends, and it is the first lowering in this
+arc whose loop is *emitted by the backend* rather than being straight-line or a single
+branch. Gate B from
+[`GC_PLAN.md`](GC_PLAN.md) §11 is therefore open; the remaining `array.fill`/`copy`/
+`new_data`/`new_elem` reuse this shape.
+
+### The loop shape (deliberately MEM2-free)
+
+```
+  counter = length              ; 32-bit length, zero-extended
+  cursor  = object + dataOffset ; walks the element storage
+loop:
+  if counter == 0 -> done
+  store zero at [cursor]        ; constant displacement 0, width by element kind
+  cursor += elementBytes
+  counter -= 1
+  -> loop
+```
+
+A **countdown counter plus a walking pointer** rather than an index times a stride,
+for three reasons: every store is a zero-displacement `MEM1`, so §13's `MEM2` +
+displacement mis-encoding cannot be reached; no multiply is needed to scale an index;
+and the element width stays a compile-time constant, so packed `i8`/`i16` elements
+need no special case beyond the store opcode.
+
+### Zero-fill is not free, and the fixture proves it
+
+The allocator does not guarantee zeroed storage — GC pages are reused — so
+`array.new_default` must actually write. Fixture `gc_array_default.wat` covers a
+non-zero length, an index at the end of the range, the length itself, a **zero
+length** (the loop must not execute and must not underflow the counter), and a
+packed `i8` array. All five are asserted per backend: `[gc]` **289 assertions in 17
+cases**; full suite **21372 in 716**.
+
+### The `mov r64, r32` hazard recurred — in new code
+
+The first AsmJit version crashed (SIGSEGV) on the *first* export. The cause was the
+saga's own recorded hazard: the length is an `i32`, and copying it with a 64-bit
+`mov` carried whatever sat above bit 31 into the countdown, giving a runaway loop
+that walked off the object. The fix is the documented one — copy through the 32-bit
+views, `mov(counter.r32(), length.r32())`, which zero-extends.
+
+That this recurred in freshly written code, months into the arc, is the strongest
+argument yet for the post-mortem's central recommendation: **the narrow-register
+rule must be enforced by construction, not by memory.** Two candidate mechanisms are
+recorded here for that discussion: a debug assertion in the backend's `mov` wrapper
+rejecting a 64-bit copy whose source is known-narrow, and emitting every `i32`
+producer so the upper bits are provably clean at the point of use.
+
+### Also confirmed: operands stay live across `invoke`
+
+A spill to a compiler-owned stack slot was attempted first and abandoned: `asmjit::Mem`
+is not nameable through the includes this file uses, and `InvokeNode::set_arg` has no
+overload for it. The working pattern — already used by `array.new` — keeps the wasm
+operand in a live `Gp` across the call. It works, so the RA does preserve it, and the
+new code follows the existing idiom instead of inventing a second one.
+
+### Gate D deferred, with the reason
+
+Gate D (one trap entry point per backend, kind as an explicit argument) was **not**
+started. Reading its call sites showed why it is not the “cheap” item §11 called it:
+changing the helper from one argument to two changes the `SLJIT_ARGSn` macro at every
+call site *and* the `invoke` signature at every AsmJit site — a blanket rewrite of
+working trap paths, with no opcode added and no test that would catch a
+mis-transcribed kind during the sweep. It deserves its own budget and its own
+verification pass, and §19's lesson is precisely that bulk edits across trap plumbing
+are where the wrong kind gets picked.
+
+### Status of the remaining surface
+
+| Item | State |
+|---|---|
+| Backend-emitted counted loop | **open** — `new_default` proves it |
+| `array.fill` / `copy` / `new_data` / `new_elem` | next, on this shape |
+| AsmJit block parameters | not started (3 opcodes) |
+| Abstract heap types in `ref.test`/`ref.cast` | not started |
+| One trap entry point per backend (Gate D) | deferred with reason above |
