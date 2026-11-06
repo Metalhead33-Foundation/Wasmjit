@@ -76,7 +76,7 @@ here only so this document is readable on its own.
 | `f32` | `float` | Passed in the ABI's floating-point class, never reinterpreted as an integer. |
 | `f64` | `double` | Same. |
 | `funcref`, `externref`, `anyref`, `eqref`, `structref`, `arrayref`, … | `void*` | An opaque, GC-managed reference. Never dereferenced by the embedder; ownership in §8.5. |
-| `v128` | **two `uint64_t` parameters**, low word first | **Decided 2026-11-06.** Two scalar `uint64_t` are register-passed on *every* supported ABI (SysV `rdi`/`rsi`, MS x64 `rcx`/`rdx`, AAPCS64 `x0`/`x1`, RISC-V `a0`/`a1`), where a 16-byte *aggregate* is passed **by reference** on MS x64 (§5.4). A `v128` result uses the multi-value buffer as `lo, hi`. See [`backends/V128_SIGNATURE_DECISION.md`](backends/V128_SIGNATURE_DECISION.md) §28. |
+| `v128` | **two `uint64_t` parameters**, low word first — *at the native boundary only* | **Decided 2026-11-06.** Two scalar `uint64_t` are register-passed on *every* supported ABI (SysV `rdi`/`rsi`, MS x64 `rcx`/`rdx`, AAPCS64 `x0`/`x1`, RISC-V `a0`/`a1`), where a 16-byte *aggregate* is passed **by reference** on MS x64 (§5.4). A `v128` result uses the multi-value buffer as `lo, hi`. See [`backends/V128_SIGNATURE_DECISION.md`](backends/V128_SIGNATURE_DECISION.md) §28. |
 | no results | `void` return | |
 | one result | that kind's C type | Returned in the ABI's return register. |
 | two or more results | trailing `void* results` | No aggregate is ever returned by value; [`ABI.md`](ABI.md) "Multiple Results" is normative. |
@@ -89,6 +89,19 @@ Two rules fall out of the table and are worth naming:
 - **`v128` is settled as two scalar words**, not as an aggregate: the two-word spelling is the
   only one register-passed on every supported ABI, and it survives the MS x64 rule that passes
   16-byte aggregates by reference.
+
+**Where this rule applies — and where it does not.** The two-word spelling is the **native C ABI**
+of a JIT-compiled function: the boundary an embedder crosses when it calls compiled code, and the
+boundary every helper and the libffi cache use. It is **not** the wasm ABI. Inside the Wasm type
+system a `v128` is one canonical 128-bit value, and any code compiled **to wasm** — a guest in Rust,
+C, AssemblyScript, Zig, Kotlin, MoonBit or WIT — must use that canonical type. **The conversion
+between the two happens at instantiation, inside this runtime**, never in a binding or a header.
+
+That distinction is the rule for generated bindings: a **WasmJIT-facing** emitter (`cpp-typedefs`,
+`cpp-source` — code the embedder copies into its own process) speaks this document; a
+**guest-facing** emitter (C header, Rust, AssemblyScript, Zig, Kotlin, MoonBit, WIT, dynamic) speaks
+the wasm ABI. The same language can appear on both sides, which is why the rule is per *consumer*
+and not per language.
 
 ## 4. Non-degeneracy: what a backend may not do
 
