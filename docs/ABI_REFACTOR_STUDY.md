@@ -2892,3 +2892,67 @@ step.
 
 Suite **21703 assertions in 742 test cases**, green; six new permanent `[libjit][v128][ir]` cases keep every
 replica above from being re-litigated.
+
+## 57. The IR dump clears the backend's own IR -- the corruption is in codegen (2026-11-06)
+
+`jit_dump_function` was called on the failing function. The dump, verbatim:
+
+```
+function wasm(l1 : ptr, l2 : ulong, l3 : ulong, l4 : ulong, l5 : ulong, l6 : ulong, l7 : ulong) : struct<16>
+	incoming_reg(l1, rdi)
+	incoming_reg(l2, rsi)
+	incoming_reg(l3, rdx)
+	incoming_reg(l4, rcx)
+	incoming_reg(l5, r8)
+	incoming_reg(l6, r9)
+	incoming_frame_posn(l7, 16)
+.L:
+	l16 = &s15
+	store_relative_long(l16, l2, 0)
+	l18 = &s15
+	store_relative_long(l18, l3, 8)
+	l21 = &s20
+	store_relative_long(l21, l4, 0)
+	l22 = &s20
+	store_relative_long(l22, l5, 8)
+	l25 = &s24
+	store_relative_long(l25, l6, 0)
+	l26 = &s24
+	store_relative_long(l26, l7, 8)
+	outgoing_reg(l1, rdi)
+	call_external wasm_stack_check (0x...)
+```
+
+Read it against the measurements:
+
+| What the dump says | Verdict |
+|---|---|
+| seven parameters, `ptr` then six `ulong` | **the canonical signature, exactly** |
+| `l6 -> r9`, `l7 -> stack [16]` | the 6th in the last register, the 7th on the stack -- as SysV requires |
+| the third aggregate's stores read `l6` (offset 0) and `l7` (offset 8) | **correct pairing** -- no off-by-one |
+| all six stores precede the first `call_external` | **correct order** |
+
+The IR our backend emits is **right in every respect**. The garbage therefore appears after libjit turns this IR into machine code -- and since six hand-built replicas with the same
+signature, the same stores, helper calls and ordering all produced correct results, the difference is
+register allocation / spilling driven by the rest of this function's body (the stack check, trap slot and exception
+slot calls that follow).
+
+### What that means for the fix
+
+There is nothing left to correct in our IR. The remaining candidates are libjit's own codegen for *this* IR shape, and
+the next instrument is the machine code: disassemble the compiled entry and look at what the prologue does with `r9`
+before the first store -- whether it spilt it to the frame slot the stores read, or used `r9` as scratch first.
+
+That is a concrete, bounded question with a disassembly for an answer, and it is the first time in this study that the
+remaining unknown sits *below* the IR.
+
+### The practical consequence for the refactor
+
+The canonical rule is not in question: the IR proves the backend expresses it exactly. What has to change is either
+the frame shape the backend asks for (so libjit's spilling cannot lose the register argument) or the decision about
+how many vector parameters a signature may carry. The measurement now supports both options being *stated* rather
+than guessed.
+
+### State
+
+Suite **21703 assertions in 742 test cases**, green; tree clean.
