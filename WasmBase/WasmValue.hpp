@@ -174,6 +174,31 @@ inline bool needsResultBuffer(const FuncType& ft)
 	return false;
 }
 
+//! Invokes a callable whose single result is a `v128`, through the canonical
+//! caller-supplied buffer.
+//!
+//! A `v128` result cannot come back in one return register, so a backend that
+//! follows `docs/backends/V128_SIGNATURE_DECISION.md` compiles such a function as
+//! `void(VMContext*, params..., void* out)` and writes the 16 bytes at `out`. This
+//! helper supplies that buffer and returns its contents, so an embedder or a test
+//! does not have to spell the trailing pointer itself. The trap check is the one
+//! `callCallable` performs.
+//!
+//! \tparam Args Argument types forwarded to the callable.
+//! \param callable Callable descriptor to invoke.
+//! \param args Arguments matching the callable's lowered signature.
+//! \return The sixteen bytes the callee wrote, as four 32-bit lanes in
+//!         little-endian order.
+//! \throws WASM::Trap when the call reports a pending trap at the host boundary.
+template<typename... Args>
+std::array<std::uint32_t, 4> callCallableVector(const Callable& callable, Args&&... args)
+{
+	alignas(16) std::array<std::uint32_t, 4> result {};
+	callCallable<void>(callable, std::forward<Args>(args)...,
+			static_cast<void*>(result.data()));
+	return result;
+}
+
 //! Address of the current execution state's tail-call state. Generated code
 //! calls this helper; it is the only supported way for a backend to reach the
 //! state, because a context's address is not portable across host threads.

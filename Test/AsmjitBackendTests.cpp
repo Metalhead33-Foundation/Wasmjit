@@ -152,3 +152,30 @@ TEST_CASE("AsmJIT returns a v128 through the caller's buffer", "[asmjit][v128][a
 	CHECK(lanes[2] == 9u);
 	CHECK(lanes[3] == 10u);
 }
+
+TEST_CASE("the vector-result helper works on every buffered backend",
+"[v128][abi][buffered]")
+{
+	// Both AsmJIT and SLJIT return a v128 through the caller's buffer, so the same
+// fixture and the same helper must produce the same four lanes on each. LibJIT
+// returns the aggregate itself, so it is deliberately not part of this list
+// (docs/backends/LIBJIT_ARGUMENT_DEFECT.md section 8.1).
+for (const char* backend : {"asmjit", "sljit"}) {
+auto runtime = WASM::Runtime::create(backend);
+REQUIRE(runtime != nullptr);
+auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "asmjit_vec_result.wasm");
+WASM::RegistryImportResolver imports;
+WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+
+const std::optional<WASM::Callable> callable = instance.exportedFunction("vec_result");
+REQUIRE(callable.has_value());
+REQUIRE(callable->fnPtr != nullptr);
+const std::array<std::uint32_t, 4> lanes =
+WASM::callCallableVector(*callable);
+CHECK(lanes[0] == 7u);
+CHECK(lanes[1] == 8u);
+CHECK(lanes[2] == 9u);
+CHECK(lanes[3] == 10u);
+}
+}
