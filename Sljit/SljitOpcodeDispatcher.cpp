@@ -135,6 +135,17 @@ extern "C" void sljitReportArrayOob() noexcept
 	WASM::reportTrap(WASM::TrapKind::OutOfBoundsArrayAccess);
 }
 
+//! Runtime subtype test against an object-header type id.
+//! \param vm Instance context.
+//! \param actual Type id read from the object header.
+//! \param expected Type id of the target type.
+//! \return 1 when the object type is the target or a subtype of it, else 0.
+extern "C" uint32_t sljitTypeIsSubtype(WASM::VMContext* vm, uint32_t actual,
+		uint32_t expected) noexcept
+{
+	return reinterpret_cast<WASM::ModuleInstance*>(vm)->typeIdIsSubtype(actual, expected) ? 1u : 0u;
+}
+
 extern "C" void* sljitArrayNew(WASM::VMContext* vm, uint32_t typeIndex, uint32_t length) noexcept
 {
 	return reinterpret_cast<WASM::ModuleInstance*>(vm)->allocateArrayObject(typeIndex, length);

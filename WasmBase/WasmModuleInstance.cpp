@@ -1491,6 +1491,17 @@ bool ModuleInstance::growTable(uint32_t tableIdx, uint64_t deltaEntries) {
 	return store().growTable(internals.tableRefs[tableIdx], deltaEntries);
 }
 
+bool ModuleInstance::typeIdIsSubtype(uint32_t actualTypeId, uint32_t expectedTypeId) const
+{
+	if (actualTypeId == expectedTypeId)
+		return true;
+	const std::optional<uint32_t> actual = module->typeIndexForId(TypeId {actualTypeId});
+	const std::optional<uint32_t> expected = module->typeIndexForId(TypeId {expectedTypeId});
+	if (!actual || !expected)
+		return false;
+	return module->isSubtype(*actual, *expected);
+}
+
 void ModuleInstance::arrayInitFromData(void* array, uint32_t localTypeIdx, uint32_t dataIdx, uint32_t srcOffset)
 {
 	if (dataIdx >= module->dataSegments.size()) {

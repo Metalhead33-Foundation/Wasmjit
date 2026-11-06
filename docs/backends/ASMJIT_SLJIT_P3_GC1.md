@@ -1105,3 +1105,130 @@ build raw modules in `Test/SljitBackendTests.cpp`.
 | Gate D (one trap entry point) | **open**, attempt reverted with a finding (§25) |
 | Gate C (subtyping + abstract heap types) | open; needs the core runtime predicate, and fixes a live wrong answer |
 | Gate A (block parameters + three branch opcodes) | open; largest item, both backends |
+
+## 27. Gate A, re-scoped by reading the code: it is two slices and one dependency (2026-11-06)
+
+Gate A was described as "block parameters, then three opcodes, in both backends". Reading the
+branch machinery splits it differently, and one half turns out to depend on **Gate C**.
+
+### Finding 1: SLJIT already has block parameters
+
+`Sljit::OpcodeDispatcher::ControlFrame` carries
+
+```cpp
+std::vector<int> paramWidths;   // widths of the block's parameters
+std::vector<int> resultWidths;  // widths of the block's results
+```
+
+so on SLJIT the mechanism Gate A was named after **already exists**. Gate A's mechanism
+work is therefore **AsmJit-only** — its `ControlFrame` still has a single
+`resultCount`/`resultType`/`result` triple. That halves the estimate for the SLJIT side and
+confirms the earlier note that the two backends were at different distances from this gate.
+
+### Finding 2: `br_on_non_null` is a small addition; the cast variants are not
+
+SLJIT's branch machinery is already factored into exactly the two pieces
+`br_on_non_null` needs:
+
+| Piece | What it does | Reused by |
+|---|---|---|
+| `emitBranchTo(frame)` | transfers the label's values and jumps (block → merge point, loop → header) | `br`, and the taken side of `br_on_non_null` |
+| `transferToBase(widths, baseDepth)` | moves the top *n* values down to the label's base depth | `br_if`, and the conditional prologue of `br_on_non_null` |
+
+`dispatchBrIf` is the literal template: emit a condition, branch over the transfer on the
+false path, transfer and jump on the true path. `br_on_non_null` differs only in the
+condition (`ref == 0`) and in what the fallthrough keeps (everything except the reference).
+That is a ~30-line dispatcher, not a mechanism.
+
+`br_on_cast` / `br_on_cast_fail` are a different story: their condition is a **type test**,
+and the correct type test is `wasm_type_is_subtype` — the predicate Gate C needs. Reusing
+`ref.test`'s current check would mean reusing a check that compares type ids for **exact
+identity**, so `br_on_cast` would send a subtype instance to the failure path. That is the
+same live bug §12 recorded, and implementing the cast variants first would *spread* it.
+
+### The dependency, stated plainly
+
+```
+br_on_non_null   ->  needs nothing new        (condition: ref == 0)
+br_on_cast       ->  needs Gate C's predicate (condition: subtype(actual, expected))
+br_on_cast_fail  ->  needs Gate C's predicate (the negation)
+```
+
+So the ordering §12 proposed (Gate A last) was right for the wrong reason. The correct
+order is:
+
+1. **Gate C step 1** — the runtime subtype predicate. It fixes a live wrong answer on its
+   own, and it is what makes the cast branches correct rather than merely present.
+2. **`br_on_non_null`** — SLJIT first (mechanism exists, `dispatchBrIf` is the template),
+   then AsmJit once its `ControlFrame` carries parameters.
+3. **`br_on_cast` / `br_on_cast_fail`** — both backends, on top of 1 and 2.
+
+Doing 3 before 1 would add three opcodes that answer *false* for every subtype — more
+surface, same bug, and harder to find because the code would look finished.
+
+### Status
+
+Gate A is **open and now sequenced**. Nothing was written this round beyond this note: the
+first slice needs the predicate from Gate C, and starting at the wrong end is the failure
+mode §19 called out ("open a gate once") — here, open it in the right order.
+
+## 28. Gate C step 1: the runtime subtype predicate landed; the wiring did not (2026-11-06)
+
+### What landed
+
+The core half of Gate C step 1 — the ABI addition §12 authorised — now exists:
+
+```cpp
+//! Tests whether one runtime type id is a subtype of another.
+bool ModuleInstance::typeIdIsSubtype(uint32_t actualTypeId, uint32_t expectedTypeId) const;
+```
+
+It is the runtime half of `Module::isSubtype`, and the pieces it composes were already
+there: `Module::typeIndexForId(TypeId)` maps the store-scoped id from an object header back
+to a module-local index, and `Module::isSubtype(uint32_t, uint32_t)` answers the relation
+(`TypeIdx` is a plain `unsigned int`, which the first draft got wrong by wrapping it in
+`LocalTypeIdx`). Equal ids short-circuit; an id this module does not declare answers
+`false` rather than trapping, because a foreign id cannot be a subtype of a local type.
+
+The SLJIT-side helper `sljitTypeIsSubtype(vm, actual, expected) -> uint32_t` is also in
+place — three arguments, so it sits comfortably inside the helper ABI.
+
+**Not yet wired:** neither backend calls the helper yet. The `ref.test` switch was
+attempted and reverted (below), so `ref.test`/`ref.cast` still compare type ids for exact
+identity and the subtype bug from §12 is **still live**.
+
+### Why the wiring was reverted, and the lesson
+
+There are **four** dispatch sites with the same shape — `ref.test`, `ref.test null`,
+`ref.cast`, `ref.cast null` — and each contains a local named `mismatch`. The edit found
+"the first `mismatch` block", replaced it, and then deleted "the first
+`if (mismatch != nullptr)` line", which belonged to a *different* function than the one
+replaced. The file stopped compiling, and the suite would have been red.
+
+The lesson is the same one §23 taught about labels, applied to source edits: **an anchor
+that is unique in prose is not unique in a file.** All four sites are textually alike, so
+the transformation has to be function-scoped — locate the function, then edit inside it —
+or done one site at a time with a build between. A mechanical multi-site rewrite whose
+anchors are "the first match" is the same class of mistake as the Gate D sweep (§25).
+
+### The precise next step
+
+For each of the four sites, in this order and with a build after each:
+
+1. `ref.test` — replace the id comparison with the helper call, keep `isNull` as the
+   short-circuit to a `0` result.
+2. `ref.test null` — same, but null yields `1`.
+3. `ref.cast` — replace the failure branch's condition with the helper, keeping
+   `CastFailure`.
+4. `ref.cast null` — same, null allowed.
+
+The fixture is written and was discarded with the revert; it only needs recreating:
+`(type $t (sub $s (struct …)))`, then `ref.test (ref $s)` on a `struct.new $t` must answer
+**1** (the bug), `ref.test (ref $t)` on a `struct.new $s` must answer **0**, and
+`ref.test (ref $s)` on `ref.null $s` must answer **0**.
+
+### State
+
+Suite **21464 assertions in 719 cases**, green; `[headerdoc]` green; Doxygen 0 warnings.
+Uncommitted: `WasmModuleInstance.{hpp,cpp}` (the predicate), `Sljit/SljitOpcodeDispatcher.cpp`
+(the helper), this report.

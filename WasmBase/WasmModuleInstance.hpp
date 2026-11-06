@@ -347,6 +347,13 @@ public:
 	//! \param dataIdx Data segment index.
 	//! \param srcOffset Byte offset inside the data segment.
 	void arrayInitFromData(void* array, uint32_t localTypeIdx, uint32_t dataIdx, uint32_t srcOffset);
+	//! Tests whether one runtime type id is a subtype of another.
+	//! \param actualTypeId Type id stored in the object header.
+	//! \param expectedTypeId Type id of the target type.
+	//! \return true when the object type is the target or a subtype of it.
+	//! This is the runtime half of `Module::isSubtype`: the header carries a
+	//! store-scoped id, so the module-local indices are recovered first.
+	bool typeIdIsSubtype(uint32_t actualTypeId, uint32_t expectedTypeId) const;
 	//! Custom Descriptors: the RTT/descriptor reference stored in a struct's
 	//! header, or nullptr for a null/non-struct reference. `ref.get_desc` traps
 	//! when this returns nullptr.
