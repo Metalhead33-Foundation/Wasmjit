@@ -182,3 +182,33 @@ the region back, not by the build. The rule this reinforces: when appending a
 function to a header, anchor on the **closing brace plus a following line**, never
 on the declaration of the function above; and re-read the edited region before
 building, because a misplaced brace can still parse.
+
+## 10. Step 1 complete: helpers *and* their gate (2026-11-06)
+
+The layout helpers landed, and so did the test that makes them trustworthy rather
+than merely compilable:
+
+```
+[gc][layout]  Test/HeaderTierTests.cpp
+  header 16 | i32 @16 | i64 @24 | v128 @32 | reference @48 | packed i8 @56 | size 64
+  {i32,i32}: 16, 20, size 24        empty struct: size 16
+```
+
+Nine assertions, green on the first run, and they pin exactly the four rules that
+can drift: re-alignment after a narrower field (20 → 24), `v128`'s 16-byte
+alignment, pointer-sized references, and trailing padding to the strictest field
+alignment. The empty struct case guards the header-only object.
+
+**What this buys the next step:** LibJIT can now be re-pointed at these helpers
+with a *reference* answer to compare against, and a new backend cannot silently
+invent a fourth opinion about the same bytes.
+
+**Remaining in the plan:**
+
+- **Step 2** — re-point LibJIT's `struct.get`/`struct.set` offsets at the helpers
+  (behaviour-preserving; the existing GC tests are the check).
+- **Step 3** — `dispatchStructNew`/`NewDefault`/`Get` in SLJIT (allocation
+  trampoline around `ModuleInstance::allocateStructObject` plus one `MOV` per
+  field), then mirrored in AsmJit.
+- **Step 4** — the fixture with `two_structs_not_equal`, which retires the
+  `ref.eq` gap carried since reference chunk 1.

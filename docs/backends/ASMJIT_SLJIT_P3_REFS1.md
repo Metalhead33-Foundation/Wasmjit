@@ -204,9 +204,9 @@ The `v128` function-boundary work was analysed and **deliberately deferred**; th
 | `v128` results | **refused on both today**; LibJIT only. A conformance blocker, not a niche case — see the impact study | [`V128_SIGNATURE_DECISION.md`](V128_SIGNATURE_DECISION.md) §7, §9, §10, and **Part III §21–§27** (spec scripts pass 3 `v128` operands) |
 | `v128` block types | **deferred to the ABI plan** ([`V128_SIGNATURE_DECISION.md`](V128_SIGNATURE_DECISION.md) §11) | needs a workaround; AsmJit blocks carry no results yet |
 | Wasm→Wasm calls with `v128` | deferred | SLJIT's `SLJIT_ARGS*` are fixed-arity; AsmJit's per-type signature cache needs the two-slot form |
-| `ref.eq` fixture | lowered, unfixtured | needs a `(ref null eq)` value, which only **GC construction** can produce |
+| `ref.eq` fixture | **closed** — fixtured by GC slice 1 (false case) | [`ASMJIT_SLJIT_P3_GC1.md`](ASMJIT_SLJIT_P3_GC1.md); the *true* case needs a reference local/block |
 | `br_on_non_null` | `onUnhandledOpcode` | needs a label carrying the reference, i.e. **block parameters** (AsmJit gap) |
-| GC types | **planned** — [`GC_PLAN.md`](GC_PLAN.md): struct/array construction, field layout, `ref.test`/`ref.cast`; also the route to a `ref.eq` fixture | the P4 gate in `WRITING_A_BACKEND.md` §6 |
+| GC types | **started** — layout contract + SLJIT `struct.new`/`struct.get`; AsmJit mirror, `struct.set`, arrays, `ref.test`/`ref.cast` remain | [`ASMJIT_SLJIT_P3_GC1.md`](ASMJIT_SLJIT_P3_GC1.md), plan in [`GC_PLAN.md`](GC_PLAN.md) |
 | exceptions | not started | P4 |
 | `call_ref`, continuations | not started | P5 |
 | atomics, `f16`, relaxed SIMD, bulk memory on a memory64 | refused by name | proposal-level, still open |
@@ -255,8 +255,7 @@ Do not copy: assuming `ref.eq` is testable with nulls — the engine requires
 | Opcode family | Refusal | Status |
 |---|---|---|
 | `br_on_non_null` | `onUnhandledOpcode` | blocked on AsmJit block parameters |
-| `ref.eq` | lowered, **unfixtured** | needs a GC-constructed `(ref null eq)` |
-| `ref.eq` | lowered, **unfixtured** | needs an `eqref`; pairs with `ref.func` |
+| `ref.eq` | **landed and fixtured** (false case) | true case needs a reference local/block |
 | GC types/structs/arrays, `call_ref`, continuations | refused by name | P4/P5 |
 | exceptions | refused by name | P4 |
 | `v128` signatures | refused by name | **deferred decision, must be revisited** (§2) |

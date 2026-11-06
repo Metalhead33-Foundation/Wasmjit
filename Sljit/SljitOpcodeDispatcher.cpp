@@ -89,6 +89,11 @@ extern "C" sljit_sw sljitTrapPending()
 }
 
 //! Reports the spec's `unreachable` trap without returning through a Wasm frame.
+extern "C" void* sljitStructNew(WASM::VMContext* vm, uint32_t size, uint32_t typeIndex) noexcept
+{
+	return reinterpret_cast<WASM::ModuleInstance*>(vm)->allocateStructObject(size, typeIndex);
+}
+
 extern "C" void sljitReportNullReference() noexcept
 {
 	WASM::reportTrap(WASM::TrapKind::NullReference);
@@ -3072,6 +3077,79 @@ void OpcodeDispatcher::dispatchBrOnNull(WASM::LabelIdx depth)
 		ok_ = false;
 	else if (notNull != nullptr)
 		sljit_set_label(notNull, skip);
+}
+
+void OpcodeDispatcher::dispatchStructNew(WASM::TypeIdx arg)
+{
+	if (!reachable_)
+		return;
+	const WASM::CoreTypeView view = module_.typeView(arg);
+	require(view.kind() == WASM::CanonTypeKind::Struct, "struct.new requires a struct type");
+	const std::span<const WASM::CanonFieldType> fields = view.structFields();
+	requireStack(fields.size());
+	for (const WASM::CanonFieldType& field : fields)
+		require(field.storage.isPacked || field.storage.value.opcode != WASM::ValueTypeCode::V128,
+				"the SLJIT backend does not lower v128 struct fields yet");
+	const std::size_t size = WASM::gcStructSize(fields);
+	if (!measureOnly_) {
+		// VMContext*, size, type index -> new object pointer in R0.
+		loadContext(SLJIT_R0);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R1, 0, SLJIT_IMM,
+				static_cast<sljit_sw>(size)));
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R2, 0, SLJIT_IMM,
+				static_cast<sljit_sw>(arg)));
+		emitHelper(SLJIT_ARGS3(P, P, 32, 32), &sljitStructNew);
+		// Fields are stacked in declaration order, so store them in reverse.
+		for (std::size_t i = fields.size(); i-- > 0;) {
+			const std::size_t offset = WASM::gcStructFieldOffset(fields, i);
+			const std::size_t depth = stackWidths_.size() - 1;
+			const int width = stackWidths_.back();
+			loadSlot(SLJIT_R1, depth, width == 4 ? 4 : 8);
+			emit(sljit_emit_op1(compiler_, width == 4 ? SLJIT_MOV32 : SLJIT_MOV,
+					SLJIT_MEM1(SLJIT_R0), static_cast<sljit_sw>(offset), SLJIT_R1, 0));
+			pop();
+		}
+	} else {
+		for (std::size_t i = 0; i < fields.size(); ++i)
+			pop();
+	}
+	push(8);
+	if (!measureOnly_)
+		storeSlot(SLJIT_R0, stackWidths_.size() - 1, 8);
+}
+
+void OpcodeDispatcher::dispatchStructGet(WASM::TypeIdx arg1, uint32_t arg2)
+{
+	if (!reachable_)
+		return;
+	const WASM::CoreTypeView view = module_.typeView(arg1);
+	require(view.kind() == WASM::CanonTypeKind::Struct, "struct.get requires a struct type");
+	const std::span<const WASM::CanonFieldType> fields = view.structFields();
+	require(arg2 < fields.size(), "struct.get field index is out of range");
+	requireStack(1);
+	require(stackWidths_.back() == 8, "struct.get requires a reference operand");
+	const int width = fields[arg2].storage.isPacked
+			? (fields[arg2].storage.packed == WASM::ValueTypeCode::I8 ? 1 : 2)
+			: (fields[arg2].storage.value.opcode == WASM::ValueTypeCode::I32
+					|| fields[arg2].storage.value.opcode == WASM::ValueTypeCode::F32 ? 4 : 8);
+	if (!measureOnly_) {
+		loadSlot(SLJIT_R1, stackWidths_.size() - 1, 8);
+		// A null object traps; the field load itself is one memory access.
+		sljit_jump* notNull = sljit_emit_cmp(compiler_, SLJIT_NOT_EQUAL, SLJIT_R1, 0, SLJIT_IMM, 0);
+		if (notNull == nullptr)
+			ok_ = false;
+		emitHelper(SLJIT_ARGS0V(), &sljitReportNullReference);
+		emitTrapBranch();
+		sljit_label* done = sljit_emit_label(compiler_);
+		if (done == nullptr)
+			ok_ = false;
+		else if (notNull != nullptr)
+			sljit_set_label(notNull, done);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R2, 0, SLJIT_MEM1(SLJIT_R1),
+				static_cast<sljit_sw>(WASM::gcStructFieldOffset(fields, arg2))));
+		storeSlot(SLJIT_R2, stackWidths_.size() - 1, 4);
+	}
+	stackWidths_.back() = 4;
 }
 
 void OpcodeDispatcher::dispatchRefFunc(WASM::FuncIdx arg)

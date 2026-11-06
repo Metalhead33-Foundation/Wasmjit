@@ -179,3 +179,36 @@ TEST_CASE("every public header has a compile-only translation unit", "[tiers]")
 	}
 	REQUIRE(checked == 49); // one TU per public header; bump when a header lands
 }
+
+
+TEST_CASE("gc layout: struct field offsets follow the H1 contract", "[gc][layout]")
+{
+	// Header (16) + i32, i64, v128, reference, packed i8: every alignment rule in
+	// one struct, so a drift between the runtime, LibJIT and a new backend shows
+	// up as an offset rather than as a corrupted heap object.
+	std::vector<WASM::CanonFieldType> fields(5);
+	fields[0].storage.value.opcode = WASM::ValueTypeCode::I32;
+	fields[1].storage.value.opcode = WASM::ValueTypeCode::I64;
+	fields[2].storage.value.opcode = WASM::ValueTypeCode::V128;
+	fields[3].storage.value.opcode = WASM::ValueTypeCode::ExternRef;
+	fields[4].storage.isPacked = true;
+	fields[4].storage.packed = WASM::ValueTypeCode::I8;
+
+	CHECK(WASM::gcStructFieldOffset(fields, 0) == WASM::GcHeader::kHeaderBytes);
+	CHECK(WASM::gcStructFieldOffset(fields, 1) == 24);   // i64 re-aligns from 20
+	CHECK(WASM::gcStructFieldOffset(fields, 2) == 32);   // v128 is 16-aligned
+	CHECK(WASM::gcStructFieldOffset(fields, 3) == 48);   // pointer after 16 bytes
+	CHECK(WASM::gcStructFieldOffset(fields, 4) == 56);   // packed i8 needs no padding
+	CHECK(WASM::gcStructSize(fields) == 64);             // padded to v128's alignment
+
+// Two words: no padding, no trailing slack beyond the strictest alignment.
+std::vector<WASM::CanonFieldType> pair(2);
+pair[0].storage.value.opcode = WASM::ValueTypeCode::I32;
+pair[1].storage.value.opcode = WASM::ValueTypeCode::I32;
+CHECK(WASM::gcStructFieldOffset(pair, 1) == 20);
+CHECK(WASM::gcStructSize(pair) == 24);
+
+// An empty struct is exactly its header.
+const std::span<const WASM::CanonFieldType> none{};
+CHECK(WASM::gcStructSize(none) == WASM::GcHeader::kHeaderBytes);
+}

@@ -2099,3 +2099,27 @@ TEST_CASE("sljit: a v128 parameter crosses the host boundary",
 	CHECK(reinterpret_cast<ScalarThenVector>(two->fnPtr)(two->context, 7,
 			AbiV128Arg{{5, 6, 7, 8}}) == 8);
 }
+
+
+TEST_CASE("sljit: struct.new and struct.get execute", "[sljit][module][parity][gc]")
+{
+	auto session = Sljit::createSession();
+	REQUIRE(session != nullptr);
+	WASM::RegistryImportResolver imports;
+	LoadedModule loaded = loadAndInstantiateTestModule("gc_struct", imports, *session);
+	REQUIRE(loaded.instance != nullptr);
+	WASM::ModuleInstance& instance = *loaded.instance;
+	const auto call = [&](const char* name) -> WASM::Callable {
+		const std::optional<WASM::Callable> callable = instance.exportedFunction(name);
+		INFO("export " << name);
+		REQUIRE(callable.has_value());
+		REQUIRE(callable->fnPtr != nullptr);
+		return *callable;
+	};
+
+	CHECK(WASM::callCallable<std::int32_t>(call("struct_roundtrip")) == 42);
+	CHECK(WASM::callCallable<std::int32_t>(call("struct_field_other")) == 7);
+	// Two distinct objects: `ref.eq` is false. This is the assertion the reference
+	// notes could not make until a GC object existed.
+	CHECK(WASM::callCallable<std::int32_t>(call("two_structs_not_equal")) == 0);
+}

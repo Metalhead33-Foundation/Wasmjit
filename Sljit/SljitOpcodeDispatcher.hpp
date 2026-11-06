@@ -427,6 +427,8 @@ protected:
 	void dispatchRefNull(const WASM::HeapType& arg) override; //!< `ref.null`.
 	void dispatchRefIsNull() override; //!< `ref.is_null`.
 	void dispatchBrOnNull(WASM::LabelIdx arg) override; //!< `br_on_null`.
+	void dispatchStructNew(WASM::TypeIdx arg) override; //!< `struct.new`.
+	void dispatchStructGet(WASM::TypeIdx arg1, uint32_t arg2) override; //!< `struct.get`.
 	void dispatchRefFunc(WASM::FuncIdx arg) override; //!< `ref.func`.
 	void dispatchRefAsNonNull() override; //!< `ref.as_non_null`.
 	void dispatchRefEq() override; //!< `ref.eq`.
