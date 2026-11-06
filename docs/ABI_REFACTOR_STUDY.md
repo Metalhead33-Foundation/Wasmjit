@@ -2387,3 +2387,68 @@ though it is unfinished.
 ### State
 
 No code changed; suite **21648 assertions in 734 test cases**, green; tree clean.
+
+## 47. CULPRIT FOUND: the harness's `jit_apply` marshalling gives one pointer per parameter (2026-11-06)
+
+Following `runOneScript` inward -- `runIsolated` -> the `Spec` command executor -> `invoke(*instance, action, ...)` --
+lands on **`TestBackend.cpp`**, which has two invocation paths:
+
+| Path | Condition | Marshalling |
+|---|---|---|
+| `v128AbiCall` | **every** parameter is `v128`, <= 4 of them | hand-written calls through `callWithV128Params<Ret>`, aggregate per vector |
+| `jit_apply` | everything else -- i.e. **any mixed signature** | `std::vector<void*>`, one pointer per wasm parameter |
+
+The second is the culprit:
+
+```cpp
+std::vector<void*> jitArguments;
+jitArguments.reserve(1 + arguments.size() + (multiResult ? 1 : 0));
+jitArguments.push_back(&vm);
+for (const void* argument : arguments)
+    jitArguments.push_back(const_cast<void*>(argument));   // ONE slot per wasm parameter
+```
+
+`jit_apply` demands **one argument slot per parameter in the compiled signature**. With the canonical two-slot rule the
+signature has two words per vector, so a mixed signature such as `(v128, i32)` needs **three** slots and this code
+hands over **two**: the second word is read from whatever the next `void*` happens to be, and the callee dereferences
+garbage. That is the segfault -- and it explains every observation:
+
+- **the pins pass**: they call `fnPtr` directly, never through `jit_apply`;
+- **`(v128) -> v128` passes**: all-vector signatures take the first path;
+- **the suites crash at the first command**: `i8x16.shl` is `(v128, i32)` -- mixed, therefore `jit_apply`;
+- **code generation is clean**: the fault is entirely in the caller;
+- **the count is invariant**: every fix attempted inside the backend was in the wrong layer.
+
+### The fix, exactly
+
+Expand a vector parameter into two pointers to its own 16 bytes before the `jit_apply` call:
+
+```cpp
+for (std::size_t i = 0; i < arguments.size(); ++i) {
+    if (functionType.params[i].val.opcode == WASM::ValueTypeCode::V128) {
+        const auto* bytes = static_cast<const std::uint8_t*>(arguments[i]);
+        jitArguments.push_back(const_cast<std::uint8_t*>(bytes));       // low word
+        jitArguments.push_back(const_cast<std::uint8_t*>(bytes + 8));   // high word
+    } else {
+        jitArguments.push_back(const_cast<void*>(arguments[i]));
+    }
+}
+```
+
+`jit_apply` dereferences each slot according to the signature's type, so pointing at `bytes` and `bytes + 8` supplies
+exactly the two `ulong` words the callee now expects, little-endian and low-first.
+
+### Why it cannot land alone
+
+The harness fix is only correct **together with** the two-slot signature change: applied to today's one-slot
+signature it would pass three words where two are expected. So the correct unit is:
+
+1. the backend change (§29-§31, already written and rehearsed),
+2. **this** harness expansion,
+3. the whole suite.
+
+That is the first time the missing piece of that unit has had a name. It was never in the backend.
+
+### State
+
+No code changed this round; suite **21648 assertions in 734 test cases**, green; tree clean.
