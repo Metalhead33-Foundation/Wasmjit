@@ -1071,6 +1071,22 @@ bool OpcodeDispatcher::beginFunction()
 			++floatParameters;
 	const std::uint32_t floatScratch = std::max<std::uint32_t>(3, floatParameters);
 	const sljit_s32 savedCount = nextSlot - 1;
+
+	// SLJIT requires every declared argument slot to own a saved register, and the
+	// target provides only SLJIT_NUMBER_OF_SAVED_REGISTERS of them (6 on x86-64).
+	// A `v128` parameter takes two slots, so `(v128, v128, v128)` needs seven and
+	// cannot be expressed. Refuse it here: letting `sljit_emit_enter` see the
+	// count would trip SLJIT's own assertion and abort the whole process, which
+	// would take down every other module in the run
+	// (docs/ABI_REFACTOR_STUDY.md §35, §36).
+	if (savedCount > SLJIT_NUMBER_OF_SAVED_REGISTERS) {
+		unsupportedReason_ = "the SLJIT backend cannot pass "
+			+ std::to_string(static_cast<unsigned>(savedCount))
+			+ " argument slots: the target has only "
+			+ std::to_string(SLJIT_NUMBER_OF_SAVED_REGISTERS)
+			+ ", so this signature needs fewer vector parameters";
+		return false;
+	}
 	emit(sljit_emit_enter(compiler_, 0, argTypes,
 			4 | SLJIT_ENTER_FLOAT(static_cast<sljit_s32>(floatScratch)),
 			savedCount, static_cast<sljit_s32>(frameSlots * kSlotBytes)));

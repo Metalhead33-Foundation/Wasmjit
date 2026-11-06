@@ -277,3 +277,45 @@ std::filesystem::path(WASM_TEST_DIR) / "v128_boundary_order.wasm");
 	WASM::ModuleInstance& sljitInstance = sljit->instantiate(*sljitModule, imports);
 	CHECK_FALSE(sljitInstance.v128ParameterIsAggregate());
 }
+
+TEST_CASE("a three-vector signature is refused, not crashed, by SLJIT",
+"[sljit][v128][abi][shapes]")
+{
+	// A signature needing seven argument slots cannot be expressed by SLJIT, whose
+	// targets provide six saved registers. It must be *refused* -- the export keeps
+	// a null entry point -- rather than tripping SLJIT's own argument assertion,
+// which aborts the process and takes every other module down with it
+// (docs/ABI_REFACTOR_STUDY.md §35/§36).
+auto runtime = WASM::Runtime::create("sljit");
+REQUIRE(runtime != nullptr);
+auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "v128_multi.wasm");
+WASM::RegistryImportResolver imports;
+WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+
+const std::optional<WASM::Callable> callable = instance.exportedFunction("three_lanes");
+REQUIRE(callable.has_value());
+CHECK(callable->fnPtr == nullptr);
+}
+
+TEST_CASE("the same three-vector signature compiles on LibJIT",
+"[libjit][v128][abi][shapes]")
+{
+// LibJIT spells a v128 as one 16-byte aggregate, so three vectors are four C
+// arguments and never approach a register-budget limit
+// (docs/backends/LIBJIT_ARGUMENT_DEFECT.md §8.1).
+auto runtime = WASM::Runtime::create("libjit");
+REQUIRE(runtime != nullptr);
+auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "v128_multi.wasm");
+WASM::RegistryImportResolver imports;
+WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+
+const std::optional<WASM::Callable> callable = instance.exportedFunction("three_lanes");
+REQUIRE(callable.has_value());
+REQUIRE(callable->fnPtr != nullptr);
+using Fn = std::int32_t (*)(void*, AbiBoundaryVector, AbiBoundaryVector, AbiBoundaryVector);
+CHECK(reinterpret_cast<Fn>(callable->fnPtr)(callable->context,
+AbiBoundaryVector{{1, 1, 1, 1}}, AbiBoundaryVector{{2, 2, 2, 2}},
+AbiBoundaryVector{{3, 3, 3, 3}}) == 6);
+}
