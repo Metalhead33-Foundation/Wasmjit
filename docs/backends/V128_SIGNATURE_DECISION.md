@@ -726,14 +726,41 @@ the survey passes those in registers.
 
 ### Migration plan
 
-This decision is P0 of the study's waterfall. The migration is P4, one backend at a time, LibJIT
-first; until a backend is converted, its `v128` handling stays on the internal convention it has
-today and is refused for C-callable exports rather than exported wrongly. The phases, their exit
-criteria and the two-tier rule are in [`../ABI_REFACTOR_STUDY.md`](../ABI_REFACTOR_STUDY.md) §4-§5.
+This decision is P0 of the study's waterfall. The migration is P4, one backend at a time; the
+phases, their exit criteria and the two-tier rule are in
+[`../ABI_REFACTOR_STUDY.md`](../ABI_REFACTOR_STUDY.md) §4-§5.
+
+### Compliance registry (2026-11-06)
+
+The migration has run. What each backend actually does, and where the record lives:
+
+| Backend | `v128` parameter | `v128` result | Status |
+|---|---|---|---|
+| **SLJIT** | two `W` slots, low first | caller-supplied 16-byte buffer | **canonical**, pinned by `[sljit][v128][order][abi]` and the `v128` result test |
+| **AsmJIT** | two `kUInt64`, low first | native vector register (not yet the buffer) | parameter **canonical** and asserted; result is a recorded gap |
+| **LibJIT** | one 16-byte aggregate | aggregate | **recorded deviation**, see below |
+
+**LibJIT deviation (D-L1).** libjit loses the sixth integer argument — the last one SysV passes
+in a register — so a three-vector signature (`ctx` + six words) corrupts the third parameter's low
+word. The defect is isolated and documented in
+[`LIBJIT_ARGUMENT_DEFECT.md`](LIBJIT_ARGUMENT_DEFECT.md), including the evidence that our IR is
+correct and the loss happens in libjit's code generation. LibJIT therefore keeps its own 16-byte
+aggregate spelling. On SysV that is the same ABI as two words, so nothing observable differs
+there; on MS x64 the aggregate is passed by reference, which is a divergence that holds only
+because of the policy below. The host boundary follows it: `WasmCallCache` asks the module
+instance for the spelling and describes the matching shape to libffi.
+
+**Policy (2026-11-06): cross-backend calls are illegal.** No call may have its caller compiled by
+one backend and its callee by another. This is what lets the three spellings above coexist: no
+call ever crosses between them, so the parameter rules never have to agree across backends. A
+backend-side guard for that case is therefore unnecessary; the policy is the guard.
 
 ### What is now closed
 
 - Open row **P1** in [`../ABI_PORTABILITY.md`](../ABI_PORTABILITY.md) §10.
 - The banner deferral on this note.
 - The question "is the aggregate spelling portable?" — it is not, on MS x64, and that is now the
-  recorded reason the aggregate was rejected rather than a reason to wait.
+  recorded reason the aggregate was rejected as the *canonical* rule rather than a reason to wait.
+- "Does every backend implement the rule?" — yes, canonically (SLJIT, AsmJIT parameters) or by
+  recorded deviation (LibJIT, AsmJIT results).
+
