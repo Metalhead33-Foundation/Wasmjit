@@ -1252,3 +1252,55 @@ Two backend pins now exist and both were written *before* the corresponding chan
 | `[sljit][v128][order][abi]` | SLJIT **already** matches the canonical two-word boundary | 7 assertions |
 
 Suite **21625 assertions in 731 cases**, green.
+
+## 22. P4 step 2 scoped: SLJIT *refuses* `v128` results; LibJIT crashes (2026-11-06)
+
+Reading the result path (`SljitOpcodeDispatcher.cpp:938-1060`) turns up a distinction the plan did not make,
+and it is the most useful one in the study.
+
+### SLJIT declines; LibJIT crashes
+
+```cpp
+if (resultKind_ == WASM::ValueTypeCode::V128) {
+    unsupportedReason_ = "the SLJIT backend does not lower v128 results yet";
+    resultKind_ = WASM::ValueTypeCode::Void;
+    resultWidth_ = 0;
+    return;
+}
+```
+
+SLJIT refuses a `v128` result **by name, in the support check, before emitting anything**. LibJIT does not:
+it commits to the aggregate and the crash arrives at run time, through the driver. Same gap, two very
+different failure modes -- and the clean one is not an accident of effort, it is where the check lives.
+
+### Meanwhile SLJIT's parameter side is confirmed in source
+
+`beginFunction` builds the argument list with exactly the two-slot walk the pin measures:
+
+```cpp
+if (paramWidths_[i] == 16) {
+    argTypes |= SLJIT_ARG_VALUE(SLJIT_ARG_TYPE_W, nextSlot);
+    argTypes |= SLJIT_ARG_VALUE(SLJIT_ARG_TYPE_W, nextSlot + 1);
+    nextSlot += 2;
+}
+```
+
+So the pin and the source agree, which is the position a pin is supposed to put a claim in.
+
+### What step 2 actually needs, now that the shape is known
+
+| Need | State |
+|---|---|
+| a way to carry 16 bytes out | **absent** -- SLJIT implements no multi-value buffer at all (`allReturns.size() > 1` is refused too) |
+| a return-register path | impossible for 16 bytes: one result register |
+| the buffer pointer's location | the decision's convention: through the multi-value buffer |
+
+So step 2 is not "add a width-16 case to `emitReturn`". It is: **introduce the results buffer into SLJIT**, which is
+simultaneously the multi-value support SLJIT lacks. The `v128` result is the first *user* of that machinery, not
+a parallel feature -- which is a strong argument for building it once, as multi-value, and letting `v128` fall out
+of it.
+
+That reframing is the deliverable of this step: **SLJIT's `v128` result and SLJIT's multi-value support are the
+same project**, and the decision's results-buffer rule is what unifies them.
+
+Suite **21625 assertions in 731 cases**, green; `abi-check.sh` OK; Doxygen 0 warnings; tree clean.
