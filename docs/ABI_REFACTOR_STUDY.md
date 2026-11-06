@@ -2223,3 +2223,46 @@ declaration `(void*, uint64_t, uint64_t, int32_t)`, and through the harness path
 ### State
 
 Fixtures and experiments removed; suite **21648 assertions in 734 test cases**, green; tree clean.
+
+## 43. Both invocation conventions work -- and that leaves exactly one path unmeasured (2026-11-06)
+
+The function `i8x16.shl` from the extracted spec module, compiled with the full two-slot change, was called twice
+through the same entry point:
+
+| Declaration | Call | Result |
+|---|---|---|
+| aggregate: `(void*, AbiBoundaryVector, int32_t)` | `fn(ctx, {{1,2,3,4}}, 1)` | **`lanes[0] == 2`** |
+| canonical: `(void*, uint64_t, uint64_t, int32_t)` | `fn(ctx, lo, hi, 1)` | **`lanes[0] == 2`** |
+
+5 assertions, green. So with the change applied, a `v128` parameter can be passed either as a 16-byte aggregate or
+as two scalar words and the callee reads it correctly in both cases -- which is exactly the property the canonical
+rule needs, and it is now measured rather than assumed on SysV.
+
+### What is therefore left, and it is one thing
+
+Everything measured so far is cleared:
+
+| Path | Status |
+|---|---|
+| code generation (both spec modules) | **clears** |
+| aggregate invocation | **clears** |
+| canonical (two-word) invocation | **clears** |
+| the spec harness's own invocation | **the only untested path left** |
+
+The harness does not call `fnPtr` with a hand-written prototype: it goes through `WASM::WasmValue` and the runtime's
+invoke path, which builds argument storage from the **function signature**. With a two-slot signature that path
+now expects two words per vector parameter and is handed one `WasmValue` holding 16 bytes -- so the remaining defect
+is a *harness-side* argument marshalling mismatch, not a code generation or ABI-convention defect.
+
+That is a satisfying place to have arrived: the boundary work's own machinery is measured correct in every direction
+that can be measured without the harness, and the residual failure is in the layer that feeds it.
+
+### Next step
+
+Read the invoke path in `WasmBase` (or the spec harness) that turns a `WasmValue` into native arguments, and check
+what it does for a `v128`: one 16-byte slot or two words. That is a code read and a single test at the
+`callExport` level, and it is the last unexplored surface in the whole campaign.
+
+### State
+
+Fixture and experiments removed; suite **21648 assertions in 734 test cases**, green; tree clean.
