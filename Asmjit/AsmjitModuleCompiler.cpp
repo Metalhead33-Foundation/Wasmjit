@@ -49,6 +49,31 @@ bool isFloatKind(WASM::ValueTypeCode kind) noexcept
 
 //! Slot width of one declared scalar value kind, or 0 when it is outside the
 //! scalar subset (references, v128).
+bool isReferenceKind(WASM::ValueTypeCode kind) noexcept
+{
+	switch (kind) {
+	case WASM::ValueTypeCode::Func:
+	case WASM::ValueTypeCode::FuncRef:
+	case WASM::ValueTypeCode::ExternRef:
+	case WASM::ValueTypeCode::AnyRef:
+	case WASM::ValueTypeCode::EqRef:
+	case WASM::ValueTypeCode::I31Ref:
+	case WASM::ValueTypeCode::StructRef:
+	case WASM::ValueTypeCode::ArrayRef:
+	case WASM::ValueTypeCode::ExnRef:
+	case WASM::ValueTypeCode::ContRef:
+	case WASM::ValueTypeCode::NullFuncRef:
+	case WASM::ValueTypeCode::NullExternRef:
+	case WASM::ValueTypeCode::NullExnRef:
+	case WASM::ValueTypeCode::NullRef:
+	case WASM::ValueTypeCode::Ref:
+	case WASM::ValueTypeCode::RefNull:
+		return true;
+	default:
+		return false;
+	}
+}
+
 int kindWidth(WASM::ValueTypeCode kind) noexcept
 {
 	switch (kind) {
@@ -59,7 +84,8 @@ int kindWidth(WASM::ValueTypeCode kind) noexcept
 	case WASM::ValueTypeCode::F64:
 		return 8;
 	default:
-		return 0;
+		// A reference is one machine word in the value model.
+		return isReferenceKind(kind) ? 8 : 0;
 	}
 }
 
@@ -475,6 +501,11 @@ WASM::Callable* asmjitResolveIndirectCallable(WASM::VMContext* vm, uint32_t tabl
 		}
 	}
 	return callable;
+}
+
+void* asmjitStructNew(WASM::VMContext* vm, uint32_t size, uint32_t typeIndex) noexcept
+{
+	return reinterpret_cast<WASM::ModuleInstance*>(vm)->allocateStructObject(size, typeIndex);
 }
 
 void asmjitReportNullReference() noexcept
@@ -2181,6 +2212,175 @@ protected:
 		const asmjit::Label label = target.kind == ControlKind::Loop ? target.begin : target.end;
 		checkError(compiler.test(reference, reference), "AsmJit br_on_null test failed");
 		checkError(compiler.jz(label), "AsmJit br_on_null branch failed");
+	}
+
+	void dispatchStructNewDefault(WASM::TypeIdx arg) override
+	{
+		const WASM::CoreTypeView view = module.typeView(arg);
+		if (view.kind() != WASM::CanonTypeKind::Struct)
+			throw std::runtime_error("AsmJit struct.new_default requires a struct type");
+		const std::span<const WASM::CanonFieldType> fields = view.structFields();
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke),
+				reinterpret_cast<uint64_t>(&asmjitStructNew), signature),
+				"AsmJit struct.new_default allocation call failed");
+		invoke->set_arg(0, vmContext);
+		invoke->set_arg(1, asmjit::Imm(static_cast<uint64_t>(WASM::gcStructSize(fields))));
+		invoke->set_arg(2, asmjit::Imm(static_cast<uint64_t>(arg)));
+		auto object = compiler.new_gp_ptr("structObject");
+		invoke->set_ret(0, object);
+		emitPendingTrapReturn();
+		for (std::size_t i = 0; i < fields.size(); ++i) {
+			if (fields[i].storage.isPacked)
+				throw std::runtime_error("AsmJit struct.new_default does not lower packed fields yet");
+			const int width = kindWidth(fields[i].storage.value.opcode);
+			if (width != 4 && width != 8)
+				throw std::runtime_error("AsmJit struct.new_default does not lower this field type yet");
+			const auto offset = static_cast<int32_t>(WASM::gcStructFieldOffset(fields, i));
+			if (width == 4)
+				checkError(compiler.mov(asmjit::x86::dword_ptr(object, offset),
+						static_cast<uint32_t>(0)), "AsmJit struct.new_default zeroing failed");
+			else
+				checkError(compiler.mov(asmjit::x86::qword_ptr(object, offset),
+						static_cast<uint64_t>(0)), "AsmJit struct.new_default zeroing failed");
+		}
+		values.push_back(object);
+	}
+
+	void dispatchStructNew(WASM::TypeIdx arg) override
+	{
+		const WASM::CoreTypeView view = module.typeView(arg);
+		if (view.kind() != WASM::CanonTypeKind::Struct)
+			throw std::runtime_error("AsmJit struct.new requires a struct type");
+		const std::span<const WASM::CanonFieldType> fields = view.structFields();
+		if (values.size() < fields.size())
+			throw std::runtime_error("AsmJit struct.new operand stack underflow");
+		// Fields are stacked in declaration order; store them in reverse.
+		std::vector<asmjit::x86::Gp> operands(fields.size());
+		for (std::size_t i = fields.size(); i-- > 0;) {
+			operands[i] = values.back();
+			values.pop_back();
+		}
+		const std::size_t size = WASM::gcStructSize(fields);
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke),
+				reinterpret_cast<uint64_t>(&asmjitStructNew), signature),
+				"AsmJit struct.new allocation call failed");
+		invoke->set_arg(0, vmContext);
+		invoke->set_arg(1, asmjit::Imm(static_cast<uint64_t>(size)));
+		invoke->set_arg(2, asmjit::Imm(static_cast<uint64_t>(arg)));
+		auto object = compiler.new_gp_ptr("structObject");
+		invoke->set_ret(0, object);
+		emitPendingTrapReturn();
+		for (std::size_t i = 0; i < fields.size(); ++i) {
+			const auto& field = fields[i];
+			if (field.storage.isPacked)
+				throw std::runtime_error("AsmJit struct.new does not lower packed fields yet");
+			const int width = kindWidth(field.storage.value.opcode);
+			if (width != 4 && width != 8)
+				throw std::runtime_error("AsmJit struct.new does not lower this field type yet");
+			const std::size_t offset = WASM::gcStructFieldOffset(fields, i);
+			if (width == 4)
+				checkError(compiler.mov(asmjit::x86::dword_ptr(object,
+						static_cast<int32_t>(offset)), operands[i]),
+						"AsmJit struct.new field store failed");
+			else
+				checkError(compiler.mov(asmjit::x86::qword_ptr(object,
+						static_cast<int32_t>(offset)), operands[i]),
+						"AsmJit struct.new field store failed");
+		}
+		values.push_back(object);
+	}
+
+	void dispatchStructSet(WASM::TypeIdx arg1, uint32_t arg2) override
+	{
+		const WASM::CoreTypeView view = module.typeView(arg1);
+		if (view.kind() != WASM::CanonTypeKind::Struct)
+			throw std::runtime_error("AsmJit struct.set requires a struct type");
+		const std::span<const WASM::CanonFieldType> fields = view.structFields();
+		if (arg2 >= fields.size())
+			throw std::runtime_error("AsmJit struct.set field index is out of range");
+		if (fields[arg2].storage.isPacked)
+			throw std::runtime_error("AsmJit struct.set does not lower packed fields yet");
+		const int width = kindWidth(fields[arg2].storage.value.opcode);
+		if (width != 4 && width != 8)
+			throw std::runtime_error("AsmJit struct.set does not lower this field type yet");
+		if (values.size() < 2)
+			throw std::runtime_error("AsmJit struct.set operand stack underflow");
+		auto value = values.back();
+		values.pop_back();
+		auto object = values.back();
+		values.pop_back();
+		const auto offset = static_cast<int32_t>(WASM::gcStructFieldOffset(fields, arg2));
+		asmjit::Label notNull = compiler.new_label();
+		checkError(compiler.test(object, object), "AsmJit struct.set null test failed");
+		checkError(compiler.jnz(notNull), "AsmJit struct.set null branch failed");
+		asmjit::FuncSignature nullSignature(asmjit::CallConvId::kCDecl);
+		nullSignature.set_ret(asmjit::TypeId::kVoid);
+		asmjit::InvokeNode* nullCall = nullptr;
+		checkError(compiler.invoke(asmjit::Out(nullCall),
+				reinterpret_cast<uint64_t>(&asmjitReportNullReference), nullSignature),
+				"AsmJit struct.set null trap emission failed");
+		emitPendingTrapReturn();
+		checkError(compiler.bind(notNull), "AsmJit struct.set label binding failed");
+		if (width == 4)
+			checkError(compiler.mov(asmjit::x86::dword_ptr(object, offset), value),
+					"AsmJit struct.set field store failed");
+		else
+			checkError(compiler.mov(asmjit::x86::qword_ptr(object, offset), value),
+					"AsmJit struct.set field store failed");
+	}
+
+	void dispatchStructGet(WASM::TypeIdx arg1, uint32_t arg2) override
+	{
+		const WASM::CoreTypeView view = module.typeView(arg1);
+		if (view.kind() != WASM::CanonTypeKind::Struct)
+			throw std::runtime_error("AsmJit struct.get requires a struct type");
+		const std::span<const WASM::CanonFieldType> fields = view.structFields();
+		if (arg2 >= fields.size())
+			throw std::runtime_error("AsmJit struct.get field index is out of range");
+		if (values.empty())
+			throw std::runtime_error("AsmJit struct.get operand stack underflow");
+		const auto& field = fields[arg2];
+		if (field.storage.isPacked)
+			throw std::runtime_error("AsmJit struct.get does not lower packed fields yet");
+		const int width = kindWidth(field.storage.value.opcode);
+		if (width != 4 && width != 8)
+			throw std::runtime_error("AsmJit struct.get does not lower this field type yet");
+		auto object = values.back();
+		values.pop_back();
+		const std::size_t offset = WASM::gcStructFieldOffset(fields, arg2);
+		// A null object traps, exactly as ref.as_non_null does.
+		asmjit::Label notNull = compiler.new_label();
+		checkError(compiler.test(object, object), "AsmJit struct.get null test failed");
+		checkError(compiler.jnz(notNull), "AsmJit struct.get null branch failed");
+		asmjit::FuncSignature nullSignature(asmjit::CallConvId::kCDecl);
+		nullSignature.set_ret(asmjit::TypeId::kVoid);
+		asmjit::InvokeNode* nullCall = nullptr;
+		checkError(compiler.invoke(asmjit::Out(nullCall),
+				reinterpret_cast<uint64_t>(&asmjitReportNullReference), nullSignature),
+				"AsmJit struct.get null trap emission failed");
+		emitPendingTrapReturn();
+		checkError(compiler.bind(notNull), "AsmJit struct.get label binding failed");
+		auto result = width == 4 ? compiler.new_gp32("structField")
+				: compiler.new_gp64("structField");
+		if (width == 4)
+			checkError(compiler.mov(result, asmjit::x86::dword_ptr(object,
+					static_cast<int32_t>(offset))), "AsmJit struct.get field load failed");
+		else
+			checkError(compiler.mov(result, asmjit::x86::qword_ptr(object,
+					static_cast<int32_t>(offset))), "AsmJit struct.get field load failed");
+		values.push_back(result);
 	}
 
 	void dispatchRefFunc(WASM::FuncIdx index) override

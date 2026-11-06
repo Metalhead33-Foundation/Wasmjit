@@ -2119,7 +2119,47 @@ TEST_CASE("sljit: struct.new and struct.get execute", "[sljit][module][parity][g
 
 	CHECK(WASM::callCallable<std::int32_t>(call("struct_roundtrip")) == 42);
 	CHECK(WASM::callCallable<std::int32_t>(call("struct_field_other")) == 7);
+	CHECK(WASM::callCallable<std::int32_t>(call("struct_default")) == 0);
+	// A reference local now exists, so `struct.set` and the *true* case of
+	// `ref.eq` are expressible for the first time.
+	CHECK(WASM::callCallable<std::int32_t>(call("struct_set_get")) == 99);
+	CHECK(WASM::callCallable<std::int32_t>(call("struct_eq_self")) == 1);
 	// Two distinct objects: `ref.eq` is false. This is the assertion the reference
 	// notes could not make until a GC object existed.
 	CHECK(WASM::callCallable<std::int32_t>(call("two_structs_not_equal")) == 0);
+}
+
+
+TEST_CASE("asmjit and sljit agree on struct.new and struct.get",
+"[sljit][asmjit][parity][gc]")
+{
+	WASM::Module module = loadTestModule("gc_struct");
+	AsmJitBackend::Context asmContext;
+	AsmJitBackend::ModuleCompiler asmCompiler(asmContext);
+	Sljit::ModuleCompiler sljitCompiler;
+	WASM::RegistryImportResolver asmImports;
+	WASM::RegistryImportResolver sljitImports;
+	std::unique_ptr<WASM::ModuleInstance> asmInstance =
+			asmCompiler.instantiate(module, asmImports);
+	std::unique_ptr<WASM::ModuleInstance> sljitInstance =
+			sljitCompiler.instantiate(module, sljitImports);
+	REQUIRE(asmInstance != nullptr);
+	REQUIRE(sljitInstance != nullptr);
+
+	const auto same = [&](const char* name, std::int32_t expected) {
+		const std::optional<WASM::Callable> asmCallable = asmInstance->exportedFunction(name);
+		const std::optional<WASM::Callable> sljitCallable = sljitInstance->exportedFunction(name);
+		REQUIRE(asmCallable.has_value());
+		REQUIRE(sljitCallable.has_value());
+		INFO("export " << name);
+		CHECK(WASM::callCallable<std::int32_t>(*asmCallable) == expected);
+		CHECK(WASM::callCallable<std::int32_t>(*sljitCallable) == expected);
+	};
+
+	same("struct_roundtrip", 42);
+	same("struct_field_other", 7);
+	same("struct_default", 0);
+	same("struct_set_get", 99);
+	same("struct_eq_self", 1);
+	same("two_structs_not_equal", 0);
 }

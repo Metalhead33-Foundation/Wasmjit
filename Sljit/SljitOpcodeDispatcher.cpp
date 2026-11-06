@@ -40,6 +40,31 @@ constexpr std::size_t kSlotBytes = 16;
 constexpr std::size_t kReservedSlots = 5;
 
 //! Width of a local in bytes, or 0 when the type is outside the supported subset.
+bool isReferenceKind(WASM::ValueTypeCode kind) noexcept
+{
+	switch (kind) {
+	case WASM::ValueTypeCode::Func:
+	case WASM::ValueTypeCode::FuncRef:
+	case WASM::ValueTypeCode::ExternRef:
+	case WASM::ValueTypeCode::AnyRef:
+	case WASM::ValueTypeCode::EqRef:
+	case WASM::ValueTypeCode::I31Ref:
+	case WASM::ValueTypeCode::StructRef:
+	case WASM::ValueTypeCode::ArrayRef:
+	case WASM::ValueTypeCode::ExnRef:
+	case WASM::ValueTypeCode::ContRef:
+	case WASM::ValueTypeCode::NullFuncRef:
+	case WASM::ValueTypeCode::NullExternRef:
+	case WASM::ValueTypeCode::NullExnRef:
+	case WASM::ValueTypeCode::NullRef:
+	case WASM::ValueTypeCode::Ref:
+	case WASM::ValueTypeCode::RefNull:
+		return true;
+	default:
+		return false;
+	}
+}
+
 int widthOf(const WASM::ValueType& type)
 {
 	switch (type.opcode) {
@@ -52,7 +77,8 @@ int widthOf(const WASM::ValueType& type)
 	case WASM::ValueTypeCode::V128:
 		return 16;
 	default:
-		return 0;
+		// A reference is one machine word in a slot.
+		return isReferenceKind(type.opcode) ? 8 : 0;
 	}
 }
 
@@ -3079,6 +3105,39 @@ void OpcodeDispatcher::dispatchBrOnNull(WASM::LabelIdx depth)
 		sljit_set_label(notNull, skip);
 }
 
+void OpcodeDispatcher::dispatchStructNewDefault(WASM::TypeIdx arg)
+{
+	if (!reachable_)
+		return;
+	const WASM::CoreTypeView view = module_.typeView(arg);
+	require(view.kind() == WASM::CanonTypeKind::Struct, "struct.new_default requires a struct type");
+	const std::span<const WASM::CanonFieldType> fields = view.structFields();
+	if (!measureOnly_) {
+		loadContext(SLJIT_R0);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R1, 0, SLJIT_IMM,
+				static_cast<sljit_sw>(WASM::gcStructSize(fields))));
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R2, 0, SLJIT_IMM,
+				static_cast<sljit_sw>(arg)));
+		emitHelper(SLJIT_ARGS3(P, P, 32, 32), &sljitStructNew);
+		// Default fields are zero; the heap does not promise pre-zeroed memory.
+		for (std::size_t i = 0; i < fields.size(); ++i) {
+			require(!fields[i].storage.isPacked, "the SLJIT backend does not lower packed struct fields yet");
+			const WASM::ValueTypeCode opcode = fields[i].storage.value.opcode;
+			const int width = (opcode == WASM::ValueTypeCode::I32
+					|| opcode == WASM::ValueTypeCode::F32) ? 4 : 8;
+			require(opcode != WASM::ValueTypeCode::V128,
+					"the SLJIT backend does not lower v128 struct fields yet");
+			emit(sljit_emit_op1(compiler_, width == 4 ? SLJIT_MOV32 : SLJIT_MOV,
+					SLJIT_MEM1(SLJIT_R0),
+					static_cast<sljit_sw>(WASM::gcStructFieldOffset(fields, i)),
+					SLJIT_IMM, 0));
+		}
+	}
+	push(8);
+	if (!measureOnly_)
+		storeSlot(SLJIT_R0, stackWidths_.size() - 1, 8);
+}
+
 void OpcodeDispatcher::dispatchStructNew(WASM::TypeIdx arg)
 {
 	if (!reachable_)
@@ -3116,6 +3175,44 @@ void OpcodeDispatcher::dispatchStructNew(WASM::TypeIdx arg)
 	push(8);
 	if (!measureOnly_)
 		storeSlot(SLJIT_R0, stackWidths_.size() - 1, 8);
+}
+
+void OpcodeDispatcher::dispatchStructSet(WASM::TypeIdx arg1, uint32_t arg2)
+{
+	if (!reachable_)
+		return;
+	const WASM::CoreTypeView view = module_.typeView(arg1);
+	require(view.kind() == WASM::CanonTypeKind::Struct, "struct.set requires a struct type");
+	const std::span<const WASM::CanonFieldType> fields = view.structFields();
+	require(arg2 < fields.size(), "struct.set field index is out of range");
+	requireStack(2);
+	require(!fields[arg2].storage.isPacked, "the SLJIT backend does not lower packed struct fields yet");
+	const WASM::ValueTypeCode opcode = fields[arg2].storage.value.opcode;
+	require(opcode != WASM::ValueTypeCode::V128,
+			"the SLJIT backend does not lower v128 struct fields yet");
+	const int width = (opcode == WASM::ValueTypeCode::I32
+			|| opcode == WASM::ValueTypeCode::F32) ? 4 : 8;
+	if (!measureOnly_) {
+		loadSlot(SLJIT_R1, stackWidths_.size() - 2, 8);
+		sljit_jump* notNull = sljit_emit_cmp(compiler_, SLJIT_NOT_EQUAL,
+				SLJIT_R1, 0, SLJIT_IMM, 0);
+		if (notNull == nullptr)
+			ok_ = false;
+		emitHelper(SLJIT_ARGS0V(), &sljitReportNullReference);
+		emitTrapBranch();
+		sljit_label* done = sljit_emit_label(compiler_);
+		if (done == nullptr)
+			ok_ = false;
+		else if (notNull != nullptr)
+			sljit_set_label(notNull, done);
+		loadSlot(SLJIT_R2, stackWidths_.size() - 1, width);
+		emit(sljit_emit_op1(compiler_, width == 4 ? SLJIT_MOV32 : SLJIT_MOV,
+				SLJIT_MEM1(SLJIT_R1),
+				static_cast<sljit_sw>(WASM::gcStructFieldOffset(fields, arg2)),
+				SLJIT_R2, 0));
+	}
+	pop();
+	pop();
 }
 
 void OpcodeDispatcher::dispatchStructGet(WASM::TypeIdx arg1, uint32_t arg2)
