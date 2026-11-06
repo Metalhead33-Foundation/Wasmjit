@@ -1546,3 +1546,52 @@ decision. It must be corrected in the same commit that changes the signature, no
 describes what the code does).
 
 Suite **21628 assertions in 731 cases**, green; `abi-check.sh` OK (0 removed); Doxygen 0 warnings; tree clean.
+
+## 28. P4 step 3 done: AsmJit's parameter boundary is two scalar words (2026-11-06)
+
+`translateFunctionType` now expands a `v128` parameter into **two `kUInt64`** arguments, low word first:
+
+```cpp
+for (int word = 0; word < 2; ++word) {
+    if (!signature.can_add_arg())
+        throw std::runtime_error("AsmJit ABI translation: function has too many arguments");
+    signature.add_arg(asmjit::TypeId::kUInt64);
+}
+continue;
+```
+
+and `translateValueType`'s `V128` comment now says what the type *is* rather than what the ABI used
+to be: the native vector type is the **internal** materialisation (lane operations, result register) and
+deliberately **not** the argument boundary.
+
+### A test was enshrining the wrong ABI
+
+`"AsmJit lowers V128 as a native 128-bit vector ABI value"` asserted `arg(1) == kInt32x4` -- i.e. the suite
+required the vector-register boundary. It is now `"AsmJit passes V128 as two scalar words, not a vector
+register"`, expecting `arg_count() == 3` with `arg(1)`/`arg(2)` as `kUInt64`. That is the same pattern as
+SLJIT's refusal test in §26: **a test naming a non-canonical convention as if it were the ABI**, which is why no
+amount of passing tests ever surfaced it.
+
+### What deliberately did not change
+
+| Thing | State | Why |
+|---|---|---|
+| `translateValueType(V128)` -> `kInt32x4` | kept | it is the internal/vector type for lane ops; the boundary is now elsewhere |
+| the `v128` **result** | still `kInt32x4` | it must move to the caller's buffer, but only with the write path (§24) |
+| prologue assembly + call-site re-pack | **not done** | AsmJit does not claim `v128` functions today, so there is no working path to keep in step yet |
+
+The last row is the honest limit of this step: the *signature* is canonical, the *body plumbing* (reading two
+argument registers into the 16-byte buffer, and re-packing at call sites) belongs with the commit that first
+compiles a `v128`-signature function in AsmJit -- together with fixing the prologue's
+`newIntegerRegister(..., V128)` path, which would currently pick a 32-bit register for a 16-byte parameter.
+
+### Where the three backends stand now
+
+| Backend | parameter boundary | result boundary |
+|---|---|---|
+| **SLJIT** | two `W` slots -- **canonical, with a pin** | caller's buffer -- **canonical, measured** |
+| **LibJIT** | 16-byte aggregate, one slot | aggregate (works today); buffer once the trigger is safe |
+| **AsmJit** | two `kUInt64` -- **canonical, asserted** | native vector register (remaining divergence) |
+
+Suite **21629 assertions in 731 cases**, green; `[headerdoc]` green; `[docs]` green; `abi-check.sh` OK
+(0 removed); Doxygen 0 warnings; tree clean.
