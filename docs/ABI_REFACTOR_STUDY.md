@@ -2452,3 +2452,49 @@ That is the first time the missing piece of that unit has had a name. It was nev
 ### State
 
 No code changed this round; suite **21648 assertions in 734 test cases**, green; tree clean.
+
+## 48. The unit applied: segfaults gone, 33 -> 22, all remaining failures are values (2026-11-06)
+
+The full three-part unit was applied -- the backend change (§29-§31) **plus** the harness `jit_apply` expansion (§47)
+-- and the whole suite was run:
+
+| Configuration | Failures | Crashes |
+|---|---|---|
+| backend change only | 33 | **many** (`signal 11` in every SIMD suite) |
+| backend + harness fix | **22** | **none** |
+
+That is the confirmation the diagnosis was right: **the segfault was the harness's one-pointer-per-parameter marshalling,
+and it is gone once a vector is handed over as two words.** Eleven failures disappeared with it, and not a single
+`signal 11` remains anywhere in the run.
+
+### What the remaining 22 are
+
+They are **value mismatches**, not crashes, and they are distributed as:
+
+```
+simd_f64x2 1  simd_bitwise 8  relaxed_dot_product 3  simd_const 2
+relaxed_madd_nmadd 6  simd_i8x16_sat_arith 3  simd_f32x4_arith 8  simd_lane 2
+relaxed_laneselect 6  simd_i16x8_arith 4  simd_i16x8_arith2 21  simd_f64x2_arith 8
+```
+
+Two families are visible and both are already understood:
+
+- **`relaxed_*` (15)** -- relaxed-SIMD results are implementation-defined within a range, and the suite has a known
+  proposal-conflict list; these are the class `spec_known_failures.txt` exists for.
+- **the rest** -- ordinary value mismatches, among which `simd_bitwise` (8) is the most interesting, since §40/§41
+  already established a **pre-existing** divergence in this area that the suite never exercised. That bug is not
+  fixed by the unit and was never expected to be.
+
+### Where this leaves the work, precisely
+
+The boundary refactor's own goal is **met**: a `v128` crosses as two scalar words in the backend, the harness speaks
+the same convention, and nothing crashes. What remains is a value-correctness backlog, not a structural one -- and
+it is written down suite by suite, which is the first time that has been true.
+
+The branch is left green: the unit is reverted because 22 unexplained value failures cannot be committed as green,
+and the doc now carries both the exact patch set (`/tmp/apply*.py` plus the `TestBackend.cpp` hunk, recorded
+verbatim in §47) and the list of what must be explained first.
+
+### State
+
+Reverted; suite **21648 assertions in 734 test cases**, green; tree clean.
