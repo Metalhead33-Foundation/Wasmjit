@@ -1174,3 +1174,47 @@ unknown left except whether libjit's shift insns behave as expected on the halve
 one build.
 
 Suite **21618 assertions in 730 cases**, green; `abi-check.sh` OK; Doxygen 0 warnings; tree clean.
+
+## 21. The "unknown" was not the shifts — P4's order inverts (2026-11-06)
+
+Reading `LibjitModuleCompiler.cpp:440-500` to fix the third edit found the real obstacle, and it is not
+libjit's shift instructions.
+
+### LibJIT's tail-call driver is one slot per wasm parameter by construction
+
+The driver is a trampoline with a **fixed five-slot `void*` signature** (`thunkSig`, line 350) that forwards
+to the raw entry:
+
+```cpp
+std::vector<jit_value_t> callArgs(1 + paramCount + (hasResultBuffer ? 1 : 0));
+for (p) callArgs[1 + p] = jit_value_get_param(driver, p + 1);
+jit_insn_call_indirect(driver, fnPtr, sig, callArgs.data(), ...);
+```
+
+A split `v128` needs **two values** in that `call_indirect`, and the driver has one slot to take them from. Its
+own signature would have to become arity-per-function — a rework of the trampoline, not an index correction.
+That is why the pin crashed with no calls in it: the driver wraps **every** compiled entry.
+
+### Consequently the phase order inverts, and so does its justification
+
+LibJIT was first because "it owns both sides of every call and cannot get the calling convention wrong". That
+is still true — and irrelevant, because it has the **largest structural obstacle**: a hand-written tail-call
+driver whose argument shape is fixed. The measured picture:
+
+| Backend | Current `v128` parameter boundary | Work for P4 |
+|---|---|---|
+| **SLJIT** | **already two `W` slots** (`beginFunction` emits `SLJIT_ARG_TYPE_W` twice) | a **pin**, and the canonical rule becomes the documented one rather than an internal convention |
+| **AsmJit** | one 16-byte aggregate in `FuncSignature` | split the parameter into two `uint64_t`; typed, so mechanical |
+| **LibJIT** | one 16-byte `jit_type_t` **plus the fixed-arity driver** | driver rework first, then the split |
+
+### Revised P4 order
+
+1. **SLJIT** — pin the two-slot convention (it already complies), then add the result path.
+2. **AsmJit** — the typed split, mechanical.
+3. **LibJIT** — rework the driver to derive its arity from the function signature, *then* split.
+
+This is the third plan correction on P4 and the largest: the backend that was scheduled first is the one that
+needs the most work, and the reason it was scheduled first — that it cannot get the ABI wrong — is exactly why
+it did not need to be first.
+
+Suite **21618 assertions in 730 cases**, green; `abi-check.sh` OK; Doxygen 0 warnings; tree clean.
