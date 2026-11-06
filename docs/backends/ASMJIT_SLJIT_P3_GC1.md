@@ -1444,3 +1444,56 @@ carries one result, not a parameter list).
 
 `wasm_type_kind` is still the one missing predicate, and with `typeIndexForId` +
 `typeView(...).kind()` it is now a small addition.
+
+## 32. The second predicate: `typeIdMatchesAbstractKind` (2026-11-06)
+
+`wasm_type_kind` from [`GC_PLAN.md`](GC_PLAN.md) §12 is in the tree as
+`ModuleInstance::typeIdMatchesAbstractKind`, and — following §30's rule — it is **proven by a
+test before any backend uses it**. The core test now asserts, with no codegen involved:
+
+| Query | Result |
+|---|---|
+| `($s, struct)` on a struct type | true |
+| `($t, struct)` on a struct subtype | true |
+| `($s, any)` / `($s, eq)` | true |
+| `($s, array)` | false |
+| `($s, func)` | false |
+
+It resolves the header's store-scoped id through `typeIndexForId`, then classifies the type
+with `typeView(...).kind()`: `struct` and `array` are exact, `any` and `eq` are the union of
+the two. Twelve assertions pass.
+
+### One deliberate limit, stated in the API
+
+A function or external reference is **not** a header-tagged object, so a type-id query cannot
+answer for it. The predicate returns `false` for `func`/`extern`, and the backends must
+therefore keep **refusing** `ref.test (ref func)` rather than asking — a `false` there would be
+a wrong answer, not a missing feature. The rule is in the header comment so a future author
+does not "fix" it by wiring the call through.
+
+### Where the wiring stands
+
+| Piece | State |
+|---|---|
+| `typeIdIsSubtype` (core) | **done**, tested |
+| `typeIdMatchesAbstractKind` (core) | **done**, tested |
+| `sljitTypeIsSubtype` / `sljitTypeIdMatchesKind` (helpers) | **done**, `sljitTypeIsSubtype` wired and parity-tested |
+| `ref.test`/`ref.cast` on `(ref struct)`/`(ref array)`/`(ref any)`/`(ref eq)` | **not wired** — still refused by name |
+| AsmJit equivalent of the kind helper | not added |
+
+The remaining work is the same three-site rewiring as §30/§31, with one difference that makes
+it safe: the *predicate* is already proven, so a wrong result can only come from the call
+itself, and §30 has now documented exactly how that goes wrong on SLJIT (argument index by
+arity) and why it cannot on AsmJit (named arguments).
+
+### The pattern this whole gate has established
+
+Three times in this gate the same order was decisive:
+
+1. **Predicate in the core, tested without a backend** — cheap, and it eliminates the
+   hypothesis "the predicate is wrong" that wasted two full rounds at §28/§29.
+2. **One backend site, one test** — localises the fault to marshalling.
+3. **The second backend, then the parity case** — AsmJit took one edit where SLJIT took three.
+
+That is the re-usable answer for every remaining gate: A (`br_on_non_null`, then the cast
+branches), the loop-emitting array ops, and Gate D's sweep.

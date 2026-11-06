@@ -1491,6 +1491,27 @@ bool ModuleInstance::growTable(uint32_t tableIdx, uint64_t deltaEntries) {
 	return store().growTable(internals.tableRefs[tableIdx], deltaEntries);
 }
 
+bool ModuleInstance::typeIdMatchesAbstractKind(uint32_t typeId, uint32_t kind) const
+{
+	const std::optional<uint32_t> index = module->typeIndexForId(TypeId {typeId});
+	if (!index)
+		return false;
+	const CoreTypeView view = module->typeView(*index);
+	const bool isStruct = view.kind() == CanonTypeKind::Struct;
+	const bool isArray = view.kind() == CanonTypeKind::Array;
+	switch (static_cast<AbstractHeapType>(static_cast<std::int32_t>(kind))) {
+	case AbstractHeapType::Struct:
+		return isStruct;
+	case AbstractHeapType::Array:
+		return isArray;
+	case AbstractHeapType::Any:
+	case AbstractHeapType::Eq:
+		return isStruct || isArray;
+	default:
+		return false;
+	}
+}
+
 bool ModuleInstance::typeIdIsSubtype(uint32_t actualTypeId, uint32_t expectedTypeId) const
 {
 	if (actualTypeId == expectedTypeId)

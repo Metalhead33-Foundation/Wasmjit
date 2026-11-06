@@ -354,6 +354,14 @@ public:
 	//! This is the runtime half of `Module::isSubtype`: the header carries a
 	//! store-scoped id, so the module-local indices are recovered first.
 	bool typeIdIsSubtype(uint32_t actualTypeId, uint32_t expectedTypeId) const;
+	//! Tests whether a runtime type id belongs to an abstract heap kind.
+	//! \param typeId The type id stored in the object header.
+	//! \param kind The abstract heap type, as an `AbstractHeapType` value.
+	//! \return true when the type is of that kind.
+	//! Only the kinds a GC object can have are answered: `struct`, `array`, and the
+	//! `any`/`eq` supertypes of both. Function and external references are not
+	//! header-tagged objects, so they answer false here.
+	bool typeIdMatchesAbstractKind(uint32_t typeId, uint32_t kind) const;
 	//! Custom Descriptors: the RTT/descriptor reference stored in a struct's
 	//! header, or nullptr for a null/non-struct reference. `ref.get_desc` traps
 	//! when this returns nullptr.

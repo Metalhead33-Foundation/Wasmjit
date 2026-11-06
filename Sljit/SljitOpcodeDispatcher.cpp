@@ -146,6 +146,12 @@ extern "C" uint32_t sljitTypeIsSubtype(WASM::VMContext* vm, uint32_t actual,
 	return reinterpret_cast<WASM::ModuleInstance*>(vm)->typeIdIsSubtype(actual, expected) ? 1u : 0u;
 }
 
+extern "C" uint32_t sljitTypeIdMatchesKind(WASM::VMContext* vm, uint32_t typeId,
+		uint32_t kind) noexcept
+{
+	return reinterpret_cast<WASM::ModuleInstance*>(vm)->typeIdMatchesAbstractKind(typeId, kind) ? 1u : 0u;
+}
+
 extern "C" void* sljitArrayNew(WASM::VMContext* vm, uint32_t typeIndex, uint32_t length) noexcept
 {
 	return reinterpret_cast<WASM::ModuleInstance*>(vm)->allocateArrayObject(typeIndex, length);

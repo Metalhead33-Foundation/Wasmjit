@@ -2738,6 +2738,16 @@ TEST_CASE("the runtime subtype predicate follows sub declarations",
 	CHECK(instance.typeIdIsSubtype(t, t));
 	CHECK(instance.typeIdIsSubtype(t, s));
 	CHECK_FALSE(instance.typeIdIsSubtype(s, t));
+	// Abstract kinds: `$s` is a struct, so `struct` and `any`/`eq` match it.
+	const auto kindOf = [](WASM::AbstractHeapType kind) {
+		return static_cast<std::uint32_t>(static_cast<std::int32_t>(kind));
+	};
+	CHECK(instance.typeIdMatchesAbstractKind(s, kindOf(WASM::AbstractHeapType::Struct)));
+	CHECK(instance.typeIdMatchesAbstractKind(t, kindOf(WASM::AbstractHeapType::Struct)));
+	CHECK(instance.typeIdMatchesAbstractKind(s, kindOf(WASM::AbstractHeapType::Any)));
+	CHECK(instance.typeIdMatchesAbstractKind(s, kindOf(WASM::AbstractHeapType::Eq)));
+	CHECK_FALSE(instance.typeIdMatchesAbstractKind(s, kindOf(WASM::AbstractHeapType::Array)));
+	CHECK_FALSE(instance.typeIdMatchesAbstractKind(s, kindOf(WASM::AbstractHeapType::Func)));
 }
 
 
