@@ -2031,3 +2031,47 @@ mechanical: name the function, then read it.
 ### State
 
 Backend unchanged; experiment reverted; suite **21648 assertions in 734 test cases**, green; tree clean.
+
+## 38. Instrumented bisect: the signature is not the trigger, the opcode is (2026-11-06)
+
+A temporary `fprintf` at the head of `compileFunction` printed the function index, type index, parameter count,
+number of `v128` parameters and result count. With the full change applied, `[spec]` was run and the last line
+before each crash read:
+
+| Suite | Last function compiled |
+|---|---|
+| `simd_load8_lane` | `fn=46 type=0 params=2 v128params=1 results=1` |
+| `simd_store16_lane` | `fn=30 type=0 params=2 v128params=1 results=1` |
+| `simd_load64_lane` | `fn=10 type=0 params=2 v128params=1 results=1` |
+| **`simd_bit_shift`** | **`fn=22 type=1 params=1 v128params=1 results=1`** |
+
+### The decisive line is `simd_bit_shift`
+
+That signature is `(v128) -> v128` -- and a minimal fixture with **exactly that signature passed**, twice: the
+`(v128) -> v128` roundtrip in §37 and this run's own fixtures. So:
+
+> **The failing signal is not the signature shape at all. Identical signatures compile and run correctly in a
+> hand-written module and crash in the spec scripts.** The trigger is therefore in the **body** -- the opcode
+> lowering -- not in the parameter boundary.
+
+That retro-explains the whole elimination record: three candidate ABI fixes changed nothing because the ABI path
+was already correct; six shapes passed because they were the wrong axis. The parameter boundary has now been
+measured correct from every angle available.
+
+### The opcode families to bisect next, in order of cost
+
+1. **`i8x16.shl` / `.shr_s` / `.shr_u`** (`simd_bit_shift`, one parameter, one result): a 10-line fixture --
+   `(func (export "shift") (param v128) (result v128) local.get 0 i32.const 1 i8x16.shl)` -- is the smallest
+   possible reproducer and needs one build.
+2. **`v128.load8_lane` / `store8_lane`** (`simd_load8_lane`, `simd_store8_lane`): a v128 operand *plus* a memory
+   operand, so of the two families this one is more likely to be touching the operand's storage.
+3. **`v128.and` / `or` / `xor`** (`simd_bitwise`): pure helpers, included only because the suite fails.
+
+A plausible mechanism worth checking first in each: these ops take the vector operand and may write into or take
+the address of **the value that arrived as a parameter**. That value is now a slot the prologue synthesised,
+whereas before the change it was the parameter itself -- a difference that only shows up in ops that treat the
+operand as mutable storage, which is exactly the three families above and none of the six passing shapes.
+
+### State
+
+Instrumentation removed, experiment reverted; suite **21648 assertions in 734 test cases**, green; tree clean.
