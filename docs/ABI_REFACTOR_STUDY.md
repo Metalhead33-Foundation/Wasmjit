@@ -1004,7 +1004,7 @@ arguments exactly as the emitted signature does, because the cast is unchecked.*
 
 The pin now asserts **both** families in one case: `wasm_v128` present and `arg0_lo` absent for the guest
 side; `uint64_t arg0_lo, uint64_t arg0_hi` present and `wasm_v128 arg0` absent for the native side.
-`[bindings][v128]` is **20 assertions**; `[bindings]` **955**; full suite **21614 in 729 cases**, green.
+`[bindings][v128]` is **20 assertions**; `[bindings]` **955**; full suite **21611 in 729 cases**, green.
 
 Two mechanical mistakes on the way — the helper landed after its first use, and the brace-less `for`
 swallowed only one of two inserted statements — both caught immediately because the *pin* defined what
