@@ -2302,3 +2302,58 @@ call" entry, and the pins never called it.
 ### State
 
 No code changed; suite **21648 assertions in 734 test cases**, green; tree clean.
+
+## 45. The marshalling layer found -- and its *result* path is the last divergence (2026-11-06)
+
+Searching with the codebase's own vocabulary (`ValueKind::V128`, `argSlotCount`) instead of "invoke" located it
+immediately: `WasmBase/WasmBackendAbi.hpp` owns `argSlotCount` / `mapArgSlots`, and
+**`WasmBase/WasmCallCache.cpp` is the marshaller** that turns a wasm call into a native one through a libffi `cif`.
+
+### What it already gets right
+
+```cpp
+const std::uint32_t slots = argSlotCount(valueKindOf(parameter.value.opcode));
+if (slots == 1) {
+    entry.argTypes.push_back(ffiTypeFor(parameter));
+} else {
+    for (std::uint32_t slot = 0; slot < slots; ++slot)
+        entry.argTypes.push_back(&ffi_type_uint64);   // two scalar words
+}
+```
+
+The **parameter** rule is implemented there exactly as the decision prescribes -- two `uint64` words, driven by
+`argSlotCount` -- so the marshaller and the (changed) LibJIT signature agree on parameters. That closes the
+question §43 left open.
+
+### What it does not
+
+```cpp
+entry.returnType = view.funcResults().empty() || entry.multiResult
+    ? &ffi_type_void
+    : ffiTypeFor(view.funcResults().front());
+```
+
+A single `v128` result takes the `ffiTypeFor(result)` branch -- i.e. the marshaller asks libffi to return a
+**16-byte aggregate**, while the decision (§28) and the SLJIT implementation (§26) both say a `v128` result crosses
+through the **caller-supplied buffer**, exactly like a multi-value tuple. `needsResultBuffer()` (§23) was added to
+the core for precisely this and is not used here.
+
+### So the fix has a name and a home
+
+`WasmCallCache.cpp`'s result branch should be driven by `WASM::needsResultBuffer(...)`, not by
+`funcResults().size() > 1`, and should emit `ffi_type_pointer` + `ffi_type_void` for a `v128` result the same way it
+already does for a multi-value tuple. That is the last place where the canonical rule is stated but not applied, and
+it is the one the spec harness reaches.
+
+### Two secondary findings worth keeping
+
+1. **`mapArgSlots` exists and libjit does not use it.** Its docstring warns that hand-computed slot walks "produced
+   three separate corruption investigations in a positional backend" -- which is exactly what this study spent
+   fifteen rounds doing by hand. The libjit slot walks (prologue, driver, call sites) should be expressed through
+   `mapArgSlots`, turning three manual walks into one shared contract.
+2. **The marshaller is the single point every invocation crosses**, which is why no hand-written pin could find
+   this: the pins call `fnPtr` directly, and this path goes through libffi.
+
+### State
+
+No code changed this round; suite **21648 assertions in 734 test cases**, green; tree clean.
