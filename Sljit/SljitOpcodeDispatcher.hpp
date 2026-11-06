@@ -690,6 +690,7 @@ private:
 	//! Probes the pending-trap slot and branches to the trap epilogue when set.
 	void emitPendingTrapCheck();
 	//! Emits an unconditional branch to the trap epilogue.
+	void emitTrap(WASM::TrapKind kind); //!< Reports one trap kind and leaves the block.
 	void emitTrapBranch();
 	/*!
 	 * \brief Emits a two-operand integer operation over the top two slots.

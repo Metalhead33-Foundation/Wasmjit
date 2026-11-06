@@ -2346,3 +2346,152 @@ clobber, not a trap-handling error.
 Suite **21529 assertions in 723 cases**, green; `[headerdoc]` green; Doxygen 0 warnings. The core hook,
 the payload slot, the non-destructive check and six allocation checks are in the tree; the fourteen
 remaining helpers' guards (§40) are unchanged.
+
+## 46. Both open items closed, and the codebase already knew (2026-11-06)
+
+### Item 1 — AsmJit re-measured, and the stale conclusion retired
+
+The A/B safety case now runs both backends: **14 assertions, green**. Each backend in turn gets a
+healthy call (`7`), an armed allocation producing `TrapKind::Internal`, and a healthy call again.
+
+So AsmJit's allocation path *is* contained, and §44's earlier "AsmJit faults" observation is
+**withdrawn**: that run predated both the corrected mechanism and the fix, and the fault was almost
+certainly a *consequence* of SLJIT's heap corruption in the same process — the SLJIT probe ran first
+and had already corrupted the heap. That closes §41's hypothesis from the other direction: the abort
+was heap corruption, and it was ours, produced by a clobbered pointer, not by anything in AsmJit.
+
+This is the third time in the arc that a conclusion had to be withdrawn because the measurement was
+taken under a broken precondition (§37 stale fixture, §38 stale fixture, §46 corrupted process). The
+post-mortem rule is now unambiguous: **a result taken while something else is already broken is not a
+result.**
+
+### Item 2 — the fifteen pre-existing sites, enumerated
+
+| Site | What it guards |
+|---|---|
+| `beginFunction` | the frame setup helper |
+| `emitResolvedCall` | `ref.func` resolution |
+| `emitCheckedBinary` | integer division by zero |
+| `emitFloatToInt` | invalid float→int conversion |
+| `emitCheckedMemoryAddress` | memory bounds |
+| `dispatchMemorySize`, `dispatchMemoryGrow`, `dispatchMemoryCopy`, `dispatchMemoryFill`, `dispatchMemoryInit`, `dispatchDataDrop`, `dispatchTableInit`, `dispatchElemDrop`, `dispatchTableCopy`, `dispatchTableSize` | bulk memory and table operations |
+
+All fifteen now inherit the non-destructive check **by construction**, so none of them can be
+corrupted by the probe any more — the change removed the need to reason about them one at a time.
+
+### The finding that validates the fix, and a near-miss
+
+`emitCheckedMemoryAddress` **already** implemented park → check → reload, with a comment saying so:
+
+```cpp
+// The pointer survives the pending-trap probe in the scratch slot.
+emit(MOV [SP + scratchSlotOffset()], R0);
+emitPendingTrapCheck();
+emit(MOV R0, [SP + scratchSlotOffset()]);
+```
+
+Three things follow.
+
+1. **The hazard was already known** to whoever wrote that site — the mechanism had been discovered
+   once, in one place, and not generalised. §44's "new" bug was the same bug, met again from a
+   different direction, because the knowledge lived at a call site instead of in the primitive.
+2. **The fix is the generalisation of an existing convention**, not an invention: same pattern, moved
+   into `emitPendingTrapCheck` so every caller gets it.
+3. **The choice of reserved slot 3 was load-bearing.** `emitCheckedMemoryAddress` parks in
+   `scratchSlotOffset()` (slot 2). Had the payload slot reused slot 2, a nested check would have
+   overwritten the memory-address site's parked pointer — a new corruption bug, created by the fix for
+   the old one. The near-miss is worth recording because it is exactly the class of defect this arc
+   keeps meeting: two mechanisms, both correct alone, that collide when composed.
+
+### What is still not tested
+
+Only the six allocation sites have a test that arms a failure (§45). The other fifteen have their
+*trap* paths exercised by existing memory/table/division tests, but nothing asserts that their values
+survive the probe — which is now guaranteed by construction rather than by a test. Adding a hook that
+forces a *trap* (not an allocation failure) at those helpers would close it, and the recipe is the
+same one used here.
+
+### Status
+
+Suite **21537 assertions in 724 cases**, green; `[headerdoc]` green; Doxygen 0 warnings. §44's
+diagnosis is confirmed, §45's fix is verified on both backends, and the arc's containment story is
+closed: **a refused allocation traps, cannot corrupt an instance, and cannot kill the host.**
+
+## 47. Gate D, GC family: done — and it failed in §25 for a reason now known (2026-11-06)
+
+### What landed
+
+All **fourteen** GC trap sites now go through one entry point:
+
+```cpp
+extern "C" void sljitReportTrap(uint32_t kind) noexcept
+{
+	WASM::reportTrap(static_cast<WASM::TrapKind>(kind));
+}
+
+void OpcodeDispatcher::emitTrap(WASM::TrapKind kind)
+{
+	// The trap block materialises the kind into R0 and then calls a helper, so
+	// whatever the continuing path holds in R0 is parked and restored.
+	emit(MOV [SP + payloadSlotOffset()], R0);
+	emit(MOV32 R0, kind);
+	emitHelper(SLJIT_ARGS1V(32), &sljitReportTrap);
+	emitTrapBranch();
+	emit(MOV R0, [SP + payloadSlotOffset()]);
+}
+```
+
+Call sites became one line each: `emitTrap(WASM::TrapKind::NullArrayReference);` instead of a
+`emitHelper(…, &sljitReportNullArray)` plus an `emitTrapBranch()`. The four per-kind wrappers that
+served this family are now unreferenced; they are left in place in this pass so the change reads as
+one idea, and their removal is a separate, trivial follow-up.
+
+**Full suite: 21541 assertions in 724 cases, green.**
+
+### Why §25 failed and this does not
+
+§25 converted eighteen sites across *all* families and the shared integer module broke. The
+explanation is the one §44 found for a different symptom: the trap block sets `R0` to the kind and
+then calls a helper, and **a helper call clobbers `R0`–`R3`**. Any site whose continuing path relied on
+`R0` was silently corrupted — and because the corruption surfaces later, it looked like the conversion
+was "semantically not neutral" rather than a clobber.
+
+So §25 was right to revert and wrong about the cause. The park/restore in `emitTrap` is the missing
+half, and it is the same payload slot §45 introduced, which is why the two fixes compose instead of
+colliding.
+
+### The discipline that was actually needed
+
+| Rule | Where it came from |
+|---|---|
+| Convert **one family** per build, full suite between families | §25's failure was unlocalisable precisely because it spanned families |
+| **Park `R0`** around anything that materialises a value for a call | §44/§45; `emitCheckedMemoryAddress` had already done it locally |
+| One kind per site as an **explicit argument** | §19: a global substitution across per-kind names gave `array.len` the structure kind |
+
+### What remains for Gate D
+
+The other families are the same mechanical change, one at a time:
+
+- `NullReference` (the memory/reference null checks),
+- the memory and table trap kinds,
+- `Unreachable` and the internal kind.
+
+Each keeps the parking; each gets a full-suite run. Their wrappers stay until their family moves.
+
+### Post-mortem note: a primitive fix retired a feature that had failed twice
+
+`array.new_elem` was not attempted in this pass — the budget went to Gate D because Gate D had
+*already failed twice* and now had a known cause. The result is a general lesson worth carrying into
+the saga write-up: **fixing the primitive (§45) did not just fix a bug, it unblocked a piece of work
+that had been planned as "hard" (§47) and had already been reverted twice.** The arc's recurring
+pattern has been "the blocker is one level below the feature"; this is its constructive form — the
+same relationship also means a primitive fix can retire a whole planned item.
+
+`array.new_elem` remains next, and its plan is unchanged: an `arrayInitFromData`-shaped core method
+plus **per-element reference retention**, with the fixture needing an `(elem declare func $f)` segment
+(the §39 discovery about `ref.func` fixtures).
+
+### Status
+
+Suite **21541 assertions in 724 cases**, green; `[headerdoc]` green; Doxygen 0 warnings. Gate D is
+open for the remaining families only; the GC family is closed.

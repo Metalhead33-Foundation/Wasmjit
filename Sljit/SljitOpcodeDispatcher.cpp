@@ -196,6 +196,15 @@ extern "C" void* sljitStructNew(WASM::VMContext* vm, uint32_t size, uint32_t typ
 	}
 }
 
+//! Reports a trap of @p kind through the shared trap slot.
+//! @param kind The `WASM::TrapKind` enumerator, passed as an immediate.
+//! The single entry point: the kind is an explicit argument at every call
+//! site, so a wrong kind is visible in the lowering (docs §19, §47).
+extern "C" void sljitReportTrap(uint32_t kind) noexcept
+{
+	WASM::reportTrap(static_cast<WASM::TrapKind>(kind));
+}
+
 extern "C" void sljitReportNullReference() noexcept
 {
 	WASM::reportTrap(WASM::TrapKind::NullReference);
@@ -1369,6 +1378,21 @@ void OpcodeDispatcher::emitPendingTrapCheck()
 	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0, SLJIT_MEM1(SLJIT_SP),
 			payloadSlotOffset()));
 	trapJumps_.push_back(jump);
+}
+
+void OpcodeDispatcher::emitTrap(WASM::TrapKind kind)
+{
+	// The trap block materialises the kind into R0 and then calls a helper, so
+	// whatever the continuing path holds in R0 is parked and restored: the same
+	// clobber that §25 ran into and §44 diagnosed.
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+			payloadSlotOffset(), SLJIT_R0, 0));
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R0, 0, SLJIT_IMM,
+			static_cast<sljit_sw>(kind)));
+	emitHelper(SLJIT_ARGS1V(32), &sljitReportTrap);
+	emitTrapBranch();
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0, SLJIT_MEM1(SLJIT_SP),
+			payloadSlotOffset()));
 }
 
 void OpcodeDispatcher::emitTrapBranch()
@@ -3316,8 +3340,7 @@ void OpcodeDispatcher::emitArrayGetPacked(WASM::TypeIdx arg, bool signExtend)
 		sljit_jump* notNull = sljit_emit_cmp(compiler_, SLJIT_NOT_EQUAL, SLJIT_R1, 0, SLJIT_IMM, 0);
 		if (notNull == nullptr)
 			ok_ = false;
-		emitHelper(SLJIT_ARGS0V(), &sljitReportNullArray);
-		emitTrapBranch();
+		emitTrap(WASM::TrapKind::NullArrayReference);
 		sljit_label* afterNull = sljit_emit_label(compiler_);
 		if (afterNull == nullptr)
 			ok_ = false;
@@ -3330,8 +3353,7 @@ void OpcodeDispatcher::emitArrayGetPacked(WASM::TypeIdx arg, bool signExtend)
 		sljit_jump* inBounds = sljit_emit_cmp(compiler_, SLJIT_LESS, SLJIT_R2, 0, SLJIT_R3, 0);
 		if (inBounds == nullptr)
 			ok_ = false;
-		emitHelper(SLJIT_ARGS0V(), &sljitReportArrayOob);
-		emitTrapBranch();
+		emitTrap(WASM::TrapKind::OutOfBoundsArrayAccess);
 		sljit_label* afterBounds = sljit_emit_label(compiler_);
 		if (afterBounds == nullptr)
 			ok_ = false;
@@ -3379,8 +3401,7 @@ void OpcodeDispatcher::dispatchArraySet(WASM::TypeIdx arg)
 		sljit_jump* notNull = sljit_emit_cmp(compiler_, SLJIT_NOT_EQUAL, SLJIT_R1, 0, SLJIT_IMM, 0);
 		if (notNull == nullptr)
 			ok_ = false;
-		emitHelper(SLJIT_ARGS0V(), &sljitReportNullArray);
-		emitTrapBranch();
+		emitTrap(WASM::TrapKind::NullArrayReference);
 		sljit_label* afterNull = sljit_emit_label(compiler_);
 		if (afterNull == nullptr)
 			ok_ = false;
@@ -3393,8 +3414,7 @@ void OpcodeDispatcher::dispatchArraySet(WASM::TypeIdx arg)
 		sljit_jump* inBounds = sljit_emit_cmp(compiler_, SLJIT_LESS, SLJIT_R2, 0, SLJIT_R3, 0);
 		if (inBounds == nullptr)
 			ok_ = false;
-		emitHelper(SLJIT_ARGS0V(), &sljitReportArrayOob);
-		emitTrapBranch();
+		emitTrap(WASM::TrapKind::OutOfBoundsArrayAccess);
 		sljit_label* afterBounds = sljit_emit_label(compiler_);
 		if (afterBounds == nullptr)
 			ok_ = false;
@@ -3442,8 +3462,7 @@ void OpcodeDispatcher::dispatchArrayGet(WASM::TypeIdx arg)
 		sljit_jump* notNull = sljit_emit_cmp(compiler_, SLJIT_NOT_EQUAL, SLJIT_R1, 0, SLJIT_IMM, 0);
 		if (notNull == nullptr)
 			ok_ = false;
-		emitHelper(SLJIT_ARGS0V(), &sljitReportNullArray);
-		emitTrapBranch();
+		emitTrap(WASM::TrapKind::NullArrayReference);
 		sljit_label* afterNull = sljit_emit_label(compiler_);
 		if (afterNull == nullptr)
 			ok_ = false;
@@ -3456,8 +3475,7 @@ void OpcodeDispatcher::dispatchArrayGet(WASM::TypeIdx arg)
 		sljit_jump* inBounds = sljit_emit_cmp(compiler_, SLJIT_LESS, SLJIT_R2, 0, SLJIT_R3, 0);
 		if (inBounds == nullptr)
 			ok_ = false;
-		emitHelper(SLJIT_ARGS0V(), &sljitReportArrayOob);
-		emitTrapBranch();
+		emitTrap(WASM::TrapKind::OutOfBoundsArrayAccess);
 		sljit_label* afterBounds = sljit_emit_label(compiler_);
 		if (afterBounds == nullptr)
 			ok_ = false;
@@ -3521,8 +3539,7 @@ void OpcodeDispatcher::dispatchArrayCopy(WASM::TypeIdx arg1, WASM::TypeIdx arg2)
 				sljit_emit_cmp(compiler_, SLJIT_NOT_EQUAL, SLJIT_R0, 0, SLJIT_IMM, 0);
 		if (notNull == nullptr)
 			ok_ = false;
-		emitHelper(SLJIT_ARGS0V(), &sljitReportNullArray);
-		emitTrapBranch();
+		emitTrap(WASM::TrapKind::NullArrayReference);
 		struct sljit_label* after = sljit_emit_label(compiler_);
 		if (after == nullptr)
 			ok_ = false;
@@ -3540,8 +3557,7 @@ void OpcodeDispatcher::dispatchArrayCopy(WASM::TypeIdx arg1, WASM::TypeIdx arg2)
 				sljit_emit_cmp(compiler_, SLJIT_LESS_EQUAL, SLJIT_R0, 0, SLJIT_R2, 0);
 		if (inBounds == nullptr)
 			ok_ = false;
-		emitHelper(SLJIT_ARGS0V(), &sljitReportArrayOob);
-		emitTrapBranch();
+		emitTrap(WASM::TrapKind::OutOfBoundsArrayAccess);
 		struct sljit_label* after = sljit_emit_label(compiler_);
 		if (after == nullptr)
 			ok_ = false;
@@ -3663,8 +3679,7 @@ void OpcodeDispatcher::dispatchArrayFill(WASM::TypeIdx arg)
 			sljit_emit_cmp(compiler_, SLJIT_NOT_EQUAL, SLJIT_R0, 0, SLJIT_IMM, 0);
 	if (notNull == nullptr)
 		ok_ = false;
-	emitHelper(SLJIT_ARGS0V(), &sljitReportNullArray);
-	emitTrapBranch();
+	emitTrap(WASM::TrapKind::NullArrayReference);
 	struct sljit_label* afterNull = sljit_emit_label(compiler_);
 	if (afterNull == nullptr)
 		ok_ = false;
@@ -3682,8 +3697,7 @@ void OpcodeDispatcher::dispatchArrayFill(WASM::TypeIdx arg)
 			sljit_emit_cmp(compiler_, SLJIT_LESS_EQUAL, SLJIT_R0, 0, SLJIT_R2, 0);
 	if (inBounds == nullptr)
 		ok_ = false;
-	emitHelper(SLJIT_ARGS0V(), &sljitReportArrayOob);
-	emitTrapBranch();
+	emitTrap(WASM::TrapKind::OutOfBoundsArrayAccess);
 	struct sljit_label* afterBounds = sljit_emit_label(compiler_);
 	if (afterBounds == nullptr)
 		ok_ = false;
@@ -3939,8 +3953,7 @@ void OpcodeDispatcher::dispatchArrayLen()
 		sljit_jump* notNull = sljit_emit_cmp(compiler_, SLJIT_NOT_EQUAL, SLJIT_R1, 0, SLJIT_IMM, 0);
 		if (notNull == nullptr)
 			ok_ = false;
-		emitHelper(SLJIT_ARGS0V(), &sljitReportNullArray);
-		emitTrapBranch();
+		emitTrap(WASM::TrapKind::NullArrayReference);
 		sljit_label* done = sljit_emit_label(compiler_);
 		if (done == nullptr)
 			ok_ = false;
@@ -3979,8 +3992,7 @@ void OpcodeDispatcher::emitStructGetPacked(WASM::TypeIdx arg1, uint32_t arg2, bo
 		sljit_jump* notNull = sljit_emit_cmp(compiler_, SLJIT_NOT_EQUAL, SLJIT_R1, 0, SLJIT_IMM, 0);
 		if (notNull == nullptr)
 			ok_ = false;
-		emitHelper(SLJIT_ARGS0V(), &sljitReportNullStructure);
-		emitTrapBranch();
+		emitTrap(WASM::TrapKind::NullStructureReference);
 		sljit_label* done = sljit_emit_label(compiler_);
 		if (done == nullptr)
 			ok_ = false;
@@ -4056,8 +4068,7 @@ void OpcodeDispatcher::dispatchStructGet(WASM::TypeIdx arg1, uint32_t arg2)
 		sljit_jump* notNull = sljit_emit_cmp(compiler_, SLJIT_NOT_EQUAL, SLJIT_R1, 0, SLJIT_IMM, 0);
 		if (notNull == nullptr)
 			ok_ = false;
-		emitHelper(SLJIT_ARGS0V(), &sljitReportNullStructure);
-		emitTrapBranch();
+		emitTrap(WASM::TrapKind::NullStructureReference);
 		sljit_label* done = sljit_emit_label(compiler_);
 		if (done == nullptr)
 			ok_ = false;
@@ -4142,8 +4153,7 @@ void OpcodeDispatcher::emitRefCast(const WASM::HeapType& arg, bool nullable)
 		SLJIT_IMM, 0);
 	if (matches == nullptr)
 		ok_ = false;
-	emitHelper(SLJIT_ARGS0V(), &sljitReportCastFailure);
-	emitTrapBranch();
+	emitTrap(WASM::TrapKind::CastFailure);
 	sljit_label* afterCast = sljit_emit_label(compiler_);
 	if (afterCast == nullptr)
 		ok_ = false;
