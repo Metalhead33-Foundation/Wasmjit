@@ -2202,3 +2202,147 @@ trap impossible** (check the slot, and make the check verifiably work), because 
 converts one crash into another and the hook's test cannot pass.
 
 Suite **21529 assertions in 723 cases**, green; Doxygen 0 warnings.
+
+## 44. Root cause: the trap check clobbers the register holding the allocation (2026-11-06)
+
+### What the trace proved
+
+With file-based logging (the §39 rule: write to a file, `fflush`, never rely on stderr) the
+containment path finally showed its hand:
+
+```
+trapPending 0      <- first allocation succeeded; the check ran and saw no trap
+guardFired 1       <- armed allocation threw; the guard caught it and reported Internal
+trapPending 1      <- the check after the allocation saw the trap
+```
+
+So the chain is real: **an allocation refusal becomes a reported trap and the lowering can observe
+it.** F2's guard and `emitPendingTrapCheck()` do work together — when the check is placed where it
+does not destroy state.
+
+### What broke, and why it looked like a trap bug
+
+Inserting `emitPendingTrapCheck()` immediately after each allocation helper put the whole **suite**
+into `SIGSEGV` — not just the armed-hook test. That is the signature of a register-clobbering bug,
+not a trap-handling bug: the non-trap path was corrupted too.
+
+`emitPendingTrapCheck()` emits a call to `sljitTrapPending()`. **A helper call clobbers `R0`–`R3`,
+and the freshly allocated object pointer lives in `R0`.** The sequence was:
+
+```
+emitHelper(ARGS3, &sljitArrayNew);   // R0 = the new object
+emitPendingTrapCheck();              // calls a helper: R0 is destroyed
+storeSlot(SLJIT_R0, depth, 8);       // stores garbage into the operand slot
+```
+
+Every subsequent use of that slot then works from a garbage pointer — which faults in an unrelated
+operation, which is why the failure kept appearing in the wrong place.
+
+This is the fourth member of one family now: **a helper call is never a no-op for the registers the
+surrounding lowering is using.** §22 recorded trap blocks clobbering `R0`–`R3`; §30 recorded the
+argument-index error; here the clobber is deliberate and the *state around it* was not preserved.
+
+### The fix, and it is three lines
+
+Park, check, reload:
+
+```cpp
+emitHelper(ARGS3, &sljitArrayNew);
+storeSlot(SLJIT_R0, resultDepth, 8);   // park the pointer first
+emitPendingTrapCheck();                // may clobber R0-R3; harmless now
+loadSlot(SLJIT_R0, resultDepth, 8);    // reload before use
+```
+
+Not implemented in this pass — the budget went into finding it, and shipping a second guess at
+eleven allocation sites would repeat the pattern this arc keeps punishing. It is a mechanical change
+at six SLJIT sites, with the hook and the trace pattern ready to verify each one.
+
+### The audit this implies
+
+SLJIT already had **fifteen** `emitPendingTrapCheck()` call sites before this work. Each is a
+potential instance of the same bug: *is the value it needs parked before the call, or still in
+`R0`?* That is a bounded, mechanical audit — and if any of the fifteen is unguarded, it is a live
+corruption bug in shipped code, in exactly the shape that took three rounds to see here.
+
+### Process lessons from this round, in order of cost
+
+1. **A filtered search is not evidence of absence** (§43) — "one hit" and "I looked at one hit" look
+   identical.
+2. **Never delete on a bare statement** (§43) — anchor on the marker you inserted.
+3. **Instrument to a file, with `fflush`** (§39) — the trace is what ended the guessing.
+4. **A fix that makes the *whole* suite fail is a state bug, not a logic bug** — the blast radius
+   names the cause class. That single observation turned three failed rounds into one line of code.
+
+### Status
+
+Suite **21529 assertions in 723 cases**, green; Doxygen 0 warnings. The core test hook
+(`failAllocationsForTesting`) is in place and inert; the safety test and the six checks are out of the
+tree until the park/check/reload order is applied. The next unit is that three-line fix plus the
+fifteen-site audit, both verifiable with the hook and the trace that produced this entry.
+
+## 45. Fix landed: the trap check is now non-destructive (2026-11-06)
+
+§44 diagnosed the defect; this entry fixes it at the highest-leverage point instead of at eleven call
+sites.
+
+### The fix
+
+`emitPendingTrapCheck()` now preserves the caller's `R0`:
+
+```cpp
+void OpcodeDispatcher::emitPendingTrapCheck()
+{
+if (measureOnly_)
+return;
+// The probe calls a helper, which clobbers R0-R3, and callers legitimately hold
+// the value they just produced in R0 (a fresh allocation, typically). Park it in
+// the reserved payload slot and restore it on the fallthrough path; the trap path
+// never needs it.
+emit(op1(MOV, [SP + payloadSlotOffset()], R0));
+emitHelper(SLJIT_ARGS0(W), &sljitTrapPending);
+sljit_jump* jump = sljit_emit_cmp(NOT_EQUAL, R0, 0, IMM 0);
+if (jump == nullptr) { ok_ = false; return; }
+emit(op1(MOV, R0, [SP + payloadSlotOffset()]));   // restore after the Jcc
+trapJumps_.push_back(jump);
+}
+```
+
+Three details make it correct:
+
+- **The restore is emitted *after* the conditional jump.** `sljit_emit_cmp` has already emitted its
+  `Jcc` by the time it returns, so loading after it cannot disturb the condition, and the trap path
+  never needs `R0`.
+- **`MOV` does not touch the flags on x86**, so even a restore placed between the compare and the
+  branch would be harmless — but placing it after the jump is provable rather than
+  architecture-dependent.
+- **One place, every caller.** All fifteen pre-existing sites and the six new allocation sites are
+  protected by construction; there is no per-site discipline to forget.
+
+`payloadSlotOffset()` uses **reserved slot 3** — `kReservedSlots` is 5 and only slots 0–2 had
+accessors, so the payload slot was already there and unused.
+
+### What it proves
+
+| Check | Result |
+|---|---|
+| Full suite **with the six allocation checks in place** | **21529 assertions in 723 cases**, green — previously this exact arrangement put the whole suite into `SIGSEGV` |
+| Armed-allocation probe (`[safety]`) | **passes**: healthy call → 7; armed → `TrapKind::Internal`; repeatable; instance healthy afterwards |
+
+The contrast between those two rows and §44 is the whole story: same six call sites, same probe, one
+`MOV` pair different, green instead of corrupted. That also confirms the diagnosis — a register
+clobber, not a trap-handling error.
+
+### Still open, and named
+
+- **AsmJit's allocation path** has not been re-probed since the fix. §44's earlier A/B attempt showed
+  AsmJit faulting where SLJIT trapped, but that run predates both this fix and the corrected
+  mechanism, so the result must be re-measured before it is trusted — the §37/§38 lesson, applied to
+  my own earlier conclusion.
+- **The fifteen pre-existing sites** are now safe *by construction*, but none of them has a test that
+  arms an allocation failure on its path; the hook makes that mechanical.
+
+### Status
+
+Suite **21529 assertions in 723 cases**, green; `[headerdoc]` green; Doxygen 0 warnings. The core hook,
+the payload slot, the non-destructive check and six allocation checks are in the tree; the fourteen
+remaining helpers' guards (§40) are unchanged.

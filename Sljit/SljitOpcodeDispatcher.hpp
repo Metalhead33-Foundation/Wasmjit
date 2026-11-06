@@ -641,6 +641,7 @@ private:
 	 * \return Offset from `SLJIT_SP`.
 	 */
 	sljit_sw scratchSlotOffset() const;
+	sljit_sw payloadSlotOffset() const;
 	//! Offset of the two-word shuffle selector block.
 	sljit_sw selectorBlockOffset() const;
 

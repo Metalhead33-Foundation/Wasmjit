@@ -2873,3 +2873,38 @@ TEST_CASE("SLJIT br_if carries an i32 block result over a live fallthrough",
 
 
 
+
+
+TEST_CASE("a refused allocation traps instead of crashing or corrupting",
+"[sljit][gc][safety]")
+{
+	WASM::Module module = loadTestModule("gc_array_default");
+	Sljit::ModuleCompiler compiler;
+	WASM::RegistryImportResolver imports;
+	std::unique_ptr<WASM::ModuleInstance> instance = compiler.instantiate(module, imports);
+	REQUIRE(instance != nullptr);
+
+	const std::optional<WASM::Callable> callable = instance->exportedFunction("default_len");
+	REQUIRE(callable.has_value());
+
+	// The healthy path first: the probe must not disturb the value it preserves.
+	CHECK(WASM::callCallable<std::int32_t>(*callable) == 7);
+
+	// Arm one failing allocation: the guard reports Internal, the lowering's trap
+// check stops it, and the caller sees a trap rather than a crash.
+WASM::ModuleInstance::failAllocationsForTesting(1);
+const std::optional<WASM::TrapKind> kind = trapKindOf([&] {
+WASM::callCallable<std::int32_t>(*callable);
+});
+WASM::ModuleInstance::failAllocationsForTesting(0);
+
+REQUIRE(kind.has_value());
+CHECK(*kind == WASM::TrapKind::Internal);
+
+// Repeatable, and the instance is still healthy afterwards.
+CHECK(WASM::callCallable<std::int32_t>(*callable) == 7);
+WASM::ModuleInstance::failAllocationsForTesting(1);
+CHECK(trapKindOf([&] { WASM::callCallable<std::int32_t>(*callable); }) == WASM::TrapKind::Internal);
+WASM::ModuleInstance::failAllocationsForTesting(0);
+CHECK(WASM::callCallable<std::int32_t>(*callable) == 7);
+}

@@ -1283,6 +1283,13 @@ sljit_sw OpcodeDispatcher::scratchSlotOffset() const
 	return static_cast<sljit_sw>((localSlots_ + 2) * kSlotBytes);
 }
 
+sljit_sw OpcodeDispatcher::payloadSlotOffset() const
+{
+	// Reserved slot 3 is unused elsewhere; `emitPendingTrapCheck` parks the
+	// caller's R0 here so the probe cannot destroy it.
+	return static_cast<sljit_sw>((localSlots_ + 3) * kSlotBytes);
+}
+
 sljit_sw OpcodeDispatcher::selectorBlockOffset() const
 {
 	return static_cast<sljit_sw>((localSlots_ + 3) * kSlotBytes);
@@ -1346,6 +1353,12 @@ void OpcodeDispatcher::emitPendingTrapCheck()
 {
 	if (measureOnly_)
 		return;
+	// The probe calls a helper, which clobbers R0-R3, and callers legitimately
+	// hold the value they just produced in R0 (a fresh allocation, typically).
+	// Park it in the reserved payload slot and restore it on the fallthrough
+	// path; the trap path never needs it (docs/backends/ASMJIT_SLJIT_P3_GC1.md §44).
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP), payloadSlotOffset(),
+			SLJIT_R0, 0));
 	emitHelper(SLJIT_ARGS0(W), &sljitTrapPending);
 	sljit_jump* jump = sljit_emit_cmp(compiler_, SLJIT_NOT_EQUAL,
 			SLJIT_R0, 0, SLJIT_IMM, 0);
@@ -1353,6 +1366,8 @@ void OpcodeDispatcher::emitPendingTrapCheck()
 		ok_ = false;
 		return;
 	}
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0, SLJIT_MEM1(SLJIT_SP),
+			payloadSlotOffset()));
 	trapJumps_.push_back(jump);
 }
 
@@ -3209,6 +3224,7 @@ void OpcodeDispatcher::dispatchStructNewDefault(WASM::TypeIdx arg)
 		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R2, 0, SLJIT_IMM,
 				static_cast<sljit_sw>(arg)));
 		emitHelper(SLJIT_ARGS3(P, P, 32, 32), &sljitStructNew);
+		emitPendingTrapCheck(); // ALLOC_TRAPCHECK
 		// Default fields are zero; the heap does not promise pre-zeroed memory.
 		for (std::size_t i = 0; i < fields.size(); ++i) {
 			require(!fields[i].storage.isPacked, "the SLJIT backend does not lower packed struct fields yet");
@@ -3248,6 +3264,7 @@ void OpcodeDispatcher::dispatchStructNew(WASM::TypeIdx arg)
 		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R2, 0, SLJIT_IMM,
 				static_cast<sljit_sw>(arg)));
 		emitHelper(SLJIT_ARGS3(P, P, 32, 32), &sljitStructNew);
+		emitPendingTrapCheck(); // ALLOC_TRAPCHECK
 		// Fields are stacked in declaration order, so store them in reverse.
 		for (std::size_t i = fields.size(); i-- > 0;) {
 			const std::size_t offset = WASM::gcStructFieldOffset(fields, i);
@@ -3729,6 +3746,7 @@ emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R1, 0, SLJIT_IMM,
 static_cast<sljit_sw>(arg1)));
 loadContext(SLJIT_R0);
 emitHelper(SLJIT_ARGS3(P, P, 32, 32), &sljitArrayNew);
+emitPendingTrapCheck(); // ALLOC_TRAPCHECK
 // The object has to survive the copy call, so it is parked in the length
 // slot; that slot's value is dead once the allocation has used it.
 	storeSlot(SLJIT_R0, lenDepth, 8);
@@ -3775,6 +3793,7 @@ void OpcodeDispatcher::dispatchArrayNewDefault(WASM::TypeIdx arg)
 		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R1, 0, SLJIT_IMM,
 				static_cast<sljit_sw>(arg)));
 		emitHelper(SLJIT_ARGS3(P, P, 32, 32), &sljitArrayNew);
+		emitPendingTrapCheck(); // ALLOC_TRAPCHECK
 		// Zero-fill loop. The count is a runtime value, so this is the first
 		// backend-emitted counted loop: R1 counts down to zero while R3 walks the
 		// data pointer, so every store is a constant-offset MEM1 (never MEM2).
@@ -3824,6 +3843,7 @@ void OpcodeDispatcher::dispatchArrayNewFixed(WASM::TypeIdx arg1, uint32_t arg2)
 		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R2, 0, SLJIT_IMM,
 				static_cast<sljit_sw>(arg2)));
 		emitHelper(SLJIT_ARGS3(P, P, 32, 32), &sljitArrayNew);
+		emitPendingTrapCheck(); // ALLOC_TRAPCHECK
 		const sljit_sw dataOffset =
 				static_cast<sljit_sw>(WASM::gcArrayDataOffset(element.storage));
 		const sljit_sw elementBytes =
@@ -3870,6 +3890,7 @@ void OpcodeDispatcher::dispatchArrayNew(WASM::TypeIdx arg)
 				static_cast<sljit_sw>(arg)));
 		loadContext(SLJIT_R0);
 		emitHelper(SLJIT_ARGS3(P, P, 32, 32), &sljitArrayNew);
+		emitPendingTrapCheck(); // ALLOC_TRAPCHECK
 		// The helper clobbers R1-R3, so the initialiser and the length are
 		// reloaded afterwards. **Every** element must be initialised, not just
 		// element 0: this is the counted store loop, the same shape array.fill
