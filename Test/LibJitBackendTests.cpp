@@ -534,3 +534,53 @@ CHECK(got == 34);
 
 jit_context_destroy(context);
 }
+
+// The prologue replica again, but with the one thing the backend does that every
+// replica above omitted: an optimisation level. If the third aggregate comes
+// back as garbage here, libjit's optimiser is losing stack-passed arguments.
+TEST_CASE("libjit: three aggregates at optimisation level 2", "[libjit][v128][ir]")
+{
+for (unsigned int level = 0; level <= 3; ++level) {
+jit_context_t context = jit_context_create();
+REQUIRE(context != nullptr);
+jit_context_build_start(context);
+
+jit_type_t params[7] = {jit_type_void_ptr, jit_type_ulong, jit_type_ulong,
+jit_type_ulong, jit_type_ulong, jit_type_ulong, jit_type_ulong};
+jit_type_t signature =
+jit_type_create_signature(jit_abi_cdecl, jit_type_int, params, 7, 1);
+jit_function_t function = jit_function_create(context, signature);
+
+jit_type_t fields[4] = {jit_type_int, jit_type_int, jit_type_int, jit_type_int};
+jit_type_t aggregate = jit_type_create_struct(fields, 4, 0);
+jit_type_set_size_and_alignment(aggregate, 16, 16);
+
+jit_value_t lane[3] = {nullptr, nullptr, nullptr};
+for (int k = 0; k < 3; ++k) {
+jit_value_t slot = jit_value_create(function, aggregate);
+jit_value_t address = jit_insn_address_of(function, slot);
+jit_insn_store_relative(function, address, 0,
+jit_value_get_param(function, static_cast<unsigned>(1 + 2 * k)));
+jit_insn_store_relative(function, address, 8,
+jit_value_get_param(function, static_cast<unsigned>(2 + 2 * k)));
+lane[k] = jit_insn_load_relative(function, address, 0, jit_type_int);
+}
+jit_insn_return(function, jit_insn_add(function,
+jit_insn_add(function, lane[0], lane[1]), lane[2]));
+jit_function_set_optimization_level(function, level);
+jit_context_build_end(context);
+
+REQUIRE(jit_function_compile(function) == JIT_RESULT_OK);
+void* entry = nullptr;
+REQUIRE(jit_function_compile_entry(function, &entry) == JIT_RESULT_OK);
+REQUIRE(entry != nullptr);
+
+using Fn = std::int32_t (*)(void*, std::uint64_t, std::uint64_t, std::uint64_t,
+std::uint64_t, std::uint64_t, std::uint64_t);
+const std::int32_t got = reinterpret_cast<Fn>(entry)(nullptr, 1, 0, 2, 0, 3, 0);
+std::fprintf(stderr, "OPT%d=%d\n", static_cast<int>(level), got);
+CHECK(got == 6);
+
+jit_context_destroy(context);
+}
+}

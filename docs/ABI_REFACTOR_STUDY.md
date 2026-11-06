@@ -2781,3 +2781,63 @@ not: an off-by-one in a walk is invisible until a third parameter exists.
 ### State
 
 Suite **21673 assertions in 739 test cases**, green; tree clean.
+
+## 55. The third vector parameter is garbage -- and every replica still behaves (2026-11-06)
+
+§54's three prints were run. All three came back **correct**:
+
+```
+CF fn=2 sigParams=7 params=3 locals=3
+  VEC i=0 slot=1   VEC i=1 slot=3   VEC i=2 slot=5
+```
+
+So the body's signature really has seven parameters, the wasm function really has three parameters, and the walk really
+reads slots `1,2 / 3,4 / 5,6`. Nothing in the prologue's arithmetic is wrong.
+
+### Which parameter is bad
+
+Three single-parameter exports (`local.get N; i32x4.extract_lane 0`) called with lanes `1, 2, 3`:
+
+| Export | Expected | Measured |
+|---|---|---|
+| `p0_lane` | 1 | **1** |
+| `p1_lane` | 2 | **2** |
+| `p2_lane` | 3 | **`-6584344`** |
+
+**The third vector parameter is garbage.** The first two are perfect.
+
+### Five more replicas, all still correct
+
+The prologue pattern plus optimisation levels 0-3, each returning the lane sum of three aggregates built from six
+argument words:
+
+```
+OPT0=6   OPT1=6   OPT2=6   OPT3=6
+```
+
+- So it is not optimisation (§54's replicas had none; this closes that gap).
+
+### What is left, and it is one element
+
+Every replica builds the aggregates and reads a lane **with an intrinsic load**. The real body reads through
+`jit_insn_address_of(local)` handed to a **helper call**:
+
+```cpp
+jit_value_t args[2] = {jit_insn_address_of(function, a),
+        jit_value_create_nint_constant(function, jit_type_uint, arg)};
+callSimdHelper(reinterpret_cast<void*>(wasm_i32x4_extract_lane), jit_type_int, types, args);
+```
+
+That is the only structural difference left between the working replica and the failing function: the aggregate's
+address is passed to a **call**, which forces it into memory at a call boundary rather than at an intrinsic load. The
+next replica therefore adds one thing -- a `jit_insn_call_native` taking `address_of(slot[2])` -- and nothing else.
+
+### No correction attempted
+
+The measurement gives the *where* (third vector parameter) but not yet the *why* (helper-call boundary), and a fix
+aimed at the former would be guesswork. The honest state is: one more replica, then the fix.
+
+### State
+
+Suite **21693 assertions in 740 test cases**, green; five new permanent `[libjit][v128][ir]` cases keep every
+replica above from ever being re-litigated.
