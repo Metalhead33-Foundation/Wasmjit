@@ -2357,3 +2357,33 @@ it is the one the spec harness reaches.
 ### State
 
 No code changed this round; suite **21648 assertions in 734 test cases**, green; tree clean.
+
+## 46. Correction: the call cache is *not* the spec harness's path (2026-11-06)
+
+§45 closed with "that is the one the spec harness reaches". Checking it before changing anything shows that is **wrong**:
+`WASM::ModuleCallCache` is referenced only from `Test/CallCacheTests.cpp` -- nowhere in `WasmBase`, and nowhere in the
+spec runner.
+
+| Claim in §45 | Verification |
+|---|---|
+| `WasmCallCache.cpp` implements the canonical *parameter* rule | **true** -- two `uint64` words driven by `argSlotCount` |
+| its *result* branch still emits a 16-byte aggregate (`ffiTypeFor`) | **true**, and a genuine divergence from §28 |
+| the spec harness crosses it | **false** -- only the call-cache tests do |
+
+So the result-branch gap is real and worth fixing on its own merits (it is the last place where §28 is stated but
+not applied), but it is **not** the cause of the 33 SIMD failures, and changing it would not move them.
+
+### What this leaves, stated accurately
+
+The spec harness's invocation remains unidentified. What is excluded after this round is now quite long: it is not
+`SpecSuite.cpp`, not `WastScript.cpp`, not `helper.hpp`, not the `WasmModuleInstance`/`WasmRuntime` invoke APIs, and
+now **not** the call cache either. The next search should start from the opposite direction -- from `runOneScript`
+inward: follow the command executor to whatever function actually calls the export, rather than guessing at names.
+
+That is the honest state: fifteen rounds of elimination, one hypothesis per round, and the harness's own invoke path
+still not located. Every other layer has been measured and cleared, which is why the remaining search is small even
+though it is unfinished.
+
+### State
+
+No code changed; suite **21648 assertions in 734 test cases**, green; tree clean.
