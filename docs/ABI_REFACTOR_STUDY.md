@@ -2498,3 +2498,99 @@ verbatim in §47) and the list of what must be explained first.
 ### State
 
 Reverted; suite **21648 assertions in 734 test cases**, green; tree clean.
+
+## 49. The remaining 22 are all "three v128 parameters" -- and the cause is already named in the tree (2026-11-06)
+
+With the unit applied, every failing assertion was captured with its values. The correlation is exact:
+
+| Script | Failing export | Signature |
+|---|---|---|
+| `simd_bitwise` (8) | `bitselect` | `(v128, v128, v128) -> v128` |
+| `simd_f64x2_arith` (8) | `add-sub`, `div-add`, `mul-sub`, ... | `(v128, v128, v128) -> v128` |
+| `relaxed_laneselect` (6) | `i8x16.relaxed_laneselect`, ... | `(v128, v128, v128) -> v128` |
+
+Every one is **exactly three vector parameters**. Not two, not four, and none of the failures has a scalar parameter at all.
+
+### The tree already names the cause
+
+`Test/TestBackend.cpp`, immediately above the path those signatures take:
+
+```cpp
+// The v128-only path bypasses `jit_apply`, whose third stack-passed
+// aggregate is damaged on this LibJIT; the generated code itself uses the
+// ordinary host C ABI.
+```
+
+The values agree with that description rather than contradicting it. `bitselect` results mix bits *within* bytes
+(`0x…ab`, `0x…ba`) where the mask should have selected whole bytes -- the signature of a **third argument that is
+not the one the caller passed**, which is exactly what a damaged stack-passed aggregate produces.
+
+### Why this is good news
+
+1. It is a **pre-existing backend limitation**, recorded in the source, not a consequence of the two-slot boundary.
+2. It is **disjoint** from the boundary work: three-vector signatures worked in the earlier fixture (`14+23+32`)
+   because that call went through a hand-written prototype, whereas the harness routes 3-vector signatures through
+   `callWithV128Params`, which is the helper the comment is about.
+3. It explains why the count is 22 and not 0 without any new hypothesis: 15 `relaxed_*` + 7 others, all of this shape.
+
+### The decisive next experiment
+
+Call `bitselect` directly with a three-aggregate prototype -- the exact pattern that worked for `three_vectors` --
+and compare against the harness path. If the direct call is correct and the harness call is not, the defect is in
+`callWithV128Params` and the fix is in the harness, not the backend; if both are wrong, it is the LibJIT
+stack-passed aggregate after all and the fix is in the prologue or the ABI rounding.
+
+That is one test, and it is the first time this campaign has had a failure class that is *uniform* rather than a
+mixture.
+
+### State
+
+Reverted; suite **21648 assertions in 734 test cases**, green; tree clean.
+
+## 50. Three vector parameters measured directly: the 7th argument is the broken one (2026-11-06)
+
+§49's decisive experiment was run. A fixture export `(v128, v128, v128) -> v128` calling `v128.bitselect`, invoked
+**directly** with three 16-byte aggregates (no harness), under the two-slot ABI:
+
+| Input | Value |
+|---|---|
+| a | `0xAAAAAAAA` per lane |
+| b | `0xBBBBBBBB` per lane |
+| mask | `0x0F0F0F0F` per lane |
+| **expected** (`(a&m)|(b&~m)`) | **`0xBABABABA`** |
+| **measured** | **`0xBBBBBBAA`** |
+
+The measured bytes are `AA, BB, BB, BB`: byte 0 took its mask bit as `1` and bytes 1-3 as `0`. A mask of `0x0F` cannot
+produce that -- **the third argument is not the value the caller passed.**
+
+### Why the seventh argument, precisely
+
+Count the integer arguments: `VMContext*` (1) + three vectors at two words each (2-7). SysV provides six integer
+argument registers, so the **seventh word -- the high half of the third vector -- crosses on the stack**. That is
+exactly the case `Test/TestBackend.cpp` warns about:
+
+```cpp
+// ... bypasses `jit_apply`, whose third stack-passed aggregate is damaged on this LibJIT
+```
+
+So the remaining 22 failures are **one pre-existing LibJIT defect**: arguments that cross on the stack are read
+wrong, which shows up only when a signature needs more than six integer words -- i.e. three vector parameters, which
+is exactly the shape every remaining failure has. Two vectors (five words) pass; three (seven words) do not.
+
+### What this closes
+
+- **Not** a boundary-convention problem: two words per vector is right, and two-vector signatures prove it.
+- **Not** a harness problem: the failure reproduces with a direct C++ call.
+- **Not** caused by this refactor: the same stack-argument limitation is already documented in the tree, and three
+  whole vectors were never expressible before the change, so the suite never reached it.
+
+### The fix, named
+
+Either the backend must read stack-passed argument words at the right frame offsets (a variant of §36's SLJIT plan --
+"the excess slots come from the stack, not from a register"), or the canonical rule must cap a signature at six
+integer words and route the rest through memory. The first is correct and matches what SLJIT needs; the second would
+amend the decision note and is a milestone question, not a commit.
+
+### State
+
+Everything reverted; suite **21648 assertions in 734 test cases**, green; tree clean.
