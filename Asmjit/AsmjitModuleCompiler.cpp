@@ -2537,6 +2537,61 @@ protected:
 		values.push_back(result);
 	}
 
+	void dispatchArrayNewFixed(WASM::TypeIdx arg1, uint32_t arg2) override
+	{
+		const WASM::CoreTypeView view = module.typeView(arg1);
+		if (view.kind() != WASM::CanonTypeKind::Array)
+			throw std::runtime_error("AsmJit array.new_fixed requires an array type");
+		const WASM::CanonFieldType& element = view.arrayElement();
+		const bool packed = element.storage.isPacked;
+		const bool packedI8 = packed && element.storage.packed == WASM::ValueTypeCode::I8;
+		const int width = packed ? (packedI8 ? 1 : 2)
+				: kindWidth(element.storage.value.opcode);
+		if (width != 1 && width != 2 && width != 4 && width != 8)
+			throw std::runtime_error("AsmJit array.new_fixed does not lower this element type yet");
+		if (values.size() < arg2)
+			throw std::runtime_error("AsmJit array.new_fixed operand stack underflow");
+		std::vector<asmjit::x86::Gp> operands(arg2);
+		for (uint32_t i = arg2; i-- > 0; ) {
+			operands[i] = values.back();
+			values.pop_back();
+		}
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke),
+				reinterpret_cast<uint64_t>(&asmjitArrayNew), signature),
+				"AsmJit array.new_fixed allocation call failed");
+		invoke->set_arg(0, vmContext);
+		invoke->set_arg(1, asmjit::Imm(static_cast<uint64_t>(arg1)));
+		invoke->set_arg(2, asmjit::Imm(static_cast<uint64_t>(arg2)));
+		auto object = compiler.new_gp_ptr("arrayObject");
+		invoke->set_ret(0, object);
+		emitPendingTrapReturn();
+		const auto dataOffset = static_cast<int32_t>(WASM::gcArrayDataOffset(element.storage));
+		const auto elementBytes = static_cast<int32_t>(WASM::gcStorageBytes(element.storage));
+		for (uint32_t i = 0; i < arg2; ++i) {
+			const auto offset = static_cast<int32_t>(dataOffset + static_cast<int32_t>(i) * elementBytes);
+			if (packed) {
+				if (packedI8)
+					checkError(compiler.mov(asmjit::x86::byte_ptr(object, offset),
+							operands[i].r8()), "AsmJit array.new_fixed packed store failed");
+				else
+					checkError(compiler.mov(asmjit::x86::word_ptr(object, offset),
+							operands[i].r16()), "AsmJit array.new_fixed packed store failed");
+			} else if (width == 4)
+				checkError(compiler.mov(asmjit::x86::dword_ptr(object, offset), operands[i]),
+						"AsmJit array.new_fixed element store failed");
+			else
+				checkError(compiler.mov(asmjit::x86::qword_ptr(object, offset), operands[i]),
+						"AsmJit array.new_fixed element store failed");
+		}
+		values.push_back(object);
+	}
+
 	void dispatchArrayNew(WASM::TypeIdx arg) override
 	{
 		const WASM::CoreTypeView view = module.typeView(arg);

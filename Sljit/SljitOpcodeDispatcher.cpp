@@ -3399,6 +3399,51 @@ void OpcodeDispatcher::dispatchArrayGet(WASM::TypeIdx arg)
 	push(width);
 }
 
+void OpcodeDispatcher::dispatchArrayNewFixed(WASM::TypeIdx arg1, uint32_t arg2)
+{
+	if (!reachable_)
+		return;
+	const WASM::CoreTypeView view = module_.typeView(arg1);
+	require(view.kind() == WASM::CanonTypeKind::Array, "array.new_fixed requires an array type");
+	const WASM::CanonFieldType& element = view.arrayElement();
+	require(element.storage.isPacked || element.storage.value.opcode != WASM::ValueTypeCode::V128,
+			"the SLJIT backend does not lower v128 array elements yet");
+	const bool packed = element.storage.isPacked;
+	const bool packedI8 = packed && element.storage.packed == WASM::ValueTypeCode::I8;
+	const WASM::ValueTypeCode opcode = element.storage.value.opcode;
+	const int width = packed ? (packedI8 ? 1 : 2)
+			: ((opcode == WASM::ValueTypeCode::I32
+					|| opcode == WASM::ValueTypeCode::F32) ? 4 : 8);
+	requireStack(arg2);
+	if (!measureOnly_) {
+		// The element count is an immediate, so every store offset is constant.
+		loadContext(SLJIT_R0);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R1, 0, SLJIT_IMM,
+				static_cast<sljit_sw>(arg1)));
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R2, 0, SLJIT_IMM,
+				static_cast<sljit_sw>(arg2)));
+		emitHelper(SLJIT_ARGS3(P, P, 32, 32), &sljitArrayNew);
+		const sljit_sw dataOffset =
+				static_cast<sljit_sw>(WASM::gcArrayDataOffset(element.storage));
+		const sljit_sw elementBytes =
+				static_cast<sljit_sw>(WASM::gcStorageBytes(element.storage));
+		const sljit_s32 storeOp = packed ? (packedI8 ? SLJIT_MOV_U8 : SLJIT_MOV_U16)
+				: (width == 4 ? SLJIT_MOV32 : SLJIT_MOV);
+		for (std::uint32_t i = arg2; i-- > 0;) {
+			loadSlot(SLJIT_R1, stackWidths_.size() - 1, 4);
+			emit(sljit_emit_op1(compiler_, storeOp, SLJIT_MEM1(SLJIT_R0),
+					dataOffset + static_cast<sljit_sw>(i) * elementBytes, SLJIT_R1, 0));
+			pop();
+		}
+	} else {
+		for (std::uint32_t i = 0; i < arg2; ++i)
+			pop();
+	}
+	push(8);
+	if (!measureOnly_)
+		storeSlot(SLJIT_R0, stackWidths_.size() - 1, 8);
+}
+
 void OpcodeDispatcher::dispatchArrayNew(WASM::TypeIdx arg)
 {
 	if (!reachable_)

@@ -683,3 +683,47 @@ Counts: `[gc]` **253 assertions in 15 cases**; full suite **21336 in 714**;
    hierarchy consulted at run time.
 4. **`wasm_trap(kind)`** in the core — thirteen per-kind wrappers, and §19 just
    showed that hand-maintaining the kind per call site is error-prone.
+
+## 20. `array.new_fixed` — item 2's loop-free half (2026-11-06)
+
+`array.new_fixed` landed in both backends, and it is the one member of the
+`array.new_*` family that needs **no loop**: the element count is an immediate, so
+every destination offset is a compile-time constant
+(`dataOffset + i * elementBytes`) and the lowering is a straight-line sequence of
+stores — the same shape `struct.new` uses for its fields, and the third time in
+this arc that an immediate count turned a would-be loop into straight-line code.
+
+| | SLJIT | AsmJit |
+|---|---|---|
+| allocation | `(vm, typeIndex, count)` trampoline | same call via `invoke` |
+| element store | one `MOV`/`MOV32`/`MOV_U8`/`MOV_U16` per element at a constant `MEM1` offset | `dword_ptr`/`qword_ptr`/`byte_ptr`/`word_ptr` with the narrow register views |
+| stack | elements popped in reverse, result pushed as a reference | same |
+
+Note the deliberate avoidance of `MEM2`: every offset here is a constant applied to
+`MEM1(base)`, which is exactly the addressing shape §13 proved safe on SLJIT.
+
+Fixture `gc_array_fixed.wat`: `fixed_get0` → 10, `fixed_get2` → 30, `fixed_len` → 3,
+asserted per backend in one A/B case. Counts: `[gc]` **267 assertions in 16 cases**;
+full suite **21350 in 715**; `[headerdoc]` green; Doxygen 0 warnings.
+
+### Item 2's remainder, and why it really is a loop problem
+
+What is left of `array.new_*` / `array.fill` / `array.copy` all take a **runtime**
+length: `array.new_default` (zero `len` elements), `array.fill` (store a value over a
+runtime range), `array.copy` (overlapping copy over a runtime range), `new_data`
+(copy from a data segment). Each needs a counted loop **emitted by the backend**,
+with the bounds trap inside it — that loop shape is itself a small capability, and
+it is the honest reason these remain refused rather than a matter of arity or
+layout. It is also the reason item 2 cannot be finished by more of the same
+mechanism that produced `array.new_fixed`.
+
+### Remaining non-`v128` work
+
+1. **AsmJit block parameters** — one gate, three opcodes
+   (`br_on_cast`/`br_on_cast_fail`/`br_on_non_null`).
+2. **The loop-emitting array ops** — `new_default`, `fill`, `copy`, `new_data`,
+   `new_elem`; needs the counted-loop-plus-trap shape described above.
+3. **Abstract heap types** in `ref.test`/`ref.cast` — the core subtype hierarchy
+   consulted at run time.
+4. **`wasm_trap(kind)`** in the core — thirteen per-kind wrappers, and §19 showed a
+   global substitution across them can silently pick the wrong kind.

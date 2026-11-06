@@ -212,3 +212,79 @@ invent a fourth opinion about the same bytes.
   field), then mirrored in AsmJit.
 - **Step 4** — the fixture with `two_structs_not_equal`, which retires the
   `ref.eq` gap carried since reference chunk 1.
+
+## 11. The four remaining gates, made executable (2026-11-06)
+
+Every opcode still missing from the GC surface is blocked on one of four
+capabilities. None is “more of the same” mechanical work; each is a decision plus a
+small mechanism. This section is the hand-off plan: what to change, where, and the
+test that proves it.
+
+### Gate A — AsmJit block parameters (unblocks `br_on_cast`, `br_on_cast_fail`, `br_on_non_null`)
+
+- **Where:** `Asmjit/AsmjitModuleCompiler.cpp`, `ControlFrame` and the block/loop/if
+  dispatchers and branch paths.
+- **Change:** give `ControlFrame` a `std::vector<asmjit::x86::Gp> params` beside the
+  existing single `result`. On `block`/`loop`/`if` entry, pop the declared parameter
+  count into the frame and push them back as the frame's initial operands; a branch
+  to that frame writes the incoming values into `params` (the same transfer the
+  single-result path already performs); a loop re-establishes them on the back edge.
+- **Why it is one gate, not three opcodes:** `br_on_non_null` needs a label carrying
+  the reference; `br_on_cast`/`br_on_cast_fail` need a label carrying the casted
+  reference. All three are *branches with one reference parameter*.
+- **Tests:** a `(block (param i32) …)` round-trip and a `loop (param i32)` counter
+  first (they prove the mechanism without GC), then the three branch opcodes.
+- **Risk:** the highest in the series — it touches every structured-control path.
+  Gate it on the full suite, not the tags.
+
+### Gate B — backend-emitted counted loops (unblocks `array.fill`, `array.copy`, `array.new_default`, `new_data`, `new_elem`)
+
+- **Where:** both dispatchers; no core change (`GcHeader`/`gcArray*` already suffice).
+- **Change:** a small `emitCountedLoop` shape per backend — a label pair, one counter
+  register, a compare against the runtime length, and a back edge — with the bounds
+  trap inside the body. `array.fill` is the first user (store a value over
+  `[index, index+len)`); `copy` adds overlap handling; `new_default` is “allocate,
+  then zero `len` elements”.
+- **Tests:** a runtime length (not an immediate), a zero length, and an
+  out-of-bounds range asserting `OutOfBoundsArrayAccess` by **kind** (§19’s helper).
+- **Why it is a gate:** the loop shape does not exist anywhere in either backend yet;
+  every current lowering is straight-line or a single branch.
+
+### Gate C — abstract heap types in `ref.test` / `ref.cast`
+
+- **Where:** both dispatchers, plus one core question.
+- **Change:** `ref.test`/`ref.cast` currently require `arg.isTypeIndex`. For abstract
+  targets the check is a *kind* question — `any`/`eq` cover every struct/array/i31
+  object, `struct`/`array` cover their own kind, `func` covers function references.
+  The clean implementation asks the core: a helper that answers “is this object’s
+  type id a subtype of this abstract heap type”, so the hierarchy stays in one place.
+- **Tests:** `ref.test (ref any)` on a struct and on a function reference; a cast to
+  `(ref struct)` succeeding and to `(ref array)` trapping with `CastFailure`.
+
+### Gate D — one trap entry point per backend (removes the §19 hazard)
+
+- **Where:** both dispatchers only — **no core change**, so no frozen surface moves.
+- **Change:** replace the thirteen per-kind `extern "C"` wrappers with one
+  `…ReportTrap(uint32_t kind)` per backend and pass the kind as an explicit argument
+  at each call site (the `TrapKind` enumerator is an immediate).
+- **Why:** §19 showed that a global substitution over the per-kind names silently
+  gave `array.len` the structure kind. With a single entry point the kind is a
+  visible argument at every call site, and the eight-to-thirteen-wrapper sprawl
+  disappears.
+- **Tests:** none new — the `[gc]` trap-kind case already pins four kinds; add
+  `NullExnReference`/`NullStructureReference` coverage as the wrappers retire.
+
+### Also still open (outside GC)
+
+- The **`v128` signature seam** — deferred by decision, see
+  [`V128_SIGNATURE_DECISION.md`](V128_SIGNATURE_DECISION.md) §11; it blocks saga
+  closure and is the last item of the closure table in
+  [`ASMJIT_SLJIT_P3_REFS1.md`](ASMJIT_SLJIT_P3_REFS1.md) §2.
+- **Exceptions**, **`call_ref`/continuations**, **atomics**, **`f16`**, **relaxed
+  SIMD**, **bulk memory on memory64** — proposal-level, each refused by name.
+
+### Suggested order
+
+D (cheap, removes a hazard) → B (mechanical once the loop shape exists) → A (the
+big gate) → C (needs a core answer) → the `v128` seam → saga closure. D and B change
+no ABI; A touches control flow everywhere; C and the seam are the two decisions.

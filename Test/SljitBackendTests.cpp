@@ -2509,3 +2509,34 @@ TEST_CASE("both backends report the same trap kinds for GC failures",
 	check("array_oob", WASM::TrapKind::OutOfBoundsArrayAccess);
 	check("cast_fail", WASM::TrapKind::CastFailure);
 }
+
+
+TEST_CASE("both backends lower array.new_fixed", "[sljit][asmjit][parity][gc]")
+{
+	WASM::Module module = loadTestModule("gc_array_fixed");
+	AsmJitBackend::Context asmContext;
+	AsmJitBackend::ModuleCompiler asmCompiler(asmContext);
+	Sljit::ModuleCompiler sljitCompiler;
+	WASM::RegistryImportResolver asmImports;
+	WASM::RegistryImportResolver sljitImports;
+	std::unique_ptr<WASM::ModuleInstance> asmInstance =
+			asmCompiler.instantiate(module, asmImports);
+	std::unique_ptr<WASM::ModuleInstance> sljitInstance =
+			sljitCompiler.instantiate(module, sljitImports);
+	REQUIRE(asmInstance != nullptr);
+	REQUIRE(sljitInstance != nullptr);
+
+	const auto same = [&](const char* name, std::int32_t expected) {
+		const std::optional<WASM::Callable> asmCallable = asmInstance->exportedFunction(name);
+		const std::optional<WASM::Callable> sljitCallable = sljitInstance->exportedFunction(name);
+		REQUIRE(asmCallable.has_value());
+		REQUIRE(sljitCallable.has_value());
+		INFO("export " << name);
+		CHECK(WASM::callCallable<std::int32_t>(*asmCallable) == expected);
+		CHECK(WASM::callCallable<std::int32_t>(*sljitCallable) == expected);
+	};
+
+	same("fixed_get0", 10);
+	same("fixed_get2", 30);
+	same("fixed_len", 3);
+}
