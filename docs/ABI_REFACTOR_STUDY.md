@@ -1595,3 +1595,56 @@ compiles a `v128`-signature function in AsmJit -- together with fixing the prolo
 
 Suite **21629 assertions in 731 cases**, green; `[headerdoc]` green; `[docs]` green; `abi-check.sh` OK
 (0 removed); Doxygen 0 warnings; tree clean.
+
+## 29. LibJIT step 4: all four sites located, and the conversion problem that explains the order (2026-11-06)
+
+The driver's arity is *not* the blocker. `jit_function_create(context, sig)` at
+`LibjitModuleCompiler.cpp:424` creates the driver **with the function's own signature**, so a two-slot `v128`
+parameter appears in the driver automatically. What has to change is every place that assumes "one signature slot
+per wasm parameter". All four are now located:
+
+| # | Site | Today | Needed |
+|---|---|---|---|
+| 1 | `LibJitTypeTranslation.cpp:205-207` | one param per wasm param | a `v128` pushes **two `jit_type_ulong`** |
+| 2 | `LibjitModuleCompiler.cpp:184-185` | `locals.push_back(jit_value_get_param(fn, i + 1))` | assemble the aggregate local from two params |
+| 3 | `LibjitModuleCompiler.cpp:465-486` | `callArgs[1 + p] = get_param(driver, p + 1)` | walk two slots for a `v128` param |
+| 4 | `LibjitOpcodeDispatcher.cpp:4566-4571` (**and every other call site**) | `callArgs[1 + i] = stackArgs[i]` | **split** an aggregate value into two words |
+
+Sites 1-3 are index arithmetic -- the same shape SLJIT's off-by-one took, and mechanically the same fix. **Site 4
+is different in kind**, and it is why this backend is last.
+
+### Site 4: libjit has no way to reinterpret a 16-byte aggregate as two words
+
+The callee's operand is an aggregate *value* (`jit_value_t` of the `v128` struct type). The callee now wants two
+`jit_type_ulong` arguments. LibJIT gives two routes, both poor:
+
+| Route | Mechanism | Cost |
+|---|---|---|
+| address + loads | `jit_insn_address_of(value)`, then two `jit_insn_load_relative(..., 0 / 8, jit_type_ulong)` | forces the value into memory at every call, and `address_of` requires the value to have a home |
+| field extraction + shifts | `jit_insn_extract` the two `int` fields, shift and `or` into a `long`, twice | four instructions per split, and the shift insns' exact behaviour on halves is the one unknown §20 left open |
+
+The prologue (site 2) has the mirror problem in reverse and is cheaper: a **store** into the aggregate's memory
+(`jit_insn_store_relative(fn, local, 0/4/8/12, half)`), because a local has an address by construction. That
+asymmetry is the finding: *storing* into an aggregate is easy, *reinterpreting* one as scalar arguments is not.
+
+### So step 4 is a primitive, not an edit
+
+LibJIT needs one shared helper -- `splitAggregate(arg) -> {lo, hi}` -- used by every call site, implemented once
+over `address_of` + two loads. Every call path (`call`, `call_indirect`, imports, the direct tail-call fallback)
+currently builds `callArgs` independently, so the helper must land before any of them is changed:
+
+1. add `splitAggregate`, used by nothing yet -- **no behaviour change, verifiable alone**;
+2. change site 2 (prologue assembly) and site 1 (translation) together, with the pin;
+3. change site 3 (driver) and site 4 (all call sites) via the helper;
+4. only then widen `hasResultBuffer` for the `v128` result (§24).
+
+That ordering is the whole lesson of this study applied once more: the **consumer of the new shape must exist and
+be provable before the producer emits it**. Attempts 1 and 2 failed because the producer changed first.
+
+### Why LibJIT is last, stated in one line
+
+SLJIT needed a frame slot; AsmJit needed a signature expansion; LibJIT needs a **conversion primitive that libjit
+does not provide**, plus four cooperating sites -- and it is the only backend where the *internal* representation
+(`{int, int, int, int}`, read directly by every lane operation) is shared with the boundary.
+
+Suite **21629 assertions in 731 cases**, green; `abi-check.sh` OK; Doxygen 0 warnings; tree clean.
