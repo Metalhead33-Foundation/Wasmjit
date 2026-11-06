@@ -484,6 +484,10 @@ shape — not a silent wrong answer (§11's limitations table is the worked exam
   §4's contract rows this note elaborates.
 - [`ABI.md`](ABI.md) — the calling convention, tuples, `v128`, traps, tail calls,
   continuations.
+- [`ABI_PORTABILITY.md`](ABI_PORTABILITY.md) — the C ABI contract: the host C
+  convention with C linkage on every target, portability over performance, what a
+  backend may **not** do while lowering it (§4), the target matrix you must declare
+  (§7.2), and the GC object/allocator ABI (§8).
 - [`SAFETY.md`](SAFETY.md) — budgets, bounds, and traps versus `abort`.
 - [`SIMD_BACKENDS.md`](SIMD_BACKENDS.md) — what each toolkit can do for SIMD.
 - [`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md) — the dynamic form, its

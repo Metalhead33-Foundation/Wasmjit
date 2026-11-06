@@ -26,6 +26,7 @@ row here. A note missing from this table builds as a *sibling* and fails the
 | change type identity, canonicalisation or `match` | \subpage doc_type_identity | module-local indices → store-scoped `TypeId`, interning, `rec` groups |
 | add or change a diagnostic | \subpage doc_diagnostics | the id/record/schema contract, the ring, the sink, the host flags |
 | emit, call or embed compiled code | \subpage doc_abi | `VMContext*` as arg0, `Callable`, result tuples, `v128`, references, the embedder guide |
+| change a signature, a function prolog, or a GC object layout | \subpage doc_abi_portability | C linkage and the host C ABI on every target, portability over performance, what a backend may not do, the target matrix, the GC object/allocator ABI |
 | embed the engine, or change its install/version story | \subpage doc_embedding_surface | `WASM::Runtime`, the three header tiers, soname/visibility, the install layout |
 | change an embedder-facing surface or the backend seam | \subpage doc_api_abi_stability | the milestone and its four gates, the frozen surfaces, the break classes, the merge readiness |
 | add or change SIMD support | \subpage doc_simd_backends | what each backend can do for vectors, and the helper-based lowering every backend starts from |

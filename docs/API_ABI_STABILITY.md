@@ -66,6 +66,7 @@ without a deliberate version bump**. For this milestone the frozen set is:
 | S8 | The embedder's invocation path: `WASM::callCallable` / `callCallableWithResults`, `HostBridge`, `nativeImport<&fn>()` | [`ABI.md`](ABI.md) "Embedder Guide"; [`WasmValue.hpp`](../WasmBase/WasmValue.hpp) |
 | S9 | The diagnostic record/id/schema contract (`wasmjit.diagnostic.v1`) | [`DIAGNOSTICS.md`](DIAGNOSTICS.md) §1 |
 | S11 | The optional libffi export precache: `ModuleCallCache`, `ComponentCallCache`, their entry records, and `ComponentInstanceHandle::exportedFunctionNames()` | [`WasmCallCache.hpp`](../WasmBase/WasmCallCache.hpp); [`WasmComponentInstance.hpp`](../WasmBase/WasmComponentInstance.hpp) |
+| S12 | The C ABI contract: C linkage for every compiled function, the host C ABI as the convention, portability over performance, the target matrix (`tested` vs `provisional`), and the GC object layout plus allocator call shape | [`ABI_PORTABILITY.md`](ABI_PORTABILITY.md) §1–§8 |
 
 Stability here means **source and ABI compatibility for those ten surfaces
 across one release series**, with three permitted changes: (a) additive fields

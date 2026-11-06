@@ -5,6 +5,13 @@
 > the deferred `v128` block types. See
 > [`ASMJIT_SLJIT_P3_REFS1.md`](ASMJIT_SLJIT_P3_REFS1.md) §2 for the closure
 > checklist.
+>
+> **Added 2026-11-06:** the signature contract this decision is a member of now
+> exists — [`ABI_PORTABILITY.md`](../ABI_PORTABILITY.md) §3 (`v128` is the only
+> kind without a settled C spelling) and §5.4 (why: the aggregate spelling is
+> register-passed on SysV/AAPCS64/RISC-V but **by reference** on MS x64, and the
+> vector spelling has no RISC-V base-psABI support and no portable C name). That
+> document carries the item as open row **P1**; this note is where it is decided.
 
 # Decision note: `v128` across the function boundary (P3's last item)
 
