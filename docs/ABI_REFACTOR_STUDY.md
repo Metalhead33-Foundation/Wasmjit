@@ -1101,3 +1101,36 @@ must assemble a vector from words rather than re-type the aggregate.
 | 1 — the adjacency pin | **done**, 7 assertions, green |
 | 2+3 — signature + prolog | **attempted twice, reverted**; the fix is now known: keep the 4×i32 aggregate and split each boundary word into two halves |
 | 4 — import thunk | pending |
+
+## 19. Recorded decision: local representation is per-backend; only the boundary is canonical (2026-11-06)
+
+Raised in review: *isn't "four 32-bit integers" the representation that made SLJIT and AsmJit unviable in
+the first place?* It is not, and the distinction must be written down or it will be re-litigated every time a
+backend's v128 shape comes up.
+
+**What was unviable, precisely:**
+
+1. **`v128` *returns* in a single-return backend.** A backend whose function returns one register cannot hand
+   back 16 bytes. This is why returns are deferred and why the decision routes them through the results
+   buffer.
+2. **A 16-byte aggregate at the *boundary*.** Two GPRs on SysV by coincidence, **by reference on MS x64**, and
+   differing register-pair rules per target. This is the divergence D-ABI-2/D-ABI-3 forbid.
+
+**What was never the problem:** a `v128` occupying 16 bytes in a stack slot or aggregate local *inside* a
+function. Every backend already does that for GC elements, struct fields and spills, and D-ABI-4 explicitly
+allows each backend to choose its implementation.
+
+### The decision, and the invariant that makes it safe
+
+> **Local representation is per-backend implementation. Only the boundary is canonical.** SLJIT may keep two
+> `W` slots, AsmJit its aggregate, LibJIT four `i32`; each converts at the call. The invariant that makes
+> this legal is byte identity: `lo` = lanes 0-1, `hi` = lanes 2-3, on little-endian, so the conversion is a
+> re-interpretation and never a shuffle.
+
+That is Option A. Option B — one canonical internal representation (two `u64`) everywhere — is a coherent
+end state but a much larger change: every lane operation in every backend would become masking and shifting.
+It is P5 territory (performance and consistency), not a prerequisite for P4, and unit 2+3's second attempt is
+exactly what applying B to one backend without the lane-op rewrite looks like.
+
+**Consequence for unit 2+3:** the specified fix stands — keep LibJIT's `{ int, int, int, int }` and split each
+boundary word into two 32-bit halves in the prolog. No representation change anywhere.
