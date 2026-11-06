@@ -2842,3 +2842,26 @@ TEST_CASE("both backends handle abstract heap kinds in ref.test and ref.cast",
 	trapOf("cast_array_kind_fail", WASM::TrapKind::CastFailure);
 }
 
+
+
+
+
+TEST_CASE("SLJIT br_if carries an i32 block result over a live fallthrough",
+"[sljit][gate-a][probe]")
+{
+	WASM::Module module = loadTestModule("gc_br_if_i32");
+	Sljit::ModuleCompiler compiler;
+	WASM::RegistryImportResolver imports;
+	std::unique_ptr<WASM::ModuleInstance> instance = compiler.instantiate(module, imports);
+	REQUIRE(instance != nullptr);
+
+	const auto call = [&](const char* name) {
+		const std::optional<WASM::Callable> callable = instance->exportedFunction(name);
+		REQUIRE(callable.has_value());
+		INFO("export " << name);
+		return WASM::callCallable<std::int32_t>(*callable);
+	};
+
+	CHECK(call("i32_taken") == 7);
+	CHECK(call("i32_not_taken") == -1);
+}

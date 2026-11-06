@@ -1620,3 +1620,146 @@ cases**, green.
 The two prerequisites Gate A needed are in place and tested — subtype and abstract-kind
 predicates, both wired on both backends — so the remaining work is purely the branch lowering
 and its frame interaction, which is what this entry now narrows down.
+
+## 35. `br_on_non_null`, second attempt: the bug may not be in my opcode (2026-11-06)
+
+The second attempt copied `br_if`'s exact shape — `cmp` → `transferToBase` → `jump` →
+fallthrough label, no `emitBranchTo` at all — and **still failed, but differently**: SIGILL
+became SIGABRT.
+
+That change of failure mode is the useful result. It eliminates §34's candidate 1 (`emitBranchTo`
+assumes the following code is unreachable): the second version never calls it, so the fault is
+elsewhere.
+
+### What is left, and a suspicion worth testing first
+
+Both remaining candidates are about the **merge**, not the branch:
+
+- the block's live fallthrough reaches the block's end; and
+- the branch path delivers a value through `target.endJumps`.
+
+Here is the part that matters: **no fixture in the tree exercises that combination.** Every
+existing block-parameter or block-result test uses `br`/`br_if` whose fallthrough is either
+empty or unreachable. If the merge machinery has never been exercised with a live fallthrough
+plus a value-carrying conditional branch, then the bug may be a **pre-existing gap in SLJIT**
+that `br_on_non_null` merely exposes — and writing more of `br_on_non_null` would be debugging
+the wrong thing.
+
+### The next step, and it needs no new opcode
+
+Write a *neutral* test of the machinery that already exists:
+
+```wat
+(func (export "br_if_value") (result i32)
+  (local $r (ref null $a))
+  (local.set $r (array.new_default $a (i32.const 3)))
+  (local.get $r)                       ;; the block's parameter
+  (block $b (param (ref $a)) (result i32)
+    (i32.const 1)                       ;; condition
+    (br_if $b)                          ;; carries the reference
+    (drop)                              ;; fallthrough: drop the param
+    (i32.const -1)))                    ;; fallthrough result
+```
+
+If that faults too, the defect is in the merge path and **not** in `br_on_non_null` — a
+finding worth having on its own, because it would mean blocks-with-parameters plus conditional
+branches have never actually worked, only their degenerate cases. If it passes, then my
+condition (`SLJIT_EQUAL` on a 64-bit reference against zero, versus `br_if`'s
+`SLJIT_EQUAL | SLJIT_32` on an `i32`) or my `pop()` ordering is the fault, and the fix is
+narrow.
+
+Either way the experiment is cheap, uses an opcode that already exists, and decides between
+"my opcode" and "the machinery" — which is exactly the split §34 asked for.
+
+### Status
+
+Gate A **open**, both attempts removed, suite **21524 assertions in 722 cases**, green. The two
+predicates Gate A needed remain in place and tested; what is unproven is the *branch merge*,
+not the type logic.
+
+### Note on the removal technique
+
+This removal worked first time, unlike §34's: anchor on the function's signature line, then cut
+*forward* to the first `}` in column 0. The §34 failure came from anchoring on the wrong brace
+by searching from the wrong place — the rule holds, **anchor on unique content, cut forward**.
+
+## 36. Study: the merge defect is reference-specific, and it is not my opcode (2026-11-06)
+
+§35 left one question: is `br_on_non_null`'s failure my lowering, or the block/branch merge
+machinery underneath it? Two experiments answer it, and the answer re-prioritises the work.
+
+### Experiment 1 — the machinery, with an existing opcode
+
+Feature-neutral probe: a `block` with a **reference** result, a `br_if` that carries that result,
+and a live fallthrough that also produces one. No new opcode, no new lowering:
+
+```wat
+(block $b (result (ref $a))
+  (local.get $r)
+  (i32.const 1)
+  (br_if $b)          ;; carries the reference to the block end
+  (drop)
+  (local.get $r))
+```
+
+**Result: SIGABRT** when the branch is taken. The machinery, not `br_on_non_null`, is at fault.
+
+### Experiment 2 — the same shape with a scalar
+
+```wat
+(block $b (result i32)
+  (i32.const 7)
+  (i32.const 1)
+  (br_if $b)
+  (drop)
+  (i32.const -1))
+```
+
+**Result: passes** — `7` when taken, `-1` when not, and it is now a kept regression test
+(`[sljit][gate-a][probe]`).
+
+### What the pair proves
+
+| Property | i32 result | reference result |
+|---|---|---|
+| `br_if` carrying the block result | **works** | **aborts** |
+| `br_if` not taken, live fallthrough | works | untested (the taken case already aborts) |
+
+So the merge path is sound for 4-byte scalars and broken for 8-byte **references**. That is a
+sharper statement than "blocks are buggy", and it has three consequences:
+
+1. **It is a defect in shipped functionality, not a missing feature.** Any Wasm program that
+   conditionally branches out of a block carrying a reference hits it today. Nobody noticed
+   because every existing reference fixture uses `br` (unconditional) or has no live fallthrough.
+2. **`br_on_non_null` cannot be implemented on top of it** — the opcode's entire purpose is
+   carrying a reference out of a block conditionally. Building it first would have meant
+debugging two things at once, which is exactly what §34/§35 did.
+3. **Priority changes.** Gate A (new opcodes) drops below fixing this, because this is a wrong
+   answer in code that already exists.
+
+### Candidate causes, in the order worth testing
+
+The value is 8 bytes and GC-managed, while the working case is 4 bytes and unmanaged, so the
+suspects are all about references rather than about control flow:
+
+| # | Hypothesis | How to test |
+|---|---|---|
+| a | The merge emits a **retain or release** for the transferred reference, and one path double-counts | compare against a fixture whose value is a `funcref` (a `Callable*`, not refcounted) — if that works, the fault is the GC refcount path |
+| b | `transferToBase` / the result pop moves an 8-byte value with a 4-byte assumption | read the emitted slots for the two experiments; the widths come from `stackWidths_`, so a wrong width entry would show up as a half-written slot |
+| c | The live fallthrough's `drop` releases the very value the merge later reads | remove the `drop` (fallthrough produces a fresh reference) and see if the abort moves or disappears |
+
+Hypothesis (c) is the cheapest and the most likely to be informative: it distinguishes "the merge
+mishandles references" from "the fallthrough and the branch disagree about ownership", and the
+second is a much smaller fix.
+
+### Where this leaves the arc
+
+Gate A is **blocked on a pre-existing SLJIT defect**, now characterised, reproducible in ten lines
+of Wasm text, and isolated to reference results. The two type predicates Gate A needs are done and
+parity-tested, so once the merge is fixed the remaining work is the branch lowering that §34/§35
+already drafted twice.
+
+Recorded as the arc's clearest example of the general rule this whole saga keeps producing: **the
+blocker is almost never where the feature is.** Four times now a "missing" GC feature turned out to
+sit on a defect or a gap one level down — the layout contract, the trap kinds, the operand-stack
+height, and now the reference merge.
