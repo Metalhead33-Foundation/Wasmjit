@@ -2,6 +2,7 @@
 
 #include "SljitModuleCompiler.hpp"
 
+#include "../WasmBase/WasmBackendAbi.hpp"
 #include "../WasmBase/WasmMemory.hpp"
 #include "../WasmBase/WasmStack.hpp"
 #include "../WasmBase/WasmStore.hpp"

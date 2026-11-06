@@ -130,9 +130,18 @@ ModuleCallCache::ModuleCallCache(ModuleInstance& instance)
 					entry.argTypes.push_back(&ffi_type_uint64);
 			}
 		}
-		if (entry.multiResult)
+		// A backend that returns a v128 through a caller-supplied buffer describes the
+		// same shape as a multi-value tuple: a trailing pointer argument and a void
+		// return (docs/backends/V128_SIGNATURE_DECISION.md).
+		const bool bufferedVectorResult = !entry.multiResult
+				&& view.funcResults().size() == 1u
+				&& view.funcResults().front().value.opcode
+						== WASM::ValueTypeCode::V128
+				&& instance.v128ResultIsBuffered();
+		if (entry.multiResult || bufferedVectorResult)
 			entry.argTypes.push_back(&ffi_type_pointer); // result buffer
 		entry.returnType = view.funcResults().empty() || entry.multiResult
+				|| bufferedVectorResult
 				? &ffi_type_void
 				: ffiTypeFor(view.funcResults().front());
 		auto cif = std::make_unique<ffi_cif>();

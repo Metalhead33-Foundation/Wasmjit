@@ -890,14 +890,29 @@ public:
 			throw std::runtime_error("AsmJit initial compiler does not support multi-value results");
 		for (const auto& parameter : type.params)
 			requireScalar(parameter.val, "parameters");
-		for (const auto& result : type.results)
-			requireScalar(result.val, "results");
+		for (const auto& result : type.results) {
+			// A v128 result is allowed: it travels through the caller-supplied buffer,
+			// which the signature spells as a trailing pointer and a void return.
+			if (result.val.opcode != WASM::ValueTypeCode::V128)
+				requireScalar(result.val, "results");
+		}
 		for (const auto& local : stack.allLocals) {
 			if (local.opcode != WASM::ValueTypeCode::V128)
 				requireScalar(local, "locals");
 		}
 		resultType = type.results.empty()
 				? WASM::ValueTypeCode::Void : type.results.front().val.opcode;
+		bufferedVectorResult = resultType == WASM::ValueTypeCode::V128;
+		if (bufferedVectorResult) {
+			// The caller supplies a 16-byte buffer as a trailing pointer argument; keep
+			// it in a stack slot so helper calls cannot clobber it.
+			v128ResultSlot = compiler.new_stack(16, 16, "v128ResultBuffer");
+			asmjit::x86::Gp bufferPointer = compiler.new_gp_ptr("v128ResultBufferIn");
+			function.set_arg(static_cast<uint32_t>(stack.parameterCount) + 1,
+					bufferPointer);
+			checkError(compiler.mov(v128ResultSlot, bufferPointer),
+					"AsmJit v128 result buffer capture failed");
+		}
 
 		locals.reserve(stack.allLocals.size());
 		vmContext = compiler.new_gp_ptr("vmContext");
@@ -929,7 +944,7 @@ public:
 		asmjit::Label bodyLabel = compiler.new_label();
 		checkError(compiler.test(pending, pending), "AsmJit pending-trap test emission failed");
 		checkError(compiler.jz(bodyLabel), "AsmJit pending-trap branch emission failed");
-		if (type.results.empty()) {
+		if (type.results.empty() || bufferedVectorResult) {
 			checkError(compiler.ret(), "AsmJit trap-path void return emission failed");
 		} else if (isFloatKind(resultType)) {
 			auto zero = compiler.new_xmm("trapFloatResult");
@@ -1004,7 +1019,24 @@ public:
 				checkError(compiler.ret(
 						materializeFloat(values.back(), kindWidth(resultType))),
 						"AsmJit float function return emission failed");
-			else
+			else if (bufferedVectorResult) {
+				// The value is the address of the vector 16-byte buffer; copy it into the
+				// caller buffer and return void.
+				asmjit::x86::Gp destination = compiler.new_gp_ptr("v128ResultOut");
+				checkError(compiler.mov(destination, v128ResultSlot),
+						"AsmJit v128 result buffer reload failed");
+				asmjit::x86::Gp source = values.back();
+				asmjit::x86::Gp word = compiler.new_gp64("v128ResultWord");
+				checkError(compiler.mov(word, asmjit::x86::qword_ptr(source, 0)),
+						"AsmJit v128 result low word load failed");
+				checkError(compiler.mov(asmjit::x86::qword_ptr(destination, 0), word),
+						"AsmJit v128 result low word store failed");
+				checkError(compiler.mov(word, asmjit::x86::qword_ptr(source, 8)),
+						"AsmJit v128 result high word load failed");
+				checkError(compiler.mov(asmjit::x86::qword_ptr(destination, 8), word),
+						"AsmJit v128 result high word store failed");
+				checkError(compiler.ret(), "AsmJit v128 result return emission failed");
+			} else
 				checkError(compiler.ret(values.back()),
 						"AsmJit function return emission failed");
 		}
@@ -4920,6 +4952,10 @@ private:
 	std::vector<ControlFrame> controls;
 	uint32_t resultCount = 0;
 	WASM::ValueTypeCode resultType = WASM::ValueTypeCode::Void;
+	//! Stack slot holding the caller-supplied 16-byte buffer of a v128 result.
+	asmjit::x86::Mem v128ResultSlot;
+	//! True when the single result is a v128 returned through that buffer.
+	bool bufferedVectorResult = false;
 };
 
 } // namespace
@@ -4986,6 +5022,12 @@ void ModuleCompiler::declareFunctions(WASM::ModuleInstance& instance,
 void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance,
 		const WASM::Module& module, WASM::ModuleInstanceInternals& internals)
 {
+	// A v128 result travels through the caller-supplied 16-byte buffer: the
+	// signature spells it as a trailing pointer and a void return, so the call
+	// cache must describe that shape rather than a returned aggregate
+	// (docs/backends/V128_SIGNATURE_DECISION.md).
+	instance.setV128ResultIsBuffered(true);
+
 	if (module.functionBodies.size() != functionRecords.size())
 		throw std::runtime_error("AsmJit function declaration/body count mismatch");
 

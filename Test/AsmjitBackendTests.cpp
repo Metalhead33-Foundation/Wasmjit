@@ -126,19 +126,29 @@ TEST_CASE("AsmJit extends packed i8 and i16 storage to i32", "[asmjit][storage]"
 	CHECK(i16Unsigned(&i16) == 0x00008001u);
 }
 
-TEST_CASE("AsmJIT refuses a v128 result rather than miscompiling it", "[asmjit][v128][abi]")
+TEST_CASE("AsmJIT returns a v128 through the caller's buffer", "[asmjit][v128][abi]")
 {
-// The canonical rule says a v128 result crosses through a caller-supplied
-// 16-byte buffer (docs/backends/V128_SIGNATURE_DECISION.md). The backend does not
-// implement that path yet, and it *refuses* the shape at instantiation with a
-// diagnostic instead of returning the vector's buffer address where the signature
-	// declares a vector register. This pins the refusal until the buffer path lands
+	// The canonical rule: a v128 result crosses through a caller-supplied 16-byte
+	// buffer, so the compiled signature is void(VMContext*, void* out). The buffer is
+	// pre-filled so a function that wrote nothing would fail
 	// (docs/ABI_REFACTOR_POST_MORTEM.md section 6, follow-up 1).
 	auto runtime = WASM::Runtime::create("asmjit");
 	REQUIRE(runtime != nullptr);
 	auto module = runtime->loadFile(
-std::filesystem::path(WASM_TEST_DIR) / "asmjit_vec_result.wasm");
+			std::filesystem::path(WASM_TEST_DIR) / "asmjit_vec_result.wasm");
 	WASM::RegistryImportResolver imports;
-	CHECK_THROWS_WITH(runtime->instantiate(*module, imports),
-			Catch::Matchers::ContainsSubstring("AsmJit supports only"));
+	WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+
+	const std::optional<WASM::Callable> callable = instance.exportedFunction("vec_result");
+	REQUIRE(callable.has_value());
+	REQUIRE(callable->fnPtr != nullptr);
+
+	alignas(16) std::uint32_t lanes[4] = {0xffffffffu, 0xffffffffu, 0xffffffffu,
+			0xffffffffu};
+	using Entry = void (*)(void*, void*);
+	reinterpret_cast<Entry>(callable->fnPtr)(callable->context, lanes);
+	CHECK(lanes[0] == 7u);
+	CHECK(lanes[1] == 8u);
+	CHECK(lanes[2] == 9u);
+	CHECK(lanes[3] == 10u);
 }

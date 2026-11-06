@@ -319,3 +319,34 @@ CHECK(reinterpret_cast<Fn>(callable->fnPtr)(callable->context,
 AbiBoundaryVector{{1, 1, 1, 1}}, AbiBoundaryVector{{2, 2, 2, 2}},
 AbiBoundaryVector{{3, 3, 3, 3}}) == 6);
 }
+
+TEST_CASE("the call cache follows the backend's v128 result spelling",
+"[callcache][v128][abi]")
+{
+	// A backend that returns a v128 through a caller-supplied buffer describes the
+	// same shape as a multi-value tuple: a trailing pointer argument and a void
+	// return (docs/backends/V128_SIGNATURE_DECISION.md). AsmJIT does the buffered
+	// form; SLJIT and LibJIT still return the value themselves.
+	auto asmjit = WASM::Runtime::create("asmjit");
+	REQUIRE(asmjit != nullptr);
+	auto asmjitModule = asmjit->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "asmjit_vec_result.wasm");
+	WASM::RegistryImportResolver imports;
+	WASM::ModuleInstance& asmjitInstance = asmjit->instantiate(*asmjitModule, imports);
+	CHECK(asmjitInstance.v128ResultIsBuffered());
+
+	WASM::ModuleCallCache cache(asmjitInstance);
+	const WASM::ModuleFfiEntry* entry = cache.find("vec_result");
+	REQUIRE(entry != nullptr);
+	CHECK(entry->paramCount == 0u);
+	// VMContext* plus the caller's 16-byte result buffer.
+REQUIRE(entry->argTypes.size() == 2u);
+CHECK(entry->returnType != nullptr);
+
+auto sljit = WASM::Runtime::create("sljit");
+REQUIRE(sljit != nullptr);
+auto sljitModule = sljit->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "v128_boundary_order.wasm");
+WASM::ModuleInstance& sljitInstance = sljit->instantiate(*sljitModule, imports);
+CHECK_FALSE(sljitInstance.v128ResultIsBuffered());
+}

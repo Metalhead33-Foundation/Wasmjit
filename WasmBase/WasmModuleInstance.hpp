@@ -506,6 +506,19 @@ public:
 	/** \brief Reports how the backend spells a `v128` parameter. \return true when a vector crosses as one 16-byte aggregate. */
 	bool v128ParameterIsAggregate() const noexcept { return v128ParameterIsAggregate_; }
 
+	//! How this module's backend returns a `v128` result. `false` (the default) means
+	//! the backend returns it itself -- in a register or an aggregate, as its own
+	//! convention says. `true` means the canonical rule: the caller passes a 16-byte
+	//! buffer as a trailing pointer parameter and the function returns void
+	//! (`docs/backends/V128_SIGNATURE_DECISION.md`). The call cache needs to know,
+	//! because the two describe different C signatures to libffi.
+	bool v128ResultIsBuffered_ = false;
+
+	/** \brief Records whether a `v128` result crosses through the caller's buffer. \param buffered true when it does. */
+	void setV128ResultIsBuffered(bool buffered) noexcept { v128ResultIsBuffered_ = buffered; }
+	/** \brief Reports whether a `v128` result crosses through the caller's buffer. \return true when the caller supplies the 16-byte result buffer. */
+	bool v128ResultIsBuffered() const noexcept { return v128ResultIsBuffered_; }
+
 	//! Objects whose count reached zero are only *queued*; `gcCollect()` does
 	//! the actual recycling. Call it only at a safepoint where no Wasm frame is
 	//! live and the embedder holds no un-counted references — then any queued

@@ -109,7 +109,19 @@ asmjit::FuncSignature TypeTranslator::translateFunctionType(const WASM::FuncType
 		const WASM::StorageType& result = function.results.front();
 		if (result.isPacked)
 			throw std::runtime_error("AsmJit ABI translation: packed function result is invalid Wasm");
-		signature.set_ret(translateStorageType(result));
+		if (!result.isPacked && result.val.opcode == WASM::ValueTypeCode::V128) {
+			// A v128 result cannot come back in one return register, so it travels
+			// through a caller-supplied 16-byte buffer as a trailing pointer
+			// parameter and the function returns void -- the canonical rule, and the
+			// same path multi-value tuples and SLJIT already use
+			// (docs/backends/V128_SIGNATURE_DECISION.md).
+			if (!signature.can_add_arg())
+				throw std::runtime_error("AsmJit ABI translation: no room for v128 result buffer");
+			signature.add_arg(asmjit::TypeId::kUIntPtr);
+			signature.set_ret(asmjit::TypeId::kVoid);
+		} else {
+			signature.set_ret(translateStorageType(result));
+		}
 	} else if (function.results.size() > 1) {
 		// Multi-value tuples are written through the caller-provided trailing
 		// result buffer. Do not rely on a platform's aggregate-return ABI.
