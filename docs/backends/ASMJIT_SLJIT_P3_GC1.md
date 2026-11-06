@@ -332,3 +332,83 @@ and it is exactly the shape that would have avoided the arity problem in §10.
 
 **Still refused, both backends:** `array.set`, `array.fill`, `array.copy`,
 `array.new_data`/`elem`, packed elements, `v128` elements, `ref.test`/`ref.cast`.
+
+## 12. Negative result: `array.set` was attempted and reverted (2026-11-06)
+
+`array.set` was implemented on both backends with the same shape as `array.get`
+(null trap, bounds trap, reload after the traps, `object + dataOffset + index*size`)
+and the first fixture run **crashed the process with `SIGILL`** rather than
+failing an assertion. Reverted in full: both definitions, the SLJIT declaration,
+the fixture export and its assertions. The suite is back to its pre-attempt
+count (`[gc]` 114 assertions in 6 cases; full suite 21197 in 705).
+
+**Why reverted rather than debugged:** a `SIGILL` inside generated code means the
+registers or the address were wrong at the store, i.e. a wild write into the heap —
+the same memory-safety class the GC plan exists to avoid. With no budget left to
+bisect, leaving a wild-store path in the tree is strictly worse than a refused
+opcode (the refusal is clean: the function has no compiled body).
+
+**Where to start next time** (in order of likelihood):
+
+1. **SLJIT `SLJIT_MEM2(R1, R2)` with an immediate offset.** `array.set` writes
+   through `MEM2(base, index)` plus `dataOffset`; `array.get` reads through
+   `MEM1(base)` after folding the offset into the base register. The asymmetry is
+   the first suspect — fold the offset into the register for the store too, so
+   both directions address identically.
+2. **Register pressure across three operands.** `array.set` is the first GC op
+   that needs the object, the index *and* the value live after two trap blocks;
+   reloading all three after the labels is necessary but may not be sufficient if
+   one of them is still holding a partially computed address.
+3. **AsmJit.** The crash was not isolated per backend this time; the fixture case
+   ran both. The next attempt should tag the two backends separately (as the
+   `v128` narrow defect taught) instead of running the A/B case first.
+
+**Lesson for the saga post-mortem:** every `SIGILL` in this saga has come from
+*register liveness across a helper call* or from a *memory-operand form the toolkit
+rejects silently*. The mitigation that has worked every time is the one line this
+entry recommends: make the two directions of an access address **identically**,
+and isolate per backend before comparing.
+
+## 13. `array.set` resolved: the hypothesis in §12 was the cause (2026-11-06)
+
+The diagnosis in §12 was correct, and the method it prescribed is what proved it.
+
+**Step 1 — isolate SLJIT, and only SLJIT.** `array.set` was re-added to the SLJIT
+backend alone, with the fixture assertion attached to the SLJIT-only case (no A/B
+run). It passed immediately: **17 assertions, no crash**. So the fault had been in
+the SLJIT lowering, not in AsmJit, and the previous attempt's crash could be
+attributed without a bisect.
+
+**Step 2 — make the two directions address identically.** The read path folds the
+element offset into the base register:
+
+```c
+R1 += index * elementSize;  load  [R1 + dataOffset]
+```
+
+while the failed store used `SLJIT_MEM2(base, index)` **plus** a displacement. The
+fixed store adds both parts into the register and then stores through `[R1]`:
+
+```c
+R1 += index * elementSize;  R1 += dataOffset;  store  [R1]
+```
+
+which is the same arithmetic, expressed in the same instruction shape. The
+`MEM2`+displacement store was the culprit; nothing else changed.
+
+**Step 3 — mirror to AsmJit**, using the same folded-address shape (copy the
+object into an address Gp, add the scaled index, add `dataOffset`, store through
+the register). That backend had never been at fault: the earlier crash was SLJIT's
+store, and the A/B case had simply been run first.
+
+Counts: `[gc]` **121 assertions in 6 cases**; full suite **21204 in 705**;
+`[headerdoc]` green; Doxygen 0 warnings.
+
+### The lesson, now with a proven mitigation
+
+For the saga post-mortem: **`SLJIT_MEM2` plus an immediate displacement on a store
+was silently mis-encoded, and the same arithmetic through `MEM1` was correct.** The
+mitigation that worked, in order: isolate the backend, then make read and write
+paths address identically rather than using a different memory-operand *form* for
+the same computation. Both halves of §12's advice earned their place — the
+isolation made the crash attributable, and the shape change made it disappear.

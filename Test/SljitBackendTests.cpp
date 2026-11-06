@@ -2184,6 +2184,7 @@ TEST_CASE("sljit: array.new and array.len execute", "[sljit][module][parity][gc]
 	CHECK(WASM::callCallable<std::int32_t>(call("array_len")) == 3);
 	CHECK(WASM::callCallable<std::int32_t>(call("array_len_zero")) == 0);
 	CHECK(WASM::callCallable<std::int32_t>(call("array_get")) == 42);
+	CHECK(WASM::callCallable<std::int32_t>(call("array_set_get")) == 77);
 	CHECK_THROWS(WASM::callCallable<std::int32_t>(call("array_get_oob")));
 }
 
@@ -2217,6 +2218,7 @@ TEST_CASE("asmjit and sljit agree on array.new and array.len",
 	same("array_len", 3);
 	same("array_len_zero", 0);
 	same("array_get", 42);
+	same("array_set_get", 77);
 	// The bounds trap must fire on both backends, not just one.
 	{
 		const std::optional<WASM::Callable> asmFn = asmInstance->exportedFunction("array_get_oob");

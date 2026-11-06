@@ -433,6 +433,7 @@ protected:
 	void dispatchStructSet(WASM::TypeIdx arg1, uint32_t arg2) override; //!< `struct.set`.
 	void dispatchArrayNew(WASM::TypeIdx arg) override; //!< `array.new`.
 	void dispatchArrayGet(WASM::TypeIdx arg) override; //!< `array.get`.
+	void dispatchArraySet(WASM::TypeIdx arg) override; //!< `array.set`.
 	void dispatchArrayLen() override; //!< `array.len`.
 	void dispatchRefFunc(WASM::FuncIdx arg) override; //!< `ref.func`.
 	void dispatchRefAsNonNull() override; //!< `ref.as_non_null`.

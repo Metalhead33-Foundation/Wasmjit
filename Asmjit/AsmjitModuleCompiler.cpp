@@ -2317,6 +2317,68 @@ protected:
 		values.push_back(object);
 	}
 
+	void dispatchArraySet(WASM::TypeIdx arg) override
+	{
+		const WASM::CoreTypeView view = module.typeView(arg);
+		if (view.kind() != WASM::CanonTypeKind::Array)
+			throw std::runtime_error("AsmJit array.set requires an array type");
+		const WASM::CanonFieldType& element = view.arrayElement();
+		if (element.storage.isPacked)
+			throw std::runtime_error("AsmJit array.set does not lower packed elements yet");
+		const int width = kindWidth(element.storage.value.opcode);
+		if (width != 4 && width != 8)
+			throw std::runtime_error("AsmJit array.set does not lower this element type yet");
+		if (values.size() < 3)
+			throw std::runtime_error("AsmJit array.set operand stack underflow");
+		auto value = values.back();
+		values.pop_back();
+		auto index = values.back();
+		values.pop_back();
+		auto object = values.back();
+		values.pop_back();
+		asmjit::FuncSignature voidSignature(asmjit::CallConvId::kCDecl);
+		voidSignature.set_ret(asmjit::TypeId::kVoid);
+		asmjit::Label notNull = compiler.new_label();
+		checkError(compiler.test(object, object), "AsmJit array.set null test failed");
+		checkError(compiler.jnz(notNull), "AsmJit array.set null branch failed");
+		asmjit::InvokeNode* nullCall = nullptr;
+		checkError(compiler.invoke(asmjit::Out(nullCall),
+				reinterpret_cast<uint64_t>(&asmjitReportNullArray), voidSignature),
+				"AsmJit array.set null trap emission failed");
+		emitPendingTrapReturn();
+		checkError(compiler.bind(notNull), "AsmJit array.set null label binding failed");
+		auto length = compiler.new_gp32("arrayLength");
+		checkError(compiler.mov(length, asmjit::x86::dword_ptr(object,
+				static_cast<int32_t>(WASM::GcHeader::kArrayLengthOffset))),
+				"AsmJit array.set length load failed");
+		asmjit::Label inBounds = compiler.new_label();
+		checkError(compiler.cmp(index, length), "AsmJit array.set bounds compare failed");
+		checkError(compiler.jb(inBounds), "AsmJit array.set bounds branch failed");
+		asmjit::InvokeNode* oobCall = nullptr;
+		checkError(compiler.invoke(asmjit::Out(oobCall),
+				reinterpret_cast<uint64_t>(&asmjitReportArrayOob), voidSignature),
+				"AsmJit array.set bounds trap emission failed");
+		emitPendingTrapReturn();
+		checkError(compiler.bind(inBounds), "AsmJit array.set bounds label binding failed");
+		// Fold the offset into one register, exactly as the read path does.
+		auto address = compiler.new_gp_ptr("arraySetAddress");
+		checkError(compiler.mov(address, object), "AsmJit array.set base copy failed");
+		auto byteOffset = compiler.new_gp64("arraySetOffset");
+		checkError(compiler.mov(byteOffset.r32(), index), "AsmJit array.set index widening failed");
+		checkError(compiler.shl(byteOffset, width == 4 ? 2 : 3),
+				"AsmJit array.set index scaling failed");
+		checkError(compiler.add(address, byteOffset), "AsmJit array.set address add failed");
+		checkError(compiler.add(address,
+				static_cast<int32_t>(WASM::gcArrayDataOffset(element.storage))),
+				"AsmJit array.set data offset failed");
+		if (width == 4)
+			checkError(compiler.mov(asmjit::x86::dword_ptr(address), value),
+					"AsmJit array.set element store failed");
+		else
+			checkError(compiler.mov(asmjit::x86::qword_ptr(address), value),
+					"AsmJit array.set element store failed");
+	}
+
 	void dispatchArrayGet(WASM::TypeIdx arg) override
 	{
 		const WASM::CoreTypeView view = module.typeView(arg);
