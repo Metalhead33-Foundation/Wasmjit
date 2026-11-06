@@ -1992,3 +1992,42 @@ read.
 ### State
 
 Backend unchanged; suite **21648 assertions in 734 test cases**, green; `abi-check.sh` OK; Doxygen 0 warnings.
+
+## 37. Bisect: one axis is impossible, the other says the shape is not the signal (2026-11-06)
+
+### Bisecting the *edits* is not possible, and §20 explains why
+
+The change splits into translation, prologue, driver, call sites and result indices. Removing any one part leaves the
+other two disagreeing about how many slots a `v128` occupies, so every proper subset is broken *by construction*:
+the pins fail, not the suites. That is §20's rule again -- a boundary drawn through edits that are simultaneous
+produces no intermediate state worth measuring -- so the useful axis is the **shape space**, not the edit set.
+
+### Bisecting the *shapes* (with the full change applied)
+
+| Shape | Result under the changed ABI |
+|---|---|
+| `(v128) -> i32` (lane read) | passes |
+| `(i32, v128) -> i32`, `(v128, i32) -> i32` | passes |
+| `(v128, v128) -> i32` | passes |
+| `(v128, v128, v128) -> i32` | passes |
+| `v128` parameter with a `v128` **local** | passes |
+| **`(v128) -> v128`** (parameter and result) | **passes** |
+
+Six shapes, all correct, including the parameter-plus-result combination that `simd_align` and `simd_select` use.
+So the failing signal is **not** a `v128`-parameter shape. It is something the pins and those scripts differ in for
+another reason -- and the scripts were checked to genuinely contain `(param $x v128)` (an earlier count said
+otherwise only because the grep missed the `$name` form).
+
+### Where the bisect points next
+
+Each spec script is a **sequence of `(module ...)` definitions**, and a single script can define several modules with
+different shapes -- including imports, multiple results, and `v128` tuples through the result buffer. The next cut
+is therefore by **module**: run `simd_align.wast`'s modules one at a time, or instrument `compileFunction` to print
+the function index and type it is about to build, so the crashing function names itself in one run.
+
+Given six passing shapes and three passing candidate fixes, the remaining space is small and the next step is
+mechanical: name the function, then read it.
+
+### State
+
+Backend unchanged; experiment reverted; suite **21648 assertions in 734 test cases**, green; tree clean.
