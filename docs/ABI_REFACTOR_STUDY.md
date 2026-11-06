@@ -939,3 +939,38 @@ move safe (`wasm_v128` present, `arg0_lo` absent, then inverted here).
 | **Post-mortem** | §16, four corrections, and the sequence that produced them |
 
 Suite **21609 assertions in 729 cases**, green; `abi-check.sh` OK; Doxygen 0 warnings.
+
+### Correction: the native split is four sites, and the fourth is a contract (2026-11-06)
+
+Reading `EmitCpp.cpp:495-545` to implement the three-site change found a fourth dependency: the generated
+adapter does not call the function pointer directly, it forwards through a variadic helper:
+
+```cpp
+callExport<int32_t>("lane1", arg0);           // or callExportVoid / callExportWithResults
+```
+
+So a two-parameter signature is not achievable by editing the declaration alone: `callExport<T>` must be
+**invoked with the two words**, and its own contract — how it binds host-side arguments to the compiled
+function's signature — lives in the runtime header the adapter includes, not in the emitter. Changing the
+declaration without it would produce an adapter that compiles and calls with the wrong arity.
+
+That makes the native-side change **four** coordinated edits:
+
+| # | Site | Change |
+|---|---|---|
+| 1 | `EmitCpp.cpp:33` | typedef parameter list: two `uint64_t` for a vector |
+| 2 | `EmitCpp.cpp:505` | adapter signature: same |
+| 3 | `EmitCpp.cpp:517` (forwarding) | `callExport(…, name_lo, name_hi)` |
+| 4 | the `callExport` family's contract | must accept the pair; read it before editing 1-3 |
+
+Item 4 is the reason this stopped rather than proceeded: it is a **contract question, not an edit**, and the
+arc's entire record says contracts are settled before edits — P1 exists because of exactly this.
+
+### Where P3 and P4 stand, without euphemism
+
+- **P3**: guest side done and asserted across 14 languages; native side **located (4 sites) and blocked on
+  `callExport`'s contract**; cache fixed and parity-tested.
+- **P4**: not started. LibJIT's four parts are specified; nothing in any backend has changed for this
+  refactor. **No compiled function anywhere uses the new convention yet.**
+
+Suite **21609 assertions in 729 cases**, green; `abi-check.sh` OK; Doxygen 0 warnings; tree clean.
