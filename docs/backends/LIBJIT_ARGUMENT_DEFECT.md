@@ -124,3 +124,54 @@ canonical boundary or another backend.
 Option 5 is acceptable without further measurement; 1 and 2 can each be decided
 in a single build.
 
+## 7. Workaround experiments run (2026-11-06)
+
+| Option | Change | Result |
+|---|---|---|
+| 1 | body compiled at optimisation level 0 for signatures with >6 parameters | **no effect** -- the third vector's low word is still garbage |
+| 2 | two-hop copy (each incoming word stored into a fresh `ulong` local, then into the aggregate) | **no effect** |
+| -- | `rawFnPtr` vs `fnPtr` for the same function | **both wrong, differently** -- the driver is not involved |
+
+Options 3 and 4 are variants of 2 and are not expected to behave differently,
+since 2 already ends the argument's live range at entry and the value is still
+lost.
+
+Together with the measurement in §3, this means the value is lost **before any
+IR we can write executes** -- i.e. inside libjit's own function prologue, while
+it saves the incoming argument registers. If that is so, **no backend-side IR
+can recover it**, and no wrapper or trampoline can either: the word never
+arrives.
+
+## 8. Recommendation
+
+Two workarounds remain viable, and the choice between them is a product
+decision rather than a technical one:
+
+1. **Refuse the shape (option 5).** Detect a signature needing more than five
+   argument words after the context at declaration time and refuse to compile
+   that function, with a diagnostic. Effect: no silent corruption; the affected
+   spec commands skip rather than fail; capability is honest but reduced
+   (three-vector functions stop existing). Cost: one guard in the backend plus
+   a test.
+2. **Restore the backend's own spelling for those shapes.** LibJIT historically
+   passed a `v128` as a single 16-byte aggregate, which is four arguments for a
+   three-vector function and therefore never reaches `r9`. Restoring that
+   **only for LibJIT** removes the defect outright and costs nothing at
+   runtime -- but it makes LibJIT's boundary differ from the canonical rule for
+   these signatures, which is exactly what `docs/ABI_PORTABILITY.md` forbids
+   for cross-backend interop (MS x64 passes such aggregates by reference).
+
+Given that the canonical rule exists to keep backends interchangeable, option 1
+is the defensible default and option 2 is the escape hatch to take only with an
+explicit milestone decision recorded against
+`docs/backends/V128_SIGNATURE_DECISION.md`.
+
+## 9. What would close this properly
+
+Disassemble the compiled entry (`objdump` on the generated code, or libjit's own
+machine-code dump) and look at what the prologue does with `r9` between entry and
+the first store. If `r9` is clobbered there, the defect is upstream of every
+workaround and should be reported to libjit; if it is saved correctly, the loss
+is in our frame layout and option 3 becomes worth testing after all.
+
+
