@@ -641,3 +641,39 @@ rule is a **native-boundary** rule, and `ABI_PORTABILITY.md` §3 should say so i
 
 This is the first correction in the refactor that came from review rather than from a test, and it is the
 most valuable kind: the tests were all green while the *design* was under-specified.
+
+### Resolution of §15: this generator emits *native-side* surfaces only
+
+Checking how `direction` is actually used settles it. `EmitCpp` reads
+`schema.value("direction", "g2h")` and uses it for **nothing except which functions to emit**:
+`emitImports = direction != "h2g"`, `emitExports = direction != "g2h"`. The vector spelling is not
+conditioned on it — and that is correct, because **both directions in this tool are native-side**:
+
+| Direction | What the generated declaration describes | Which ABI |
+|---|---|---|
+| `g2h` | a **host** function that JIT-compiled guest code calls | native C ABI — the call is made *from* machine code |
+| `h2g` | a **function pointer** into JIT-compiled code that the host calls | native C ABI — the call is made *into* machine code |
+| `g2g` | not applicable: the emitters refuse it and ask for a projected schema | — |
+
+So every signature this tool emits crosses the native boundary, and the **two-word rule applies uniformly**
+to both directions. The earlier correction stands as a *conceptual* clarification — a guest-side SDK (Rust or
+C compiled **to wasm**) would need the canonical wasm `v128` — but that is a **different product surface**
+that this tool does not emit, and it is now written down as such rather than as a defect in the current
+output.
+
+**Consequences:**
+
+- The `EmitCpp` / `EmitShared` / `EmitRust` **type** declarations (`{ lo, hi }`) are correct for every schema
+  this tool accepts.
+- The **Rust parameter split** (`argN_lo: u64, argN_hi: u64`) is correct for the same reason, and has been
+  re-applied with that reasoning in the code comment rather than left reverted.
+- A future guest-side emitter must consult `direction` **and** the target (wasm vs native) — a `(direction,
+  target, language)` mapping — because for that surface the two-word rule would be wrong. That is recorded
+  here so nobody "fixes" the current emitters into it.
+
+### What the exchange itself produced
+
+The correction came from review, not from a test, and the *resolution* also came from reading the code —
+`EmitCpp`'s two uses of `direction`. Two lessons, both already in the post-mortem's list but worth the
+repetition: **a rule stated without its boundary is under-specified**, and **the fastest way to settle a
+design question is to read what the code already decided.**
