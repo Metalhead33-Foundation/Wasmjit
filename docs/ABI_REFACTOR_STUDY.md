@@ -2152,3 +2152,40 @@ or to the SIMD helper, and those are fixed in different places.
 ### State
 
 Experiment reverted; suite **21648 assertions in 734 test cases**, green; tree clean.
+
+## 41. The degenerate-count defect is pre-existing and orthogonal -- measured (2026-11-06)
+
+The §40 fixture was run against the **unchanged** tree, same exports, same input, same expectations:
+
+| Configuration | Result |
+|---|---|
+| with the two-slot boundary | 13 assertions, 10 passed, **3 failed**, no crash |
+| **without it (committed tree)** | 13 assertions, 10 passed, **3 failed**, no crash |
+
+Identical failure value (`0xC0000000 == -1`): the high lane comes back as an arithmetic shift by one, i.e. the count
+is masked to the lane width. **The defect is therefore pre-existing, independent of the `v128` boundary work, and
+must not be attributed to it.**
+
+### Why the suite stays green while the fixture fails
+
+This is the useful part. The spec suites report per-script **skipped** counts, and the degenerate-count assertions
+of `simd_bit_shift` are among the commands the harness does not execute. So the tree has been green *and* wrong at
+the same time: the spec never exercised counts at or beyond the lane width through this path, and my fixture does.
+That is a third instance of the session's recurring pattern -- **the suite was not testing the property that was
+broken** -- and unlike the previous two (LibJIT's aggregate assumption, SLJIT's refusal test) this one is a gap,
+not a wrong assertion.
+
+### What this changes in the plan
+
+- The boundary work is now **fully cleared** of the degenerate-shift finding: it neither causes nor worsens it.
+- The finding is a **standalone spec-compliance bug** in the LibJIT SIMD shift lowering: counts `>= width` must yield
+  zero (`shr_u`) or sign-fill (`shr_s`), and instead are masked `& (width - 1)`.
+- Fixing it is small and independent of P4: clamp the count before the shift helper, in the helper rather than in
+  every opcode. It should land as **its own commit with its own test**, taken from the fixture above, so the gap it
+  reveals closes permanently.
+- The segfault remains the only open item in the boundary work, and it is a *different* defect a few functions
+  later in the same script.
+
+### State
+
+Experiments reverted; suite **21648 assertions in 734 test cases**, green; tree clean.
