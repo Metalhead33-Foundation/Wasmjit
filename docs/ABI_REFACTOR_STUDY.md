@@ -544,3 +544,33 @@ everything.
 
 That is the same rule this whole phase keeps producing, in its cheapest form: **when a gate fails, read
 what the gate printed.**
+
+### The C header moves alone after all — the union was the problem, not the rename (2026-11-06)
+
+The note above said the next pass should read the gate's output before guessing. Doing exactly that
+settled it in one build: with `typedef struct wasm_v128 { uint64_t lo; uint64_t hi; }` the `[bindings]`
+compile-and-run cases **pass** (937 assertions), and the full suite is green.
+
+So the earlier three failures were caused by the **union spelling** —
+`union wasm_v128 { struct { ... }; uint8_t bytes[16]; }` — whose anonymous inner struct is not something
+the generated adapter accepts, not by renaming the fields. Two lessons, both cheap:
+
+1. **A failed experiment does not mean the target is unreachable.** The union failed; the plain struct
+   did not. The recorded negative result was accurate about the union and over-general in its
+   conclusion, and reading the compiler output separated the two in one build.
+2. **"It failed before" is not evidence.** The first attempt bundled the typedef rename with a Rust
+   change and reported three failures; the rename alone is fine. Bundling two changes made a correct
+   edit look guilty.
+
+### Emitter inventory after this pass
+
+| Emitter | State |
+|---|---|
+| `EmitCpp.cpp` | **canonical** |
+| `EmitShared.cpp` — C typedef | **canonical** (`{ uint64_t lo; uint64_t hi; }`) |
+| `EmitRust.cpp` | **canonical** |
+| `EmitShared.cpp` — kind→type (205, 468, 577) and the four parameter loops | aggregate: a vector parameter is still emitted as one type |
+| `EmitDynamic.cpp` (5), `EmitWeb.cpp` | aggregate |
+
+The remaining work is now **parameter expansion only**: the type *declarations* agree everywhere they can,
+and what is left is emitting two scalars where one type is emitted today.

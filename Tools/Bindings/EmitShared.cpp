@@ -413,7 +413,7 @@ std::string emitCHeaderImpl(const Json& schema)
 	out << "#  define WASMJIT_WASM_IMPORT(module, name)\n";
 	out << "#endif\n\n";
 	out << "#ifdef __cplusplus\nextern \"C\" {\n#endif\n\n";
-	out << "typedef struct wasm_v128 { uint8_t bytes[16]; } wasm_v128;\n";
+	out << "typedef struct wasm_v128 { uint64_t lo; uint64_t hi; } wasm_v128;\n";
 	emitWitOpaqueTypes(out, schema, false);
 	for (const std::string& ref : refs) {
 		if (ref.rfind("wasmjit_wit_", 0) == 0)
