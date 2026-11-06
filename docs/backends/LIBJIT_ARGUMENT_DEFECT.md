@@ -166,6 +166,46 @@ is the defensible default and option 2 is the escape hatch to take only with an
 explicit milestone decision recorded against
 `docs/backends/V128_SIGNATURE_DECISION.md`.
 
+### 8.1 Decision (2026-11-06): option 2, LibJIT-only
+
+**Choice: LibJIT keeps its own 16-byte aggregate spelling for a `v128`
+parameter.** The canonical two-word rule remains the cross-backend contract and
+is implemented by SLJIT (parameters and results) and AsmJIT (parameters);
+LibJIT is a recorded deviation.
+
+Why this is safe on the tested target, and where it is not:
+
+* SysV AMD64 classifies a 16-byte aggregate as **two INTEGER eightbytes**, i.e.
+  exactly the two registers the canonical spelling would use. Native host
+  imports, cross-backend calls and the spec harness therefore behave identically
+  under either spelling on x86-64 -- this is why every pre-refactor vector test
+  passed with the aggregate and why the harness needed no change for it.
+* MS x64 passes such an aggregate **by reference**, so a LibJIT-compiled
+  function would not be callable from an MS x64 caller expecting two words.
+  LibJIT is therefore **provisional on MS x64** for signatures that carry a
+  `v128`, which is recorded here rather than discovered later.
+
+Pinned by `[libjit][v128][abi][shapes]`: three `v128` parameters arrive intact,
+both as a pass-through and through a lane read.
+
+### 8.2 Why not the stack (the SLJIT answer, considered)
+
+The SLJIT workaround is "read the excess argument slots from the stack instead
+of from a register" (`docs/ABI_REFACTOR_STUDY.md` §36). That is unavailable
+here, and the reason is structural rather than a matter of effort:
+
+* SLJIT emits its own prologue, so it chooses where each argument comes from.
+* libjit's public API exposes no equivalent: a parameter is whatever
+  `jit_value_get_param` returns, and the prologue is libjit's to emit. There is
+  no way to ask libjit to take argument *n* from `incoming_frame_posn` instead
+  of `incoming_reg`.
+
+The aggregate spelling is the closest analogue that *is* available: choosing a
+parameter shape with fewer register arguments keeps the sixth word out of `r9`
+entirely -- the same goal (do not put everything in registers) reached through
+the signature rather than through the prologue.
+
+
 ## 9. What would close this properly
 
 Disassemble the compiled entry (`objdump` on the generated code, or libjit's own

@@ -254,3 +254,38 @@ REQUIRE(vectorFirst->fnPtr != nullptr);
 using VectorFirst = std::int32_t (*)(void*, std::uint64_t, std::uint64_t, std::int32_t);
 CHECK(reinterpret_cast<VectorFirst>(vectorFirst->fnPtr)(vectorFirst->context, lo, hi, 21) == 21);
 }
+
+TEST_CASE("LibJIT passes a v128 as one 16-byte aggregate", "[libjit][v128][abi][shapes]")
+{
+	// The LibJIT backend deliberately keeps the aggregate spelling for a v128
+	// parameter instead of the canonical two-word rule, because libjit loses the
+	// sixth integer argument (docs/backends/LIBJIT_ARGUMENT_DEFECT.md). This test
+	// pins the behaviour that spelling buys: a third vector parameter arrives
+	// intact, in both lanes and through a lane read.
+	auto runtime = WASM::Runtime::create("libjit");
+	REQUIRE(runtime != nullptr);
+	auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "v128_boundary_order.wasm");
+	WASM::RegistryImportResolver imports;
+	WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+
+	const AbiBoundaryVector a{{11, 11, 11, 11}};
+	const AbiBoundaryVector b{{22, 22, 22, 22}};
+	const AbiBoundaryVector c{{33, 33, 33, 33}};
+
+	const std::optional<WASM::Callable> pass = instance.exportedFunction("ret_p2");
+	REQUIRE(pass.has_value());
+	REQUIRE(pass->fnPtr != nullptr);
+	using PassFn = AbiBoundaryVector (*)(void*, AbiBoundaryVector, AbiBoundaryVector,
+AbiBoundaryVector);
+	const AbiBoundaryVector out = reinterpret_cast<PassFn>(pass->fnPtr)(pass->context, a, b, c);
+	CHECK(out.lanes[0] == 33);
+	CHECK(out.lanes[3] == 33);
+
+	const std::optional<WASM::Callable> lane = instance.exportedFunction("p2_lane");
+	REQUIRE(lane.has_value());
+	REQUIRE(lane->fnPtr != nullptr);
+	using LaneFn = std::int32_t (*)(void*, AbiBoundaryVector, AbiBoundaryVector,
+AbiBoundaryVector);
+	CHECK(reinterpret_cast<LaneFn>(lane->fnPtr)(lane->context, a, b, c) == 33);
+}
