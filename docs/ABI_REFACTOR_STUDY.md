@@ -677,3 +677,50 @@ The correction came from review, not from a test, and the *resolution* also came
 `EmitCpp`'s two uses of `direction`. Two lessons, both already in the post-mortem's list but worth the
 repetition: **a rule stated without its boundary is under-specified**, and **the fastest way to settle a
 design question is to read what the code already decided.**
+
+## 16. The rule that resolves §15: two families, chosen by *consumer*, not by language (2026-11-06)
+
+The ABI a generated binding must express is decided by **who consumes the generated code**, not by the
+language it is written in:
+
+| Family | Emitters | Must match | Why |
+|---|---|---|---|
+| **WasmJIT-facing** — code the embedder copies into their own C++ application | `cpp-typedefs`, `cpp-source` | **WasmJIT's ABI** (native: a vector is **two `uint64_t`**, low first) | the embedder's process calls the JIT-compiled code directly; there is no runtime in between to convert anything |
+| **Guest-facing** — code describing the module's own interface | C header, Rust, AssemblyScript, Zig, Kotlin, MoonBit, WIT, the dynamic/ctypes emitters | **the WASM ABI** (a vector is the canonical wasm `v128`) | the conversion from the wasm ABI to WasmJIT's native ABI happens **at instantiation**, inside the runtime — never in the binding |
+
+That single sentence — *the conversion happens at instantiation* — is the test that settles any future
+question of this shape. If the generated code runs in the guest's world (or describes it), it speaks the
+wasm ABI. If it is compiled into the embedder's world, it speaks WasmJIT's.
+
+### What that means for the changes already made
+
+| Change | Verdict |
+|---|---|
+| `EmitCpp` emits `{ uint64_t lo; uint64_t hi; }` | **correct** — WasmJIT-facing, and the embedder copies it |
+| `EmitShared`'s C-header typedef → `{ uint64_t lo; uint64_t hi; }` | **wrong side**: the C header is guest-facing, so it must keep the canonical wasm spelling |
+| `EmitRust` type/parameters → the pair | **wrong side**, same reason |
+
+Both have been reverted to the committed state.
+
+### The obstacle the revert exposed, which is the real finding
+
+The binding **conformance harness compiles the guest-side C header and the WasmJIT-side C++ adapter into
+one program** (`BindingSchemaTests.cpp`, the gcc compile-and-run cases). While both spelled a vector
+`bytes[16]` that worked; the moment the two families diverge *correctly*, the harness fails to compile —
+three failures, immediately.
+
+So the split cannot be completed by editing emitters alone. It needs one of:
+
+1. **a translation layer** in the generated adapter — the WasmJIT-side code converts between the guest-side
+   `wasm_v128` and the native pair at the boundary, which is precisely what the runtime does for real;
+2. **two separate conformance programs**, one per family, each compiled against only its own header.
+
+Option 1 is the truth-preserving one: it models the runtime's own job, so the test would exercise the
+conversion rather than assume it away.
+
+### Lesson
+
+**"Which ABI?" is answered by a question, not by a lookup table: _who compiles this code, and who calls
+it?_** The same language appears on both sides of the boundary in this project — C is guest-facing in the
+C header and WasmJIT-facing in the C++ adapter — which is exactly why a per-language rule could not work,
+and why this needed a real answer rather than a revision of the previous one.
