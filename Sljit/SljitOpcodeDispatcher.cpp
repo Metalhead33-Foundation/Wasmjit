@@ -1037,17 +1037,27 @@ bool OpcodeDispatcher::beginFunction()
 			? SLJIT_ARG_RETURN(SLJIT_ARG_TYPE_RET_VOID)
 			: SLJIT_ARG_RETURN(argTypeOf(resultKind_));
 	// A v128 parameter is a 16-byte integer pair on the SysV boundary, so it
-	// occupies two argument slots and every later parameter shifts by two.
+	// occupies two argument slots and every later parameter shifts by two. The
+	// walk comes from `WASM::mapArgSlots` rather than being spelled out here: its
+	// contract is that every backend indexing parameters positionally uses it,
+	// because hand arithmetic for this mapping produced three separate corruption
+	// investigations in a positional backend.
 	argTypes |= SLJIT_ARG_VALUE(SLJIT_ARG_TYPE_P, 1);
+	std::vector<WASM::ValueKind> parameterKinds;
+	parameterKinds.reserve(parameterCount_);
+	for (std::uint32_t i = 0; i < parameterCount_; ++i)
+		parameterKinds.push_back(WASM::valueKindOf(paramKinds_[i]));
+	const std::vector<WASM::ArgSlot> parameterSlots = WASM::mapArgSlots(parameterKinds);
 	sljit_s32 nextSlot = 2;
-	for (std::uint32_t i = 0; i < parameterCount_; ++i) {
-		if (paramWidths_[i] == 16) {
-			argTypes |= SLJIT_ARG_VALUE(SLJIT_ARG_TYPE_W, nextSlot);
-			argTypes |= SLJIT_ARG_VALUE(SLJIT_ARG_TYPE_W, nextSlot + 1);
-			nextSlot += 2;
+	for (const WASM::ArgSlot& slot : parameterSlots) {
+		const sljit_s32 first = 2 + static_cast<sljit_s32>(slot.firstSlot);
+		if (slot.slots == 2) {
+			argTypes |= SLJIT_ARG_VALUE(SLJIT_ARG_TYPE_W, first);
+			argTypes |= SLJIT_ARG_VALUE(SLJIT_ARG_TYPE_W, first + 1);
+			nextSlot = first + 2;
 		} else {
-			argTypes |= SLJIT_ARG_VALUE(argTypeOf(paramKinds_[i]), nextSlot);
-			++nextSlot;
+			argTypes |= SLJIT_ARG_VALUE(argTypeOf(paramKinds_[slot.parameter]), first);
+			nextSlot = first + 1;
 		}
 	}
 
