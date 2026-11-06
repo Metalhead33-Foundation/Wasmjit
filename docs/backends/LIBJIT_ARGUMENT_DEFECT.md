@@ -289,6 +289,64 @@ stack plan is the same problem from the other side).
 | Any target, after libjit is fixed (§11.2) | canonical, no deviation |
 | Any target, after a §28 spill amendment (§11.3) | canonical, no register cliff |
 
+## 12. Policy: cross-backend calls are illegal (2026-11-06)
+
+**Decision: a call whose caller and callee are compiled by different backends is
+not permitted at all.** Not "unsupported with care" -- illegal.
+
+### What that removes
+
+The §11.1 guard exists only to catch the cross-backend case, so it becomes
+unnecessary: with the policy in force the hazard it would refuse cannot occur,
+and the deviation stops being an interop problem. SLJIT and AsmJIT may then
+speak the canonical two words while LibJIT speaks its aggregate, **without any
+mismatch ever arising**, because no call crosses the boundary between them.
+
+### What it does *not* remove -- and this is the part that decides MS x64
+
+There is a second boundary that is **not** cross-backend: the **host boundary**.
+
+`WasmBase/WasmCallCache.cpp` builds a libffi `cif` for a callable and, for a
+`v128` parameter, emits **two `ffi_type_uint64`** -- the canonical rule, hard-coded
+and independent of which backend compiled the callee:
+
+```cpp
+const std::uint32_t slots = argSlotCount(valueKindOf(parameter.value.opcode));
+if (slots == 1) {
+    entry.argTypes.push_back(ffiTypeFor(parameter));
+} else {
+    for (std::uint32_t slot = 0; slot < slots; ++slot)
+        entry.argTypes.push_back(&ffi_type_uint64);   // two words, always
+}
+```
+
+On SysV this is the same ABI as LibJIT's aggregate, so nothing shows. On **MS
+x64** it is not: libffi passes two words in two registers while a LibJIT-compiled
+callee reads a **pointer** to a caller-allocated copy. Same system, same backend
+on both sides -- and still a mismatch.
+
+### Answer to "does the policy validate LibJIT on MS x64?"
+
+**No, not by itself.** It removes the cross-backend hazard and leaves exactly
+one exposure:
+
+| Path into a LibJIT-compiled function | MS x64 status |
+|---|---|
+| direct call, spelled as a 16-byte aggregate (`Callable::fnPtr`, our tests) | **coherent** -- both sides by-reference; provisional |
+| direct call, spelled as two words | mismatch -- a caller error, avoidable by the documented rule |
+| **through `WasmCallCache` (libffi), any `v128` parameter** | **mismatch** -- the cache always uses two words |
+
+So LibJIT becomes valid on MS x64 only once the host boundary agrees with it,
+which is one small, local change: make `WasmCallCache` ask the target backend
+for its `v128` parameter spelling (aggregate vs two words) instead of hard-coding
+`argSlotCount`, and emit `ffiTypeFor(aggregate)` for a backend that spells the
+parameter as an aggregate. That is the same information the backend already
+carries in its signature translator -- a capability query, not a new concept.
+
+Until then: LibJIT on MS x64 is **provisional**, correct for direct calls, and
+wrong for `v128` parameters passed through the call cache.
+
+
 
 
 ## 9. What would close this properly
