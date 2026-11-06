@@ -37,7 +37,7 @@ constexpr std::size_t kSlotBytes = 16;
 //! Reserved frame slots that follow the locals and precede the operand stack.
 //! Reserved frame cells: context, target, scratch, then the two-word selector
 //! block `i8x16.shuffle` passes to its adapter.
-constexpr std::size_t kReservedSlots = 5;
+constexpr std::size_t kReservedSlots = 7; //!< context, target, scratch, then four parked argument registers.
 
 //! Width of a local in bytes, or 0 when the type is outside the supported subset.
 bool isReferenceKind(WASM::ValueTypeCode kind) noexcept
@@ -115,26 +115,6 @@ extern "C" sljit_sw sljitTrapPending()
 }
 
 //! Reports the spec's `unreachable` trap without returning through a Wasm frame.
-extern "C" void sljitReportCastFailure() noexcept
-{
-	WASM::reportTrap(WASM::TrapKind::CastFailure);
-}
-
-extern "C" void sljitReportNullStructure() noexcept
-{
-	WASM::reportTrap(WASM::TrapKind::NullStructureReference);
-}
-
-extern "C" void sljitReportNullArray() noexcept
-{
-	WASM::reportTrap(WASM::TrapKind::NullArrayReference);
-}
-
-extern "C" void sljitReportArrayOob() noexcept
-{
-	WASM::reportTrap(WASM::TrapKind::OutOfBoundsArrayAccess);
-}
-
 //! Runtime subtype test against an object-header type id.
 //! \param vm Instance context.
 //! \param actual Type id read from the object header.
@@ -203,11 +183,6 @@ extern "C" void* sljitStructNew(WASM::VMContext* vm, uint32_t size, uint32_t typ
 extern "C" void sljitReportTrap(uint32_t kind) noexcept
 {
 	WASM::reportTrap(static_cast<WASM::TrapKind>(kind));
-}
-
-extern "C" void sljitReportNullReference() noexcept
-{
-	WASM::reportTrap(WASM::TrapKind::NullReference);
 }
 
 extern "C" void sljitReportUnreachable() noexcept
@@ -1292,11 +1267,11 @@ sljit_sw OpcodeDispatcher::scratchSlotOffset() const
 	return static_cast<sljit_sw>((localSlots_ + 2) * kSlotBytes);
 }
 
-sljit_sw OpcodeDispatcher::payloadSlotOffset() const
+sljit_sw OpcodeDispatcher::payloadSlotOffset(std::size_t index) const
 {
 	// Reserved slot 3 is unused elsewhere; `emitPendingTrapCheck` parks the
 	// caller's R0 here so the probe cannot destroy it.
-	return static_cast<sljit_sw>((localSlots_ + 3) * kSlotBytes);
+	return static_cast<sljit_sw>((localSlots_ + 3 + index) * kSlotBytes);
 }
 
 sljit_sw OpcodeDispatcher::selectorBlockOffset() const
@@ -1382,17 +1357,20 @@ void OpcodeDispatcher::emitPendingTrapCheck()
 
 void OpcodeDispatcher::emitTrap(WASM::TrapKind kind)
 {
-	// The trap block materialises the kind into R0 and then calls a helper, so
-	// whatever the continuing path holds in R0 is parked and restored: the same
-	// clobber that §25 ran into and §44 diagnosed.
-	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
-			payloadSlotOffset(), SLJIT_R0, 0));
+	// Reporting a kind needs a register, and the call that follows clobbers
+	// R0-R3. All four are parked, so a caller may hold anything across this
+	// primitive (docs/backends/ASMJIT_SLJIT_P3_GC1.md §48).
+	const sljit_s32 parked[4] = {SLJIT_R0, SLJIT_R1, SLJIT_R2, SLJIT_R3};
+	for (std::size_t i = 0; i < 4; ++i)
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+				payloadSlotOffset(i), parked[i], 0));
 	emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R0, 0, SLJIT_IMM,
 			static_cast<sljit_sw>(kind)));
 	emitHelper(SLJIT_ARGS1V(32), &sljitReportTrap);
 	emitTrapBranch();
-	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0, SLJIT_MEM1(SLJIT_SP),
-			payloadSlotOffset()));
+	for (std::size_t i = 0; i < 4; ++i)
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, parked[i], 0, SLJIT_MEM1(SLJIT_SP),
+				payloadSlotOffset(i)));
 }
 
 void OpcodeDispatcher::emitTrapBranch()
@@ -4031,8 +4009,7 @@ void OpcodeDispatcher::dispatchStructSet(WASM::TypeIdx arg1, uint32_t arg2)
 				SLJIT_R1, 0, SLJIT_IMM, 0);
 		if (notNull == nullptr)
 			ok_ = false;
-		emitHelper(SLJIT_ARGS0V(), &sljitReportNullReference);
-		emitTrapBranch();
+		emitTrap(WASM::TrapKind::NullReference);
 		sljit_label* done = sljit_emit_label(compiler_);
 		if (done == nullptr)
 			ok_ = false;
@@ -4127,8 +4104,7 @@ void OpcodeDispatcher::emitRefCast(const WASM::HeapType& arg, bool nullable)
 		sljit_jump* notNull = sljit_emit_cmp(compiler_, SLJIT_NOT_EQUAL, SLJIT_R1, 0, SLJIT_IMM, 0);
 		if (notNull == nullptr)
 			ok_ = false;
-		emitHelper(SLJIT_ARGS0V(), &sljitReportNullReference);
-		emitTrapBranch();
+		emitTrap(WASM::TrapKind::NullReference);
 		sljit_label* afterNull = sljit_emit_label(compiler_);
 		if (afterNull == nullptr)
 			ok_ = false;
@@ -4285,8 +4261,7 @@ void OpcodeDispatcher::dispatchRefAsNonNull()
 				SLJIT_R0, 0, SLJIT_IMM, 0);
 		if (notNull == nullptr)
 			ok_ = false;
-		emitHelper(SLJIT_ARGS0V(), &sljitReportNullReference);
-		emitTrapBranch();
+		emitTrap(WASM::TrapKind::NullReference);
 		sljit_label* done = sljit_emit_label(compiler_);
 		if (done == nullptr)
 			ok_ = false;

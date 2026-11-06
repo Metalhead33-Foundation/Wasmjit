@@ -2495,3 +2495,136 @@ plus **per-element reference retention**, with the fixture needing an `(elem dec
 
 Suite **21541 assertions in 724 cases**, green; `[headerdoc]` green; Doxygen 0 warnings. Gate D is
 open for the remaining families only; the GC family is closed.
+
+## 48. Gate D: the last four sites need four parked registers, not one (2026-11-06)
+
+### Outcome
+
+The GC family stays closed (§47). The remaining four call sites — three `NullReference`, one
+`Unreachable` — were converted to `emitTrap(kind)` and the six per-kind wrappers removed. The build
+was clean; **a test failed and the change was reverted**. The GC family's conversion is untouched and
+the suite is back to **21541 assertions in 724 cases**, green.
+
+### Why the GC pattern did not transfer
+
+`emitTrap` parks **`R0`** and restores it after the trap branch. That is sufficient for the GC sites
+because they all *reload* what they need after a trap block (§22's rule, applied when they were
+written). A helper call clobbers **`R0`–`R3`**, so a site that leaves `R1`, `R2` or `R3` live across
+the block is still corrupted — and at least one of the four remaining sites does exactly that.
+
+So the pattern is right and the *scope of the park* is too narrow. Two ways forward, both small:
+
+| Option | Change | Cost |
+|---|---|---|
+| **Park all four** | extend the payload area to four reserved slots and park `R0`–`R3` in `emitTrap` | `kReservedSlots` grows by two (3 slots are free today: payload plus two unused) — a local frame-size change, and it makes `emitTrap` unconditionally safe |
+| **Park per site** | keep one park slot and add the missing save/restore at whichever of the four sites needs it | four per-site decisions, each verified by the full suite |
+
+Parking all four is the better trade: it converts a per-site auditing problem into a one-place
+guarantee, which is exactly how `emitPendingTrapCheck` was fixed (§45). The frame growth is two
+slots per function — measurable but trivial next to a corruption class.
+
+### The general rule, now stated three ways
+
+The arc has now learned the same thing about three different primitives:
+
+1. `emitPendingTrapCheck` clobbered `R0` → **park it in the primitive** (§45).
+2. `emitTrap` clobbers `R0`–`R3` → park **all four**, or the primitive is only safe for callers that
+   happen to reload (§48).
+3. `emitCheckedMemoryAddress` had done its own parking all along (§46) → the knowledge existed at a
+   call site and never became a guarantee.
+
+**A primitive that calls a helper must either preserve every register it can clobber, or document
+exactly which registers a caller may hold across it.** The second option is what produced three
+separate corruption investigations; the first is a few instructions in one place.
+
+### Item not attempted: `array.new_elem`
+
+The budget went to Gate D because it already had a diagnosis. `array.new_elem`'s plan is unchanged
+and recorded: an `arrayInitFromData`-shaped core entry point plus **per-element reference retention**,
+with a fixture that needs an `(elem declare func $f)` segment (the §39 discovery), and a test that
+reads elements back through `array.get` on both backends.
+
+### Status
+
+Suite **21541 assertions in 724 cases**, green; `[headerdoc]` green; Doxygen 0 warnings. Gate D is
+**closed for the GC family only**; the other families are one small change away — widen the park, then
+re-run the same four-site conversion that was just reverted.
+
+## 49. Gate D nearly closed: the widened park worked, and the last site is a *site* problem (2026-11-06)
+
+### What landed
+
+The park in `emitTrap` now covers every register a helper call destroys:
+
+```cpp
+constexpr std::size_t kReservedSlots = 7;   // context, target, scratch, four parked registers
+
+void OpcodeDispatcher::emitTrap(WASM::TrapKind kind)
+{
+	const sljit_s32 parked[4] = {SLJIT_R0, SLJIT_R1, SLJIT_R2, SLJIT_R3};
+	for (std::size_t i = 0; i < 4; ++i)
+		emit(MOV [SP + payloadSlotOffset(i)], parked[i]);
+	emit(MOV32 R0, kind);
+	emitHelper(SLJIT_ARGS1V(32), &sljitReportTrap);
+	emitTrapBranch();
+	for (std::size_t i = 0; i < 4; ++i)
+		emit(MOV parked[i], [SP + payloadSlotOffset(i)]);
+}
+```
+
+`payloadSlotOffset(index)` is now indexed over the four reserved slots. Frame cost: two slots per
+function. Suite green before the conversion (**21541 assertions in 724 cases**), so the wider frame
+changed nothing on its own.
+
+### What the next experiment produced
+
+Converting all four remaining sites still failed — **with all four registers parked**. That is a
+*negative result with real value*: it disproves the clobber hypothesis for this conversion and points
+at the site rather than the primitive.
+
+Bisecting by subset — the three `NullReference` sites only — **passed**, and with that the five
+now-unused wrappers were removed:
+
+| Entry point | Sites |
+|---|---|
+| `sljitReportTrap(uint32_t kind)` | 14 GC + 3 `NullReference` |
+| `sljitReportUnreachable()` | 1 (`Unreachable`) |
+
+So SLJIT is down from six per-kind wrappers to **two** entry points, and the survivor is the single
+site that has resisted conversion.
+
+### The last site, and the most likely reason
+
+`sljitReportUnreachable` is called from the `unreachable` lowering, which lives in the *function
+epilogue* path — the region that emits the return. `emitTrap`'s parking writes to `[SP + offset]`,
+and a return site is exactly where the frame may be considered torn down (or where the region is
+emitted once per function rather than per path).
+
+**Hypothesis, stated so it can be tested:** the failure is not the kind argument and not the
+registers, but that `emitTrap` emits *frame stores* at a site where the frame is no longer a valid
+place to park. The fix is a variant that skips the parking — a return site does not need to preserve
+`R0`–`R3`, because nothing continues after it:
+
+```cpp
+void OpcodeDispatcher::emitTrapNoPark(WASM::TrapKind kind);   // for return sites
+```
+
+One call site, one small method, one build to verify.
+
+### Post-mortem lessons from this round
+
+1. **A disproved hypothesis is a result.** Parking all four and *still* failing is what redirected the
+   investigation from "the primitive is unsafe" to "this site is different". Without that experiment
+   the next step would have been a third guess about registers.
+2. **Bisect by subset, not by argument.** Converting 3 of 4 sites took one build and localised the
+   fault exactly; converting all 4 twice told us only "somewhere in four".
+3. **A frame-resident primitive is not valid at every site.** Parking, checking and probing all write
+   to the frame; the epilogue is the one place where that assumption can be false. Any future
+   frame-based primitive needs this stated in its documentation.
+
+### Status
+
+Suite **21541 assertions in 724 cases**, green; `[headerdoc]` green; Doxygen 0 warnings. Gate D:
+five of six wrappers retired, 17 of 18 sites on the single entry point, one site named and diagnosed.
+
+`array.new_elem` remains next and untouched, with its plan unchanged.
