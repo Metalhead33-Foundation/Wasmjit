@@ -2640,3 +2640,55 @@ this from being re-blamed on libjit, and it is the smallest possible guard for t
 ### State
 
 Suite **21654 assertions in 735 test cases**, green; tree clean.
+
+## 52. Both candidate sites investigated: the driver is innocent, and libjit is too (2026-11-06)
+
+§51's separating experiment was run under the full unit, plus two further discriminators.
+
+| Call | Expected | Measured |
+|---|---|---|
+| `bitselect3` via **`rawFnPtr`** (body) | `0xBABABABA` | `0xBBBBBBAB` |
+| `bitselect3` via **`fnPtr`** (driver) | `0xBABABABA` | `0xABBBBBAB` |
+| `three_lanes` (extract_lane sum of the three params) | `6` | wrong |
+
+The first two differ from each other but are both wrong, so **the driver is not the defect**. The third is the
+important one: a function that only *reads* one lane from each of three vector parameters also fails, so the
+**parameters themselves are wrong** -- this is not about `v128.bitselect` or any opcode.
+
+### And libjit is not the defect either
+
+Two new IR cases, no backend code involved:
+
+| Test | Result |
+|---|---|
+| seven integer arguments, return the 7th (stack-passed) | **`42` -- correct** |
+| the same, but stored through an `address_of` temp first (frame + stack argument) | **`42` -- correct** |
+
+29 assertions across five `[libjit][v128][ir]` cases, all green. So libjit reads stack-passed arguments correctly
+both on its own **and** through a frame temp -- which is exactly what §50 blamed and §51 doubted.
+
+### What the two experiments leave
+
+Every layer below our glue is now measured correct:
+
+| Layer | Verdict |
+|---|---|
+| libjit stack arguments | **correct** (2 tests) |
+| libjit frame + stack argument | **correct** |
+| the driver's forwarding | **not the cause** (raw fails too) |
+| opcode lowering | **not the cause** (extract_lane only fails too) |
+| **the translated signature / prologue glue for 3+ vectors** | **the only remaining suspect** |
+
+That is a very small space: `translateFunctionSignature` must be emitting six `ulong` slots for three vectors (it
+was written to), and `compileFunction`'s prologue must be reading slots 1-6. The next step is to **print the
+signature** for a three-vector function -- `jit_type_num_params`, and each parameter's kind and size -- instead of
+reasoning about it. One assertion in an existing test answers it.
+
+### Two permanent tests kept
+
+Both new `[libjit][v128][ir]` cases stay: together they pin the register-budget boundary and its interaction with a
+frame, so no future round can blame libjit for this again.
+
+### State
+
+Suite **21658 assertions in 736 test cases**, green; tree clean.

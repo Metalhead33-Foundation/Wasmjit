@@ -326,3 +326,39 @@ std::uint64_t, std::uint64_t, std::uint64_t);
 
 	jit_context_destroy(context);
 }
+
+// The 7-argument test above passes, but the backend's prologue also builds a
+// frame and stores each argument through an address. If a stack-passed argument
+// does not survive that, the defect is libjit's frame/stack-argument interaction
+// and the backend cannot work around it by passing arguments differently.
+TEST_CASE("libjit: a stack argument survives an addressable temp", "[libjit][v128][ir]")
+{
+	jit_context_t context = jit_context_create();
+	REQUIRE(context != nullptr);
+	jit_context_build_start(context);
+
+	jit_type_t params[7] = {jit_type_void_ptr, jit_type_ulong, jit_type_ulong,
+			jit_type_ulong, jit_type_ulong, jit_type_ulong, jit_type_ulong};
+	jit_type_t signature =
+			jit_type_create_signature(jit_abi_cdecl, jit_type_ulong, params, 7, 1);
+	jit_function_t function = jit_function_create(context, signature);
+
+	// A frame temp, its address, and the 7th argument stored through it -- the
+	// three things the prologue does for every vector parameter.
+	jit_value_t slot = jit_value_create(function, jit_type_ulong);
+	jit_value_t address = jit_insn_address_of(function, slot);
+	jit_insn_store_relative(function, address, 0, jit_value_get_param(function, 6));
+	jit_insn_return(function, jit_insn_load_relative(function, address, 0, jit_type_ulong));
+	jit_context_build_end(context);
+
+	REQUIRE(jit_function_compile(function) == JIT_RESULT_OK);
+	void* entry = nullptr;
+	REQUIRE(jit_function_compile_entry(function, &entry) == JIT_RESULT_OK);
+	REQUIRE(entry != nullptr);
+
+	using Fn = std::uint64_t (*)(void*, std::uint64_t, std::uint64_t, std::uint64_t,
+std::uint64_t, std::uint64_t, std::uint64_t);
+	CHECK(reinterpret_cast<Fn>(entry)(nullptr, 1, 2, 3, 4, 5, 42) == 42);
+
+	jit_context_destroy(context);
+}
