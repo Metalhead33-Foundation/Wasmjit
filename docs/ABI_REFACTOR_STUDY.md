@@ -1893,3 +1893,54 @@ grepping the three index expressions.
 ### State
 
 Suite **21648 assertions in 734 test cases**, green (three `[ir]` cases now, 19 assertions). Backend unchanged.
+
+## 35. The multi-vector fixture: candidate 3 eliminated, and an SLJIT capacity limit found (2026-11-06)
+
+The fixture was extended with `two_vectors` (v128, v128), `three_vectors` (v128 x3) and
+`vector_param_and_local` (v128 parameter plus a v128 local), and asserted on both backends.
+
+### LibJIT: all three shapes pass
+
+`[libjit][v128][order][shapes]` **passed with 10 assertions** against the *current*, unchanged ABI -- two vectors,
+three vectors, and a vector parameter next to a vector local, all with correct lane values.
+
+That eliminates candidate 3 of §34: the 33 SIMD failures are **not** caused by multi-vector parameters. The
+remaining candidates are the ones about a signature whose length no longer equals its parameter count
+(result-buffer indices at `params.size() + 1`, and a possible cached signature).
+
+### SLJIT: a hard capacity limit, pre-existing
+
+The same fixture on SLJIT aborts inside `sljit_emit_enter`:
+
+```
+Assertion failed at sljitLir.c:1446
+CHECK_ARGUMENT(function_check_arguments(arg_types, real_scratches, saveds, fscratches));
+```
+
+`SLJIT_NUMBER_OF_SAVED_REGISTERS` is **6** on x86-64, and SLJIT requires **every declared argument slot to own a
+saved register**. A `v128` parameter occupies two slots, so `(v128, v128)` needs five slots (context + 4) and
+`(v128, v128, v128)` needs seven -- past the budget. The backend passes `savedCount = nextSlot - 1` straight into
+`sljit_emit_enter`, so this is a **pre-existing** limit of the SLJIT backend, not a consequence of the boundary
+work; no fixture or spec module had ever declared three vector parameters.
+
+Fixing it means receiving the excess slots **from the stack** rather than from a saved register -- a real piece of
+work, now named and measured rather than hypothetical.
+
+### The testing lesson, which is the durable one
+
+`instantiate` compiles **every** function in a module. Putting a shape one backend cannot compile into a *shared*
+fixture therefore breaks **every test that loads that module** -- including tests about something else entirely.
+And `[!mayfail]` does not help: a fatal SLJIT assert kills the process before Catch2 can record a failure.
+
+> **Backend-specific shapes need backend-specific fixtures.** A shared fixture may only contain shapes every
+> backend can compile.
+
+That is why the multi-vector exports and their assertions were removed again rather than marked mayfail: keeping
+them in `v128_boundary_order.wasm` took the whole suite down. Preserving the LibJIT half as an executable test
+needs a separate `v128_multi.wat` -- a new fixture file, which the build picks up through the existing
+`WAT_SOURCES` wildcard but which needs a qmake regeneration.
+
+### State
+
+Suite **21648 assertions in 734 test cases**, green; fixture restored to its two exports; `abi-check.sh` OK;
+Doxygen 0 warnings; tree clean.
