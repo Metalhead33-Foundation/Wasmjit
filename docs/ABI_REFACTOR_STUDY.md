@@ -1648,3 +1648,50 @@ does not provide**, plus four cooperating sites -- and it is the only backend wh
 (`{int, int, int, int}`, read directly by every lane operation) is shared with the boundary.
 
 Suite **21629 assertions in 731 cases**, green; `abi-check.sh` OK; Doxygen 0 warnings; tree clean.
+
+## 30. Attempt 4 measured: the cheap prologue route is dead (2026-11-06)
+
+Sites 1-3 of §29 were implemented and reverted. The measurement is worth recording because it eliminates the
+cheapest hypothesis for site 2.
+
+### What was tried
+
+| Site | Change |
+|---|---|
+| 1 | a `v128` parameter pushes two `jit_type_ulong` into the signature |
+| 2 | the prologue creates the aggregate local and stores the two words at offsets 0 and 8 |
+| 3 | the driver walks *slots* (a new `paramSlots`), not wasm parameters, in both the result-buffer index and the forwarding loop |
+
+Sites 1 and 3 are index arithmetic done correctly this time -- `paramSlots` is computed from the FuncType and
+used consistently in the three places that had `paramCount`. Site 2 used the cheapest possible assembly:
+
+```cpp
+jit_insn_store_relative(fn, slot, 0, jit_value_get_param(fn, signatureSlot));
+jit_insn_store_relative(fn, slot, 8, jit_value_get_param(fn, signatureSlot + 1));
+```
+
+### Result
+
+`[libjit][v128][order]`: **assertion 1 passed, assertion 2 segfaulted.** The first call (`scalar_then_vector`)
+worked -- so the signature split, the slot walk and the ABI are right -- and the *second* call
+(`vector_then_scalar`, where the vector is **followed** by a scalar) died.
+
+That is a precise signal: the failure tracks the aggregate local's use, not the boundary. The likely cause is
+that `jit_insn_store_relative` with a `jit_type_ulong` source over a struct whose fields are `int` is not a
+sound reinterpretation in libjit -- it does not derive the field-wise semantics the aggregate's type declares.
+Writing 8 bytes into an `{int, int, int, int}` is a *layout* operation, and libjit types values, so the type
+system has no reason to accept it.
+
+### What this eliminates, and what it leaves
+
+| Route for site 2 | Status |
+|---|---|
+| store two `ulong` words into the aggregate | **dead** -- measured above |
+| store four `int` halves (shifts required) | the §20 unknown (libjit's shift insns) remains untested |
+| build the aggregate from extracted halves via a shared helper | untested |
+
+So attempt 4 did its job: it converted "the cheap way might work" into "the cheap way does not", for one build
+and one pin. The next attempt starts from the two remaining routes, both of which need the `splitAggregate` /
+`assembleAggregate` helper pair §29 calls for -- which is why that helper is the first artefact, not the last.
+
+Suite restored to **21629 assertions in 731 cases**, green; tree clean.
