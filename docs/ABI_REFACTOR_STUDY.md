@@ -2692,3 +2692,54 @@ frame, so no future round can blame libjit for this again.
 ### State
 
 Suite **21658 assertions in 736 test cases**, green; tree clean.
+
+## 53. The signature is dumped and correct -- and a wrong-overload trap found on the way (2026-11-06)
+
+The last suspect was instrumented rather than reasoned about: both `translateFunctionSignature` overloads were made to
+print their result -- parameter count and each parameter's kind and size -- and a three-vector function was called.
+
+**First finding: the `FuncType` overload never runs.** No output appeared from it; the live path is the
+`CoreTypeView` overload, exactly as §31 found for the *edit*. That is the same trap twice in one study, and it is now
+worth stating as a rule: **`LibJitTypeTranslation.cpp` has two signature builders and only one of them is live.**
+
+**Second finding: the live overload is right.**
+
+```
+SIGcv wasmParams=3 jitParams=7
+  [0] kind=17 size=8   (pointer: VMContext*)
+  [1] kind=10 size=8   (ulong)
+  [2] kind=10 size=8
+  [3] kind=10 size=8
+  [4] kind=10 size=8
+  [5] kind=10 size=8
+  [6] kind=10 size=8
+```
+
+Three wasm parameters become **six 64-bit `ulong` words after the context** -- precisely the canonical rule, with
+nothing extra, nothing missing, and the right kinds.
+
+### So the entire boundary layer is now proven correct
+
+| Layer | Verdict | Evidence |
+|---|---|---|
+| signature translation | **correct** | the dump above |
+| libjit stack arguments (7th word) | **correct** | `[ir]` test, returns 42 |
+| libjit frame + stack argument | **correct** | `[ir]` test, returns 42 |
+| driver forwarding | **not the cause** | `rawFnPtr` fails too |
+| opcode lowering | **not the cause** | `extract_lane`-only body fails |
+| **prologue: three `address_of` + `store_relative` pairs** | **the only thing left** | by elimination |
+
+The observed value for the three-vector lane sum is `22` where `6` is correct, so parameters 1-3 arrive as something
+other than `1, 2, 3` -- **in the body, after the signature handed them over correctly**.
+
+### The next test writes itself
+
+§52's IR test verified *one* `address_of` + `store_relative` for a stack-passed argument. The prologue does **three**
+of them. Extending that IR case to three temps -- `address_of` three slots, store params 1/2, 3/4, 5/6, then load a
+lane from each and sum -- replicates the prologue exactly, in 25 lines with no backend code. If it reproduces `22`,
+the defect is libjit's handling of *several* frame temps alongside stack arguments and the backend must materialise
+vectors differently; if it returns `6`, the defect is in how the dispatcher consumes the locals afterwards.
+
+### State
+
+All instrumentation removed; suite **21658 assertions in 736 test cases**, green; tree clean.
