@@ -1386,3 +1386,61 @@ which is a point in favour of the typed-signature style that `ABI_PORTABILITY.md
 refused by name. `wasm_type_kind` — the second predicate §12 proposed — is still unwritten;
 with `Module::typeIndexForId` + `typeView(...).kind()` it is a small addition, and the
 subtype half it feeds is now proven.
+
+## 31. Gate C step 1 complete on both backends (2026-11-06)
+
+AsmJit now shares the predicate, and the subtype case is a `[parity]` test: both backends
+agree on all six exports. `ref.test`/`ref.cast` on both sides follow the subtype relation.
+
+### The AsmJit wiring was mechanical — and that is the interesting part
+
+The same three sites (`ref.test`, `ref.test null`, `emitRefCast`), the same replacement
+shape, but **no register packing at all**:
+
+```cpp
+// SLJIT: assign registers by hand, in argument order
+emit(MOV32 R1 <- [R1 + kTypeIdOffset]);   // actual
+emit(MOV32 R2 <- expected);               // expected
+loadContext(R0);                          // vm
+emitHelper(SLJIT_ARGS3(32, P, 32, 32), &sljitTypeIsSubtype);
+
+// AsmJit: declare the signature, let the allocator assign
+asmjit::FuncSignature sig(kCDecl);
+sig.set_ret(kUInt32);
+sig.add_arg(kUIntPtr); sig.add_arg(kUInt32); sig.add_arg(kUInt32);
+invoke(Out(call), &asmjitTypeIsSubtype, sig);
+call->set_arg(0, vmContext);
+call->set_arg(1, typeId);
+call->set_arg(2, Imm(expected));
+```
+
+§30's bug — `actual` landing in `R2` instead of `R1` because the layout of a *four*-argument
+call was still in my head — **cannot happen in the AsmJit form**. The signature names each
+argument's position; there is no index to get wrong. That is a concrete, measured data point
+for [`ABI_PORTABILITY.md`](../ABI_PORTABILITY.md) §7's argument that a typed signature is the
+safer seam: it cost one edit and zero debug cycles where SLJIT cost three failed rewrites.
+
+It also relocates a lesson: the SLJIT `SLJIT_ARGSn` macro is a *positional* ABI description
+with no type checking, so every helper call is a hand-assembled call frame. That is not a
+reason to avoid it — it is the price of a portable descriptor-based toolkit — but it is a
+reason to unit-test through it rather than to inspect it.
+
+### Status after this step
+
+| Item | SLJIT | AsmJit |
+|---|---|---|
+| `ref.test` / `ref.test null` subtype-correct | **yes** | **yes** |
+| `ref.cast` / `ref.cast null` subtype-correct | **yes** | **yes** |
+| A/B parity case | `[parity][gc][subtype]`, 32 assertions | same |
+| Abstract heap types in those four ops | refused by name | refused by name |
+
+### What this unblocks
+
+Gate A's dependency (§27) is now satisfied: `br_on_cast` and `br_on_cast_fail` are the two
+opcodes that needed `subtype(actual, expected)`, and that call exists on both backends. The
+remaining Gate A work is therefore **entirely mechanical on SLJIT** (block parameters already
+exist; `dispatchBrIf` is the template) and **mechanism-first on AsmJit** (its `ControlFrame`
+carries one result, not a parameter list).
+
+`wasm_type_kind` is still the one missing predicate, and with `typeIndexForId` +
+`typeView(...).kind()` it is now a small addition.

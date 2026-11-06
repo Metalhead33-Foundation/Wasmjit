@@ -528,6 +528,11 @@ void* asmjitArrayNew(WASM::VMContext* vm, uint32_t typeIndex, uint32_t length) n
 	return reinterpret_cast<WASM::ModuleInstance*>(vm)->allocateArrayObject(typeIndex, length);
 }
 
+uint32_t asmjitTypeIsSubtype(WASM::VMContext* vm, uint32_t actual, uint32_t expected) noexcept
+{
+	return reinterpret_cast<WASM::ModuleInstance*>(vm)->typeIdIsSubtype(actual, expected) ? 1u : 0u;
+}
+
 void asmjitArrayInitFromData(WASM::VMContext* vm, void* array, uint32_t typeIndex,
 		uint64_t packedOffsetAndIndex) noexcept
 {
@@ -3244,8 +3249,22 @@ protected:
 		checkError(compiler.mov(typeId, asmjit::x86::dword_ptr(reference,
 				static_cast<int32_t>(WASM::GcHeader::kTypeIdOffset))),
 				"AsmJit ref.cast type-id load failed");
-		checkError(compiler.cmp(typeId, expected), "AsmJit ref.cast compare failed");
-		checkError(compiler.je(afterCast), "AsmJit ref.cast match branch failed");
+	asmjit::FuncSignature subtypeSignature(asmjit::CallConvId::kCDecl);
+	subtypeSignature.set_ret(asmjit::TypeId::kUInt32);
+	subtypeSignature.add_arg(asmjit::TypeId::kUIntPtr);
+	subtypeSignature.add_arg(asmjit::TypeId::kUInt32);
+	subtypeSignature.add_arg(asmjit::TypeId::kUInt32);
+	asmjit::InvokeNode* subtypeCall = nullptr;
+	checkError(compiler.invoke(asmjit::Out(subtypeCall),
+		reinterpret_cast<uint64_t>(&asmjitTypeIsSubtype), subtypeSignature),
+		"AsmJit subtype predicate call failed");
+	subtypeCall->set_arg(0, vmContext);
+	subtypeCall->set_arg(1, typeId);
+	subtypeCall->set_arg(2, asmjit::Imm(static_cast<uint64_t>(expected)));
+	auto subtypeMatch = compiler.new_gp32("subtypeMatch");
+	subtypeCall->set_ret(0, subtypeMatch);
+	checkError(compiler.test(subtypeMatch, subtypeMatch), "AsmJit ref.cast match test failed");
+	checkError(compiler.jnz(afterCast), "AsmJit ref.cast match branch failed");
 		asmjit::InvokeNode* castCall = nullptr;
 		checkError(compiler.invoke(asmjit::Out(castCall),
 				reinterpret_cast<uint64_t>(&asmjitReportCastFailure), voidSignature),
@@ -3275,9 +3294,21 @@ protected:
 		checkError(compiler.mov(typeId, asmjit::x86::dword_ptr(reference,
 				static_cast<int32_t>(WASM::GcHeader::kTypeIdOffset))),
 				"AsmJit ref.test type-id load failed");
-		checkError(compiler.cmp(typeId, expected), "AsmJit ref.test type-id compare failed");
-		checkError(compiler.jne(done), "AsmJit ref.test mismatch branch failed");
-		checkError(compiler.mov(result, static_cast<uint32_t>(1)), "AsmJit ref.test match failed");
+		asmjit::FuncSignature subtypeSignature(asmjit::CallConvId::kCDecl);
+		subtypeSignature.set_ret(asmjit::TypeId::kUInt32);
+		subtypeSignature.add_arg(asmjit::TypeId::kUIntPtr);
+		subtypeSignature.add_arg(asmjit::TypeId::kUInt32);
+		subtypeSignature.add_arg(asmjit::TypeId::kUInt32);
+		asmjit::InvokeNode* subtypeCall = nullptr;
+		checkError(compiler.invoke(asmjit::Out(subtypeCall),
+			reinterpret_cast<uint64_t>(&asmjitTypeIsSubtype), subtypeSignature),
+			"AsmJit subtype predicate call failed");
+		subtypeCall->set_arg(0, vmContext);
+		subtypeCall->set_arg(1, typeId);
+		subtypeCall->set_arg(2, asmjit::Imm(static_cast<uint64_t>(expected)));
+		auto subtypeMatch = compiler.new_gp32("subtypeMatch");
+		subtypeCall->set_ret(0, subtypeMatch);
+		checkError(compiler.mov(result, subtypeMatch), "AsmJit ref.test result copy failed");
 		checkError(compiler.bind(done), "AsmJit ref.test label binding failed");
 		values.push_back(result);
 	}
@@ -3302,9 +3333,21 @@ protected:
 		checkError(compiler.mov(typeId, asmjit::x86::dword_ptr(reference,
 				static_cast<int32_t>(WASM::GcHeader::kTypeIdOffset))),
 				"AsmJit ref.test type-id load failed");
-		checkError(compiler.cmp(typeId, expected), "AsmJit ref.test type-id compare failed");
-		checkError(compiler.jne(done), "AsmJit ref.test mismatch branch failed");
-		checkError(compiler.mov(result, static_cast<uint32_t>(1)), "AsmJit ref.test match failed");
+		asmjit::FuncSignature subtypeSignature(asmjit::CallConvId::kCDecl);
+		subtypeSignature.set_ret(asmjit::TypeId::kUInt32);
+		subtypeSignature.add_arg(asmjit::TypeId::kUIntPtr);
+		subtypeSignature.add_arg(asmjit::TypeId::kUInt32);
+		subtypeSignature.add_arg(asmjit::TypeId::kUInt32);
+		asmjit::InvokeNode* subtypeCall = nullptr;
+		checkError(compiler.invoke(asmjit::Out(subtypeCall),
+			reinterpret_cast<uint64_t>(&asmjitTypeIsSubtype), subtypeSignature),
+			"AsmJit subtype predicate call failed");
+		subtypeCall->set_arg(0, vmContext);
+		subtypeCall->set_arg(1, typeId);
+		subtypeCall->set_arg(2, asmjit::Imm(static_cast<uint64_t>(expected)));
+		auto subtypeMatch = compiler.new_gp32("subtypeMatch");
+		subtypeCall->set_ret(0, subtypeMatch);
+		checkError(compiler.mov(result, subtypeMatch), "AsmJit ref.test result copy failed");
 		checkError(compiler.bind(done), "AsmJit ref.test label binding failed");
 		values.push_back(result);
 	}

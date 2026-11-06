@@ -2741,30 +2741,48 @@ TEST_CASE("the runtime subtype predicate follows sub declarations",
 }
 
 
-TEST_CASE("SLJIT ref.test follows the subtype relation", "[sljit][gc][subtype]")
+TEST_CASE("both backends follow the subtype relation in ref.test and ref.cast",
+		"[sljit][asmjit][parity][gc][subtype]")
 {
 	WASM::Module module = loadTestModule("gc_subtype");
-	Sljit::ModuleCompiler compiler;
-	WASM::RegistryImportResolver imports;
-	std::unique_ptr<WASM::ModuleInstance> instance = compiler.instantiate(module, imports);
-	REQUIRE(instance != nullptr);
+	AsmJitBackend::Context asmContext;
+	AsmJitBackend::ModuleCompiler asmCompiler(asmContext);
+	Sljit::ModuleCompiler sljitCompiler;
+	WASM::RegistryImportResolver asmImports;
+	WASM::RegistryImportResolver sljitImports;
+	std::unique_ptr<WASM::ModuleInstance> asmInstance =
+			asmCompiler.instantiate(module, asmImports);
+	std::unique_ptr<WASM::ModuleInstance> sljitInstance =
+			sljitCompiler.instantiate(module, sljitImports);
+	REQUIRE(asmInstance != nullptr);
+	REQUIRE(sljitInstance != nullptr);
 
-	const auto call = [&](const char* name) {
-		const std::optional<WASM::Callable> callable = instance->exportedFunction(name);
-		REQUIRE(callable.has_value());
+	const auto same = [&](const char* name, std::int32_t expected) {
+		const std::optional<WASM::Callable> asmCallable = asmInstance->exportedFunction(name);
+		const std::optional<WASM::Callable> sljitCallable = sljitInstance->exportedFunction(name);
+		REQUIRE(asmCallable.has_value());
+		REQUIRE(sljitCallable.has_value());
 		INFO("export " << name);
-		return WASM::callCallable<std::int32_t>(*callable);
+		CHECK(WASM::callCallable<std::int32_t>(*asmCallable) == expected);
+		CHECK(WASM::callCallable<std::int32_t>(*sljitCallable) == expected);
+	};
+	const auto trapOf = [&](const char* name, WASM::TrapKind expected) {
+		const std::optional<WASM::Callable> asmCallable = asmInstance->exportedFunction(name);
+		const std::optional<WASM::Callable> sljitCallable = sljitInstance->exportedFunction(name);
+		REQUIRE(asmCallable.has_value());
+		REQUIRE(sljitCallable.has_value());
+		INFO("export " << name);
+		CHECK(trapKindOf([&] { WASM::callCallable<std::int32_t>(*asmCallable); }) == expected);
+		CHECK(trapKindOf([&] { WASM::callCallable<std::int32_t>(*sljitCallable); }) == expected);
 	};
 
 	// The bug being fixed: a subtype instance used to fail an identity comparison.
-	CHECK(call("test_super") == 1);
-	CHECK(call("test_nullable") == 1);
-	// The relation is not symmetric, and null never matches a non-null test.
-	CHECK(call("test_sub") == 0);
-	CHECK(call("test_null") == 0);
-	// A cast to an ancestor now succeeds; the reverse still traps.
-	CHECK(call("cast_super") == 0);
-	const std::optional<WASM::Callable> castFail = instance->exportedFunction("cast_fail");
-	REQUIRE(castFail.has_value());
-	CHECK(trapKindOf([&] { WASM::callCallable<std::int32_t>(*castFail); }) == WASM::TrapKind::CastFailure);
+	same("test_super", 1);
+	same("test_nullable", 1);
+	// Not symmetric, and null never matches a non-null test.
+	same("test_sub", 0);
+	same("test_null", 0);
+	// A cast to an ancestor succeeds; the reverse traps.
+	same("cast_super", 0);
+	trapOf("cast_fail", WASM::TrapKind::CastFailure);
 }
