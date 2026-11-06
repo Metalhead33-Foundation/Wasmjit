@@ -2080,3 +2080,125 @@ allocator check fires; if it prints nothing, the abort is ours and the next step
 Suite **21529 assertions in 723 cases**, green; Doxygen 0 warnings. The probe is removed; the i32
 merge probe stays. Gate A remains blocked on F1, which is now a heap-corruption hypothesis with a
 named, cheap test (read glibc's own message) rather than a mystery.
+
+## 42. The measurement trap is now a build rule, not a discipline (2026-11-06)
+
+Two rounds went wrong by reading a test result off a fixture that had **not built** (§37, §38), and
+each wrong reading was convincing: the stale `.wasm` produced a stable, reproducible, entirely
+fictitious answer.
+
+### The fix
+
+The `.wat` conversion rule now removes its output **before** parsing:
+
+```make
+wat2wasm.commands = $$QMAKE_MKDIR $$WASM_BUILD_OUTPUT_DIR && rm -f ${QMAKE_FILE_OUT} \
+                  && $$WASM_TOOLS parse ${QMAKE_FILE_IN} -o ${QMAKE_FILE_OUT}
+```
+
+A fixture that fails to parse now leaves **no** `.wasm`. The test that needs it fails at load —
+loudly, with a parse or file error — instead of silently exercising last build's binary.
+
+Three properties make this the right layer:
+
+- **It cannot be forgotten.** Discipline-dependent checks ("remember to grep the build output") had
+  already failed twice in one session; a build rule has no such failure mode.
+- **It costs nothing when nothing is wrong.** The `rm` runs only when the rule actually runs.
+- **It is honest about the failure.** The error names the fixture, not a wrong assertion deep in a
+  backend.
+
+A runtime check inside `loadTestModule` was considered and rejected: `WASM_TEST_DIR` contains only
+`.wasm` files, so the loader cannot compare against the source `.wat`'s timestamp. The build is the
+only place that knows both.
+
+### What else is realistically implementable before F1 and `v128`
+
+With this out of the way, the remaining work sorts into three buckets.
+
+**Ready now, no new mechanism:**
+
+| Item | Size | Risk |
+|---|---|---|
+| `array.new_elem` — the loop plus an element-segment read, with reference retention per element | medium | medium: it stores references, and the GC ownership rules must be honoured per element |
+| The allocator test hook that would let F2's guard be tested (a failing-allocation mode beside the existing budget knob) | small | low |
+| Gate D, **one family at a time** (GC traps → reference traps → the rest), running the full suite between families | small each | low, by construction |
+
+**Blocked on F1:** `br_on_non_null`, `br_on_cast`, `br_on_cast_fail` — all three carry references into
+blocks, which is exactly the shape F1 corrupts.
+
+**Blocked by design, not by work:** `ref.test`/`ref.cast` on `(ref func)`/`(ref extern)`/`(ref i31)` —
+a function reference is not a header-tagged object, so a type-id query cannot answer for it.
+
+**Out of scope:** `v128`, exceptions, `call_ref`/continuations, atomics, `f16`, relaxed SIMD.
+
+Recommended order from here: the allocator hook (it converts F2 from "fixed but untested" to
+"tested"), then `array.new_elem`, then Gate D family by family. All three are independent of F1 and of
+`v128`, so none of them can be blocked by the two deferred items.
+
+## 43. The allocator hook landed; the containment chain it was meant to test does not hold (2026-11-06)
+
+### What landed
+
+A test hook in the core makes allocation fail on demand:
+
+```cpp
+//! Test hook: makes the next N allocations throw `std::bad_alloc`.
+//! Exists so the helper exception guards can be exercised by a test; it is never
+//! armed in production, and it changes no layout or calling convention.
+static void failAllocationsForTesting(uint32_t count);
+```
+
+It arms a file-static counter; `allocateArrayObject` and `allocateStructObject` throw while it is
+armed. It is inert unless armed, and the whole suite passes with it present.
+
+### What it exposed, in three layers
+
+1. **The guard works.** Arming the hook and calling an allocating export no longer produces a wrong
+   value or an abort — the throw is caught by F2's guard, an internal trap is reported, and the
+   helper returns `nullptr`. The failure mode moved *forward* in the chain, which is progress and is
+   measurable.
+2. **The chain then breaks.** The lowering uses that `nullptr`, and the probe dies with `SIGSEGV`.
+   So the guard is necessary and not sufficient: nothing stops the lowering from consuming a null
+   result after a reported trap.
+3. **Adding the missing check did not fix it.** `emitPendingTrapCheck()` — which emits
+   `sljitTrapPending()` and a conditional jump to the trap epilogue — was inserted after each of the
+   six allocation helper calls, and the probe **still** faulted. So either those checks are
+   mis-ordered with respect to the null use, or the check itself does not work on this path.
+   **That is unresolved and is the next thing to investigate**, with the hook now available to
+   reproduce it in one call.
+
+### A correction, and the process lesson that matters more
+
+Mid-investigation I wrote that `emitPendingTrapCheck()` was dead code because a grep showed only its
+definition. Restoring the file showed **fifteen** existing call sites: the grep had matched the
+definition line and I read a truncated result as the whole picture. It was not dead code.
+
+Then a worse version of the same mistake: to remove the six checks I had just added, I filtered every
+line equal to `emitPendingTrapCheck();` — which deleted **21** lines, the six I added plus the fifteen
+that were already there. The suite went red immediately (a `SIGSEGV` in an unrelated path), and the
+only reason it was recoverable in one command was that the previous state had been committed.
+
+Two rules, both instances of the same discipline this arc keeps re-learning:
+
+- **Never filter on a bare statement; anchor on the marker you inserted.** A unique comment line is
+  safe to delete against; a statement line is not, because the codebase already contains it.
+- **Back up, or rely on a commit, before any bulk deletion.** This is the third deletion/edit accident
+  in the arc (§25, §34, §43); the two recoveries both came from a committed baseline.
+
+The grep lesson generalises further: **a truncated or filtered search result is not evidence of
+absence.** "Only one hit" and "I only looked at the first hit" are indistinguishable in a terminal.
+
+### Status of the three "ready now" items
+
+| Item | State |
+|---|---|
+| Allocator test hook | **landed** (inert, documented) |
+| The test that proves F2's guard | written, **withdrawn**: it exposes the null-use gap rather than passing |
+| `array.new_elem` | not started |
+| Gate D family by family | not started |
+
+The next unit of work is therefore not on that list: it is **making the null-use after a reported
+trap impossible** (check the slot, and make the check verifiably work), because without it F2's guard
+converts one crash into another and the hook's test cannot pass.
+
+Suite **21529 assertions in 723 cases**, green; Doxygen 0 warnings.

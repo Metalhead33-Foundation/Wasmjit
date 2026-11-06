@@ -1523,6 +1523,16 @@ bool ModuleInstance::typeIdIsSubtype(uint32_t actualTypeId, uint32_t expectedTyp
 	return module->isSubtype(*actual, *expected);
 }
 
+namespace {
+//! Armed by `failAllocationsForTesting`; test-only, never set in production.
+std::atomic<uint32_t> g_allocationFailuresForTesting {0};
+} // namespace
+
+void ModuleInstance::failAllocationsForTesting(uint32_t count)
+{
+	g_allocationFailuresForTesting.store(count, std::memory_order_relaxed);
+}
+
 void ModuleInstance::arrayInitFromData(void* array, uint32_t localTypeIdx, uint32_t dataIdx, uint32_t srcOffset)
 {
 	if (dataIdx >= module->dataSegments.size()) {
@@ -1751,6 +1761,10 @@ void ModuleInstance::bufferInitFromElems(uint32_t elemIdx, void* dst, uint32_t s
 
 void* ModuleInstance::allocateStructObject(uint32_t size, uint32_t localTypeIdx, void* descriptor)
 {
+	if (g_allocationFailuresForTesting.load(std::memory_order_relaxed) > 0) {
+		g_allocationFailuresForTesting.fetch_sub(1, std::memory_order_relaxed);
+		throw std::bad_alloc();
+	}
 	// Resolve the module-local index against this instance's module and stamp the
 	// canonical TypeId into the header, so a later cast can match it even from
 	// another module (M6).
@@ -1835,6 +1849,10 @@ void* ModuleInstance::allocateArrayObject(uint32_t localTypeIdx, uint32_t length
 
 void* ModuleInstance::allocateArrayObject(uint32_t dataOffset, uint32_t elementSize, uint32_t length, uint32_t localTypeIdx)
 {
+	if (g_allocationFailuresForTesting.load(std::memory_order_relaxed) > 0) {
+		g_allocationFailuresForTesting.fetch_sub(1, std::memory_order_relaxed);
+		throw std::bad_alloc();
+	}
 	const TypeId typeId = module->typeId(LocalTypeIdx{localTypeIdx});
 
 	// One block: header + inline elements (D13/GC-9). The whole size is charged

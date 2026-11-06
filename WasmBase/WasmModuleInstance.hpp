@@ -362,6 +362,11 @@ public:
 	//! `any`/`eq` supertypes of both. Function and external references are not
 	//! header-tagged objects, so they answer false here.
 	bool typeIdMatchesAbstractKind(uint32_t typeId, uint32_t kind) const;
+	//! Test hook: makes the next N allocations throw `std::bad_alloc`.
+	//! \param count Number of allocations to fail; 0 disables the hook.
+	//! Exists so the helper exception guards can be exercised by a test; it is
+	//! never armed in production, and it changes no layout or calling convention.
+	static void failAllocationsForTesting(uint32_t count);
 	//! Custom Descriptors: the RTT/descriptor reference stored in a struct's
 	//! header, or nullptr for a null/non-struct reference. `ref.get_desc` traps
 	//! when this returns nullptr.
