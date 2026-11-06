@@ -724,3 +724,54 @@ conversion rather than assume it away.
 it?_** The same language appears on both sides of the boundary in this project — C is guest-facing in the
 C header and WasmJIT-facing in the C++ adapter — which is exactly why a per-language rule could not work,
 and why this needed a real answer rather than a revision of the previous one.
+
+## 17. The translation layer, specified against real anchors (2026-11-06)
+
+§16 established that the two families must diverge; the conformance harness is what stops them. The fix is a
+translation layer **in the generated adapter**, because that is precisely the job the runtime performs for
+real — so the test exercises the conversion instead of assuming it away.
+
+### Where it goes
+
+The adapter is emitted by `emitCppAdapterImpl` (`Tools/Bindings/EmitCpp.cpp:429`); its call site is the
+`reinterpret_cast<Target>(callable->fnPtr)` emission at `:414`. The generated shape today is
+"cast the pointer, forward the arguments, return the result". It becomes:
+
+```cpp
+// for each exported function taking or returning a vector
+Target target = reinterpret_cast<Target>(callable->fnPtr);
+return target(context, arg0, guest.arg1.bytes /* wasm side */ ... );
+            // ^ guest-side `wasm_v128` split into the native pair here
+```
+
+### What the layer must do, exactly
+
+| Position | Guest-side value | Native argument it becomes |
+|---|---|---|
+| parameter | one `wasm_v128` (`bytes[16]`, little-endian) | **two `uint64_t`**: `lo` = bytes 0-7, `hi` = bytes 8-15 |
+| result (single) | one `wasm_v128` | two words read from the return, packed back into `bytes[16]` |
+| result (multi-value) | the trailing buffer | unchanged — the buffer is `lo, hi` at byte offsets 0 and 8, which is the same bytes |
+
+Note the third row: **the buffer case needs no conversion at all**, because "`lo` then `hi`" and "bytes 0-7
+then 8-15" are the same memory. That is a useful invariant to state, and a reason the two-word decision was
+the right one: the only place the two ABIs differ is *how the value travels*, never *what the bytes are*.
+
+### What it must not do
+
+- **No byte swapping.** The word order is defined by bit position (§28 of the decision note), not by
+  register number, so `lo` is always bytes 0-7 on every target — including a future big-endian port, which
+  would change the JIT's load/store, not the binding.
+- **No conversion on the guest-facing side.** A guest-facing emitter that converted would be modelling the
+  runtime in the guest, which is exactly the confusion §16 resolved.
+- **No conversion for non-vector parameters.** The layer is a no-op unless a signature mentions `v128`.
+
+### The gate
+
+> With the C header on the **wasm** spelling and the C++ adapter on the **native** pair, the gcc
+> compile-and-run conformance cases pass, and `[callcache][v128][abi][parity]` still passes — three
+> independent paths (generated adapter, libffi cache, direct pointer) agreeing on one convention.
+
+### State
+
+Not implemented; specified against line anchors so the next pass edits rather than investigates. Suite
+**21591 assertions in 728 cases**, green, tree clean.
