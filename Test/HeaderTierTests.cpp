@@ -1,5 +1,7 @@
 #include <catch2/catch_all.hpp>
 
+#include "WasmBase/WasmBackendAbi.hpp"
+
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
@@ -256,4 +258,28 @@ TEST_CASE("a v128 crosses the C boundary as two little-endian words",
 	CHECK(lane[8] == 0x01);
 	CHECK(lane[15] == 0xFF);
 #endif
+}
+
+
+TEST_CASE("a v128 parameter occupies two C argument slots", "[v128][abi][layout]")
+{
+	using WASM::ValueKind;
+
+	// The canonical rule, as a number rather than as prose.
+	CHECK(WASM::argSlotCount(ValueKind::I32) == 1);
+	CHECK(WASM::argSlotCount(ValueKind::I64) == 1);
+	CHECK(WASM::argSlotCount(ValueKind::Ref) == 1);
+	CHECK(WASM::argSlotCount(ValueKind::V128) == 2);
+
+	const ValueKind kinds[] = {ValueKind::I32, ValueKind::V128, ValueKind::I64};
+	const std::vector<WASM::ArgSlot> slots = WASM::mapArgSlots(kinds);
+	REQUIRE(slots.size() == 3);
+	CHECK(slots[0].firstSlot == 0);
+	CHECK(slots[0].slots == 1);
+	CHECK(slots[1].firstSlot == 1);
+	CHECK(slots[1].slots == 2);
+	// The parameter *after* the vector is the one a hand-written walk gets wrong: it
+	// starts at slot 3, not 2. This assertion is the whole point of the mapping.
+	CHECK(slots[2].firstSlot == 3);
+	CHECK(slots[2].slots == 1);
 }
