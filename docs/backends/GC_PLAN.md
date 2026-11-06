@@ -288,3 +288,86 @@ test that proves it.
 D (cheap, removes a hazard) → B (mechanical once the loop shape exists) → A (the
 big gate) → C (needs a core answer) → the `v128` seam → saga closure. D and B change
 no ABI; A touches control flow everywhere; C and the seam are the two decisions.
+
+## 12. Re-sizing the gates after inspection (2026-11-06)
+
+§11 wrote the four gates from the outside. Reading the code changed three of the
+estimates, and one reading turned up a bug that is not a gate at all. Recorded here so
+the next author does not plan from §11's optimism.
+
+**Authority note:** the maintainer has authorised breaking the existing ABI/API where a
+gate requires it, provided the gap being filled is documented. Two of the items below
+exercise that permission, and each says exactly what breaks.
+
+### Gate A is not "unblock three opcodes" — it is "write three opcodes"
+
+§11 assumed `br_on_non_null`, `br_on_cast` and `br_on_cast_fail` were implemented on
+SLJIT and merely gated on AsmJit's block parameters. They are **absent from both
+backends**: the only member of the family that exists is `br_on_null`
+(`Sljit/SljitOpcodeDispatcher.cpp`, `Asmjit/AsmjitModuleCompiler.cpp`).
+
+So Gate A is really three things, and they are indivisible:
+
+1. a block-parameter mechanism in **both** backends — today `ControlFrame` carries a
+   single `resultCount`/`resultType`/`result`;
+2. three branch opcodes on top of it, twice;
+3. fixtures that separate the cast-success and cast-failure paths.
+
+Doing (1) without (2) unlocks nothing, and (2) without (1) cannot be written. It is the
+largest single item left, and it should be scheduled as one unit.
+
+### Gate C exposes a real bug, and needs a runtime predicate
+
+Two findings:
+
+- **Abstract heap types** are refused by name (`require(arg.isTypeIndex, "ref.test on an
+  abstract heap type is not lowered yet")`). Supporting them needs a decision about a
+  *runtime* type id, which the module-local, compile-time `Module::isSubtype(TypeIdx,
+  TypeIdx)` cannot answer.
+- **`ref.test` and `ref.cast` compare the stored `TypeId` against the target type's id
+  with equality.** An instance of a *subtype* therefore fails `ref.test $super`, and a
+  cast to an ancestor traps `CastFailure`. That is a fidelity bug independent of
+  abstract heap types, it was never recorded, and no test asserts the case (every
+  fixture so far casts between unrelated types, where equality and subtyping agree).
+
+Both want the same thing, and it is a **core runtime predicate** — an ABI addition,
+which is where this plan uses the break permission:
+
+```c
+//! True when @p actual is @p expected or a subtype of it.
+bool wasm_type_is_subtype(WASM::VMContext* vm, uint32_t actual, uint32_t expected);
+//! The abstract kind a runtime type id belongs to (struct / array / func / extern).
+uint32_t wasm_type_kind(uint32_t typeId);
+```
+
+- **Gap filled:** `ref.test`/`ref.cast` cannot express subtyping at all today; abstract
+  heap types are refused. Both become correct, at the cost of one call on the cast path.
+- **What breaks:** `WasmBase` gains two exported entry points (additive; the existing
+  exact-equality lowering is replaced, and `ref.test` on a hierarchy edge changes its
+  answer from `false` to `true` — which is the bug being fixed, so it is a behavioural
+  break, not an accidental one).
+- **Order:** the predicate first (it fixes the equality bug for concrete types with two
+  small backend patches), abstract heap types second.
+
+### Gate D is unchanged, and is the cheapest of the three
+
+The sweep is as §11 described: one `ReportTrap(uint32_t kind)` per backend, the kind as
+an explicit argument. §19 showed the failure mode it removes (a global substitution
+across the per-kind wrappers gave `array.len` the structure kind); §22 and §23 added
+more call sites, which makes the sweep more mechanical and *more* worth doing than when
+it was written. **No ABI is broken** — the wrappers are backend-local `extern "C"`
+functions, so this is invisible outside each `*.cpp`.
+
+### Recalibrated order of work
+
+| # | Item | Mechanism needed | Risk |
+|---|---|---|---|
+| 1 | `array.new_data`, `array.new_elem` | none — the §21 loop plus a segment read | low |
+| 2 | Gate D | none | low (mechanical, wide) |
+| 3 | Gate C step 1 — runtime subtype predicate | a core function (ABI addition) | medium |
+| 4 | Gate C step 2 — abstract heap types | the predicate | low once 3 lands |
+| 5 | Gate A | block parameters + three opcodes, both backends | **highest** |
+
+`v128` is excluded from all of this by instruction: it stays deferred
+([`V128_SIGNATURE_DECISION.md`](V128_SIGNATURE_DECISION.md), open row **P1** in
+[`../ABI_PORTABILITY.md`](../ABI_PORTABILITY.md)).
