@@ -2715,3 +2715,56 @@ TEST_CASE("both backends lower array.new_data", "[sljit][asmjit][parity][gc]")
 	trapOf("data_oob", WASM::TrapKind::OutOfBoundsMemoryAccess);
 }
 
+
+
+TEST_CASE("the runtime subtype predicate follows sub declarations",
+"[gc][subtype][predicate]")
+{
+	WASM::Module module = loadTestModule("gc_subtype");
+	WASM::RegistryImportResolver imports;
+	// No backend involved: this exercises the predicate, not any codegen.
+	WASM::ModuleInstance instance(module, imports);
+
+	// In the fixture `$s` is type index 0 and `$t` is index 1, declared `(sub $s ...)`.
+	const std::uint32_t s = module.typeId(WASM::LocalTypeIdx{0}).value;
+	const std::uint32_t t = module.typeId(WASM::LocalTypeIdx{1}).value;
+	INFO("$s id=" << s << " $t id=" << t);
+
+	// Diagnostic split: the module-local relation on its own, then through the ids.
+	CHECK(module.isSubtype(1, 0));
+	CHECK_FALSE(module.isSubtype(0, 1));
+
+	CHECK(instance.typeIdIsSubtype(s, s));
+	CHECK(instance.typeIdIsSubtype(t, t));
+	CHECK(instance.typeIdIsSubtype(t, s));
+	CHECK_FALSE(instance.typeIdIsSubtype(s, t));
+}
+
+
+TEST_CASE("SLJIT ref.test follows the subtype relation", "[sljit][gc][subtype]")
+{
+	WASM::Module module = loadTestModule("gc_subtype");
+	Sljit::ModuleCompiler compiler;
+	WASM::RegistryImportResolver imports;
+	std::unique_ptr<WASM::ModuleInstance> instance = compiler.instantiate(module, imports);
+	REQUIRE(instance != nullptr);
+
+	const auto call = [&](const char* name) {
+		const std::optional<WASM::Callable> callable = instance->exportedFunction(name);
+		REQUIRE(callable.has_value());
+		INFO("export " << name);
+		return WASM::callCallable<std::int32_t>(*callable);
+	};
+
+	// The bug being fixed: a subtype instance used to fail an identity comparison.
+	CHECK(call("test_super") == 1);
+	CHECK(call("test_nullable") == 1);
+	// The relation is not symmetric, and null never matches a non-null test.
+	CHECK(call("test_sub") == 0);
+	CHECK(call("test_null") == 0);
+	// A cast to an ancestor now succeeds; the reverse still traps.
+	CHECK(call("cast_super") == 0);
+	const std::optional<WASM::Callable> castFail = instance->exportedFunction("cast_fail");
+	REQUIRE(castFail.has_value());
+	CHECK(trapKindOf([&] { WASM::callCallable<std::int32_t>(*castFail); }) == WASM::TrapKind::CastFailure);
+}

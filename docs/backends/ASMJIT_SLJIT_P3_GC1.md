@@ -1314,3 +1314,75 @@ backend, no codegen, no register pressure — asserting `true` for `($t, $s)` an
 
 That is the same contract-first discipline that made the layout work cheap: settle the
 contract with a test, then let the backends follow.
+
+## 30. Gate C lands on SLJIT: the bug was the argument packing (2026-11-06)
+
+Gate C step 1 is **done on SLJIT**. `ref.test`, `ref.test null`, `ref.cast` and
+`ref.cast null` now ask the runtime predicate instead of comparing type ids, so an
+instance of a subtype satisfies `ref.test $super` and casts to its ancestor successfully.
+Full suite: **21483 assertions in 721 cases**, green.
+
+### The debugging order that worked — and it is the §29 rule, vindicated
+
+The previous two attempts rewired the backends first and broke. This time the order was:
+
+1. **A core test with no backend at all.** `ModuleInstance` is publicly constructible
+   (`ModuleInstance(module, resolver)`), so a test can call `typeIdIsSubtype` directly on a
+   parsed fixture. It passed all six assertions, including `typeIdIsSubtype($t, $s) == true`.
+   That single test **eliminated both remaining hypotheses** — the predicate was correct, so
+   `typeIndexForId` and `isSubtype` semantics were never the problem.
+2. **A backend test for one site only.** `test_super` still answered `0`, which localised
+   the fault to the *marshalling* between the dispatcher and the helper.
+3. That localisation made the bug obvious on inspection.
+
+Three failed rewrites were replaced by one core test, one narrowed backend test, and a
+one-line fix. The contract-first rule did not merely avoid a mistake — it made the bug
+*found* in minutes instead of guessed at.
+
+### The bug: a three-argument helper fills R0, R1, R2
+
+The predicate takes `(vm, actual, expected)`. The first wiring put `actual` in **R2** and
+`expected` in **R3** — the layout of a *four*-argument call, which the neighbouring
+`sljitArrayInitFromData` had trained me into. So the helper received `vm`, a stale *object
+pointer* as `actual`, and the real `actual` as `expected`. Every pair answered `false`,
+which looks exactly like "the predicate is broken" and is not.
+
+```c
+// wrong                                   // right
+R2 = actual; R3 = expected;                R1 = actual; R2 = expected;
+```
+
+With three arguments the register budget is `R0..R2`; with four it is `R0..R3`. There is no
+compiler to catch this: the ABI descriptor says "three arguments of these types", and the
+registers are filled in order. **The argument count is silent; the argument order is
+silent; only a test that distinguishes a true from a false result catches it.** This is the
+third variant of the same family now recorded in this arc — §22 (four is the ceiling), §25
+(argument registers change when arity changes) and this one (arity changes the *index of
+every* argument).
+
+### The second bug, in `emitRefCast`
+
+`ref.cast` had its own version of the same problem plus a clobbering one: the helper call
+happens on the **success** path, and a helper call destroys `R0`–`R3`, so the object pointer
+had to be reloaded from its operand-stack slot before the reference is pushed. That reload is
+now emitted with a comment saying why. §29 predicted exactly this ("any later use of R2/R3
+in that function is now reading garbage") and it was right.
+
+### Tests added
+
+| Test | Tag | What it pins |
+|---|---|---|
+| `the runtime subtype predicate follows sub declarations` | `[gc][subtype][predicate]` | the predicate itself, **no backend** — 6 assertions including the diagnostic split (`module.isSubtype(1,0)` separately from the id path) |
+| `SLJIT ref.test follows the subtype relation` | `[sljit][gc][subtype]` | both directions of the relation, the nullable form, and `CastFailure` on the reverse cast |
+
+### Still open on this gate
+
+**AsmJit** still compares type ids for identity: `test_super` answers `1` on SLJIT and `0` on
+AsmJit today, so the A/B parity test cannot be enabled yet. The AsmJit wiring is the same
+three sites and, being `invoke`-based, it cannot suffer the register-packing bug at all —
+which is a point in favour of the typed-signature style that `ABI_PORTABILITY.md` §7 notes.
+
+**Abstract heap types** (`(ref any)`, `(ref eq)`, `(ref struct)`, `(ref array)`) remain
+refused by name. `wasm_type_kind` — the second predicate §12 proposed — is still unwritten;
+with `Module::typeIndexForId` + `typeView(...).kind()` it is a small addition, and the
+subtype half it feeds is now proven.

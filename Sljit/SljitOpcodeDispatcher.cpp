@@ -4069,10 +4069,17 @@ void OpcodeDispatcher::emitRefCast(const WASM::HeapType& arg, bool nullable)
 		// The trap block called a helper: reload the reference.
 		loadSlot(SLJIT_R1, depth, 8);
 	}
-	emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R3, 0, SLJIT_MEM1(SLJIT_R1),
-			static_cast<sljit_sw>(WASM::GcHeader::kTypeIdOffset)));
-	sljit_jump* matches = sljit_emit_cmp(compiler_, SLJIT_EQUAL, SLJIT_R3, 0,
-			SLJIT_IMM, static_cast<sljit_sw>(expected));
+	// Three arguments fill R0, R1 and R2: actual in R1, expected in R2.
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R1, 0, SLJIT_MEM1(SLJIT_R1),
+		static_cast<sljit_sw>(WASM::GcHeader::kTypeIdOffset)));
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R2, 0, SLJIT_IMM,
+		static_cast<sljit_sw>(expected)));
+	loadContext(SLJIT_R0);
+	emitHelper(SLJIT_ARGS3(32, P, 32, 32), &sljitTypeIsSubtype);
+	// The call clobbers the object pointer; restore it for the value push.
+	loadSlot(SLJIT_R1, depth, 8);
+	sljit_jump* matches = sljit_emit_cmp(compiler_, SLJIT_NOT_EQUAL, SLJIT_R0, 0,
+		SLJIT_IMM, 0);
 	if (matches == nullptr)
 		ok_ = false;
 	emitHelper(SLJIT_ARGS0V(), &sljitReportCastFailure);
@@ -4115,19 +4122,19 @@ void OpcodeDispatcher::dispatchRefTest(const WASM::HeapType& arg)
 		sljit_jump* isNull = sljit_emit_cmp(compiler_, SLJIT_EQUAL, SLJIT_R1, 0, SLJIT_IMM, 0);
 		if (isNull == nullptr)
 			ok_ = false;
-		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R3, 0, SLJIT_MEM1(SLJIT_R1),
-				static_cast<sljit_sw>(WASM::GcHeader::kTypeIdOffset)));
-		sljit_jump* mismatch = sljit_emit_cmp(compiler_, SLJIT_NOT_EQUAL, SLJIT_R3, 0,
-				SLJIT_IMM, static_cast<sljit_sw>(expected));
-		if (mismatch == nullptr)
-			ok_ = false;
-		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R2, 0, SLJIT_IMM, 1));
+		// Three arguments fill R0, R1 and R2: actual in R1, expected in R2.
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R1, 0, SLJIT_MEM1(SLJIT_R1),
+			static_cast<sljit_sw>(WASM::GcHeader::kTypeIdOffset)));
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R2, 0, SLJIT_IMM,
+			static_cast<sljit_sw>(expected)));
+		loadContext(SLJIT_R0);
+		emitHelper(SLJIT_ARGS3(32, P, 32, 32), &sljitTypeIsSubtype);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R2, 0, SLJIT_R0, 0));
 		sljit_label* done = sljit_emit_label(compiler_);
 		if (done == nullptr)
 			ok_ = false;
 		else {
 			if (isNull != nullptr) sljit_set_label(isNull, done);
-			if (mismatch != nullptr) sljit_set_label(mismatch, done);
 		}
 		storeSlot(SLJIT_R2, depth, 4);
 	}
@@ -4151,19 +4158,19 @@ void OpcodeDispatcher::dispatchRefTestNull(const WASM::HeapType& arg)
 		if (isNull == nullptr)
 			ok_ = false;
 		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R2, 0, SLJIT_IMM, 0));
-		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R3, 0, SLJIT_MEM1(SLJIT_R1),
-				static_cast<sljit_sw>(WASM::GcHeader::kTypeIdOffset)));
-		sljit_jump* mismatch = sljit_emit_cmp(compiler_, SLJIT_NOT_EQUAL, SLJIT_R3, 0,
-				SLJIT_IMM, static_cast<sljit_sw>(expected));
-		if (mismatch == nullptr)
-			ok_ = false;
+		// Three arguments fill R0, R1 and R2: actual in R1, expected in R2.
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R1, 0, SLJIT_MEM1(SLJIT_R1),
+			static_cast<sljit_sw>(WASM::GcHeader::kTypeIdOffset)));
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R2, 0, SLJIT_IMM,
+			static_cast<sljit_sw>(expected)));
+		loadContext(SLJIT_R0);
+		emitHelper(SLJIT_ARGS3(32, P, 32, 32), &sljitTypeIsSubtype);
 		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R2, 0, SLJIT_IMM, 1));
 		sljit_label* done = sljit_emit_label(compiler_);
 		if (done == nullptr)
 			ok_ = false;
 		else {
 			if (isNull != nullptr) sljit_set_label(isNull, done);
-			if (mismatch != nullptr) sljit_set_label(mismatch, done);
 		}
 		storeSlot(SLJIT_R2, depth, 4);
 	}
