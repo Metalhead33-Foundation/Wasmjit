@@ -156,6 +156,31 @@ suite is evidence of *what it tests*, never of what it does not.
 4. **Adopt `mapArgSlots` in SLJIT.** Its docstring warns that hand-rolled slot
    walks caused three investigations; SLJIT still hand-rolls one.
 
+### Next two probes, in order
+
+**A. SLJIT: can the callee READ a stack-passed argument?** Deferred; declaration
+is measured closed, reading is untested. Plan: sweep again with a legal register
+budget (the first attempt aborted for asking 4 scratches + 6 saved, not because of
+the arguments); declare only what fits, let the C caller pass seven, and sweep
+`SLJIT_MEM1(SLJIT_SP)` offsets for the value 42; if that base does not reach the
+incoming-argument region, sweep from `sljit_get_local_base` instead. Exit gate
+unchanged: `[sljit][v128][abi][shapes]` flips from refused to `three_lanes` = 6.
+
+*The name is the warning.* SLJIT is the **Stack-less** Just-In-Time compiler: it
+does not own a stack of the kind that carries arguments, so a callee reaching its
+caller argument area is exactly what one must not assume. That is why this stays
+a probe and not a patch.
+
+**B. AsmJIT: a wasm-level call that RECEIVES a v128 result.** Attempted
+2026-11-06 and **reverted**: relaxing the two call-result refusals and filling the
+trailing buffer argument inside `emitCallResult` compiled, but instantiation
+failed with `AsmJit compiler finalisation failed: 25`. Hypothesis: the buffer
+address is set on the `InvokeNode` *after* the node was created, and AsmJIT does
+not accept that for an argument beyond the ones `setCallArguments` filled. Next
+attempt should pass the buffer through `setCallArguments` (i.e. append it to the
+prepared argument list before `compiler.invoke`), not through a later `set_arg`.
+The refusals are back in place, so the shape is still honestly refused.
+
 ## 7. Practice changes adopted
 
 - Read the code a plan depends on **before** writing the plan; a plan that cites
