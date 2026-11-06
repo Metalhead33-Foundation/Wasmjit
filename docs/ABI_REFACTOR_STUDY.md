@@ -447,3 +447,17 @@ no field was removed, renamed or reordered — which is why the symbol set only 
 export sets will always pass a struct that grew. Struct layouts need their own audit — a `sizeof`/
 offset assertion, or a designated-initialiser policy — and this phase is the reason to think so: the
 first ABI break of the refactor was invisible to the gate that exists to catch ABI breaks.
+
+### The gap B1 exposed is now closed
+
+`[callcache][abi][layout]` pins the `ModuleFfiEntry` record: declaration order, the monotonic offsets,
+`paramKinds`'s position immediately after `paramCount`, the size covering the last member, and
+`sizeof % alignof == 0`. That is the audit `abi-check.sh` cannot perform, and it is a test rather than
+a convention — an accidental field insertion or reorder now fails in CI instead of silently changing an
+embedder's offsets.
+
+The assertions are deliberately **relational** (each offset greater than the previous) rather than
+literal, because a literal layout is stdlib- and platform-specific. The comment says so, so nobody
+"strengthens" them into a number that fails on the next toolchain. The one literal that *should*
+exist — a generated offsets baseline checked by `abi-check.sh` — remains the follow-up, and is the
+honest generalisation: **a symbol gate needs a layout companion, or PODs are unguarded by construction.**

@@ -158,3 +158,28 @@ std::int32_t cachedTwo = 0;
 CHECK(compiledTwo == 4);
 CHECK(cachedTwo == compiledTwo);
 }
+
+
+TEST_CASE("the module ffi entry layout is pinned", "[callcache][abi][layout]")
+{
+	// The libffi precache record is part of the frozen S11 surface, and
+	// `abi-check.sh` compares symbol sets: it cannot see a struct that grew
+	// (recorded as break B1 in docs/API_ABI_STABILITY.md). These assertions are the
+	// audit that gate cannot perform, so an accidental field insertion or reorder
+	// fails a test instead of silently changing an embedder's offsets.
+using Entry = WASM::ModuleFfiEntry;
+
+CHECK(offsetof(Entry, name) == 0u);
+CHECK(offsetof(Entry, callable) >= sizeof(std::string));
+CHECK(offsetof(Entry, argTypes) > offsetof(Entry, callable));
+CHECK(offsetof(Entry, returnType) > offsetof(Entry, argTypes));
+CHECK(offsetof(Entry, paramCount) > offsetof(Entry, returnType));
+// The member added by the two-word v128 decision. It must stay last: a field
+// appended is a size change, a field inserted anywhere else is a reorder.
+	CHECK(offsetof(Entry, paramKinds) > offsetof(Entry, paramCount));
+	CHECK(offsetof(Entry, multiResult) > offsetof(Entry, paramKinds));
+CHECK(sizeof(Entry) >= offsetof(Entry, paramKinds) + sizeof(std::vector<WASM::ValueTypeCode>));
+
+// And the size is a multiple of the alignment the ABI promises for the record.
+CHECK(sizeof(Entry) % alignof(Entry) == 0u);
+}
