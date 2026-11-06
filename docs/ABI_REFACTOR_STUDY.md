@@ -598,3 +598,46 @@ diff that looks right and fatal in a test that does not.
 Binding emitters after this pass: `EmitCpp` declarations canonical, `EmitShared` C typedef canonical,
 `EmitRust` type and **parameters** canonical. Remaining: `EmitShared`'s shared parameter loops (4),
 `EmitDynamic` (5 spellings), `EmitWeb`.
+
+## 15. A correction from review: the two-word rule is the *native* ABI, not the wasm one (2026-11-06)
+
+**The objection, and it is right:** a `v128` in a *guest-side* binding — Rust or C compiled **to wasm** —
+must use the **canonical wasm type** (`u128`, or `core::arch::wasm32::v128` in Rust). The two-`uint64_t`
+rule is the **native C ABI of a JIT-compiled module**, i.e. the boundary where WasmJit has already lowered
+the vector into machine registers. Between two wasm modules there is no such lowering: `v128` is a single
+128-bit value in the wasm type system, and whoever compiles the guest decides how it reaches a register.
+
+So there are **two boundaries with two different canonical spellings**:
+
+| Boundary | `v128` spelling | Why |
+|---|---|---|
+| **native C ABI** (JIT-compiled export, libffi cache, generated C header calling *into* compiled code) | **two `uint64_t`**, low first | the machine has no portable 16-byte vector ABI (MS x64 passes aggregates by reference) |
+| **wasm ABI** (a guest module's own imports/exports, any language compiled to wasm) | **the wasm `v128` type** (`u128`, `wasm_v128`, `[u8; 16]` by value, `v128` in C with the wasm toolchain's own convention) | the wasm type system already defines it, and the guest's compiler lowers it |
+
+### The defect this exposes in the binding generator
+
+`Direction` appears **nowhere** in `EmitRust.cpp` or `EmitShared.cpp`: the emitters produce one shape for
+both boundaries. Whatever they choose is therefore wrong for one of them — and my last change (expanding
+Rust parameters into `argN_lo: u64, argN_hi: u64`) was made **without** establishing which boundary the
+Rust output serves. It has been reverted, because shipping a possibly-wrong ABI is worse than shipping
+none.
+
+**What the tool needs:** every emitter's parameter and result mapping must be a function of
+`(Direction, Language)`, not of `Language` alone. Concretely:
+
+- `HostToGuest` (native caller → JIT-compiled export): **two `uint64_t`** per vector — the decision of §28;
+- `GuestToHost` (wasm guest → host import): the **wasm `v128`** type of that language.
+
+That is a design change in the binding tool, and it is the *correct* framing of P3: the decision note's
+rule is a **native-boundary** rule, and `ABI_PORTABILITY.md` §3 should say so in those words.
+
+### What stands, and what is now uncertain
+
+| Change | Status |
+|---|---|
+| `EmitCpp` / `EmitShared` **typedefs** → `{ uint64_t lo; uint64_t hi; }` | stands for the native header they serve; a guest-side C header would need the wasm spelling and does not exist in this tool yet |
+| `EmitRust` **type** → `{ pub lo: u64, pub hi: u64 }` | **same caveat** — it is right for a native host, wrong for a Rust-to-wasm guest |
+| `EmitRust` **parameters** → two scalars | **reverted**; needs the direction split first |
+
+This is the first correction in the refactor that came from review rather than from a test, and it is the
+most valuable kind: the tests were all green while the *design* was under-specified.
