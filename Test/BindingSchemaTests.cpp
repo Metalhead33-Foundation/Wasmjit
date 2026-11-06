@@ -2543,6 +2543,15 @@ testStore().types(), WASM::Bindings::Direction::HostToGuest, "v128_param");
 	CHECK(rust.find("wasm_v128") != std::string::npos);
 	CHECK(rust.find("arg0_lo") == std::string::npos);
 
+	// The WasmJIT-facing family is the mirror image: the native side must spell a
+	// vector as TWO scalar words, because the embedder copies this declaration and
+	// calls the compiled code directly (study §16). An aggregate here would be
+	// passed by reference on MS x64.
+	const std::string cpp = WASM::Bindings::emit(schema, WASM::Bindings::Language::CppTypedefs);
+	INFO(cpp);
+	CHECK(cpp.find("uint64_t arg0_lo, uint64_t arg0_hi") != std::string::npos);
+	CHECK(cpp.find("wasm_v128 arg0") == std::string::npos);
+
 	// Every other guest-facing emitter must obey the same boundary rule: no
 	// language may adopt WasmJIT's native pair split, because the conversion
 	// happens at instantiation (study §16). Asserting an absence keeps this

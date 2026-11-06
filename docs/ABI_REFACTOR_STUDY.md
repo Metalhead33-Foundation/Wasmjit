@@ -974,3 +974,38 @@ arc's entire record says contracts are settled before edits — P1 exists becaus
   refactor. **No compiled function anywhere uses the new convention yet.**
 
 Suite **21609 assertions in 729 cases**, green; `abi-check.sh` OK; Doxygen 0 warnings; tree clean.
+
+### Contract settled, and P3's native split done (2026-11-06)
+
+**The contract, read rather than assumed:** `Runtime::callExport` forwards to `callCallable`, which is a
+**direct cast**:
+
+```cpp
+using Fn = Ret (*)(VMContext*, std::decay_t<Args>...);
+Fn fn = reinterpret_cast<Fn>(callable.fnPtr);
+fn(callable.context, std::forward<Args>(args)...);
+```
+
+So **the caller's C++ argument list *is* the declaration of the callee's C signature.** There is no
+marshalling layer, no conversion, and nothing to satisfy beyond agreeing with it. The "fourth site" of the
+previous note was therefore never a blocker: `callExport(name, lo, hi)` compiles and works by construction.
+
+That is the stable contract, and it is one sentence: *whoever calls a compiled function must spell its
+arguments exactly as the emitted signature does, because the cast is unchecked.*
+
+### The change that followed
+
+| Site | Change |
+|---|---|
+| `EmitCpp.cpp` — new `emitCppParam` helper | emits `uint64_t name_lo, uint64_t name_hi` for a vector, the plain declaration otherwise |
+| `emitCppParams` (typedef parameter list) | uses the helper, with braces around the two-statement body |
+| adapter signature | uses the helper |
+| adapter forwarding | passes `name_lo, name_hi` to `callExport` |
+
+The pin now asserts **both** families in one case: `wasm_v128` present and `arg0_lo` absent for the guest
+side; `uint64_t arg0_lo, uint64_t arg0_hi` present and `wasm_v128 arg0` absent for the native side.
+`[bindings][v128]` is **20 assertions**; `[bindings]` **955**; full suite **21614 in 729 cases**, green.
+
+Two mechanical mistakes on the way — the helper landed after its first use, and the brace-less `for`
+swallowed only one of two inserted statements — both caught immediately because the *pin* defined what
+success looked like.
