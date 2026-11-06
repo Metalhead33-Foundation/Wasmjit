@@ -584,3 +584,121 @@ CHECK(got == 6);
 jit_context_destroy(context);
 }
 }
+
+namespace {
+// Stands in for wasm_i32x4_extract_lane: reads lane 0 of a 16-byte vector.
+std::int32_t readLaneZero(void* vector)
+{
+	std::int32_t lane = 0;
+	std::memcpy(&lane, vector, sizeof(lane));
+	return lane;
+}
+} // namespace
+
+// The last structural difference from the failing function: the aggregate's
+// address is handed to a *call* rather than an intrinsic load, which forces the
+// value into memory at a call boundary -- for the third aggregate that storage
+// came from a stack-passed argument word
+// (docs/ABI_REFACTOR_STUDY.md §55).
+TEST_CASE("libjit: three aggregates stored first, then called", "[libjit][v128][ir]")
+{
+	jit_context_t context = jit_context_create();
+	REQUIRE(context != nullptr);
+	jit_context_build_start(context);
+
+	jit_type_t params[7] = {jit_type_void_ptr, jit_type_ulong, jit_type_ulong,
+			jit_type_ulong, jit_type_ulong, jit_type_ulong, jit_type_ulong};
+	jit_type_t signature =
+			jit_type_create_signature(jit_abi_cdecl, jit_type_int, params, 7, 1);
+	jit_function_t function = jit_function_create(context, signature);
+
+	jit_type_t fields[4] = {jit_type_int, jit_type_int, jit_type_int, jit_type_int};
+	jit_type_t aggregate = jit_type_create_struct(fields, 4, 0);
+	jit_type_set_size_and_alignment(aggregate, 16, 16);
+
+	jit_type_t readParams[1] = {jit_type_void_ptr};
+	jit_type_t readSig = jit_type_create_signature(jit_abi_cdecl, jit_type_int,
+			readParams, 1, 1);
+
+	// The real order: every store first, then every call.
+	jit_value_t address[3] = {nullptr, nullptr, nullptr};
+	for (int k = 0; k < 3; ++k) {
+		jit_value_t slot = jit_value_create(function, aggregate);
+		address[k] = jit_insn_address_of(function, slot);
+		jit_insn_store_relative(function, address[k], 0,
+				jit_value_get_param(function, static_cast<unsigned>(1 + 2 * k)));
+		jit_insn_store_relative(function, address[k], 8,
+				jit_value_get_param(function, static_cast<unsigned>(2 + 2 * k)));
+	}
+	jit_value_t lane[3] = {nullptr, nullptr, nullptr};
+	for (int k = 0; k < 3; ++k) {
+		jit_value_t readArgs[1] = {address[k]};
+		lane[k] = jit_insn_call_native(function, "readLaneZero",
+				reinterpret_cast<void*>(&readLaneZero), readSig, readArgs, 1, 0);
+	}
+	jit_insn_return(function, jit_insn_add(function,
+			jit_insn_add(function, lane[0], lane[1]), lane[2]));
+	jit_context_build_end(context);
+
+	REQUIRE(jit_function_compile(function) == JIT_RESULT_OK);
+	void* entry = nullptr;
+	REQUIRE(jit_function_compile_entry(function, &entry) == JIT_RESULT_OK);
+	REQUIRE(entry != nullptr);
+
+	using Fn = std::int32_t (*)(void*, std::uint64_t, std::uint64_t, std::uint64_t,
+			std::uint64_t, std::uint64_t, std::uint64_t);
+	const std::int32_t got = reinterpret_cast<Fn>(entry)(nullptr, 1, 0, 2, 0, 3, 0);
+	std::fprintf(stderr, "STORES_THEN_CALLS=%d\n", got);
+	CHECK(got == 6);
+
+	jit_context_destroy(context);
+}
+TEST_CASE("libjit: three aggregates read through helper calls", "[libjit][v128][ir]")
+{
+jit_context_t context = jit_context_create();
+REQUIRE(context != nullptr);
+jit_context_build_start(context);
+
+jit_type_t params[7] = {jit_type_void_ptr, jit_type_ulong, jit_type_ulong,
+jit_type_ulong, jit_type_ulong, jit_type_ulong, jit_type_ulong};
+jit_type_t signature =
+jit_type_create_signature(jit_abi_cdecl, jit_type_int, params, 7, 1);
+jit_function_t function = jit_function_create(context, signature);
+
+jit_type_t fields[4] = {jit_type_int, jit_type_int, jit_type_int, jit_type_int};
+jit_type_t aggregate = jit_type_create_struct(fields, 4, 0);
+jit_type_set_size_and_alignment(aggregate, 16, 16);
+
+jit_type_t readParams[1] = {jit_type_void_ptr};
+jit_type_t readSig = jit_type_create_signature(jit_abi_cdecl, jit_type_int,
+readParams, 1, 1);
+
+jit_value_t lane[3] = {nullptr, nullptr, nullptr};
+for (int k = 0; k < 3; ++k) {
+jit_value_t slot = jit_value_create(function, aggregate);
+jit_value_t address = jit_insn_address_of(function, slot);
+jit_insn_store_relative(function, address, 0,
+jit_value_get_param(function, static_cast<unsigned>(1 + 2 * k)));
+jit_insn_store_relative(function, address, 8,
+jit_value_get_param(function, static_cast<unsigned>(2 + 2 * k)));
+jit_value_t readArgs[1] = {address};
+lane[k] = jit_insn_call_native(function, "readLaneZero",
+reinterpret_cast<void*>(&readLaneZero), readSig, readArgs, 1, 0);
+}
+jit_insn_return(function, jit_insn_add(function,
+jit_insn_add(function, lane[0], lane[1]), lane[2]));
+jit_context_build_end(context);
+
+REQUIRE(jit_function_compile(function) == JIT_RESULT_OK);
+void* entry = nullptr;
+REQUIRE(jit_function_compile_entry(function, &entry) == JIT_RESULT_OK);
+REQUIRE(entry != nullptr);
+
+using Fn = std::int32_t (*)(void*, std::uint64_t, std::uint64_t, std::uint64_t,
+std::uint64_t, std::uint64_t, std::uint64_t);
+const std::int32_t got = reinterpret_cast<Fn>(entry)(nullptr, 1, 0, 2, 0, 3, 0);
+std::fprintf(stderr, "HELPER_READ=%d\n", got);
+CHECK(got == 6);
+
+jit_context_destroy(context);
+}

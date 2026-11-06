@@ -2841,3 +2841,54 @@ aimed at the former would be guesswork. The honest state is: one more replica, t
 
 Suite **21693 assertions in 740 test cases**, green; five new permanent `[libjit][v128][ir]` cases keep every
 replica above from ever being re-litigated.
+
+## 56. The corrupt word is located: the 6th argument, not the 7th (2026-11-06)
+
+A pass-through export that returns each parameter unchanged isolates the corruption from every opcode:
+
+| Export | `lane0` | `lane3` |
+|---|---|---|
+| `ret_p0` (returns parameter 0) | `11` | `11` |
+| `ret_p1` (returns parameter 1) | `22` | `22` |
+| `ret_p2` (returns parameter 2) | **`1867730888`** | **`33`** |
+
+The third vector comes back with its **high word correct and its low word garbage**. Counting the argument words
+(`ctx`, then two per vector) the third vector's words are the **6th and 7th** arguments -- so the corrupted one is the
+**6th**, the last one SysV passes in a register (`R9`), while the 7th (stack-passed) is *fine*.
+
+That is the opposite of §50's conclusion and of what the tree's own comment claims. The stack-passed word is not the
+problem; the last *register* argument is.
+
+### Six replicas, all correct
+
+| Replica | Result |
+|---|---|
+| prologue verbatim (three aggregates from six words) | `6` |
+| plus eight live temps (spill pressure) | `34` |
+| lanes read after the pressure block | `34` |
+| optimisation levels 0, 1, 2, 3 | `6, 6, 6, 6` |
+| three native helper calls taking each aggregate's **address** | `6` |
+| **stores first, then all three calls** (the real order) | `6` |
+
+74 assertions across eleven `[libjit][v128][ir]` cases, all green. The IR shape is therefore *not* the cause: every
+ingredient the backend emits has been reproduced in isolation and behaves, including the helper-call boundary and the
+emission order.
+
+### What that means, exactly
+
+The corruption appears **only in the compiled wasm function** and not in any IR built by hand, with the same
+signature, the same stores, the same calls and the same order. Two explanations survive:
+
+1. something the backend emits that the replicas still lack (the stack-check call, the trap-slot call, the
+   pending-trap probe, or the call-site argument expansion of §32), or
+2. libjit's own function prologue clobbering `R9` before it has saved the incoming argument -- which a hand-built
+   IR test would not trigger only if it differed in frame size or register pressure in a way not yet matched.
+
+The decisive tool for both is `jit_dump_function`, which prints libjit's own IR for the compiled function. Diffing
+that dump against the replica's dump replaces every remaining guess with a readable difference, and it is the next
+step.
+
+### State
+
+Suite **21703 assertions in 742 test cases**, green; six new permanent `[libjit][v128][ir]` cases keep every
+replica above from being re-litigated.
