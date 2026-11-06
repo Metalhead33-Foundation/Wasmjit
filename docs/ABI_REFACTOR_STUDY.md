@@ -427,3 +427,23 @@ signature must move with the surface that marshals it.** The call cache taught i
 and values), the emitters teach it with the conformance gate (declaration and program). That is why P4
 cannot begin until the emitters are consistent: a backend converted against a cache or a header that
 still speaks the old convention would pass its own tests and fail on the generated interface.
+
+## 13. The one ABI break this phase has taken, and why it is safe to take
+
+`WASM::ModuleFfiEntry` gained `paramKinds`, so a public POD struct changed size and layout. Recorded
+as **B1** in [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §2.2 rather than left implicit, because
+`S11` freezes the entry records and a struct layout is not a symbol: `abi-check.sh` reports **0 removed
+and 149 added** (the additions are the new inline helpers in `WasmBackendAbi.hpp`, which become weak
+symbols), so a symbol-level gate would have called this change clean while an embedder built against
+the old header would have read the wrong offsets.
+
+**Why this break is justified**, in the terms the milestone requires: the two-word vector decision is
+unimplementable without it (the cache cannot expand a parameter into two argument slots unless it knows
+which parameters are vectors), the break is a *size* change in one record rather than a signature
+change, and the migration is trivially mechanical for an embedder (rebuild). It is additive in spirit —
+no field was removed, renamed or reordered — which is why the symbol set only grew.
+
+**The general lesson:** the additive-only rule measures the wrong thing for PODs. A gate that compares
+export sets will always pass a struct that grew. Struct layouts need their own audit — a `sizeof`/
+offset assertion, or a designated-initialiser policy — and this phase is the reason to think so: the
+first ABI break of the refactor was invisible to the gate that exists to catch ABI breaks.
