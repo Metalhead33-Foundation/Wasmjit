@@ -362,3 +362,175 @@ std::uint64_t, std::uint64_t, std::uint64_t);
 
 	jit_context_destroy(context);
 }
+
+// The prologue verbatim: three vector parameters, each arriving as two ulong
+// words (six words, so the last crosses on the stack), each assembled into a
+// 16-byte aggregate through `address_of` + two `store_relative` calls. Lane 0 of
+// each aggregate is then read and summed. If this returns something other than
+// 6, the defect is libjit's handling of several frame temps alongside
+// stack-passed arguments (docs/ABI_REFACTOR_STUDY.md §53).
+TEST_CASE("libjit: three aggregates assembled from six argument words",
+"[libjit][v128][ir]")
+{
+jit_context_t context = jit_context_create();
+REQUIRE(context != nullptr);
+jit_context_build_start(context);
+
+jit_type_t params[7] = {jit_type_void_ptr, jit_type_ulong, jit_type_ulong,
+jit_type_ulong, jit_type_ulong, jit_type_ulong, jit_type_ulong};
+jit_type_t signature =
+jit_type_create_signature(jit_abi_cdecl, jit_type_int, params, 7, 1);
+jit_function_t function = jit_function_create(context, signature);
+
+jit_type_t fields[4] = {jit_type_int, jit_type_int, jit_type_int, jit_type_int};
+jit_type_t aggregate = jit_type_create_struct(fields, 4, 0);
+jit_type_set_size_and_alignment(aggregate, 16, 16);
+
+jit_value_t lane[3] = {nullptr, nullptr, nullptr};
+for (int k = 0; k < 3; ++k) {
+jit_value_t slot = jit_value_create(function, aggregate);
+jit_value_t address = jit_insn_address_of(function, slot);
+jit_insn_store_relative(function, address, 0,
+jit_value_get_param(function, static_cast<unsigned>(1 + 2 * k)));
+jit_insn_store_relative(function, address, 8,
+jit_value_get_param(function, static_cast<unsigned>(2 + 2 * k)));
+lane[k] = jit_insn_load_relative(function, address, 0, jit_type_int);
+}
+jit_insn_return(function, jit_insn_add(function,
+jit_insn_add(function, lane[0], lane[1]), lane[2]));
+jit_context_build_end(context);
+
+REQUIRE(jit_function_compile(function) == JIT_RESULT_OK);
+void* entry = nullptr;
+REQUIRE(jit_function_compile_entry(function, &entry) == JIT_RESULT_OK);
+REQUIRE(entry != nullptr);
+
+using Fn = std::int32_t (*)(void*, std::uint64_t, std::uint64_t, std::uint64_t,
+std::uint64_t, std::uint64_t, std::uint64_t);
+const std::int32_t got = reinterpret_cast<Fn>(entry)(nullptr, 1, 0, 2, 0, 3, 0);
+std::fprintf(stderr, "THREE_TEMPS=%d\n", got);
+CHECK(got == 6);
+
+jit_context_destroy(context);
+}
+
+// The same prologue, but with a real body's register pressure: eight extra live
+// temps forced through memory. If the six argument words survive only while the
+// frame is small, this reproduces the backend's wrong lane sum.
+TEST_CASE("libjit: three aggregates under register pressure", "[libjit][v128][ir]")
+{
+	jit_context_t context = jit_context_create();
+	REQUIRE(context != nullptr);
+	jit_context_build_start(context);
+
+	jit_type_t params[7] = {jit_type_void_ptr, jit_type_ulong, jit_type_ulong,
+			jit_type_ulong, jit_type_ulong, jit_type_ulong, jit_type_ulong};
+	jit_type_t signature =
+			jit_type_create_signature(jit_abi_cdecl, jit_type_int, params, 7, 1);
+	jit_function_t function = jit_function_create(context, signature);
+
+	jit_type_t fields[4] = {jit_type_int, jit_type_int, jit_type_int, jit_type_int};
+	jit_type_t aggregate = jit_type_create_struct(fields, 4, 0);
+	jit_type_set_size_and_alignment(aggregate, 16, 16);
+
+	jit_value_t lane[3] = {nullptr, nullptr, nullptr};
+	for (int k = 0; k < 3; ++k) {
+		jit_value_t slot = jit_value_create(function, aggregate);
+		jit_value_t address = jit_insn_address_of(function, slot);
+		jit_insn_store_relative(function, address, 0,
+jit_value_get_param(function, static_cast<unsigned>(1 + 2 * k)));
+		jit_insn_store_relative(function, address, 8,
+jit_value_get_param(function, static_cast<unsigned>(2 + 2 * k)));
+		lane[k] = jit_insn_load_relative(function, address, 0, jit_type_int);
+	}
+
+	// Pressure: eight temporaries, each stored and reloaded through memory.
+	jit_value_t pressure[8];
+	for (int i = 0; i < 8; ++i)
+		pressure[i] = jit_value_create(function, jit_type_int);
+	for (int i = 0; i < 8; ++i)
+		jit_insn_store(function, pressure[i],
+jit_value_create_nint_constant(function, jit_type_int, i));
+	for (int i = 0; i < 8; ++i)
+		lane[0] = jit_insn_add(function, lane[0], pressure[i]);
+
+	jit_insn_return(function, jit_insn_add(function,
+jit_insn_add(function, lane[0], lane[1]), lane[2]));
+	jit_context_build_end(context);
+
+	REQUIRE(jit_function_compile(function) == JIT_RESULT_OK);
+	void* entry = nullptr;
+	REQUIRE(jit_function_compile_entry(function, &entry) == JIT_RESULT_OK);
+	REQUIRE(entry != nullptr);
+
+	using Fn = std::int32_t (*)(void*, std::uint64_t, std::uint64_t, std::uint64_t,
+std::uint64_t, std::uint64_t, std::uint64_t);
+	// 1+2+3 = 6, plus 0+1+...+7 = 28.
+	const std::int32_t got = reinterpret_cast<Fn>(entry)(nullptr, 1, 0, 2, 0, 3, 0);
+	std::fprintf(stderr, "PRESSURE_SUM=%d\n", got);
+	CHECK(got == 34);
+
+	jit_context_destroy(context);
+}
+
+// The one difference left between the replica and the real body: the real
+// function stores all six words first and reads the lanes *later*, after other
+// IR has run. Here the loads are moved after the pressure block.
+TEST_CASE("libjit: lanes read late from three aggregates", "[libjit][v128][ir]")
+{
+	jit_context_t context = jit_context_create();
+	REQUIRE(context != nullptr);
+	jit_context_build_start(context);
+
+	jit_type_t params[7] = {jit_type_void_ptr, jit_type_ulong, jit_type_ulong,
+			jit_type_ulong, jit_type_ulong, jit_type_ulong, jit_type_ulong};
+	jit_type_t signature =
+			jit_type_create_signature(jit_abi_cdecl, jit_type_int, params, 7, 1);
+	jit_function_t function = jit_function_create(context, signature);
+
+	jit_type_t fields[4] = {jit_type_int, jit_type_int, jit_type_int, jit_type_int};
+	jit_type_t aggregate = jit_type_create_struct(fields, 4, 0);
+	jit_type_set_size_and_alignment(aggregate, 16, 16);
+
+	jit_value_t address[3] = {nullptr, nullptr, nullptr};
+	for (int k = 0; k < 3; ++k) {
+		jit_value_t slot = jit_value_create(function, aggregate);
+		address[k] = jit_insn_address_of(function, slot);
+		jit_insn_store_relative(function, address[k], 0,
+jit_value_get_param(function, static_cast<unsigned>(1 + 2 * k)));
+		jit_insn_store_relative(function, address[k], 8,
+jit_value_get_param(function, static_cast<unsigned>(2 + 2 * k)));
+	}
+
+	// Other IR first, so the aggregate's home can be reused before the read.
+jit_value_t pressure[8];
+for (int i = 0; i < 8; ++i)
+pressure[i] = jit_value_create(function, jit_type_int);
+for (int i = 0; i < 8; ++i)
+jit_insn_store(function, pressure[i],
+jit_value_create_nint_constant(function, jit_type_int, i));
+
+jit_value_t sum = jit_insn_load_relative(function, address[0], 0, jit_type_int);
+sum = jit_insn_add(function, sum,
+jit_insn_load_relative(function, address[1], 0, jit_type_int));
+sum = jit_insn_add(function, sum,
+jit_insn_load_relative(function, address[2], 0, jit_type_int));
+for (int i = 0; i < 8; ++i)
+sum = jit_insn_add(function, sum, pressure[i]);
+
+jit_insn_return(function, sum);
+jit_context_build_end(context);
+
+REQUIRE(jit_function_compile(function) == JIT_RESULT_OK);
+void* entry = nullptr;
+REQUIRE(jit_function_compile_entry(function, &entry) == JIT_RESULT_OK);
+REQUIRE(entry != nullptr);
+
+using Fn = std::int32_t (*)(void*, std::uint64_t, std::uint64_t, std::uint64_t,
+std::uint64_t, std::uint64_t, std::uint64_t);
+const std::int32_t got = reinterpret_cast<Fn>(entry)(nullptr, 1, 0, 2, 0, 3, 0);
+std::fprintf(stderr, "LATE_SUM=%d\n", got);
+CHECK(got == 34);
+
+jit_context_destroy(context);
+}

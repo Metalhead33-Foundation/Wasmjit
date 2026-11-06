@@ -2743,3 +2743,41 @@ vectors differently; if it returns `6`, the defect is in how the dispatcher cons
 ### State
 
 All instrumentation removed; suite **21658 assertions in 736 test cases**, green; tree clean.
+
+## 54. The prologue pattern replicated five ways, all correct (2026-11-06)
+
+§53 left one suspect: the prologue's three `address_of` + `store_relative` pairs. It was replicated in IR, in four
+increasingly faithful variants, each with no backend code:
+
+| Variant | Expects | Result |
+|---|---|---|
+| three aggregates from six argument words (the prologue verbatim) | `6` | **`6`** |
+| the same with eight live temps forcing spills | `34` | **`34`** |
+| the same, lanes read **after** the pressure block | `34` | **`34`** |
+| (earlier) seven arguments, 7th returned | `42` | **`42`** |
+| (earlier) 7th argument stored through `address_of` | `42` | **`42`** |
+
+**44 assertions across eight `[libjit][v128][ir]` cases, all green.** So the *pattern* the prologue uses -- three
+16-byte aggregates assembled from six argument words through addresses, read late, under pressure -- is sound in
+libjit. Combined with §53's dump (the signature really is six `ulong` words after the context), everything the
+backend is *supposed* to be doing has now been reproduced in isolation and behaves.
+
+The real function still returns `22` where `6` is required.
+
+### What that leaves, and it is now narrow enough to print
+
+The replica and the real body differ in exactly three things, and each can be *printed* rather than reasoned about:
+
+1. the signature the compiled body actually carries -- `jit_type_num_params(jit_function_get_signature(fn))` at
+   `compileFunction` time. If it is not 7, the body was created from a different signature than the one the dump
+   showed, and `translatedTypes` is being indexed differently than assumed;
+2. the parameter indices the prologue reads -- print `signatureSlot` at each store. If it is not `1,2,3,4,5,6`, the
+   walk is wrong in a way that a 3-vector fixture exposes and 2-vector ones do not;
+3. what the dispatcher's `local.get 0/1/2` returns -- print the `locals.size()` and the index used.
+
+Those three prints settle it in **one** build. Two of the three would also explain why two vectors work and three do
+not: an off-by-one in a walk is invisible until a third parameter exists.
+
+### State
+
+Suite **21673 assertions in 739 test cases**, green; tree clean.
