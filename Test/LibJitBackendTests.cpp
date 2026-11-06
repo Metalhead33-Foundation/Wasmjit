@@ -238,3 +238,60 @@ jit_insn_ushr(function, hi, shift), jit_type_int, 0);
 
 	jit_context_destroy(context);
 }
+
+// The hypothesis behind attempt 6's 33 SIMD failures: a value produced the way
+// `dispatchV128Const` produces one (a frame slot written through its address)
+// then copied with a whole-aggregate `jit_insn_store` into another temp, and
+// split again. If this fails, the split helper's `store` is the culprit and the
+// helper must copy through addresses instead (docs/ABI_REFACTOR_STUDY.md §33).
+TEST_CASE("libjit: a const-built aggregate survives a whole-struct store",
+"[libjit][v128][ir]")
+{
+	jit_context_t context = jit_context_create();
+	REQUIRE(context != nullptr);
+	jit_context_build_start(context);
+
+	jit_type_t fields[4] = {jit_type_int, jit_type_int, jit_type_int, jit_type_int};
+	jit_type_t aggregate = jit_type_create_struct(fields, 4, 0);
+	jit_type_set_size_and_alignment(aggregate, 16, 16);
+
+	jit_type_t signature = jit_type_create_signature(jit_abi_cdecl, jit_type_int,
+nullptr, 0, 1);
+	jit_function_t function = jit_function_create(context, signature);
+
+	// Step 1 -- build the value exactly as dispatchV128Const does: a frame slot
+	// written through its address with two 64-bit immediates.
+	jit_value_t built = jit_value_create(function, aggregate);
+	jit_value_t builtAddr = jit_insn_address_of(function, built);
+	jit_insn_store_relative(function, builtAddr, 0,
+jit_value_create_long_constant(function, jit_type_ulong,
+static_cast<jit_long>(11ull | (12ull << 32))));
+	jit_insn_store_relative(function, builtAddr, 8,
+jit_value_create_long_constant(function, jit_type_ulong,
+static_cast<jit_long>(13ull | (14ull << 32))));
+
+	// Step 2 -- what the split helper does today.
+	jit_value_t temp = jit_value_create(function, jit_value_get_type(built));
+	REQUIRE(jit_insn_store(function, temp, built) != 0);
+	jit_value_t tempAddr = jit_insn_address_of(function, temp);
+	jit_value_t lo = jit_insn_load_relative(function, tempAddr, 0, jit_type_ulong);
+	jit_value_t hi = jit_insn_load_relative(function, tempAddr, 8, jit_type_ulong);
+
+	jit_value_t shift = jit_value_create_nint_constant(function, jit_type_ulong, 32);
+	jit_value_t lane1 = jit_insn_convert(function,
+jit_insn_ushr(function, lo, shift), jit_type_int, 0);
+	jit_value_t lane3 = jit_insn_convert(function,
+jit_insn_ushr(function, hi, shift), jit_type_int, 0);
+	jit_insn_return(function, jit_insn_add(function, lane1, lane3));
+	jit_context_build_end(context);
+
+	REQUIRE(jit_function_compile(function) == JIT_RESULT_OK);
+	void* entry = nullptr;
+	REQUIRE(jit_function_compile_entry(function, &entry) == JIT_RESULT_OK);
+	REQUIRE(entry != nullptr);
+
+	using Fn = std::int32_t (*)();
+	CHECK(reinterpret_cast<Fn>(entry)() == 26);
+
+	jit_context_destroy(context);
+}

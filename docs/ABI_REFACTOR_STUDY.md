@@ -1850,3 +1850,46 @@ route is, and it is now a single IR question with a five-line test.
 
 Backend changes reverted again; the two `[libjit][v128][ir]` tests and every finding above are kept.
 Suite **21642 assertions in 733 test cases**, green; `abi-check.sh` OK; Doxygen 0 warnings; tree clean.
+
+## 34. §33's hypothesis tested and DISPROVED — and what that leaves (2026-11-06)
+
+The third `[libjit][v128][ir]` case builds a value exactly the way `dispatchV128Const` does (a frame slot written
+through its address with two 64-bit immediates), then does what the split helper does (whole-struct
+`jit_insn_store` into a second temp), then splits it and returns `lane1 + lane3`.
+
+**It passes: `{11,12,13,14}` -> 26.** 19 assertions across three `[ir]` cases, all green.
+
+So, measured and settled:
+
+| Claim | Verdict |
+|---|---|
+| a const-built aggregate survives a whole-struct `store` | **true** |
+| the split helper's `store` is the cause of the 33 SIMD failures | **false** |
+| a `v128` value is an aggregate (not a pointer) inside the dispatcher | true -- `newV128Slot()` is `jit_value_create(function, v128Type())` |
+
+### What that leaves, narrowed
+
+Since the crash is at *instantiation* (`"after 0 passing commands"`) and the conversion primitives are all proven,
+the remaining candidates are about the **plumbing around a signature that changed length**:
+
+1. **Result-buffer indices still use `params.size()`.** Three places index the trailing buffer as
+   `currentFunc.params.size() + 1` (`LibjitOpcodeDispatcher.cpp`, the call sites) -- correct only while one wasm
+   parameter equals one slot. The slot count is `nativeParamSlotCount()` (§32's helper). This bites any function
+   with a `v128` parameter **and** multiple results.
+2. **A signature path not yet covered.** All function signatures come from the two `translateFunctionSignature`
+   overloads (both changed), but if some type is served from a cache populated before translation, a stale
+   one-slot signature would make `jit_value_get_param` return NULL exactly as it did in §31.
+3. **A shape the fixture lacks.** `v128_boundary_order.wasm` has `scalar+v128` and `v128+scalar`. The SIMD suites
+   add **two or more `v128` parameters**, and `v128` params next to `v128` locals -- neither is covered by any
+   fixture in the tree.
+
+### The cheapest next experiment
+
+Candidate 3 is a fixture, not a code hunt: add exports with `(v128, v128)`, `(v128, v128, v128)`, and one with a
+`v128` parameter plus a `v128` local to `v128_boundary_order.wasm`, and run them on LibJIT. Two of three
+candidates are eliminated or confirmed by a single build, and candidate 1 can be checked in the same pass by
+grepping the three index expressions.
+
+### State
+
+Suite **21648 assertions in 734 test cases**, green (three `[ir]` cases now, 19 assertions). Backend unchanged.
