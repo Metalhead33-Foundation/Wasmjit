@@ -1395,3 +1395,50 @@ That ordering is also why SLJIT remains step 2 and LibJIT last: SLJIT has the *l
 break, which — inverted from the original plan's reasoning — is exactly the property that should determine order.
 
 Suite **21625 assertions in 731 cases**, green; `abi-check.sh` OK; Doxygen 0 warnings; tree clean.
+
+## 25. SLJIT write path: the six edit sites, and the frame slot nobody counted (2026-11-06)
+
+Reading `beginFunction` and `finish` (`SljitOpcodeDispatcher.cpp:1000-1180`) settles how the out-buffer enters
+SLJIT, and turns up one dependency that would have cost another crash.
+
+### How SLJIT receives arguments
+
+`SLJIT_S(n)` are the incoming argument registers: the context is slot 1, and `integerSlot` walks the parameters,
+advancing **two** for a `v128` (already implemented). `emitReturn` reads the top operand slot and returns it in
+`SLJIT_R0`. So an out-buffer is simply **one more trailing argument slot** -- the same mechanism as a parameter,
+not a new one.
+
+### The hidden dependency: the frame is full
+
+`kReservedSlots = 7` -- "context, target, scratch, then four parked argument registers". The buffer pointer must
+survive helper calls (R0-R3 are clobbered, and S registers are not held across one), so it needs a frame slot:
+**`kReservedSlots` becomes 8, with a `resultBufferSlotOffset()` helper.** Cheap, but invisible from the
+signature side, which is exactly the kind of thing that produces a crash two edits later.
+
+### The six edit sites
+
+| # | Site | Change |
+|---|---|---|
+| 1 | `kReservedSlots` + offset helper | 7 -> 8; add `resultBufferSlotOffset()` |
+| 2 | `checkSupported` | drop the `V128` refusal; keep `resultWidth_ = 16` |
+| 3 | `beginFunction` -- return type | `resultWidth_ == 16` -> `SLJIT_ARG_RETURN(RET_VOID)` |
+| 4 | `beginFunction` -- arguments | trailing `SLJIT_ARG_VALUE(SLJIT_ARG_TYPE_P, nextSlot)` **before** `savedCount`/`enter`; then store it to the frame slot |
+| 5 | `emitReturn` | `resultWidth_ == 16` first: copy four operand slots (16 bytes) from the stack top to the buffer, then `return_void` |
+| 6 | `finish` (trap epilogue) | `resultWidth_ == 16` -> `return_void`, not a `MOV` return |
+
+Site 4 must precede the `savedCount`/`sljit_emit_enter` lines -- `savedCount` is `nextSlot - 1`, so an argument
+added after it is silently unpreserved.
+
+### Why this one is safe to attempt first
+
+SLJIT routes **nothing** to a buffer today, so every newly-matched case is new behaviour: there is no working path
+to displace (contrast §24, where LibJIT had one). That is the property that earns SLJIT step 2, and it is now
+stated as the ordering criterion rather than "it was already partly compliant".
+
+### The pin to write with it
+
+A `v128`-result fixture declared as `void (*)(void*, void*)` -- `(context, out)` -- writing 16 bytes at `out`, and
+compared against the four expected lanes. Add it beside the two boundary pins so the result rule is measured the
+same way the parameter rule is.
+
+Suite **21625 assertions in 731 cases**, green; `abi-check.sh` OK; Doxygen 0 warnings; tree clean.
