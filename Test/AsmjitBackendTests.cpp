@@ -225,18 +225,17 @@ TEST_CASE("AsmJIT spells each v128 parameter as two words at the C boundary",
 	CHECK(signature.ret() == asmjit::TypeId::kInt32);
 }
 
-TEST_CASE("AsmJIT refuses a v128 parameter at function entry", "[asmjit][abi][v128][gap]")
+TEST_CASE("AsmJIT takes a v128 parameter in the frame form", "[asmjit][abi][v128]")
 {
 	auto runtime = WASM::Runtime::create("asmjit");
 	REQUIRE(runtime != nullptr);
 	auto module = runtime->loadFile(
 			std::filesystem::path(WASM_TEST_DIR) / "v128_multi.wasm");
 	WASM::RegistryImportResolver imports;
-	// The signature spells it (test above); the compiler refuses it at
-	// AsmjitModuleCompiler.cpp:892. Lifting that refusal is step 5, and this
-	// test is deliberately written to be REWRITTEN when it happens -- a gap pin
-	// that fails the day the gap closes.
-	REQUIRE_THROWS(runtime->instantiate(*module, imports));
+	WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+	// A vector parameter forces the frame form, so this is no longer a refusal.
+	CHECK(instance.frameCallAbi());
+	CHECK(instance.exportedFunction("three_lanes").has_value());
 }
 
 TEST_CASE("AsmJIT instantiates a v128-parameter module in frame mode",

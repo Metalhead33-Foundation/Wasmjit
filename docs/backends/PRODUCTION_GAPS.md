@@ -359,3 +359,46 @@ flip pass would trade a safety property for a default.
 
 That second item is the real content of option 1's step 2, and it is smaller and
 sharper than "31 fixtures": **one fixture, one test, three lines.**
+
+## 13. Option 1 landed: AsmJIT's frame form is a decision
+
+```
+All tests passed (21867 assertions in 777 test cases)
+```
+
+Three call sites now read the same predicate:
+
+```cpp
+TypeTranslator::moduleNeedsFrame(module, WASM::frameCallAbiOptIn())
+```
+
+-- the signature loop in `translateTypes`, the `FunctionCompiler` constructor local and
+its `frameMode` member. A module whose signatures fit the register form keeps it; one
+that does not switches wholly, which is option 1 as chosen.
+
+### The two blockers, and how each was cleared
+
+**1. The `v128` gap pin** became a positive test: a `v128` parameter now yields
+`frameCallAbi() == true` and an exportable function, instead of a refusal. The pin
+did its job -- it failed the moment the gap closed, which is why it was written.
+
+**2. The rollback safety test needed a durable "unsupported" probe.** Its old fixture
+used a `v128` signature, which the frame form now accepts. Replaced with a
+**multi-value block** (`block (result i32 i32)`), which AsmJIT's body lowering refuses
+whatever the calling form is:
+
+> The probe must be something the *body* refuses, not something the *boundary* used to
+> refuse. Boundary refusals keep being retired by this campaign; body refusals do not.
+
+That is the general lesson for every "unsupported" fixture in the tree: anchor it to a
+limitation the work is not currently removing, or the test will flip the moment a
+feature lands -- and a safety test that flips is worse than no test, because it looks
+like coverage.
+
+### What this changes
+
+* AsmJIT no longer depends on a process-wide switch for a per-signature property;
+* the 31-fixture migration feared in section 6 did **not** happen: the suite went from
+  21866 to 21867 assertions with **one** test converted and **one** fixture replaced;
+* the opt-in remains meaningful for LibJIT, where it is the stated policy, and as an
+  escape hatch for AsmJIT (step 3 can now remove it there).

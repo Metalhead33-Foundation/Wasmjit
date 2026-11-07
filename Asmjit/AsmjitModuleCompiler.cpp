@@ -891,7 +891,7 @@ public:
 			throw std::runtime_error("AsmJit initial compiler does not support multi-value results");
 		// A vector parameter is exactly what the frame form exists to carry, so
 		// the entry refusal applies only to the register form.
-		const bool frameAbi = WASM::frameCallAbiOptIn();
+		const bool frameAbi = TypeTranslator::moduleNeedsFrame(module, WASM::frameCallAbiOptIn());
 		for (const auto& parameter : type.params) {
 			if (!frameAbi)
 				requireScalar(parameter.val, "parameters");
@@ -5134,7 +5134,7 @@ private:
 	//! The frame pointer in frame mode (docs/backends/EXPORT_SIGNATURE.md).
 	asmjit::x86::Gp framePointer;
 	//! Whether this function is compiled in the staging-frame form.
-	const bool frameMode = WASM::frameCallAbiOptIn();
+	const bool frameMode = TypeTranslator::moduleNeedsFrame(module, WASM::frameCallAbiOptIn());
 	std::vector<asmjit::x86::Gp> locals;
 	//! Slot width of every local (4/8, or 16 for a v128 buffer).
 	std::vector<int> localWidths;
@@ -5170,7 +5170,7 @@ void ModuleCompiler::translateTypes(WASM::ModuleInstance& instance, const WASM::
 	// Staging-frame ABI (docs/backends/EXPORT_SIGNATURE.md section 11): the mode
 	// is decided before translation, because the signature itself changes shape.
 	// Opt-in, never inferred -- see WasmBase/WasmBackendAbi.hpp.
-	const bool frameMode = WASM::frameCallAbiOptIn();
+	const bool frameMode = TypeTranslator::moduleNeedsFrame(module, WASM::frameCallAbiOptIn());
 	// An import expects the typed C signature -- a native one by definition, and a
 	// wasm-to-wasm one because it is compiled by its own instance in whatever mode
 	// that instance chose. Handing either of them (ctx, frame) would be a silent
