@@ -147,4 +147,38 @@ and did not compile; it now sits after it. And the tripwire initially looped ove
 AsmJIT, which refuses `v128` parameters outright -- an unrelated recorded gap --
 so it covers the two backends that compile a vector signature today.
 
+**Step 3 -- SLJIT emits the frame form. Design settled, not implemented.**
+
+*Mode decision (settles the mixed-module question).* A module compiles **either
+entirely** in the register form **or entirely** in the frame form, chosen at
+`ModuleCompiler` time: if **any** internal function's signature needs more
+argument slots than the register form allows (more than `kArgumentSlotCeiling` =
+4), the whole module switches and `instance.setFrameCallAbi(true)` is recorded.
+That keeps `frameCallAbi()` a module-wide fact -- which is what the core's flag
+already is -- and means a module of narrow signatures is byte-for-byte unchanged,
+so every existing pin keeps its meaning.
+
+*Sites, in order.*
+
+| # | Site | Change |
+|---|---|---|
+| 1 | `SljitOpcodeDispatcher.hpp` ctor | take `bool frameCallAbi`; store `bool frameAbi_`; add `std::vector<WASM::ValueKind> frameKinds_` and `sljit_sw frameResultOffset_` |
+| 2 | `kReservedSlots` | 8 -> 9, plus `frameSlotOffset()` = `(localSlots_ + 8) * kSlotBytes`, holding the frame pointer |
+| 3 | `beginFunction` -- argument list | frame mode: `SLJIT_ARG_RETURN(RET_VOID) | SLJIT_ARG_VALUE(P, 1) | SLJIT_ARG_VALUE(P, 2)` and `savedCount = 2`; skip the ceiling refusal |
+| 4 | `beginFunction` -- prologue | store `SLJIT_S(1)` (the frame pointer) into the reserved slot; for each parameter load from `frame + frameArgumentOffset(frameKinds_, i)` into `localSlotOffset(i)` (16-byte kinds as two 8-byte moves), reloading the frame pointer into `R2` per parameter because helpers clobber R0-R3 |
+| 5 | `frameResultOffset_` | `frameArgumentsBytes(frameKinds_)`, computed once per function |
+| 6 | `emitReturn` | frame mode: store the single produced operand slot at `frameResultOffset_` (two words for a `v128`), then `return_void` |
+| 7 | `finish` trap epilogue | frame mode returns void for every result kind |
+| 8 | `SljitModuleCompiler.cpp:102` | compute the module-wide mode, pass it to each dispatcher, `instance.setFrameCallAbi(mode)` |
+
+*Gate.* `[staging][sljit][abi]`: the three-vector fixture (`v128_multi.wasm`)
+round-trips through a 56-byte frame -- three 16-byte arguments at 0/16/32, one
+`i32` result at 48 -- and returns 6. Passing it makes `kArgumentSlotCeiling` and
+the "four argument slots" refusal dead code in frame mode, which is the point of
+the whole exercise.
+
+*Not started:* the budget for this session ended at step 2. Nothing about the
+above is uncertain; it is a mechanical edit with the sites named.
+
+
 
