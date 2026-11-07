@@ -921,9 +921,10 @@ public:
 			const WASM::FuncType& type, const WASM::FunctionBody& body,
 			const WASM::Module& module, WASM::ModuleInstanceInternals& internals,
 			const std::vector<asmjit::FuncNode*>& functions,
-			const std::vector<std::unique_ptr<asmjit::FuncSignature>>& signatures)
+			const std::vector<std::unique_ptr<asmjit::FuncSignature>>& signatures,
+			uint32_t functionIndex)
 		: compiler(compiler), module(module), internals(internals),
-		  functions(functions), signatures(signatures)
+		  functions(functions), signatures(signatures), functionIndex(functionIndex)
 	{
 		WASM::PreparedFunctionStack stack;
 		stack.prepare(type, body);
@@ -1079,6 +1080,11 @@ public:
 		localWidths.reserve(stack.allLocals.size());
 		for (const auto& local : stack.allLocals)
 			localWidths.push_back(slotWidthOf(local.opcode));
+		// The body-entry label is the loop target of a direct self tail call; the
+		// prologue above (context, trap slot, locals) has already run for this frame.
+		bodyStart = compiler.new_label();
+		checkError(compiler.bind(bodyStart), "AsmJit body-start label binding failed");
+		parameterCount = stack.parameterCount;
 		resultCount = static_cast<uint32_t>(type.results.size());
 		resultTypes.reserve(type.results.size());
 		for (const auto& result : type.results)
@@ -1581,6 +1587,34 @@ protected:
 		const WASM::FuncType calledType = module.funcTypeAt(typeIndex);
 		if (values.size() != calledType.params.size())
 			throw std::runtime_error("AsmJit return_call has unexpected values below its arguments");
+		if (index == functionIndex) {
+			// Direct self-recursion: overwrite the parameter locals, reset the rest,
+			// and loop to the body start. The frame is reused, so the host stack does
+			// not grow. Mutual/indirect chains still use call + return until the
+			// cross-function trampoline lands.
+			std::vector<asmjit::x86::Gp> selfArgs(calledType.params.size());
+			for (std::size_t i = calledType.params.size(); i-- > 0; ) {
+				selfArgs[i] = values.back();
+				values.pop_back();
+			}
+			for (std::size_t i = 0; i < selfArgs.size(); ++i) {
+				if (localWidths[i] == 16)
+					copyVector(locals[i], selfArgs[i]);
+				else
+					checkError(compiler.mov(locals[i], selfArgs[i]),
+							"AsmJit self tail-call argument store failed");
+			}
+			for (std::size_t i = parameterCount; i < locals.size(); ++i) {
+				if (localWidths[i] == 16)
+					zeroVector(locals[i]);
+				else
+					checkError(compiler.xor_(locals[i], locals[i]),
+							"AsmJit self tail-call local reset failed");
+			}
+			checkError(compiler.jmp(bodyStart), "AsmJit self tail-call jump failed");
+			emitUnreachablePlaceholders();
+			return;
+		}
 		if (frameMode) {
 			// Frame form: the callee writes into the staging frame and the tail call
 			// becomes a call plus a frame-mode return. The host stack still grows;
@@ -6789,6 +6823,12 @@ private:
 	WASM::ModuleInstanceInternals& internals;
 	const std::vector<asmjit::FuncNode*>& functions;
 	const std::vector<std::unique_ptr<asmjit::FuncSignature>>& signatures;
+	//! Module function index of this body (direct self tail calls).
+	uint32_t functionIndex = 0;
+	//! Number of Wasm parameters (the first parameterCount locals).
+	uint32_t parameterCount = 0;
+	//! Loop target of a direct self tail call.
+	asmjit::Label bodyStart;
 	asmjit::x86::Gp vmContext;
 	//! The frame pointer in frame mode (docs/backends/EXPORT_SIGNATURE.md).
 	asmjit::x86::Gp framePointer;
@@ -6924,7 +6964,8 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance,
 			const uint32_t typeIndex = module.internalFunctionTypeIndices[i];
 			const WASM::FuncType type = module.funcTypeAt(typeIndex);
 			IntegerFunctionEmitter emitter(compiler, *function, type, module.functionBodies[i],
-					module, internals, functions, signatures);
+					module, internals, functions, signatures,
+					static_cast<uint32_t>(module.importFunctions.size() + i));
 			emitter.compile(module.functionBodies[i], type);
 			checkError(compiler.end_func(), "AsmJit function finalisation failed");
 		}

@@ -1349,3 +1349,34 @@ CHECK(directBlock == 33);
 CHECK(ref == 33);
 }
 }
+
+// Item 1: a direct self-recursive tail call must not grow the native stack.
+TEST_CASE("tail calls: direct self-recursion is constant-stack",
+"[staging][abi][tail][self]")
+{
+for (const char* backend : {"libjit", "asmjit", "sljit"}) {
+std::fprintf(stderr, "TAILSELF %s: ", backend);
+auto runtime = WASM::Runtime::create(backend);
+REQUIRE(runtime != nullptr);
+auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "tailcall_self_probe.wasm");
+WASM::RegistryImportResolver imports;
+WASM::ModuleInstance* instance = nullptr;
+try {
+instance = &runtime->instantiate(*module, imports);
+} catch (const std::exception& error) {
+std::fprintf(stderr, "REFUSED: %s\n", error.what());
+continue;
+}
+const std::optional<WASM::Callable> run = instance->exportedFunction("run");
+REQUIRE(run.has_value());
+try {
+const std::int32_t value = WASM::callCallable<std::int32_t>(*run);
+std::fprintf(stderr, "run()=%d\n", (int)value);
+CHECK(value == 0);
+} catch (const std::exception& error) {
+std::fprintf(stderr, "FAILED at the host boundary: %s\n", error.what());
+CHECK(false);
+}
+}
+}

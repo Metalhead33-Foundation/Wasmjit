@@ -8,8 +8,8 @@ section 18 (the latest re-run).
 
 ## 1. Where the tree is
 
-**Snapshot (2026-11-07, this working tree):** `--rng-seed 12345` -> **22122
-assertions, 795 cases, green**. Gates: `[headerdoc]`, `[docs]`, `doxygen` 0
+**Snapshot (2026-11-07, this working tree):** `--rng-seed 12345` -> **22131
+assertions, 796 cases, green**. Gates: `[headerdoc]`, `[docs]`, `doxygen` 0
 warnings, `abi-check` OK.
 
 The frame ABI work is done on all three backends. Exceptions (including
@@ -40,12 +40,13 @@ field as 4 bytes. The load and the slot width now follow the field type.
 | memory atomics: load/store/RMW/cmpxchg, fence, pause, notify, wait | OK | OK | OK | `i32=9 i64=10 i8=0 i16=0`, `bump=0,1` |
 | **numeric** shared-everything atomics (global/struct/array) | OK | OK | OK | `global=5 struct32=7 struct64=9 array=11` |
 | frame-form `return_call` / `return_call_indirect` | OK | OK | OK | `tail_wide=1` |
+| direct self-recursive `return_call` in constant stack | OK | OK | OK | `TAILSELF` 1,000,000 links, `run()=0` |
 
 ### Remaining (honest refusals)
 
 | Gap | Backends | Reason |
 |---|---|---|
-| constant-stack tail-call trampolines | SLJIT, AsmJIT | `return_call` is still call + return; the values are correct, the host stack grows |
+| mutual/indirect tail-call trampolines | SLJIT, AsmJIT | direct self-recursion is a real loop now; cross-function chains are still call + return |
 | shared-everything atomics on **reference** slots and **tables** | SLJIT, AsmJIT | numeric slots are done; a reference slot needs the GC barrier, and table get/set is itself unimplemented on these backends |
 | structured **block parameters** | AsmJIT | block results (including multi-value) work; parameters are still refused |
 | bulk memory on memory64 | SLJIT, AsmJIT | message says "yet" |
@@ -106,7 +107,8 @@ field as 4 bytes. The load and the slot width now follow the field type.
 
 ## 7. Next session's recommendation
 
-1. **True tail-call trampolines.** This is the one large architectural item left:
+1. **Cross-function tail-call trampolines.** Direct self-recursion is done (a loop).
+   This is the one large architectural item left:
    a driver per function and a uniform thunk per type (LibJIT's model), or a
    libffi closure driver. Portability and the ABI contract outrank speed; do not
    claim the space guarantee until a deep `return_call` chain runs in constant

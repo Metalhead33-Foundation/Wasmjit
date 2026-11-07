@@ -686,6 +686,15 @@ private:
 	 */
 	bool beginFunction();
 	/*!
+	 * \brief Lowers a direct `return_call` to this function as a loop.
+	 *
+	 * The arguments are written into the parameter locals, the non-parameter
+	 * locals are reset to zero, and control branches to the body start. The
+	 * frame is reused, so a self-recursive tail call runs in constant native
+	 * stack.
+	 */
+	void emitSelfTailCall();
+	/*!
 	 * \brief Emits the trap epilogue, finalises the code and returns its entry.
 	 * \param entry Receives the executable entry point.
 	 * \return true when SLJIT produced code.
@@ -1288,6 +1297,8 @@ private:
 	std::size_t maxStackDepth_ = 0; //!< High-water mark of the operand stack.
 	std::vector<ControlFrame> controls_; //!< Active structured-control frames.
 	std::vector<sljit_jump*> trapJumps_; //!< Branches to the trap epilogue.
+	//! Body-entry label, the target of a direct self tail call.
+	sljit_label* bodyStart_ = nullptr;
 
 	sljit_compiler* compiler_ = nullptr; //!< Compiler for the emitting pass.
 	bool ok_ = true; //!< False once any SLJIT call has failed.

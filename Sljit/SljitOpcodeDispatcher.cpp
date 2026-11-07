@@ -1324,6 +1324,11 @@ bool OpcodeDispatcher::beginFunction()
 					SLJIT_MEM1(SLJIT_SP), localSlotOffset(i), SLJIT_IMM, 0));
 		}
 	}
+	// The body-entry label is the loop target of a direct self tail call; the
+	// prologue above has already run for this frame.
+	bodyStart_ = sljit_emit_label(compiler_);
+	if (bodyStart_ == nullptr)
+		ok_ = false;
 	return ok_;
 }
 
@@ -2675,6 +2680,13 @@ void OpcodeDispatcher::dispatchCallIndirect(WASM::TypeIdx arg1, WASM::TableIdx a
 
 void OpcodeDispatcher::dispatchReturnCall(WASM::FuncIdx arg)
 {
+	// A direct tail call to this function is a loop: the frame is reused and the
+	// host stack does not grow. Mutual and indirect tail calls still take the
+	// semantic call + return lowering until the cross-function trampoline lands.
+	if (arg == functionIndex_) {
+		emitSelfTailCall();
+		return;
+	}
 	// A frame-form tail call is a call plus a frame-mode return: the callee
 	// writes its result into the staging frame and `emitReturnValue` moves it
 	// into the caller's result block. This is not a true trampoline (the host
@@ -2682,6 +2694,57 @@ void OpcodeDispatcher::dispatchReturnCall(WASM::FuncIdx arg)
 	emitCall(arg, true);
 	if (!measureOnly_)
 		emitReturnValue();
+	markUnreachable();
+}
+
+void OpcodeDispatcher::emitSelfTailCall()
+{
+	require(reachable_, "a return_call appears in unreachable code");
+	const std::size_t parameterCount = funcType_.params.size();
+	requireStack(parameterCount);
+	const std::size_t base = stackWidths_.size() - parameterCount;
+
+	if (!measureOnly_) {
+		// The new arguments become the parameter locals. A `v128` parameter is a
+		// 16-byte cell, so it uses the same slot copy as a vector local.
+		for (std::size_t i = 0; i < parameterCount; ++i) {
+			const int width = widthOf(funcType_.params[i].val);
+			if (width == 16) {
+				copyStackToLocal(base + i, i);
+			} else if (isFloatKind(funcType_.params[i].val.opcode)) {
+				loadFloatSlot(SLJIT_FR0, base + i, width);
+				emit(sljit_emit_fop1(compiler_,
+						width == 4 ? SLJIT_MOV_F32 : SLJIT_MOV_F64,
+						SLJIT_MEM1(SLJIT_SP), localSlotOffset(i), SLJIT_FR0, 0));
+			} else {
+				loadSlot(SLJIT_R0, base + i, width);
+				emit(sljit_emit_op1(compiler_, width == 4 ? SLJIT_MOV32 : SLJIT_MOV,
+						SLJIT_MEM1(SLJIT_SP), localSlotOffset(i), SLJIT_R0, 0));
+			}
+		}
+		// A tail call is a fresh invocation: declared locals start at zero.
+		for (std::size_t i = parameterCount; i < localSlots_; ++i) {
+			if (localWidths_[i] == 16) {
+				emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+						localSlotOffset(i), SLJIT_IMM, 0));
+				emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+						localSlotOffset(i) + 8, SLJIT_IMM, 0));
+			} else {
+				emit(sljit_emit_op1(compiler_,
+						localWidths_[i] == 4 ? SLJIT_MOV32 : SLJIT_MOV,
+						SLJIT_MEM1(SLJIT_SP), localSlotOffset(i), SLJIT_IMM, 0));
+			}
+		}
+		sljit_jump* jump = sljit_emit_jump(compiler_, SLJIT_JUMP);
+		if (jump == nullptr)
+			ok_ = false;
+		else if (bodyStart_ != nullptr)
+			sljit_set_label(jump, bodyStart_);
+		else
+			ok_ = false;
+	}
+
+	stackWidths_.resize(base);
 	markUnreachable();
 }
 
