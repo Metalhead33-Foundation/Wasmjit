@@ -1,8 +1,9 @@
 # Production-readiness gaps, backend by backend
 
-**Status:** living note, 2026-11-06 (`backendsMh33`). Companions:
+**Status:** living note, 2026-11-07 (`backendsMh33`). Companions:
 [`EXPORT_SIGNATURE.md`](EXPORT_SIGNATURE.md) (the ABI itself),
-[`STAGING_CALL_ABI.md`](STAGING_CALL_ABI.md) (its history).
+[`STAGING_CALL_ABI.md`](STAGING_CALL_ABI.md) (its history). **Section 25 is the current
+defect ledger**; sections 23-24 are the superseded sweep record.
 
 This note exists because a survey of refusal strings (EXPORT_SIGNATURE §44) described
 "limits" that are **not limits**: the frame form exists precisely to remove them.
@@ -831,3 +832,73 @@ probe measured itself, not the feature.
 | `array.get/set/fill` **on AsmJIT and SLJIT** | Q-1 left this row unresolved: the fixture needs fixing before the row can be filled |
 | GC arrays of **reference** elements | values probed, reference elements not |
 | exception **handler payloads** across instances | single-module only so far |
+
+## 25. Defect round: the ledger is closed (2026-11-07)
+
+**Snapshot (2026-11-07, `backendsMh33`):** suite **22012 assertions in 791 cases** under
+`--rng-seed 12345`, green; `[headerdoc]`, `[docs]`, `doxygen` (0 warnings) and `abi-check`
+all pass. This section is the measured resolution of the three defects recorded in
+sections 23-24, and it supersedes them.
+
+### What each defect turned out to be
+
+| # | Recorded | Measured now | Resolution |
+|---|---|---|---|
+| **D-1** | LibJIT: an uncaught `throw` returns normally instead of trapping | **Not a backend defect.** An uncaught throw is defined to return normally with a pending exception (`docs/ABI.md`, `docs/proposals/EXCEPTIONS.md` EXD1), and `Test/main.cpp` already asserted it. The probe asserted a trap instead. | probe rewritten to assert the documented property; no backend change |
+| **D-2** | LibJIT: `array.set` / `array.fill` abort the process | **Not reproducible on LibJIT; a real wrong answer on AsmJIT and SLJIT.** Both popped `array.fill`'s value as the offset. | both lowerings fixed; the parity fixture corrected; LibJIT added to the parity test; the probe strengthened to observe the writes |
+| **D-3** | SLJIT: an `externref` through a struct field is non-null for a null input | **Real, exactly as recorded.** `struct.get` computed the field width and then loaded/stored 4 bytes regardless. | the load op and the slot width follow the field type |
+
+### D-1: the probe measured its own premise
+
+`throw` with no handler in the function sets the pending-exception slot and returns zeroes
+(EXD1); it does not set the *trap* slot. The probe called `do_throw` and asserted "must
+never return normally", so the correct behaviour looked like a defect. The rewritten probe
+clears the slot, calls, checks the zero result, takes the payload and compares its tag id
+with `ModuleInstance::tagIdForIndex(0)`. LibJIT's handler and cross-instance paths were
+already measured by probes 13 and 21 and are unchanged.
+
+### D-2: the operand order, and the fixture that hid it
+
+`array.fill` is `[array, offset, value, count]` — the validator in `WasmValidator.cpp`
+pops in that order, and upstream `array_fill.wast` invokes it as `(offset, value, count)`.
+AsmJIT popped the second-from-top slot as the offset (it is the value) and SLJIT named the
+depths the same way. Their shared fixture `gc_array_fill.wat` was written value-first, so
+the two wrong backends agreed with each other and both parity tests were green. LibJIT kept
+the spec order (the value-first fixture is an out-of-bounds fill under that reading), so the
+two contracts were never compared.
+
+The fix is two pop orders and one fixture. The parity test now instantiates AsmJIT, SLJIT
+and **LibJIT** from the corrected fixture, so a divergence fails instead of producing
+mutual agreement. The strengthened probe (`set_get`, `fill_get`, `inline`) returns the value
+it read back; the old probe returned a constant and could not observe the mutation.
+
+The `popValueRaw` abort recorded as the LibJIT symptom did not reproduce with the committed
+fixture on a build with assertions active (`-O2`, no `NDEBUG`). It is recorded here as
+unconfirmed rather than fixed: the claim that led to it was a fixture that did not observe
+its own stores.
+
+### D-3: the width follows the field type
+
+`SljitOpcodeDispatcher::dispatchStructGet` now selects `SLJIT_MOV32` for `i32`/`f32` and
+`SLJIT_MOV` otherwise, stores the slot with the same width, and refuses packed and `v128`
+fields explicitly (the packed forms belong to `struct.get_s`/`struct.get_u`). The
+`REFFIELD` probe requires `nullptr` on every backend instead of pinning SLJIT's old
+non-null answer.
+
+### Corrected capability rows
+
+| Feature | SLJIT | AsmJIT | LibJIT | Probe |
+|---|---|---|---|---|
+| exceptions (`throw`, `try_table`) | ⛔ refuses | ⛔ refuses | ✅ pending-exception protocol | `[exceptions]` |
+| GC array `set` / `fill` | ✅ | ✅ | ✅ | `[gc]` |
+| `externref` in a struct field | ✅ | ✅ | ✅ | `[tables][gc]` |
+| `array.get` (including a reference element array) | ✅ | ✅ | ✅ | `[gc]` |
+
+### The two lessons
+
+1. **Agreement between two backends is not a spec check.** A parity test can only prove
+   they agree; when both encode the same misreading it proves the wrong thing. Compare the
+   operand order with the validator and the upstream `.wast`, and put the third backend in
+   the test.
+2. **A probe must observe the property.** Executing a store and returning a constant
+   cannot distinguish a correct lowering from a no-op. Return the value that was read back.

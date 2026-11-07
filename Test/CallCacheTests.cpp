@@ -7,6 +7,7 @@
 
 #include "WasmBase/WasmBackendAbi.hpp"
 #include "WasmBase/WasmCallCache.hpp"
+#include "WasmBase/WasmExn.hpp"
 #include "WasmBase/WasmRegistryImportResolver.hpp"
 #include "WasmBase/WasmRuntime.hpp"
 
@@ -587,17 +588,16 @@ WASM::setFrameCallAbiOptIn(false);
 CHECK(&runtime->instantiate(*module, imports) == &instance);
 }
 
-// Item 4: exceptions on every backend, reported rather than assumed. The assertion
-// is the property, not the outcome: a `throw` must never return normally, and a
-// backend that cannot compile it must refuse at instantiation
-// (docs/backends/PRODUCTION_GAPS.md section 16).
-TEST_CASE("exceptions: AsmJIT and SLJIT refuse, LibJIT is a KNOWN DEFECT",
+// Item 4: exceptions on every backend, reported rather than assumed
+// (docs/backends/PRODUCTION_GAPS.md section 16). A backend either refuses the
+// module at instantiation or executes the throw; an uncaught throw is the
+// documented pending-exception protocol, not a trap (docs/ABI.md "Exceptions",
+// docs/proposals/EXCEPTIONS.md EXD1), so the property asserted for LibJIT is
+// "zero result + pending exception carrying this module's tag".
+TEST_CASE("exceptions: AsmJIT and SLJIT refuse, LibJIT leaves an uncaught throw pending",
 "[staging][abi][exceptions]")
 {
-// Measured, not assumed: AsmJIT and SLJIT refuse a `throw` at instantiation, while
-// LibJIT executes it and RETURNS NORMALLY -- a trap silently becoming a value. That
-// is the worst of the three answers and is recorded as a defect, not as support
-// (docs/backends/PRODUCTION_GAPS.md section 16).
+// Measured, not assumed: AsmJIT and SLJIT refuse a `throw` at instantiation.
 for (const char* backend : {"asmjit", "sljit"}) {
 auto runtime = WASM::Runtime::create(backend);
 REQUIRE(runtime != nullptr);
@@ -607,8 +607,10 @@ WASM::RegistryImportResolver imports;
 REQUIRE_THROWS(runtime->instantiate(*module, imports));
 }
 
-// LibJIT: the defect is pinned so it cannot be forgotten, and the day it turns into
-// a refusal or a real trap this assertion fails and the test gets rewritten.
+// LibJIT: the uncaught throw must leave the exception in the execution state's
+// pending slot and return the zero of the result type (EXD1). Clearing a stale
+// slot first, and taking the payload afterwards, makes the assertion independent
+// of whatever an earlier test left behind.
 auto runtime = WASM::Runtime::create("libjit");
 REQUIRE(runtime != nullptr);
 auto module = runtime->loadFile(
@@ -617,9 +619,12 @@ WASM::RegistryImportResolver imports;
 WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
 const std::optional<WASM::Callable> callable = instance.exportedFunction("do_throw");
 REQUIRE(callable.has_value());
-// KNOWN DEFECT: this returns instead of trapping.
+::wasm_exn_clear_pending();
 std::int32_t returned = WASM::callCallable<std::int32_t>(*callable, 7);
 CHECK(returned == 0);
+void* pending = ::wasm_exn_take_pending();
+REQUIRE(pending != nullptr);
+CHECK(::wasm_exn_tag_id(pending) == instance.tagIdForIndex(0));
 }
 
 // Item 4, probe 2: reference types. The assertion is the property -- a backend either
@@ -956,14 +961,6 @@ std::fprintf(stderr, "REFUSED: %s\n", error.what());
 }
 }
 {
-// KNOWN DEFECT D-2: LibJIT ABORTS the process (assertion in popValueRaw) on
-	// array.set / array.fill. An abort cannot be caught, so the probe cannot run it
-	// without killing the suite -- recorded here, skipped there, and flagged for the
-	// defect list (docs/backends/PRODUCTION_GAPS.md section 24).
-	if (std::string(backend) == "libjit") {
-		std::fprintf(stderr, "GCARROP libjit: SKIPPED -- known abort (D-2)\n");
-		continue;
-	}
 	std::fprintf(stderr, "GCARROP %s: ", backend);
 auto runtime = WASM::Runtime::create(backend);
 REQUIRE(runtime != nullptr);
@@ -971,15 +968,31 @@ auto module = runtime->loadFile(
 std::filesystem::path(WASM_TEST_DIR) / "gc_array_ops_probe.wasm");
 WASM::RegistryImportResolver imports;
 try {
-WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
-const std::optional<WASM::Callable> probe = instance.exportedFunction("probe");
+WASM::ModuleInstance* instance = &runtime->instantiate(*module, imports);
+struct Question { const char* exportName; std::int32_t expected; } questions[] = {
+{"set_get", 9}, {"fill_get", 5}, {"inline", 0}};
+for (const Question& question : questions) {
+const std::optional<WASM::Callable> probe =
+instance->exportedFunction(question.exportName);
 if (!probe.has_value()) {
-std::fprintf(stderr, "no export\n");
-} else {
-const std::int32_t value = WASM::callCallable<std::int32_t>(*probe);
-std::fprintf(stderr, "probe()=%d\n", (int)value);
-CHECK(value == 0);
+std::fprintf(stderr, "%s=no export ", question.exportName);
+CHECK(probe.has_value());
+continue;
 }
+// A runtime trap here is NOT a refusal: the array is in bounds, so the
+// mutation must return the value that was read back.
+std::int32_t value = 0;
+try {
+value = WASM::callCallable<std::int32_t>(*probe);
+} catch (const std::exception& error) {
+std::fprintf(stderr, "%s THREW: %s ", question.exportName, error.what());
+FAIL("an in-bounds array mutation must not trap");
+continue;
+}
+std::fprintf(stderr, "%s=%d ", question.exportName, (int)value);
+CHECK(value == question.expected);
+}
+std::fprintf(stderr, "\n");
 } catch (const std::exception& error) {
 std::fprintf(stderr, "REFUSED: %s\n", error.what());
 }
@@ -1029,12 +1042,10 @@ std::fprintf(stderr, "no export\n");
 } else {
 const void* value = WASM::callCallable<const void*>(*call, nullptr);
 std::fprintf(stderr, "roundtrip(null)=%s\n", value == nullptr ? "null" : "non-null");
-// KNOWN DEFECT D-3: SLJIT returns a NON-NULL value when a null externref crosses a
-// struct field. Pinned, not tolerated: the day it returns null this assertion fails
-// and the test is rewritten (docs/backends/PRODUCTION_GAPS.md section 24).
-if (std::string(backend) == "sljit")
-CHECK(value != nullptr);
-else
+// The property: a reference that crosses a struct field comes back exactly
+// as it went in. D-3 was SLJIT returning a stale non-null pointer for a null
+// field; the assertion stays on the property, not on the old wrong answer
+// (docs/backends/CAPABILITY_PROBES.md section 9).
 CHECK(value == nullptr);
 }
 } catch (const std::exception& error) {
@@ -1051,8 +1062,6 @@ TEST_CASE("array.get and atomic store/load: refuse or answer correctly",
 {
 for (const char* backend : {"libjit", "asmjit", "sljit"}) {
 {
-// LibJIT is skipped: D-2 shows its GC array path can ABORT, which cannot be caught.
-if (std::string(backend) != "libjit") {
 std::fprintf(stderr, "ARRGET %s: ", backend);
 auto runtime = WASM::Runtime::create(backend);
 REQUIRE(runtime != nullptr);
@@ -1071,7 +1080,6 @@ CHECK(value == 22);
 }
 } catch (const std::exception& error) {
 std::fprintf(stderr, "REFUSED: %s\n", error.what());
-}
 }
 }
 {
@@ -1105,7 +1113,6 @@ TEST_CASE("reference arrays and tag boundaries: refuse or answer correctly",
 {
 for (const char* backend : {"libjit", "asmjit", "sljit"}) {
 {
-if (std::string(backend) != "libjit") { // D-2: LibJIT's GC array path may abort
 std::fprintf(stderr, "REFARR %s: ", backend);
 auto runtime = WASM::Runtime::create(backend);
 REQUIRE(runtime != nullptr);
@@ -1127,7 +1134,6 @@ CHECK(value == nullptr);
 }
 } catch (const std::exception& error) {
 std::fprintf(stderr, "REFUSED: %s\n", error.what());
-}
 }
 }
 {

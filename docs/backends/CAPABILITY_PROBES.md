@@ -1,8 +1,9 @@
 # Capability probes: what the tree actually does, per backend
 
-**Status:** living note, 2026-11-06 (`backendsMh33`). Companion to
+**Status:** living note, 2026-11-07 (`backendsMh33`). Companion to
 [`PRODUCTION_GAPS.md`](PRODUCTION_GAPS.md), which holds the **matrix**; this note holds
-the **instruments** that fill it.
+the **instruments** that fill it. Section 16 records the defect round that re-ran and
+corrected the probes.
 
 A probe is a fixture plus one test that runs it on every backend and records one of
 exactly three outcomes. The rule that governs all of them:
@@ -206,6 +207,11 @@ that quietly ignored the index would answer 0 or crash. It answers 1 on all thre
 
 ## 8. Probes 13 and 14: exception handlers work on LibJIT; GC array ops are D-2 and inconclusive
 
+> **Correction (2026-11-07):** this section's D-2 attribution did not hold. LibJIT does not
+> abort on the committed fixture; the real defect was AsmJIT and SLJIT swapping
+> `array.fill`'s offset and value, hidden by a fixture written in the same wrong order.
+> Section 16 has the re-run and `PRODUCTION_GAPS.md` section 25 the resolution.
+
 ### Probe 13 -- exception HANDLERS
 
 ```
@@ -264,6 +270,10 @@ are believed**, which is the same rule as "inert test data" and "assert the prop
 applied one step earlier.
 
 ## 9. Probes 15 and 16: tables work everywhere; a reference in a struct field is D-3
+
+> **Correction (2026-11-07):** D-3 is fixed. `dispatchStructGet` loaded every field as 4
+> bytes; the load and the slot width now follow the field type. The probe requires
+> `nullptr` on all three backends (section 16).
 
 ```
 TABLE    libjit/asmjit/sljit: via_table(3,4)=7
@@ -391,6 +401,11 @@ stands as measured.
 
 ## 15. Probe 21: cross-instance exception payloads WORK on LibJIT
 
+> **Correction (2026-11-07):** this section's final sentence inherits D-1's premise. An
+> uncaught throw is *defined* to return normally with a pending exception, not to leave a
+> pending trap (`docs/ABI.md`, `EXCEPTIONS.md` EXD1); the probe was asserting a trap. The
+> cross-instance result (7) stands, and no backend change was needed (section 16).
+
 ```
 XINST libjit: caught()=7
 XINST asmjit: REFUSED: opcode dispatch is not implemented: dispatchThrow
@@ -409,3 +424,62 @@ This was the last open question of the sweep, and it closes the exception pictur
 that makes D-1 sharper still: **LibJIT's exception implementation is substantially
 complete** -- tags cross instances, handlers catch, payloads arrive -- and the defect is
 confined to the *uncaught* path, where a throw returns instead of leaving a pending trap.
+
+## 16. Defect round (2026-11-07): the probes were wrong before the backends were
+
+The sweep closed with three defects. This round re-ran each probe against the frozen
+contracts, strengthened the fixtures, and found that two of the three entries named the
+wrong thing. The current ledger is `PRODUCTION_GAPS.md` section 25.
+
+### Probe 1 (exceptions): the assertion contradicted the ABI
+
+The probe asserted that a throw "must never return normally". The contract says the
+opposite: an uncaught throw **returns normally with the exception in the pending slot**
+(`docs/ABI.md` "Exceptions", `docs/proposals/EXCEPTIONS.md` EXD1), and the manual test in
+`Test/main.cpp` already asserted it. The probe now checks the documented property — zero
+result, pending payload, correct tag id — and passes on LibJIT. AsmJIT and SLJIT still
+refuse at instantiation, which remains the correct answer for a backend that does not lower
+the opcode.
+
+### Probe 14 (GC array ops): the fixture did not observe its own stores
+
+The old fixture executed `array.set`/`array.fill`, discarded both arrays, and returned a
+constant. It could therefore detect a compile-time abort but not a wrong lowering. The
+strengthened fixture adds three observable exports:
+
+```
+GCARROP libjit: set_get=9 fill_get=5 inline=0
+GCARROP asmjit: set_get=9 fill_get=5 inline=0
+GCARROP sljit:  set_get=9 fill_get=5 inline=0
+```
+
+The first strengthened run failed on AsmJIT and SLJIT with **out of bounds array access**
+on an in-bounds fill. The cause was not the fixture: both backends used the fill *value* as
+the *offset*. `array.fill` is `[array, offset, value, count]` in the validator and in
+upstream `array_fill.wast`; the old parity fixture `gc_array_fill.wat` was written
+value-first, so the two wrong backends agreed and both passed. The backends and the fixture
+are now fixed, and the parity test includes LibJIT so a third opinion is always present.
+The LibJIT `popValueRaw` abort recorded as D-2 did not reproduce with the committed fixture
+on a build with assertions active.
+
+### Probe 16 (reference field): correct as recorded
+
+`SljitOpcodeDispatcher::dispatchStructGet` computed the field width and then used
+`SLJIT_MOV32` and a 4-byte slot store for every field. A reference field was half-loaded,
+leaving the upper half of the slot stale; the fixture reported `0x7f1700000000` for a null
+input. The load and the store now follow the field type, and the probe requires `nullptr`
+on all three backends.
+
+### The meta-lesson this round added
+
+The sweep's rule was "validate the fixture before believing it". This round shows the
+weaker form that was still missing:
+
+> **Two backends agreeing is not evidence.** A parity test proves agreement, not
+> conformance. When both encode the same misreading, it certifies the bug. Compare the
+> operand order with the validator and the upstream `.wast`, and keep the third backend in
+> the fixture.
+
+This round paid the fixture price once more: the first strengthened fixture transposed its
+own folded `array.fill` operands, and only the returned value exposed it. A test that
+observes the property catches its author as readily as a backend.

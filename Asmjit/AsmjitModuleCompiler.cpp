@@ -3120,11 +3120,14 @@ protected:
 			throw std::runtime_error("AsmJit array.fill does not lower this element type yet");
 		if (values.size() < 4)
 			throw std::runtime_error("AsmJit array.fill operand stack underflow");
+		// Operand order (spec): [array, offset, value, count]. The value is the
+		// second-from-top slot and the offset the third; naming them the other
+		// way round made the fill treat the value as the offset (D-2).
 		auto length = values.back();
 		values.pop_back();
-		auto index = values.back();
-		values.pop_back();
 		auto elementValue = values.back();
+		values.pop_back();
+		auto index = values.back();
 		values.pop_back();
 		auto object = values.back();
 		values.pop_back();

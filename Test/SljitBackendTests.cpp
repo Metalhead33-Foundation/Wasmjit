@@ -22,6 +22,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <limits>
 #include <memory>
 #include <span>
@@ -2583,8 +2584,8 @@ TEST_CASE("both backends zero-fill array.new_default with a counted loop",
 }
 
 
-TEST_CASE("both backends lower array.fill with a store loop and both traps",
-		"[sljit][asmjit][parity][gc]")
+TEST_CASE("all three backends lower array.fill with a store loop and the same traps",
+		"[sljit][asmjit][libjit][parity][gc]")
 {
 	WASM::Module module = loadTestModule("gc_array_fill");
 	AsmJitBackend::Context asmContext;
@@ -2599,6 +2600,20 @@ TEST_CASE("both backends lower array.fill with a store loop and both traps",
 	REQUIRE(asmInstance != nullptr);
 	REQUIRE(sljitInstance != nullptr);
 
+	// The parity fixture used to be written value-first, which let AsmJIT and
+	// SLJIT agree with each other while both disagreed with the validator and
+	// with LibJIT. `array.fill` is `[array, offset, value, count]` (upstream
+	// array_fill.wast); including LibJIT here makes a divergence fail.
+	auto libjitRuntime = WASM::Runtime::create("libjit");
+	REQUIRE(libjitRuntime != nullptr);
+	// A runtime only instantiates modules it loaded: their types live in its
+	// store (docs/EMBEDDING_SURFACE.md §4.3/§4.4).
+	auto libjitOwnedModule = libjitRuntime->loadFile(
+			std::filesystem::path(WASM_TEST_DIR) / "gc_array_fill.wasm");
+	WASM::RegistryImportResolver libjitImports;
+	WASM::ModuleInstance& libjitInstance =
+			libjitRuntime->instantiate(*libjitOwnedModule, libjitImports);
+
 	const auto call = [&](const char* name) {
 		const std::optional<WASM::Callable> asmCallable = asmInstance->exportedFunction(name);
 		const std::optional<WASM::Callable> sljitCallable = sljitInstance->exportedFunction(name);
@@ -2612,17 +2627,23 @@ TEST_CASE("both backends lower array.fill with a store loop and both traps",
 	const auto trapOf = [&](const char* name, WASM::TrapKind expected) {
 		const std::optional<WASM::Callable> asmCallable = asmInstance->exportedFunction(name);
 		const std::optional<WASM::Callable> sljitCallable = sljitInstance->exportedFunction(name);
+		const std::optional<WASM::Callable> libjitCallable = libjitInstance.exportedFunction(name);
 		REQUIRE(asmCallable.has_value());
 		REQUIRE(sljitCallable.has_value());
+		REQUIRE(libjitCallable.has_value());
 		INFO("export " << name);
 		CHECK(trapKindOf([&] { WASM::callCallable<std::int32_t>(*asmCallable); }) == expected);
 		CHECK(trapKindOf([&] { WASM::callCallable<std::int32_t>(*sljitCallable); }) == expected);
+		CHECK(trapKindOf([&] { WASM::callCallable<std::int32_t>(*libjitCallable); }) == expected);
 	};
 
 	const auto same = [&](const char* name, std::int32_t expected) {
 		const auto [asmValue, sljitValue] = call(name);
 		CHECK(asmValue == expected);
 		CHECK(sljitValue == expected);
+		const std::optional<WASM::Callable> libjitCallable = libjitInstance.exportedFunction(name);
+		REQUIRE(libjitCallable.has_value());
+		CHECK(WASM::callCallable<std::int32_t>(*libjitCallable) == expected);
 	};
 	same("fill_all", 14);
 	same("fill_partial", 10);

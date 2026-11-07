@@ -3920,9 +3920,12 @@ void OpcodeDispatcher::dispatchArrayFill(WASM::TypeIdx arg)
 			: ((opcode == WASM::ValueTypeCode::I32
 					|| opcode == WASM::ValueTypeCode::F32) ? 4 : 8);
 	requireStack(4);
+	// Operand order (spec): [array, offset, value, count]. The offset is the
+	// third slot from the top and the value the second; the reversed naming made
+	// the fill use the value as the offset (D-2).
 	const std::size_t arrayDepth = stackWidths_.size() - 4;
-	const std::size_t valueDepth = stackWidths_.size() - 3;
-	const std::size_t indexDepth = stackWidths_.size() - 2;
+	const std::size_t indexDepth = stackWidths_.size() - 3;
+	const std::size_t valueDepth = stackWidths_.size() - 2;
 	const std::size_t lenDepth = stackWidths_.size() - 1;
 	if (measureOnly_) {
 		for (int i = 0; i < 4; ++i)
@@ -4318,10 +4321,17 @@ void OpcodeDispatcher::dispatchStructGet(WASM::TypeIdx arg1, uint32_t arg2)
 	require(arg2 < fields.size(), "struct.get field index is out of range");
 	requireStack(1);
 	require(stackWidths_.back() == 8, "struct.get requires a reference operand");
-	const int width = fields[arg2].storage.isPacked
-			? (fields[arg2].storage.packed == WASM::ValueTypeCode::I8 ? 1 : 2)
-			: (fields[arg2].storage.value.opcode == WASM::ValueTypeCode::I32
-					|| fields[arg2].storage.value.opcode == WASM::ValueTypeCode::F32 ? 4 : 8);
+	require(!fields[arg2].storage.isPacked,
+			"the SLJIT backend does not lower packed struct fields yet");
+	const WASM::ValueTypeCode opcode = fields[arg2].storage.value.opcode;
+	require(opcode != WASM::ValueTypeCode::V128,
+			"the SLJIT backend does not lower v128 struct fields yet");
+	// A reference field is pointer-sized. Loading only the low 32 bits leaves the
+	// upper half of the 8-byte stack slot untouched, turning a null field into a
+	// stale non-null pointer (D-3). The load and the slot width both follow the
+	// field type.
+	const int width = (opcode == WASM::ValueTypeCode::I32
+			|| opcode == WASM::ValueTypeCode::F32) ? 4 : 8;
 	if (!measureOnly_) {
 		loadSlot(SLJIT_R1, stackWidths_.size() - 1, 8);
 		// A null object traps; the field load itself is one memory access.
@@ -4334,11 +4344,12 @@ void OpcodeDispatcher::dispatchStructGet(WASM::TypeIdx arg1, uint32_t arg2)
 			ok_ = false;
 		else if (notNull != nullptr)
 			sljit_set_label(notNull, done);
-		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R2, 0, SLJIT_MEM1(SLJIT_R1),
+		emit(sljit_emit_op1(compiler_, width == 4 ? SLJIT_MOV32 : SLJIT_MOV,
+				SLJIT_R2, 0, SLJIT_MEM1(SLJIT_R1),
 				static_cast<sljit_sw>(WASM::gcStructFieldOffset(fields, arg2))));
-		storeSlot(SLJIT_R2, stackWidths_.size() - 1, 4);
+		storeSlot(SLJIT_R2, stackWidths_.size() - 1, width);
 	}
-	stackWidths_.back() = 4;
+	stackWidths_.back() = width;
 }
 
 void OpcodeDispatcher::dispatchRefFunc(WASM::FuncIdx arg)
