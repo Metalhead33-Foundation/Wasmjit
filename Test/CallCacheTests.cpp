@@ -1160,3 +1160,36 @@ std::fprintf(stderr, "REFUSED: %s\n", error.what());
 }
 }
 }
+
+// Item 4, probe 21: a tag thrown in one INSTANCE and caught in another
+// (docs/backends/CAPABILITY_PROBES.md section 15).
+TEST_CASE("cross-instance exception payloads: refuse or answer correctly",
+"[staging][abi][exceptions]")
+{
+for (const char* backend : {"libjit", "asmjit", "sljit"}) {
+std::fprintf(stderr, "XINST %s: ", backend);
+auto runtime = WASM::Runtime::create(backend);
+REQUIRE(runtime != nullptr);
+WASM::RegistryImportResolver imports;
+try {
+auto providerModule = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "tag_provider.wasm");
+WASM::ModuleInstance& provider = runtime->instantiate(*providerModule, imports);
+provider.registerExports(imports, "provider");
+
+auto consumerModule = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "tag_consumer.wasm");
+WASM::ModuleInstance& consumer = runtime->instantiate(*consumerModule, imports);
+const std::optional<WASM::Callable> caught = consumer.exportedFunction("caught");
+if (!caught.has_value()) {
+std::fprintf(stderr, "no export\n");
+} else {
+const std::int32_t value = WASM::callCallable<std::int32_t>(*caught);
+std::fprintf(stderr, "caught()=%d\n", (int)value);
+CHECK(value == 7);
+}
+} catch (const std::exception& error) {
+std::fprintf(stderr, "REFUSED: %s\n", error.what());
+}
+}
+}

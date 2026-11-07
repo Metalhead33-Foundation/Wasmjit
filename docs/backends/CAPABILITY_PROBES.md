@@ -388,3 +388,24 @@ refused ⛔ with a reason, `skipped` (with why), or `unknown` (with what would r
 The one area left genuinely open is **a tag thrown in one instance and caught in another**,
 which needs a two-instance fixture. Everything else in `PRODUCTION_GAPS.md` §24's ledger
 stands as measured.
+
+## 15. Probe 21: cross-instance exception payloads WORK on LibJIT
+
+```
+XINST libjit: caught()=7
+XINST asmjit: REFUSED: opcode dispatch is not implemented: dispatchThrow
+XINST sljit:  REFUSED: does not lower dispatchThrow
+```
+
+A provider instance exports a tag and throws it (`i32.const 7; throw $e`); a **separate**
+consumer instance imports both the tag and the throwing function and catches it. LibJIT
+returns **7** -- the payload crosses the instance boundary intact.
+
+| SLJIT | AsmJIT | LibJIT |
+|---|---|---|
+| ⛔ refuses | ⛔ refuses | **✅ 7** |
+
+This was the last open question of the sweep, and it closes the exception picture in a way
+that makes D-1 sharper still: **LibJIT's exception implementation is substantially
+complete** -- tags cross instances, handlers catch, payloads arrive -- and the defect is
+confined to the *uncaught* path, where a throw returns instead of leaving a pending trap.
