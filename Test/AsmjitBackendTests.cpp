@@ -351,3 +351,35 @@ std::int32_t result = 0;
 std::memcpy(&result, frame + 48, sizeof(result));
 CHECK(result == 6);
 }
+
+// Step 5e gate: a v128 *result* crosses the frame instead of a caller buffer.
+TEST_CASE("AsmJIT returns a v128 through a frame",
+"[staging][asmjit][abi][v128]")
+{
+if (std::getenv("WASMJIT_STEP5_GATES") == nullptr) {
+SUCCEED("step 5 gate: set WASMJIT_STEP5_GATES=1 to run it");
+return;
+}
+WASM::setFrameCallAbiOptIn(true);
+auto runtime = WASM::Runtime::create("asmjit");
+REQUIRE(runtime != nullptr);
+auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "asmjit_vec_result.wasm");
+WASM::RegistryImportResolver imports;
+WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+CHECK(instance.frameCallAbi());
+
+const std::optional<WASM::Callable> callable = instance.exportedFunction("vec_result");
+REQUIRE(callable.has_value());
+
+// No parameters, so the result block starts at offset zero.
+alignas(16) std::uint8_t frame[32] = {};
+WASM::callCallableFrame(*callable, frame);
+WASM::setFrameCallAbiOptIn(false);
+
+const std::uint32_t* lanes = reinterpret_cast<const std::uint32_t*>(frame);
+CHECK(lanes[0] == 7u);
+CHECK(lanes[1] == 8u);
+CHECK(lanes[2] == 9u);
+CHECK(lanes[3] == 10u);
+}

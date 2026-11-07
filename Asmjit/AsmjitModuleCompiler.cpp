@@ -908,7 +908,9 @@ public:
 		}
 		resultType = type.results.empty()
 				? WASM::ValueTypeCode::Void : type.results.front().val.opcode;
-		bufferedVectorResult = resultType == WASM::ValueTypeCode::V128;
+		// Only the register form needs the caller-supplied result buffer; in frame
+		// mode the result block of the frame *is* that buffer (step 5e).
+		bufferedVectorResult = resultType == WASM::ValueTypeCode::V128 && !frameAbi;
 		if (bufferedVectorResult) {
 			// The caller supplies a 16-byte buffer as a trailing pointer argument; keep
 			// it in a stack slot so helper calls cannot clobber it.
@@ -1057,7 +1059,34 @@ public:
 				checkError(compiler.ret(
 						materializeFloat(values.back(), kindWidth(resultType))),
 						"AsmJit float function return emission failed");
-			else if (bufferedVectorResult) {
+			else if (frameMode) {
+				// Staging-frame ABI (steps 5c/5e): the result goes into the frame --
+				// AsmJIT has no driver to collect it -- and the signature returns
+				// void. The result block begins where the argument block ends, and a
+				// `v128` result is the 16 bytes its local buffer holds.
+				const uint32_t resultOffset = frameResultOffsetBytes(type);
+				asmjit::x86::Gp destination = compiler.new_gp_ptr("resultAddress");
+				checkError(compiler.lea(destination,
+						asmjit::x86::Mem(framePointer, resultOffset)),
+						"AsmJit frame result address failed");
+				if (resultType == WASM::ValueTypeCode::V128) {
+					asmjit::x86::Gp source = values.back();
+					for (int word = 0; word < 2; ++word) {
+						asmjit::x86::Gp bits = compiler.new_gp64("frameResultWord");
+						checkError(compiler.mov(bits,
+								asmjit::x86::qword_ptr(source, word * 8)),
+								"AsmJit frame vector result load failed");
+						checkError(compiler.mov(
+								asmjit::x86::qword_ptr(destination, word * 8), bits),
+								"AsmJit frame vector result store failed");
+					}
+				} else {
+					checkError(compiler.mov(
+							asmjit::x86::Mem(destination, 0, values.back().size()),
+							values.back()), "AsmJit frame result store failed");
+				}
+				checkError(compiler.ret(), "AsmJit frame result return failed");
+			} else if (bufferedVectorResult) {
 				// The value is the address of the vector 16-byte buffer; copy it into the
 				// caller buffer and return void.
 				asmjit::x86::Gp destination = compiler.new_gp_ptr("v128ResultOut");
@@ -4088,6 +4117,15 @@ private:
 		auto address = compiler.new_gp_ptr(name);
 		checkError(compiler.lea(address, storage), "AsmJit v128 buffer address failed");
 		return address;
+	}
+
+	//! Bytes the parameters occupy in a staging frame: 8 per scalar, 16 per v128.
+	static uint32_t frameResultOffsetBytes(const WASM::FuncType& functionType)
+	{
+		uint32_t bytes = 0;
+		for (const auto& parameter : functionType.params)
+			bytes += parameter.val.opcode == WASM::ValueTypeCode::V128 ? 16u : 8u;
+		return bytes;
 	}
 
 	//! Copies 16 bytes between two buffer addresses.

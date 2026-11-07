@@ -356,3 +356,31 @@ suite is 21806 assertions in 760 cases.
   still uses `prepareCallArguments`;
 * frame calls into a **native import**, where the callee expects the typed signature
   and must therefore be excluded from the frame path.
+
+## 15. Step 5e done: the vector result crosses the frame
+
+`bufferedVectorResult` was not deleted -- it still serves the **register** form,
+which has no frame to put a vector result in. What 5e did instead:
+
+* the flag is now `resultType == V128 && !frameAbi`, so the frame form never asks
+  for the trailing caller buffer;
+* the epilogue checks `frameMode` **before** `bufferedVectorResult`, because the
+  buffered branch would otherwise win and ask for a buffer argument the frame
+  signature does not have -- a branch *order* bug, invisible while every fixture
+  had a scalar result;
+* a `v128` result stores its **16 bytes** out of the local buffer into the frame,
+  not the 8-byte buffer pointer, which is what the scalar path stores.
+
+**Gate:** a module whose only export returns a `v128` (`asmjit_vec_result.wasm`)
+instantiates in frame mode and yields lanes **7, 8, 9, 10** at offset zero. All five
+step-5 gates pass -- 21 assertions in 5 test cases -- and the default suite is 21807
+in 761 cases.
+
+### What is left in step 5, stated exactly
+
+| Item | Why it is safe to leave |
+|---|---|
+| `bufferedVectorResult` deletion | it is the register form's mechanism, and the register form is still the default for AsmJIT's narrow signatures |
+| the `[asmjit][abi][v128][gap]` pin | still truthful: with the flag off a vector parameter is still refused |
+| indirect calls in frame mode | the direct site is patched; an indirect frame call still takes the register path, which refuses vectors, so it fails loudly rather than silently |
+| frame calls into a native import | must be *excluded* from the frame path, since an import expects the typed signature |
