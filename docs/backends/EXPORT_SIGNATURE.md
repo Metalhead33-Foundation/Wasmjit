@@ -384,3 +384,67 @@ in 761 cases.
 | the `[asmjit][abi][v128][gap]` pin | still truthful: with the flag off a vector parameter is still refused |
 | indirect calls in frame mode | the direct site is patched; an indirect frame call still takes the register path, which refuses vectors, so it fails loudly rather than silently |
 | frame calls into a native import | must be *excluded* from the frame path, since an import expects the typed signature |
+
+## 16. Register-form and frame-form can be bridged by a thunk (answer to a design question)
+
+**Question.** Can a wrapper convert between a backend's register-based convention
+(LibJIT today) and the frame-based one (mandatory for SLJIT and AsmJIT, opt-in for
+LibJIT) -- for example with virtual registers on the frame or stack -- so that less
+of LibJIT has to change, even at the cost of extra work on the other two?
+
+**Answer: yes, and it is the better plan.** The frame form should be the **boundary**
+ABI, not necessarily every backend's **internal** ABI.
+
+### The shape
+
+The adapter is generated **per signature, at the boundary**, never per call site:
+
+| Crossing | Adapter |
+|---|---|
+| host -> wasm export | frame-shaped entry that unpacks the frame into typed arguments, calls the register-form function, packs the result back |
+| wasm -> host import | the existing import trampoline, which already passes typed arguments |
+| wasm -> wasm, same backend | whatever that backend is fastest at (frame for SLJIT/AsmJIT, register for LibJIT) |
+
+The canonical contract stays exactly as this note defines it: **one way to expose a
+C++ function to wasm, one way to call a compiled wasm function from C++, on every
+backend.** What changes is only *where* the conversion happens.
+
+### Why it is cheaper
+
+* **LibJIT stops being a special case with unfinished work.** Its frame form is
+  already proven (step 4a: arguments cross, results return 6), but flipping its
+  whole call path (4b) is the expensive part. With an adapter, 4b is **not
+  required** for the boundary contract: the driver -- which LibJIT already
+generates per exported function -- becomes the packer, and nothing inside the body
+  changes.
+* **SLJIT and AsmJIT need no change at all** for exports, because their entry is
+  already the frame form; their imports already use typed trampolines.
+* **The correctness burden moves to one place per backend.** Packing order and
+  widths (8 bytes per scalar, 16 per `v128`, results after arguments) get
+  implemented once in the thunk instead of at every call site -- which is where
+  every defect in this campaign actually occurred.
+
+### Costs, stated honestly
+
+* **One extra indirection per boundary crossing** (a call plus a copy of each
+  argument), not per wasm-to-wasm call. For embedder-facing calls this is a fair
+  price; for hot internal calls it is irrelevant, because those do not cross the
+  boundary.
+* **A second calling convention stays in the tree**, which the note elsewhere
+  argues against. The mitigation is that it becomes **internal and unobservable**:
+  no embedder and no cross-backend caller can see it, because the boundary always
+  speaks frames.
+* **Thunk caching must exist** for the cost to stay flat. The machinery is already
+  there: `WASM::Callable`, `rawFnPtr`/`fnPtr`, LibJIT's drivers, and SLJIT's
+  trampoline thunks are all per-signature entries that could carry the pack/unpack.
+
+### Consequence for the plan
+
+`P1` (multi-result through the frame) and `P2` (one spelling for exports and calls)
+are **unchanged and still the deliverable** -- they are what the boundary contract
+needs. What the adapter removes is **step 4b** (LibJIT frame-mode call sites), which
+was the largest remaining block and existed only so that LibJIT could call itself in
+a form nobody is obliged to see.
+
+**Recommendation:** adopt the adapter. Implement it as P2's entry/exit thunk, and
+retire 4b rather than finish it.
