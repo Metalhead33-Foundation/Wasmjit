@@ -635,3 +635,41 @@ test-authoring rule, not a backend fact -- and it is worth recording because the
 looked like a backend refusal for a moment.
 
 Suite 21891 assertions in 780 cases, green.
+
+## 20. The probes did not break the suite: order-dependent flakes were already there
+
+After probes 3 and 4 the full suite failed intermittently, in tests *unrelated to them*:
+
+```
+stack-switching resume_throw dispatches a handler clause      Test/main.cpp:13391
+simd: float arithmetic and comparisons run through the JIT    Test/main.cpp:8085
+```
+
+The evidence that they are pre-existing, not caused by the probes:
+
+| Run | Result |
+|---|---|
+| `~[tail]` -- probes **excluded** | pass / **2 failed** / pass |
+| full suite, `--rng-seed 12345` | **pass** / **pass** |
+
+* the failures occur with the new probes **excluded**;
+* they disappear with a fixed seed, so they are **order-dependent**, not test-specific;
+* the failing test differs run to run, and the assertion total differs too (21869 vs
+  21890), which is what a test aborting early looks like.
+
+Adding test cases changed Catch2's random order, which is enough to expose them. **The
+probes are not implicated.**
+
+### Recommendation, stated as a next step rather than done
+
+Pin the seed for CI runs (`--rng-seed <constant>`, or a default in the test main) so the
+suite is reproducible, and **then** bisect the stack-switching interaction with a known
+order. Until the seed is pinned, "the suite is green" is a statement about *one* order,
+and this campaign has already learned what a filtered green run is worth (section 18).
+
+### Correction to section 19
+
+Section 19 recorded "Suite 21891 assertions in 780 cases, green" at the moment of
+commit; the run it quoted was one of the passing orders. The honest statement is:
+**21891 assertions in 780 cases under a fixed seed; intermittent, pre-existing
+order-dependent failures otherwise.**
