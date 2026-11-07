@@ -2119,16 +2119,31 @@ void OpcodeDispatcher::emitCallIndirect(WASM::TypeIdx typeIndex, WASM::TableIdx 
 
 void OpcodeDispatcher::dispatchCall(WASM::FuncIdx arg)
 {
+	if (frameAbi_) {
+		// The frame form is emitted for functions, not yet for call sites: a call
+		// would hand register arguments to a callee that reads a frame. Refuse
+		// rather than miscompile (docs/backends/STAGING_CALL_ABI.md, step 3 note).
+		onUnhandledOpcode("call (a frame-form module with internal calls)");
+		return;
+	}
 	emitCall(arg, false);
 }
 
 void OpcodeDispatcher::dispatchCallIndirect(WASM::TypeIdx arg1, WASM::TableIdx arg2)
 {
+	if (frameAbi_) {
+		onUnhandledOpcode("call_indirect (a frame-form module with internal calls)");
+		return;
+	}
 	emitCallIndirect(arg1, arg2, false);
 }
 
 void OpcodeDispatcher::dispatchReturnCall(WASM::FuncIdx arg)
 {
+	if (frameAbi_) {
+		onUnhandledOpcode("return_call (a frame-form module with internal calls)");
+		return;
+	}
 	emitCall(arg, true);
 	if (!measureOnly_)
 		emitReturnValue();
@@ -2137,6 +2152,10 @@ void OpcodeDispatcher::dispatchReturnCall(WASM::FuncIdx arg)
 
 void OpcodeDispatcher::dispatchReturnCallIndirect(WASM::TypeIdx arg1, WASM::TableIdx arg2)
 {
+	if (frameAbi_) {
+		onUnhandledOpcode("return_call_indirect (a frame-form module with internal calls)");
+		return;
+	}
 	emitCallIndirect(arg1, arg2, true);
 	if (!measureOnly_)
 		emitReturnValue();

@@ -207,3 +207,25 @@ the editor tool block by block, which applied cleanly first time. The lesson is
 recorded in the post-mortem: multi-site patches are written with the editor, never
 through a heredoc. The header's Doxygen gate then caught the new constructor
 parameter lacking a `\param`, fixed in place.
+
+### Step 3, gap found immediately after: call sites are not frame-form yet
+
+Step 3 converts **callee signatures and prologues**. It does not convert the calls
+*inside* a compiled body: those still hand register arguments to what is now a
+frame-reading callee. The gate passed only because the three-vector fixture makes
+no calls, so the gap was invisible to it.
+
+That is a silent-miscompile class, so it is guarded now: in a frame-form module,
+`call`, `call_indirect`, `return_call` and `return_call_indirect` all report
+`onUnhandledOpcode`, which refuses the function with a diagnostic instead of
+emitting a mismatched call. Pinned by the existing suite (no behaviour change for
+register modules).
+
+**Consequence for the plan:** steps 4 and 5 are *larger* than step 3, not smaller.
+Each needs the six call sites (`LibjitOpcodeDispatcher.cpp` has 16 `callArgs`
+references) to build a frame, write the arguments into it, call, and read the
+results back -- plus the signature, prologue, epilogue and driver, exactly as
+SLJIT needed. The right shape is therefore one shared core helper that builds and
+reads a frame from the operand stack, used by every backend's call sites, and only
+then the two flips. The step-6 list ("harness + cache") should also be read to
+include **compiled-to-compiled calls**, which is where the real work is.
