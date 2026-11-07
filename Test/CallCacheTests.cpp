@@ -412,3 +412,24 @@ std::filesystem::path(WASM_TEST_DIR) / "staging_call.wasm");
 	std::memcpy(&result, frame + 48, sizeof(result));
 	CHECK(result == 6);
 }
+
+// The mandatory deliverable: the embedder keeps the typed grammar and never learns
+// that the backend needed a frame (docs/backends/EXPORT_SIGNATURE.md section 21).
+TEST_CASE("The call cache hides a backend frame behind the typed grammar",
+"[staging][callcache][abi]")
+{
+auto runtime = WASM::Runtime::create("sljit");
+REQUIRE(runtime != nullptr);
+auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "v128_multi.wasm");
+WASM::RegistryImportResolver imports;
+WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+// Six argument words: SLJIT is obliged to switch, and the cache must hide it.
+REQUIRE(instance.frameCallAbi());
+
+WASM::ModuleCallCache cache(instance);
+std::uint32_t lanes[3][4] = {{1, 1, 1, 1}, {2, 2, 2, 2}, {3, 3, 3, 3}};
+const std::int32_t sum = cache.call<std::int32_t>(
+"three_lanes", lanes[0], lanes[1], lanes[2]);
+CHECK(sum == 6);
+}

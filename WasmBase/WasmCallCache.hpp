@@ -47,6 +47,11 @@ struct ModuleFfiEntry {
 	//! argument slots at the canonical two-word convention (decision note §28).
 	std::vector<WASM::ValueTypeCode> paramKinds;
 	bool multiResult = false; //!< True when the ABI has a trailing result buffer.
+	//! Declared kind of the single result; `Void` when there is none. The frame
+	//! packer needs the *Wasm* kind to know the copy width, which an `ffi_type`
+	//! cannot express (docs/backends/EXPORT_SIGNATURE.md section 21).
+	WASM::ValueTypeCode resultKind = WASM::ValueTypeCode::Void;
+	std::size_t resultCount = 0; //!< Number of declared results.
 };
 
 //! A name-indexed ffi cache over one module instance's function exports.

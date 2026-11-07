@@ -690,3 +690,57 @@ complete enough that the next session's first action is an edit, not a reading.
 hands a *pointer* to 16 bytes, so the packer copies 16 bytes from `args[i]` into a
 16-byte slot, which is the canonical frame spelling. That is the one place where the
 canonical rule and the ffi spelling agree, and it is worth asserting in the test.
+
+## 22. The cache packer is implemented: the embedder never sees a frame
+
+Three edits, ~30 lines, **no backend change**:
+
+1. `ModuleFfiEntry` gained `resultKind` and `resultCount` -- an `ffi_type*` cannot
+   distinguish a 4-byte `i32` from a 4-byte `f32`, and the packer needs the *Wasm*
+   kind to know how much to copy (section 21's blocker 1);
+2. `ModuleCallCache`'s constructor records both from the canonical view;
+3. `ModuleCallCache::call` gained a frame branch that, when the instance says
+   `frameCallAbi()`, packs the arguments into a 512-byte aligned block, calls
+   `void(ctx, frame)`, and copies the result back out.
+
+**The two blockers from section 21 are both handled in the code**:
+
+* the **slot-versus-value width** trap -- a slot is 8 bytes, an `i32` argument points
+  at 4, so the packer copies the value's own width into an already-zeroed slot and
+  never a blind 8 bytes;
+* the **`v128`** case is correct by construction: the ffi boundary hands a pointer to
+  16 bytes, so the packer copies 16 bytes into a 16-byte slot, which is the
+  canonical frame spelling.
+
+### Proof
+
+```
+The call cache hides a backend frame behind the typed grammar
+[staging][callcache][abi]   ->  3 assertions, green
+```
+
+The test instantiates `v128_multi` on **SLJIT**, asserts `frameCallAbi()` is true (six
+argument words, so the backend is obliged to switch), then calls
+`cache.call<std::int32_t>("three_lanes", lanes[0], lanes[1], lanes[2])` -- the typed
+grammar -- and reads **6**.
+
+That is the mandatory requirement demonstrated end to end: **one spelling to call a
+compiled wasm function from C++, on any backend**, with the frame existing only
+inside the backend that needed it.
+
+### What this retires
+
+* Section 16's per-signature JIT adapter: **not needed**.
+* LibJIT step 4b: **already retired**, and now formally pointless -- its register
+  form is hidden by the same packer.
+* The ``"one marshalling path"`` goal for the **export** direction: **done** in code.
+
+### What is still missing
+
+* no test yet for a frame-mode instance on **AsmJIT** through the cache, which would
+  exercise the vector-result path end to end (the `v128` result is stored in the
+  frame by the backend and copied out by `widthOf(V128) == 16`);
+* `frame[512]` is a fixed local bound with no refusal above it -- a signature larger
+  than 512 bytes would overrun. It must either be sized from `frameBytes()` or
+  guarded by a refusal. **This is a real defect, not a note**, and it is the first
+  item of the next session.

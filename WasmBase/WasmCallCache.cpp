@@ -109,6 +109,9 @@ ModuleCallCache::ModuleCallCache(ModuleInstance& instance)
 		entry.callable = *callable;
 		entry.paramCount = view.funcParams().size();
 		entry.multiResult = view.funcResults().size() > 1u;
+		entry.resultCount = view.funcResults().size();
+		if (entry.resultCount == 1u)
+			entry.resultKind = view.funcResults().front().value.opcode;
 		entry.argTypes.reserve(1u + entry.paramCount
 				+ (entry.multiResult ? 1u : 0u));
 		entry.argTypes.push_back(&ffi_type_pointer); // VMContext*
@@ -180,6 +183,39 @@ void ModuleCallCache::call(const ModuleFfiEntry& entry, void* result,
 		throw std::runtime_error("module call cache: entry is not from this cache");
 	const auto index = static_cast<std::size_t>(found - entries_.begin());
 	ffi_cif* cif = static_cast<ffi_cif*>(cifs_[index]);
+	// Staging-frame ABI (docs/backends/EXPORT_SIGNATURE.md sections 17 and 21): the
+	// embedder keeps the typed grammar and this cache is the only place that knows
+	// the callee wanted a frame. No backend changes, no per-signature thunk.
+	if (instance_->frameCallAbi()) {
+		const auto widthOf = [](WASM::ValueTypeCode code) -> std::size_t {
+			switch (code) {
+			case WASM::ValueTypeCode::V128: return 16;
+			case WASM::ValueTypeCode::I32: return 4;
+			case WASM::ValueTypeCode::F32: return 4;
+			default: return 8;
+			}
+		};
+		alignas(16) std::uint8_t frame[512] = {};
+		std::size_t offset = 0;
+		for (std::size_t i = 0; i < entry.paramCount; ++i) {
+			const std::size_t width = widthOf(entry.paramKinds[i]);
+			// A frame slot is 8 bytes but an i32 argument points at 4, so the slot
+			// is zeroed first and only the value's own width is copied -- never a
+			// blind 8-byte copy, which would read past the caller's value.
+			std::memcpy(frame + offset, args[i], width);
+			offset += width == 16 ? 16 : 8;
+		}
+		const auto entryPoint = reinterpret_cast<void (*)(void*, void*)>(
+				entry.callable.fnPtr);
+		void* frameContext = entry.callable.context != nullptr
+				? static_cast<void*>(entry.callable.context)
+				: static_cast<void*>(instance_->context());
+		entryPoint(frameContext, frame);
+		if (result != nullptr && entry.resultCount == 1u)
+			std::memcpy(result, frame + offset, widthOf(entry.resultKind));
+		return;
+	}
+
 	std::vector<void*> arguments(entry.argTypes.size(), nullptr);
 	void* context = entry.callable.context != nullptr
 			? static_cast<void*>(entry.callable.context)
