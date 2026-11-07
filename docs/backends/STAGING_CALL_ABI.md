@@ -331,3 +331,63 @@ Details that mattered and are now in the code:
 * `call` and `call_indirect` lost their frame guards; **tail calls keep theirs**,
   since the trampoline does not carry a frame pointer yet -- that is the remaining
   refusal in the frame form, and it is honest.
+
+## 10. Policy update: cross-backend calls are technically legal, discouraged in production
+
+With the staging frame, the ABI is **identical on every backend** -- two C
+arguments and a byte-defined frame -- so the reason for the previous outright ban
+(per-backend spellings that could not agree) no longer exists. The ban is lifted
+**technically**: a call whose caller and callee are compiled by different backends
+is no longer ill-formed.
+
+It stays **discouraged in production**, and the note says why: the frame form is
+implemented per backend and each backend's parity is pinned only by its own tests,
+so a cross-backend call combines two independently-verified halves into one
+unverified whole. The recommendation stands until there is a dedicated
+cross-backend test suite, which is step 6's last gate.
+
+## 11. Step 4 (LibJIT) and step 5 (AsmJIT): implementation briefs
+
+Both are the same shape as step 3 plus step 3b. What differs is the emitter.
+
+### Shared structural decisions
+
+* **Mode threshold.** Frame mode when a signature needs more argument slots than
+the register form can carry. For LibJIT that is more than **5** slots after the
+context (the `r9` loss); for AsmJIT, more than `kArgumentSlotCeiling` = 4. The
+mode is module-wide, set once, and recorded with `setFrameCallAbi(true)`.
+* **Mode must be decided before type translation**, because the signature itself
+changes shape. In LibJIT that means the decision belongs beside
+`translateTypes`, not only in `compileFunctions`; in AsmJIT beside
+`translateTypes` too.
+
+### LibJIT sites
+
+| # | Site | Change |
+|---|---|---|
+| 1 | `LibJitTypeTranslation.cpp`, **`CoreTypeView` overload** (the live one) | frame mode: `void(VMContext*, void*)`, two parameters |
+| 2 | `LibjitModuleCompiler.cpp` `compileFunction` prologue | load each parameter from `frame + frameArgumentOffset`; a `v128` assembles through `address_of` as today, but from two frame words |
+| 3 | same, result path | store results at `frame + frameArgumentsBytes`; `jit_insn_return(nullptr)` |
+| 4 | `LibjitModuleCompiler.cpp` driver | forward `(ctx, frame)` -- the `paramSlots` walk disappears entirely in frame mode |
+| 5 | `LibjitOpcodeDispatcher.cpp`, **16 `callArgs` sites** | in frame mode build a frame in a fresh jit temp, store the arguments, call `(ctx, addr)`, load the results back |
+| 6 | tail calls / thunks | remain on the register form; guard them in frame mode as SLJIT does |
+
+### AsmJIT sites
+
+| # | Site | Change |
+|---|---|---|
+| 1 | `AsmjitTypeTranslator.cpp` `translateFunctionType` | frame mode: `(ctx, frame)` -> void |
+| 2 | `AsmjitModuleCompiler.cpp` prologue | parameters from the frame; the `v128` buffer already exists, so it becomes a 16-byte copy |
+| 3 | `emitCallResult` / return path | write results into the frame; `ret()` |
+| 4 | `setCallArguments` / `prepareCallArguments` | build the callee frame in a stack buffer and pass its address **as the second argument** -- this is the place the earlier `executeCall` attempt got wrong by setting an argument after the node existed |
+| 5 | `requireScalar` call sites | the `v128` refusals become irrelevant in frame mode |
+
+### Gates
+
+Same fixture shape for both: `staging_call.wasm` (export calls a three-vector
+callee) must return 6 through a frame, and `v128_multi.wasm` (no call) must return 6
+too. Passing both on a backend retires, for that backend, `D-L1` (LibJIT), the
+`v128`-result special case (AsmJIT) and every argument-count refusal.
+
+**Not implemented.** Steps 4 and 5 are each one step-3-plus-3b unit; the briefs
+above exist so they are executed, not explored.
