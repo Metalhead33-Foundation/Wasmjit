@@ -421,3 +421,34 @@ Threshold for LibJIT: frame mode when `1 + sum(argSlotCount(param))` exceeds
 
 **Not implemented.** Nine edits across three files plus a fixture, which is one
 focused unit; the brief above is what makes it mechanical.
+
+### Step 4a, first attempt: arguments cross, the result does not (reverted)
+
+Seven edits were written and **compiled**: the translator flag and setter, the frame
+signature branch, the module-wide mode decision in `translateTypes`, the
+prologue-from-frame, the driver's frame signature, its two-value forwarding, and
+the result store. The gate then measured this:
+
+```
+FRAME0=100000001 FRAME1=100000001   <- param 0, lanes 1,1,1,1   (intact)
+FRAME2=200000002 FRAME3=200000002   <- param 1, lanes 2,2,2,2   (intact)
+FRAME4=300000003 FRAME5=300000003   <- param 2, lanes 3,3,3,3   (intact)
+FRAME6=f6c65bd0                     <- result slot: a TRUNCATED POINTER, not 6
+```
+
+That is a genuinely useful failure. **The whole argument half of the ABI is
+proven**: the module switched modes, the signature took `(ctx, frame)`, the
+prologue read all three vectors out of the frame at 0/16/32, the driver forwarded
+the frame, and nothing overwrote a live argument. The defect is confined to the
+**return path** -- either the frame signature's return type is not the scalar it
+should be, or the driver's `store_relative` of `callRet` stores a pointer-typed
+value at `frame + 48`.
+
+The branch was reverted rather than left half-wired; the tree is green.
+
+**Next action is therefore a two-line unit test, not an investigation**: build a
+`LibJitTypeTranslator` with `setFrameCallAbi(true)`, translate a three-vector
+signature, and assert `jit_type_num_params(sig) == 2` and that the return type is
+the scalar (not `void_ptr`). If the signature is right, the bug is the single
+`store_relative` in the driver; if it is wrong, it is `translateCanonStorage` on
+a result. Either answer is one edit.
