@@ -229,3 +229,44 @@ SLJIT needed. The right shape is therefore one shared core helper that builds an
 reads a frame from the operand stack, used by every backend's call sites, and only
 then the two flips. The step-6 list ("harness + cache") should also be read to
 include **compiled-to-compiled calls**, which is where the real work is.
+
+### Step 3b -- compiled-to-compiled calls, implementation brief
+
+Read from `Sljit/SljitOpcodeDispatcher.cpp`:
+
+* `dispatchCall` / `dispatchCallIndirect` -> `emitCall` / `emitCallIndirect` ->
+  **`emitResolvedCall(calledType, callableReg)`**, which is the single place where
+  arguments are loaded and the indirect call is emitted. **One conversion point,
+  not six** -- provided `emitCallIndirect` also routes through it.
+* `emitCall` currently refuses a callee with more than three parameters
+  (**`kMaxWasmParameters`**, line 2037) and any `v128` parameter (line 2042) --
+  the same ceiling, restated for calls.
+* Arguments live in the operand stack as 16-byte slots (`stackSlotOffset(depth)`),
+  so packing them into a frame means copying each value from its slot to
+  `frame + frameArgumentOffset(argKinds, i)` (two words for a `v128`).
+
+**Where the frame lives.** In the caller's own stack frame, after the operand
+stack: a new member `maxCallFrameBytes_`, sized in the measure pass as the maximum
+of `frameBytes(calleeArgs, calleeResults)` over every call site, added to
+`frameSlots` at `sljit_emit_enter` time (rounded up to `kSlotBytes`). Its address
+comes from `sljit_get_local_base(compiler_, reg, callFrameOffset(), 0)` -- it must
+not be assumed to be `SLJIT_SP`, which points below the local area.
+
+**Sites, in order.**
+
+| # | Site | Change |
+|---|---|---|
+| 1 | measure pass | track `maxCallFrameBytes_`; add it to `frameSlots` |
+| 2 | `callFrameOffset()` | new helper, frame offset of the scratch area |
+| 3 | `emitCall` | in frame mode skip the three-parameter and `v128` refusals |
+| 4 | `emitResolvedCall` | frame mode: pack arguments from the operand stack into the scratch area, obtain its address with `sljit_get_local_base`, call `(ctx, frame)`, then copy results from `frame + argumentsBytes` into the operand slots |
+| 5 | `emitCallIndirect` | ensure it shares site 4 |
+| 6 | tail calls | stay refused in frame mode until the trampoline carries the frame pointer |
+
+**Gate.** A module with a wide signature *and* an internal call: one export calls
+`(v128, v128, v128) -> v128` and returns its lane sum. That fixture does not exist
+yet and is the first artefact this step should add.
+
+**Why this is the right unit.** It is one conversion point plus one scratch sizing
+rule. Once it lands, the LibJIT and AsmJIT flips become the same edit with a
+different emitter, because the frame construction is identical in kind.
