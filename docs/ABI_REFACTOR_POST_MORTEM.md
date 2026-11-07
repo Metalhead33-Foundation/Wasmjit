@@ -177,6 +177,62 @@ varying the numbers. Note that the backend itself compiles five-slot signatures
 with `saveds = 5`, which is why the two-vector pins pass while this probe does
 not.
 
+### What `function_check_arguments` actually says (read, not guessed)
+
+`extern/sljit/sljit_src/sljitLir.c:924`. The body hard-caps the argument list:
+
+```c
+while (arg_types != 0) {
+    if (word_arg_count + float_arg_count >= 4)
+        return 0;                       /* at most four arguments, period */
+    ...
+}
+return (saved_arg_count <= saveds && scratch_arg_end <= scratches
+        && float_arg_count <= fscratches);
+```
+
+So SLJIT's documented-by-code limit is **four arguments in total**, not a saved-register
+count. That matches the third-party note that prompted this reading (it said three; the
+code says four) and explains why sweeping saved-register counts never helped: the ceiling
+was never `saveds`.
+
+**But it contradicts our own passing pins.** `two_vectors` declares context + four words
+-- five arguments -- and compiles and runs correctly, and so does the `v128`-result pin
+with a trailing buffer. Both should trip the `>= 4` cap. Two readings are possible and
+they are separable in one build:
+
+1. `SLJIT_ARGUMENT_CHECKS` is compiled out in our SLJIT build and the abort our probe hit
+   came from a *different* check in the same macro block; or
+2. our `argTypes` really is four entries and the fifth slot is something else.
+
+Decisive probe: print `argTypes`, the scratch count and the saved count from
+`beginFunction` for a **working** `two_vectors` compile, and print the same for a failing
+probe configuration. One build, two lines of output, no guessing.
+
+### Calling convention: all three backends already use the host C ABI
+
+Asked and answered from the source, because it is the assumption the whole `v128` rule
+rests on:
+
+| Backend | What the generated function actually is |
+|---|---|
+| **LibJIT** | `jit_abi_cdecl` in every `jit_type_create_signature` |
+| **AsmJIT** | `asmjit::FuncSignature(asmjit::CallConvId::kCDecl)` everywhere |
+| **SLJIT** | `sljit_emit_enter(compiler_, 0, ...)` -- options `0` selects the platform's default C ABI |
+
+So yes: every compiled wasm function is a **standard host-C-ABI function**, callable from
+native C++ exactly as the harness and the tests do. That is precisely why the two-word
+spelling and a 16-byte aggregate are the same ABI on SysV, and why `callCallable`,
+libffi and `jit_apply` can all reach the same entry.
+
+**Therefore the four-argument cap is not an ABI limitation, it is an SLJIT API limitation**
+-- and it is the kind every real SLJIT user works around by passing **one pointer to a
+context struct** instead of many arguments (the pattern PCRE2's JIT uses). That maps
+directly onto the staging-area rule sketched in section 11.3 of the LibJIT defect note: a
+signature that needs more words than the API accepts carries them through memory,
+referenced by a single pointer. The ABI stays C; only the *shape* of the argument list
+changes.
+
 *The name is the warning.* SLJIT is the **Stack-less** Just-In-Time compiler: it
 does not own a stack of the kind that carries arguments, so a callee reaching its
 caller argument area is exactly what one must not assume. That is why this stays
