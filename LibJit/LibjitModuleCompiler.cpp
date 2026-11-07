@@ -268,6 +268,13 @@ void ModuleCompiler::translateTypes(WASM::ModuleInstance& instance, const WASM::
 	// changes shape.
 	{
 		const bool frame = WASM::frameCallAbiOptIn();
+		// A call inside a frame-mode body is step 4b, which is not implemented:
+		// the register form there would hand a callee expecting (ctx, frame) a set
+		// of typed arguments. Refused at module level, before any JIT context is
+		// built (docs/backends/STAGING_CALL_ABI.md section 12).
+		if (frame && (module.functionBodies.size() > 1 || !module.importFunctions.empty()))
+			throw std::runtime_error(
+					"LibJIT frame ABI: a call inside a frame-mode function is not implemented");
 		typeTranslator.setFrameCallAbi(frame);
 		instance.setFrameCallAbi(frame);
 	}

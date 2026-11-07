@@ -819,3 +819,54 @@ TEST_CASE("LibJIT takes a three-vector signature through an opted-in frame",
 	std::memcpy(&result, frame + 48, sizeof(result));
 	CHECK(result == 6);
 }
+
+// P0.1 probe: after a hook throws during instantiation, the runtime must still
+// work. Set WASMJIT_SAFETY_PROBES=1 to run it
+// (docs/backends/STAGING_CALL_ABI.md section 12).
+TEST_CASE("LibJIT instantiation failure leaves the runtime usable",
+"[safety][instantiate][libjit]")
+{
+if (std::getenv("WASMJIT_SAFETY_PROBES") == nullptr) {
+SUCCEED("safety probe: set WASMJIT_SAFETY_PROBES=1 to run it");
+return;
+}
+auto runtime = WASM::Runtime::create("libjit");
+REQUIRE(runtime != nullptr);
+auto bad = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "staging_call.wasm");
+auto good = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "v128_multi.wasm");
+WASM::RegistryImportResolver imports;
+
+// A frame-mode refusal makes a hook throw -- the cheapest way to test recovery.
+WASM::setFrameCallAbiOptIn(true);
+REQUIRE_THROWS(runtime->instantiate(*bad, imports));
+WASM::setFrameCallAbiOptIn(false);
+
+// The very next instantiation must succeed and behave normally.
+WASM::ModuleInstance& instance = runtime->instantiate(*good, imports);
+CHECK_FALSE(instance.frameCallAbi());
+const std::optional<WASM::Callable> callable =
+instance.exportedFunction("three_lanes");
+REQUIRE(callable.has_value());
+}
+
+// P0a gate: a call inside a frame-mode body must refuse at module level, before
+// any JIT context is built (docs/backends/STAGING_CALL_ABI.md section 12).
+TEST_CASE("LibJIT refuses a call inside a frame-mode function",
+"[staging][libjit][abi][call]")
+{
+auto runtime = WASM::Runtime::create("libjit");
+REQUIRE(runtime != nullptr);
+auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "staging_call.wasm");
+WASM::RegistryImportResolver imports;
+
+// The register form compiles this fixture; the frame form must refuse it.
+WASM::setFrameCallAbiOptIn(true);
+REQUIRE_THROWS(runtime->instantiate(*module, imports));
+WASM::setFrameCallAbiOptIn(false);
+
+WASM::ModuleInstance& registerForm = runtime->instantiate(*module, imports);
+CHECK_FALSE(registerForm.frameCallAbi());
+}

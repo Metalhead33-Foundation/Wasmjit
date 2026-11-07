@@ -554,3 +554,44 @@ Lifting the cross-backend *call* ban is **optional**. What is mandatory is
 compiled wasm from C++, on every backend**. That makes ABI uniformity -- not
 cross-backend mixing -- the thing this campaign is measured by, and it demotes the
 cross-backend test suite from a gate to a nice-to-have.
+
+## 13. P0a done: the module-level refusal, and a wrong theory corrected
+
+**Landed:**
+
+```cpp
+if (frame && (module.functionBodies.size() > 1 || !module.importFunctions.empty()))
+    throw std::runtime_error("LibJIT frame ABI: a call inside a frame-mode function is not implemented");
+```
+
+in `ModuleCompiler::translateTypes`, before any JIT context exists. Coarse on
+purpose: a module with one function and no imports cannot contain a call.
+
+**Two tests, and what they separate:**
+
+| Test | Tag | Purpose |
+|---|---|---|
+| refuses a call inside a frame-mode function | `[staging][libjit][abi][call]` | the frame form refuses; the register form still compiles the fixture |
+| instantiation failure leaves the runtime usable | `[safety][instantiate][libjit]`, `WASMJIT_SAFETY_PROBES=1` | a throw from a hook must not poison the runtime |
+
+### The theory that was wrong
+
+I claimed `Runtime::instantiate` was not exception-safe, because two earlier attempts
+both produced *two failures and a segfault in tests that never enable frame mode*.
+The probe **disproves it**: after a hook throws, the next instantiation succeeds and
+exports its function correctly.
+
+What actually happened: **the appended test had landed inside another test's body**.
+That produced a compile-time-valid but semantically broken test, whose failure and
+follow-on crash looked like corrupted state. The same class of mistake had already
+happened once -- in `AsmjitBackendTests.cpp`, inserted at line 20 through
+`insert_line` mid-function.
+
+**Rule (repeated, because it repeated):** a test that fails in a way that does not
+match its own assertion is a **test-file** defect until proven otherwise. Check where
+the test was inserted before hypothesising about the product.
+
+That mistake cost two reverts and a wrong architectural claim. The claim is now
+struck from the record, and section 12's reasoning -- "throwing mid-build corrupts a
+half-built context" -- stands only as *plausible for the dispatcher variant*, not as
+established fact.
