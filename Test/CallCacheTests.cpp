@@ -350,3 +350,25 @@ std::filesystem::path(WASM_TEST_DIR) / "v128_boundary_order.wasm");
 WASM::ModuleInstance& sljitInstance = sljit->instantiate(*sljitModule, imports);
 CHECK_FALSE(sljitInstance.v128ResultIsBuffered());
 }
+
+TEST_CASE("no backend uses the staging-frame ABI until it flips",
+"[abi][frame]")
+{
+	// The frame ABI is adopted one backend at a time, each behind its own pins
+	// (docs/backends/STAGING_CALL_ABI.md section 6). Until a backend flips, its
+	// register spelling stays in force, so every existing pin keeps meaning what it
+	// meant. This test is the tripwire: the day a backend flips, this expectation
+	// changes deliberately rather than by accident.
+	WASM::RegistryImportResolver imports;
+	// Only the backends that compile a `v128` signature today: AsmJIT still refuses
+	// `v128` parameters outright, which is its own recorded gap and not this test's
+	// subject.
+	for (const char* backend : {"libjit", "sljit"}) {
+		auto runtime = WASM::Runtime::create(backend);
+		REQUIRE(runtime != nullptr);
+		auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "v128_boundary_order.wasm");
+		WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+		CHECK_FALSE(instance.frameCallAbi());
+	}
+}

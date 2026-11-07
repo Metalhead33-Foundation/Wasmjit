@@ -519,6 +519,20 @@ public:
 	/** \brief Reports whether a `v128` result crosses through the caller's buffer. \return true when the caller supplies the 16-byte result buffer. */
 	bool v128ResultIsBuffered() const noexcept { return v128ResultIsBuffered_; }
 
+	//! Whether this module's compiled functions use the **staging-frame** call ABI
+	//! (`docs/backends/STAGING_CALL_ABI.md`): the C signature is
+	//! `void fn(VMContext*, void* frame)`, with every parameter and result in a
+	//! caller-allocated, 16-byte-aligned frame whose layout both sides derive from
+	//! the same `FuncType`. Default `false`: the per-backend register spellings
+	//! stay in force until a backend flips, one at a time, each behind its own
+	//! pins.
+	bool frameCallAbi_ = false;
+
+	/** \brief Records whether this module's functions use the staging-frame call ABI. \param enabled true when they do. */
+	void setFrameCallAbi(bool enabled) noexcept { frameCallAbi_ = enabled; }
+	/** \brief Reports whether this module's functions use the staging-frame call ABI. \return true when `fn(VMContext*, void* frame)` applies. */
+	bool frameCallAbi() const noexcept { return frameCallAbi_; }
+
 	//! Objects whose count reached zero are only *queued*; `gcCollect()` does
 	//! the actual recycling. Call it only at a safepoint where no Wasm frame is
 	//! live and the embedder holds no un-counted references — then any queued

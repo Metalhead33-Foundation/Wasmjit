@@ -116,3 +116,35 @@ identical on SysV, MS x64, AAPCS64, RISC-V and MIPS.
   the frame form rather than deleted.
 * A cross-backend call test, un-skipped, once the policy can be lifted.
 
+## 9. Migration log (after-action report)
+
+**Step 1 -- core arithmetic. Done 2026-11-06.**
+`frameValueBytes`, `frameArgumentsBytes`, `frameResultsBytes`,
+`frameArgumentOffset`, `frameResultOffset`, `frameBytes` in
+`WasmBackendAbi.hpp`, all derived from `argSlotCount` so the frame layout and the
+register layout cannot disagree. Pinned by `[abi][frame]` with 14 assertions,
+including the case that motivates the whole note: three vector parameters are
+**48 argument bytes and two C arguments**.
+
+*What went wrong:* the header-doc gate rejects a plain `//` banner in a `.hpp` --
+every header comment must be Doxygen (`//!`). Caught on the first build, fixed in
+place. Worth knowing before a larger diff.
+
+**Step 2 -- the capability and the core primitive. Done 2026-11-06.**
+`ModuleInstance::frameCallAbi()` (default `false`, with a setter) records whether
+a module's functions use the frame form -- the same shape as the existing
+`v128ParameterIsAggregate` / `v128ResultIsBuffered` facts, deliberately *not* a
+new virtual on the backend seam, which is a frozen surface. `callCallableFrame()`
+in `WasmValue.hpp` invokes `void fn(VMContext*, void* frame)` and reuses
+`callCallable`, so the trap check is the existing one.
+
+Pinned by `[abi][frame]`'s tripwire: no backend reports `frameCallAbi()` today, so
+every register-form pin keeps meaning what it meant. The day a backend flips,
+that expectation changes **deliberately** rather than by accident.
+
+*What went wrong:* the helper was first inserted above `callCallable`'s definition
+and did not compile; it now sits after it. And the tripwire initially looped over
+AsmJIT, which refuses `v128` parameters outright -- an unrelated recorded gap --
+so it covers the two backends that compile a vector signature today.
+
+

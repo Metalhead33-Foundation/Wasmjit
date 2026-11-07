@@ -199,6 +199,7 @@ std::array<std::uint32_t, 4> callCallableVector(const Callable& callable, Args&&
 	return result;
 }
 
+
 //! Address of the current execution state's tail-call state. Generated code
 //! calls this helper; it is the only supported way for a backend to reach the
 //! state, because a context's address is not portable across host threads.
@@ -257,6 +258,30 @@ void callCallableWithResults(const Callable& callable, void* results, Args&&... 
 		fn(callable.context, std::forward<Args>(args)..., results);
 	}
 	checkTrap();
+}
+
+//! Invokes a callable through the **staging-frame** call ABI.
+//!
+//! Under that ABI (`docs/backends/STAGING_CALL_ABI.md`) a compiled function is
+//! `void fn(VMContext*, void* frame)` and every parameter and result lives in the
+//! caller's frame, whose layout both sides derive from the same `FuncType` via
+//! `frameArgumentsBytes` / `frameArgumentOffset` / `frameResultOffset`. The point
+//! of the form is that the argument list is always **two** C arguments, so no
+//! target's argument-register budget or aggregate classification can constrain a
+//! signature.
+//!
+//! The caller owns the frame: it must be 16-byte aligned and at least
+//! `frameBytes(argumentKinds, resultKinds)` long, with the arguments already
+//! written at their offsets. Results appear in the frame's result block when the
+//! call returns. The trap check is the one `callCallable` performs.
+//!
+//! \param callable Callable descriptor to invoke; it must have been compiled with
+//!                 the frame ABI (`ModuleInstance::frameCallAbi()`).
+//! \param frame Caller-allocated, 16-byte-aligned argument-and-result frame.
+//! \throws WASM::Trap when the call reports a pending trap at the host boundary.
+inline void callCallableFrame(const Callable& callable, void* frame)
+{
+	callCallable<void>(callable, frame);
 }
 
 }
