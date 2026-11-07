@@ -452,3 +452,33 @@ signature, and assert `jit_type_num_params(sig) == 2` and that the return type i
 the scalar (not `void_ptr`). If the signature is right, the bug is the single
 `store_relative` in the driver; if it is wrong, it is `translateCanonStorage` on
 a result. Either answer is one edit.
+
+### Step 4a, second attempt: the frame path works; the switch is policy (off)
+
+Three defects were found and fixed by measurement, in this order:
+
+1. **The wrong overload.** `translateTypes` uses
+   `translateFunctionSignature(const WASM::FuncType&)`, *not* the `CoreTypeView`
+   one -- measured by a signature-shape test that reported a 16-byte second
+   parameter where 8 was required. Both overloads now spell the frame form.
+2. **A `v128` local is written through its address.** `jit_insn_store_relative`
+   on the aggregate *value* segfaults; `jit_insn_address_of` first, then store.
+   Found by calling `rawFnPtr` directly, which is the only way to separate the
+   prologue's fault from the driver's.
+3. **Automatic switching is wrong for LibJIT.** A `v128` is one 16-byte
+   aggregate here, so three vectors cross the register form intact
+   (`ctx` + 3 arguments). Switching every wide-vector module wholesale produced
+   **ten suite failures and a crash**: modules that worked stopped working.
+
+After (1) and (2), the frame path itself was **verified end to end**: a direct
+call to `rawFnPtr` with a hand-built frame returned **6**, and so did the
+`callCallableFrame` path through the driver. What is *not* enabled is the
+automatic switch -- `frame` stays `false` by policy, with both the reason and the
+measurement in the code, and two tests pin it: the frame signature is
+`(ctx, frame) -> scalar`, and a wide vector module stays on the register form.
+
+**What this changes about the plan.** LibJIT has no local argument ceiling to
+lift, so its motive for the frame form is *cross-backend parity*, not capacity.
+That makes "when does a module switch" a step-6 policy question -- per module,
+per call site, or only for embedder-facing entries -- rather than a threshold.
+The frame machinery is in place and measured; the policy is what remains.

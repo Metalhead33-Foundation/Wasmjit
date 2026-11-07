@@ -48,6 +48,9 @@ private:
 	std::unordered_map<WASM::TypeId, jit_type_t> canonicalCache;
 	//! Mapping from this module's LocalTypeIdx values to canonical TypeIds.
 	std::vector<WASM::TypeId> localTypeIds;
+	//! Whether function signatures take the staging frame
+	//! (docs/backends/STAGING_CALL_ABI.md, step 4a).
+	bool frameAbi_ = false;
 	/*!
 	 * \brief Creates the LibJIT type used for an i31 reference.
 	 * \return The LibJIT type handle representing i31.
@@ -58,6 +61,16 @@ public:
 	 * \brief Constructs a translator and initializes its primitive type handles.
 	 */
 	LibJitTypeTranslator();
+	/*!
+	 * \brief Selects the staging-frame call ABI for function signatures.
+	 * \param enabled Whether signatures take a frame pointer instead of typed parameters.
+	 */
+	void setFrameCallAbi(bool enabled) { frameAbi_ = enabled; }
+	/*!
+	 * \brief Reports whether the staging-frame call ABI is selected.
+	 * \return The current mode.
+	 */
+	bool frameCallAbi() const { return frameAbi_; }
 	/*!
 	 * \brief Clears module-local translation state.
 	 *

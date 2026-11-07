@@ -7,6 +7,8 @@
 #include <catch2/catch_all.hpp>
 
 #include <cstdint>
+#include <cstring>
+#include <filesystem>
 #include <span>
 #include <vector>
 
@@ -16,6 +18,8 @@
 #include "TestStore.hpp"
 #include "LibJit/LibJitTypeTranslation.hpp"
 #include "WasmBase/WasmGcHeader.hpp"
+#include "WasmBase/WasmRegistryImportResolver.hpp"
+#include "WasmBase/WasmRuntime.hpp"
 #include "WasmBase/WasmModule.hpp"
 #include "WasmBase/WasmStore.hpp"
 #include "WasmBase/WasmType.hpp"
@@ -729,4 +733,55 @@ REQUIRE(signature != nullptr);
 // VMContext* plus one aggregate per vector: four parameters, not seven.
 CHECK(jit_type_num_params(signature) == 4u);
 CHECK(jit_type_get_size(jit_type_get_param(signature, 1)) == 16u);
+}
+
+
+// Step 4a diagnostic: the frame signature's shape in isolation, so the return
+// path defect is located by measurement rather than by inspection
+// (docs/backends/STAGING_CALL_ABI.md, "Step 4a, first attempt").
+TEST_CASE("LibJIT spells a frame signature as (ctx, frame) -> scalar",
+		"[staging][libjit][abi][frame]")
+{
+	WASM::StorageType vector;
+	vector.isPacked = false;
+	vector.val.opcode = WASM::ValueTypeCode::V128;
+	vector.val.heapType = -1;
+
+	WASM::StorageType scalar;
+	scalar.isPacked = false;
+	scalar.val.opcode = WASM::ValueTypeCode::I32;
+	scalar.val.heapType = -1;
+
+	WASM::FuncType type;
+	type.params.assign(3, vector);
+	type.results.push_back(scalar);
+
+	LibJIT::LibJitTypeTranslator translator;
+	translator.setFrameCallAbi(true);
+	jit_type_t signature = translator.translateFunctionSignature(type);
+	REQUIRE(signature != nullptr);
+	// Two words: the context and the frame pointer.
+	CHECK(jit_type_num_params(signature) == 2u);
+	CHECK(jit_type_get_size(jit_type_get_param(signature, 0)) == sizeof(void*));
+	CHECK(jit_type_get_size(jit_type_get_param(signature, 1)) == sizeof(void*));
+	// The scalar result crosses in a register, not in a pointer slot.
+	const jit_type_t ret = jit_type_get_return(signature);
+	CHECK(jit_type_get_size(ret) == 4u);
+	CHECK(ret != jit_type_void_ptr);
+}
+
+TEST_CASE("LibJIT keeps a wide vector signature on the register form",
+		"[staging][libjit][abi][frame]")
+{
+	// Step 4a's measurement, pinned: because a `v128` is one 16-byte aggregate
+	// here, three vectors cross the register form intact, so the module must
+	// NOT switch. Switching is a policy decision for step 6
+	// (docs/backends/STAGING_CALL_ABI.md).
+	auto runtime = WASM::Runtime::create("libjit");
+	REQUIRE(runtime != nullptr);
+	auto module = runtime->loadFile(
+			std::filesystem::path(WASM_TEST_DIR) / "v128_multi.wasm");
+	WASM::RegistryImportResolver imports;
+	WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+	CHECK_FALSE(instance.frameCallAbi());
 }
