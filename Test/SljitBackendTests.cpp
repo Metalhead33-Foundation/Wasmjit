@@ -1050,19 +1050,16 @@ TEST_CASE("asmjit and sljit agree on the shared memory64 module",
 	});
 }
 
-TEST_CASE("sljit: bulk memory on a memory64 is refused per function",
+TEST_CASE("sljit: bulk memory on a memory64 refuses the whole module",
 		"[sljit][m64][refusal]")
 {
 	auto session = Sljit::createSession();
 	REQUIRE(session != nullptr);
 	WASM::RegistryImportResolver imports;
-	LoadedModule loaded = loadAndInstantiateTestModule("memory64_bulk", imports, *session);
-	REQUIRE(loaded.instance != nullptr);
-	// The module still instantiates; only the one unsupported function has no
-	// entry point, which is SLJIT's refusal granularity.
-	const std::optional<WASM::Callable> copy = loaded.instance->exportedFunction("copy");
-	REQUIRE(copy.has_value());
-	CHECK(copy->fnPtr == nullptr);
+	// No partial modules: one function the backend cannot compile aborts the module.
+	// Before this, the module instantiated with an uncallable export
+	// (docs/backends/PRODUCTION_GAPS.md section 15).
+	REQUIRE_THROWS(loadAndInstantiateTestModule("memory64_bulk", imports, *session));
 }
 
 
@@ -2970,18 +2967,16 @@ CHECK(second == 9);
 // 2b: an unsupported function must say WHY. A narrow two-result module keeps the
 // register form, which has nowhere to put the second result
 // (docs/backends/PRODUCTION_GAPS.md section 3).
-TEST_CASE("SLJIT reports why an export could not be compiled",
+TEST_CASE("SLJIT refuses a module whose function it cannot compile",
 "[staging][sljit][abi][reason]")
 {
-auto runtime = WASM::Runtime::create("sljit");
-REQUIRE(runtime != nullptr);
-auto module = runtime->loadFile(
-std::filesystem::path(WASM_TEST_DIR) / "asmjit_multi_result.wasm");
-WASM::RegistryImportResolver imports;
-WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
-CHECK_FALSE(instance.frameCallAbi());
-
-const std::optional<std::string> reason = instance.unsupportedReason("pair");
-REQUIRE(reason.has_value());
-CHECK(reason->find("multiple results") != std::string::npos);
+	auto runtime = WASM::Runtime::create("sljit");
+	REQUIRE(runtime != nullptr);
+	auto module = runtime->loadFile(
+			std::filesystem::path(WASM_TEST_DIR) / "asmjit_multi_result.wasm");
+	WASM::RegistryImportResolver imports;
+	// No partial modules: a shape the register form cannot deliver aborts the whole
+	// module with a reason, rather than yielding one with an uncallable export
+	// (docs/backends/PRODUCTION_GAPS.md section 15).
+	REQUIRE_THROWS(runtime->instantiate(*module, imports));
 }

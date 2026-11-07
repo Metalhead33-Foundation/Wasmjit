@@ -118,14 +118,13 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM
 				frameMode);
 		void* entry = nullptr;
 		if (!dispatcher.compile(entry)) {
-			// The function stays uncallable; the core refuses it at the call
-			// boundary. Never install a partially emitted body. The reason is
-			// published so an embedder can ask why rather than infer it from a null
-			// entry (docs/backends/EXPORT_SIGNATURE.md section 43).
-			unsupportedFunctions_.push_back(dispatcher.unsupportedReason());
-			instance.setFunctionUnsupported(static_cast<std::uint32_t>(i),
-					dispatcher.unsupportedReason());
-			continue;
+			// No partial modules: an instantiable module must have every function
+			// callable, or an exported function could be one that cannot be called.
+			// The first failure aborts the module with its reason
+			// (docs/backends/PRODUCTION_GAPS.md section 15).
+			throw std::runtime_error("the SLJIT backend could not compile function "
+					+ std::to_string(functionIndex) + ": "
+					+ dispatcher.unsupportedReason());
 		}
 		internals.internalCallables[i].fnPtr = entry;
 		// No trampoline driver wraps this entry, so the raw pointer and the

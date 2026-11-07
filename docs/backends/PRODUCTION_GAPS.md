@@ -441,3 +441,49 @@ The first is a two-line fixture change and keeps the option open; the second is
 honest if nobody wants per-process control. **Neither is urgent** -- the reported
 defect (a per-signature property decided by a global switch) is already fixed by
 option 1.
+
+## 15. Ruling: no partial modules, on any backend
+
+> **A "partial module" is garbage and useless**, because it has functions that cannot
+> be called -- and it is strongly implied that if a function is exported, it is going
+> to be called.
+
+All three backends now fail the **module**:
+
+| Backend | Before | Now |
+|---|---|---|
+| **SLJIT** | recorded the reason, left `fnPtr` null, module instantiated | **throws**, naming the function and the reason |
+| **AsmJIT** | threw | threw (unchanged, ruled earlier) |
+| **LibJIT** | threw | threw (unchanged) |
+
+The SLJIT change is one branch:
+
+```cpp
+if (!dispatcher.compile(entry))
+    throw std::runtime_error("the SLJIT backend could not compile function "
+            + std::to_string(functionIndex) + ": " + dispatcher.unsupportedReason());
+```
+
+### Two tests encoded the old policy, and both were rewritten
+
+| Test | Old expectation | New expectation |
+|---|---|---|
+| "sljit: bulk memory on a memory64 is refused per function" | module instantiates; `copy->fnPtr == nullptr` | the module **throws** -- renamed to "refuses the whole module" |
+| my `[staging][sljit][abi][reason]` | reason recorded on a live instance | the instantiation **throws** |
+
+Both tests were *correct* under the old policy, which is why they are the right place to
+look for policy drift: a behaviour change shows up as a small number of tests encoding
+the previous rule.
+
+### What becomes vestigial, and what does not
+
+`ModuleInstance::unsupportedReason(name)` (EXPORT_SIGNATURE §43) no longer has a
+producer: no backend instantiates a module with an uncallable function, so there is
+never a live instance to ask. It stays for now -- removing it would touch a header and
+its test for no behavioural gain -- but it is **documented here as unused**, so the next
+reader does not assume it carries meaning.
+
+**The reason text did not go to waste**: it is now part of the exception message, which
+is strictly better than a query an embedder has to know to make.
+
+Suite 21863 assertions in 777 cases, green.
