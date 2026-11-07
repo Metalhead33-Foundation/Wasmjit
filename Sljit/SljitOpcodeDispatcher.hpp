@@ -710,6 +710,19 @@ private:
 	 */
 	void emitTailCallState(WASM::FuncIdx arg, const WASM::FuncType& type);
 	/*!
+	 * \brief Lowers a cross-function `return_call_indirect` to a pending dispatch.
+	 *
+	 * The table slot is resolved and type-checked, then its `tailEntry` decides:
+	 * a callable with a thunk writes `TailCallState` and returns; a foreign one
+	 * falls back to the semantic call plus return.
+	 *
+	 * \param typeIndex Declared callee type.
+	 * \param tableIndex Table index.
+	 */
+	void emitTailCallIndirectState(WASM::TypeIdx typeIndex, WASM::TableIdx tableIndex);
+	//! Emits the typed zero return a pending tail call leaves behind.
+	void emitTailCallDummyReturn();
+	/*!
 	 * \brief Emits the trap epilogue, finalises the code and returns its entry.
 	 * \param entry Receives the executable entry point.
 	 * \return true when SLJIT produced code.

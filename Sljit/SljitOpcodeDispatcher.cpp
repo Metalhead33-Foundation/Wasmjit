@@ -2881,21 +2881,109 @@ void OpcodeDispatcher::emitTailCallState(WASM::FuncIdx arg, const WASM::FuncType
 		}
 		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_MEM1(SLJIT_R0),
 				static_cast<sljit_sw>(offsetof(WASM::TailCallState, pending)), SLJIT_IMM, 1));
-		if (resultKinds_.size() > 1 || resultWidth_ == 0) {
-			emit(sljit_emit_return_void(compiler_));
-		} else if (isFloatKind(resultKind_)) {
-			// The driver ignores the dummy result; it exists only for the ABI.
-			emit(resultWidth_ == 4
-					? sljit_emit_fset32(compiler_, SLJIT_FR0, 0.0f)
-					: sljit_emit_fset64(compiler_, SLJIT_FR0, 0.0));
-			emit(sljit_emit_return(compiler_, resultWidth_ == 4 ? SLJIT_MOV_F32 : SLJIT_MOV_F64,
-					SLJIT_FR0, 0));
-		} else {
-			emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R1, 0, SLJIT_IMM, 0));
-			emit(sljit_emit_return(compiler_, resultWidth_ == 4 ? SLJIT_MOV32 : SLJIT_MOV,
-					SLJIT_R1, 0));
-		}
+		emitTailCallDummyReturn();
 	}
+
+	stackWidths_.resize(base);
+	markUnreachable();
+}
+
+void OpcodeDispatcher::emitTailCallDummyReturn()
+{
+	if (resultKinds_.size() > 1 || resultWidth_ == 0) {
+		emit(sljit_emit_return_void(compiler_));
+	} else if (isFloatKind(resultKind_)) {
+		// The driver ignores the dummy result; it exists only for the ABI.
+		emit(resultWidth_ == 4
+				? sljit_emit_fset32(compiler_, SLJIT_FR0, 0.0f)
+				: sljit_emit_fset64(compiler_, SLJIT_FR0, 0.0));
+		emit(sljit_emit_return(compiler_, resultWidth_ == 4 ? SLJIT_MOV_F32 : SLJIT_MOV_F64,
+				SLJIT_FR0, 0));
+	} else {
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R1, 0, SLJIT_IMM, 0));
+		emit(sljit_emit_return(compiler_, resultWidth_ == 4 ? SLJIT_MOV32 : SLJIT_MOV,
+				SLJIT_R1, 0));
+	}
+}
+
+void OpcodeDispatcher::emitTailCallIndirectState(WASM::TypeIdx typeIndex, WASM::TableIdx tableIndex)
+{
+	require(reachable_, "a return_call_indirect appears in unreachable code");
+	requireTableIndex(tableIndex);
+	require(static_cast<std::uint32_t>(typeIndex) < module_.typeCount(),
+			"the return_call_indirect type index is out of range");
+	const WASM::FuncType calledType = module_.funcTypeAt(typeIndex);
+	require(calledType.results.size() <= 1,
+			"the SLJIT backend cannot tail-call a multi-result function");
+	for (const WASM::StorageType& parameter : calledType.params)
+		require(widthOf(parameter.val) != 0, "the SLJIT backend only calls i32/i64 signatures");
+	for (const WASM::StorageType& result : calledType.results)
+		require(widthOf(result.val) != 0, "the SLJIT backend only calls i32/i64 signatures");
+	requireStack(calledType.params.size() + 1);
+	require(stackWidths_.back() == 4, "the return_call_indirect selector must be an i32");
+	const std::size_t selectorDepth = stackWidths_.size() - 1;
+	const std::size_t base = selectorDepth - calledType.params.size();
+
+	if (measureOnly_) {
+		stackWidths_.resize(base);
+		markUnreachable();
+		return;
+	}
+
+	pop();
+	loadContext(SLJIT_R0);
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R1, 0, SLJIT_IMM,
+			static_cast<sljit_sw>(tableIndex)));
+	loadSlot(SLJIT_R2, selectorDepth, 4);
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R3, 0, SLJIT_IMM,
+			static_cast<sljit_sw>(module_.typeId(WASM::LocalTypeIdx{ typeIndex }).value)));
+	emitHelper(SLJIT_ARGS4(P, P, 32, 32, 32), &sljitResolveIndirectCallable);
+	sljit_jump* resolved = sljit_emit_cmp(compiler_, SLJIT_NOT_EQUAL,
+			SLJIT_R0, 0, SLJIT_IMM, 0);
+	if (resolved == nullptr)
+		ok_ = false;
+	emitTrapBranch();
+	sljit_label* continueLabel = sljit_emit_label(compiler_);
+	if (continueLabel == nullptr)
+		ok_ = false;
+	else if (resolved != nullptr)
+		sljit_set_label(resolved, continueLabel);
+
+	// A callable without a thunk (an embedder-registered foreign funcref) takes
+	// the semantic call + return path below.
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R1, 0, SLJIT_MEM1(SLJIT_R0),
+			static_cast<sljit_sw>(offsetof(WASM::Callable, tailEntry))));
+	sljit_jump* fallback = sljit_emit_cmp(compiler_, SLJIT_EQUAL,
+			SLJIT_R1, 0, SLJIT_IMM, 0);
+	if (fallback == nullptr)
+		ok_ = false;
+
+	// Reach the state helper without losing the callable: it lives in the
+	// reserved scratch slot until the helper returns.
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+			scratchSlotOffset(), SLJIT_R0, 0));
+	emitHelper(SLJIT_ARGS0(P), &WASM::currentTailCallState);
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R1, 0, SLJIT_MEM1(SLJIT_SP),
+			scratchSlotOffset()));
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_R0),
+			static_cast<sljit_sw>(offsetof(WASM::TailCallState, target)), SLJIT_R1, 0));
+	for (std::size_t i = 0; i < calledType.params.size(); ++i) {
+		loadSlot(SLJIT_R1, base + i, widthOf(calledType.params[i].val));
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_R0),
+				static_cast<sljit_sw>(offsetof(WASM::TailCallState, args)
+						+ i * WASM::kTailCallSlotBytes), SLJIT_R1, 0));
+	}
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_MEM1(SLJIT_R0),
+			static_cast<sljit_sw>(offsetof(WASM::TailCallState, pending)), SLJIT_IMM, 1));
+	emitTailCallDummyReturn();
+
+	sljit_label* fallbackLabel = sljit_emit_label(compiler_);
+	if (fallbackLabel == nullptr)
+		ok_ = false;
+	else if (fallback != nullptr)
+		sljit_set_label(fallback, fallbackLabel);
+	emitResolvedCall(calledType, SLJIT_R0);
+	emitReturnValue();
 
 	stackWidths_.resize(base);
 	markUnreachable();
@@ -2903,6 +2991,15 @@ void OpcodeDispatcher::emitTailCallState(WASM::FuncIdx arg, const WASM::FuncType
 
 void OpcodeDispatcher::dispatchReturnCallIndirect(WASM::TypeIdx arg1, WASM::TableIdx arg2)
 {
+	if (tailTrampoline_) {
+		require(static_cast<std::uint32_t>(arg1) < module_.typeCount(),
+				"the return_call_indirect type index is out of range");
+		const WASM::FuncType calledType = module_.funcTypeAt(arg1);
+		if (WASM::tailCallSlotsSupported(calledType)) {
+			emitTailCallIndirectState(arg1, arg2);
+			return;
+		}
+	}
 	// A frame-form tail call is a call plus a frame-mode return: the callee
 	// writes its result into the staging frame and `emitReturnValue` moves it
 	// into the caller's result block. This is not a true trampoline (the host

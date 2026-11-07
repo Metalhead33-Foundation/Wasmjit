@@ -1721,6 +1721,7 @@ protected:
 					asmjit::Imm(reinterpret_cast<uint64_t>(target))),
 					"AsmJit tail-call target materialisation failed");
 			emitTailCallState(targetRegister, tailArgs);
+			emitUnreachablePlaceholders();
 			return;
 		}
 		if (frameMode) {
@@ -1769,6 +1770,22 @@ protected:
 			return;
 		}
 		validateTailCallType(typeIndex);
+		if (!frameMode && module.hasTailCalls()
+				&& WASM::tailCallSlotsSupported(calledType)) {
+			const ResolvedIndirect resolved = resolveIndirectTarget(typeIndex, tableIndex);
+			auto thunk = compiler.new_gp_ptr("tailThunk");
+			checkError(compiler.mov(thunk, asmjit::x86::ptr(resolved.callable,
+					static_cast<int32_t>(offsetof(WASM::Callable, tailEntry)))),
+					"AsmJit tail-call thunk load failed");
+			auto fallback = compiler.new_label();
+			checkError(compiler.test(thunk, thunk), "AsmJit tail-call thunk test failed");
+			checkError(compiler.jz(fallback), "AsmJit tail-call fallback branch failed");
+			emitTailCallState(resolved.callable, resolved.arguments);
+			checkError(compiler.bind(fallback), "AsmJit tail-call fallback label binding failed");
+			emitIndirectInvocation(resolved, calledType, typeIndex);
+			dispatchReturn();
+			return;
+		}
 		dispatchCallIndirect(typeIndex, tableIndex);
 		dispatchReturn();
 	}
@@ -1786,7 +1803,15 @@ protected:
 			requireI32(result.val, "tail-call results");
 	}
 
-	void dispatchCallIndirect(WASM::TypeIdx typeIndex, WASM::TableIdx tableIndex) override
+	struct ResolvedIndirect {
+		asmjit::x86::Gp callable;
+		std::vector<asmjit::x86::Gp> arguments;
+	};
+
+	//! Validates an indirect call and resolves its table slot to a Callable.
+	//! The parameters are the declared callee type and the table index; the
+	//! result is the callable plus its already-popped arguments.
+	ResolvedIndirect resolveIndirectTarget(WASM::TypeIdx typeIndex, WASM::TableIdx tableIndex)
 	{
 		if (tableIndex >= module.importTables.size() + module.tables.size())
 			throw std::runtime_error("AsmJit call_indirect references an unknown table");
@@ -1832,13 +1857,20 @@ protected:
 		auto callable = compiler.new_gp_ptr("indirectCallable");
 		resolver->set_ret(0, callable);
 		emitPendingTrapReturn();
+		return {callable, std::move(arguments)};
+	}
 
+	//! Emits the context selection and the indirect invocation itself.
+	//! \param resolved Resolved callable and arguments. \param calledType Declared signature.
+	void emitIndirectInvocation(const ResolvedIndirect& resolved, const WASM::FuncType& calledType,
+			uint32_t typeIndex)
+	{
 		auto target = compiler.new_gp_ptr("indirectFunction");
-		checkError(compiler.mov(target, asmjit::x86::ptr(callable,
+		checkError(compiler.mov(target, asmjit::x86::ptr(resolved.callable,
 				static_cast<int32_t>(offsetof(WASM::Callable, fnPtr)))),
 				"AsmJit indirect function pointer load failed");
 		auto calleeContext = compiler.new_gp_ptr("indirectContext");
-		checkError(compiler.mov(calleeContext, asmjit::x86::ptr(callable,
+		checkError(compiler.mov(calleeContext, asmjit::x86::ptr(resolved.callable,
 				static_cast<int32_t>(offsetof(WASM::Callable, context)))),
 				"AsmJit indirect VMContext load failed");
 		auto callerContext = compiler.new_label();
@@ -1847,7 +1879,7 @@ protected:
 		checkError(compiler.mov(calleeContext, vmContext), "AsmJit native indirect context selection failed");
 		checkError(compiler.bind(callerContext), "AsmJit indirect context label binding failed");
 
-		auto preparedArguments = prepareCallArguments(calledType, arguments);
+		auto preparedArguments = prepareCallArguments(calledType, resolved.arguments);
 		asmjit::InvokeNode* invoke = nullptr;
 		checkError(compiler.invoke(asmjit::Out(invoke), target, *signatures[typeIndex]),
 				"AsmJit indirect function invocation emission failed");
@@ -1856,6 +1888,13 @@ protected:
 		emitCallResult(invoke, calledType, "indirectCallResult");
 		emitPendingTrapReturn();
 		emitPendingExceptionCheck();
+	}
+
+	void dispatchCallIndirect(WASM::TypeIdx typeIndex, WASM::TableIdx tableIndex) override
+	{
+		const WASM::FuncType calledType = module.funcTypeAt(typeIndex);
+		const ResolvedIndirect resolved = resolveIndirectTarget(typeIndex, tableIndex);
+		emitIndirectInvocation(resolved, calledType, typeIndex);
 	}
 
 	void dispatchCall(WASM::FuncIdx index) override
@@ -2116,7 +2155,6 @@ protected:
 				static_cast<int32_t>(offsetof(WASM::TailCallState, pending)), 4),
 				asmjit::Imm(1)), "AsmJit tail-call pending store failed");
 		emitZeroReturn();
-		emitUnreachablePlaceholders();
 	}
 
 	void emitFrameReturnValue(const asmjit::x86::Gp& value)

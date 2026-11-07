@@ -8,8 +8,8 @@ section 18 (the latest re-run).
 
 ## 1. Where the tree is
 
-**Snapshot (2026-11-07, this working tree):** `--rng-seed 12345` -> **22201
-assertions, 799 cases, green**. Gates: `[headerdoc]`, `[docs]`, `doxygen` 0
+**Snapshot (2026-11-07, this working tree):** `--rng-seed 12345` -> **22210
+assertions, 800 cases, green**. Gates: `[headerdoc]`, `[docs]`, `doxygen` 0
 warnings, `abi-check` OK.
 
 The frame ABI work is done on all three backends. Exceptions (including
@@ -43,13 +43,14 @@ field as 4 bytes. The load and the slot width now follow the field type.
 | direct self-recursive `return_call` in constant stack | OK | OK | OK | `TAILSELF` 1,000,000 links, `run()=0` |
 | structured block/loop/if parameters | OK | OK | OK | `BLOCKPARAM` block=42 if=11/12 loop=0 |
 | direct cross-function `return_call` (mutual) | OK | OK | OK | `TAILMUTUAL` 1,000,000 links, `run()=1` |
+| indirect cross-function `return_call_indirect` | OK | OK | OK | `TAILINDIRECT` 1,000,000 links, `run()=1` |
 | bulk memory on memory64 | OK | OK | OK | `MEM64BULK` copy=97 fill=65 init=97 |
 
 ### Remaining (honest refusals)
 
 | Gap | Backends | Reason |
 |---|---|---|
-| indirect/ref and frame-form tail-call trampolines | SLJIT, AsmJIT | direct self and mutual chains are real loops; indirect/ref targets and the frame ABI still call + return |
+| ref and frame-form tail-call trampolines | SLJIT, AsmJIT | self, direct and indirect mutual chains loop; ref is not lowered and frame-form chains still call + return |
 | shared-everything atomics on **reference** slots and **tables** | SLJIT, AsmJIT | numeric slots are done; a reference slot needs the GC barrier, and table get/set is itself unimplemented on these backends |
 | LibJIT frame-mode calls / imports / multi-result | LibJIT | **policy**: the frame form is opt-in and partial on purpose |
 

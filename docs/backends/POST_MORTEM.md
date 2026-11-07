@@ -8,7 +8,7 @@ actually happened, the root cause of every surprise, and what is still open.
 
 | # | Item | Status | Evidence / blocker |
 |---|---|---|---|
-| 1 | constant-stack tail calls | **partial** | direct self-recursion is a loop, and direct mutual recursion goes through the libffi driver (`TAILMUTUAL` 1,000,000 links, `run()=1`) on all three; indirect/ref and frame-form chains still call + return |
+| 1 | constant-stack tail calls | **partial** | direct self, direct mutual and indirect mutual chains go through the libffi driver (`TAILMUTUAL`/`TAILINDIRECT` 1,000,000 links, `run()=1`) on all three; ref and frame-form chains still call + return |
 | 2 | shared reference/table atomics | **blocked** | numeric family done; shared-ref fixtures need shared composites, and table atomics need `table.get`/`table.set`; SLJIT's four-argument ceiling needs a record for `cmpxchg` |
 | 3 | AsmJIT block parameters | **done** | `BLOCKPARAM` block=42 if=11/12 loop=0 on all three |
 | 4 | bulk memory on memory64 | **done** | `MEM64BULK` copy=97 fill=65 init=97 on all three |
@@ -192,13 +192,41 @@ guest stack guard on `run`.
    **pre-existing** bug, not introduced by the trampoline; `even(0)` is its
    minimal reproducer.
 
+### Indirect targets (same session)
+
+`return_call_indirect` now takes the same pending path. The backend resolves the
+table slot to a `Callable*` (the existing bounds/type/null checks are reused),
+loads its `tailEntry`, and branches:
+
+* non-null -> write `TailCallState` and return;
+* null (an embedder-registered foreign funcref) -> the semantic call + return.
+
+AsmJIT's resolver and invocation were split into `resolveIndirectTarget` and
+`emitIndirectInvocation`, so the fallback calls the already-resolved target
+instead of resolving the table twice. SLJIT saves the resolved callable in the
+frame's scratch slot before calling `currentTailCallState`, because that helper
+clobbers R0-R3; the fallback branch still finds the callable in R0.
+
+Evidence (`tailcall_indirect_probe.wat`, even/odd through a two-entry funcref
+table, 1,000,000 links):
+
+```
+TAILINDIRECT libjit: run()=1
+TAILINDIRECT asmjit: run()=1
+TAILINDIRECT sljit: run()=1
+```
+
+A first AsmJIT draft referenced a non-existent `typeIndexFor(calledType)` in the
+new invocation helper; the declared type index is now passed explicitly. A
+scripted edit also turned a `//! \return` in a `.cpp` comment into a carriage
+return, splitting the line (`eturn ...`); a plain prose comment avoids the
+escape.
+
 ### What is still open
 
-* `return_call_indirect` and `return_call_ref` still use call + return. The core
-  driver already supports any target with a `tailEntry`; the missing work is the
-  runtime `tailEntry != null` branch and the pending write in each backend.
-  SLJIT does not lower `call_ref` at all, so only the indirect form is reachable
-  there today.
+* `return_call_ref` is not lowered by SLJIT or AsmJIT at all (neither has a
+  `call_ref` lowering), so there is no backend path to extend yet. When one is
+  added, the runtime `tailEntry` check above is the pattern.
 * Cross-function chains in **frame form** (a module with a `v128` or more than
   three parameters) still use call + return. The driver needs a frame pointer (or
   a packed frame) in `TailCallState`.
