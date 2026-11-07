@@ -321,3 +321,41 @@ should be scheduled deliberately. **Neither was flipped today**, because choosin
 would invalidate the 31-fixture migration that follows.
 
 Suite 21866 assertions in 777 cases, green; nothing changed.
+
+## 12. Option 1 attempted: 3 lines, and exactly two tests block it
+
+The flip was written -- `moduleNeedsFrame(module, optIn)` at the signature loop, the
+constructor local and the member -- and the whole change is **three lines**. Measured
+result: **777 cases, 775 passed, 3 assertions failed in 2 cases**, not the 31-fixture
+migration the plan feared.
+
+Both failures are *informative*, and only one of them is a pin:
+
+| Test | What happened |
+|---|---|
+| `[asmjit][abi][v128][gap]` | my own gap pin, asserting that a `v128` parameter is **refused**. It is no longer refused -- the frame form handles it. The pin did exactly what it was for. |
+| "AsmJit rolls back code allocations when a later function is unsupported" | a **safety** test. Its fixture (`asmjit_i32_unsupported`) is now *supported*, so nothing throws and the allocation checkpoint is 1 instead of 0. |
+
+The first is a one-line conversion to a positive test. The second is **not**: it guards
+rollback of code allocations when instantiation fails, and the only way to keep that
+guard is a fixture that is *still* unsupported. Deleting or weakening it to make the
+flip pass would trade a safety property for a default.
+
+### Status: helper landed, wiring reverted, tree green
+
+* `TypeTranslator::signatureNeedsFrame(type)` and
+  `TypeTranslator::moduleNeedsFrame(module, optIn)` are **committed and testable**;
+* the three call sites still read the opt-in only, so behaviour is unchanged;
+* suite back to 21866 assertions in 777 cases.
+
+### What the flip needs before it can land
+
+1. convert `[asmjit][abi][v128][gap]` to its positive form (assert `frameCallAbi()` is
+   true and the export calls correctly) -- one test, mechanical;
+2. **a new fixture whose function is genuinely unsupported on AsmJIT in frame mode** --
+   the rollback guard depends on it. Candidates: an unsupported opcode, or a value type
+   the body lowering still rejects. This is a *design* question: what is still
+   impossible on AsmJIT once the frame form is available?
+
+That second item is the real content of option 1's step 2, and it is smaller and
+sharper than "31 fixtures": **one fixture, one test, three lines.**

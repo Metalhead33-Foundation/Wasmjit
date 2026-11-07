@@ -2,6 +2,7 @@
 
 #include <stdexcept>
 #include <string>
+#include "../WasmBase/WasmModule.hpp"
 
 namespace AsmJitBackend {
 
@@ -161,6 +162,20 @@ bool TypeTranslator::signatureNeedsFrame(const WASM::FuncType& function)
 			&& function.results.front().val.opcode == WASM::ValueTypeCode::V128)
 		return true; // a vector result needs the caller buffer today
 	return entries > 4;
+}
+
+
+bool TypeTranslator::moduleNeedsFrame(const WASM::Module& module, bool optIn)
+{
+	if (optIn)
+		return true;
+	for (uint32_t ti = 0; ti < module.typeCount(); ++ti) {
+		if (module.typeView(ti).kind() != WASM::CanonTypeKind::Func)
+			continue;
+		if (signatureNeedsFrame(module.funcTypeAt(ti)))
+			return true;
+	}
+	return false;
 }
 
 } // namespace AsmJitBackend
