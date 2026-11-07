@@ -306,3 +306,37 @@ TEST_CASE("a v128 parameter occupies two C argument slots", "[v128][abi][layout]
 	// No parameters is not an error: the context pointer is still argument 0.
 	CHECK(WASM::mapArgSlots({}).empty());
 }
+
+TEST_CASE("the staging frame layout is defined by bytes, not registers",
+"[abi][frame]")
+{
+	// docs/backends/STAGING_CALL_ABI.md: a compiled function is
+	// void fn(VMContext*, void* frame), and both sides derive every offset from the
+	// same FuncType. These numbers are the contract.
+	using WASM::ValueKind;
+
+	CHECK(WASM::frameValueBytes(ValueKind::I32) == 8u);
+	CHECK(WASM::frameValueBytes(ValueKind::I64) == 8u);
+	CHECK(WASM::frameValueBytes(ValueKind::V128) == 16u);
+
+	const ValueKind mixed[] = {ValueKind::I32, ValueKind::V128, ValueKind::I64};
+	CHECK(WASM::frameArgumentsBytes(mixed) == 32u);
+	CHECK(WASM::frameArgumentOffset(mixed, 0) == 0u);
+	CHECK(WASM::frameArgumentOffset(mixed, 1) == 8u);
+	CHECK(WASM::frameArgumentOffset(mixed, 2) == 24u);
+	// Out of range reads as zero rather than indexing past the block.
+	CHECK(WASM::frameArgumentOffset(mixed, 3) == 0u);
+
+	// The result block starts after the argument block.
+	const ValueKind results[] = {ValueKind::V128, ValueKind::I32};
+	CHECK(WASM::frameResultOffset(mixed, results, 0) == 32u);
+	CHECK(WASM::frameResultOffset(mixed, results, 1) == 48u);
+	CHECK(WASM::frameResultOffset(mixed, results, 2) == 0u);
+	CHECK(WASM::frameBytes(mixed, results) == 56u);
+
+	// A three-vector signature -- the shape SLJIT cannot even declare today -- is
+	// just three 16-byte blocks in a frame: 48 argument bytes and two C arguments.
+	const ValueKind threeVectors[] = {ValueKind::V128, ValueKind::V128, ValueKind::V128};
+	CHECK(WASM::frameArgumentsBytes(threeVectors) == 48u);
+	CHECK(WASM::frameArgumentOffset(threeVectors, 2) == 32u);
+}

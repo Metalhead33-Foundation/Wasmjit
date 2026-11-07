@@ -235,6 +235,89 @@ inline std::vector<ArgSlot> mapArgSlots(std::span<const ValueKind> kinds)
 	return slots;
 }
 
+//! Staging-frame arithmetic (`docs/backends/STAGING_CALL_ABI.md`).
+//! In the frame form a compiled function is `void fn(VMContext*, void* frame)` and
+//! every parameter and result lives in bytes. Both sides derive the offsets from
+//! the same FuncType, which is what makes the form canonical: it is defined by
+//! bytes, not by registers, so no target's argument classification can change it.
+
+/** \brief Bytes one value kind occupies in a staging frame.
+\param kind The value kind.
+\return 16 for `v128`, 8 for every other kind.
+A value is stored at its natural width rounded up to 8, and a vector's 16 bytes are
+exactly what `argSlotCount` already counts as two words.
+*/
+inline constexpr std::uint32_t frameValueBytes(ValueKind kind) noexcept
+{
+	return argSlotCount(kind) * 8u;
+}
+
+/** \brief Total bytes the parameter list occupies in a staging frame.
+\param kinds The parameter kinds, in declaration order.
+\return The byte size of the argument block.
+*/
+inline std::uint32_t frameArgumentsBytes(std::span<const ValueKind> kinds) noexcept
+{
+	std::uint32_t bytes = 0;
+	for (const ValueKind kind : kinds)
+		bytes += frameValueBytes(kind);
+	return bytes;
+}
+
+/** \brief Total bytes a result tuple occupies in a staging frame.
+\param kinds The result kinds, in declaration order.
+\return The byte size of the result block.
+*/
+inline std::uint32_t frameResultsBytes(std::span<const ValueKind> kinds) noexcept
+{
+	return frameArgumentsBytes(kinds);
+}
+
+/** \brief Byte offset of one parameter inside the argument block.
+\param kinds The parameter kinds, in declaration order.
+\param parameter Zero-based index of the parameter.
+\return The offset from the start of the frame, or 0 when `parameter` is out of range.
+*/
+inline std::uint32_t frameArgumentOffset(std::span<const ValueKind> kinds,
+		std::uint32_t parameter) noexcept
+{
+	if (parameter >= kinds.size())
+		return 0;
+	std::uint32_t offset = 0;
+	for (std::uint32_t i = 0; i < parameter; ++i)
+		offset += frameValueBytes(kinds[i]);
+	return offset;
+}
+
+/** \brief Byte offset of one result inside the result block, which follows the arguments.
+\param argumentKinds The parameter kinds, in declaration order.
+\param resultKinds The result kinds, in declaration order.
+\param result Zero-based index of the result.
+\return The offset from the start of the frame, or 0 when `result` is out of range.
+*/
+inline std::uint32_t frameResultOffset(std::span<const ValueKind> argumentKinds,
+		std::span<const ValueKind> resultKinds, std::uint32_t result) noexcept
+{
+	if (result >= resultKinds.size())
+		return 0;
+	std::uint32_t offset = frameArgumentsBytes(argumentKinds);
+	for (std::uint32_t i = 0; i < result; ++i)
+		offset += frameValueBytes(resultKinds[i]);
+	return offset;
+}
+
+/** \brief Total bytes a call frame needs: the argument block then the result block.
+\param argumentKinds The parameter kinds, in declaration order.
+\param resultKinds The result kinds, in declaration order.
+\return The byte size the caller must allocate, 16-byte aligned by the caller.
+*/
+inline std::uint32_t frameBytes(std::span<const ValueKind> argumentKinds,
+		std::span<const ValueKind> resultKinds) noexcept
+{
+	return frameArgumentsBytes(argumentKinds) + frameResultsBytes(resultKinds);
+}
+
+
 } // namespace WASM
 
 WASMJIT_VISIBLE_END
