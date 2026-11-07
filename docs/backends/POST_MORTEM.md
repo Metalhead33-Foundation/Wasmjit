@@ -4,6 +4,22 @@ This note is the mandatory record of the "what remains" work, item by item, in
 the order of `HANDOFF.md` section 7. Each section records what was intended, what
 actually happened, the root cause of every surprise, and what is still open.
 
+## Status at the end of this pass
+
+| # | Item | Status | Evidence / blocker |
+|---|---|---|---|
+| 1 | constant-stack tail calls | **partial** | direct self-recursion is a loop on all three (`TAILSELF` 1,000,000 links, `run()=0`); mutual/indirect chains still call + return |
+| 2 | shared reference/table atomics | **blocked** | numeric family done; shared-ref fixtures need shared composites, and table atomics need `table.get`/`table.set`; SLJIT's four-argument ceiling needs a record for `cmpxchg` |
+| 3 | AsmJIT block parameters | **done** | `BLOCKPARAM` block=42 if=11/12 loop=0 on all three |
+| 4 | bulk memory on memory64 | **done** | `MEM64BULK` copy=97 fill=65 init=97 on all three |
+
+Suite at the last commit: **22184 assertions in 798 cases** under
+`--rng-seed 12345`, green; `[headerdoc]`, `[docs]` and `doxygen` are warning-free.
+
+The two open rows are the honest remainder. Item 1 is a cross-function driver/thunk
+problem, not a local lowering; item 2 is blocked on a prerequisite (table accessors) and
+on a fixture shape the pinned tool accepts.
+
 ## Item 1 — constant-stack tail calls
 
 ### Intended
