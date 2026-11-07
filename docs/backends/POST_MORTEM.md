@@ -502,6 +502,35 @@ which is exactly why two backends agreeing is not a spec check.
   for a rollback test; move the probe to a genuinely excluded shape (`v128`
   parameter) when the feature lands.
 
+## Remaining-gap pass — frame-form indirect tail calls
+
+### Intended
+
+A `return_call_indirect` in a frame-form module must take the driver/thunk path,
+not call + return.
+
+### What we did
+
+* SLJIT removed the `!frameAbi_` guard: `tailCallFrameSupported` selects the
+  pending path, and `emitTailCallIndirectState` emits a void dummy return in
+  frame mode. The existing `emitResolvedCall` frame fallback is reused.
+* AsmJIT's `emitIndirectInvocation` gained the frame staging branch (pack the
+  argument block, invoke `(ctx, frame)`, read every result). The frame
+  `return_call_indirect` branch now resolves the callable, checks `tailEntry`,
+  writes `TailCallState` and uses the frame invocation only as the foreign-target
+  fallback.
+
+### Evidence
+
+`tailcall_indirect_frame_probe.wat`, four parameters, even/odd through a funcref
+table, 1,000,000 links:
+
+```
+TAILINDIRECTFRAME libjit: run()=1
+TAILINDIRECTFRAME asmjit: run()=1
+TAILINDIRECTFRAME sljit: run()=1
+```
+
 ## Remaining-gap pass — multi-result reference calls
 
 ### Intended

@@ -1788,14 +1788,24 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 			for (std::size_t i = 0; i < resultCount; ++i)
 				if (calledType.results[i].val.opcode != resultTypes[i])
 					throw std::runtime_error("AsmJit frame tail-call result type differs from the caller");
-			dispatchCallIndirect(typeIndex, tableIndex);
-			if (resultCount == 0) {
-				checkError(compiler.ret(), "AsmJit frame tail-call void return failed");
+			if (WASM::tailCallTrampolinesEligible(module, true)
+					&& WASM::tailCallFrameSupported(calledType)) {
+				const ResolvedIndirect resolved = resolveIndirectTarget(typeIndex, tableIndex);
+				auto thunk = compiler.new_gp_ptr("tailThunk");
+				checkError(compiler.mov(thunk, asmjit::x86::ptr(resolved.callable,
+						static_cast<int32_t>(offsetof(WASM::Callable, tailEntry)))),
+						"AsmJit frame tail-call thunk load failed");
+				auto fallback = compiler.new_label();
+				checkError(compiler.test(thunk, thunk), "AsmJit frame tail-call thunk test failed");
+				checkError(compiler.jz(fallback), "AsmJit frame tail-call fallback branch failed");
+				emitTailCallState(resolved.callable, resolved.arguments, calledType);
+				checkError(compiler.bind(fallback), "AsmJit frame tail-call fallback label failed");
+				emitIndirectInvocation(resolved, calledType, typeIndex);
+				dispatchReturn();
 				return;
 			}
-			if (resultCount > 1)
-				throw std::runtime_error("AsmJit frame tail calls with multiple results are not implemented");
-			emitFrameReturnValue(values.back());
+			dispatchCallIndirect(typeIndex, tableIndex);
+			dispatchReturn();
 			return;
 		}
 		validateTailCallType(typeIndex);
@@ -1907,6 +1917,67 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 		checkError(compiler.jnz(callerContext), "AsmJit indirect context branch failed");
 		checkError(compiler.mov(calleeContext, vmContext), "AsmJit native indirect context selection failed");
 		checkError(compiler.bind(callerContext), "AsmJit indirect context label binding failed");
+		if (frameMode) {
+			uint32_t argBytes = 0;
+			for (const WASM::StorageType& parameter : calledType.params)
+				argBytes += parameter.val.opcode == WASM::ValueTypeCode::V128 ? 16u : 8u;
+			asmjit::x86::Mem frameStorage = compiler.new_stack(argBytes + 16, 16, "indirectFrame");
+			asmjit::x86::Gp frameAddress = compiler.new_gp_ptr("indirectFrame");
+			checkError(compiler.lea(frameAddress, frameStorage),
+					"AsmJit indirect frame address failed");
+			uint32_t offset = 0;
+			for (std::size_t i = 0; i < resolved.arguments.size(); ++i) {
+				if (calledType.params[i].val.opcode == WASM::ValueTypeCode::V128) {
+					for (int word = 0; word < 2; ++word) {
+						auto bits = compiler.new_gp64("indirectFrameWord");
+						checkError(compiler.mov(bits,
+								asmjit::x86::qword_ptr(resolved.arguments[i], word * 8)),
+								"AsmJit indirect frame vector load failed");
+						checkError(compiler.mov(
+								asmjit::x86::qword_ptr(frameAddress, offset + word * 8), bits),
+								"AsmJit indirect frame vector store failed");
+					}
+					offset += 16;
+					continue;
+				}
+				checkError(compiler.mov(
+						asmjit::x86::Mem(frameAddress, offset, resolved.arguments[i].size()),
+						resolved.arguments[i]), "AsmJit indirect frame store failed");
+				offset += 8;
+			}
+			asmjit::InvokeNode* invoke = nullptr;
+			checkError(compiler.invoke(asmjit::Out(invoke), target, *signatures[typeIndex]),
+					"AsmJit indirect frame invocation failed");
+			invoke->set_arg(0, calleeContext);
+			invoke->set_arg(1, frameAddress);
+			uint32_t resultOffset = offset;
+			for (const WASM::StorageType& resultType : calledType.results) {
+				if (resultType.val.opcode == WASM::ValueTypeCode::V128) {
+					auto buffer = newVectorBuffer("indirectVectorResult");
+					for (int word = 0; word < 2; ++word) {
+						auto bits = compiler.new_gp64("indirectResultWord");
+						checkError(compiler.mov(bits,
+								asmjit::x86::qword_ptr(frameAddress, resultOffset + word * 8)),
+								"AsmJit indirect frame vector result load failed");
+						checkError(compiler.mov(
+								asmjit::x86::qword_ptr(buffer, word * 8), bits),
+								"AsmJit indirect frame vector result store failed");
+					}
+					values.push_back(buffer);
+					resultOffset += 16;
+				} else {
+					auto result = newIntegerRegister(compiler, resultType.val, "indirectResult");
+					checkError(compiler.mov(result,
+							asmjit::x86::Mem(frameAddress, resultOffset, result.size())),
+							"AsmJit indirect frame result load failed");
+					values.push_back(result);
+					resultOffset += 8;
+				}
+			}
+			emitPendingTrapReturn();
+			emitPendingExceptionCheck();
+			return;
+		}
 
 		auto preparedArguments = prepareCallArguments(calledType, resolved.arguments);
 		asmjit::InvokeNode* invoke = nullptr;

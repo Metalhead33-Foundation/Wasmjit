@@ -3031,7 +3031,10 @@ void OpcodeDispatcher::emitTailCallIndirectState(WASM::TypeIdx typeIndex, WASM::
 	}
 	emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_MEM1(SLJIT_R0),
 			static_cast<sljit_sw>(offsetof(WASM::TailCallState, pending)), SLJIT_IMM, 1));
-	emitTailCallDummyReturn();
+	if (frameAbi_)
+		emit(sljit_emit_return_void(compiler_));
+	else
+		emitTailCallDummyReturn();
 
 	sljit_label* fallbackLabel = sljit_emit_label(compiler_);
 	if (fallbackLabel == nullptr)
@@ -3177,11 +3180,14 @@ void OpcodeDispatcher::dispatchReturnCallRef(WASM::TypeIdx typeIndex)
 
 void OpcodeDispatcher::dispatchReturnCallIndirect(WASM::TypeIdx arg1, WASM::TableIdx arg2)
 {
-	if (tailTrampoline_ && !frameAbi_) {
+	if (tailTrampoline_) {
 		require(static_cast<std::uint32_t>(arg1) < module_.typeCount(),
 				"the return_call_indirect type index is out of range");
 		const WASM::FuncType calledType = module_.funcTypeAt(arg1);
-		if (WASM::tailCallSlotsSupported(calledType)) {
+		const bool supported = frameAbi_
+				? WASM::tailCallFrameSupported(calledType)
+				: WASM::tailCallSlotsSupported(calledType);
+		if (supported) {
 			emitTailCallIndirectState(arg1, arg2);
 			return;
 		}

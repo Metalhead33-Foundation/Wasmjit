@@ -1998,3 +1998,42 @@ CHECK(false);
 }
 }
 }
+
+// Frame-form indirect tail calls: the driver loop carries the staging frame.
+TEST_CASE("tail calls: frame-form indirect mutual recursion is constant-stack",
+"[staging][abi][tail][indirect][frame]")
+{
+for (const char* backend : {"libjit", "asmjit", "sljit"}) {
+std::fprintf(stderr, "TAILINDIRECTFRAME %s: ", backend);
+auto runtime = WASM::Runtime::create(backend);
+REQUIRE(runtime != nullptr);
+auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "tailcall_indirect_frame_probe.wasm");
+WASM::RegistryImportResolver imports;
+WASM::ModuleInstance* instance = nullptr;
+try {
+instance = &runtime->instantiate(*module, imports);
+} catch (const std::exception& error) {
+std::fprintf(stderr, "REFUSED: %s\n", error.what());
+CHECK(false);
+continue;
+}
+const auto run = instance->exportedFunction("run");
+REQUIRE(run.has_value());
+try {
+std::int32_t value = 0;
+if (instance->frameCallAbi()) {
+alignas(16) std::uint8_t frame[16] = {};
+WASM::callCallableFrame(*run, frame);
+std::memcpy(&value, frame, sizeof(value));
+} else {
+value = WASM::callCallable<std::int32_t>(*run);
+}
+std::fprintf(stderr, "run()=%d\n", (int)value);
+CHECK(value == 1);
+} catch (const std::exception& error) {
+std::fprintf(stderr, "FAILED: %s\n", error.what());
+CHECK(false);
+}
+}
+}
