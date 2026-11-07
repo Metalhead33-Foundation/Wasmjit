@@ -1051,16 +1051,16 @@ TEST_CASE("asmjit and sljit agree on the shared memory64 module",
 	});
 }
 
-TEST_CASE("sljit: bulk memory on a memory64 refuses the whole module",
-		"[sljit][m64][refusal]")
+TEST_CASE("sljit: bulk memory on a memory64 executes", "[sljit][m64][bulk]")
 {
 	auto session = Sljit::createSession();
 	REQUIRE(session != nullptr);
 	WASM::RegistryImportResolver imports;
-	// No partial modules: one function the backend cannot compile aborts the module.
-	// Before this, the module instantiated with an uncallable export
-	// (docs/backends/PRODUCTION_GAPS.md section 15).
-	REQUIRE_THROWS(loadAndInstantiateTestModule("memory64_bulk", imports, *session));
+	LoadedModule loaded = loadAndInstantiateTestModule("memory64_bulk", imports, *session);
+	REQUIRE(loaded.instance != nullptr);
+	auto copy = loaded.instance->exportedFunction("copy");
+	REQUIRE(copy.has_value());
+	CHECK_NOTHROW(WASM::callCallable<void>(*copy, INT64_C(0), INT64_C(0), INT64_C(0)));
 }
 
 

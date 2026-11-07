@@ -584,17 +584,17 @@ TEST_CASE("AsmJit compiles the shared memory64 module", "[asmjit][module][m64]")
 }
 
 
-TEST_CASE("AsmJit refuses bulk memory on a memory64 transactionally",
-		"[asmjit][m64][refusal]")
+TEST_CASE("AsmJit executes bulk memory on a memory64", "[asmjit][m64][bulk]")
 {
 	WASM::Module module = loadTestModule("memory64_bulk");
 	WASM::RegistryImportResolver imports;
 	AsmJitBackend::Context context;
 	AsmJitBackend::ModuleCompiler compiler(context);
 
-	// AsmJit's long-standing model is a transactional module refusal: the
-	// unsupported body aborts instantiation and its allocations are returned.
-	CHECK_THROWS(compiler.instantiate(module, imports));
-	CHECK(context.allocationCheckpoint() == 0);
+	auto instance = compiler.instantiate(module, imports);
+	REQUIRE(instance != nullptr);
+	auto copy = instance->exportedFunction("copy");
+	REQUIRE(copy.has_value());
+	CHECK_NOTHROW(WASM::callCallable<void>(*copy, INT64_C(0), INT64_C(0), INT64_C(0)));
 }
 

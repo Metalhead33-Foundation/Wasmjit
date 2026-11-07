@@ -543,7 +543,7 @@ strings. The rule for every row: a backend either does the thing or refuses the
 | `funcref` / GC refs / structs / arrays | **unprobed** | **unprobed** | **unprobed** | — |
 | tail calls in frame mode | ⛔ refuses | **unprobed** | **unprobed** | — |
 | atomics / threads | **unprobed** | **unprobed** | **unprobed** | — |
-| memory64 | partial (bulk-memory refuses) | **unprobed** | **unprobed** | `[m64]` |
+| memory64 | ✅ (bulk incl.) | ✅ (bulk incl.) | ✅ (bulk incl.) | `[m64]` |
 
 ### Correction this matrix forced
 
@@ -693,7 +693,7 @@ row below is reproducible.
 | **tail calls, FRAME form** | ⛔ refused | unprobed | unprobed | next probe |
 | GC refs, structs, arrays | unprobed | unprobed | unprobed | — |
 | atomics / threads | unprobed | unprobed | unprobed | — |
-| memory64 | partial (bulk refuses) | unprobed | unprobed | `[m64]` |
+| memory64 | ✅ (bulk incl.) | ✅ (bulk incl.) | ✅ (bulk incl.) | `[m64]` |
 
 ### How to read the symbols
 
@@ -768,7 +768,6 @@ is *record, document, keep probing*.
 | R-1 | `throw` | ⛔ | ⛔ | (D-1) | *opcode dispatch is not implemented: dispatchThrow* |
 | R-2 | atomics (`i32.atomic.rmw.add`) | ⛔ | ⛔ | ✅ | *does not lower dispatchI32AtomicRmwAdd* |
 | R-3 | tail call from a frame-form function | ⛔ | ⛔ | n/a | *supports only i32 tail-call parameters* (AsmJIT) |
-| R-4 | bulk memory on memory64 | ⛔ | ⛔ | ✅ | *does not lower bulk memory on memory64 YET* |
 | R-5 | calls inside a frame-mode body | ✅ works | ✅ works | ⛔ | *a call inside a frame-mode function is not implemented* |
 | R-6 | imports in a frame-mode module | n/a | ⛔ | ⛔ | *calls into imports are not implemented* |
 | R-7 | multi-result in frame mode | ✅ works | ✅ works | ⛔ | *multiple results are not implemented* |
@@ -930,9 +929,8 @@ staging-frame ABI is honoured end to end.
 | Gap | SLJIT | AsmJIT | LibJIT | Reason |
 |---|---|---|---|---|
 | `catch_ref` / `catch_all_ref`; a catch payload wider than one value | n/a (supported) | ⛔ | n/a (supported) | a structured block on AsmJIT carries at most one result |
-| shared-everything atomics (global/table/struct/array) | ⛔ | ⛔ | ✅ | the memory family is done; the reference-slot barrier is LibJIT-only |
-| constant-stack tail calls | ⛔ | ⛔ | ✅ | no frame-carrying trampoline on the two register-machine backends |
-| bulk memory on memory64 | ⛔ | ⛔ | ✅ | message says "yet" |
+| shared-everything atomics on reference/table slots | ⛔ | ⛔ | ✅ | numeric global/struct/array slots are done; shared refs need shared composites and tables need table.get/set |
+| mutual/indirect tail-call trampolines | ⛔ | ⛔ | ✅ | self-recursion is a loop on all three; cross-function chains still call + return |
 | LibJIT frame-mode calls/imports/multi-result | n/a | n/a | ⛔ | **policy**: the frame form is opt-in and partial on purpose |
 
 ### Findings
@@ -962,7 +960,7 @@ in both passes.
 
 ## 27. V-1 fixed, multi-value catches and numeric shared atomics closed (2026-11-07)
 
-**Snapshot (2026-11-07, `backendsMh33`):** suite **22155 assertions in 797
+**Snapshot (2026-11-07, `backendsMh33`):** suite **22184 assertions in 798
 cases** under `--rng-seed 12345`, green; `[headerdoc]`, `[docs]`, `doxygen`
 (0 warnings) and `abi-check` all pass. This section supersedes section 26.
 
@@ -1019,5 +1017,4 @@ which neither SLJIT nor AsmJIT lowers yet.
 |---|---|---|
 | mutual/indirect tail-call trampolines | SLJIT, AsmJIT | self-recursion loops; cross-function chains still call + return |
 | shared reference/table atomics | SLJIT, AsmJIT | GC barrier / missing table.get/set |
-| bulk memory on memory64 | SLJIT, AsmJIT | "yet" |
 | LibJIT frame-mode calls/imports/multi-result | LibJIT | policy |

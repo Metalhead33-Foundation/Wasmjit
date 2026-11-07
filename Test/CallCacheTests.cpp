@@ -1422,3 +1422,47 @@ CHECK(false);
 }
 }
 }
+
+// Item 4: bulk memory on a memory64 memory.
+TEST_CASE("bulk memory works on memory64", "[staging][memory64][bulk]")
+{
+for (const char* backend : {"libjit", "asmjit", "sljit"}) {
+std::fprintf(stderr, "MEM64BULK %s: ", backend);
+auto runtime = WASM::Runtime::create(backend);
+REQUIRE(runtime != nullptr);
+auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "memory64_bulk_probe.wasm");
+WASM::RegistryImportResolver imports;
+WASM::ModuleInstance* instance = nullptr;
+try {
+instance = &runtime->instantiate(*module, imports);
+} catch (const std::exception& error) {
+std::fprintf(stderr, "REFUSED: %s\n", error.what());
+CHECK(false);
+continue;
+}
+const auto copyFn = instance->exportedFunction("copy");
+const auto fillFn = instance->exportedFunction("fill");
+const auto initFn = instance->exportedFunction("init");
+const auto getFn = instance->exportedFunction("get");
+REQUIRE(copyFn.has_value());
+REQUIRE(fillFn.has_value());
+REQUIRE(initFn.has_value());
+REQUIRE(getFn.has_value());
+try {
+WASM::callCallable<std::int32_t>(*copyFn, INT64_C(300), INT64_C(0), INT64_C(3));
+const auto copied = WASM::callCallable<std::int32_t>(*getFn, INT64_C(300));
+WASM::callCallable<std::int32_t>(*fillFn, INT64_C(200), 0x41, INT64_C(3));
+const auto filled = WASM::callCallable<std::int32_t>(*getFn, INT64_C(200));
+WASM::callCallable<std::int32_t>(*initFn, INT64_C(100), 0, 7);
+const auto initialized = WASM::callCallable<std::int32_t>(*getFn, INT64_C(100));
+std::fprintf(stderr, "copy=%d fill=%d init=%d\n", (int)copied, (int)filled, (int)initialized);
+CHECK(copied == 97);
+CHECK(filled == 65);
+CHECK(initialized == 97);
+} catch (const std::exception& error) {
+std::fprintf(stderr, "FAILED: %s\n", error.what());
+CHECK(false);
+}
+}
+}

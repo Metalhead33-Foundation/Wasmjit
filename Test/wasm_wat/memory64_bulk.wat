@@ -1,7 +1,5 @@
-;; Bulk memory on a memory64 is a documented P2 residual refusal. The two
-;; backends report it differently: SLJIT leaves this function without an entry
-;; point and keeps the module usable, while AsmJit fails the whole module
-;; transactionally (its long-standing refusal model).
+;; Bulk memory on a memory64 is lowered by all three backends; the fixture is a
+;; zero-length copy used by the AsmJIT and SLJIT regression tests.
 (module
   (memory i64 1)
   (func (export "copy") (param i64 i64 i64)

@@ -192,3 +192,63 @@ which is exactly why two backends agreeing is not a spec check.
 * **Do not use a feature you intend to implement as the "unsupported" fixture**
   for a rollback test; move the probe to a genuinely excluded shape (`v128`
   parameter) when the feature lands.
+
+## Item 4 — bulk memory on memory64 (SLJIT, AsmJIT)
+
+### Intended
+
+Lower `memory.copy`, `memory.fill` and `memory.init` when the memory uses the
+64-bit index type, instead of refusing the function (SLJIT) or the module
+(AsmJIT).
+
+### What we did
+
+* Added `ModuleInstance::memoryInit64`; the existing 32-bit `memoryInit`
+  delegates to it. The bounds checks use subtraction after a `>` test so a huge
+  64-bit offset cannot wrap.
+* Added backend helper entry points with 64-bit addresses/lengths:
+  `asmjitMemoryCopy64`/`Fill64`/`Init64` and
+  `sljitMemoryCopy64`/`Fill64`/`Init64`.
+* AsmJIT: the invoke signature now matches the wasm operand widths — a 64-bit
+  destination, but a **32-bit** segment source/length for `memory.init`. The
+  first attempt declared all three as 64-bit and the upper halves of the 32-bit
+  operands were garbage, which trapped `memory.init` as out of bounds.
+* SLJIT: the four-argument call ceiling cannot carry `(vm, memoryPair, dst, src,
+  len)`. `memory.fill64` fits as `(vm, memoryAndValue, dst, len)`. `copy64` and
+  `init64` take a pointer to the **first operand slot** and read the three slots
+  (16 bytes apart) inside the helper. The first attempt tried to materialise
+  `SLJIT_SP` in a register with `MOV R3, SP`, which trips SLJIT's argument
+  assertion (`SLJIT_SP` is a base, not an op1 source); `slotAddress(R3, base)`
+  (`sljit_get_local_base`) is the supported way.
+
+### Evidence
+
+`memory64_bulk_probe.wat` on all three backends:
+
+```
+MEM64BULK libjit: copy=97 fill=65 init=97
+MEM64BULK asmjit: copy=97 fill=65 init=97
+MEM64BULK sljit: copy=97 fill=65 init=97
+```
+
+The probe exercises a 64-bit destination, a 64-bit source/length and a load
+back from the copied/filled/initialised bytes. The old `memory64_bulk` fixture's
+refusal tests became execution tests; the module's zero-length copy is legal.
+
+### A semantic trap in the fixture
+
+The first probe used one **active** data segment and called `memory.init` on it.
+All three backends correctly trapped: an active segment is dropped after
+instantiation. A `memory.init` test needs a **passive** segment. This was not a
+backend bug; the debug print showed `segsize=7` but `segmentSize=0` because the
+dropped flag had been set.
+
+### Lessons
+
+* **Match the helper signature to the wasm operand width, not to the widest
+  one.** A 32-bit segment index passed through a 64-bit parameter carries
+  whatever was in the upper half of the register.
+* **SLJIT cannot read SP as an ordinary register.** Use `sljit_get_local_base`
+  (the existing `slotAddress`) when a helper needs a stack address.
+* **A bulk-memory test must use a passive segment for `memory.init`.** Active
+  segments are dropped at instantiation, exactly as the spec says.

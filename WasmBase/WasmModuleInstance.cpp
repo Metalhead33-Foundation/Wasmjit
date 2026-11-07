@@ -1612,6 +1612,11 @@ void ModuleInstance::arrayInitFromData(void* array, uint32_t localTypeIdx, uint3
 
 void ModuleInstance::memoryInit(uint32_t memIdx, uint32_t dataIdx, uint32_t dstOffset, uint32_t srcOffset, uint32_t len)
 {
+	memoryInit64(memIdx, dataIdx, dstOffset, srcOffset, len);
+}
+
+void ModuleInstance::memoryInit64(uint32_t memIdx, uint32_t dataIdx, uint64_t dstOffset, uint64_t srcOffset, uint64_t len)
+{
 	if (memIdx >= internals.memoryRefs.size()) {
 		reportTrap(TrapKind::Internal, "memory index out of range");
 		return;
@@ -1627,11 +1632,11 @@ void ModuleInstance::memoryInit(uint32_t memIdx, uint32_t dataIdx, uint32_t dstO
 	// A dropped segment behaves as if it were empty: a zero-length copy is a
 	// no-op, anything longer traps. See docs/proposals/BULK_MEMORY.md BM-1/BM-3.
 	const uint64_t segmentSize = internals.dataSegmentDropped[dataIdx].load(std::memory_order_acquire) ? 0 : seg.data.size();
-	if (static_cast<uint64_t>(srcOffset) + len > segmentSize) {
+	if (srcOffset > segmentSize || len > segmentSize - srcOffset) {
 		reportTrap(TrapKind::OutOfBoundsMemoryAccess, "out of bounds memory.init source");
 		return;
 	}
-	if (static_cast<uint64_t>(dstOffset) + len > memory->memorySize) {
+	if (dstOffset > memory->memorySize || len > memory->memorySize - dstOffset) {
 		reportTrap(TrapKind::OutOfBoundsMemoryAccess);
 		return;
 	}

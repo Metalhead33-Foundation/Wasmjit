@@ -8,8 +8,8 @@ section 18 (the latest re-run).
 
 ## 1. Where the tree is
 
-**Snapshot (2026-11-07, this working tree):** `--rng-seed 12345` -> **22155
-assertions, 797 cases, green**. Gates: `[headerdoc]`, `[docs]`, `doxygen` 0
+**Snapshot (2026-11-07, this working tree):** `--rng-seed 12345` -> **22184
+assertions, 798 cases, green**. Gates: `[headerdoc]`, `[docs]`, `doxygen` 0
 warnings, `abi-check` OK.
 
 The frame ABI work is done on all three backends. Exceptions (including
@@ -42,15 +42,14 @@ field as 4 bytes. The load and the slot width now follow the field type.
 | frame-form `return_call` / `return_call_indirect` | OK | OK | OK | `tail_wide=1` |
 | direct self-recursive `return_call` in constant stack | OK | OK | OK | `TAILSELF` 1,000,000 links, `run()=0` |
 | structured block/loop/if parameters | OK | OK | OK | `BLOCKPARAM` block=42 if=11/12 loop=0 |
+| bulk memory on memory64 | OK | OK | OK | `MEM64BULK` copy=97 fill=65 init=97 |
 
 ### Remaining (honest refusals)
 
 | Gap | Backends | Reason |
 |---|---|---|
 | mutual/indirect tail-call trampolines | SLJIT, AsmJIT | direct self-recursion is a real loop now; cross-function chains are still call + return |
-| shared reference/table atomics | SLJIT, AsmJIT | numeric family is done; shared-ref fixtures need shared composites, tables need table.get/set |
 | shared-everything atomics on **reference** slots and **tables** | SLJIT, AsmJIT | numeric slots are done; a reference slot needs the GC barrier, and table get/set is itself unimplemented on these backends |
-| bulk memory on memory64 | SLJIT, AsmJIT | message says "yet" |
 | LibJIT frame-mode calls / imports / multi-result | LibJIT | **policy**: the frame form is opt-in and partial on purpose |
 
 ## 4. Findings from this round (record before editing)
@@ -117,7 +116,6 @@ field as 4 bytes. The load and the slot width now follow the field type.
 2. **Shared reference/table atomics.** Numeric slots are done. Reference slots
    need the retain/release barrier (`wasm_atomic_ref_*`); table slots additionally
    need table.get/set lowering, which neither backend has yet.
-3. **Bulk memory on memory64** on SLJIT and AsmJIT.
 
 Keep the probe discipline: strengthen the fixture until it observes the
 property, validate the module, run all three backends, then record a row.

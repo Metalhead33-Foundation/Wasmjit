@@ -807,6 +807,92 @@ extern "C" void sljitMemoryFill(WASM::VMContext* vm, uint64_t memoryAndValue,
 	std::memset(memory->memoryBase + destination, static_cast<unsigned char>(value), length);
 }
 
+extern "C" void sljitMemoryCopy64(WASM::VMContext* vm, uint64_t memoryPair,
+const uint64_t* slots) noexcept
+{
+const uint32_t destinationMemory = static_cast<uint32_t>(memoryPair);
+const uint32_t sourceMemory = static_cast<uint32_t>(memoryPair >> 32);
+// One operand-stack slot is 16 bytes (two 64-bit words).
+const uint64_t destination = slots[0];
+const uint64_t source = slots[2];
+const uint64_t length = slots[4];
+if (vm == nullptr || vm->memories == nullptr
+|| destinationMemory >= vm->memoryCount || sourceMemory >= vm->memoryCount) {
+WASM::reportTrap(WASM::TrapKind::Internal, "SLJIT memory64.copy index is invalid");
+return;
+}
+WASM::LinearMemory* dst = vm->memories[destinationMemory];
+WASM::LinearMemory* src = vm->memories[sourceMemory];
+if (dst == nullptr || src == nullptr) {
+WASM::reportTrap(WASM::TrapKind::Internal, "SLJIT memory64.copy memory is null");
+return;
+}
+const uint64_t dstSize = WASM::wasm_memory_size(dst);
+const uint64_t srcSize = WASM::wasm_memory_size(src);
+if (destination > dstSize || length > dstSize - destination
+|| source > srcSize || length > srcSize - source) {
+WASM::reportTrap(WASM::TrapKind::OutOfBoundsMemoryAccess);
+return;
+}
+if (length == 0)
+return;
+if (dst->memoryBase == nullptr || src->memoryBase == nullptr) {
+WASM::reportTrap(WASM::TrapKind::Internal, "SLJIT memory64.copy base is null");
+return;
+}
+std::memmove(dst->memoryBase + destination, src->memoryBase + source,
+static_cast<size_t>(length));
+}
+
+extern "C" void sljitMemoryFill64(WASM::VMContext* vm, uint64_t memoryAndValue,
+uint64_t destination, uint64_t length) noexcept
+{
+const uint32_t memoryIndex = static_cast<uint32_t>(memoryAndValue);
+const uint32_t value = static_cast<uint32_t>(memoryAndValue >> 32);
+if (vm == nullptr || vm->memories == nullptr || memoryIndex >= vm->memoryCount) {
+WASM::reportTrap(WASM::TrapKind::Internal, "SLJIT memory64.fill index is invalid");
+return;
+}
+WASM::LinearMemory* memory = vm->memories[memoryIndex];
+if (memory == nullptr) {
+WASM::reportTrap(WASM::TrapKind::Internal, "SLJIT memory64.fill memory is null");
+return;
+}
+const uint64_t size = WASM::wasm_memory_size(memory);
+if (destination > size || length > size - destination) {
+WASM::reportTrap(WASM::TrapKind::OutOfBoundsMemoryAccess);
+return;
+}
+if (length == 0)
+return;
+if (memory->memoryBase == nullptr) {
+WASM::reportTrap(WASM::TrapKind::Internal, "SLJIT memory64.fill base is null");
+return;
+}
+std::memset(memory->memoryBase + destination, static_cast<unsigned char>(value),
+static_cast<size_t>(length));
+}
+
+extern "C" void sljitMemoryInit64(WASM::VMContext* vm, uint64_t indexPair,
+const uint64_t* slots) noexcept
+{
+const uint32_t dataIndex = static_cast<uint32_t>(indexPair);
+const uint32_t memoryIndex = static_cast<uint32_t>(indexPair >> 32);
+const uint64_t destination = slots[0];
+const uint32_t source = static_cast<uint32_t>(slots[2]);
+const uint32_t length = static_cast<uint32_t>(slots[4]);
+if (vm == nullptr) {
+WASM::reportTrap(WASM::TrapKind::Internal, "SLJIT memory64.init VMContext is null");
+return;
+}
+try {
+reinterpret_cast<WASM::ModuleInstance*>(vm)->memoryInit64(
+memoryIndex, dataIndex, destination, source, length);
+} catch (...) {
+WASM::reportTrap(WASM::TrapKind::Internal, "SLJIT memory64.init helper failed");
+}
+}
+
 extern "C" void sljitMemoryInit(WASM::VMContext* vm, uint64_t indexPair,
 		uint64_t addressPair, uint32_t length) noexcept
 {
@@ -6752,79 +6838,97 @@ void OpcodeDispatcher::dispatchMemoryCopy(WASM::MemIdx arg1, WASM::MemIdx arg2)
 {
 	if (!reachable_)
 		return;
-	(void)requireMemoryIndex(arg1);
-	(void)requireMemoryIndex(arg2);
-	require(requireMemoryIndex(arg1).indexType == WASM::MemoryIndexType::I32
-					&& requireMemoryIndex(arg2).indexType == WASM::MemoryIndexType::I32,
-			"the SLJIT backend does not lower bulk memory on memory64 yet");
+	const auto destinationType = requireMemoryIndex(arg1).indexType;
+	const auto sourceType = requireMemoryIndex(arg2).indexType;
+	require(destinationType == sourceType,
+			"memory.copy memories must have the same index type");
 	requireStack(3);
+	const std::size_t base = stackWidths_.size() - 3;
 	if (!measureOnly_) {
-		const std::size_t base = stackWidths_.size() - 3;
-		loadContext(SLJIT_R0);
-		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R1, 0, SLJIT_IMM,
-				static_cast<sljit_sw>((static_cast<std::uint64_t>(arg2) << 32)
-						| static_cast<std::uint64_t>(arg1))));
-		loadSlot(SLJIT_R2, base, 4);
-		loadSlot(SLJIT_R3, base + 1, 4);
-		emit(sljit_emit_op2(compiler_, SLJIT_SHL, SLJIT_R3, 0, SLJIT_R3, 0,
-				SLJIT_IMM, 32));
-		emit(sljit_emit_op2(compiler_, SLJIT_OR, SLJIT_R2, 0, SLJIT_R2, 0, SLJIT_R3, 0));
-		loadSlot(SLJIT_R3, base + 2, 4);
-		emitHelper(SLJIT_ARGS4V(P, W, W, 32), &sljitMemoryCopy);
+		if (destinationType == WASM::MemoryIndexType::I32) {
+			loadContext(SLJIT_R0);
+			emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R1, 0, SLJIT_IMM,
+					static_cast<sljit_sw>((static_cast<std::uint64_t>(arg2) << 32)
+							| static_cast<std::uint64_t>(arg1))));
+			loadSlot(SLJIT_R2, base, 4);
+			loadSlot(SLJIT_R3, base + 1, 4);
+			emit(sljit_emit_op2(compiler_, SLJIT_SHL, SLJIT_R3, 0, SLJIT_R3, 0,
+					SLJIT_IMM, 32));
+			emit(sljit_emit_op2(compiler_, SLJIT_OR, SLJIT_R2, 0, SLJIT_R2, 0, SLJIT_R3, 0));
+			loadSlot(SLJIT_R3, base + 2, 4);
+			emitHelper(SLJIT_ARGS4V(P, W, W, 32), &sljitMemoryCopy);
+		} else {
+			// Three arguments: the helper reads destination/source/length from the
+			// three operand slots (16 bytes apart) instead of a fourth register.
+			slotAddress(SLJIT_R2, base);
+			loadContext(SLJIT_R0);
+			emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R1, 0, SLJIT_IMM,
+					static_cast<sljit_sw>((static_cast<std::uint64_t>(arg2) << 32)
+							| static_cast<std::uint64_t>(arg1))));
+			emitHelper(SLJIT_ARGS3V(P, W, W), &sljitMemoryCopy64);
+		}
 		emitPendingTrapCheck();
 	}
-	stackWidths_.resize(stackWidths_.size() - 3);
+	stackWidths_.resize(base);
 }
 
 void OpcodeDispatcher::dispatchMemoryFill(WASM::MemIdx arg)
 {
 	if (!reachable_)
 		return;
-	(void)requireMemoryIndex(arg);
-	require(requireMemoryIndex(arg).indexType == WASM::MemoryIndexType::I32,
-			"the SLJIT backend does not lower bulk memory on memory64 yet");
+	const bool is64 = requireMemoryIndex(arg).indexType == WASM::MemoryIndexType::I64;
 	requireStack(3);
+	const std::size_t base = stackWidths_.size() - 3;
 	if (!measureOnly_) {
-		const std::size_t base = stackWidths_.size() - 3;
 		loadContext(SLJIT_R0);
 		loadSlot(SLJIT_R1, base + 1, 4);
 		emit(sljit_emit_op2(compiler_, SLJIT_SHL, SLJIT_R1, 0, SLJIT_R1, 0,
 				SLJIT_IMM, 32));
 		emit(sljit_emit_op2(compiler_, SLJIT_OR, SLJIT_R1, 0, SLJIT_R1, 0,
 				SLJIT_IMM, static_cast<sljit_sw>(arg)));
-		loadSlot(SLJIT_R2, base, 4);
-		loadSlot(SLJIT_R3, base + 2, 4);
-		emitHelper(SLJIT_ARGS4V(P, W, 32, 32), &sljitMemoryFill);
+		loadSlot(SLJIT_R2, base, is64 ? 8 : 4);
+		loadSlot(SLJIT_R3, base + 2, is64 ? 8 : 4);
+		if (is64)
+			emitHelper(SLJIT_ARGS4V(P, W, W, W), &sljitMemoryFill64);
+		else
+			emitHelper(SLJIT_ARGS4V(P, W, 32, 32), &sljitMemoryFill);
 		emitPendingTrapCheck();
 	}
-	stackWidths_.resize(stackWidths_.size() - 3);
+	stackWidths_.resize(base);
 }
 
 void OpcodeDispatcher::dispatchMemoryInit(uint32_t arg1, WASM::MemIdx arg2)
 {
 	if (!reachable_)
 		return;
-	(void)requireMemoryIndex(arg2);
-	require(requireMemoryIndex(arg2).indexType == WASM::MemoryIndexType::I32,
-			"the SLJIT backend does not lower bulk memory on memory64 yet");
+	const bool is64 = requireMemoryIndex(arg2).indexType == WASM::MemoryIndexType::I64;
 	require(arg1 < module_.dataSegments.size(), "the data segment index is out of range");
 	requireStack(3);
+	const std::size_t base = stackWidths_.size() - 3;
 	if (!measureOnly_) {
-		const std::size_t base = stackWidths_.size() - 3;
-		loadContext(SLJIT_R0);
-		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R1, 0, SLJIT_IMM,
-				static_cast<sljit_sw>((static_cast<std::uint64_t>(arg2) << 32)
-						| static_cast<std::uint64_t>(arg1))));
-		loadSlot(SLJIT_R2, base, 4);
-		loadSlot(SLJIT_R3, base + 1, 4);
-		emit(sljit_emit_op2(compiler_, SLJIT_SHL, SLJIT_R3, 0, SLJIT_R3, 0,
-				SLJIT_IMM, 32));
-		emit(sljit_emit_op2(compiler_, SLJIT_OR, SLJIT_R2, 0, SLJIT_R2, 0, SLJIT_R3, 0));
-		loadSlot(SLJIT_R3, base + 2, 4);
-		emitHelper(SLJIT_ARGS4V(P, W, W, 32), &sljitMemoryInit);
+		if (is64) {
+			slotAddress(SLJIT_R2, base);
+			loadContext(SLJIT_R0);
+			emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R1, 0, SLJIT_IMM,
+					static_cast<sljit_sw>((static_cast<std::uint64_t>(arg2) << 32)
+							| static_cast<std::uint64_t>(arg1))));
+			emitHelper(SLJIT_ARGS3V(P, W, W), &sljitMemoryInit64);
+		} else {
+			loadContext(SLJIT_R0);
+			emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R1, 0, SLJIT_IMM,
+					static_cast<sljit_sw>((static_cast<std::uint64_t>(arg2) << 32)
+							| static_cast<std::uint64_t>(arg1))));
+			loadSlot(SLJIT_R2, base, 4);
+			loadSlot(SLJIT_R3, base + 1, 4);
+			emit(sljit_emit_op2(compiler_, SLJIT_SHL, SLJIT_R3, 0, SLJIT_R3, 0,
+					SLJIT_IMM, 32));
+			emit(sljit_emit_op2(compiler_, SLJIT_OR, SLJIT_R2, 0, SLJIT_R2, 0, SLJIT_R3, 0));
+			loadSlot(SLJIT_R3, base + 2, 4);
+			emitHelper(SLJIT_ARGS4V(P, W, W, 32), &sljitMemoryInit);
+		}
 		emitPendingTrapCheck();
 	}
-	stackWidths_.resize(stackWidths_.size() - 3);
+	stackWidths_.resize(base);
 }
 
 void OpcodeDispatcher::dispatchDataDrop(uint32_t arg)

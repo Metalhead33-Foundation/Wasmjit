@@ -125,11 +125,10 @@ of this note is about.
 
 ### memory64 was the last unprobed row, and it passes
 
-`(memory i64 1)` plus `memory.size` answering **1** on all three backends. Note this does
-not contradict SLJIT's documented bulk-memory refusal (`PRODUCTION_GAPS` §15's
-`memory64_bulk` fixture): that fixture uses bulk-memory instructions, which SLJIT does not
-lower; the *memory itself* is fine. Two different questions, two different answers, both
-recorded.
+`(memory i64 1)` plus `memory.size` answering **1** on all three backends. At the time of
+this probe the *memory itself* worked while bulk-memory instructions on it were refused by
+SLJIT and AsmJIT; that second question was closed on 2026-11-07 (see the revision in
+section 6). Two different questions, two different answers, both recorded.
 
 ### The matrix after eight probes
 
@@ -142,14 +141,20 @@ recorded.
 | GC struct (`struct.new`, called) | ✅ | ✅ | ✅ |
 | **atomics** | ⛔ | ⛔ | ✅ |
 | memory64 (memory itself) | ✅ | ✅ | ✅ |
-| memory64 + bulk memory | ⛔ | unprobed | unprobed |
+| memory64 + bulk memory | ✅ | ✅ | ✅ |
+
+> **Revision 2026-11-07:** the `atomics` row above predates the numeric
+> shared-everything family, which is now green on all three backends for memory,
+> globals, struct fields and array elements. Reference and table slots remain
+> refused; see `POST_MORTEM.md` item 2.
 
 **Every row now has a measured answer.** The only ❌ in the matrix remains LibJIT's silent
 `throw`, and the only ⛔ rows are honest refusals with reasons.
 
-Suite 21916 assertions in 784 cases under `--rng-seed 12345`, green.
+Suite 21916 assertions in 784 cases under `--rng-seed 12345`, green. (Revision
+2026-11-07: suite 22184 assertions in 798 cases, same seed.)
 
-## 6. Probes 9 and 10: GC arrays work everywhere; memory64 + bulk memory does not
+## 6. Probes 9 and 10: GC arrays work everywhere; memory64 + bulk memory (now does)
 
 ```
 GCARR    libjit/asmjit/sljit: array ref non-null
@@ -161,12 +166,18 @@ M64BULK  sljit:  REFUSED: does not lower bulk memory on memory64 yet
 | # | Probe | SLJIT | AsmJIT | LibJIT |
 |---|---|---|---|---|
 | 9 | GC array (`array.new`, called) | ✅ reference | ✅ | ✅ |
-| 10 | memory64 **with bulk memory** | ⛔ refuses | ⛔ refuses | ✅ |
+| 10 | memory64 **with bulk memory** | ✅ | ✅ | ✅ |
+
+> **Revision 2026-11-07 (item 4):** SLJIT and AsmJIT now lower `memory.copy`,
+> `memory.fill` and `memory.init` on memory64. The original refusal output above is kept
+> as history; the measured replacement is
+> `MEM64BULK libjit/asmjit/sljit: copy=97 fill=65 init=97`.
 
 ### This completes the memory64 picture, and it is a two-row story
 
 * **memory itself** (`memory i64`, `memory.size`): ✅ on all three (probe 8);
-* **memory64 + bulk memory**: ⛔ on SLJIT and AsmJIT, ✅ on LibJIT.
+* **memory64 + bulk memory**: ✅ on all three as of 2026-11-07 (previously SLJIT and
+  AsmJIT refused).
 
 Both rows are needed: a single "memory64" row would have been wrong in whichever direction
 it was filled in. The refusal message is also precise -- *"does not lower bulk memory on
@@ -180,10 +191,10 @@ merely *accepted*.
 
 ### Probe 10 was already a test -- in the wrong place
 
-SLJIT's `memory64_bulk` refusal had a test of its own (`[sljit][m64][refusal]`), and it
-encodes the current policy correctly. Probe 10 duplicates it deliberately: the *point* of
-a probe is that it runs the **same fixture on every backend**, so the matrix row is
-measured rather than assembled from three differently-shaped tests.
+SLJIT's `memory64_bulk` refusal had a test of its own (`[sljit][m64][refusal]`); when item
+4 landed that test became an execution test, and the AsmJIT counterpart did the same.
+Probe 10 ran the **same fixture on every backend**, so the matrix row is measured rather
+than assembled from three differently-shaped tests.
 
 ## 7. Probes 11 and 12: bulk memory on memory32 and multi-memory both work
 

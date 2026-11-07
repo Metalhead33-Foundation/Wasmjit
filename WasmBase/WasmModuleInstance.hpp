@@ -328,6 +328,8 @@ public:
 	bool growTable(uint32_t tableIdx, uint64_t deltaEntries);
 	/** \brief Copies a data-segment range into linear memory. \param memIdx Destination memory index. \param dataIdx Data-segment index. \param dstOffset Destination byte offset. \param srcOffset Source byte offset within the segment. \param len Number of bytes to copy. */
 	void memoryInit(uint32_t memIdx, uint32_t dataIdx, uint32_t dstOffset, uint32_t srcOffset, uint32_t len);
+	/** \brief 64-bit-offset variant of memoryInit for a memory64 destination. \param memIdx Memory index. \param dataIdx Data-segment index. \param dstOffset Destination byte offset. \param srcOffset Source byte offset into the segment. \param len Number of bytes to copy. */
+	void memoryInit64(uint32_t memIdx, uint32_t dataIdx, uint64_t dstOffset, uint64_t srcOffset, uint64_t len);
 	/** \brief Marks a data segment dropped so later memory.init sees an empty segment. \param dataIdx Data-segment index. */
 	void dataDrop(uint32_t dataIdx);
 	/** \brief Copies element-segment references into a table. \param elemIdx Source element-segment index. \param tableIdx Destination table index. \param dstOffset Destination element offset. \param srcOffset Source element offset. \param len Number of elements to copy. */
