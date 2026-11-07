@@ -1712,14 +1712,6 @@ protected:
 				tailArgs[i] = values.back();
 				values.pop_back();
 			}
-			asmjit::FuncSignature stateSignature(asmjit::CallConvId::kCDecl);
-			stateSignature.set_ret(asmjit::TypeId::kUIntPtr);
-			asmjit::InvokeNode* stateInvoke = nullptr;
-			checkError(compiler.invoke(asmjit::Out(stateInvoke),
-					reinterpret_cast<uint64_t>(&WASM::currentTailCallState), stateSignature),
-					"AsmJit tail-call state call emission failed");
-			auto state = compiler.new_gp_ptr("tailState");
-			stateInvoke->set_ret(0, state);
 			const std::size_t imported = module.importFunctions.size();
 			const void* target = index < imported
 					? static_cast<const void*>(&internals.importStorage[index])
@@ -1728,20 +1720,7 @@ protected:
 			checkError(compiler.mov(targetRegister,
 					asmjit::Imm(reinterpret_cast<uint64_t>(target))),
 					"AsmJit tail-call target materialisation failed");
-			checkError(compiler.mov(asmjit::x86::Mem(state,
-					static_cast<int32_t>(offsetof(WASM::TailCallState, target)), 8),
-					targetRegister),
-					"AsmJit tail-call target store failed");
-			for (std::size_t i = 0; i < tailArgs.size(); ++i)
-				checkError(compiler.mov(asmjit::x86::Mem(state,
-						static_cast<int32_t>(offsetof(WASM::TailCallState, args)
-								+ i * WASM::kTailCallSlotBytes), tailArgs[i].size()),
-						tailArgs[i]), "AsmJit tail-call argument store failed");
-			checkError(compiler.mov(asmjit::x86::Mem(state,
-					static_cast<int32_t>(offsetof(WASM::TailCallState, pending)), 4),
-					asmjit::Imm(1)), "AsmJit tail-call pending store failed");
-			emitZeroReturn();
-			emitUnreachablePlaceholders();
+			emitTailCallState(targetRegister, tailArgs);
 			return;
 		}
 		if (frameMode) {
@@ -2109,6 +2088,35 @@ protected:
 		checkError(compiler.xor_(zero, zero),
 				"AsmJit exception-path result initialisation failed");
 		checkError(compiler.ret(zero), "AsmJit exception-path result return failed");
+	}
+
+	//! Writes a pending tail call and returns a typed zero.
+	//! \param target Callable pointer to re-enter.
+	//! \param args Argument values, already popped from the operand stack.
+	void emitTailCallState(const asmjit::x86::Gp& target,
+			const std::vector<asmjit::x86::Gp>& args)
+	{
+		asmjit::FuncSignature stateSignature(asmjit::CallConvId::kCDecl);
+		stateSignature.set_ret(asmjit::TypeId::kUIntPtr);
+		asmjit::InvokeNode* stateInvoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(stateInvoke),
+				reinterpret_cast<uint64_t>(&WASM::currentTailCallState), stateSignature),
+				"AsmJit tail-call state call emission failed");
+		auto state = compiler.new_gp_ptr("tailState");
+		stateInvoke->set_ret(0, state);
+		checkError(compiler.mov(asmjit::x86::Mem(state,
+				static_cast<int32_t>(offsetof(WASM::TailCallState, target)), 8),
+				target), "AsmJit tail-call target store failed");
+		for (std::size_t i = 0; i < args.size(); ++i)
+			checkError(compiler.mov(asmjit::x86::Mem(state,
+					static_cast<int32_t>(offsetof(WASM::TailCallState, args)
+							+ i * WASM::kTailCallSlotBytes), args[i].size()),
+					args[i]), "AsmJit tail-call argument store failed");
+		checkError(compiler.mov(asmjit::x86::Mem(state,
+				static_cast<int32_t>(offsetof(WASM::TailCallState, pending)), 4),
+				asmjit::Imm(1)), "AsmJit tail-call pending store failed");
+		emitZeroReturn();
+		emitUnreachablePlaceholders();
 	}
 
 	void emitFrameReturnValue(const asmjit::x86::Gp& value)
