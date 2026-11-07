@@ -1353,3 +1353,54 @@ WASMJIT_SAFETY_PROBES=1 ./Test/WasmJit '[experiment]'
 This is the first time in the campaign that instrumenting *before* theorising produced
 a clean answer in one run: three `fprintf`s and a call settled what two rounds of
 edit-and-revert could not. The prints are kept for that reason.
+
+## 38. The refusal was innocent; the TEST was wrong (and one probe showed both)
+
+Instrumented before theorising, as section 37's rule says. One run, four lines:
+
+```
+PROBE-A first            frameCallAbi=0
+PROBE-A same-module      NO THROW   frameCallAbi=0     <- SECTION 19's CACHING
+PROBE-B fresh            threw: LibJIT frame ABI: multiple results are not implemented
+PROBE done
+```
+
+### Finding 1: my failing test compiled the same module object twice
+
+PROBE-A instantiated one module object in the register form and then again under the
+opt-in: **no throw, and `frameCallAbi` still 0**. The second instantiation reused the
+first compilation, so the mode was never re-decided and the refusal never ran --
+exactly the caching caveat this note recorded in **section 19**, written by me, and then
+forgotten when the test was written one day later.
+
+That accounts for the failed `REQUIRE_THROWS`, and the gate now **loads the fixture
+fresh** before asking the frame question. Stated as a rule:
+
+> **A test that toggles the mode must load a fresh module object.** The preference
+> affects the first compilation of a given module, nothing later.
+
+### Finding 2: the refusal is correct and safe, and so is MV5
+
+With the guard restored, PROBE-B throws **cleanly** with its message and no crash. So:
+
+* the refusal is **not** the cause of the earlier failure -- it was innocent both times;
+* LibJIT's register-form multi-result is sound (section 37), and the frame form now
+  refuses `(result i32 i64)` rather than reaching an epilogue that would look for the
+  register form's trailing buffer.
+
+### What landed
+
+| Change | Where |
+|---|---|
+| module-level refusal of multiple results in frame mode | `LibjitModuleCompiler::translateTypes`, before any JIT context |
+| gate, with a **fresh** module object for the frame half | `[staging][libjit][abi][multi]` |
+| two permanent instrumented probes | `[experiment]`, `[experiment2]`, gated by `WASMJIT_SAFETY_PROBES=1` |
+
+Suite 21850 assertions in 773 cases, `[staging][libjit]` 23 in 6, all green.
+
+### The lesson, which cost two reverts to learn
+
+Both reverts blamed the guard. Both times the guard was right and the **test** was
+wrong -- once from a mid-file insertion (section 13), once from cached compilation
+(section 19). The distinguishing evidence took one instrumented run and was available
+from the first minute.

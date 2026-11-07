@@ -915,3 +915,73 @@ std::fprintf(stderr, "PROBE first=%d second=%lld\n", (int)first,
 CHECK(first == 7);
 CHECK(second == 9);
 }
+
+// EXPERIMENT 2 (docs/backends/EXPORT_SIGNATURE.md section 38): is the failure the
+// refusal, or the same-module-object caching documented in section 19?
+TEST_CASE("LibJIT frame-mode multi-result, instrumented",
+"[experiment2][libjit][abi][multi]")
+{
+if (std::getenv("WASMJIT_SAFETY_PROBES") == nullptr) {
+SUCCEED("experiment: set WASMJIT_SAFETY_PROBES=1 to run it");
+return;
+}
+const auto path =
+std::filesystem::path(WASM_TEST_DIR) / "asmjit_multi_result.wasm";
+auto runtime = WASM::Runtime::create("libjit");
+REQUIRE(runtime != nullptr);
+WASM::RegistryImportResolver imports;
+
+// (a) SAME module object: instantiate in the register form, then under the opt-in.
+auto shared = runtime->loadFile(path);
+WASM::ModuleInstance& first = runtime->instantiate(*shared, imports);
+std::fprintf(stderr, "PROBE-A first frameCallAbi=%d\n", (int)first.frameCallAbi());
+WASM::setFrameCallAbiOptIn(true);
+try {
+WASM::ModuleInstance& again = runtime->instantiate(*shared, imports);
+std::fprintf(stderr, "PROBE-A same-module NO THROW frameCallAbi=%d\n",
+(int)again.frameCallAbi());
+} catch (const std::exception& error) {
+std::fprintf(stderr, "PROBE-A same-module threw: %s\n", error.what());
+}
+WASM::setFrameCallAbiOptIn(false);
+
+// (b) FRESH module object, opt-in from the start.
+WASM::setFrameCallAbiOptIn(true);
+try {
+auto fresh = runtime->loadFile(path);
+WASM::ModuleInstance& instance = runtime->instantiate(*fresh, imports);
+std::fprintf(stderr, "PROBE-B fresh NO THROW frameCallAbi=%d\n",
+(int)instance.frameCallAbi());
+} catch (const std::exception& error) {
+std::fprintf(stderr, "PROBE-B fresh threw: %s\n", error.what());
+}
+WASM::setFrameCallAbiOptIn(false);
+std::fprintf(stderr, "PROBE done\n");
+}
+
+// Gate: LibJIT refuses multiple results in frame mode, and the fixture must be
+// FRESHLY LOADED -- instantiation caches compiled code per module object, so a
+// second instantiation of the same object never re-decides the mode
+// (docs/backends/EXPORT_SIGNATURE.md section 38).
+TEST_CASE("LibJIT refuses multiple results in frame mode",
+"[staging][libjit][abi][multi]")
+{
+const auto path =
+std::filesystem::path(WASM_TEST_DIR) / "asmjit_multi_result.wasm";
+auto runtime = WASM::Runtime::create("libjit");
+REQUIRE(runtime != nullptr);
+WASM::RegistryImportResolver imports;
+
+// The register form handles it -- MV5's trailing result buffer, measured sound.
+{
+auto shared = runtime->loadFile(path);
+WASM::ModuleInstance& instance = runtime->instantiate(*shared, imports);
+CHECK_FALSE(instance.frameCallAbi());
+}
+
+// The frame form must refuse, and needs its own module object to be asked.
+WASM::setFrameCallAbiOptIn(true);
+auto fresh = runtime->loadFile(path);
+REQUIRE_THROWS(runtime->instantiate(*fresh, imports));
+WASM::setFrameCallAbiOptIn(false);
+}

@@ -275,6 +275,18 @@ void ModuleCompiler::translateTypes(WASM::ModuleInstance& instance, const WASM::
 		if (frame && (module.functionBodies.size() > 1 || !module.importFunctions.empty()))
 			throw std::runtime_error(
 					"LibJIT frame ABI: a call inside a frame-mode function is not implemented");
+		// Multiple results in frame mode are not implemented: the epilogue still
+		// expects the register form's trailing result-buffer parameter, which the
+		// frame signature does not have (docs/backends/EXPORT_SIGNATURE.md section 38).
+		if (frame) {
+			for (uint32_t ti = 0; ti < module.typeCount(); ++ti) {
+				if (module.typeView(ti).kind() != WASM::CanonTypeKind::Func)
+					continue;
+				if (module.funcTypeAt(ti).results.size() > 1)
+					throw std::runtime_error(
+							"LibJIT frame ABI: multiple results are not implemented");
+			}
+		}
 		typeTranslator.setFrameCallAbi(frame);
 		instance.setFrameCallAbi(frame);
 	}
