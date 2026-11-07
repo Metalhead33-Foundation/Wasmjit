@@ -960,7 +960,7 @@ in both passes.
 
 ## 27. V-1 fixed, multi-value catches and numeric shared atomics closed (2026-11-07)
 
-**Snapshot (2026-11-07, `backendsMh33`):** suite **22225 assertions in 801
+**Snapshot (2026-11-07, `backendsMh33`):** suite **22231 assertions in 802
 cases** under `--rng-seed 12345`, green; `[headerdoc]`, `[docs]`, `doxygen`
 (0 warnings) and `abi-check` all pass. This section supersedes section 26.
 
@@ -1019,5 +1019,5 @@ which neither SLJIT nor AsmJIT lowers yet.
 | Gap | Backends | Reason |
 |---|---|---|
 | mutual/indirect tail-call trampolines | SLJIT, AsmJIT | self-recursion loops; cross-function chains still call + return |
-| shared reference/table atomics | SLJIT, AsmJIT | GC barrier / missing table.get/set |
+| shared reference/table atomics | SLJIT, AsmJIT | parser rejects shared composite references; missing table.get/set |
 | LibJIT frame-mode calls/imports/multi-result | LibJIT | policy |

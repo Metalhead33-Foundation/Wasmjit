@@ -9,7 +9,7 @@ actually happened, the root cause of every surprise, and what is still open.
 | # | Item | Status | Evidence / blocker |
 |---|---|---|---|
 | 1 | constant-stack tail calls | **partial** | self, direct, indirect and scalar frame-form chains go through the libffi driver (`TAILSELF`/`TAILMUTUAL`/`TAILINDIRECT`/`TAILFRAME`, 1,000,000 links, `run()=1`) on all three; `ref` is not lowered and v128 frame chains still call + return |
-| 2 | shared reference/table atomics | **blocked** | numeric family done; shared-ref fixtures need shared composites, and table atomics need `table.get`/`table.set`; SLJIT's four-argument ceiling needs a record for `cmpxchg` |
+| 2 | shared reference/table atomics | **blocked** | numeric family done; the parser rejects shared composite references (`malformed mutability`), table atomics need `table.get`/`table.set`, and SLJIT's four-argument ceiling needs a record for `cmpxchg` |
 | 3 | AsmJIT block parameters | **done** | `BLOCKPARAM` block=42 if=11/12 loop=0 on all three |
 | 4 | bulk memory on memory64 | **done** | `MEM64BULK` copy=97 fill=65 init=97 on all three |
 
@@ -278,6 +278,14 @@ fields, array elements) and table slots, with the GC retain/release barrier.
 ### What we found (blockers, not a completion)
 
 * The numeric family is complete on all three backends (previous commit).
+* **The core parser rejects the only valid upstream fixture.** A shared struct
+  with `(ref null (shared any))` validates with the pinned `wasm-tools`, but
+  `Runtime::loadFile` fails on all three backends with *"malformed mutability"*.
+  The type model does not carry shared composite references yet, so no atomic
+  lowering can be exercised. `shared_ref_atomic_probe.wat` is kept as a valid
+  upstream fixture and a documented refusal; its round-trip assertion starts
+  running when the parser accepts it.
+
 * **Reference slots in a shared composite are not expressible in the pinned
   `wasm-tools`.** `struct.atomic.set` on `anyref` is rejected; `externref`,
   `funcref`, `eqref`, `structref`, `arrayref`, `i31ref` and the null types are
