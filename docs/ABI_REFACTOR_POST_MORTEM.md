@@ -415,3 +415,43 @@ suite whose coverage is unknown.
   parameter is *refused*; with the flag off it still is, so the pin remains
   truthful for the default path. It will be inverted in 5e, when the register form
   stops being the only option.
+
+## 10. The pattern worth naming: I announced fixes for things that already existed
+
+Across this campaign I announced a forthcoming fix for a problem that had already
+been solved **three times**, and each was settled by one grep or one test:
+
+| # | I claimed | Reality | Cost |
+|---|---|---|---|
+| 1 | "`Runtime::instantiate` is not exception-safe" | it is; the failing *test* had been appended inside another test's body | two reverts, a wrong architectural claim |
+| 2 | "SLJIT has a parameter-count limit" | it was **our** `kMaxWasmParameters = 3`, ungated on the mode | one round |
+| 3 | "SLJIT's multi-result path is untested; it needs a guard" | the guard exists at `SljitOpcodeDispatcher.cpp:958`, unconditional, older than the frame form | one round |
+
+A fourth case sits alongside them: the epilogue's `bufferedVectorResult` winning over
+`frameMode` was a **branch-order** bug, not a missing feature -- and the dead duplicate
+branch found next to it was another artefact of the same edit.
+
+### The rule, in the form that would have prevented all four
+
+> **Before writing a guard, grep for the guard.**
+> **Before blaming a layer, grep that layer's own constants** -- and check whether they
+> are gated on the mode.
+> **Before claiming a path is untested or broken, run the test that would prove either
+> answer.**
+
+Each of those is a *reading* action, and each is cheaper than the edit it replaces.
+The three failures above cost roughly five rounds between them; the greps cost three
+tool calls.
+
+### Why the mistakes were predictable, not random
+
+All of them came from the same assumption: **that a codebase with one calling
+convention had been cleanly extended to two.** It had not. Every limit was written when
+there was one form, so every limit is a candidate for "is this still true in the other
+form?" -- and the answer was "no" three times out of three.
+
+That is why the campaign's most useful artefact is not the frame ABI. It is the list of
+refusals in each backend and the question to ask of each one: **is this about the
+register form?** Every real defect found here -- the four-entry ceiling, the
+sixth-argument loss, the three-parameter cap, the buffered vector result, the
+single-result epilogue -- was one of those guards applied to both forms alike.
