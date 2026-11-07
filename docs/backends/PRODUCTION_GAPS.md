@@ -793,3 +793,41 @@ is *record, document, keep probing*.
 * **R-8 is the ruling**, not a limitation;
 * the unprobed list is where the next defect could still be hiding -- and the reason to
   keep probing rather than declare victory.
+
+## 24. Ledger, second revision (after probes 13-16)
+
+### Defects
+
+| # | Defect | Backend | Confidence |
+|---|---|---|---|
+| **D-1** | an **uncaught** `throw` returns normally instead of trapping (caught throws work correctly -- probe 13) | LibJIT | high |
+| **D-2** | `array.set` / `array.fill` **abort the process** (assertion in `popValueRaw`) | LibJIT | high (needs a minimal repro) |
+| **D-3** | an `externref` passed through a struct field comes back **non-null** for a null input | SLJIT | high (pinned) |
+
+**Two backends, three defects.** AsmJIT has none.
+
+### Rows completed since the first ledger
+
+| Feature | SLJIT | AsmJIT | LibJIT |
+|---|---|---|---|
+| exception handlers (`try_table` + catch) | ⛔ | ⛔ | **✅ works** |
+| GC array ops (`set`, `fill`) | ? | ? | **abort (D-2)** |
+| `funcref` in a table + `call_indirect` | ✅ | ✅ | ✅ |
+| `externref` in a struct field | **❌ D-3** | ✅ | ✅ |
+| bulk memory on memory32 | ✅ | ✅ | ✅ |
+| multi-memory | ✅ | ✅ | ✅ |
+
+### Retracted
+
+**Q-1** (`array.set` operand order) is **not a defect**: the tree has passing spec tests for
+`array`, `array_fill` and `array_new_elem`, and my fixture had two invalid versions. The
+probe measured itself, not the feature.
+
+### Still unprobed
+
+| Area | Note |
+|---|---|
+| threads beyond a single atomic RMW | one instruction probed; shared memory itself works on LibJIT |
+| `array.get/set/fill` **on AsmJIT and SLJIT** | Q-1 left this row unresolved: the fixture needs fixing before the row can be filled |
+| GC arrays of **reference** elements | values probed, reference elements not |
+| exception **handler payloads** across instances | single-module only so far |

@@ -262,3 +262,45 @@ A probe that is *invalid wasm* makes every backend look broken -- and the messag
 bugs when they are correct rejections. **The fixture must be validated before its results
 are believed**, which is the same rule as "inert test data" and "assert the property",
 applied one step earlier.
+
+## 9. Probes 15 and 16: tables work everywhere; a reference in a struct field is D-3
+
+```
+TABLE    libjit/asmjit/sljit: via_table(3,4)=7
+REFFIELD libjit: roundtrip(null)=null
+REFFIELD asmjit: roundtrip(null)=null
+REFFIELD sljit:  roundtrip(null)=non-null     <- D-3
+```
+
+| # | Probe | SLJIT | AsmJIT | LibJIT |
+|---|---|---|---|---|
+| 15 | `funcref` in a table + `call_indirect` | ✅ 7 | ✅ 7 | ✅ 7 |
+| 16 | `externref` stored in a struct field | ❌ **D-3** | ✅ null | ✅ null |
+
+### D-3: SLJIT mangles a reference that passes through a struct field
+
+An identity round-trip of `null` returns **non-null** on SLJIT. The function is
+`(externref) -> externref` and its body is `struct.new` then `struct.get` of field 0, so
+the reference must come back unchanged -- and on two backends it does.
+
+The likely cause is a *boxing* mistake: SLJIT probably returns the **GC object**
+(the struct it just built) instead of the **payload read out of its field**. That would
+explain a non-null value that is nevertheless a valid pointer, and it is worth checking
+first when this is fixed.
+
+Pinned, not tolerated: the test asserts SLJIT's **current wrong** behaviour, so closing
+the defect forces the test to be rewritten.
+
+## 10. Q-1 was my fixture, not the backends
+
+`array.fill` has spec coverage in the tree (`spec: array`, `spec: array_fill`,
+`spec: array_new_elem`), and all three pass. Combined with the two earlier invalid
+versions of the probe fixture, the honest conclusion is:
+
+> **Q-1 does not become a defect.** My `gc_array_ops_probe` fixture is the likely
+> culprit; the feature has passing spec coverage in the shapes the suite exercises.
+
+**D-2 stands independently of Q-1**: LibJIT's abort was reproduced with an assertion in
+`popValueRaw`, and the probe skips LibJIT so the suite survives. D-2 still needs a
+minimal reproduction that the spec tests do not already cover -- which is a task for the
+fix session, not for probing.

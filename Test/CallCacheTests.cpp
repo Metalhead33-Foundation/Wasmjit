@@ -986,3 +986,60 @@ std::fprintf(stderr, "REFUSED: %s\n", error.what());
 }
 }
 }
+
+// Item 4, probes 15 and 16: tables with call_indirect, and a reference stored in a
+// struct field (docs/backends/CAPABILITY_PROBES.md section 9).
+TEST_CASE("tables and reference fields: refuse or answer correctly",
+"[staging][abi][tables][gc]")
+{
+for (const char* backend : {"libjit", "asmjit", "sljit"}) {
+{
+std::fprintf(stderr, "TABLE %s: ", backend);
+auto runtime = WASM::Runtime::create(backend);
+REQUIRE(runtime != nullptr);
+auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "table_call_probe.wasm");
+WASM::RegistryImportResolver imports;
+try {
+WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+const std::optional<WASM::Callable> call = instance.exportedFunction("via_table");
+if (!call.has_value()) {
+std::fprintf(stderr, "no export\n");
+} else {
+const std::int32_t value = WASM::callCallable<std::int32_t>(*call, 3, 4);
+std::fprintf(stderr, "via_table(3,4)=%d\n", (int)value);
+CHECK(value == 7);
+}
+} catch (const std::exception& error) {
+std::fprintf(stderr, "REFUSED: %s\n", error.what());
+}
+}
+{
+std::fprintf(stderr, "REFFIELD %s: ", backend);
+auto runtime = WASM::Runtime::create(backend);
+REQUIRE(runtime != nullptr);
+auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "ref_field_probe.wasm");
+WASM::RegistryImportResolver imports;
+try {
+WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+const std::optional<WASM::Callable> call = instance.exportedFunction("roundtrip");
+if (!call.has_value()) {
+std::fprintf(stderr, "no export\n");
+} else {
+const void* value = WASM::callCallable<const void*>(*call, nullptr);
+std::fprintf(stderr, "roundtrip(null)=%s\n", value == nullptr ? "null" : "non-null");
+// KNOWN DEFECT D-3: SLJIT returns a NON-NULL value when a null externref crosses a
+// struct field. Pinned, not tolerated: the day it returns null this assertion fails
+// and the test is rewritten (docs/backends/PRODUCTION_GAPS.md section 24).
+if (std::string(backend) == "sljit")
+CHECK(value != nullptr);
+else
+CHECK(value == nullptr);
+}
+} catch (const std::exception& error) {
+std::fprintf(stderr, "REFUSED: %s\n", error.what());
+}
+}
+}
+}
