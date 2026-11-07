@@ -273,3 +273,51 @@ makes Doxygen **merge the two docs onto one function**. Both happened here, and 
 were caught by gates (`WARN_NO_PARAMDOC` and a build error). The fix pattern, now used
 twice: normalise `\\` -> `\`, then move the older block down beside its own
 declaration.
+
+## 11. Item A step 2: the decision is per FUNCTION, not per module
+
+Before flipping anything, the sites were read. There are three, and they do not share a
+scope:
+
+| Site | Scope | Today |
+|---|---|---|
+| `translateTypes` signature loop (`:5173`) | **per type** | `frameMode` from the opt-in |
+| `FunctionCompiler` constructor local `frameAbi` (`:894`) | **per function** | same |
+| `FunctionCompiler` member `frameMode` (`:5137`) | **per function** | same |
+
+So "frame mode" is already consulted at three different granularities, and step 2's
+"module-wide flag, or measurement" would have smeared one answer across all three.
+The natural decision is **per signature**, computed by the helper added in step 1:
+
+```cpp
+translateFunctionType(type, TypeTranslator::signatureNeedsFrame(type) || optIn)
+```
+
+and the two `FunctionCompiler` sites read the same expression for their own `type`.
+That is *smaller* than the plan and strictly more precise: a module with one wide
+function and nine narrow ones stops paying the frame cost for all ten.
+
+### The consequence that must be decided first
+
+`ModuleInstance::frameCallAbi()` is **per module**, and the cache reads it as "this
+instance's entries take `(ctx, frame)`". With per-function modes that stops being true:
+
+* the flag can only mean *"at least one function is frame-form"*, which the cache would
+  misread for the narrow ones;
+* the honest fix is to make the frame-ness a property of the **`Callable`** (or of the
+  cache entry), not of the instance -- and §39 records that `Callable` is frozen, so
+  that is an API decision, not an edit.
+
+**Therefore step 2 has a prerequisite the plan did not name:** decide where per-function
+frame-ness lives before flipping the default. Options, cheapest first:
+
+1. keep the mode **per module** (as today) and let the measurement apply only to
+   modules that need it *entirely* -- no API change, and it still fixes the reported
+   defect (AsmJIT's frame form depending on a global switch);
+2. per function, with frame-ness carried by `Callable` -- correct, but an API decision.
+
+Option 1 is what the plan intended and needs no new surface; option 2 is better and
+should be scheduled deliberately. **Neither was flipped today**, because choosing wrong
+would invalidate the 31-fixture migration that follows.
+
+Suite 21866 assertions in 777 cases, green; nothing changed.
