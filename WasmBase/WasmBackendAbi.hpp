@@ -317,6 +317,38 @@ inline std::uint32_t frameBytes(std::span<const ValueKind> argumentKinds,
 	return frameArgumentsBytes(argumentKinds) + frameResultsBytes(resultKinds);
 }
 
+/*! \brief The process-wide staging-frame preference, mutable for the opt-in.
+\return The flag a backend reads when it chooses a calling form.
+*/
+inline bool& frameCallAbiPreference() noexcept
+{
+	static bool preferred = false;
+	return preferred;
+}
+
+/** \brief Opts every module compiled afterwards into the staging-frame ABI.
+\param enabled Whether a backend should prefer the frame form.
+
+The frame form is an option, never an inference: a backend must not switch a
+module by measuring signatures, because the form has to be honoured end to end
+(calls, drivers, embedder entries) and a silent switch changes behaviour of
+modules that already work. Setting this is a deliberate request -- typically by a
+test or an embedder that needs one ABI everywhere -- and it applies to every
+module compiled while it is set.
+*/
+inline void setFrameCallAbiOptIn(bool enabled) noexcept
+{
+	frameCallAbiPreference() = enabled;
+}
+
+/*! \brief Reports whether the staging-frame ABI was opted into.
+\return The current preference.
+*/
+inline bool frameCallAbiOptIn() noexcept
+{
+	return frameCallAbiPreference();
+}
+
 
 } // namespace WASM
 

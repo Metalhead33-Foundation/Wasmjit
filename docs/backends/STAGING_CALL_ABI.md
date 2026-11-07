@@ -482,3 +482,29 @@ lift, so its motive for the frame form is *cross-backend parity*, not capacity.
 That makes "when does a module switch" a step-6 policy question -- per module,
 per call site, or only for embedder-facing entries -- rather than a threshold.
 The frame machinery is in place and measured; the policy is what remains.
+
+### The frame form is opt-in: `WASM::setFrameCallAbiOptIn()`
+
+There is now a deliberate request, not an inference
+(`WasmBase/WasmBackendAbi.hpp`): `setFrameCallAbiOptIn(true)` makes every module
+compiled while it is set take the frame form, and `frameCallAbiOptIn()` reports
+the preference. It is process-wide, because the alternative -- a per-module
+threshold -- was measured to be wrong: LibJIT's aggregate spelling already
+delivers wide vector signatures, so automatic switching broke ten working modules.
+
+**Rules the flag encodes.**
+
+* A backend must not switch by *measuring* signatures. The form has to be honoured
+  end to end -- prologue, calls, driver, embedder entry -- and a silent switch
+  changes behaviour of modules that already work.
+* Default off. The register form stays the fast path wherever it is valid, which
+  for LibJIT is every shape it compiles today.
+* Opt-in is the fallback: when an embedder needs **one ABI everywhere** (a mixed
+  SLJIT + LibJIT process, or a single marshalling path in its own code), it asks
+  once and every backend answers the same way.
+
+**Verified on LibJIT with the flag on**: `v128_multi.wasm` instantiates in frame
+mode, `callCallableFrame` writes the three vectors at 0/16/32, and the result
+block reads **6** -- the same fixture that started this thread. With the flag off
+the same module stays on the register form and still returns 6, which is why both
+tests are kept: one pins the default, the other pins the option.

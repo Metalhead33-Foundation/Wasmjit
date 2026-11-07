@@ -1,5 +1,6 @@
 #include "LibjitModuleCompiler.hpp"
 #include "LibjitOpcodeDispatcher.hpp"
+#include "../WasmBase/WasmBackendAbi.hpp"
 #include "../WasmBase/WasmStack.hpp"
 #include "../WasmBase/WasmStore.hpp"
 #include "../WasmBase/WasmTrap.hpp"
@@ -256,41 +257,17 @@ void ModuleCompiler::translateTypes(WASM::ModuleInstance& instance, const WASM::
 	// We must do this before declaring any function, because each
 	// function's signature is expressed as a type index, and we need
 	// the jit_type_t for that index to create the jit_function_t.
-	// Staging-frame ABI (docs/backends/STAGING_CALL_ABI.md, step 4a): a module
-	// keeps the register form unless one signature needs more than five argument
-	// slots, at which point the whole module switches -- the sixth slot is the
-	// one the register form loses (docs/backends/LIBJIT_ARGUMENT_DEFECT.md).
-	// The mode must be chosen before translation, because the signature itself
-	// changes shape. Multi-result signatures stay on the register form: the
-	// trailing result-buffer convention is not part of step 4a.
+	// Staging-frame ABI (docs/backends/STAGING_CALL_ABI.md, step 4a): the frame
+	// form is OPT-IN, never inferred. LibJIT spells a `v128` as one 16-byte
+	// aggregate, so a wide vector signature already crosses the register form
+	// intact and there is no local ceiling to lift; switching every such module
+	// automatically produced ten suite failures and a crash. The register form is
+	// therefore the default -- it is the fastest form this backend has -- and the
+	// frame form is used when an embedder asks for one ABI everywhere.
+	// The choice must be made before translation, because the signature itself
+	// changes shape.
 	{
-		bool frame = false;
-		for (uint32_t ti = 0; ti < module.typeCount() && !frame; ++ti) {
-			if (module.typeView(ti).kind() != WASM::CanonTypeKind::Func)
-				continue;
-			const WASM::FuncType ft = module.funcTypeAt(ti);
-			if (ft.results.size() > 1)
-				continue;
-			uint32_t slots = 1; // the context
-			bool hasVector = false;
-			for (const WASM::StorageType& pv : ft.params) {
-				const jit_type_t pvType = typeTranslator.translateType(pv.val);
-				slots += static_cast<uint32_t>((jit_type_get_size(pvType) + 7) / 8);
-				hasVector = hasVector
-					|| pv.val.opcode == WASM::ValueTypeCode::V128;
-			}
-			// Automatic switching is OFF, deliberately. LibJIT spells a `v128`
-			// as one 16-byte aggregate, so a wide vector signature already
-			// crosses the register form intact -- measured: switching every
-			// such module to the frame form produced ten suite failures and a
-			// crash. The frame form stays available behind the flag (tests set
-			// it directly); *when* to switch is a policy decision for step 6,
-			// because the frame's value here is cross-backend parity, not a
-			// local argument ceiling.
-			frame = false;
-			(void)slots;
-			(void)hasVector;
-		}
+		const bool frame = WASM::frameCallAbiOptIn();
 		typeTranslator.setFrameCallAbi(frame);
 		instance.setFrameCallAbi(frame);
 	}

@@ -17,6 +17,7 @@
 #include "helper.hpp"
 #include "TestStore.hpp"
 #include "LibJit/LibJitTypeTranslation.hpp"
+#include "WasmBase/WasmBackendAbi.hpp"
 #include "WasmBase/WasmGcHeader.hpp"
 #include "WasmBase/WasmRegistryImportResolver.hpp"
 #include "WasmBase/WasmRuntime.hpp"
@@ -784,4 +785,37 @@ TEST_CASE("LibJIT keeps a wide vector signature on the register form",
 	WASM::RegistryImportResolver imports;
 	WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
 	CHECK_FALSE(instance.frameCallAbi());
+}
+
+TEST_CASE("LibJIT takes a three-vector signature through an opted-in frame",
+		"[staging][libjit][abi][frame]")
+{
+	// The frame form is opt-in by design (docs/backends/STAGING_CALL_ABI.md):
+	// the request switches the module, and then both directions of the frame
+	// must work -- the caller writes the argument block, the driver reads it and
+	// writes the result block back.
+	WASM::setFrameCallAbiOptIn(true);
+	auto runtime = WASM::Runtime::create("libjit");
+	REQUIRE(runtime != nullptr);
+	auto module = runtime->loadFile(
+			std::filesystem::path(WASM_TEST_DIR) / "v128_multi.wasm");
+	WASM::RegistryImportResolver imports;
+	WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+	CHECK(instance.frameCallAbi());
+
+	const std::optional<WASM::Callable> callable =
+		instance.exportedFunction("three_lanes");
+	REQUIRE(callable.has_value());
+	REQUIRE(callable->fnPtr != nullptr);
+
+	alignas(16) std::uint8_t frame[64] = {};
+	const std::uint32_t lanes[3][4] = {{1, 1, 1, 1}, {2, 2, 2, 2}, {3, 3, 3, 3}};
+	for (int i = 0; i < 3; ++i)
+		std::memcpy(frame + 16 * i, lanes[i], 16);
+	WASM::callCallableFrame(*callable, frame);
+	WASM::setFrameCallAbiOptIn(false);
+
+	std::int32_t result = 0;
+	std::memcpy(&result, frame + 48, sizeof(result));
+	CHECK(result == 6);
 }
