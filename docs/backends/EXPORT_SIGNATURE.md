@@ -1188,3 +1188,48 @@ unsupported shape (LibJIT frame calls, AsmJIT imports in frame mode, SLJIT
 multi-result) currently surfaces through one of those two indistinguishable signals.
 
 Suite 21845 assertions in 770 cases, green.
+
+## 34. Item 1 attempted and refuted in one run: a null `fnPtr` is ambiguous BOTH ways
+
+The proposed fix was to stop handing out unsupported functions as callables: in
+`ModuleInstance::exportedFunction`, return `nullopt` when the internal callable's
+`fnPtr` is null.
+
+**Three tests failed immediately**:
+
+```
+Test/SljitBackendTests.cpp:1064   REQUIRE( copy.has_value() )
+Test/RuntimeTests.cpp:423         REQUIRE( instance.exportedFunction("answer").has_value() )
+Test/PluginTests.cpp:257          REQUIRE( instance.exportedFunction("answer").has_value() )
+```
+
+So `fnPtr == nullptr` does **not** mean "the backend could not compile this": it also
+means "this backend provides an instance without compiled entries", which is a
+legitimate configuration that Runtime and Plugin tests exercise.
+
+### The finding, which is worth more than the fix would have been
+
+A null `fnPtr` is ambiguous **in both directions**:
+
+* it can mean *unsupported shape* (SLJIT's 33-parameter function);
+* it can mean *a backend with no compiled entries at all* (a legitimate instance).
+
+Inferring support from it is therefore impossible. The signal has to be **explicit**:
+
+| Option | Cost |
+|---|---|
+| a `supported` flag beside `fnPtr` in `Callable` | changes a frozen struct -- needs an API decision, `docs/API_ABI_STABILITY.md` territory |
+| a `ModuleInstance::unsupportedReason(name)` query | additive, no struct change, and it can carry the backend's own text ("the SLJIT backend does not support multiple results") |
+| `nullopt` from `exportedFunction` | **refuted** -- it breaks legitimate instances |
+
+The middle option is the right one, and it needs the backend's `unsupportedReason_` to
+survive into the instance rather than dying in the dispatcher.
+
+### Fourth instance of the same pattern
+
+Section 10 named three. This is a fourth: I assumed what a null meant, and the suite
+refuted it in one run. The rule holds and is sharpened: **a sentinel already in the
+tree has a meaning, and it is whatever the tree says -- not what the new code needs it
+to be.**
+
+Suite restored to 21845 assertions in 770 cases, green; the change was reverted.
