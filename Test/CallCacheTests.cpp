@@ -1380,3 +1380,45 @@ CHECK(false);
 }
 }
 }
+
+// Item 3: block, loop and if parameters (multi-value proposal).
+TEST_CASE("structured control flow carries block parameters",
+"[staging][gc][blockparams]")
+{
+for (const char* backend : {"libjit", "asmjit", "sljit"}) {
+std::fprintf(stderr, "BLOCKPARAM %s: ", backend);
+auto runtime = WASM::Runtime::create(backend);
+REQUIRE(runtime != nullptr);
+auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "block_params_probe.wasm");
+WASM::RegistryImportResolver imports;
+WASM::ModuleInstance* instance = nullptr;
+try {
+instance = &runtime->instantiate(*module, imports);
+} catch (const std::exception& error) {
+std::fprintf(stderr, "REFUSED: %s\n", error.what());
+CHECK(false);
+continue;
+}
+const auto block = instance->exportedFunction("block");
+const auto ifFn = instance->exportedFunction("if");
+const auto loopFn = instance->exportedFunction("loop");
+REQUIRE(block.has_value());
+REQUIRE(ifFn.has_value());
+REQUIRE(loopFn.has_value());
+try {
+const auto b = WASM::callCallable<std::int32_t>(*block, 41);
+const auto t = WASM::callCallable<std::int32_t>(*ifFn, 10, 1);
+const auto f = WASM::callCallable<std::int32_t>(*ifFn, 10, 0);
+const auto l = WASM::callCallable<std::int32_t>(*loopFn, 7);
+std::fprintf(stderr, "block=%d if=%d/%d loop=%d\n", (int)b, (int)t, (int)f, (int)l);
+CHECK(b == 42);
+CHECK(t == 11);
+CHECK(f == 12);
+CHECK(l == 0);
+} catch (const std::exception& error) {
+std::fprintf(stderr, "FAILED: %s\n", error.what());
+CHECK(false);
+}
+}
+}

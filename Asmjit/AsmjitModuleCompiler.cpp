@@ -1274,8 +1274,8 @@ protected:
 			const std::size_t payloadCount = catchAll
 					? 0u : tagPayloadType(clause.tagIdx).params.size();
 			const std::size_t carried = payloadCount + (carryExn ? 1u : 0u);
-			const std::size_t targetValues =
-					target.kind == ControlKind::Loop ? 0u : target.resultCount;
+			const std::size_t targetValues = target.kind == ControlKind::Loop
+					? target.paramCount : target.resultCount;
 			if (targetValues != carried)
 				throw std::runtime_error("AsmJit try_table catch arity does not match its target label");
 		}
@@ -1405,6 +1405,8 @@ protected:
 		checkError(compiler.jmp(frame.end), "AsmJit if/else end jump failed");
 		checkError(compiler.bind(frame.alternate), "AsmJit else label binding failed");
 		values.resize(frame.stackHeight);
+		for (const asmjit::x86::Gp& param : frame.params)
+			values.push_back(param);
 		frame.hasElse = true;
 	}
 
@@ -1451,17 +1453,19 @@ protected:
 			return;
 		}
 		ControlFrame& target = controls[controls.size() - 1 - depth];
-		const size_t branchValues = target.kind == ControlKind::Loop ? 0 : target.resultCount;
+		const bool loopTarget = target.kind == ControlKind::Loop;
+		const size_t branchValues = loopTarget ? target.paramCount : target.resultCount;
 		if (values.size() != target.stackHeight + branchValues)
 			throw std::runtime_error("AsmJit br_if operand stack does not match target label signature");
-		const asmjit::Label label = target.kind == ControlKind::Loop ? target.begin : target.end;
+		const asmjit::Label label = loopTarget ? target.begin : target.end;
 		if (branchValues != 0) {
 			auto skip = compiler.new_label();
 			checkError(compiler.test(condition, condition), "AsmJit br_if condition test failed");
 			checkError(compiler.jz(skip), "AsmJit br_if conditional skip emission failed");
 			const size_t first = values.size() - branchValues;
+			const std::vector<asmjit::x86::Gp>& destinations = loopTarget ? target.params : target.results;
 			for (size_t i = 0; i < branchValues; ++i)
-				checkError(compiler.mov(target.results[i], values[first + i]),
+				checkError(compiler.mov(destinations[i], values[first + i]),
 						"AsmJit br_if result transfer failed");
 			checkError(compiler.jmp(label), "AsmJit br_if branch emission failed");
 			checkError(compiler.bind(skip), "AsmJit br_if skip label binding failed");
@@ -1485,16 +1489,18 @@ protected:
 			return;
 		}
 		ControlFrame& target = controls[controls.size() - 1 - depth];
-		const size_t branchValues = target.kind == ControlKind::Loop ? 0 : target.resultCount;
+		const bool loopTarget = target.kind == ControlKind::Loop;
+		const size_t branchValues = loopTarget ? target.paramCount : target.resultCount;
 		if (values.size() != target.stackHeight + branchValues)
 			throw std::runtime_error("AsmJit br operand stack does not match target label signature");
 		if (branchValues != 0) {
 			const size_t first = values.size() - branchValues;
+			const std::vector<asmjit::x86::Gp>& destinations = loopTarget ? target.params : target.results;
 			for (size_t i = 0; i < branchValues; ++i)
-				checkError(compiler.mov(target.results[i], values[first + i]),
+				checkError(compiler.mov(destinations[i], values[first + i]),
 						"AsmJit br result transfer failed");
 		}
-		const asmjit::Label label = target.kind == ControlKind::Loop ? target.begin : target.end;
+		const asmjit::Label label = loopTarget ? target.begin : target.end;
 		checkError(compiler.jmp(label), "AsmJit br emission failed");
 	}
 	void dispatchBrTable(std::vector<WASM::LabelIdx>&& depths, WASM::LabelIdx defaultDepth) override
@@ -1512,7 +1518,7 @@ protected:
 				return resultTypes;
 			const ControlFrame& target = controls[controls.size() - 1 - depth];
 			if (target.kind == ControlKind::Loop)
-				return {};
+				return target.paramTypes;
 			return target.resultTypes;
 		};
 		auto validateTarget = [&](WASM::LabelIdx depth) {
@@ -1523,7 +1529,8 @@ protected:
 			if (depth < controls.size()) {
 				const ControlFrame& target = controls[controls.size() - 1 - depth];
 				stackHeight = target.stackHeight;
-				branchValues = target.kind == ControlKind::Loop ? 0 : target.resultCount;
+				branchValues = target.kind == ControlKind::Loop
+						? target.paramCount : target.resultCount;
 			}
 			const std::vector<WASM::ValueTypeCode> types = targetTypes(depth);
 			if (first) {
@@ -1553,13 +1560,16 @@ protected:
 				return;
 			}
 			ControlFrame& target = controls[controls.size() - 1 - depth];
-			if (target.kind != ControlKind::Loop && target.resultCount != 0) {
-				const size_t firstValue = values.size() - target.resultCount;
-				for (size_t i = 0; i < target.resultCount; ++i)
-					checkError(compiler.mov(target.results[i], values[firstValue + i]),
+			const bool loopTarget = target.kind == ControlKind::Loop;
+			const size_t transferCount = loopTarget ? target.paramCount : target.resultCount;
+			if (transferCount != 0) {
+				const size_t firstValue = values.size() - transferCount;
+				const std::vector<asmjit::x86::Gp>& destinations = loopTarget ? target.params : target.results;
+				for (size_t i = 0; i < transferCount; ++i)
+					checkError(compiler.mov(destinations[i], values[firstValue + i]),
 							"AsmJit br_table result transfer failed");
 			}
-			const asmjit::Label label = target.kind == ControlKind::Loop ? target.begin : target.end;
+			const asmjit::Label label = loopTarget ? target.begin : target.end;
 			checkError(compiler.jmp(label), "AsmJit br_table branch emission failed");
 		};
 		for (size_t i = 0; i < depths.size(); ++i) {
@@ -5755,6 +5765,11 @@ private:
 		ControlKind kind = ControlKind::Block;
 		size_t stackHeight = 0;
 		size_t resultCount = 0;
+			//! Declared parameter types, in order (block/loop parameters).
+		std::vector<WASM::ValueTypeCode> paramTypes;
+		//! One register per declared parameter, the values the body starts with.
+		std::vector<asmjit::x86::Gp> params;
+		std::size_t paramCount = 0;
 		//! Declared result types, in order (multi-value blocks included).
 		std::vector<WASM::ValueTypeCode> resultTypes;
 		//! One register per declared result, filled by a branch and read at `end`.
@@ -6254,7 +6269,13 @@ private:
 			throw std::runtime_error("AsmJit control nesting is too deep");
 		ControlFrame frame;
 		frame.kind = kind;
-		frame.stackHeight = values.size();
+		frame.paramTypes = blockParamTypes(type);
+		frame.paramCount = frame.paramTypes.size();
+		if (values.size() < frame.paramCount)
+			throw std::runtime_error("AsmJit block parameters underflow the operand stack");
+		frame.stackHeight = values.size() - frame.paramCount;
+		for (std::size_t i = 0; i < frame.paramCount; ++i)
+			frame.params.push_back(values[frame.stackHeight + i]);
 		frame.resultTypes = blockResultTypes(type);
 		frame.resultCount = frame.resultTypes.size();
 		for (WASM::ValueTypeCode code : frame.resultTypes) {
@@ -6272,6 +6293,21 @@ private:
 		controls.push_back(frame);
 	}
 
+	std::vector<WASM::ValueTypeCode> blockParamTypes(const WASM::BlockType& type) const
+	{
+		std::vector<WASM::ValueTypeCode> params;
+		if (type.isVoid() || !type.isTypeIndex)
+			return params;
+		if (type.typeIndex < 0 || static_cast<uint32_t>(type.typeIndex) >= module.typeCount())
+			throw std::runtime_error("AsmJit block type index is out of range");
+		const WASM::FuncType blockType = module.funcTypeAt(static_cast<uint32_t>(type.typeIndex));
+		for (const auto& param : blockType.params) {
+			requireScalar(param.val, "block parameters");
+			params.push_back(param.val.opcode);
+		}
+		return params;
+	}
+
 	std::vector<WASM::ValueTypeCode> blockResultTypes(const WASM::BlockType& type) const
 	{
 		std::vector<WASM::ValueTypeCode> results;
@@ -6281,8 +6317,6 @@ private:
 			if (type.typeIndex < 0 || static_cast<uint32_t>(type.typeIndex) >= module.typeCount())
 				throw std::runtime_error("AsmJit block type index is out of range");
 			const WASM::FuncType blockType = module.funcTypeAt(static_cast<uint32_t>(type.typeIndex));
-			if (!blockType.params.empty())
-				throw std::runtime_error("AsmJit block parameters are not supported yet");
 			for (const auto& result : blockType.results) {
 				requireScalar(result.val, "block results");
 				results.push_back(result.val.opcode);
