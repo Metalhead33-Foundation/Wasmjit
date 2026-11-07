@@ -206,3 +206,37 @@ prologue and return paths of a register-allocating backend. The two tests come
 first (signature shape; `v128_multi` returning 6 through the frame), then the
 edits in this order: signature, prologue, entry refusals, return sites, call-site
 refusals.
+
+## 11. Step 5 split into subtasks, with the tests written first
+
+The tests for step 5 now exist (`Test/AsmjitBackendTests.cpp`), in two kinds:
+
+| Kind | Tag | State today |
+|---|---|---|
+| baseline pins | `[asmjit][abi][sig]`, `[asmjit][abi][v128][gap]` | green -- they describe the behaviour step 5 must change |
+| step-5 gates | `[staging][asmjit][abi][frame]`, gated by `WASMJIT_STEP5_GATES=1` | red by design, failing with the exact refusal text |
+
+Running them is one command: `WASMJIT_STEP5_GATES=1 ./Test/WasmJit '[staging][asmjit]'`. The
+red run's message -- *"AsmJit supports only i32/i64/f32/f64 parameters"* -- is the entry
+refusal at `AsmjitModuleCompiler.cpp:892`, which is precisely the thing subtask **5c** lifts.
+So the gate does not merely fail; it **names the site**.
+
+The baseline pins matter as much as the gates, and one of them is deliberately hostile: the
+*refusal* is asserted, not tolerated. The day step 5 lands that test fails, forcing whoever
+lands it to rewrite it into the positive assertion -- a gap cannot be closed silently.
+
+### The subtasks, each with its own gate
+
+| # | Subtask | Gate |
+|---|---|---|
+| **5a** | Transitive mode: `translateFunctionType` takes the frame setting (it is `static`, so it needs a parameter, not a member flag) | `[staging][asmjit][abi][sig]` once frame mode exists |
+| **5b** | Signature: frame mode emits `(ctx, void*) -> void` | the signature-shape test, extended |
+| **5c** | Prologue + entry refusals: parameters read from the frame; `requireScalar` at `:892`/`:1358` skipped in frame mode | "instantiates a v128-parameter module in frame mode" |
+| **5d** | Return sites: results stored into the frame at `frame + frameArgumentsBytes`, `ret()` void -- epilogue `:1014`, trap path `:948`-`:957`, dispatcher `return` | "takes three vectors through a frame and returns 6" |
+| **5e** | Call sites: `prepareCallArguments` builds the callee frame; `setCallArguments` passes its address (4b for SLJIT's analogue) | `staging_call` on asmjit |
+| **5f** | `bufferedVectorResult` deletion, and the rewritten gap pin | the gap test inverted |
+
+Each subtask is green-or-revert on its own. 5a is a signature change with no behaviour, 5b a
+shape with no store, **5c is the first that can crash**, and 5d is the one that must touch
+three return sites. That ordering exists so a failure localises to one subtask rather than to
+"step 5".

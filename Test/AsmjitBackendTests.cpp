@@ -1,14 +1,19 @@
 #include <catch2/catch_all.hpp>
 
 #include "Asmjit/AsmjitContext.hpp"
+#include "Asmjit/AsmjitTypeTranslator.hpp"
 #include "TestFixtures.hpp"
 #include "WasmBase/WasmBackendRegistry.hpp"
 #include "WasmBase/WasmRegistryImportResolver.hpp"
+#include "WasmBase/WasmBackendAbi.hpp"
 #include "WasmBase/WasmRuntime.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <cstdlib>
+#include <cstring>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -17,6 +22,7 @@ TEST_CASE("AsmJit registers under its name and instantiates a module", "[asmjit]
 	const std::vector<std::string> names = WASM::backendNames();
 	REQUIRE(std::find(names.begin(), names.end(), "asmjit") != names.end());
 	const WASM::BackendInstance backend = WASM::createBackendInstance("asmjit");
+
 	REQUIRE(backend.instantiator != nullptr);
 	REQUIRE(backend.keepAlive != nullptr);
 
@@ -178,4 +184,106 @@ CHECK(lanes[1] == 8u);
 CHECK(lanes[2] == 9u);
 CHECK(lanes[3] == 10u);
 }
+}
+
+// ── Step 5 scaffolding (docs/backends/EXPORT_SIGNATURE.md §7-§10) ──────────
+//
+// Two kinds of test live here. The untagged ones are green today and pin the
+// *baseline* step 5 must change: the canonical two-word spelling of a v128 at
+// the C boundary, and the fact that AsmJIT still refuses a v128 parameter at
+// function entry. The ones tagged "[.]" are the step-5 gates, written before the
+// implementation; run them with
+//     ./Test/WasmJit '[.][staging][asmjit]'
+// and expect red until the frame form lands.
+TEST_CASE("AsmJIT spells each v128 parameter as two words at the C boundary",
+		"[asmjit][abi][sig]")
+{
+	WASM::StorageType vector;
+	vector.isPacked = false;
+	vector.val.opcode = WASM::ValueTypeCode::V128;
+	vector.val.heapType = -1;
+
+	WASM::StorageType scalar;
+	scalar.isPacked = false;
+	scalar.val.opcode = WASM::ValueTypeCode::I32;
+	scalar.val.heapType = -1;
+
+	WASM::FuncType type;
+	type.params.assign(3, vector);
+	type.results.push_back(scalar);
+
+	const asmjit::FuncSignature signature =
+		AsmJitBackend::TypeTranslator::translateFunctionType(type);
+	// Context, then two words per vector: six argument words, which is exactly
+	// what a four-entry register ceiling cannot carry -- so the *signature* can
+	// already spell the case the *compiler* refuses at entry.
+	CHECK(signature.arg_count() == 7u);
+	CHECK(signature.args()[0] == asmjit::TypeId::kUIntPtr);
+	for (size_t i = 1; i < signature.arg_count(); ++i)
+		CHECK(signature.args()[i] == asmjit::TypeId::kUInt64);
+	// Scalar, not a pointer: the result stays a typed return in step 5a.
+	CHECK(signature.ret() == asmjit::TypeId::kInt32);
+}
+
+TEST_CASE("AsmJIT refuses a v128 parameter at function entry", "[asmjit][abi][v128][gap]")
+{
+	auto runtime = WASM::Runtime::create("asmjit");
+	REQUIRE(runtime != nullptr);
+	auto module = runtime->loadFile(
+			std::filesystem::path(WASM_TEST_DIR) / "v128_multi.wasm");
+	WASM::RegistryImportResolver imports;
+	// The signature spells it (test above); the compiler refuses it at
+	// AsmjitModuleCompiler.cpp:892. Lifting that refusal is step 5, and this
+	// test is deliberately written to be REWRITTEN when it happens -- a gap pin
+	// that fails the day the gap closes.
+	REQUIRE_THROWS(runtime->instantiate(*module, imports));
+}
+
+TEST_CASE("AsmJIT instantiates a v128-parameter module in frame mode",
+		"[.][staging][asmjit][abi][frame]")
+{
+	if (std::getenv("WASMJIT_STEP5_GATES") == nullptr) {
+		SUCCEED("step 5 gate: set WASMJIT_STEP5_GATES=1 to run it");
+		return;
+	}
+	WASM::setFrameCallAbiOptIn(true);
+	auto runtime = WASM::Runtime::create("asmjit");
+	REQUIRE(runtime != nullptr);
+	auto module = runtime->loadFile(
+			std::filesystem::path(WASM_TEST_DIR) / "v128_multi.wasm");
+	WASM::RegistryImportResolver imports;
+	WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+	WASM::setFrameCallAbiOptIn(false);
+	CHECK(instance.frameCallAbi());
+}
+
+TEST_CASE("AsmJIT takes three vectors through a frame and returns 6",
+		"[.][staging][asmjit][abi][frame]")
+{
+	if (std::getenv("WASMJIT_STEP5_GATES") == nullptr) {
+		SUCCEED("step 5 gate: set WASMJIT_STEP5_GATES=1 to run it");
+		return;
+	}
+	WASM::setFrameCallAbiOptIn(true);
+	auto runtime = WASM::Runtime::create("asmjit");
+	REQUIRE(runtime != nullptr);
+	auto module = runtime->loadFile(
+			std::filesystem::path(WASM_TEST_DIR) / "v128_multi.wasm");
+	WASM::RegistryImportResolver imports;
+	WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+
+	const std::optional<WASM::Callable> callable =
+		instance.exportedFunction("three_lanes");
+	REQUIRE(callable.has_value());
+
+	alignas(16) std::uint8_t frame[64] = {};
+	const std::uint32_t lanes[3][4] = {{1, 1, 1, 1}, {2, 2, 2, 2}, {3, 3, 3, 3}};
+	for (int i = 0; i < 3; ++i)
+		std::memcpy(frame + 16 * i, lanes[i], 16);
+	WASM::callCallableFrame(*callable, frame);
+	WASM::setFrameCallAbiOptIn(false);
+
+	std::int32_t result = 0;
+	std::memcpy(&result, frame + 48, sizeof(result));
+	CHECK(result == 6);
 }
