@@ -195,3 +195,43 @@ mis-matched brace would compile silently into a wrong branch chain -- the one fa
 mode this campaign has learned to refuse.
 
 Suite 21862 assertions in 776 cases, green.
+
+## 8. Decision: AsmJIT fails the whole module (2b closed by policy)
+
+The project owner's ruling:
+
+> **Module-level throw. If one function fails, the entire module is garbage.**
+
+That settles 2b for AsmJIT in one line -- **there is nothing to implement**. AsmJIT
+throwing from the dispatcher is not a limitation of the reporting mechanism; it is the
+declared contract:
+
+| Backend | A refused function means | `unsupportedReason` |
+|---|---|---|
+| **SLJIT** | *that function* is uncallable; the module is otherwise usable | **populated** (2b landed) |
+| **AsmJIT** | the **module** is unusable -- instantiation throws | never populated, by design |
+| **LibJIT** | module-level refusals today; per-function once the checks move into the compiler | pending |
+
+The two models are coherent rather than contradictory: SLJIT can degrade to a partial
+module because its failures are per-function; AsmJIT's failures are structural (ABI
+translation, unsupported value types), so a partial module would be a lie. **A tree that
+sometimes throws and sometimes reports must say which is which** -- and it now does.
+
+## 9. Housekeeping 3a done: the dead epilogue branch is gone
+
+```
+before:  :1097 live "steps 5c/5e"   :1124 bufferedVectorResult   :1141 dead "step 5c"
+after:   :1097 live                :1124 bufferedVectorResult   (no dead branch)
+```
+
+Applied as a **ranged** edit, exactly as section 7 specified: keep the `}` that closes
+`bufferedVectorResult`, drop ` else if (frameMode) {` through the dead body's closing
+brace, and let the fallback `else` attach to the branch above. Verified by count
+(two occurrences of the marker became one), by the compiler, and by both suites:
+step-5 gates **31 in 7**, whole suite **21862 in 776**.
+
+**Why the script and not the editor:** the two branches opened with identical text, and
+a partial match would have deleted the *live* one -- which would still have compiled,
+because the dead one handled the same case. That is the silent-branch-chain failure
+this campaign has refused three times; the script asserted `keep < a2 < resume` before
+writing.

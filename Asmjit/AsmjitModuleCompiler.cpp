@@ -1138,21 +1138,6 @@ public:
 				checkError(compiler.mov(asmjit::x86::qword_ptr(destination, 8), word),
 						"AsmJit v128 result high word store failed");
 				checkError(compiler.ret(), "AsmJit v128 result return emission failed");
-			} else if (frameMode) {
-				// Staging-frame ABI (step 5c): the result goes into the frame --
-				// AsmJIT has no driver to collect it -- and the signature returns
-				// void. The result block begins where the argument block ends.
-				uint32_t resultOffset = 0;
-				for (const WASM::StorageType& p : type.params)
-					resultOffset += p.val.opcode == WASM::ValueTypeCode::V128 ? 16u : 8u;
-				asmjit::x86::Gp destination = compiler.new_gp_ptr("resultAddress");
-				checkError(compiler.lea(destination,
-						asmjit::x86::Mem(framePointer, resultOffset)),
-						"AsmJit frame result address failed");
-				checkError(compiler.mov(
-						asmjit::x86::Mem(destination, 0, values.back().size()),
-						values.back()), "AsmJit frame result store failed");
-				checkError(compiler.ret(), "AsmJit frame result return failed");
 			} else
 				checkError(compiler.ret(values.back()),
 						"AsmJit function return emission failed");
