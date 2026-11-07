@@ -516,3 +516,41 @@ mode, `callCallableFrame` writes the three vectors at 0/16/32, and the result
 block reads **6** -- the same fixture that started this thread. With the flag off
 the same module stays on the register form and still returns 6, which is why both
 tests are kept: one pins the default, the other pins the option.
+
+## 12. P0: the LibJIT guard, and why it belongs one level up (reverted)
+
+**The hole is real.** `LibJit/` contains no `frameCallAbi` reference outside the
+prologue, the mode choice and the driver, so a frame-mode module containing a `call`
+compiled the register form against a callee expecting `(ctx, frame)` -- a silent
+miscompile, not a refusal.
+
+The guard was written at the five call entry points (`dispatchCall`,
+`dispatchCallIndirect`, `dispatchReturnCall`, `dispatchReturnCallIndirect`,
+`dispatchReturnCallRef`), each throwing when `instance.frameCallAbi()`. Result:
+**two `[staging][libjit]` failures and a segfault in the full suite**, reverted on
+sight.
+
+### What that means
+
+Throwing from inside the dispatcher happens **while LibJIT is building a context**.
+That phase is not exception-safe: a throw leaves the context half-built, and the
+*destructor* or the *next* module then faults. The failures also appeared in tests
+that never enable the frame mode, which is the signature of corrupted state rather
+than a wrong condition.
+
+**Therefore the guard belongs at the module level**: refuse at instantiation,
+before any JIT context is built -- scan the function bodies for call opcodes, or
+refuse by type when the module has both a frame-mode signature and any call. A
+refusal that happens before code generation cannot corrupt anything.
+
+That is also the shape AsmJIT's native-import exclusion needs (P0b), so the two
+subtasks share one mechanism: **decide refusal eligibility at the module level, then
+compile.**
+
+### Priority note (from the project owner)
+
+Lifting the cross-backend *call* ban is **optional**. What is mandatory is
+**one spelling for exposing C++ functions to wasm and one spelling for calling
+compiled wasm from C++, on every backend**. That makes ABI uniformity -- not
+cross-backend mixing -- the thing this campaign is measured by, and it demotes the
+cross-backend test suite from a gate to a nice-to-have.
