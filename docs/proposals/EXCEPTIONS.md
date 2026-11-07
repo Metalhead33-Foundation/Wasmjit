@@ -131,6 +131,14 @@ shape only.)
   suite does not exercise this corner; a future tail-call-aware handler model
   would close it.
 
+- **All three backends execute the protocol (2026-11-07).** SLJIT and AsmJIT no
+  longer refuse `throw`, `throw_ref` or `try_table`: both implement the same
+  Store-owned object, pending-slot protocol, call-site check and runtime clause
+  dispatch as LibJIT, and a cross-instance throw is caught with its payload on
+  every backend. AsmJIT still refuses `catch_ref`/`catch_all_ref` and a catch
+  whose payload is wider than one value, because a structured block on that
+  backend carries at most one result; that refusal is explicit, not silent.
+
 ## 5. Gaps
 
 | # | Gap | Evidence | Severity |

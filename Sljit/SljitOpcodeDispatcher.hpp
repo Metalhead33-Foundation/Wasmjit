@@ -64,10 +64,11 @@ public:
 	 * \param body Decoded body whose opcode stream is walked.
 	 * \param functionIndex Module function index, used for the trap-site annotation.
 	 * \param frameCallAbi True to emit the staging-frame ABI (`void fn(VMContext*, void* frame)`) instead of the register form; set module-wide by the compiler (docs/backends/STAGING_CALL_ABI.md).
+	 * \param tagIds The instance's tag index space, imports first, so a `throw tagidx` folds to its canonical id (docs/proposals/EXCEPTIONS.md EX-2).
 	 */
 	OpcodeDispatcher(const WASM::Module& module, const WASM::FuncType& funcType,
 			const WASM::FunctionBody& body, std::uint32_t functionIndex,
-			bool frameCallAbi = false);
+			bool frameCallAbi, const std::vector<WASM::TagId>& tagIds);
 
 	/*!
 	 * \brief Emits the function and hands back its executable entry point.
@@ -107,6 +108,9 @@ protected:
 	void dispatchReturn() override; //!< `return`.
 	void dispatchReturnCall(WASM::FuncIdx arg) override; //!< `return_call`.
 	void dispatchReturnCallIndirect(WASM::TypeIdx arg1, WASM::TableIdx arg2) override; //!< `return_call_indirect`.
+	void dispatchTryTable(const WASM::BlockType& arg1, std::vector<WASM::CatchClause>&& arg2) override; //!< `try_table`.
+	void dispatchThrow(WASM::TagIdx arg) override; //!< `throw`.
+	void dispatchThrowRef() override; //!< `throw_ref`.
 	void dispatchCall(WASM::FuncIdx arg) override; //!< `call`.
 	void dispatchCallIndirect(WASM::TypeIdx arg1, WASM::TableIdx arg2) override; //!< `call_indirect`.
 	void dispatchDrop() override; //!< `drop`.
@@ -541,6 +545,75 @@ protected:
 	void dispatchTableCopy(WASM::TableIdx arg1, WASM::TableIdx arg2) override; //!< `table.copy`.
 	void dispatchTableSize(WASM::TableIdx arg) override; //!< `table.size`.
 
+	void dispatchI32AtomicLoad(WASM::MemArg arg) override; //!< Atomic load (4 byte(s), 4-byte value).
+	void dispatchI64AtomicLoad(WASM::MemArg arg) override; //!< Atomic load (8 byte(s), 8-byte value).
+	void dispatchI32AtomicLoad8U(WASM::MemArg arg) override; //!< Atomic load (1 byte(s), 4-byte value).
+	void dispatchI32AtomicLoad16U(WASM::MemArg arg) override; //!< Atomic load (2 byte(s), 4-byte value).
+	void dispatchI64AtomicLoad8U(WASM::MemArg arg) override; //!< Atomic load (1 byte(s), 8-byte value).
+	void dispatchI64AtomicLoad16U(WASM::MemArg arg) override; //!< Atomic load (2 byte(s), 8-byte value).
+	void dispatchI64AtomicLoad32U(WASM::MemArg arg) override; //!< Atomic load (4 byte(s), 8-byte value).
+	void dispatchI32AtomicStore(WASM::MemArg arg) override; //!< Atomic store (4 byte(s), 4-byte value).
+	void dispatchI64AtomicStore(WASM::MemArg arg) override; //!< Atomic store (8 byte(s), 8-byte value).
+	void dispatchI32AtomicStore8(WASM::MemArg arg) override; //!< Atomic store (1 byte(s), 4-byte value).
+	void dispatchI32AtomicStore16(WASM::MemArg arg) override; //!< Atomic store (2 byte(s), 4-byte value).
+	void dispatchI64AtomicStore8(WASM::MemArg arg) override; //!< Atomic store (1 byte(s), 8-byte value).
+	void dispatchI64AtomicStore16(WASM::MemArg arg) override; //!< Atomic store (2 byte(s), 8-byte value).
+	void dispatchI64AtomicStore32(WASM::MemArg arg) override; //!< Atomic store (4 byte(s), 8-byte value).
+	void dispatchI32AtomicRmwAdd(WASM::MemArg arg) override; //!< Atomic `add` (4 byte(s)).
+	void dispatchI64AtomicRmwAdd(WASM::MemArg arg) override; //!< Atomic `add` (8 byte(s)).
+	void dispatchI32AtomicRmw8AddU(WASM::MemArg arg) override; //!< Atomic `add` (1 byte(s)).
+	void dispatchI32AtomicRmw16AddU(WASM::MemArg arg) override; //!< Atomic `add` (2 byte(s)).
+	void dispatchI64AtomicRmw8AddU(WASM::MemArg arg) override; //!< Atomic `add` (1 byte(s)).
+	void dispatchI64AtomicRmw16AddU(WASM::MemArg arg) override; //!< Atomic `add` (2 byte(s)).
+	void dispatchI64AtomicRmw32AddU(WASM::MemArg arg) override; //!< Atomic `add` (4 byte(s)).
+	void dispatchI32AtomicRmwSub(WASM::MemArg arg) override; //!< Atomic `sub` (4 byte(s)).
+	void dispatchI64AtomicRmwSub(WASM::MemArg arg) override; //!< Atomic `sub` (8 byte(s)).
+	void dispatchI32AtomicRmw8SubU(WASM::MemArg arg) override; //!< Atomic `sub` (1 byte(s)).
+	void dispatchI32AtomicRmw16SubU(WASM::MemArg arg) override; //!< Atomic `sub` (2 byte(s)).
+	void dispatchI64AtomicRmw8SubU(WASM::MemArg arg) override; //!< Atomic `sub` (1 byte(s)).
+	void dispatchI64AtomicRmw16SubU(WASM::MemArg arg) override; //!< Atomic `sub` (2 byte(s)).
+	void dispatchI64AtomicRmw32SubU(WASM::MemArg arg) override; //!< Atomic `sub` (4 byte(s)).
+	void dispatchI32AtomicRmwAnd(WASM::MemArg arg) override; //!< Atomic `and` (4 byte(s)).
+	void dispatchI64AtomicRmwAnd(WASM::MemArg arg) override; //!< Atomic `and` (8 byte(s)).
+	void dispatchI32AtomicRmw8AndU(WASM::MemArg arg) override; //!< Atomic `and` (1 byte(s)).
+	void dispatchI32AtomicRmw16AndU(WASM::MemArg arg) override; //!< Atomic `and` (2 byte(s)).
+	void dispatchI64AtomicRmw8AndU(WASM::MemArg arg) override; //!< Atomic `and` (1 byte(s)).
+	void dispatchI64AtomicRmw16AndU(WASM::MemArg arg) override; //!< Atomic `and` (2 byte(s)).
+	void dispatchI64AtomicRmw32AndU(WASM::MemArg arg) override; //!< Atomic `and` (4 byte(s)).
+	void dispatchI32AtomicRmwOr(WASM::MemArg arg) override; //!< Atomic `or` (4 byte(s)).
+	void dispatchI64AtomicRmwOr(WASM::MemArg arg) override; //!< Atomic `or` (8 byte(s)).
+	void dispatchI32AtomicRmw8OrU(WASM::MemArg arg) override; //!< Atomic `or` (1 byte(s)).
+	void dispatchI32AtomicRmw16OrU(WASM::MemArg arg) override; //!< Atomic `or` (2 byte(s)).
+	void dispatchI64AtomicRmw8OrU(WASM::MemArg arg) override; //!< Atomic `or` (1 byte(s)).
+	void dispatchI64AtomicRmw16OrU(WASM::MemArg arg) override; //!< Atomic `or` (2 byte(s)).
+	void dispatchI64AtomicRmw32OrU(WASM::MemArg arg) override; //!< Atomic `or` (4 byte(s)).
+	void dispatchI32AtomicRmwXor(WASM::MemArg arg) override; //!< Atomic `xor` (4 byte(s)).
+	void dispatchI64AtomicRmwXor(WASM::MemArg arg) override; //!< Atomic `xor` (8 byte(s)).
+	void dispatchI32AtomicRmw8XorU(WASM::MemArg arg) override; //!< Atomic `xor` (1 byte(s)).
+	void dispatchI32AtomicRmw16XorU(WASM::MemArg arg) override; //!< Atomic `xor` (2 byte(s)).
+	void dispatchI64AtomicRmw8XorU(WASM::MemArg arg) override; //!< Atomic `xor` (1 byte(s)).
+	void dispatchI64AtomicRmw16XorU(WASM::MemArg arg) override; //!< Atomic `xor` (2 byte(s)).
+	void dispatchI64AtomicRmw32XorU(WASM::MemArg arg) override; //!< Atomic `xor` (4 byte(s)).
+	void dispatchI32AtomicRmwXchg(WASM::MemArg arg) override; //!< Atomic `xchg` (4 byte(s)).
+	void dispatchI64AtomicRmwXchg(WASM::MemArg arg) override; //!< Atomic `xchg` (8 byte(s)).
+	void dispatchI32AtomicRmw8XchgU(WASM::MemArg arg) override; //!< Atomic `xchg` (1 byte(s)).
+	void dispatchI32AtomicRmw16XchgU(WASM::MemArg arg) override; //!< Atomic `xchg` (2 byte(s)).
+	void dispatchI64AtomicRmw8XchgU(WASM::MemArg arg) override; //!< Atomic `xchg` (1 byte(s)).
+	void dispatchI64AtomicRmw16XchgU(WASM::MemArg arg) override; //!< Atomic `xchg` (2 byte(s)).
+	void dispatchI64AtomicRmw32XchgU(WASM::MemArg arg) override; //!< Atomic `xchg` (4 byte(s)).
+	void dispatchI32AtomicRmwCmpxchg(WASM::MemArg arg) override; //!< Atomic compare-exchange (4 byte(s)).
+	void dispatchI64AtomicRmwCmpxchg(WASM::MemArg arg) override; //!< Atomic compare-exchange (8 byte(s)).
+	void dispatchI32AtomicRmw8CmpxchgU(WASM::MemArg arg) override; //!< Atomic compare-exchange (1 byte(s)).
+	void dispatchI32AtomicRmw16CmpxchgU(WASM::MemArg arg) override; //!< Atomic compare-exchange (2 byte(s)).
+	void dispatchI64AtomicRmw8CmpxchgU(WASM::MemArg arg) override; //!< Atomic compare-exchange (1 byte(s)).
+	void dispatchI64AtomicRmw16CmpxchgU(WASM::MemArg arg) override; //!< Atomic compare-exchange (2 byte(s)).
+	void dispatchI64AtomicRmw32CmpxchgU(WASM::MemArg arg) override; //!< Atomic compare-exchange (4 byte(s)).
+	void dispatchMemoryAtomicNotify(WASM::MemArg arg) override; //!< `memory.atomic.notify`.
+	void dispatchMemoryAtomicWait32(WASM::MemArg arg) override; //!< `memory.atomic.wait32`.
+	void dispatchMemoryAtomicWait64(WASM::MemArg arg) override; //!< `memory.atomic.wait64`.
+	void dispatchAtomicFence(uint8_t ordering) override; //!< `atomic.fence`.
+	void dispatchAtomicPause() override; //!< `atomic.pause`.
+
 private:
 	//! Structured control kind of one active block frame.
 	enum class ControlKind { Block, Loop, If };
@@ -551,6 +624,10 @@ private:
 		std::size_t baseDepth = 0; //!< Operand depth the label's values live at.
 		std::vector<int> paramWidths; //!< Widths of the block's parameters.
 		std::vector<int> resultWidths; //!< Widths of the block's results.
+		//! True for a `try_table` frame; its clauses route a pending exception.
+		bool tryTable = false;
+		//! Decoded catch clauses of a `try_table`, in source order.
+		std::vector<WASM::CatchClause> catchClauses;
 		sljit_label* begin = nullptr; //!< Branch target of a loop.
 		sljit_jump* alternateJump = nullptr; //!< False path of an `if`.
 		std::vector<sljit_jump*> endJumps; //!< Branches to the merge point.
@@ -710,6 +787,41 @@ private:
 	}
 	//! Probes the pending-trap slot and branches to the trap epilogue when set.
 	void emitPendingTrapCheck();
+	/*!
+	 * \brief Resolves the payload signature a tag index declares.
+	 * \param tagIdx Tag index in the module's index space (imports first).
+	 * \return The tag's function type, whose parameters are the payload.
+	 */
+	WASM::FuncType tagPayloadType(WASM::TagIdx tagIdx);
+	/*!
+	 * \brief Returns the canonical id of the tag a catch clause names.
+	 * \param clause Decoded catch clause.
+	 * \return The tag's process-wide id.
+	 */
+	WASM::TagId tagIdForClause(const WASM::CatchClause& clause);
+	//! Probes the pending-exception slot after a call: routes a pending exception
+	//! to a local `try_table` clause or returns from this function, and leaves the
+	//! continuation reachable when the slot is empty.
+	void emitPendingExceptionCheck();
+	//! Dispatches the pending exception over the open `try_table` frames at run
+	//! time; every emitted path branches to a catch target or returns zeroes.
+	void emitExceptionPropagation();
+	/*!
+	 * \brief Writes a catch's payload into the target's slots and branches to it.
+	 * \param target Control frame the catch label names.
+	 * \param payload The caught tag's payload signature.
+	 * \param carryExn True for `catch_ref`/`catch_all_ref`, which also carry the `exnref`.
+	 */
+	void emitCatchBranch(ControlFrame& target, const WASM::FuncType& payload, bool carryExn);
+	//! Returns the zero of each declared result without annotating a trap. Used
+	//! when an uncaught exception leaves the function: the caller sees the
+	//! pending slot before any value.
+	void emitZeroReturn();
+	/*!
+	 * \brief Byte offset of the reserved slot holding the exception being routed.
+	 * \return Offset from `SLJIT_SP`.
+	 */
+	sljit_sw exceptionPtrSlotOffset() const;
 	//! Emits an unconditional branch to the trap epilogue.
 	void emitTrap(WASM::TrapKind kind); //!< Reports one trap kind and leaves the block.
 	void emitTrapBranch();
@@ -1005,6 +1117,46 @@ private:
 	void emitMemoryStore(const WASM::MemArg& arg, std::uint32_t width,
 			sljit_s32 storeOp);
 	/*!
+	 * \brief Emits one atomic load through the shared alignment-checked helper.
+	 * \param arg Memory immediate, including the ordering byte.
+	 * \param width Access width in bytes.
+	 * \param resultWidth Width of the value pushed (4 for i32, 8 for i64).
+	 */
+	void emitAtomicLoad(const WASM::MemArg& arg, std::uint32_t width, int resultWidth);
+	/*!
+	 * \brief Emits one atomic store through the shared alignment-checked helper.
+	 * \param arg Memory immediate, including the ordering byte.
+	 * \param width Access width in bytes.
+	 * \param valueWidth Width of the stored operand (4 for i32, 8 for i64).
+	 */
+	void emitAtomicStore(const WASM::MemArg& arg, std::uint32_t width, int valueWidth);
+	/*!
+	 * \brief Emits one atomic read-modify-write through the shared helper.
+	 * \param arg Memory immediate, including the ordering byte.
+	 * \param width Access width in bytes.
+	 * \param op The `WASM_ATOMIC_*` operation selector.
+	 * \param valueWidth Width of the operand (4 or 8).
+	 * \param resultWidth Width of the old value pushed (4 or 8).
+	 */
+	void emitAtomicRmw(const WASM::MemArg& arg, std::uint32_t width, std::uint32_t op,
+			int valueWidth, int resultWidth);
+	/*!
+	 * \brief Emits one atomic compare-exchange through the shared helper.
+	 * \param arg Memory immediate, including the ordering byte.
+	 * \param width Access width in bytes.
+	 * \param valueWidth Width of the expected/replacement operands (4 or 8).
+	 * \param resultWidth Width of the observed value pushed (4 or 8).
+	 */
+	void emitAtomicCmpxchg(const WASM::MemArg& arg, std::uint32_t width, int valueWidth,
+			int resultWidth);
+	/*!
+	 * \brief Emits `memory.atomic.wait32/64` through the shared wait helper.
+	 * \param arg Memory immediate.
+	 * \param width Access width in bytes (4 or 8).
+	 * \param valueWidth Width of the expected operand (4 or 8).
+	 */
+	void emitAtomicWait(const WASM::MemArg& arg, std::uint32_t width, int valueWidth);
+	/*!
 	 * \brief Validates a global index and returns its type.
 	 * \param index Global index.
 	 * \return The declared global type.
@@ -1019,6 +1171,7 @@ private:
 	const WASM::Module& module_; //!< Module owning the body; borrowed.
 	const WASM::FuncType& funcType_; //!< Declared signature of the function.
 	const WASM::FunctionBody& body_; //!< Body being lowered.
+	const std::vector<WASM::TagId>& tagIds_; //!< Instance tag index space, imports first.
 	std::uint32_t functionIndex_; //!< Module function index (trap-site annotation).
 	const char* functionName_ = nullptr; //!< Name-section name, or null.
 

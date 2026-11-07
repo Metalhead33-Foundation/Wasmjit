@@ -115,7 +115,7 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM
 				static_cast<uint32_t>(module.importFunctions.size() + i);
 
 		OpcodeDispatcher dispatcher(module, funcType, module.functionBodies[i], functionIndex,
-				frameMode);
+				frameMode, internals.tagIds);
 		void* entry = nullptr;
 		if (!dispatcher.compile(entry)) {
 			// No partial modules: an instantiable module must have every function

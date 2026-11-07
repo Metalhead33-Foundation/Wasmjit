@@ -334,6 +334,14 @@ Two further properties of the tail-call lowering:
   threads-specific, but it changes the stack budget a multi-agent scheduler would
   have to account for.
 
+- **All three backends lower the memory family (2026-11-07).** SLJIT and AsmJIT
+  no longer refuse atomic loads, stores, RMW, compare-exchange, `fence`, `pause`,
+  `notify` or `wait`: both call the same `wasm_atomic_*` helpers, so the memory
+  order and the alignment trap are shared. `Test/CallCacheTests.cpp` asserts the
+  produced value, not just an export: RMW add/xor/cmpxchg, i64 store/add/load,
+  and the one- and two-byte wrapping forms (`i32=9 i64=10 i8=0 i16=0`).
+  Shared-everything atomics (globals, tables, GC fields) remain LibJIT-only.
+
 ## 5. Gaps
 
 | # | Gap | Evidence | Severity |

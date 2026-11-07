@@ -2,8 +2,8 @@
 
 **Status:** living note, 2026-11-07 (`backendsMh33`). Companions:
 [`EXPORT_SIGNATURE.md`](EXPORT_SIGNATURE.md) (the ABI itself),
-[`STAGING_CALL_ABI.md`](STAGING_CALL_ABI.md) (its history). **Section 25 is the current
-defect ledger**; sections 23-24 are the superseded sweep record.
+[`STAGING_CALL_ABI.md`](STAGING_CALL_ABI.md) (its history). **Section 26 is the current
+defect/gap ledger**; sections 23-25 are the superseded record.
 
 This note exists because a survey of refusal strings (EXPORT_SIGNATURE §44) described
 "limits" that are **not limits**: the frame form exists precisely to remove them.
@@ -902,3 +902,60 @@ non-null answer.
    the test.
 2. **A probe must observe the property.** Executing a store and returning a constant
    cannot distinguish a correct lowering from a no-op. Return the value that was read back.
+
+## 26. Capability gaps closed, and the findings they exposed (2026-11-07)
+
+**Snapshot (2026-11-07, `backendsMh33`):** suite **22058 assertions in 792 cases**
+under `--rng-seed 12345`, green; `[headerdoc]`, `[docs]`, `doxygen` (0 warnings) and
+`abi-check` all pass. This section supersedes the remaining rows of sections 23-25.
+
+### Closed
+
+| Capability | SLJIT | AsmJIT | LibJIT | Evidence |
+|---|---|---|---|---|
+| `throw`, `throw_ref`, `try_table`, `catch`, `catch_all` | ✅ | ✅ | ✅ | `[exceptions]`: local catch 42, cross-instance 7, uncaught pending set |
+| memory atomics: load/store/RMW/cmpxchg, fence, pause, notify, wait | ✅ | ✅ | ✅ | `[atomics]`: `bump=0,1`; `i32=9 i64=10 i8=0 i16=0` |
+| frame-form `return_call` / `return_call_indirect` | ✅ | ✅ | ✅ (register form) | `[tail]`: `tail_wide=1` |
+
+The exception lowering is one protocol on all three backends: a Store-owned object
+with a canonical payload layout, a per-execution-state pending slot, a call-site
+check, and runtime clause dispatch for `try_table`. The atomics use the shared
+`wasm_atomic_*` helper ABI (bounds-checked address in generated code, alignment and
+memory order in the helper), so no target-specific atomic instruction is required.
+Frame-form tail calls are call + frame return: the values are correct and the
+staging-frame ABI is honoured end to end.
+
+### Still refused (honest, temporary)
+
+| Gap | SLJIT | AsmJIT | LibJIT | Reason |
+|---|---|---|---|---|
+| `catch_ref` / `catch_all_ref`; a catch payload wider than one value | n/a (supported) | ⛔ | n/a (supported) | a structured block on AsmJIT carries at most one result |
+| shared-everything atomics (global/table/struct/array) | ⛔ | ⛔ | ✅ | the memory family is done; the reference-slot barrier is LibJIT-only |
+| constant-stack tail calls | ⛔ | ⛔ | ✅ | no frame-carrying trampoline on the two register-machine backends |
+| bulk memory on memory64 | ⛔ | ⛔ | ✅ | message says "yet" |
+| LibJIT frame-mode calls/imports/multi-result | n/a | n/a | ⛔ | **policy**: the frame form is opt-in and partial on purpose |
+
+### Findings
+
+**V-1 -- the validator accepts a block that leaves extra stack values.**
+`exc_handler_probe` and `tag_consumer` declared `try_table (result i32)` and then
+pushed another value before the enclosing `end`. `wasm-tools validate` rejects both
+("values remaining on stack at end of block"); this engine's validator accepted them,
+and LibJIT/SLJIT executed the catch path, which hid the invalidity. Both fixtures are
+corrected. The validator's block-end stack check is a core gap, independent of any
+backend, and is **open**.
+
+**P-1 -- SLJIT's dead function end ignored the frame form (fixed).** After a tail
+call the function-wide `end` is unreachable; the epilogue then emitted a typed return
+for a `void(ctx, frame)` signature. SLJIT asserts on that mismatch and aborted the
+process. The dead path now returns void in frame mode.
+
+**P-2 -- AsmJIT's frame-mode float return was unreachable/wrong (fixed).** The
+function-end path tested `isFloatKind` before `frameMode`, so a float result was
+returned in an Xmm from a void signature. Frame branches now come first; one
+`emitFrameReturnValue` serves the normal end, an explicit `return` and `return_call`.
+
+**P-3 -- the measuring pass is part of the lowering (fixed).** The first SLJIT atomic
+helpers pushed their result only in the emit pass; the measuring pass then underflowed
+on the next instruction. Every new lowering must update the compile-time stack model
+in both passes.

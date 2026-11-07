@@ -5,6 +5,8 @@
 #include "SljitModuleCompiler.hpp"
 
 #include "../WasmBase/WasmBackendAbi.hpp"
+#include "../WasmBase/WasmExn.hpp"
+#include "../WasmBase/wasm_atomic.hpp"
 #include "../WasmBase/WasmMemory.hpp"
 #include "../WasmBase/WasmStack.hpp"
 #include "../WasmBase/WasmStore.hpp"
@@ -46,7 +48,7 @@ constexpr std::size_t kSlotBytes = 16;
 //! process rather than failing the compile.
 constexpr sljit_s32 kArgumentSlotCeiling = 4;
 
-constexpr std::size_t kReservedSlots = 9; //!< context, target, scratch, four parked argument registers, then the result buffer.
+constexpr std::size_t kReservedSlots = 10; //!< context, target, scratch, four parked argument registers, the result buffer, the frame, and the exception being routed.
 
 //! Width of a local in bytes, or 0 when the type is outside the supported subset.
 bool isReferenceKind(WASM::ValueTypeCode kind) noexcept
@@ -122,6 +124,89 @@ extern "C" sljit_sw sljitTrapPending()
 {
 	return WASM::trapPending() ? 1 : 0;
 }
+
+// ── Exception helpers (docs/proposals/EXCEPTIONS.md EX-3/EXD1) ───────────────
+// The pending exception is part of the execution state, like the trap slot.
+// These wrappers keep the generated call sites to a fixed SLJIT argument shape.
+
+//! Reads the execution state's pending exception, or null.
+extern "C" void* sljitExnPending() noexcept
+{
+	return ::wasm_exn_pending();
+}
+
+//! Allocates a Store-owned exception object and returns its payload area.
+extern "C" void* sljitExnCreate(WASM::VMContext* vm, int32_t tagId, uint32_t payloadBytes) noexcept
+{
+	return ::wasm_exn_create(vm, tagId, payloadBytes);
+}
+
+//! Leaves an exception pending for the caller (and the embedder).
+extern "C" void sljitExnSetPending(void* exn) noexcept
+{
+	::wasm_exn_set_pending(exn);
+}
+
+//! Clears the pending slot when a catch consumes the exception.
+extern "C" void sljitExnClearPending() noexcept
+{
+	::wasm_exn_clear_pending();
+}
+
+//! Reads the canonical tag id out of an exception object.
+extern "C" int32_t sljitExnTagId(const void* exn) noexcept
+{
+	return ::wasm_exn_tag_id(exn);
+}
+
+
+// ── Atomic helpers (docs/proposals/THREADS.md TH-1) ────────────────────────
+// SLJIT emits at most four C arguments, so the wider helper signatures are
+// packed into one 32-bit word here. The unpacking is the only difference from
+// the ABI the LibJIT backend calls directly.
+
+extern "C" uint64_t sljitAtomicRmw(void* address, uint64_t value, uint32_t packed) noexcept
+{
+	return ::wasm_atomic_rmw(address, value, packed & 0xFFu,
+			(packed >> 8) & 0xFFu, (packed >> 16) & 0xFFu);
+}
+
+extern "C" uint64_t sljitAtomicCmpxchg(void* address, uint64_t expected, uint64_t replacement,
+		uint32_t packed) noexcept
+{
+	return ::wasm_atomic_cmpxchg(address, expected, replacement, packed & 0xFFu,
+			(packed >> 8) & 0xFFu);
+}
+
+extern "C" uint32_t sljitAtomicWait(const void* address, uint64_t expected,
+		uint64_t timeoutNs, uint32_t width) noexcept
+{
+	return ::wasm_atomic_wait(address, expected, timeoutNs, width);
+}
+
+//! Payload layout of one tag: the canonical aggregate layout the exception ABI
+//! documents (`translateStruct` on LibJIT, `computeAggregateLayout` here).
+struct ExceptionPayloadLayout {
+	std::vector<WASM::FieldLayout> fields; //!< Offset/size/alignment per payload value.
+	std::uint32_t size = 0; //!< Total payload bytes, rounded to its alignment.
+};
+
+//! Computes the payload layout of a tag's parameter list.
+//! \param payload The tag's function type; its parameters are the payload.
+//! \return The canonical field layout.
+ExceptionPayloadLayout exceptionPayloadLayout(const WASM::FuncType& payload)
+{
+	ExceptionPayloadLayout layout;
+	layout.fields.resize(payload.params.size());
+	std::vector<WASM::ValueKind> kinds;
+	kinds.reserve(payload.params.size());
+	for (const WASM::StorageType& parameter : payload.params)
+		kinds.push_back(WASM::valueKindOf(parameter.val.opcode));
+	const WASM::AggregateLayout aggregate = WASM::computeAggregateLayout(kinds, layout.fields);
+	layout.size = aggregate.size;
+	return layout;
+}
+
 
 //! Reports the spec's `unreachable` trap without returning through a Wasm frame.
 //! Runtime subtype test against an object-header type id.
@@ -899,10 +984,12 @@ sljit_s32 callArgTypes(const WASM::FuncType& type, WASM::ValueTypeCode resultKin
 } // namespace
 
 OpcodeDispatcher::OpcodeDispatcher(const WASM::Module& module, const WASM::FuncType& funcType,
-		const WASM::FunctionBody& body, std::uint32_t functionIndex, bool frameCallAbi)
+		const WASM::FunctionBody& body, std::uint32_t functionIndex, bool frameCallAbi,
+		const std::vector<WASM::TagId>& tagIds)
 	: module_(module)
 	, funcType_(funcType)
 	, body_(body)
+	, tagIds_(tagIds)
 	, functionIndex_(functionIndex)
 	, frameAbi_(frameCallAbi)
 {
@@ -1407,6 +1494,14 @@ sljit_sw OpcodeDispatcher::callFrameOffset() const
 			(localSlots_ + kReservedSlots + maxStackDepth_) * kSlotBytes);
 }
 
+sljit_sw OpcodeDispatcher::exceptionPtrSlotOffset() const
+{
+	// Reserved slot 9, after the staging-frame pointer: the exception being
+	// routed has to survive the helper calls that clear the slot and read the
+	// tag id.
+	return static_cast<sljit_sw>((localSlots_ + 9) * kSlotBytes);
+}
+
 sljit_sw OpcodeDispatcher::selectorBlockOffset() const
 {
 	return static_cast<sljit_sw>((localSlots_ + 3) * kSlotBytes);
@@ -1559,6 +1654,188 @@ void OpcodeDispatcher::emitPendingTrapCheck()
 	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0, SLJIT_MEM1(SLJIT_SP),
 			payloadSlotOffset()));
 	trapJumps_.push_back(jump);
+}
+
+WASM::FuncType OpcodeDispatcher::tagPayloadType(WASM::TagIdx tagIdx)
+{
+	const std::size_t imported = module_.importTags.size();
+	std::uint32_t typeIdx = 0;
+	if (tagIdx < imported) {
+		typeIdx = module_.importTags[tagIdx].typeIdx;
+	} else {
+		const std::size_t local = tagIdx - imported;
+		require(local < module_.tags.size(), "throw names an out-of-range tag");
+		typeIdx = module_.tags[local].typeIdx;
+	}
+	require(typeIdx < module_.typeCount()
+					&& module_.typeView(typeIdx).kind() == WASM::CanonTypeKind::Func,
+			"the tag does not name a function type");
+	return module_.funcTypeAt(typeIdx);
+}
+
+WASM::TagId OpcodeDispatcher::tagIdForClause(const WASM::CatchClause& clause)
+{
+	require(clause.tagIdx < tagIds_.size(), "try_table catch names an out-of-range tag");
+	return tagIds_[clause.tagIdx];
+}
+
+void OpcodeDispatcher::emitZeroReturn()
+{
+	// The exception leaves the function, but the generated signature still has to
+	// return a well-formed value. Zeroes are never observed by the caller: it
+	// sees the pending slot first (docs/ABI.md "Exceptions").
+	if (frameAbi_ || resultWidth_ == 0 || resultWidth_ == 16) {
+		emit(sljit_emit_return_void(compiler_));
+		return;
+	}
+	if (isFloatKind(resultKind_)) {
+		emit(resultWidth_ == 4
+				? sljit_emit_fset32(compiler_, SLJIT_FR0, 0.0f)
+				: sljit_emit_fset64(compiler_, SLJIT_FR0, 0.0));
+		emit(sljit_emit_return(compiler_,
+				resultWidth_ == 4 ? SLJIT_MOV_F32 : SLJIT_MOV_F64, SLJIT_FR0, 0));
+		return;
+	}
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0, SLJIT_IMM, 0));
+	emit(sljit_emit_return(compiler_, resultWidth_ == 4 ? SLJIT_MOV32 : SLJIT_MOV,
+			SLJIT_R0, 0));
+}
+
+void OpcodeDispatcher::emitPendingExceptionCheck()
+{
+	if (measureOnly_)
+		return;
+	// A trap wins over a pending Wasm exception and must never be routed into a
+	// `try_table` handler: a trap is not catchable by Wasm code (EXD2).
+	emitPendingTrapCheck();
+
+	emitHelper(SLJIT_ARGS0(P), &sljitExnPending);
+	sljit_jump* none = sljit_emit_cmp(compiler_, SLJIT_EQUAL,
+			SLJIT_R0, 0, SLJIT_IMM, 0);
+	if (none == nullptr)
+		ok_ = false;
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+			exceptionPtrSlotOffset(), SLJIT_R0, 0));
+	emitExceptionPropagation();
+	sljit_label* continuation = sljit_emit_label(compiler_);
+	if (continuation == nullptr)
+		ok_ = false;
+	else if (none != nullptr)
+		sljit_set_label(none, continuation);
+}
+
+void OpcodeDispatcher::emitExceptionPropagation()
+{
+	if (measureOnly_)
+		return;
+	// The pending pointer survives the helpers in the reserved slot.
+	emitHelper(SLJIT_ARGS0(P), &sljitExnPending);
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+			exceptionPtrSlotOffset(), SLJIT_R0, 0));
+
+	// R0 carries the thrown tag id for the comparison chain.
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0,
+			SLJIT_MEM1(SLJIT_SP), exceptionPtrSlotOffset()));
+	emitHelper(SLJIT_ARGS1(32, P), &sljitExnTagId);
+
+	for (std::size_t frameIndex = controls_.size(); frameIndex-- > 0; ) {
+		ControlFrame& frame = controls_[frameIndex];
+		if (!frame.tryTable)
+			continue;
+		for (const WASM::CatchClause& clause : frame.catchClauses) {
+			require(clause.labelIdx < frameIndex,
+					"the try_table catch label targets the function label");
+			ControlFrame& target = controls_[frameIndex - 1 - clause.labelIdx];
+			const bool catchAll = clause.kind == WASM::CatchKind::CatchAll
+					|| clause.kind == WASM::CatchKind::CatchAllRef;
+			const bool carryExn = clause.kind == WASM::CatchKind::CatchRef
+					|| clause.kind == WASM::CatchKind::CatchAllRef;
+			if (catchAll) {
+				emitCatchBranch(target, WASM::FuncType{}, carryExn);
+				return;
+			}
+			const WASM::FuncType payload = tagPayloadType(clause.tagIdx);
+			const WASM::TagId tagId = tagIdForClause(clause);
+			sljit_jump* mismatch = sljit_emit_cmp(compiler_, SLJIT_NOT_EQUAL,
+					SLJIT_R0, 0, SLJIT_IMM, static_cast<sljit_sw>(tagId));
+			if (mismatch == nullptr)
+				ok_ = false;
+			emitCatchBranch(target, payload, carryExn);
+			sljit_label* next = sljit_emit_label(compiler_);
+			if (next == nullptr)
+				ok_ = false;
+			else if (mismatch != nullptr)
+				sljit_set_label(mismatch, next);
+		}
+	}
+
+	// No handler in this function: the pending slot is already set, so return
+	// zeroes and let the caller re-propagate it.
+	emitZeroReturn();
+}
+
+void OpcodeDispatcher::emitCatchBranch(ControlFrame& target, const WASM::FuncType& payload,
+		bool carryExn)
+{
+	const std::vector<int>& targetWidths =
+			target.kind == ControlKind::Loop ? target.paramWidths : target.resultWidths;
+	const std::size_t payloadCount = payload.params.size();
+	require(targetWidths.size() == payloadCount + (carryExn ? 1u : 0u),
+			"the try_table catch arity does not match its target label");
+
+	// A caught exception is consumed: clearing first means the caller and the
+	// embedder no longer observe it (EXD1).
+	emitHelper(SLJIT_ARGS0V(), &sljitExnClearPending);
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R1, 0,
+			SLJIT_MEM1(SLJIT_SP), exceptionPtrSlotOffset()));
+
+	const ExceptionPayloadLayout layout = exceptionPayloadLayout(payload);
+	for (std::size_t i = 0; i < payloadCount; ++i) {
+		const sljit_sw offset = static_cast<sljit_sw>(layout.fields[i].offset);
+		const std::size_t slot = target.baseDepth + i;
+		const WASM::ValueTypeCode kind = payload.params[i].val.opcode;
+		const int width = widthOf(payload.params[i].val);
+		if (width == 16) {
+			emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0,
+					SLJIT_MEM1(SLJIT_R1), offset));
+			emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+					stackSlotOffset(slot), SLJIT_R0, 0));
+			emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0,
+					SLJIT_MEM1(SLJIT_R1), offset + 8));
+			emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+					stackSlotOffset(slot) + 8, SLJIT_R0, 0));
+		} else if (isFloatKind(kind)) {
+			emit(sljit_emit_fop1(compiler_,
+					width == 4 ? SLJIT_MOV_F32 : SLJIT_MOV_F64,
+					SLJIT_FR0, 0, SLJIT_MEM1(SLJIT_R1), offset));
+			storeFloatSlot(SLJIT_FR0, slot, width);
+		} else {
+			emit(sljit_emit_op1(compiler_, width == 4 ? SLJIT_MOV_U32 : SLJIT_MOV,
+					SLJIT_R0, 0, SLJIT_MEM1(SLJIT_R1), offset));
+			storeSlot(SLJIT_R0, slot, width);
+		}
+	}
+	if (carryExn) {
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0,
+				SLJIT_MEM1(SLJIT_SP), exceptionPtrSlotOffset()));
+		storeSlot(SLJIT_R0, target.baseDepth + payloadCount, 8);
+	}
+
+	sljit_jump* jump = sljit_emit_jump(compiler_, SLJIT_JUMP);
+	if (jump == nullptr) {
+		ok_ = false;
+		return;
+	}
+	if (target.kind == ControlKind::Loop) {
+		if (target.begin == nullptr) {
+			ok_ = false;
+			return;
+		}
+		sljit_set_label(jump, target.begin);
+	} else {
+		target.endJumps.push_back(jump);
+		target.endTargeted = true;
+	}
 }
 
 void OpcodeDispatcher::emitTrap(WASM::TrapKind kind)
@@ -1719,6 +1996,53 @@ void OpcodeDispatcher::dispatchIf(const WASM::BlockType& type)
 	controls_.push_back(std::move(frame));
 }
 
+void OpcodeDispatcher::dispatchTryTable(const WASM::BlockType& type,
+		std::vector<WASM::CatchClause>&& catches)
+{
+	const BlockSignature signature = blockSignature(type);
+	ControlFrame frame;
+	frame.kind = ControlKind::Block;
+	frame.tryTable = true;
+	frame.catchClauses = std::move(catches);
+	frame.paramWidths = signature.params;
+	frame.resultWidths = signature.results;
+	frame.entryReachable = reachable_;
+	if (reachable_) {
+		requireStack(signature.params.size());
+		frame.baseDepth = stackWidths_.size() - signature.params.size();
+	} else {
+		frame.baseDepth = stackWidths_.size();
+	}
+	controls_.push_back(std::move(frame));
+	const std::size_t frameIndex = controls_.size() - 1;
+	ControlFrame& tryFrame = controls_[frameIndex];
+
+	// Validate every clause and, in the measuring pass, reserve room for the
+	// payload slots a catch writes into its target label. A catch can target a
+	// block whose end the body never reaches normally, so the operand-stack
+	// high-water mark alone does not necessarily cover those slots.
+	for (const WASM::CatchClause& clause : tryFrame.catchClauses) {
+		require(clause.labelIdx < frameIndex,
+				"the try_table catch label targets the function label");
+		ControlFrame& target = controls_[frameIndex - 1 - clause.labelIdx];
+		const bool catchAll = clause.kind == WASM::CatchKind::CatchAll
+				|| clause.kind == WASM::CatchKind::CatchAllRef;
+		const bool carryExn = clause.kind == WASM::CatchKind::CatchRef
+				|| clause.kind == WASM::CatchKind::CatchAllRef;
+		const std::size_t payloadCount = catchAll
+				? 0u : tagPayloadType(clause.tagIdx).params.size();
+		const std::size_t targetWidths = target.kind == ControlKind::Loop
+				? target.paramWidths.size() : target.resultWidths.size();
+		require(targetWidths == payloadCount + (carryExn ? 1u : 0u),
+				"the try_table catch arity does not match its target label");
+		if (measureOnly_) {
+			const std::size_t bound = target.baseDepth + targetWidths;
+			if (bound > maxStackDepth_)
+				maxStackDepth_ = bound;
+		}
+	}
+}
+
 void OpcodeDispatcher::dispatchElse()
 {
 	require(!controls_.empty() && controls_.back().kind == ControlKind::If
@@ -1755,7 +2079,11 @@ void OpcodeDispatcher::dispatchEnd()
 		if (!measureOnly_) {
 			if (reachable_)
 				emitReturnValue();
-			else if (resultWidth_ != 0) {
+			else if (frameAbi_ || resultWidth_ == 0) {
+				// Frame mode returns void; a typed return here would violate the
+				// emitted signature (this path is dead after a tail call).
+				emit(sljit_emit_return_void(compiler_));
+			} else if (resultWidth_ != 0) {
 				if (isFloatKind(resultKind_)) {
 					emit(resultWidth_ == 4
 							? sljit_emit_fset32(compiler_, SLJIT_FR0, 0.0f)
@@ -2030,6 +2358,101 @@ void OpcodeDispatcher::dispatchReturn()
 	markUnreachable();
 }
 
+void OpcodeDispatcher::dispatchThrow(WASM::TagIdx arg)
+{
+	// Dead code: the tag's operand stack is polymorphic and the throw can never
+	// execute.
+	if (!reachable_)
+		return;
+	require(arg < tagIds_.size(), "throw names an out-of-range tag");
+
+	const WASM::TagId tagId = tagIds_[arg];
+	const WASM::FuncType payload = tagPayloadType(arg);
+	const std::size_t payloadCount = payload.params.size();
+	requireStack(payloadCount);
+	const std::size_t base = stackWidths_.size() - payloadCount;
+
+	if (!measureOnly_) {
+		const ExceptionPayloadLayout layout = exceptionPayloadLayout(payload);
+
+		// Materialise the exception object: its payload is written below, and
+		// both a local catch and a caller need the object, not the stack values.
+		loadContext(SLJIT_R0);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R1, 0, SLJIT_IMM,
+				static_cast<sljit_sw>(tagId)));
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R2, 0, SLJIT_IMM,
+				static_cast<sljit_sw>(layout.size)));
+		emitHelper(SLJIT_ARGS3(P, P, 32, 32), &sljitExnCreate);
+		// An allocation failure is a trap; otherwise R0 is the payload pointer.
+		emitPendingTrapCheck();
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+				exceptionPtrSlotOffset(), SLJIT_R0, 0));
+
+		for (std::size_t i = 0; i < payloadCount; ++i) {
+			const sljit_sw offset = static_cast<sljit_sw>(layout.fields[i].offset);
+			const int width = widthOf(payload.params[i].val);
+			emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R1, 0,
+					SLJIT_MEM1(SLJIT_SP), exceptionPtrSlotOffset()));
+			if (width == 16) {
+				emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0,
+						SLJIT_MEM1(SLJIT_SP), stackSlotOffset(base + i)));
+				emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_R1),
+						offset, SLJIT_R0, 0));
+				emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0,
+						SLJIT_MEM1(SLJIT_SP), stackSlotOffset(base + i) + 8));
+				emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_R1),
+						offset + 8, SLJIT_R0, 0));
+			} else if (isFloatKind(payload.params[i].val.opcode)) {
+				loadFloatSlot(SLJIT_FR0, base + i, width);
+				emit(sljit_emit_fop1(compiler_,
+						width == 4 ? SLJIT_MOV_F32 : SLJIT_MOV_F64,
+						SLJIT_MEM1(SLJIT_R1), offset, SLJIT_FR0, 0));
+			} else {
+				loadSlot(SLJIT_R0, base + i, width);
+				emit(sljit_emit_op1(compiler_, width == 4 ? SLJIT_MOV32 : SLJIT_MOV,
+						SLJIT_MEM1(SLJIT_R1), offset, SLJIT_R0, 0));
+			}
+		}
+
+		// Publish the exception, then route it through the local try_tables.
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0,
+				SLJIT_MEM1(SLJIT_SP), exceptionPtrSlotOffset()));
+		emitHelper(SLJIT_ARGS1V(P), &sljitExnSetPending);
+		emitExceptionPropagation();
+	}
+
+	stackWidths_.resize(base);
+	markUnreachable();
+}
+
+void OpcodeDispatcher::dispatchThrowRef()
+{
+	if (!reachable_)
+		return;
+	requireStack(1);
+	require(stackWidths_.back() == 8, "throw_ref requires an exnref operand");
+	const std::size_t depth = stackWidths_.size() - 1;
+
+	if (!measureOnly_) {
+		loadSlot(SLJIT_R0, depth, 8);
+		sljit_jump* notNull = sljit_emit_cmp(compiler_, SLJIT_NOT_EQUAL,
+				SLJIT_R0, 0, SLJIT_IMM, 0);
+		if (notNull == nullptr)
+			ok_ = false;
+		emitTrap(WASM::TrapKind::NullReference);
+		sljit_label* after = sljit_emit_label(compiler_);
+		if (after == nullptr)
+			ok_ = false;
+		else if (notNull != nullptr)
+			sljit_set_label(notNull, after);
+		emitHelper(SLJIT_ARGS1V(P), &sljitExnSetPending);
+		emitExceptionPropagation();
+	}
+
+	pop();
+	markUnreachable();
+}
+
 void OpcodeDispatcher::emitResolvedCall(const WASM::FuncType& type, int callableReg)
 {
 	// Load the target and its context out of the resolved `Callable`.
@@ -2109,6 +2532,7 @@ void OpcodeDispatcher::emitResolvedCall(const WASM::FuncType& type, int callable
 				storeSlot(SLJIT_R3, base, resultWidth);
 			}
 		}
+		emitPendingExceptionCheck();
 		return;
 	}
 
@@ -2140,7 +2564,7 @@ void OpcodeDispatcher::emitResolvedCall(const WASM::FuncType& type, int callable
 		else
 			storeSlot(SLJIT_R0, base, resultWidth);
 	}
-	emitPendingTrapCheck();
+	emitPendingExceptionCheck();
 }
 
 void OpcodeDispatcher::emitCall(WASM::FuncIdx index, bool isTail)
@@ -2251,10 +2675,10 @@ void OpcodeDispatcher::dispatchCallIndirect(WASM::TypeIdx arg1, WASM::TableIdx a
 
 void OpcodeDispatcher::dispatchReturnCall(WASM::FuncIdx arg)
 {
-	if (frameAbi_) {
-		onUnhandledOpcode("return_call (a frame-form module with internal calls)");
-		return;
-	}
+	// A frame-form tail call is a call plus a frame-mode return: the callee
+	// writes its result into the staging frame and `emitReturnValue` moves it
+	// into the caller's result block. This is not a true trampoline (the host
+	// stack still grows); the register form has the same limitation.
 	emitCall(arg, true);
 	if (!measureOnly_)
 		emitReturnValue();
@@ -2263,10 +2687,10 @@ void OpcodeDispatcher::dispatchReturnCall(WASM::FuncIdx arg)
 
 void OpcodeDispatcher::dispatchReturnCallIndirect(WASM::TypeIdx arg1, WASM::TableIdx arg2)
 {
-	if (frameAbi_) {
-		onUnhandledOpcode("return_call_indirect (a frame-form module with internal calls)");
-		return;
-	}
+	// A frame-form tail call is a call plus a frame-mode return: the callee
+	// writes its result into the staging frame and `emitReturnValue` moves it
+	// into the caller's result block. This is not a true trampoline (the host
+	// stack still grows); the register form has the same limitation.
 	emitCallIndirect(arg1, arg2, true);
 	if (!measureOnly_)
 		emitReturnValue();
@@ -4913,6 +5337,292 @@ void OpcodeDispatcher::emitMemoryStore(const WASM::MemArg& arg, std::uint32_t wi
 	emitCheckedMemoryAddress(arg, width, stackWidths_.size());
 	loadSlot(SLJIT_R1, stackWidths_.size() + 1, static_cast<int>(width));
 	emit(sljit_emit_op1(compiler_, storeOp, SLJIT_MEM1(SLJIT_R0), 0, SLJIT_R1, 0));
+}
+
+
+void OpcodeDispatcher::emitAtomicLoad(const WASM::MemArg& arg, std::uint32_t width,
+		int resultWidth)
+{
+	if (!reachable_)
+		return;
+	requireStack(1);
+	const std::size_t depth = stackWidths_.size() - 1;
+	if (!measureOnly_) {
+		emitCheckedMemoryAddress(arg, width, depth);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R1, 0, SLJIT_IMM,
+				static_cast<sljit_sw>(width)));
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R2, 0, SLJIT_IMM,
+				static_cast<sljit_sw>(arg.ordering)));
+		emitHelper(SLJIT_ARGS3(W, P, 32, 32), &wasm_atomic_load);
+		emitPendingTrapCheck();
+		storeSlot(SLJIT_R0, depth, resultWidth);
+	}
+	stackWidths_.back() = resultWidth;
+}
+
+void OpcodeDispatcher::emitAtomicStore(const WASM::MemArg& arg, std::uint32_t width,
+		int valueWidth)
+{
+	if (!reachable_)
+		return;
+	requireStack(2);
+	const std::size_t valueDepth = stackWidths_.size() - 1;
+	const std::size_t addressDepth = stackWidths_.size() - 2;
+	pop();
+	pop();
+	if (measureOnly_)
+		return;
+	emitCheckedMemoryAddress(arg, width, addressDepth);
+	loadSlot(SLJIT_R1, valueDepth, valueWidth);
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R2, 0, SLJIT_IMM,
+			static_cast<sljit_sw>(width)));
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R3, 0, SLJIT_IMM,
+			static_cast<sljit_sw>(arg.ordering)));
+	emitHelper(SLJIT_ARGS4V(P, W, 32, 32), &wasm_atomic_store);
+	emitPendingTrapCheck();
+}
+
+void OpcodeDispatcher::emitAtomicRmw(const WASM::MemArg& arg, std::uint32_t width,
+		std::uint32_t op, int valueWidth, int resultWidth)
+{
+	if (!reachable_)
+		return;
+	requireStack(2);
+	const std::size_t valueDepth = stackWidths_.size() - 1;
+	const std::size_t addressDepth = stackWidths_.size() - 2;
+	pop();
+	pop();
+	if (measureOnly_) {
+		push(resultWidth);
+		return;
+	}
+	emitCheckedMemoryAddress(arg, width, addressDepth);
+	loadSlot(SLJIT_R1, valueDepth, valueWidth);
+	const std::uint32_t packed = width | (op << 8) | (arg.ordering << 16);
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R2, 0, SLJIT_IMM,
+			static_cast<sljit_sw>(packed)));
+	emitHelper(SLJIT_ARGS3(W, P, W, 32), &sljitAtomicRmw);
+	emitPendingTrapCheck();
+	storeSlot(SLJIT_R0, addressDepth, resultWidth);
+	push(resultWidth);
+}
+
+void OpcodeDispatcher::emitAtomicCmpxchg(const WASM::MemArg& arg, std::uint32_t width,
+		int valueWidth, int resultWidth)
+{
+	if (!reachable_)
+		return;
+	requireStack(3);
+	const std::size_t replacementDepth = stackWidths_.size() - 1;
+	const std::size_t expectedDepth = stackWidths_.size() - 2;
+	const std::size_t addressDepth = stackWidths_.size() - 3;
+	pop();
+	pop();
+	pop();
+	if (measureOnly_) {
+		push(resultWidth);
+		return;
+	}
+	emitCheckedMemoryAddress(arg, width, addressDepth);
+	loadSlot(SLJIT_R1, expectedDepth, valueWidth);
+	loadSlot(SLJIT_R2, replacementDepth, valueWidth);
+	const std::uint32_t packed = width | (arg.ordering << 8);
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R3, 0, SLJIT_IMM,
+			static_cast<sljit_sw>(packed)));
+	emitHelper(SLJIT_ARGS4(W, P, W, W, 32), &sljitAtomicCmpxchg);
+	emitPendingTrapCheck();
+	storeSlot(SLJIT_R0, addressDepth, resultWidth);
+	push(resultWidth);
+}
+
+void OpcodeDispatcher::dispatchI32AtomicLoad(WASM::MemArg arg)
+{ emitAtomicLoad(arg, 4, 4); }
+void OpcodeDispatcher::dispatchI64AtomicLoad(WASM::MemArg arg)
+{ emitAtomicLoad(arg, 8, 8); }
+void OpcodeDispatcher::dispatchI32AtomicLoad8U(WASM::MemArg arg)
+{ emitAtomicLoad(arg, 1, 4); }
+void OpcodeDispatcher::dispatchI32AtomicLoad16U(WASM::MemArg arg)
+{ emitAtomicLoad(arg, 2, 4); }
+void OpcodeDispatcher::dispatchI64AtomicLoad8U(WASM::MemArg arg)
+{ emitAtomicLoad(arg, 1, 8); }
+void OpcodeDispatcher::dispatchI64AtomicLoad16U(WASM::MemArg arg)
+{ emitAtomicLoad(arg, 2, 8); }
+void OpcodeDispatcher::dispatchI64AtomicLoad32U(WASM::MemArg arg)
+{ emitAtomicLoad(arg, 4, 8); }
+void OpcodeDispatcher::dispatchI32AtomicStore(WASM::MemArg arg)
+{ emitAtomicStore(arg, 4, 4); }
+void OpcodeDispatcher::dispatchI64AtomicStore(WASM::MemArg arg)
+{ emitAtomicStore(arg, 8, 8); }
+void OpcodeDispatcher::dispatchI32AtomicStore8(WASM::MemArg arg)
+{ emitAtomicStore(arg, 1, 4); }
+void OpcodeDispatcher::dispatchI32AtomicStore16(WASM::MemArg arg)
+{ emitAtomicStore(arg, 2, 4); }
+void OpcodeDispatcher::dispatchI64AtomicStore8(WASM::MemArg arg)
+{ emitAtomicStore(arg, 1, 8); }
+void OpcodeDispatcher::dispatchI64AtomicStore16(WASM::MemArg arg)
+{ emitAtomicStore(arg, 2, 8); }
+void OpcodeDispatcher::dispatchI64AtomicStore32(WASM::MemArg arg)
+{ emitAtomicStore(arg, 4, 8); }
+void OpcodeDispatcher::dispatchI32AtomicRmwAdd(WASM::MemArg arg)
+{ emitAtomicRmw(arg, 4, 0, 4, 4); }
+void OpcodeDispatcher::dispatchI64AtomicRmwAdd(WASM::MemArg arg)
+{ emitAtomicRmw(arg, 8, 0, 8, 8); }
+void OpcodeDispatcher::dispatchI32AtomicRmw8AddU(WASM::MemArg arg)
+{ emitAtomicRmw(arg, 1, 0, 4, 4); }
+void OpcodeDispatcher::dispatchI32AtomicRmw16AddU(WASM::MemArg arg)
+{ emitAtomicRmw(arg, 2, 0, 4, 4); }
+void OpcodeDispatcher::dispatchI64AtomicRmw8AddU(WASM::MemArg arg)
+{ emitAtomicRmw(arg, 1, 0, 8, 8); }
+void OpcodeDispatcher::dispatchI64AtomicRmw16AddU(WASM::MemArg arg)
+{ emitAtomicRmw(arg, 2, 0, 8, 8); }
+void OpcodeDispatcher::dispatchI64AtomicRmw32AddU(WASM::MemArg arg)
+{ emitAtomicRmw(arg, 4, 0, 8, 8); }
+void OpcodeDispatcher::dispatchI32AtomicRmwSub(WASM::MemArg arg)
+{ emitAtomicRmw(arg, 4, 1, 4, 4); }
+void OpcodeDispatcher::dispatchI64AtomicRmwSub(WASM::MemArg arg)
+{ emitAtomicRmw(arg, 8, 1, 8, 8); }
+void OpcodeDispatcher::dispatchI32AtomicRmw8SubU(WASM::MemArg arg)
+{ emitAtomicRmw(arg, 1, 1, 4, 4); }
+void OpcodeDispatcher::dispatchI32AtomicRmw16SubU(WASM::MemArg arg)
+{ emitAtomicRmw(arg, 2, 1, 4, 4); }
+void OpcodeDispatcher::dispatchI64AtomicRmw8SubU(WASM::MemArg arg)
+{ emitAtomicRmw(arg, 1, 1, 8, 8); }
+void OpcodeDispatcher::dispatchI64AtomicRmw16SubU(WASM::MemArg arg)
+{ emitAtomicRmw(arg, 2, 1, 8, 8); }
+void OpcodeDispatcher::dispatchI64AtomicRmw32SubU(WASM::MemArg arg)
+{ emitAtomicRmw(arg, 4, 1, 8, 8); }
+void OpcodeDispatcher::dispatchI32AtomicRmwAnd(WASM::MemArg arg)
+{ emitAtomicRmw(arg, 4, 2, 4, 4); }
+void OpcodeDispatcher::dispatchI64AtomicRmwAnd(WASM::MemArg arg)
+{ emitAtomicRmw(arg, 8, 2, 8, 8); }
+void OpcodeDispatcher::dispatchI32AtomicRmw8AndU(WASM::MemArg arg)
+{ emitAtomicRmw(arg, 1, 2, 4, 4); }
+void OpcodeDispatcher::dispatchI32AtomicRmw16AndU(WASM::MemArg arg)
+{ emitAtomicRmw(arg, 2, 2, 4, 4); }
+void OpcodeDispatcher::dispatchI64AtomicRmw8AndU(WASM::MemArg arg)
+{ emitAtomicRmw(arg, 1, 2, 8, 8); }
+void OpcodeDispatcher::dispatchI64AtomicRmw16AndU(WASM::MemArg arg)
+{ emitAtomicRmw(arg, 2, 2, 8, 8); }
+void OpcodeDispatcher::dispatchI64AtomicRmw32AndU(WASM::MemArg arg)
+{ emitAtomicRmw(arg, 4, 2, 8, 8); }
+void OpcodeDispatcher::dispatchI32AtomicRmwOr(WASM::MemArg arg)
+{ emitAtomicRmw(arg, 4, 3, 4, 4); }
+void OpcodeDispatcher::dispatchI64AtomicRmwOr(WASM::MemArg arg)
+{ emitAtomicRmw(arg, 8, 3, 8, 8); }
+void OpcodeDispatcher::dispatchI32AtomicRmw8OrU(WASM::MemArg arg)
+{ emitAtomicRmw(arg, 1, 3, 4, 4); }
+void OpcodeDispatcher::dispatchI32AtomicRmw16OrU(WASM::MemArg arg)
+{ emitAtomicRmw(arg, 2, 3, 4, 4); }
+void OpcodeDispatcher::dispatchI64AtomicRmw8OrU(WASM::MemArg arg)
+{ emitAtomicRmw(arg, 1, 3, 8, 8); }
+void OpcodeDispatcher::dispatchI64AtomicRmw16OrU(WASM::MemArg arg)
+{ emitAtomicRmw(arg, 2, 3, 8, 8); }
+void OpcodeDispatcher::dispatchI64AtomicRmw32OrU(WASM::MemArg arg)
+{ emitAtomicRmw(arg, 4, 3, 8, 8); }
+void OpcodeDispatcher::dispatchI32AtomicRmwXor(WASM::MemArg arg)
+{ emitAtomicRmw(arg, 4, 4, 4, 4); }
+void OpcodeDispatcher::dispatchI64AtomicRmwXor(WASM::MemArg arg)
+{ emitAtomicRmw(arg, 8, 4, 8, 8); }
+void OpcodeDispatcher::dispatchI32AtomicRmw8XorU(WASM::MemArg arg)
+{ emitAtomicRmw(arg, 1, 4, 4, 4); }
+void OpcodeDispatcher::dispatchI32AtomicRmw16XorU(WASM::MemArg arg)
+{ emitAtomicRmw(arg, 2, 4, 4, 4); }
+void OpcodeDispatcher::dispatchI64AtomicRmw8XorU(WASM::MemArg arg)
+{ emitAtomicRmw(arg, 1, 4, 8, 8); }
+void OpcodeDispatcher::dispatchI64AtomicRmw16XorU(WASM::MemArg arg)
+{ emitAtomicRmw(arg, 2, 4, 8, 8); }
+void OpcodeDispatcher::dispatchI64AtomicRmw32XorU(WASM::MemArg arg)
+{ emitAtomicRmw(arg, 4, 4, 8, 8); }
+void OpcodeDispatcher::dispatchI32AtomicRmwXchg(WASM::MemArg arg)
+{ emitAtomicRmw(arg, 4, 5, 4, 4); }
+void OpcodeDispatcher::dispatchI64AtomicRmwXchg(WASM::MemArg arg)
+{ emitAtomicRmw(arg, 8, 5, 8, 8); }
+void OpcodeDispatcher::dispatchI32AtomicRmw8XchgU(WASM::MemArg arg)
+{ emitAtomicRmw(arg, 1, 5, 4, 4); }
+void OpcodeDispatcher::dispatchI32AtomicRmw16XchgU(WASM::MemArg arg)
+{ emitAtomicRmw(arg, 2, 5, 4, 4); }
+void OpcodeDispatcher::dispatchI64AtomicRmw8XchgU(WASM::MemArg arg)
+{ emitAtomicRmw(arg, 1, 5, 8, 8); }
+void OpcodeDispatcher::dispatchI64AtomicRmw16XchgU(WASM::MemArg arg)
+{ emitAtomicRmw(arg, 2, 5, 8, 8); }
+void OpcodeDispatcher::dispatchI64AtomicRmw32XchgU(WASM::MemArg arg)
+{ emitAtomicRmw(arg, 4, 5, 8, 8); }
+void OpcodeDispatcher::dispatchI32AtomicRmwCmpxchg(WASM::MemArg arg)
+{ emitAtomicCmpxchg(arg, 4, 4, 4); }
+void OpcodeDispatcher::dispatchI64AtomicRmwCmpxchg(WASM::MemArg arg)
+{ emitAtomicCmpxchg(arg, 8, 8, 8); }
+void OpcodeDispatcher::dispatchI32AtomicRmw8CmpxchgU(WASM::MemArg arg)
+{ emitAtomicCmpxchg(arg, 1, 4, 4); }
+void OpcodeDispatcher::dispatchI32AtomicRmw16CmpxchgU(WASM::MemArg arg)
+{ emitAtomicCmpxchg(arg, 2, 4, 4); }
+void OpcodeDispatcher::dispatchI64AtomicRmw8CmpxchgU(WASM::MemArg arg)
+{ emitAtomicCmpxchg(arg, 1, 8, 8); }
+void OpcodeDispatcher::dispatchI64AtomicRmw16CmpxchgU(WASM::MemArg arg)
+{ emitAtomicCmpxchg(arg, 2, 8, 8); }
+void OpcodeDispatcher::dispatchI64AtomicRmw32CmpxchgU(WASM::MemArg arg)
+{ emitAtomicCmpxchg(arg, 4, 8, 8); }
+void OpcodeDispatcher::dispatchMemoryAtomicNotify(WASM::MemArg arg)
+{
+	if (!reachable_)
+		return;
+	requireStack(2);
+	const std::size_t countDepth = stackWidths_.size() - 1;
+	const std::size_t addressDepth = stackWidths_.size() - 2;
+	pop();
+	pop();
+	if (!measureOnly_) {
+		emitCheckedMemoryAddress(arg, 4, addressDepth);
+		loadSlot(SLJIT_R1, countDepth, 4);
+		emitHelper(SLJIT_ARGS2(32, P, 32), &wasm_atomic_notify);
+		emitPendingTrapCheck();
+		storeSlot(SLJIT_R0, addressDepth, 4);
+	}
+	push(4);
+}
+
+void OpcodeDispatcher::emitAtomicWait(const WASM::MemArg& arg, std::uint32_t width, int valueWidth)
+{
+	if (!reachable_)
+		return;
+	requireStack(3);
+	const std::size_t timeoutDepth = stackWidths_.size() - 1;
+	const std::size_t expectedDepth = stackWidths_.size() - 2;
+	const std::size_t addressDepth = stackWidths_.size() - 3;
+	pop();
+	pop();
+	pop();
+	if (!measureOnly_) {
+		emitCheckedMemoryAddress(arg, width, addressDepth);
+		loadSlot(SLJIT_R1, expectedDepth, valueWidth);
+		loadSlot(SLJIT_R2, timeoutDepth, 8);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R3, 0, SLJIT_IMM,
+				static_cast<sljit_sw>(width)));
+		emitHelper(SLJIT_ARGS4(32, P, W, W, 32), &sljitAtomicWait);
+		emitPendingTrapCheck();
+		storeSlot(SLJIT_R0, addressDepth, 4);
+	}
+	push(4);
+}
+
+void OpcodeDispatcher::dispatchMemoryAtomicWait32(WASM::MemArg arg)
+{ emitAtomicWait(arg, 4, 4); }
+void OpcodeDispatcher::dispatchMemoryAtomicWait64(WASM::MemArg arg)
+{ emitAtomicWait(arg, 8, 8); }
+
+void OpcodeDispatcher::dispatchAtomicFence(uint8_t ordering)
+{
+	if (!reachable_ || measureOnly_)
+		return;
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R0, 0, SLJIT_IMM,
+			static_cast<sljit_sw>(ordering)));
+	emitHelper(SLJIT_ARGS1V(32), &wasm_atomic_fence);
+}
+
+void OpcodeDispatcher::dispatchAtomicPause()
+{
+	if (!reachable_ || measureOnly_)
+		return;
+	emitHelper(SLJIT_ARGS0V(), &wasm_atomic_pause);
 }
 
 void OpcodeDispatcher::dispatchI32Load(WASM::MemArg arg)

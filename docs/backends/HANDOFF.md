@@ -1,133 +1,141 @@
 # Handoff: state of the tree for the next session
 
-**Written:** 2026-11-07, `backendsMh33`, after the defect round that followed the
-capability sweep (probes 1-21).
-**Read first:** [`PRODUCTION_GAPS.md`](PRODUCTION_GAPS.md) section 25 (the current ledger;
-sections 23-24 are the superseded history) and [`CAPABILITY_PROBES.md`](CAPABILITY_PROBES.md)
-section 16 (the corrected probes).
+**Written:** 2026-11-07, `backendsMh33`, after the defect round and the capability
+close-out that followed the probe sweep (probes 1-21).
+**Read first:** [`PRODUCTION_GAPS.md`](PRODUCTION_GAPS.md) section 26 (the current
+ledger; sections 23-25 are the superseded history) and
+[`CAPABILITY_PROBES.md`](CAPABILITY_PROBES.md) section 17 (the re-run instruments).
 
 ## 1. Where the tree is
 
-**Snapshot (2026-11-07, this working tree):** `--rng-seed 12345` -> **22012 assertions,
-791 cases, green**. Gates: `[headerdoc]`, `[docs]`, `doxygen` 0 warnings, `abi-check` OK.
+**Snapshot (2026-11-07, this working tree):** `--rng-seed 12345` -> **22058 assertions,
+792 cases, green**. Gates: `[headerdoc]`, `[docs]`, `doxygen` 0 warnings, `abi-check` OK.
 
-The frame ABI work is **done and tested on all three backends**: one typed spelling in
-both directions, frames invisible above the call cache, no partial modules anywhere,
-and every unsafe shape refused with a reason.
+The frame ABI work is **done and tested on all three backends**. Exceptions, the
+memory-atomics family and frame-form tail calls are now implemented on SLJIT and
+AsmJIT as well; the remaining rows are listed in section 3.
 
-## 2. The three defects: two fixed, one reclassified
+## 2. The three sweep defects: two fixed, one reclassified
 
 ### D-1 -- LibJIT uncaught `throw` -- **not a backend defect**
 
-The sweep recorded "an uncaught `throw` returns normally" as a defect and asserted in the
-`[exceptions]` probe that a throw "must never return normally". That contradicts the frozen
-contract: [`docs/ABI.md`](../ABI.md) ("Exceptions") and
-[`docs/proposals/EXCEPTIONS.md`](../proposals/EXCEPTIONS.md) EXD1 define an uncaught throw
-as a **normal return with the exception left in the execution state's pending slot**, and
-`exceptions: a caught throw carries its payload and an uncaught one stays pending` in
-`Test/main.cpp` has always asserted exactly that.
-
-The probe measured its own premise. It now asserts the documented property: it clears the
-slot, calls `do_throw(7)`, requires the zero result (EXD1's "return zeroes"), takes the
-pending payload, and checks its tag id against the module's tag index space.
-
-**Nothing in LibJIT's exception path changed.** Probe 13 (handlers) and probe 21
-(cross-instance payloads) still stand.
+The sweep recorded "an uncaught `throw` returns normally" as a defect. The frozen
+contract ([`docs/ABI.md`](../ABI.md) "Exceptions", `EXCEPTIONS.md` EXD1) defines an
+uncaught throw as a **normal return with a pending exception**, and `Test/main.cpp`
+always asserted it. The probe was asserting a trap. It now checks the documented
+property (zero result, pending payload, tag id); no LibJIT code changed.
 
 ### D-2 -- REAL, and it was AsmJIT and SLJIT: `array.fill` offset/value swapped
 
-The sweep recorded "LibJIT `array.set` / `array.fill` abort in `popValueRaw`". That abort
-**did not reproduce** with the committed fixture on the current tree (assertions are active
-in the Release build too). What the strengthened probe found instead is a real wrong answer
-on the other two backends:
-
-| | recorded | measured after strengthening the fixture |
-|---|---|---|
-| LibJIT | aborts | `set_get=9`, `fill_get=5`, `inline=0` -- correct |
-| AsmJIT | "inconclusive: out of bounds" | trapped on an **in-bounds** fill -> offset/value swapped |
-| SLJIT | "inconclusive: out of bounds" | the same swap |
-
-Operand order is `[array, offset, value, count]` (validator in `WasmValidator.cpp` and the
-upstream `array_fill.wast`). AsmJIT popped the value as the offset; SLJIT named the depth
-the same way. Their shared parity fixture (`gc_array_fill.wat`) was written *value-first*,
-so the two wrong backends agreed with each other and both parity tests passed. LibJIT and
-the validator expected the spec order, which is why the same fixture trapped there.
-
-**Fixed:** both lowerings use the spec order, the fixture is corrected, and the parity test
-now instantiates **all three** backends from the corrected fixture. The probe was
-strengthened from "execute and return 0" to `set_get` / `fill_get` / `inline`, so it
-observes the mutation instead of the instantiation.
+Operand order is `[array, offset, value, count]` (validator and upstream
+`array_fill.wast`). Both backends used the value as the offset. Their shared parity
+fixture was written value-first, so the two wrong backends agreed and both tests were
+green. Both lowerings and the fixture are fixed; the parity test now includes LibJIT.
+The LibJIT `popValueRaw` abort did not reproduce with the committed fixture.
 
 ### D-3 -- REAL and fixed: SLJIT `struct.get` loaded every field as 4 bytes
 
-`SljitOpcodeDispatcher::dispatchStructGet` computed the field width and then hard-coded
-`SLJIT_MOV32` and `storeSlot(..., 4)`. For a reference field the low half of the pointer
-was loaded and the slot's upper half kept whatever it held before -- hence
-`roundtrip(null)=0x7f1700000000`. The load op and the slot width now follow the field type
-(4 for `i32`/`f32`, 8 otherwise); packed and `v128` fields are refused explicitly, as
-elsewhere in the backend.
+`dispatchStructGet` computed the width and then used `SLJIT_MOV32` for every field,
+leaving the upper half of a reference slot stale. The load and the slot width now
+follow the field type; packed and `v128` fields are refused explicitly.
 
-The `REFFIELD` probe now requires `nullptr` for **every** backend instead of pinning the
-old wrong answer.
+## 3. Capability gaps: what closed, what remains
 
-## 3. Feature gaps (honest refusals, all temporary)
+### Closed this session
+
+| Capability | SLJIT | AsmJIT | LibJIT | Notes |
+|---|---|---|---|---|
+| `throw`, `throw_ref`, `try_table`, `catch`, `catch_all` | ✅ | ✅ | ✅ | static/runtime dispatch, payload layout, pending protocol, cross-instance payloads |
+| memory atomics: load/store/RMW/cmpxchg, fence, pause, notify, wait | ✅ | ✅ | ✅ | all widths and RMW operations, through the shared `wasm_atomic_*` ABI |
+| frame-form `return_call`, `return_call_indirect` | ✅ | ✅ | ✅ (register form) | correct values; implemented as call + frame return |
+
+Probe outputs (`[exceptions]`, `[atomics]`, `[tail]`):
+
+```
+EXCUNCAUGHT libjit/asmjit/sljit: returned=0 pending=set
+EXCH        libjit/asmjit/sljit: caught()=42
+XINST       libjit/asmjit/sljit: caught()=7
+ATOMICSOPS  libjit/asmjit/sljit: i32=9 i64=10 i8=0 i16=0
+TAILFRAME   asmjit/sljit: tail_wide=1
+```
+
+### Remaining (honest refusals)
 
 | Gap | Backends | Note |
 |---|---|---|
-| `throw`, `try_table` | SLJIT, AsmJIT | refused by dispatch; LibJIT implements the pending protocol |
-| atomics | SLJIT, AsmJIT | consistent refusal across `rmw.add`, `store`, `load` |
-| frame-form tail calls | SLJIT, AsmJIT | SLJIT needs a frame-carrying trampoline (6th thunk arg) |
-| bulk memory on memory64 | SLJIT, AsmJIT | message says "yet" -- a scheduled limitation |
-| LibJIT frame-mode calls / imports / multi-result | LibJIT | **policy**, not limitation: frame mode is opt-in and partial on purpose |
+| `catch_ref` / `catch_all_ref` and a catch with more than one payload value | AsmJIT | a structured block on AsmJIT carries at most one result |
+| shared-everything atomics (global/table/struct/array) | SLJIT, AsmJIT | memory atomics work; these still refuse |
+| a true constant-stack tail-call trampoline | SLJIT, AsmJIT | `return_call` is call + return; the values are correct, the host stack still grows |
+| bulk memory on memory64 | SLJIT, AsmJIT | message says "yet" |
+| LibJIT frame-mode calls / imports / multi-result | LibJIT | **policy**: frame mode is opt-in and partial on purpose |
 
-## 4. Process hazards this campaign paid for (read before editing)
+## 4. Findings from this round (record before editing)
+
+1. **The validator accepted two invalid fixtures.** `exc_handler_probe` and
+   `tag_consumer` left a value on the stack at the end of a block; `wasm-tools
+   validate` rejects both, while the engine's validator accepted them (LibJIT and
+   SLJIT then executed the catch path, hiding it). The fixtures are corrected. The
+   validator gap itself is recorded as **V-1** in `PRODUCTION_GAPS.md` section 26 and
+   is not fixed here.
+2. **A dead function end in frame mode aborted SLJIT.** `dispatchEnd`'s unreachable
+   epilogue emitted a typed return for a `void(ctx, frame)` signature. It now returns
+   void in frame mode.
+3. **AsmJIT's frame-mode float return was wrong.** `compile()` tested `isFloatKind`
+   before `frameMode`, so a float result returned in an Xmm from a void signature.
+   The frame branches now come first; `emitFrameReturnValue` is shared by the normal
+   end, an explicit `return` and `return_call`.
+
+## 5. Process hazards this campaign paid for (read before editing)
 
 1. **Grep for the guard before writing it.** Three times a "missing" guard already
    existed (`kMaxWasmParameters`, SLJIT's multi-result check, the exit to
    `unsupportedReason`).
-2. **A sentinel means what the tree says.** A null `fnPtr` means both "unsupported" and
-   "no compiled entries"; inferring support from it broke three tests.
-3. **Instrument before theorising.** When two reverts agree, print; one probe settled what
-   two edit rounds could not.
+2. **A sentinel means what the tree says.** A null `fnPtr` means both "unsupported"
+   and "no compiled entries".
+3. **Instrument before theorising.** Print; one probe settles what two edit rounds
+   cannot.
 4. **A filtered green run is not a green tree.** Run `--rng-seed 12345` over the whole
    suite.
-5. **Validate the fixture before believing it.** Three probes measured themselves (invalid
-   `ref.func`, missing `array.fill` count, a `get` on a consumed array). This round added a
-   fourth: a folded `array.fill` with offset and value transposed looked like a backend
-   trap.
+5. **Validate the fixture before believing it.** Four probes measured themselves this
+   campaign (invalid `ref.func`, missing `array.fill` count, a `get` on a consumed
+   array, and the two block-end fixtures above). `wasm-tools validate` every WAT
+   before recording a row.
 6. **Two backends agreeing is not a spec check.** `gc_array_fill` passed on AsmJIT and
-   SLJIT because both encoded the same transposition. Compare against the validator and
-   the upstream `.wast`, and always include LibJIT in a parity test.
-7. **Do not project a known defect into untested territory** -- D-3 was nearly filed as
-   "SLJIT mangles references" instead of "SLJIT mangles a reference in a struct field".
-8. **A closed pipe can kill a build.** `make ... | head` makes GNU make die of `SIGPIPE`
-   part-way through the subdirectories, leaving stale `.so` files that the next test run
-   silently loads. Build to a log file (`> /tmp/build.log 2>&1`), and when a fix "does
-   nothing", compare the source and library timestamps before theorising.
-9. **Mechanical:** the editor tool doubles `\` in Doxygen commands, and inserting a
-   `/*! */` block above a documented declaration makes Doxygen merge both docs onto one
-   function. After any header edit: run `doxygen` and expect to reorder.
+   SLJIT because both encoded the same transposition. Compare with the validator and
+   the upstream `.wast`, and keep LibJIT in a parity test.
+7. **A closed pipe can kill a build.** `make ... | head` makes GNU make die of
+   `SIGPIPE` part-way through the subdirectories, leaving stale `.so` files. Build to
+   a log file, and compare source and library timestamps when a fix "does nothing".
+8. **Measure-pass bookkeeping is part of a lowering.** The first SLJIT atomic helpers
+   pushed their result only in the emit pass; the measuring pass then underflowed. A
+   new operation must update the model in both passes.
+9. **Mechanical:** the editor tool doubles `\` in Doxygen commands. After a header
+   edit, run `doxygen` and expect to reorder merged doc blocks.
 
-## 5. Test-organisation rules in force
+## 6. Test-organisation rules in force
 
-* **No partial modules** -- any backend that cannot compile a function throws at module
+* **No partial modules** -- a backend that cannot compile a function throws at module
   level, naming the function and the reason.
 * **Assert the property**, not the outcome (round-trip identity, not "it returned").
-* **Refusal is a pass** in a probe -- `continue` after printing, never `SUCCEED`.
-* **A runtime trap on an in-bounds operation is a defect**, not a refusal and not a skip.
-* **Pin nothing.** The two wrong answers this round were pinned by tests; both tests now
-  assert the correct property, so a regression fails instead of matching.
+* **Refusal is a pass** in a probe; a runtime trap on an in-bounds operation is a
+  defect.
+* **Pin nothing.** A known wrong answer is recorded as a defect, never asserted as the
+  expected result.
 
-## 6. Next session's recommendation
+## 7. Next session's recommendation
 
-The defect ledger is empty. The remaining work is the capability matrix's refused rows, in
-the order the project cares about:
+1. **True tail-call trampolines for SLJIT and AsmJIT.** The frame pointer is the
+   missing sixth trampoline argument on SLJIT; AsmJIT's register-form thunk currently
+   supports only i32. Until then, `return_call` is correct but not constant-stack.
+2. **`catch_ref` / multi-payload catches on AsmJIT.** The block multi-value limit is
+   the blocker; either lift it or route such catches through a frame slot.
+3. **Shared-everything atomics on SLJIT and AsmJIT.** The memory family is done and
+   the address-forming code exists for the GC paths; the global/table forms need the
+   same helper with the GC write barrier (`wasm_atomic_ref_*`).
+4. **V-1: the validator's block-end stack check.** `wasm-tools validate` rejects a
+   module the engine accepts. This is a core validator gap, independent of any
+   backend, and it hid two invalid probe fixtures.
 
-1. **exceptions on SLJIT and AsmJIT** -- the LibJIT implementation is the worked example
-   (static catch dispatch plus the pending-exception protocol);
-2. **atomics on SLJIT and AsmJIT** -- `dispatchI32AtomicRmwAdd` and the store/load family;
-3. **the frame-carrying trampoline** for tail calls (SLJIT first: the thunk already takes
-   five arguments, so a sixth is the smallest shape).
-
-Keep the probe discipline: strengthen the fixture until it observes the property, run it
-on all three backends, and only then record a row.
+Keep the probe discipline: strengthen the fixture until it observes the property, run
+it on all three backends, validate the module with `wasm-tools`, and only then record a
+row.

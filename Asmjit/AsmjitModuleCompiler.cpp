@@ -3,6 +3,8 @@
 #include "../WasmBase/WasmOpcodeDispatcher.hpp"
 #include "../WasmBase/WasmSafety.hpp"
 #include "../WasmBase/WasmBackendAbi.hpp"
+#include "../WasmBase/WasmExn.hpp"
+#include "../WasmBase/wasm_atomic.hpp"
 #include "../WasmBase/WasmStack.hpp"
 #include "../WasmBase/WasmStore.hpp"
 #include "../WasmBase/WasmTrap.hpp"
@@ -94,6 +96,29 @@ int kindWidth(WASM::ValueTypeCode kind) noexcept
 int slotWidthOf(WASM::ValueTypeCode kind) noexcept
 {
 	return kind == WASM::ValueTypeCode::V128 ? 16 : kindWidth(kind);
+}
+
+//! Payload layout of one tag: the canonical aggregate layout the exception ABI
+//! documents (`translateStruct` on LibJIT, `computeAggregateLayout` here).
+struct ExceptionPayloadLayout {
+	std::vector<WASM::FieldLayout> fields; //!< Offset/size/alignment per payload value.
+	std::uint32_t size = 0; //!< Total payload bytes, rounded to its alignment.
+};
+
+//! Computes the payload layout of a tag's parameter list.
+//! \param payload The tag's function type; its parameters are the payload.
+//! \return The canonical field layout.
+ExceptionPayloadLayout exceptionPayloadLayout(const WASM::FuncType& payload)
+{
+	ExceptionPayloadLayout layout;
+	layout.fields.resize(payload.params.size());
+	std::vector<WASM::ValueKind> kinds;
+	kinds.reserve(payload.params.size());
+	for (const WASM::StorageType& parameter : payload.params)
+		kinds.push_back(WASM::valueKindOf(parameter.val.opcode));
+	const WASM::AggregateLayout aggregate = WASM::computeAggregateLayout(kinds, layout.fields);
+	layout.size = aggregate.size;
+	return layout;
 }
 
 //! Refuses a parameter/local/result outside the scalar subset.
@@ -875,6 +900,10 @@ asmjit::FuncSignature stackCheckSignature()
 
 class IntegerFunctionEmitter final : public WASM::OpcodeDispatcher
 {
+private:
+	//! A structured-control frame, defined with the other private state below.
+	struct ControlFrame;
+
 public:
 	IntegerFunctionEmitter(asmjit::x86::Compiler& compiler, asmjit::FuncNode& function,
 			const WASM::FuncType& type, const WASM::FunctionBody& body,
@@ -921,6 +950,7 @@ public:
 			checkError(compiler.mov(v128ResultSlot, bufferPointer),
 					"AsmJit v128 result buffer capture failed");
 		}
+		exceptionPtrSlot = compiler.new_stack(8, 8, "pendingException");
 
 		locals.reserve(stack.allLocals.size());
 		vmContext = compiler.new_gp_ptr("vmContext");
@@ -1038,6 +1068,10 @@ public:
 		for (const auto& local : stack.allLocals)
 			localWidths.push_back(slotWidthOf(local.opcode));
 		resultCount = static_cast<uint32_t>(type.results.size());
+		resultTypes.reserve(type.results.size());
+		for (const auto& result : type.results)
+			resultTypes.push_back(result.val.opcode);
+		frameResultOffset = frameResultOffsetBytes(type);
 	}
 
 	void compile(const WASM::FunctionBody& body, const WASM::FuncType& type)
@@ -1056,23 +1090,18 @@ public:
 			const std::size_t expectedResults = frameMode ? resultCount : 1u;
 			if (values.size() != expectedResults)
 				throw std::runtime_error("AsmJit function ended with the wrong number of results");
-			if (isFloatKind(resultType))
-				checkError(compiler.ret(
-						materializeFloat(values.back(), kindWidth(resultType))),
-						"AsmJit float function return emission failed");
-			else if (frameMode && resultCount > 1) {
+			if (frameMode && resultCount > 1) {
 				// Multi-result (docs/backends/EXPORT_SIGNATURE.md section 29): every
 				// result goes into the frame in declaration order, 8 bytes per scalar
-				// slot and 16 for a `v128` taken from its local buffer. The result
-				// block starts where the argument block ends.
+				// slot and 16 for a `v128` taken from its local buffer.
 				asmjit::x86::Gp destination = compiler.new_gp_ptr("resultAddress");
 				checkError(compiler.lea(destination,
-						asmjit::x86::Mem(framePointer, frameResultOffsetBytes(type))),
+						asmjit::x86::Mem(framePointer, frameResultOffset)),
 						"AsmJit frame result address failed");
 				const std::size_t firstResult = values.size() - resultCount;
 				uint32_t offset = 0;
 				for (uint32_t i = 0; i < resultCount; ++i) {
-					const WASM::ValueTypeCode code = type.results[i].val.opcode;
+					const WASM::ValueTypeCode code = resultTypes[i];
 					const asmjit::x86::Gp value = values[firstResult + i];
 					if (code == WASM::ValueTypeCode::V128) {
 						for (int word = 0; word < 2; ++word) {
@@ -1093,34 +1122,12 @@ public:
 					offset += 8;
 				}
 				checkError(compiler.ret(), "AsmJit frame result return failed");
-			}
-			else if (frameMode) {
-				// Staging-frame ABI (steps 5c/5e): the result goes into the frame --
-				// AsmJIT has no driver to collect it -- and the signature returns
-				// void. The result block begins where the argument block ends, and a
-				// `v128` result is the 16 bytes its local buffer holds.
-				const uint32_t resultOffset = frameResultOffsetBytes(type);
-				asmjit::x86::Gp destination = compiler.new_gp_ptr("resultAddress");
-				checkError(compiler.lea(destination,
-						asmjit::x86::Mem(framePointer, resultOffset)),
-						"AsmJit frame result address failed");
-				if (resultType == WASM::ValueTypeCode::V128) {
-					asmjit::x86::Gp source = values.back();
-					for (int word = 0; word < 2; ++word) {
-						asmjit::x86::Gp bits = compiler.new_gp64("frameResultWord");
-						checkError(compiler.mov(bits,
-								asmjit::x86::qword_ptr(source, word * 8)),
-								"AsmJit frame vector result load failed");
-						checkError(compiler.mov(
-								asmjit::x86::qword_ptr(destination, word * 8), bits),
-								"AsmJit frame vector result store failed");
-					}
-				} else {
-					checkError(compiler.mov(
-							asmjit::x86::Mem(destination, 0, values.back().size()),
-							values.back()), "AsmJit frame result store failed");
-				}
-				checkError(compiler.ret(), "AsmJit frame result return failed");
+			} else if (frameMode) {
+				emitFrameReturnValue(values.back());
+			} else if (isFloatKind(resultType)) {
+				checkError(compiler.ret(
+						materializeFloat(values.back(), kindWidth(resultType))),
+						"AsmJit float function return emission failed");
 			} else if (bufferedVectorResult) {
 				// The value is the address of the vector 16-byte buffer; copy it into the
 				// caller buffer and return void.
@@ -1138,9 +1145,10 @@ public:
 				checkError(compiler.mov(asmjit::x86::qword_ptr(destination, 8), word),
 						"AsmJit v128 result high word store failed");
 				checkError(compiler.ret(), "AsmJit v128 result return emission failed");
-			} else
+			} else {
 				checkError(compiler.ret(values.back()),
 						"AsmJit function return emission failed");
+			}
 		}
 		(void)type;
 	}
@@ -1227,6 +1235,133 @@ protected:
 	void dispatchBlock(const WASM::BlockType& type) override
 	{
 		pushControlFrame(ControlKind::Block, type);
+	}
+
+	void dispatchTryTable(const WASM::BlockType& type,
+			std::vector<WASM::CatchClause>&& catches) override
+	{
+		pushControlFrame(ControlKind::Block, type);
+		ControlFrame& frame = controls.back();
+		frame.tryTable = true;
+		frame.catchClauses = std::move(catches);
+		const std::size_t frameIndex = controls.size() - 1;
+		for (const WASM::CatchClause& clause : frame.catchClauses) {
+			if (clause.labelIdx >= frameIndex)
+				throw std::runtime_error("AsmJit try_table catch label is out of range");
+			ControlFrame& target = controls[frameIndex - 1 - clause.labelIdx];
+			const bool catchAll = clause.kind == WASM::CatchKind::CatchAll
+					|| clause.kind == WASM::CatchKind::CatchAllRef;
+			const bool carryExn = clause.kind == WASM::CatchKind::CatchRef
+					|| clause.kind == WASM::CatchKind::CatchAllRef;
+			if (carryExn)
+				throw std::runtime_error(
+						"AsmJit does not lower catch_ref yet: a structured block carries at most one result");
+			const std::size_t payloadCount = catchAll
+					? 0u : tagPayloadType(clause.tagIdx).params.size();
+			if (payloadCount > 1)
+				throw std::runtime_error(
+						"AsmJit catches at most one payload value: a structured block carries at most one result");
+			const std::size_t targetValues =
+					target.kind == ControlKind::Loop ? 0u : target.resultCount;
+			if (targetValues != payloadCount)
+				throw std::runtime_error("AsmJit try_table catch arity does not match its target label");
+		}
+	}
+
+	void dispatchThrow(WASM::TagIdx arg) override
+	{
+		if (arg >= internals.tagIds.size())
+			throw std::runtime_error("AsmJit throw names an out-of-range tag");
+		const WASM::TagId tagId = internals.tagIds[arg];
+		const WASM::FuncType payload = tagPayloadType(arg);
+		if (values.size() < payload.params.size())
+			throw std::runtime_error("AsmJit throw operand stack underflow");
+		std::vector<asmjit::x86::Gp> payloadValues(payload.params.size());
+		for (std::size_t i = payload.params.size(); i-- > 0; ) {
+			payloadValues[i] = values.back();
+			values.pop_back();
+		}
+		const ExceptionPayloadLayout layout = exceptionPayloadLayout(payload);
+
+		asmjit::FuncSignature createSignature(asmjit::CallConvId::kCDecl);
+		createSignature.set_ret(asmjit::TypeId::kUIntPtr);
+		createSignature.add_arg(asmjit::TypeId::kUIntPtr);
+		createSignature.add_arg(asmjit::TypeId::kInt32);
+		createSignature.add_arg(asmjit::TypeId::kUInt32);
+		asmjit::InvokeNode* create = nullptr;
+		checkError(compiler.invoke(asmjit::Out(create),
+				reinterpret_cast<uint64_t>(&::wasm_exn_create), createSignature),
+				"AsmJit failed to emit exception allocation");
+		auto exn = compiler.new_gp_ptr("thrownException");
+		create->set_arg(0, vmContext);
+		create->set_arg(1, asmjit::Imm(static_cast<int32_t>(tagId)));
+		create->set_arg(2, asmjit::Imm(static_cast<uint32_t>(layout.size)));
+		create->set_ret(0, exn);
+		emitPendingTrapReturn();
+		checkError(compiler.mov(exceptionPtrSlot, exn),
+				"AsmJit thrown-exception slot store failed");
+
+		for (std::size_t i = 0; i < payloadValues.size(); ++i) {
+			const int32_t offset = static_cast<int32_t>(layout.fields[i].offset);
+			const int width = kindWidth(payload.params[i].val.opcode);
+			if (width == 16) {
+				for (int word = 0; word < 2; ++word) {
+					auto bits = compiler.new_gp64("thrownPayloadWord");
+					checkError(compiler.mov(bits,
+							asmjit::x86::qword_ptr(payloadValues[i], word * 8)),
+							"AsmJit thrown-payload vector load failed");
+					checkError(compiler.mov(
+							asmjit::x86::qword_ptr(exn, offset + word * 8), bits),
+							"AsmJit thrown-payload vector store failed");
+				}
+				continue;
+			}
+			checkError(compiler.mov(
+					asmjit::x86::Mem(exn, offset, payloadValues[i].size()),
+					payloadValues[i]), "AsmJit thrown-payload store failed");
+		}
+
+		asmjit::FuncSignature setSignature(asmjit::CallConvId::kCDecl);
+		setSignature.set_ret(asmjit::TypeId::kVoid);
+		setSignature.add_arg(asmjit::TypeId::kUIntPtr);
+		asmjit::InvokeNode* set = nullptr;
+		checkError(compiler.invoke(asmjit::Out(set),
+				reinterpret_cast<uint64_t>(&::wasm_exn_set_pending), setSignature),
+				"AsmJit failed to emit pending-exception store");
+		set->set_arg(0, exn);
+		emitExceptionPropagation();
+		emitUnreachablePlaceholders();
+	}
+
+	void dispatchThrowRef() override
+	{
+		if (values.empty())
+			throw std::runtime_error("AsmJit throw_ref operand stack underflow");
+		auto exn = values.back();
+		values.pop_back();
+		auto notNull = compiler.new_label();
+		checkError(compiler.test(exn, exn), "AsmJit throw_ref null test failed");
+		checkError(compiler.jnz(notNull), "AsmJit throw_ref null branch failed");
+		asmjit::FuncSignature reportSignature(asmjit::CallConvId::kCDecl);
+		reportSignature.set_ret(asmjit::TypeId::kVoid);
+		asmjit::InvokeNode* report = nullptr;
+		checkError(compiler.invoke(asmjit::Out(report),
+				reinterpret_cast<uint64_t>(&asmjitReportNullReference), reportSignature),
+				"AsmJit throw_ref null trap emission failed");
+		emitZeroReturn();
+		checkError(compiler.bind(notNull), "AsmJit throw_ref continuation binding failed");
+		checkError(compiler.mov(exceptionPtrSlot, exn),
+				"AsmJit throw_ref exception slot store failed");
+		asmjit::FuncSignature setSignature(asmjit::CallConvId::kCDecl);
+		setSignature.set_ret(asmjit::TypeId::kVoid);
+		setSignature.add_arg(asmjit::TypeId::kUIntPtr);
+		asmjit::InvokeNode* set = nullptr;
+		checkError(compiler.invoke(asmjit::Out(set),
+				reinterpret_cast<uint64_t>(&::wasm_exn_set_pending), setSignature),
+				"AsmJit failed to emit throw_ref pending store");
+		set->set_arg(0, exn);
+		emitExceptionPropagation();
+		emitUnreachablePlaceholders();
 	}
 
 	void dispatchLoop(const WASM::BlockType& type) override
@@ -1416,20 +1551,55 @@ protected:
 		const uint32_t typeIndex = index < importedCount
 				? module.importFunctions[index].typeIdx
 				: module.internalFunctionTypeIndices[index - importedCount];
-		validateTailCallType(typeIndex);
 		const WASM::FuncType calledType = module.funcTypeAt(typeIndex);
 		if (values.size() != calledType.params.size())
 			throw std::runtime_error("AsmJit return_call has unexpected values below its arguments");
+		if (frameMode) {
+			// Frame form: the callee writes into the staging frame and the tail call
+			// becomes a call plus a frame-mode return. The host stack still grows;
+			// the register form's call+return has the same limitation.
+			if (calledType.results.size() != resultCount)
+				throw std::runtime_error("AsmJit frame tail-call result arity differs from the caller");
+			for (std::size_t i = 0; i < resultCount; ++i)
+				if (calledType.results[i].val.opcode != resultTypes[i])
+					throw std::runtime_error("AsmJit frame tail-call result type differs from the caller");
+			dispatchCall(index);
+			if (resultCount == 0) {
+				checkError(compiler.ret(), "AsmJit frame tail-call void return failed");
+				return;
+			}
+			if (resultCount > 1)
+				throw std::runtime_error("AsmJit frame tail calls with multiple results are not implemented");
+			emitFrameReturnValue(values.back());
+			return;
+		}
+		validateTailCallType(typeIndex);
 		dispatchCall(index);
 		dispatchReturn();
 	}
 
 	void dispatchReturnCallIndirect(WASM::TypeIdx typeIndex, WASM::TableIdx tableIndex) override
 	{
-		validateTailCallType(typeIndex);
 		const WASM::FuncType calledType = module.funcTypeAt(typeIndex);
 		if (values.size() != calledType.params.size() + 1)
 			throw std::runtime_error("AsmJit return_call_indirect has unexpected values below its arguments");
+		if (frameMode) {
+			if (calledType.results.size() != resultCount)
+				throw std::runtime_error("AsmJit frame tail-call result arity differs from the caller");
+			for (std::size_t i = 0; i < resultCount; ++i)
+				if (calledType.results[i].val.opcode != resultTypes[i])
+					throw std::runtime_error("AsmJit frame tail-call result type differs from the caller");
+			dispatchCallIndirect(typeIndex, tableIndex);
+			if (resultCount == 0) {
+				checkError(compiler.ret(), "AsmJit frame tail-call void return failed");
+				return;
+			}
+			if (resultCount > 1)
+				throw std::runtime_error("AsmJit frame tail calls with multiple results are not implemented");
+			emitFrameReturnValue(values.back());
+			return;
+		}
+		validateTailCallType(typeIndex);
 		dispatchCallIndirect(typeIndex, tableIndex);
 		dispatchReturn();
 	}
@@ -1516,6 +1686,7 @@ protected:
 		setCallArguments(invoke, preparedArguments);
 		emitCallResult(invoke, calledType, "indirectCallResult");
 		emitPendingTrapReturn();
+		emitPendingExceptionCheck();
 	}
 
 	void dispatchCall(WASM::FuncIdx index) override
@@ -1641,6 +1812,7 @@ protected:
 				}
 			}
 			emitPendingTrapReturn();
+			emitPendingExceptionCheck();
 			return;
 		}
 
@@ -1657,6 +1829,7 @@ protected:
 		setCallArguments(invoke, preparedArguments);
 		emitCallResult(invoke, calledType, "callResult");
 		emitPendingTrapReturn();
+		emitPendingExceptionCheck();
 	}
 
 	void emitPendingTrapReturn()
@@ -1697,6 +1870,506 @@ protected:
 		}
 		checkError(compiler.bind(noTrap), "AsmJit post-call continuation binding failed");
 	}
+
+	// ── Exceptions (docs/proposals/EXCEPTIONS.md EX-3/EXD1) ────────────────
+	// A structured block on this backend carries at most one result, so a catch
+	// routes at most one payload value; a multi-field tag still throws and
+	// propagates, it just cannot be caught inside the function yet.
+
+	WASM::FuncType tagPayloadType(WASM::TagIdx tagIdx)
+	{
+		const std::size_t imported = module.importTags.size();
+		std::uint32_t typeIdx = 0;
+		if (tagIdx < imported) {
+			typeIdx = module.importTags[tagIdx].typeIdx;
+		} else {
+			const std::size_t local = tagIdx - imported;
+			if (local >= module.tags.size())
+				throw std::runtime_error("AsmJit throw names an out-of-range tag");
+			typeIdx = module.tags[local].typeIdx;
+		}
+		if (typeIdx >= module.typeCount()
+				|| module.typeView(typeIdx).kind() != WASM::CanonTypeKind::Func)
+			throw std::runtime_error("AsmJit tag does not name a function type");
+		return module.funcTypeAt(typeIdx);
+	}
+
+	WASM::TagId tagIdForClause(const WASM::CatchClause& clause)
+	{
+		if (clause.tagIdx >= internals.tagIds.size())
+			throw std::runtime_error("AsmJit try_table catch names an out-of-range tag");
+		return internals.tagIds[clause.tagIdx];
+	}
+
+	void emitZeroReturn()
+	{
+		if (frameMode || resultCount == 0 || bufferedVectorResult) {
+			checkError(compiler.ret(), "AsmJit exception-path void return failed");
+			return;
+		}
+		if (isFloatKind(resultType)) {
+			auto zero = compiler.new_xmm("exceptionFloatResult");
+			checkError(compiler.xorps(zero, zero),
+					"AsmJit exception-path float result initialisation failed");
+			checkError(compiler.ret(zero), "AsmJit exception-path float return failed");
+			return;
+		}
+		asmjit::x86::Gp zero = kindWidth(resultType) == 8
+				? compiler.new_gp64("exceptionResult") : compiler.new_gp32("exceptionResult");
+		checkError(compiler.xor_(zero, zero),
+				"AsmJit exception-path result initialisation failed");
+		checkError(compiler.ret(zero), "AsmJit exception-path result return failed");
+	}
+
+	void emitFrameReturnValue(const asmjit::x86::Gp& value)
+	{
+		// Staging-frame ABI: the result goes into the caller's result block and the
+		// signature returns void.
+		asmjit::x86::Gp destination = compiler.new_gp_ptr("frameResultAddress");
+		checkError(compiler.lea(destination,
+				asmjit::x86::Mem(framePointer, frameResultOffset)),
+				"AsmJit frame result address failed");
+		if (resultType == WASM::ValueTypeCode::V128) {
+			for (int word = 0; word < 2; ++word) {
+				auto bits = compiler.new_gp64("frameResultWord");
+				checkError(compiler.mov(bits, asmjit::x86::qword_ptr(value, word * 8)),
+						"AsmJit frame vector result load failed");
+				checkError(compiler.mov(
+						asmjit::x86::qword_ptr(destination, word * 8), bits),
+						"AsmJit frame vector result store failed");
+			}
+		} else {
+			checkError(compiler.mov(
+					asmjit::x86::Mem(destination, 0, value.size()), value),
+					"AsmJit frame result store failed");
+		}
+		checkError(compiler.ret(), "AsmJit frame result return failed");
+	}
+
+	void emitUnreachablePlaceholders()
+	{
+		// The throw is a terminator. The body after it is polymorphic, so the
+		// compile-time value stack is reset to the block's height and filled with
+		// zero placeholders; the emitted instructions after the propagation are
+		// dead (every path returned or branched).
+		const std::size_t stackHeight = controls.empty() ? 0 : controls.back().stackHeight;
+		const std::size_t placeholderCount = controls.empty()
+				? resultCount : controls.back().resultCount;
+		values.resize(stackHeight);
+		for (std::size_t i = 0; i < placeholderCount; ++i) {
+			auto zero = compiler.new_gp32("exceptionStackPlaceholder");
+			checkError(compiler.xor_(zero, zero),
+					"AsmJit exception placeholder initialisation failed");
+			values.push_back(zero);
+		}
+	}
+
+	void emitPendingExceptionCheck()
+	{
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kUIntPtr);
+		asmjit::InvokeNode* call = nullptr;
+		checkError(compiler.invoke(asmjit::Out(call),
+				reinterpret_cast<uint64_t>(&::wasm_exn_pending), signature),
+				"AsmJit failed to emit pending-exception lookup");
+		auto exn = compiler.new_gp_ptr("pendingException");
+		call->set_ret(0, exn);
+		auto none = compiler.new_label();
+		checkError(compiler.test(exn, exn), "AsmJit pending-exception test failed");
+		checkError(compiler.jz(none), "AsmJit pending-exception branch failed");
+		checkError(compiler.mov(exceptionPtrSlot, exn),
+				"AsmJit pending-exception slot store failed");
+		emitExceptionPropagation();
+		checkError(compiler.bind(none), "AsmJit pending-exception continuation failed");
+	}
+
+	void emitExceptionPropagation()
+	{
+		auto exn = compiler.new_gp_ptr("routedException");
+		checkError(compiler.mov(exn, exceptionPtrSlot),
+				"AsmJit routed-exception slot load failed");
+		asmjit::FuncSignature tagSignature(asmjit::CallConvId::kCDecl);
+		tagSignature.set_ret(asmjit::TypeId::kInt32);
+		tagSignature.add_arg(asmjit::TypeId::kUIntPtr);
+		asmjit::InvokeNode* tagCall = nullptr;
+		checkError(compiler.invoke(asmjit::Out(tagCall),
+				reinterpret_cast<uint64_t>(&::wasm_exn_tag_id), tagSignature),
+				"AsmJit failed to emit exception tag-id lookup");
+		auto tag = compiler.new_gp32("routedExceptionTag");
+		tagCall->set_arg(0, exn);
+		tagCall->set_ret(0, tag);
+
+		for (std::size_t frameIndex = controls.size(); frameIndex-- > 0; ) {
+			ControlFrame& frame = controls[frameIndex];
+			if (!frame.tryTable)
+				continue;
+			for (const WASM::CatchClause& clause : frame.catchClauses) {
+				if (clause.labelIdx >= frameIndex)
+					throw std::runtime_error("AsmJit try_table catch label is out of range");
+				ControlFrame& target = controls[frameIndex - 1 - clause.labelIdx];
+				const bool catchAll = clause.kind == WASM::CatchKind::CatchAll
+						|| clause.kind == WASM::CatchKind::CatchAllRef;
+				const bool carryExn = clause.kind == WASM::CatchKind::CatchRef
+						|| clause.kind == WASM::CatchKind::CatchAllRef;
+				if (carryExn)
+					throw std::runtime_error(
+							"AsmJit does not lower catch_ref yet: a structured block carries at most one result");
+				if (catchAll) {
+					emitCatchBranch(target, WASM::FuncType{});
+					return;
+				}
+				const WASM::FuncType payload = tagPayloadType(clause.tagIdx);
+				if (payload.params.size() > 1)
+					throw std::runtime_error(
+							"AsmJit catches at most one payload value: a structured block carries at most one result");
+				const WASM::TagId tagId = tagIdForClause(clause);
+				auto next = compiler.new_label();
+				checkError(compiler.cmp(tag, static_cast<uint32_t>(tagId)),
+						"AsmJit exception tag comparison failed");
+				checkError(compiler.jne(next), "AsmJit exception tag branch failed");
+				emitCatchBranch(target, payload);
+				checkError(compiler.bind(next), "AsmJit exception next-clause binding failed");
+			}
+		}
+
+		// No handler in this function: the pending slot is already set, so return
+		// zeroes and let the caller re-propagate it.
+		emitZeroReturn();
+	}
+
+	void emitCatchBranch(ControlFrame& target, const WASM::FuncType& payload)
+	{
+		const std::size_t payloadCount = payload.params.size();
+		if (payloadCount > 1)
+			throw std::runtime_error(
+					"AsmJit catches at most one payload value: a structured block carries at most one result");
+		if (target.kind == ControlKind::Loop) {
+			if (payloadCount != 0)
+				throw std::runtime_error("AsmJit cannot route a catch payload to a loop label");
+			checkError(compiler.jmp(target.begin), "AsmJit catch-to-loop jump failed");
+			return;
+		}
+		if (target.resultCount != payloadCount)
+			throw std::runtime_error("AsmJit catch arity does not match its target label");
+
+		// A caught exception is consumed: clearing first means the caller and the
+		// embedder no longer observe it (EXD1).
+		asmjit::FuncSignature clearSignature(asmjit::CallConvId::kCDecl);
+		clearSignature.set_ret(asmjit::TypeId::kVoid);
+		asmjit::InvokeNode* clear = nullptr;
+		checkError(compiler.invoke(asmjit::Out(clear),
+				reinterpret_cast<uint64_t>(&::wasm_exn_clear_pending), clearSignature),
+				"AsmJit failed to emit pending-exception clear");
+		if (payloadCount == 1) {
+			auto exn = compiler.new_gp_ptr("caughtException");
+			checkError(compiler.mov(exn, exceptionPtrSlot),
+					"AsmJit caught-exception slot load failed");
+			const ExceptionPayloadLayout layout = exceptionPayloadLayout(payload);
+			asmjit::x86::Gp value = kindWidth(payload.params.front().val.opcode) == 8
+					? compiler.new_gp64("caughtPayload")
+					: compiler.new_gp32("caughtPayload");
+			checkError(compiler.mov(value,
+					asmjit::x86::Mem(exn, static_cast<int32_t>(layout.fields.front().offset),
+							value.size())),
+					"AsmJit caught-payload load failed");
+			checkError(compiler.mov(target.result, value),
+					"AsmJit caught-payload transfer failed");
+		}
+		checkError(compiler.jmp(target.end), "AsmJit catch-target jump failed");
+	}
+
+
+// ── Memory atomics (docs/proposals/THREADS.md TH-1) ─────────────────────
+// The bounds-checked address comes from the same helper as every scalar
+// access; the atomicity and the alignment trap live in the shared
+// `wasm_atomic_*` ABI, so a target without its own atomic lowering still
+// executes these correctly.
+
+asmjit::x86::Gp atomicValue64(const asmjit::x86::Gp& value, int valueWidth)
+{
+if (valueWidth == 8)
+return value;
+auto widened = compiler.new_gp64("atomicValue");
+checkError(compiler.mov(widened.r32(), value.r32()),
+"AsmJit atomic value widening failed");
+return widened;
+}
+
+void emitAtomicLoad(const WASM::MemArg& arg, uint32_t width, int valueWidth)
+{
+if (values.empty())
+throw std::runtime_error("AsmJit atomic load operand stack underflow");
+auto wasmAddress = values.back();
+values.pop_back();
+auto pointer = emitMemoryAddress(arg, width, wasmAddress);
+asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+signature.set_ret(asmjit::TypeId::kUInt64);
+signature.add_arg(asmjit::TypeId::kUIntPtr);
+signature.add_arg(asmjit::TypeId::kUInt32);
+signature.add_arg(asmjit::TypeId::kUInt32);
+asmjit::InvokeNode* invoke = nullptr;
+checkError(compiler.invoke(asmjit::Out(invoke),
+reinterpret_cast<uint64_t>(&::wasm_atomic_load), signature),
+"AsmJit atomic load emission failed");
+auto loaded = compiler.new_gp64("atomicLoaded");
+invoke->set_arg(0, pointer);
+invoke->set_arg(1, asmjit::Imm(width));
+invoke->set_arg(2, asmjit::Imm(arg.ordering));
+invoke->set_ret(0, loaded);
+emitPendingTrapReturn();
+if (valueWidth == 8) {
+values.push_back(loaded);
+} else {
+auto result = compiler.new_gp32("atomicLoadResult");
+checkError(compiler.mov(result, loaded.r32()),
+"AsmJit atomic load truncation failed");
+values.push_back(result);
+}
+}
+
+void emitAtomicStore(const WASM::MemArg& arg, uint32_t width, int valueWidth)
+{
+if (values.size() < 2)
+throw std::runtime_error("AsmJit atomic store operand stack underflow");
+auto value = values.back(); values.pop_back();
+auto wasmAddress = values.back(); values.pop_back();
+auto pointer = emitMemoryAddress(arg, width, wasmAddress);
+auto value64 = atomicValue64(value, valueWidth);
+asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+signature.set_ret(asmjit::TypeId::kVoid);
+signature.add_arg(asmjit::TypeId::kUIntPtr);
+signature.add_arg(asmjit::TypeId::kUInt64);
+signature.add_arg(asmjit::TypeId::kUInt32);
+signature.add_arg(asmjit::TypeId::kUInt32);
+asmjit::InvokeNode* invoke = nullptr;
+checkError(compiler.invoke(asmjit::Out(invoke),
+reinterpret_cast<uint64_t>(&::wasm_atomic_store), signature),
+"AsmJit atomic store emission failed");
+invoke->set_arg(0, pointer);
+invoke->set_arg(1, value64);
+invoke->set_arg(2, asmjit::Imm(width));
+invoke->set_arg(3, asmjit::Imm(arg.ordering));
+emitPendingTrapReturn();
+}
+
+void emitAtomicRmw(const WASM::MemArg& arg, uint32_t width, uint32_t op, int valueWidth)
+{
+if (values.size() < 2)
+throw std::runtime_error("AsmJit atomic rmw operand stack underflow");
+auto value = values.back(); values.pop_back();
+auto wasmAddress = values.back(); values.pop_back();
+auto pointer = emitMemoryAddress(arg, width, wasmAddress);
+auto value64 = atomicValue64(value, valueWidth);
+asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+signature.set_ret(asmjit::TypeId::kUInt64);
+signature.add_arg(asmjit::TypeId::kUIntPtr);
+signature.add_arg(asmjit::TypeId::kUInt64);
+signature.add_arg(asmjit::TypeId::kUInt32);
+signature.add_arg(asmjit::TypeId::kUInt32);
+signature.add_arg(asmjit::TypeId::kUInt32);
+asmjit::InvokeNode* invoke = nullptr;
+checkError(compiler.invoke(asmjit::Out(invoke),
+reinterpret_cast<uint64_t>(&::wasm_atomic_rmw), signature),
+"AsmJit atomic rmw emission failed");
+auto old = compiler.new_gp64("atomicOldValue");
+invoke->set_arg(0, pointer);
+invoke->set_arg(1, value64);
+invoke->set_arg(2, asmjit::Imm(width));
+invoke->set_arg(3, asmjit::Imm(op));
+invoke->set_arg(4, asmjit::Imm(arg.ordering));
+invoke->set_ret(0, old);
+emitPendingTrapReturn();
+if (valueWidth == 8) {
+values.push_back(old);
+} else {
+auto result = compiler.new_gp32("atomicRmwResult");
+checkError(compiler.mov(result, old.r32()),
+"AsmJit atomic rmw truncation failed");
+values.push_back(result);
+}
+}
+
+void emitAtomicCmpxchg(const WASM::MemArg& arg, uint32_t width, int valueWidth)
+{
+if (values.size() < 3)
+throw std::runtime_error("AsmJit atomic cmpxchg operand stack underflow");
+auto replacement = values.back(); values.pop_back();
+auto expected = values.back(); values.pop_back();
+auto wasmAddress = values.back(); values.pop_back();
+auto pointer = emitMemoryAddress(arg, width, wasmAddress);
+auto expected64 = atomicValue64(expected, valueWidth);
+auto replacement64 = atomicValue64(replacement, valueWidth);
+asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+signature.set_ret(asmjit::TypeId::kUInt64);
+signature.add_arg(asmjit::TypeId::kUIntPtr);
+signature.add_arg(asmjit::TypeId::kUInt64);
+signature.add_arg(asmjit::TypeId::kUInt64);
+signature.add_arg(asmjit::TypeId::kUInt32);
+signature.add_arg(asmjit::TypeId::kUInt32);
+asmjit::InvokeNode* invoke = nullptr;
+checkError(compiler.invoke(asmjit::Out(invoke),
+reinterpret_cast<uint64_t>(&::wasm_atomic_cmpxchg), signature),
+"AsmJit atomic cmpxchg emission failed");
+auto old = compiler.new_gp64("atomicCmpxchgResult");
+invoke->set_arg(0, pointer);
+invoke->set_arg(1, expected64);
+invoke->set_arg(2, replacement64);
+invoke->set_arg(3, asmjit::Imm(width));
+invoke->set_arg(4, asmjit::Imm(arg.ordering));
+invoke->set_ret(0, old);
+emitPendingTrapReturn();
+if (valueWidth == 8) {
+values.push_back(old);
+} else {
+auto result = compiler.new_gp32("atomicCmpxchgTruncated");
+checkError(compiler.mov(result, old.r32()),
+"AsmJit atomic cmpxchg truncation failed");
+values.push_back(result);
+}
+}
+
+void dispatchMemoryAtomicNotify(WASM::MemArg arg) override
+{
+if (values.size() < 2)
+throw std::runtime_error("AsmJit atomic notify operand stack underflow");
+auto count = values.back(); values.pop_back();
+auto wasmAddress = values.back(); values.pop_back();
+auto pointer = emitMemoryAddress(arg, 4, wasmAddress);
+asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+signature.set_ret(asmjit::TypeId::kUInt32);
+signature.add_arg(asmjit::TypeId::kUIntPtr);
+signature.add_arg(asmjit::TypeId::kUInt32);
+asmjit::InvokeNode* invoke = nullptr;
+checkError(compiler.invoke(asmjit::Out(invoke),
+reinterpret_cast<uint64_t>(&::wasm_atomic_notify), signature),
+"AsmJit atomic notify emission failed");
+auto woken = compiler.new_gp32("atomicWoken");
+invoke->set_arg(0, pointer);
+invoke->set_arg(1, count);
+invoke->set_ret(0, woken);
+emitPendingTrapReturn();
+values.push_back(woken);
+}
+
+void emitAtomicWait(const WASM::MemArg& arg, uint32_t width, int valueWidth)
+{
+if (values.size() < 3)
+throw std::runtime_error("AsmJit atomic wait operand stack underflow");
+auto timeout = values.back(); values.pop_back();
+auto expected = values.back(); values.pop_back();
+auto wasmAddress = values.back(); values.pop_back();
+auto pointer = emitMemoryAddress(arg, width, wasmAddress);
+auto expected64 = atomicValue64(expected, valueWidth);
+asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+signature.set_ret(asmjit::TypeId::kUInt32);
+signature.add_arg(asmjit::TypeId::kUIntPtr);
+signature.add_arg(asmjit::TypeId::kUInt64);
+signature.add_arg(asmjit::TypeId::kUInt64);
+signature.add_arg(asmjit::TypeId::kUInt32);
+asmjit::InvokeNode* invoke = nullptr;
+checkError(compiler.invoke(asmjit::Out(invoke),
+reinterpret_cast<uint64_t>(&::wasm_atomic_wait), signature),
+"AsmJit atomic wait emission failed");
+auto status = compiler.new_gp32("atomicWaitStatus");
+invoke->set_arg(0, pointer);
+invoke->set_arg(1, expected64);
+invoke->set_arg(2, timeout);
+invoke->set_arg(3, asmjit::Imm(width));
+invoke->set_ret(0, status);
+emitPendingTrapReturn();
+values.push_back(status);
+}
+
+void dispatchMemoryAtomicWait32(WASM::MemArg arg) override
+{ emitAtomicWait(arg, 4, 4); }
+void dispatchMemoryAtomicWait64(WASM::MemArg arg) override
+{ emitAtomicWait(arg, 8, 8); }
+
+void dispatchAtomicFence(uint8_t ordering) override
+{
+asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+signature.set_ret(asmjit::TypeId::kVoid);
+signature.add_arg(asmjit::TypeId::kUInt32);
+asmjit::InvokeNode* invoke = nullptr;
+checkError(compiler.invoke(asmjit::Out(invoke),
+reinterpret_cast<uint64_t>(&::wasm_atomic_fence), signature),
+"AsmJit atomic fence emission failed");
+invoke->set_arg(0, asmjit::Imm(ordering));
+}
+
+void dispatchAtomicPause() override
+{
+asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+signature.set_ret(asmjit::TypeId::kVoid);
+asmjit::InvokeNode* invoke = nullptr;
+checkError(compiler.invoke(asmjit::Out(invoke),
+reinterpret_cast<uint64_t>(&::wasm_atomic_pause), signature),
+"AsmJit atomic pause emission failed");
+}
+
+	void dispatchI32AtomicLoad(WASM::MemArg arg) override { emitAtomicLoad(arg, 4, 4); }
+	void dispatchI64AtomicLoad(WASM::MemArg arg) override { emitAtomicLoad(arg, 8, 8); }
+	void dispatchI32AtomicLoad8U(WASM::MemArg arg) override { emitAtomicLoad(arg, 1, 4); }
+	void dispatchI32AtomicLoad16U(WASM::MemArg arg) override { emitAtomicLoad(arg, 2, 4); }
+	void dispatchI64AtomicLoad8U(WASM::MemArg arg) override { emitAtomicLoad(arg, 1, 8); }
+	void dispatchI64AtomicLoad16U(WASM::MemArg arg) override { emitAtomicLoad(arg, 2, 8); }
+	void dispatchI64AtomicLoad32U(WASM::MemArg arg) override { emitAtomicLoad(arg, 4, 8); }
+	void dispatchI32AtomicStore(WASM::MemArg arg) override { emitAtomicStore(arg, 4, 4); }
+	void dispatchI64AtomicStore(WASM::MemArg arg) override { emitAtomicStore(arg, 8, 8); }
+	void dispatchI32AtomicStore8(WASM::MemArg arg) override { emitAtomicStore(arg, 1, 4); }
+	void dispatchI32AtomicStore16(WASM::MemArg arg) override { emitAtomicStore(arg, 2, 4); }
+	void dispatchI64AtomicStore8(WASM::MemArg arg) override { emitAtomicStore(arg, 1, 8); }
+	void dispatchI64AtomicStore16(WASM::MemArg arg) override { emitAtomicStore(arg, 2, 8); }
+	void dispatchI64AtomicStore32(WASM::MemArg arg) override { emitAtomicStore(arg, 4, 8); }
+	void dispatchI32AtomicRmwAdd(WASM::MemArg arg) override { emitAtomicRmw(arg, 4, 0, 4); }
+	void dispatchI64AtomicRmwAdd(WASM::MemArg arg) override { emitAtomicRmw(arg, 8, 0, 8); }
+	void dispatchI32AtomicRmw8AddU(WASM::MemArg arg) override { emitAtomicRmw(arg, 1, 0, 4); }
+	void dispatchI32AtomicRmw16AddU(WASM::MemArg arg) override { emitAtomicRmw(arg, 2, 0, 4); }
+	void dispatchI64AtomicRmw8AddU(WASM::MemArg arg) override { emitAtomicRmw(arg, 1, 0, 8); }
+	void dispatchI64AtomicRmw16AddU(WASM::MemArg arg) override { emitAtomicRmw(arg, 2, 0, 8); }
+	void dispatchI64AtomicRmw32AddU(WASM::MemArg arg) override { emitAtomicRmw(arg, 4, 0, 8); }
+	void dispatchI32AtomicRmwSub(WASM::MemArg arg) override { emitAtomicRmw(arg, 4, 1, 4); }
+	void dispatchI64AtomicRmwSub(WASM::MemArg arg) override { emitAtomicRmw(arg, 8, 1, 8); }
+	void dispatchI32AtomicRmw8SubU(WASM::MemArg arg) override { emitAtomicRmw(arg, 1, 1, 4); }
+	void dispatchI32AtomicRmw16SubU(WASM::MemArg arg) override { emitAtomicRmw(arg, 2, 1, 4); }
+	void dispatchI64AtomicRmw8SubU(WASM::MemArg arg) override { emitAtomicRmw(arg, 1, 1, 8); }
+	void dispatchI64AtomicRmw16SubU(WASM::MemArg arg) override { emitAtomicRmw(arg, 2, 1, 8); }
+	void dispatchI64AtomicRmw32SubU(WASM::MemArg arg) override { emitAtomicRmw(arg, 4, 1, 8); }
+	void dispatchI32AtomicRmwAnd(WASM::MemArg arg) override { emitAtomicRmw(arg, 4, 2, 4); }
+	void dispatchI64AtomicRmwAnd(WASM::MemArg arg) override { emitAtomicRmw(arg, 8, 2, 8); }
+	void dispatchI32AtomicRmw8AndU(WASM::MemArg arg) override { emitAtomicRmw(arg, 1, 2, 4); }
+	void dispatchI32AtomicRmw16AndU(WASM::MemArg arg) override { emitAtomicRmw(arg, 2, 2, 4); }
+	void dispatchI64AtomicRmw8AndU(WASM::MemArg arg) override { emitAtomicRmw(arg, 1, 2, 8); }
+	void dispatchI64AtomicRmw16AndU(WASM::MemArg arg) override { emitAtomicRmw(arg, 2, 2, 8); }
+	void dispatchI64AtomicRmw32AndU(WASM::MemArg arg) override { emitAtomicRmw(arg, 4, 2, 8); }
+	void dispatchI32AtomicRmwOr(WASM::MemArg arg) override { emitAtomicRmw(arg, 4, 3, 4); }
+	void dispatchI64AtomicRmwOr(WASM::MemArg arg) override { emitAtomicRmw(arg, 8, 3, 8); }
+	void dispatchI32AtomicRmw8OrU(WASM::MemArg arg) override { emitAtomicRmw(arg, 1, 3, 4); }
+	void dispatchI32AtomicRmw16OrU(WASM::MemArg arg) override { emitAtomicRmw(arg, 2, 3, 4); }
+	void dispatchI64AtomicRmw8OrU(WASM::MemArg arg) override { emitAtomicRmw(arg, 1, 3, 8); }
+	void dispatchI64AtomicRmw16OrU(WASM::MemArg arg) override { emitAtomicRmw(arg, 2, 3, 8); }
+	void dispatchI64AtomicRmw32OrU(WASM::MemArg arg) override { emitAtomicRmw(arg, 4, 3, 8); }
+	void dispatchI32AtomicRmwXor(WASM::MemArg arg) override { emitAtomicRmw(arg, 4, 4, 4); }
+	void dispatchI64AtomicRmwXor(WASM::MemArg arg) override { emitAtomicRmw(arg, 8, 4, 8); }
+	void dispatchI32AtomicRmw8XorU(WASM::MemArg arg) override { emitAtomicRmw(arg, 1, 4, 4); }
+	void dispatchI32AtomicRmw16XorU(WASM::MemArg arg) override { emitAtomicRmw(arg, 2, 4, 4); }
+	void dispatchI64AtomicRmw8XorU(WASM::MemArg arg) override { emitAtomicRmw(arg, 1, 4, 8); }
+	void dispatchI64AtomicRmw16XorU(WASM::MemArg arg) override { emitAtomicRmw(arg, 2, 4, 8); }
+	void dispatchI64AtomicRmw32XorU(WASM::MemArg arg) override { emitAtomicRmw(arg, 4, 4, 8); }
+	void dispatchI32AtomicRmwXchg(WASM::MemArg arg) override { emitAtomicRmw(arg, 4, 5, 4); }
+	void dispatchI64AtomicRmwXchg(WASM::MemArg arg) override { emitAtomicRmw(arg, 8, 5, 8); }
+	void dispatchI32AtomicRmw8XchgU(WASM::MemArg arg) override { emitAtomicRmw(arg, 1, 5, 4); }
+	void dispatchI32AtomicRmw16XchgU(WASM::MemArg arg) override { emitAtomicRmw(arg, 2, 5, 4); }
+	void dispatchI64AtomicRmw8XchgU(WASM::MemArg arg) override { emitAtomicRmw(arg, 1, 5, 8); }
+	void dispatchI64AtomicRmw16XchgU(WASM::MemArg arg) override { emitAtomicRmw(arg, 2, 5, 8); }
+	void dispatchI64AtomicRmw32XchgU(WASM::MemArg arg) override { emitAtomicRmw(arg, 4, 5, 8); }
+	void dispatchI32AtomicRmwCmpxchg(WASM::MemArg arg) override { emitAtomicCmpxchg(arg, 4, 4); }
+	void dispatchI64AtomicRmwCmpxchg(WASM::MemArg arg) override { emitAtomicCmpxchg(arg, 8, 8); }
+	void dispatchI32AtomicRmw8CmpxchgU(WASM::MemArg arg) override { emitAtomicCmpxchg(arg, 1, 4); }
+	void dispatchI32AtomicRmw16CmpxchgU(WASM::MemArg arg) override { emitAtomicCmpxchg(arg, 2, 4); }
+	void dispatchI64AtomicRmw8CmpxchgU(WASM::MemArg arg) override { emitAtomicCmpxchg(arg, 1, 8); }
+	void dispatchI64AtomicRmw16CmpxchgU(WASM::MemArg arg) override { emitAtomicCmpxchg(arg, 2, 8); }
+	void dispatchI64AtomicRmw32CmpxchgU(WASM::MemArg arg) override { emitAtomicCmpxchg(arg, 4, 8); }
 
 	void dispatchGlobalGet(WASM::GlobalIdx index) override { emitGlobalGet(index); }
 	void dispatchGlobalSet(WASM::GlobalIdx index) override { emitGlobalSet(index); }
@@ -4053,6 +4726,12 @@ protected:
 		}
 		if (values.empty())
 			throw std::runtime_error("AsmJit return operand stack underflow");
+		if (frameMode) {
+			if (resultCount > 1)
+				throw std::runtime_error("AsmJit frame-mode return with multiple results is not implemented");
+			emitFrameReturnValue(values.back());
+			return;
+		}
 		if (isFloatKind(resultType))
 			checkError(compiler.ret(
 					materializeFloat(values.back(), kindWidth(resultType))),
@@ -4082,6 +4761,10 @@ private:
 		asmjit::Label alternate;
 		asmjit::Label end;
 		bool hasElse = false;
+		//! True for a `try_table` frame; its clauses route a pending exception.
+		bool tryTable = false;
+		//! Decoded catch clauses of a `try_table`, in source order.
+		std::vector<WASM::CatchClause> catchClauses;
 	};
 
 	enum class BinaryOp { Add, Sub, Mul, And, Or, Xor };
@@ -5145,8 +5828,14 @@ private:
 	std::vector<ControlFrame> controls;
 	uint32_t resultCount = 0;
 	WASM::ValueTypeCode resultType = WASM::ValueTypeCode::Void;
+	//! Declared result types, in order, for frame-mode returns.
+	std::vector<WASM::ValueTypeCode> resultTypes;
+	//! Byte offset of the result block in a staging frame.
+	uint32_t frameResultOffset = 0;
 	//! Stack slot holding the caller-supplied 16-byte buffer of a v128 result.
 	asmjit::x86::Mem v128ResultSlot;
+	//! Stack slot holding the exception currently being routed.
+	asmjit::x86::Mem exceptionPtrSlot;
 	//! True when the single result is a v128 returned through that buffer.
 	bool bufferedVectorResult = false;
 };

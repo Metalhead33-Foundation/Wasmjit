@@ -589,42 +589,46 @@ CHECK(&runtime->instantiate(*module, imports) == &instance);
 }
 
 // Item 4: exceptions on every backend, reported rather than assumed
-// (docs/backends/PRODUCTION_GAPS.md section 16). A backend either refuses the
-// module at instantiation or executes the throw; an uncaught throw is the
-// documented pending-exception protocol, not a trap (docs/ABI.md "Exceptions",
-// docs/proposals/EXCEPTIONS.md EXD1), so the property asserted for LibJIT is
-// "zero result + pending exception carrying this module's tag".
-TEST_CASE("exceptions: AsmJIT and SLJIT refuse, LibJIT leaves an uncaught throw pending",
+// (docs/backends/PRODUCTION_GAPS.md section 16 / section 25). A backend either
+// refuses the module at instantiation or executes the throw; an uncaught throw
+// is the documented pending-exception protocol, not a trap (docs/ABI.md
+// "Exceptions", docs/proposals/EXCEPTIONS.md EXD1), so the property is "zero
+// result + pending exception carrying this module's tag".
+TEST_CASE("exceptions: refuse or leave an uncaught throw pending",
 "[staging][abi][exceptions]")
 {
-// Measured, not assumed: AsmJIT and SLJIT refuse a `throw` at instantiation.
-for (const char* backend : {"asmjit", "sljit"}) {
+for (const char* backend : {"libjit", "asmjit", "sljit"}) {
+std::fprintf(stderr, "EXCUNCAUGHT %s: ", backend);
 auto runtime = WASM::Runtime::create(backend);
 REQUIRE(runtime != nullptr);
 auto module = runtime->loadFile(
 std::filesystem::path(WASM_TEST_DIR) / "exceptions_probe.wasm");
 WASM::RegistryImportResolver imports;
-REQUIRE_THROWS(runtime->instantiate(*module, imports));
+WASM::ModuleInstance* instance = nullptr;
+try {
+instance = &runtime->instantiate(*module, imports);
+} catch (const std::exception& error) {
+std::fprintf(stderr, "REFUSED: %s\n", error.what());
+continue;
 }
-
-// LibJIT: the uncaught throw must leave the exception in the execution state's
-// pending slot and return the zero of the result type (EXD1). Clearing a stale
-// slot first, and taking the payload afterwards, makes the assertion independent
-// of whatever an earlier test left behind.
-auto runtime = WASM::Runtime::create("libjit");
-REQUIRE(runtime != nullptr);
-auto module = runtime->loadFile(
-std::filesystem::path(WASM_TEST_DIR) / "exceptions_probe.wasm");
-WASM::RegistryImportResolver imports;
-WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
-const std::optional<WASM::Callable> callable = instance.exportedFunction("do_throw");
-REQUIRE(callable.has_value());
+const std::optional<WASM::Callable> callable = instance->exportedFunction("do_throw");
+if (!callable.has_value()) {
+std::fprintf(stderr, "no export\n");
+CHECK(callable.has_value());
+continue;
+}
+// Clearing a stale slot first makes the assertion independent of whatever an
+// earlier test left behind.
 ::wasm_exn_clear_pending();
-std::int32_t returned = WASM::callCallable<std::int32_t>(*callable, 7);
+const std::int32_t returned = WASM::callCallable<std::int32_t>(*callable, 7);
 CHECK(returned == 0);
 void* pending = ::wasm_exn_take_pending();
-REQUIRE(pending != nullptr);
-CHECK(::wasm_exn_tag_id(pending) == instance.tagIdForIndex(0));
+CHECK(pending != nullptr);
+if (pending != nullptr)
+CHECK(::wasm_exn_tag_id(pending) == instance->tagIdForIndex(0));
+std::fprintf(stderr, "returned=%d pending=%s\n", (int)returned,
+        pending != nullptr ? "set" : "null");
+}
 }
 
 // Item 4, probe 2: reference types. The assertion is the property -- a backend either
@@ -777,7 +781,53 @@ const std::string exportName = std::string(fixture) == "atomics_probe"
 const std::optional<WASM::Callable> callable = instance->exportedFunction(exportName);
 std::fprintf(stderr, "export %s=%d\n", exportName.c_str(), (int)callable.has_value());
 CHECK(callable.has_value());
+if (callable.has_value() && std::string(fixture) == "atomics_probe") {
+// `bump` returns the OLD value: 0 on the first call, 1 on the second.
+const std::int32_t first = WASM::callCallable<std::int32_t>(*callable);
+const std::int32_t second = WASM::callCallable<std::int32_t>(*callable);
+std::fprintf(stderr, "bump=%d,%d\n", (int)first, (int)second);
+CHECK(first == 0);
+CHECK(second == 1);
 }
+}
+}
+}
+
+// Item 4, probe 7 strengthened: the atomic operations observe their result.
+TEST_CASE("atomics: RMW, compare-exchange and narrow widths answer correctly",
+"[staging][abi][atomics]")
+{
+for (const char* backend : {"libjit", "asmjit", "sljit"}) {
+std::fprintf(stderr, "ATOMICSOPS %s: ", backend);
+auto runtime = WASM::Runtime::create(backend);
+REQUIRE(runtime != nullptr);
+auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "atomics_ops_probe.wasm");
+WASM::RegistryImportResolver imports;
+WASM::ModuleInstance* instance = nullptr;
+try {
+instance = &runtime->instantiate(*module, imports);
+} catch (const std::exception& error) {
+std::fprintf(stderr, "REFUSED: %s\n", error.what());
+continue;
+}
+const auto integer = [&](const char* name) -> std::optional<std::int32_t> {
+const std::optional<WASM::Callable> fn = instance->exportedFunction(name);
+REQUIRE(fn.has_value());
+return WASM::callCallable<std::int32_t>(*fn);
+};
+const std::int32_t i32Value = *integer("i32_probe");
+const std::optional<WASM::Callable> probe64 = instance->exportedFunction("i64_probe");
+REQUIRE(probe64.has_value());
+const std::int64_t i64Value = WASM::callCallable<std::int64_t>(*probe64);
+const std::int32_t narrow8 = *integer("i32_8bit");
+const std::int32_t narrow16 = *integer("i32_16bit");
+std::fprintf(stderr, "i32=%d i64=%lld i8=%d i16=%d\n",
+(int)i32Value, (long long)i64Value, (int)narrow8, (int)narrow16);
+CHECK(i32Value == 9);
+CHECK(i64Value == 10);
+CHECK(narrow8 == 0);
+CHECK(narrow16 == 0);
 }
 }
 

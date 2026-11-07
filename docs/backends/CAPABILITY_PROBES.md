@@ -2,8 +2,8 @@
 
 **Status:** living note, 2026-11-07 (`backendsMh33`). Companion to
 [`PRODUCTION_GAPS.md`](PRODUCTION_GAPS.md), which holds the **matrix**; this note holds
-the **instruments** that fill it. Section 16 records the defect round that re-ran and
-corrected the probes.
+the **instruments** that fill it. Section 16 records the defect round that corrected the probes; section 17
+records the capability close-out and its re-run.
 
 A probe is a fixture plus one test that runs it on every backend and records one of
 exactly three outcomes. The rule that governs all of them:
@@ -483,3 +483,64 @@ weaker form that was still missing:
 This round paid the fixture price once more: the first strengthened fixture transposed its
 own folded `array.fill` operands, and only the returned value exposed it. A test that
 observes the property catches its author as readily as a backend.
+
+## 17. Session 3 (2026-11-07): the probes now measure the implemented gaps
+
+**Snapshot (2026-11-07, `backendsMh33`):** `[exceptions]`, `[atomics]`, `[tail]` and
+`[frame]` green on all three backends; full suite **22058 assertions in 792 cases**
+under `--rng-seed 12345`.
+
+### Exceptions: all three backends
+
+```
+EXCUNCAUGHT libjit: returned=0 pending=set
+EXCUNCAUGHT asmjit: returned=0 pending=set
+EXCUNCAUGHT sljit: returned=0 pending=set
+EXCH libjit/asmjit/sljit: caught()=42
+XINST libjit/asmjit/sljit: caught()=7
+```
+
+The probe now asserts the documented uncaught contract instead of a trap
+(see section 16). The handler probe covers `try_table` + `catch` with a payload, and
+probe 21 crosses an instance boundary. AsmJIT still refuses `catch_ref` and a catch
+payload wider than one value because its structured blocks carry one result.
+
+### Atomics: all three backends, with observable results
+
+The old probe only proved `bump` was exported. It now calls it twice and a new
+`atomics_ops_probe.wat` returns the memory state the operations produced:
+
+```
+PROBE atomics_probe on libjit/asmjit/sljit: export bump=1
+bump=0,1
+ATOMICSOPS libjit:  i32=9 i64=10 i8=0 i16=0
+ATOMICSOPS asmjit: i32=9 i64=10 i8=0 i16=0
+ATOMICSOPS sljit:  i32=9 i64=10 i8=0 i16=0
+THREADS libjit/asmjit/sljit: store_load()=123
+```
+
+`i32=9` is add/xor/compare-exchange then a load; `i64=10` is store/add/load; the
+narrow exports prove one- and two-byte RMW wrap. Shared-everything atomics remain
+LibJIT-only and are still recorded as a refusal.
+
+### Frame-form tail calls
+
+```
+TAILFRAME asmjit: tail_wide=1
+TAILFRAME sljit:  tail_wide=1
+```
+
+Both are call + frame return, so the value is correct but the constant-stack
+guarantee still belongs to a real trampoline (LibJIT's register form / the planned
+sixth trampoline argument on SLJIT).
+
+### Two more fixtures measured themselves
+
+`exc_handler_probe` and `tag_consumer` both left an extra value on the stack at the
+end of a block. `wasm-tools validate` rejects them; the engine's validator accepted
+them, which is why LibJIT and SLJIT had been "passing". The fixtures are corrected
+and the validator gap is recorded as V-1 in `PRODUCTION_GAPS.md` section 26.
+
+> **Rule reinforced:** run `wasm-tools validate` on every probe fixture before
+> believing an outcome. The engine accepting a module is not evidence that the
+> module is valid.
