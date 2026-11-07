@@ -1148,3 +1148,43 @@ next unit.
 
 Suite 21845 assertions in 770 cases, green; the fixture and test were removed rather
 than left red.
+
+## 33. Section 32's "next unit" already exists: SLJIT refuses multi-result at line 958
+
+```cpp
+if (prepared.allReturns.size() > 1) {
+    unsupportedReason_ = "the SLJIT backend does not support multiple results";
+    return;
+}
+```
+
+Unconditional, in the same function as the parameter guard, **older than the frame
+form**. So there is no missing refusal to add, and section 32's "one-line guard, next
+unit" was wrong on its second point as well as its first.
+
+### What the trap actually was
+
+An **unsupported function is still exposed as a callable**, and calling it lands in a
+trap stub -- the IOT instruction the test hit. That is deliberate for a *wasm-level*
+trap, but it is the wrong signal for "this function was never compiled":
+
+* an embedder cannot distinguish "your module called `unreachable`" from "this backend
+  cannot compile this shape";
+* a `nullptr` entry (the 33-parameter case) and a trap stub (the multi-result case) are
+  two different spellings of the same fact, neither of them diagnosable;
+* `docs/SAFETY.md` prefers a diagnosable failure to a process trap.
+
+### The real remaining work, restated
+
+| # | Item | Where |
+|---|---|---|
+| 1 | unsupported functions should not be handed out as callables -- null `fnPtr` plus a queryable reason, or `nullopt` from `exportedFunction` | core instantiation / `ModuleInstance::exportedFunction`, **not** a backend |
+| 2 | SLJIT stores N results into the frame (the actual capability) | `SljitOpcodeDispatcher` return path |
+| 3 | LibJIT `emitFunctionReturn` frame branch | LibJIT, register form stays the default |
+| 4 | delete the dead epilogue branch, cache keyed by mode, doc reconciliation | housekeeping |
+
+Item 1 is worth doing **before** item 2 despite being "just reporting": every remaining
+unsupported shape (LibJIT frame calls, AsmJIT imports in frame mode, SLJIT
+multi-result) currently surfaces through one of those two indistinguishable signals.
+
+Suite 21845 assertions in 770 cases, green.
