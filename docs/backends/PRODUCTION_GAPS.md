@@ -959,7 +959,7 @@ in both passes.
 
 ## 27. V-1 fixed, multi-value catches and numeric shared atomics closed (2026-11-07)
 
-**Snapshot (2026-11-07, `backendsMh33`):** suite **22317 assertions in 809
+**Snapshot (2026-11-07, `backendsMh33`):** suite **22329 assertions in 810
 cases** under `--rng-seed 12345`, green; `[headerdoc]`, `[docs]`, `doxygen`
 (0 warnings) and `abi-check` all pass. This section supersedes section 26.
 
@@ -980,6 +980,7 @@ cases** under `--rng-seed 12345`, green; `[headerdoc]`, `[docs]`, `doxygen`
 | shared reference atomics (struct/array) | OK | OK | OK | `SHAREDREF` run=1 array=1 |
 | shared table atomics (anyref/eqref) | OK | OK | OK | `TABLEATOMIC` run=1 |
 | global reference atomics (eqref) | OK | OK | OK | `GLOBALREF` run=1 |
+| v128 atomic slots rejected at validation | OK | OK | OK | `V128ATOMIC` rejected (global/struct/array) |
 | numeric shared-everything atomics (global/struct/array) | OK | OK | OK | `global=5 struct32=7 struct64=9 array=11` |
 | V-1: block-end stack check after a `try_table` | n/a | n/a | n/a | `validator: a catch does not disable block-end stack checks` |
 
@@ -1015,15 +1016,21 @@ uses the frame ABI when the signature is frame-mode.
 
 ### Numeric shared-everything atomics
 
-Globals, struct fields and array elements now lower `atomic.get/set/rmw/*`
-through the same `wasm_atomic_*` helpers as linear memory, including packed
-fields and the 64-bit forms. Reference slots still refuse: they need the GC
-retain/release barrier, and the table forms additionally need table.get/set,
-which neither SLJIT nor AsmJIT lowers yet.
+Globals, struct fields and array elements lower `atomic.get/set/rmw/*` through
+the same `wasm_atomic_*` helpers as linear memory, including packed fields and
+the 64-bit forms. Reference slots use `wasm_atomic_ref_*`; shared-table atomics
+use the core table helpers. `v128` atomic slots are **not** allowed by the
+proposal; the validator rejects them instead of leaving a backend refusal.
 
 ### Still open
 
 | Gap | Backends | Reason |
 |---|---|---|
-| mutual/indirect tail-call trampolines | SLJIT, AsmJIT | self-recursion loops; cross-function chains still call + return |
-| LibJIT frame-mode calls/imports/multi-result | LibJIT | policy |
+| `v128` block parameters | AsmJIT | register-form block parameters are scalar-only |
+| multi-result `call_ref` / `return_call_ref` | SLJIT, AsmJIT | reference calls take at most one result |
+| frame-form `return_call_indirect` trampoline | SLJIT, AsmJIT | frame indirect tails still call + return |
+| catch payload to a loop with parameters | AsmJIT | `emitCatchBranch` refuses a non-empty payload to a loop target |
+| LibJIT frame-mode calls/imports/multi-result | LibJIT | **policy** |
+
+`v128` atomic slots are not in this table: the proposal does not allow them and
+the validator rejects them (`V128ATOMIC`).

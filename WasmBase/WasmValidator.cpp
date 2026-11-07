@@ -3091,16 +3091,6 @@ void Validator::dispatchAtomicFence(uint8_t ordering) {
 void Validator::dispatchAtomicPause() {}
 
 namespace {
-ValueType sharedStorageValueType(const Module& module, const CanonStorageType& storage)
-{
-	if (storage.isPacked)
-		return ValueType{ValueTypeCode::I32, -1};
-	ValueType type = module.storageTypeFromCanon(storage).val;
-	if (isReferenceType(type.opcode))
-		type.isShared = true;
-	return type;
-}
-
 // The operand type for a struct field or array element: packed storage is
 // carried as i32, and a reference preserves its heap type and nullability.
 ValueType storageOperandType(const Module& module, const CanonStorageType& storage)
@@ -3111,22 +3101,48 @@ ValueType storageOperandType(const Module& module, const CanonStorageType& stora
 }
 } // namespace
 
+ValueType Validator::sharedStorageValueType(const CanonStorageType& storage)
+{
+	if (storage.isPacked)
+		return ValueType{ValueTypeCode::I32, -1};
+	const ValueTypeCode code = storage.value.opcode;
+	// The shared-everything proposal makes only i8/i16/i32/i64 and anyref
+	// subtypes atomic-addressable; f32/f64/v128 slots are not.
+	if (code == ValueTypeCode::F32 || code == ValueTypeCode::F64
+			|| code == ValueTypeCode::V128)
+		fail("shared atomic: value type is not atomic-addressable");
+	ValueType type = module.storageTypeFromCanon(storage).val;
+	if (isReferenceType(type.opcode))
+		type.isShared = true;
+	return type;
+}
+
 void Validator::dispatchGlobalAtomicGet(uint8_t ordering, GlobalIdx arg)
 {
 	if (ordering > 1) fail("global.atomic: invalid ordering immediate");
-	pushValue(globalType(arg));
+	const ValueType value = globalType(arg);
+	if (value.opcode == ValueTypeCode::F32 || value.opcode == ValueTypeCode::F64
+			|| value.opcode == ValueTypeCode::V128)
+		fail("global.atomic: value type is not atomic-addressable");
+	pushValue(value);
 }
 void Validator::dispatchGlobalAtomicSet(uint8_t ordering, GlobalIdx arg)
 {
 	if (ordering > 1) fail("global.atomic: invalid ordering immediate");
 	if (!globalIsMutable(arg)) fail("global.atomic.set of an immutable global");
-	popExpect(globalType(arg));
+	const ValueType value = globalType(arg);
+	if (value.opcode == ValueTypeCode::F32 || value.opcode == ValueTypeCode::F64
+			|| value.opcode == ValueTypeCode::V128)
+		fail("global.atomic: value type is not atomic-addressable");
+	popExpect(value);
 }
 #define WJ_VALIDATE_GLOBAL_RMW(n) \
 void Validator::dispatchGlobalAtomicRmw##n(uint8_t ordering, GlobalIdx arg) { \
 	if (ordering > 1) fail("global.atomic: invalid ordering immediate"); \
 	if (!globalIsMutable(arg)) fail("global.atomic.rmw of an immutable global"); \
 	const ValueType t = globalType(arg); \
+	if (t.opcode == ValueTypeCode::F32 || t.opcode == ValueTypeCode::F64 || t.opcode == ValueTypeCode::V128) \
+		fail("global.atomic: value type is not atomic-addressable"); \
 	popExpect(t); \
 	pushValue(t); \
 }
@@ -3142,6 +3158,8 @@ void Validator::dispatchGlobalAtomicRmwCmpxchg(uint8_t ordering, GlobalIdx arg)
 	if (ordering > 1) fail("global.atomic: invalid ordering immediate");
 	if (!globalIsMutable(arg)) fail("global.atomic.rmw.cmpxchg of an immutable global");
 	const ValueType t = globalType(arg);
+	if (t.opcode == ValueTypeCode::F32 || t.opcode == ValueTypeCode::F64 || t.opcode == ValueTypeCode::V128)
+		fail("global.atomic: value type is not atomic-addressable");
 	popExpect(t);
 	popExpect(t);
 	pushValue(t);
@@ -3186,7 +3204,7 @@ void Validator::dispatchStructAtomicGet(uint8_t ordering, TypeIdx arg1, uint32_t
 		fail("struct.atomic: type is not a struct");
 	const CanonFieldType& f = requireStructField(arg1, arg2);
 	popExpect(ValueType{ValueTypeCode::RefNull, static_cast<int32_t>(arg1)});
-	pushValue(sharedStorageValueType(module, f.storage));
+	pushValue(sharedStorageValueType(f.storage));
 }
 void Validator::dispatchStructAtomicGetS(uint8_t ordering, TypeIdx arg1, uint32_t arg2)
 {
@@ -3215,7 +3233,7 @@ void Validator::dispatchStructAtomicSet(uint8_t ordering, TypeIdx arg1, uint32_t
 		fail("struct.atomic: type is not a struct");
 	const CanonFieldType& f = requireStructField(arg1, arg2);
 	if (!f.isMutable) fail("struct.atomic: field is immutable");
-	popExpect(sharedStorageValueType(module, f.storage));
+	popExpect(sharedStorageValueType(f.storage));
 	popExpect(ValueType{ValueTypeCode::RefNull, static_cast<int32_t>(arg1)});
 }
 
@@ -3226,7 +3244,7 @@ void Validator::dispatchStructAtomicRmw##n(uint8_t ordering, TypeIdx arg1, uint3
 		fail("struct.atomic: type is not a struct"); \
 	const CanonFieldType& f = requireStructField(arg1, arg2); \
 	if (!f.isMutable) fail("struct.atomic: field is immutable"); \
-	const ValueType t = sharedStorageValueType(module, f.storage); \
+	const ValueType t = sharedStorageValueType(f.storage); \
 	popExpect(t); \
 	popExpect(ValueType{ValueTypeCode::RefNull, static_cast<int32_t>(arg1)}); \
 	pushValue(t); \
@@ -3245,7 +3263,7 @@ void Validator::dispatchStructAtomicRmwCmpxchg(uint8_t ordering, TypeIdx arg1, u
 		fail("struct.atomic: type is not a struct");
 	const CanonFieldType& f = requireStructField(arg1, arg2);
 	if (!f.isMutable) fail("struct.atomic: field is immutable");
-	const ValueType t = sharedStorageValueType(module, f.storage);
+	const ValueType t = sharedStorageValueType(f.storage);
 	popExpect(t);
 	popExpect(t);
 	popExpect(ValueType{ValueTypeCode::RefNull, static_cast<int32_t>(arg1)});
@@ -3259,7 +3277,7 @@ void Validator::dispatchArrayAtomicGet(uint8_t ordering, TypeIdx arg)
 		fail("array.atomic: type is not an array");
 	popExpect(ValueTypeCode::I32);
 	popExpect(ValueType{ValueTypeCode::RefNull, static_cast<int32_t>(arg)});
-	pushValue(sharedStorageValueType(module, module.typeView(arg).arrayElement().storage));
+	pushValue(sharedStorageValueType(module.typeView(arg).arrayElement().storage));
 }
 void Validator::dispatchArrayAtomicGetS(uint8_t ordering, TypeIdx arg)
 {
@@ -3290,7 +3308,7 @@ void Validator::dispatchArrayAtomicSet(uint8_t ordering, TypeIdx arg)
 		fail("array.atomic: type is not an array");
 	const CanonFieldType& e = module.typeView(arg).arrayElement();
 	if (!e.isMutable) fail("array.atomic: array is immutable");
-	popExpect(sharedStorageValueType(module, e.storage));
+	popExpect(sharedStorageValueType(e.storage));
 	popExpect(ValueTypeCode::I32);
 	popExpect(ValueType{ValueTypeCode::RefNull, static_cast<int32_t>(arg)});
 }
@@ -3301,7 +3319,7 @@ void Validator::dispatchArrayAtomicRmw##n(uint8_t ordering, TypeIdx arg) { \
 		fail("array.atomic: type is not an array"); \
 	const CanonFieldType& e = module.typeView(arg).arrayElement(); \
 	if (!e.isMutable) fail("array.atomic: array is immutable"); \
-	const ValueType t = sharedStorageValueType(module, e.storage); \
+	const ValueType t = sharedStorageValueType(e.storage); \
 	popExpect(t); \
 	popExpect(ValueTypeCode::I32); \
 	popExpect(ValueType{ValueTypeCode::RefNull, static_cast<int32_t>(arg)}); \
@@ -3321,7 +3339,7 @@ void Validator::dispatchArrayAtomicRmwCmpxchg(uint8_t ordering, TypeIdx arg)
 		fail("array.atomic: type is not an array");
 	const CanonFieldType& e = module.typeView(arg).arrayElement();
 	if (!e.isMutable) fail("array.atomic: array is immutable");
-	const ValueType t = sharedStorageValueType(module, e.storage);
+	const ValueType t = sharedStorageValueType(e.storage);
 	popExpect(t);
 	popExpect(t);
 	popExpect(ValueTypeCode::I32);

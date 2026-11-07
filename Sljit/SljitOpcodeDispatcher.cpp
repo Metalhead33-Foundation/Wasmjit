@@ -6458,7 +6458,7 @@ void OpcodeDispatcher::dispatchGlobalAtomicGet(uint8_t ordering, WASM::GlobalIdx
 	const WASM::GlobalType type = requireGlobalIndex(arg);
 	const std::uint32_t width = sharedAtomicWidth(type.contentType.opcode);
 	require(width != 0,
-			"the SLJIT backend does not lower shared atomics for reference or v128 globals yet");
+			"the SLJIT backend shared atomic: v128 global slots are not atomic-addressable");
 	const int resultWidth = width <= 4 ? 4 : 8;
 	push(resultWidth);
 	if (measureOnly_)
@@ -6474,7 +6474,7 @@ void OpcodeDispatcher::dispatchGlobalAtomicSet(uint8_t ordering, WASM::GlobalIdx
 	const WASM::GlobalType type = requireGlobalIndex(arg);
 	const std::uint32_t width = sharedAtomicWidth(type.contentType.opcode);
 	require(width != 0,
-			"the SLJIT backend does not lower shared atomics for reference or v128 globals yet");
+			"the SLJIT backend shared atomic: v128 global slots are not atomic-addressable");
 	const int resultWidth = width <= 4 ? 4 : 8;
 	require(type.isMutable, "global.atomic.set references an immutable global");
 	requireStack(1);
@@ -6493,7 +6493,7 @@ void OpcodeDispatcher::dispatchGlobalAtomicRmwAdd(uint8_t ordering, WASM::Global
 	const WASM::GlobalType type = requireGlobalIndex(arg);
 	const std::uint32_t width = sharedAtomicWidth(type.contentType.opcode);
 	require(width != 0,
-			"the SLJIT backend does not lower shared atomics for reference or v128 globals yet");
+			"the SLJIT backend shared atomic: v128 global slots are not atomic-addressable");
 	const int resultWidth = width <= 4 ? 4 : 8;
 	require(type.isMutable, "global.atomic.rmw references an immutable global");
 	requireStack(1);
@@ -6513,7 +6513,7 @@ void OpcodeDispatcher::dispatchGlobalAtomicRmwSub(uint8_t ordering, WASM::Global
 	const WASM::GlobalType type = requireGlobalIndex(arg);
 	const std::uint32_t width = sharedAtomicWidth(type.contentType.opcode);
 	require(width != 0,
-			"the SLJIT backend does not lower shared atomics for reference or v128 globals yet");
+			"the SLJIT backend shared atomic: v128 global slots are not atomic-addressable");
 	const int resultWidth = width <= 4 ? 4 : 8;
 	require(type.isMutable, "global.atomic.rmw references an immutable global");
 	requireStack(1);
@@ -6533,7 +6533,7 @@ void OpcodeDispatcher::dispatchGlobalAtomicRmwAnd(uint8_t ordering, WASM::Global
 	const WASM::GlobalType type = requireGlobalIndex(arg);
 	const std::uint32_t width = sharedAtomicWidth(type.contentType.opcode);
 	require(width != 0,
-			"the SLJIT backend does not lower shared atomics for reference or v128 globals yet");
+			"the SLJIT backend shared atomic: v128 global slots are not atomic-addressable");
 	const int resultWidth = width <= 4 ? 4 : 8;
 	require(type.isMutable, "global.atomic.rmw references an immutable global");
 	requireStack(1);
@@ -6553,7 +6553,7 @@ void OpcodeDispatcher::dispatchGlobalAtomicRmwOr(uint8_t ordering, WASM::GlobalI
 	const WASM::GlobalType type = requireGlobalIndex(arg);
 	const std::uint32_t width = sharedAtomicWidth(type.contentType.opcode);
 	require(width != 0,
-			"the SLJIT backend does not lower shared atomics for reference or v128 globals yet");
+			"the SLJIT backend shared atomic: v128 global slots are not atomic-addressable");
 	const int resultWidth = width <= 4 ? 4 : 8;
 	require(type.isMutable, "global.atomic.rmw references an immutable global");
 	requireStack(1);
@@ -6573,7 +6573,7 @@ void OpcodeDispatcher::dispatchGlobalAtomicRmwXor(uint8_t ordering, WASM::Global
 	const WASM::GlobalType type = requireGlobalIndex(arg);
 	const std::uint32_t width = sharedAtomicWidth(type.contentType.opcode);
 	require(width != 0,
-			"the SLJIT backend does not lower shared atomics for reference or v128 globals yet");
+			"the SLJIT backend shared atomic: v128 global slots are not atomic-addressable");
 	const int resultWidth = width <= 4 ? 4 : 8;
 	require(type.isMutable, "global.atomic.rmw references an immutable global");
 	requireStack(1);
@@ -6593,7 +6593,7 @@ void OpcodeDispatcher::dispatchGlobalAtomicRmwXchg(uint8_t ordering, WASM::Globa
 	const WASM::GlobalType type = requireGlobalIndex(arg);
 	const std::uint32_t width = sharedAtomicWidth(type.contentType.opcode);
 	require(width != 0,
-			"the SLJIT backend does not lower shared atomics for reference or v128 globals yet");
+			"the SLJIT backend shared atomic: v128 global slots are not atomic-addressable");
 	const int resultWidth = width <= 4 ? 4 : 8;
 	require(type.isMutable, "global.atomic.rmw references an immutable global");
 	requireStack(1);
@@ -6613,7 +6613,7 @@ void OpcodeDispatcher::dispatchGlobalAtomicRmwCmpxchg(uint8_t ordering, WASM::Gl
 	const WASM::GlobalType type = requireGlobalIndex(arg);
 	const std::uint32_t width = sharedAtomicWidth(type.contentType.opcode);
 	require(width != 0,
-			"the SLJIT backend does not lower shared atomics for reference or v128 globals yet");
+			"the SLJIT backend shared atomic: v128 global slots are not atomic-addressable");
 	const int resultWidth = width <= 4 ? 4 : 8;
 	require(type.isMutable, "global.atomic.rmw references an immutable global");
 	requireStack(2);
@@ -6640,7 +6640,7 @@ void OpcodeDispatcher::dispatchStructAtomicGet(uint8_t ordering, WASM::TypeIdx a
 			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
 			: sharedAtomicWidth(storage.value.opcode);
 	require(width != 0,
-			"the SLJIT backend does not lower shared atomics for reference or v128 fields yet");
+			"the SLJIT backend shared atomic: v128 field slots are not atomic-addressable");
 	const std::size_t offset = WASM::gcStructFieldOffset(fields, arg2);
 	const int resultWidth = width <= 4 ? 4 : 8;
 	const int valueWidth = width <= 4 ? 4 : 8;
@@ -6665,7 +6665,7 @@ void OpcodeDispatcher::dispatchStructAtomicGetS(uint8_t ordering, WASM::TypeIdx 
 			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
 			: sharedAtomicWidth(storage.value.opcode);
 	require(width != 0,
-			"the SLJIT backend does not lower shared atomics for reference or v128 fields yet");
+			"the SLJIT backend shared atomic: v128 field slots are not atomic-addressable");
 	const std::size_t offset = WASM::gcStructFieldOffset(fields, arg2);
 	const int resultWidth = width <= 4 ? 4 : 8;
 	const int valueWidth = width <= 4 ? 4 : 8;
@@ -6691,7 +6691,7 @@ void OpcodeDispatcher::dispatchStructAtomicGetU(uint8_t ordering, WASM::TypeIdx 
 			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
 			: sharedAtomicWidth(storage.value.opcode);
 	require(width != 0,
-			"the SLJIT backend does not lower shared atomics for reference or v128 fields yet");
+			"the SLJIT backend shared atomic: v128 field slots are not atomic-addressable");
 	const std::size_t offset = WASM::gcStructFieldOffset(fields, arg2);
 	const int resultWidth = width <= 4 ? 4 : 8;
 	const int valueWidth = width <= 4 ? 4 : 8;
@@ -6717,7 +6717,7 @@ void OpcodeDispatcher::dispatchStructAtomicSet(uint8_t ordering, WASM::TypeIdx a
 			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
 			: sharedAtomicWidth(storage.value.opcode);
 	require(width != 0,
-			"the SLJIT backend does not lower shared atomics for reference or v128 fields yet");
+			"the SLJIT backend shared atomic: v128 field slots are not atomic-addressable");
 	const std::size_t offset = WASM::gcStructFieldOffset(fields, arg2);
 	const int resultWidth = width <= 4 ? 4 : 8;
 	const int valueWidth = width <= 4 ? 4 : 8;
@@ -6749,7 +6749,7 @@ void OpcodeDispatcher::dispatchStructAtomicRmwAdd(uint8_t ordering, WASM::TypeId
 			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
 			: sharedAtomicWidth(storage.value.opcode);
 	require(width != 0,
-			"the SLJIT backend does not lower shared atomics for reference or v128 fields yet");
+			"the SLJIT backend shared atomic: v128 field slots are not atomic-addressable");
 	const std::size_t offset = WASM::gcStructFieldOffset(fields, arg2);
 	const int resultWidth = width <= 4 ? 4 : 8;
 	const int valueWidth = width <= 4 ? 4 : 8;
@@ -6778,7 +6778,7 @@ void OpcodeDispatcher::dispatchStructAtomicRmwSub(uint8_t ordering, WASM::TypeId
 			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
 			: sharedAtomicWidth(storage.value.opcode);
 	require(width != 0,
-			"the SLJIT backend does not lower shared atomics for reference or v128 fields yet");
+			"the SLJIT backend shared atomic: v128 field slots are not atomic-addressable");
 	const std::size_t offset = WASM::gcStructFieldOffset(fields, arg2);
 	const int resultWidth = width <= 4 ? 4 : 8;
 	const int valueWidth = width <= 4 ? 4 : 8;
@@ -6807,7 +6807,7 @@ void OpcodeDispatcher::dispatchStructAtomicRmwAnd(uint8_t ordering, WASM::TypeId
 			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
 			: sharedAtomicWidth(storage.value.opcode);
 	require(width != 0,
-			"the SLJIT backend does not lower shared atomics for reference or v128 fields yet");
+			"the SLJIT backend shared atomic: v128 field slots are not atomic-addressable");
 	const std::size_t offset = WASM::gcStructFieldOffset(fields, arg2);
 	const int resultWidth = width <= 4 ? 4 : 8;
 	const int valueWidth = width <= 4 ? 4 : 8;
@@ -6836,7 +6836,7 @@ void OpcodeDispatcher::dispatchStructAtomicRmwOr(uint8_t ordering, WASM::TypeIdx
 			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
 			: sharedAtomicWidth(storage.value.opcode);
 	require(width != 0,
-			"the SLJIT backend does not lower shared atomics for reference or v128 fields yet");
+			"the SLJIT backend shared atomic: v128 field slots are not atomic-addressable");
 	const std::size_t offset = WASM::gcStructFieldOffset(fields, arg2);
 	const int resultWidth = width <= 4 ? 4 : 8;
 	const int valueWidth = width <= 4 ? 4 : 8;
@@ -6865,7 +6865,7 @@ void OpcodeDispatcher::dispatchStructAtomicRmwXor(uint8_t ordering, WASM::TypeId
 			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
 			: sharedAtomicWidth(storage.value.opcode);
 	require(width != 0,
-			"the SLJIT backend does not lower shared atomics for reference or v128 fields yet");
+			"the SLJIT backend shared atomic: v128 field slots are not atomic-addressable");
 	const std::size_t offset = WASM::gcStructFieldOffset(fields, arg2);
 	const int resultWidth = width <= 4 ? 4 : 8;
 	const int valueWidth = width <= 4 ? 4 : 8;
@@ -6894,7 +6894,7 @@ void OpcodeDispatcher::dispatchStructAtomicRmwXchg(uint8_t ordering, WASM::TypeI
 			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
 			: sharedAtomicWidth(storage.value.opcode);
 	require(width != 0,
-			"the SLJIT backend does not lower shared atomics for reference or v128 fields yet");
+			"the SLJIT backend shared atomic: v128 field slots are not atomic-addressable");
 	const std::size_t offset = WASM::gcStructFieldOffset(fields, arg2);
 	const int resultWidth = width <= 4 ? 4 : 8;
 	const int valueWidth = width <= 4 ? 4 : 8;
@@ -6926,7 +6926,7 @@ void OpcodeDispatcher::dispatchStructAtomicRmwCmpxchg(uint8_t ordering, WASM::Ty
 			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
 			: sharedAtomicWidth(storage.value.opcode);
 	require(width != 0,
-			"the SLJIT backend does not lower shared atomics for reference or v128 fields yet");
+			"the SLJIT backend shared atomic: v128 field slots are not atomic-addressable");
 	const std::size_t offset = WASM::gcStructFieldOffset(fields, arg2);
 	const int resultWidth = width <= 4 ? 4 : 8;
 	const int valueWidth = width <= 4 ? 4 : 8;
@@ -6960,7 +6960,7 @@ void OpcodeDispatcher::dispatchArrayAtomicGet(uint8_t ordering, WASM::TypeIdx ar
 			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
 			: sharedAtomicWidth(storage.value.opcode);
 	require(width != 0,
-			"the SLJIT backend does not lower shared atomics for reference or v128 elements yet");
+			"the SLJIT backend shared atomic: v128 element slots are not atomic-addressable");
 	const std::size_t lengthOffset = WASM::GcHeader::kArrayLengthOffset;
 	const std::size_t dataOffset = WASM::gcArrayDataOffset(storage);
 	const std::uint32_t elementBytes = WASM::gcStorageBytes(storage);
@@ -6989,7 +6989,7 @@ void OpcodeDispatcher::dispatchArrayAtomicGetS(uint8_t ordering, WASM::TypeIdx a
 			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
 			: sharedAtomicWidth(storage.value.opcode);
 	require(width != 0,
-			"the SLJIT backend does not lower shared atomics for reference or v128 elements yet");
+			"the SLJIT backend shared atomic: v128 element slots are not atomic-addressable");
 	const std::size_t lengthOffset = WASM::GcHeader::kArrayLengthOffset;
 	const std::size_t dataOffset = WASM::gcArrayDataOffset(storage);
 	const std::uint32_t elementBytes = WASM::gcStorageBytes(storage);
@@ -7019,7 +7019,7 @@ void OpcodeDispatcher::dispatchArrayAtomicGetU(uint8_t ordering, WASM::TypeIdx a
 			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
 			: sharedAtomicWidth(storage.value.opcode);
 	require(width != 0,
-			"the SLJIT backend does not lower shared atomics for reference or v128 elements yet");
+			"the SLJIT backend shared atomic: v128 element slots are not atomic-addressable");
 	const std::size_t lengthOffset = WASM::GcHeader::kArrayLengthOffset;
 	const std::size_t dataOffset = WASM::gcArrayDataOffset(storage);
 	const std::uint32_t elementBytes = WASM::gcStorageBytes(storage);
@@ -7049,7 +7049,7 @@ void OpcodeDispatcher::dispatchArrayAtomicSet(uint8_t ordering, WASM::TypeIdx ar
 			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
 			: sharedAtomicWidth(storage.value.opcode);
 	require(width != 0,
-			"the SLJIT backend does not lower shared atomics for reference or v128 elements yet");
+			"the SLJIT backend shared atomic: v128 element slots are not atomic-addressable");
 	const std::size_t lengthOffset = WASM::GcHeader::kArrayLengthOffset;
 	const std::size_t dataOffset = WASM::gcArrayDataOffset(storage);
 	const std::uint32_t elementBytes = WASM::gcStorageBytes(storage);
@@ -7085,7 +7085,7 @@ void OpcodeDispatcher::dispatchArrayAtomicRmwAdd(uint8_t ordering, WASM::TypeIdx
 			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
 			: sharedAtomicWidth(storage.value.opcode);
 	require(width != 0,
-			"the SLJIT backend does not lower shared atomics for reference or v128 elements yet");
+			"the SLJIT backend shared atomic: v128 element slots are not atomic-addressable");
 	const std::size_t lengthOffset = WASM::GcHeader::kArrayLengthOffset;
 	const std::size_t dataOffset = WASM::gcArrayDataOffset(storage);
 	const std::uint32_t elementBytes = WASM::gcStorageBytes(storage);
@@ -7118,7 +7118,7 @@ void OpcodeDispatcher::dispatchArrayAtomicRmwSub(uint8_t ordering, WASM::TypeIdx
 			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
 			: sharedAtomicWidth(storage.value.opcode);
 	require(width != 0,
-			"the SLJIT backend does not lower shared atomics for reference or v128 elements yet");
+			"the SLJIT backend shared atomic: v128 element slots are not atomic-addressable");
 	const std::size_t lengthOffset = WASM::GcHeader::kArrayLengthOffset;
 	const std::size_t dataOffset = WASM::gcArrayDataOffset(storage);
 	const std::uint32_t elementBytes = WASM::gcStorageBytes(storage);
@@ -7151,7 +7151,7 @@ void OpcodeDispatcher::dispatchArrayAtomicRmwAnd(uint8_t ordering, WASM::TypeIdx
 			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
 			: sharedAtomicWidth(storage.value.opcode);
 	require(width != 0,
-			"the SLJIT backend does not lower shared atomics for reference or v128 elements yet");
+			"the SLJIT backend shared atomic: v128 element slots are not atomic-addressable");
 	const std::size_t lengthOffset = WASM::GcHeader::kArrayLengthOffset;
 	const std::size_t dataOffset = WASM::gcArrayDataOffset(storage);
 	const std::uint32_t elementBytes = WASM::gcStorageBytes(storage);
@@ -7184,7 +7184,7 @@ void OpcodeDispatcher::dispatchArrayAtomicRmwOr(uint8_t ordering, WASM::TypeIdx 
 			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
 			: sharedAtomicWidth(storage.value.opcode);
 	require(width != 0,
-			"the SLJIT backend does not lower shared atomics for reference or v128 elements yet");
+			"the SLJIT backend shared atomic: v128 element slots are not atomic-addressable");
 	const std::size_t lengthOffset = WASM::GcHeader::kArrayLengthOffset;
 	const std::size_t dataOffset = WASM::gcArrayDataOffset(storage);
 	const std::uint32_t elementBytes = WASM::gcStorageBytes(storage);
@@ -7217,7 +7217,7 @@ void OpcodeDispatcher::dispatchArrayAtomicRmwXor(uint8_t ordering, WASM::TypeIdx
 			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
 			: sharedAtomicWidth(storage.value.opcode);
 	require(width != 0,
-			"the SLJIT backend does not lower shared atomics for reference or v128 elements yet");
+			"the SLJIT backend shared atomic: v128 element slots are not atomic-addressable");
 	const std::size_t lengthOffset = WASM::GcHeader::kArrayLengthOffset;
 	const std::size_t dataOffset = WASM::gcArrayDataOffset(storage);
 	const std::uint32_t elementBytes = WASM::gcStorageBytes(storage);
@@ -7250,7 +7250,7 @@ void OpcodeDispatcher::dispatchArrayAtomicRmwXchg(uint8_t ordering, WASM::TypeId
 			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
 			: sharedAtomicWidth(storage.value.opcode);
 	require(width != 0,
-			"the SLJIT backend does not lower shared atomics for reference or v128 elements yet");
+			"the SLJIT backend shared atomic: v128 element slots are not atomic-addressable");
 	const std::size_t lengthOffset = WASM::GcHeader::kArrayLengthOffset;
 	const std::size_t dataOffset = WASM::gcArrayDataOffset(storage);
 	const std::uint32_t elementBytes = WASM::gcStorageBytes(storage);
@@ -7286,7 +7286,7 @@ void OpcodeDispatcher::dispatchArrayAtomicRmwCmpxchg(uint8_t ordering, WASM::Typ
 			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
 			: sharedAtomicWidth(storage.value.opcode);
 	require(width != 0,
-			"the SLJIT backend does not lower shared atomics for reference or v128 elements yet");
+			"the SLJIT backend shared atomic: v128 element slots are not atomic-addressable");
 	const std::size_t lengthOffset = WASM::GcHeader::kArrayLengthOffset;
 	const std::size_t dataOffset = WASM::gcArrayDataOffset(storage);
 	const std::uint32_t elementBytes = WASM::gcStorageBytes(storage);

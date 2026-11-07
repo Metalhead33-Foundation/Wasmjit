@@ -9,7 +9,7 @@ actually happened, the root cause of every surprise, and what is still open.
 | # | Item | Status | Evidence / blocker |
 |---|---|---|---|
 | 1 | constant-stack tail calls | **done for every lowered form** | self, direct, indirect and frame (scalar and v128) chains go through the libffi driver (`TAILSELF`/`TAILMUTUAL`/`TAILINDIRECT`/`TAILFRAME`/`TAILV128FRAME`, 1,000,000 links, `run()=1`); `ref` is not lowered by either backend |
-| 2 | shared reference/table atomics | **done** | numeric, struct/array reference and shared-table atomics run on all three, and so do global `eqref` atomics (`SHAREDREF`, `TABLEATOMIC`, `GLOBALREF`) |
+| 2 | shared reference/table atomics | **done** | numeric, struct/array reference, shared-table and global `eqref` atomics run on all three (`SHAREDREF`, `TABLEATOMIC`, `GLOBALREF`); v128 atomic slots are rejected by validation (`V128ATOMIC`) because the proposal does not allow them |
 | 3 | AsmJIT block parameters | **done** | `BLOCKPARAM` block=42 if=11/12 loop=0 on all three |
 | 4 | bulk memory on memory64 | **done** | `MEM64BULK` copy=97 fill=65 init=97 on all three |
 
@@ -386,11 +386,26 @@ GLOBALREF asmjit: run()=1
 GLOBALREF sljit: run()=1
 ```
 
+### v128 atomic slots are invalid, not a gap
+
+The proposal is explicit: `global.atomic` allows i32/i64/anyref, and
+`struct.atomic`/`array.atomic` allow i8/i16/i32/i64/anyref. The pinned tool
+rejects v128 in all three. WasmJit's validator previously accepted the shape and
+left a backend refusal to say "yet", which is the wrong layer and masks an
+invalid module. `sharedStorageValueType` and the global atomic handlers now
+reject f32/f64/v128 storage; three negative fixtures (global, struct, array) are
+checked on all three backends:
+
+```
+V128ATOMIC libjit: rejected
+V128ATOMIC asmjit: rejected
+V128ATOMIC sljit: rejected
+```
+
 ### What is still open
 
-No reference/table atomic shape in the tested proposal surface is left. Shared
-`v128` slots are outside the atomic proposal and remain refused by the numeric
-width check.
+No reference/table atomic shape in the proposal surface is left. `v128` atomic
+slots are not a missing feature; they are rejected by validation.
 
 ### Lessons
 

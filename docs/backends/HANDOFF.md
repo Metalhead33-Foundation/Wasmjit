@@ -8,8 +8,8 @@ section 18 (the latest re-run).
 
 ## 1. Where the tree is
 
-**Snapshot (2026-11-07, this working tree):** `--rng-seed 12345` -> **22317
-assertions, 809 cases, green**. Gates: `[headerdoc]`, `[docs]`, `doxygen` 0
+**Snapshot (2026-11-07, this working tree):** `--rng-seed 12345` -> **22329
+assertions, 810 cases, green**. Gates: `[headerdoc]`, `[docs]`, `doxygen` 0
 warnings, `abi-check` OK.
 
 The frame ABI work is done on all three backends. Exceptions (including
@@ -53,14 +53,21 @@ field as 4 bytes. The load and the slot width now follow the field type.
 | shared reference atomics (struct/array) | OK | OK | OK | `SHAREDREF` run=1 array=1 |
 | shared table atomics (anyref/eqref) | OK | OK | OK | `TABLEATOMIC` run=1 |
 | global reference atomics (eqref) | OK | OK | OK | `GLOBALREF` run=1 |
+| v128 atomic slots rejected at validation | OK | OK | OK | `V128ATOMIC` rejected (global/struct/array) |
 | bulk memory on memory64 | OK | OK | OK | `MEM64BULK` copy=97 fill=65 init=97 |
 
 ### Remaining (honest refusals)
 
 | Gap | Backends | Reason |
 |---|---|---|
-| shared-everything atomics on **reference** slots and **tables** | SLJIT, AsmJIT | numeric slots are done; a reference slot needs the GC barrier, and table get/set is itself unimplemented on these backends |
+| `v128` block parameters | AsmJIT | scalar block parameters work; vector parameters are outside the register-form subset |
+| multi-result `call_ref` / `return_call_ref` | SLJIT, AsmJIT | reference calls currently take at most one result |
+| frame-form `return_call_indirect` trampoline | SLJIT, AsmJIT | direct self/mutual/indirect and all reference tails loop; a frame-form indirect tail still uses call + return |
+| catch payload routed to a loop with parameters | AsmJIT | `emitCatchBranch` refuses a non-empty payload to a loop target |
 | LibJIT frame-mode calls / imports / multi-result | LibJIT | **policy**: the frame form is opt-in and partial on purpose |
+
+`v128` atomic slots are **not** on this list: the atomic proposal does not allow
+them, and the validator now rejects them (`V128ATOMIC`).
 
 ## 4. Findings from this round (record before editing)
 

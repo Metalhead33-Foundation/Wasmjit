@@ -1902,3 +1902,21 @@ CHECK(false);
 }
 }
 }
+
+// v128 slots are not atomic-addressable in the shared-everything proposal.
+// The validator must reject them, not leave the refusal to a backend.
+TEST_CASE("shared atomics: v128 slots are rejected by validation",
+"[staging][atomics][invalid]")
+{
+for (const char* backend : {"libjit", "asmjit", "sljit"}) {
+std::fprintf(stderr, "V128ATOMIC %s: ", backend);
+auto runtime = WASM::Runtime::create(backend);
+REQUIRE(runtime != nullptr);
+for (const char* fixture : {"invalid_atomic_v128_global.wasm",
+"invalid_atomic_v128_struct.wasm", "invalid_atomic_v128_array.wasm"}) {
+CHECK_THROWS(runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / fixture));
+}
+std::fprintf(stderr, "rejected\n");
+}
+}

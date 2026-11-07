@@ -232,6 +232,8 @@ private:
 	void popExpect(ValueTypeCode code);
 	//! Pops one operand and requires it to match `type`.
 	void popExpect(const ValueType& type);
+	/*! \brief Operand type of a shared atomic field/element. \param storage Canonical storage type. \return The value type, with sharedness preserved for references. \throws Validation failure when the storage type is not atomic-addressable. */
+	ValueType sharedStorageValueType(const CanonStorageType& storage);
 	//! Pushes several operand types, in order.
 	void pushTypes(const std::vector<ValueType>& types);
 	//! Pops several operand types, in reverse order.

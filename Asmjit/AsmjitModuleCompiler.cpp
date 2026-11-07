@@ -3058,7 +3058,7 @@ return address;
 		const WASM::GlobalType& type = validateGlobalIndex(arg);
 		const std::uint32_t width = sharedAtomicNumericWidth(type.contentType.opcode);
 		if (width == 0)
-			throw std::runtime_error("AsmJit does not lower shared atomics for reference or v128 globals yet");
+			throw std::runtime_error("AsmJit shared atomic: v128 global slots are not atomic-addressable");
 		const int valueWidth = width <= 4 ? 4 : 8;
 		auto cell = emitGlobalCell(arg);
 		emitSharedAtomicLoad(ordering, width, valueWidth, cell);
@@ -3069,7 +3069,7 @@ return address;
 		const WASM::GlobalType& type = validateGlobalIndex(arg);
 		const std::uint32_t width = sharedAtomicNumericWidth(type.contentType.opcode);
 		if (width == 0)
-			throw std::runtime_error("AsmJit does not lower shared atomics for reference or v128 globals yet");
+			throw std::runtime_error("AsmJit shared atomic: v128 global slots are not atomic-addressable");
 		const int valueWidth = width <= 4 ? 4 : 8;
 		if (!type.isMutable)
 			throw std::runtime_error("AsmJit global.atomic.set references an immutable global");
@@ -3089,7 +3089,7 @@ emitSharedAtomicStore(ordering, width, valueWidth, cell, value);
 		const WASM::GlobalType& type = validateGlobalIndex(arg);
 		const std::uint32_t width = sharedAtomicNumericWidth(type.contentType.opcode);
 		if (width == 0)
-			throw std::runtime_error("AsmJit does not lower shared atomics for reference or v128 globals yet");
+			throw std::runtime_error("AsmJit shared atomic: v128 global slots are not atomic-addressable");
 		const int valueWidth = width <= 4 ? 4 : 8;
 		if (!type.isMutable)
 			throw std::runtime_error("AsmJit global.atomic.rmw references an immutable global");
@@ -3105,7 +3105,7 @@ emitSharedAtomicStore(ordering, width, valueWidth, cell, value);
 		const WASM::GlobalType& type = validateGlobalIndex(arg);
 		const std::uint32_t width = sharedAtomicNumericWidth(type.contentType.opcode);
 		if (width == 0)
-			throw std::runtime_error("AsmJit does not lower shared atomics for reference or v128 globals yet");
+			throw std::runtime_error("AsmJit shared atomic: v128 global slots are not atomic-addressable");
 		const int valueWidth = width <= 4 ? 4 : 8;
 		if (!type.isMutable)
 			throw std::runtime_error("AsmJit global.atomic.rmw references an immutable global");
@@ -3121,7 +3121,7 @@ emitSharedAtomicStore(ordering, width, valueWidth, cell, value);
 		const WASM::GlobalType& type = validateGlobalIndex(arg);
 		const std::uint32_t width = sharedAtomicNumericWidth(type.contentType.opcode);
 		if (width == 0)
-			throw std::runtime_error("AsmJit does not lower shared atomics for reference or v128 globals yet");
+			throw std::runtime_error("AsmJit shared atomic: v128 global slots are not atomic-addressable");
 		const int valueWidth = width <= 4 ? 4 : 8;
 		if (!type.isMutable)
 			throw std::runtime_error("AsmJit global.atomic.rmw references an immutable global");
@@ -3137,7 +3137,7 @@ emitSharedAtomicStore(ordering, width, valueWidth, cell, value);
 		const WASM::GlobalType& type = validateGlobalIndex(arg);
 		const std::uint32_t width = sharedAtomicNumericWidth(type.contentType.opcode);
 		if (width == 0)
-			throw std::runtime_error("AsmJit does not lower shared atomics for reference or v128 globals yet");
+			throw std::runtime_error("AsmJit shared atomic: v128 global slots are not atomic-addressable");
 		const int valueWidth = width <= 4 ? 4 : 8;
 		if (!type.isMutable)
 			throw std::runtime_error("AsmJit global.atomic.rmw references an immutable global");
@@ -3153,7 +3153,7 @@ emitSharedAtomicStore(ordering, width, valueWidth, cell, value);
 		const WASM::GlobalType& type = validateGlobalIndex(arg);
 		const std::uint32_t width = sharedAtomicNumericWidth(type.contentType.opcode);
 		if (width == 0)
-			throw std::runtime_error("AsmJit does not lower shared atomics for reference or v128 globals yet");
+			throw std::runtime_error("AsmJit shared atomic: v128 global slots are not atomic-addressable");
 		const int valueWidth = width <= 4 ? 4 : 8;
 		if (!type.isMutable)
 			throw std::runtime_error("AsmJit global.atomic.rmw references an immutable global");
@@ -3169,7 +3169,7 @@ emitSharedAtomicStore(ordering, width, valueWidth, cell, value);
 		const WASM::GlobalType& type = validateGlobalIndex(arg);
 		const std::uint32_t width = sharedAtomicNumericWidth(type.contentType.opcode);
 		if (width == 0)
-			throw std::runtime_error("AsmJit does not lower shared atomics for reference or v128 globals yet");
+			throw std::runtime_error("AsmJit shared atomic: v128 global slots are not atomic-addressable");
 		const int valueWidth = width <= 4 ? 4 : 8;
 		if (!type.isMutable)
 			throw std::runtime_error("AsmJit global.atomic.rmw references an immutable global");
@@ -3189,7 +3189,7 @@ emitSharedAtomicRmw(ordering, width, WASM_ATOMIC_XCHG, valueWidth, cell, value);
 		const WASM::GlobalType& type = validateGlobalIndex(arg);
 		const std::uint32_t width = sharedAtomicNumericWidth(type.contentType.opcode);
 		if (width == 0)
-			throw std::runtime_error("AsmJit does not lower shared atomics for reference or v128 globals yet");
+			throw std::runtime_error("AsmJit shared atomic: v128 global slots are not atomic-addressable");
 		const int valueWidth = width <= 4 ? 4 : 8;
 		if (!type.isMutable)
 			throw std::runtime_error("AsmJit global.atomic.rmw references an immutable global");
@@ -3219,7 +3219,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, cell, expected, replacement
 			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
 			: sharedAtomicNumericWidth(storage.value.opcode);
 	if (width == 0)
-		throw std::runtime_error("AsmJit does not lower shared atomics for reference or v128 fields yet");
+		throw std::runtime_error("AsmJit shared atomic: v128 field slots are not atomic-addressable");
 	const uint32_t fieldOffset = static_cast<uint32_t>(WASM::gcStructFieldOffset(fields, arg2));
 	const int valueWidth = width <= 4 ? 4 : 8;
 		if (values.empty())
@@ -3243,7 +3243,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, cell, expected, replacement
 			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
 			: sharedAtomicNumericWidth(storage.value.opcode);
 	if (width == 0)
-		throw std::runtime_error("AsmJit does not lower shared atomics for reference or v128 fields yet");
+		throw std::runtime_error("AsmJit shared atomic: v128 field slots are not atomic-addressable");
 	const uint32_t fieldOffset = static_cast<uint32_t>(WASM::gcStructFieldOffset(fields, arg2));
 	const int valueWidth = width <= 4 ? 4 : 8;
 		if (!storage.isPacked)
@@ -3269,7 +3269,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, cell, expected, replacement
 			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
 			: sharedAtomicNumericWidth(storage.value.opcode);
 	if (width == 0)
-		throw std::runtime_error("AsmJit does not lower shared atomics for reference or v128 fields yet");
+		throw std::runtime_error("AsmJit shared atomic: v128 field slots are not atomic-addressable");
 	const uint32_t fieldOffset = static_cast<uint32_t>(WASM::gcStructFieldOffset(fields, arg2));
 	const int valueWidth = width <= 4 ? 4 : 8;
 		if (!storage.isPacked)
@@ -3295,7 +3295,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, cell, expected, replacement
 			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
 			: sharedAtomicNumericWidth(storage.value.opcode);
 	if (width == 0)
-		throw std::runtime_error("AsmJit does not lower shared atomics for reference or v128 fields yet");
+		throw std::runtime_error("AsmJit shared atomic: v128 field slots are not atomic-addressable");
 	const uint32_t fieldOffset = static_cast<uint32_t>(WASM::gcStructFieldOffset(fields, arg2));
 	const int valueWidth = width <= 4 ? 4 : 8;
 		if (!field.isMutable)
@@ -3326,7 +3326,7 @@ emitSharedAtomicStore(ordering, width, valueWidth, address, value);
 			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
 			: sharedAtomicNumericWidth(storage.value.opcode);
 	if (width == 0)
-		throw std::runtime_error("AsmJit does not lower shared atomics for reference or v128 fields yet");
+		throw std::runtime_error("AsmJit shared atomic: v128 field slots are not atomic-addressable");
 	const uint32_t fieldOffset = static_cast<uint32_t>(WASM::gcStructFieldOffset(fields, arg2));
 	const int valueWidth = width <= 4 ? 4 : 8;
 		if (!field.isMutable)
@@ -3353,7 +3353,7 @@ emitSharedAtomicStore(ordering, width, valueWidth, address, value);
 			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
 			: sharedAtomicNumericWidth(storage.value.opcode);
 	if (width == 0)
-		throw std::runtime_error("AsmJit does not lower shared atomics for reference or v128 fields yet");
+		throw std::runtime_error("AsmJit shared atomic: v128 field slots are not atomic-addressable");
 	const uint32_t fieldOffset = static_cast<uint32_t>(WASM::gcStructFieldOffset(fields, arg2));
 	const int valueWidth = width <= 4 ? 4 : 8;
 		if (!field.isMutable)
@@ -3380,7 +3380,7 @@ emitSharedAtomicStore(ordering, width, valueWidth, address, value);
 			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
 			: sharedAtomicNumericWidth(storage.value.opcode);
 	if (width == 0)
-		throw std::runtime_error("AsmJit does not lower shared atomics for reference or v128 fields yet");
+		throw std::runtime_error("AsmJit shared atomic: v128 field slots are not atomic-addressable");
 	const uint32_t fieldOffset = static_cast<uint32_t>(WASM::gcStructFieldOffset(fields, arg2));
 	const int valueWidth = width <= 4 ? 4 : 8;
 		if (!field.isMutable)
@@ -3407,7 +3407,7 @@ emitSharedAtomicStore(ordering, width, valueWidth, address, value);
 			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
 			: sharedAtomicNumericWidth(storage.value.opcode);
 	if (width == 0)
-		throw std::runtime_error("AsmJit does not lower shared atomics for reference or v128 fields yet");
+		throw std::runtime_error("AsmJit shared atomic: v128 field slots are not atomic-addressable");
 	const uint32_t fieldOffset = static_cast<uint32_t>(WASM::gcStructFieldOffset(fields, arg2));
 	const int valueWidth = width <= 4 ? 4 : 8;
 		if (!field.isMutable)
@@ -3434,7 +3434,7 @@ emitSharedAtomicStore(ordering, width, valueWidth, address, value);
 			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
 			: sharedAtomicNumericWidth(storage.value.opcode);
 	if (width == 0)
-		throw std::runtime_error("AsmJit does not lower shared atomics for reference or v128 fields yet");
+		throw std::runtime_error("AsmJit shared atomic: v128 field slots are not atomic-addressable");
 	const uint32_t fieldOffset = static_cast<uint32_t>(WASM::gcStructFieldOffset(fields, arg2));
 	const int valueWidth = width <= 4 ? 4 : 8;
 		if (!field.isMutable)
@@ -3461,7 +3461,7 @@ emitSharedAtomicStore(ordering, width, valueWidth, address, value);
 			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
 			: sharedAtomicNumericWidth(storage.value.opcode);
 	if (width == 0)
-		throw std::runtime_error("AsmJit does not lower shared atomics for reference or v128 fields yet");
+		throw std::runtime_error("AsmJit shared atomic: v128 field slots are not atomic-addressable");
 	const uint32_t fieldOffset = static_cast<uint32_t>(WASM::gcStructFieldOffset(fields, arg2));
 	const int valueWidth = width <= 4 ? 4 : 8;
 		if (!field.isMutable)
@@ -3492,7 +3492,7 @@ emitSharedAtomicRmw(ordering, width, WASM_ATOMIC_XCHG, valueWidth, address, valu
 			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
 			: sharedAtomicNumericWidth(storage.value.opcode);
 	if (width == 0)
-		throw std::runtime_error("AsmJit does not lower shared atomics for reference or v128 fields yet");
+		throw std::runtime_error("AsmJit shared atomic: v128 field slots are not atomic-addressable");
 	const uint32_t fieldOffset = static_cast<uint32_t>(WASM::gcStructFieldOffset(fields, arg2));
 	const int valueWidth = width <= 4 ? 4 : 8;
 		if (!field.isMutable)
@@ -3521,7 +3521,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
 			: sharedAtomicNumericWidth(storage.value.opcode);
 	if (width == 0)
-		throw std::runtime_error("AsmJit does not lower shared atomics for reference or v128 elements yet");
+		throw std::runtime_error("AsmJit shared atomic: v128 element slots are not atomic-addressable");
 	const uint32_t lengthOffset = static_cast<uint32_t>(WASM::GcHeader::kArrayLengthOffset);
 	const uint32_t dataOffset = static_cast<uint32_t>(WASM::gcArrayDataOffset(storage));
 	const uint32_t elementBytes = static_cast<uint32_t>(WASM::gcStorageBytes(storage));
@@ -3545,7 +3545,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
 			: sharedAtomicNumericWidth(storage.value.opcode);
 	if (width == 0)
-		throw std::runtime_error("AsmJit does not lower shared atomics for reference or v128 elements yet");
+		throw std::runtime_error("AsmJit shared atomic: v128 element slots are not atomic-addressable");
 	const uint32_t lengthOffset = static_cast<uint32_t>(WASM::GcHeader::kArrayLengthOffset);
 	const uint32_t dataOffset = static_cast<uint32_t>(WASM::gcArrayDataOffset(storage));
 	const uint32_t elementBytes = static_cast<uint32_t>(WASM::gcStorageBytes(storage));
@@ -3571,7 +3571,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
 			: sharedAtomicNumericWidth(storage.value.opcode);
 	if (width == 0)
-		throw std::runtime_error("AsmJit does not lower shared atomics for reference or v128 elements yet");
+		throw std::runtime_error("AsmJit shared atomic: v128 element slots are not atomic-addressable");
 	const uint32_t lengthOffset = static_cast<uint32_t>(WASM::GcHeader::kArrayLengthOffset);
 	const uint32_t dataOffset = static_cast<uint32_t>(WASM::gcArrayDataOffset(storage));
 	const uint32_t elementBytes = static_cast<uint32_t>(WASM::gcStorageBytes(storage));
@@ -3597,7 +3597,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
 			: sharedAtomicNumericWidth(storage.value.opcode);
 	if (width == 0)
-		throw std::runtime_error("AsmJit does not lower shared atomics for reference or v128 elements yet");
+		throw std::runtime_error("AsmJit shared atomic: v128 element slots are not atomic-addressable");
 	const uint32_t lengthOffset = static_cast<uint32_t>(WASM::GcHeader::kArrayLengthOffset);
 	const uint32_t dataOffset = static_cast<uint32_t>(WASM::gcArrayDataOffset(storage));
 	const uint32_t elementBytes = static_cast<uint32_t>(WASM::gcStorageBytes(storage));
@@ -3628,7 +3628,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
 			: sharedAtomicNumericWidth(storage.value.opcode);
 	if (width == 0)
-		throw std::runtime_error("AsmJit does not lower shared atomics for reference or v128 elements yet");
+		throw std::runtime_error("AsmJit shared atomic: v128 element slots are not atomic-addressable");
 	const uint32_t lengthOffset = static_cast<uint32_t>(WASM::GcHeader::kArrayLengthOffset);
 	const uint32_t dataOffset = static_cast<uint32_t>(WASM::gcArrayDataOffset(storage));
 	const uint32_t elementBytes = static_cast<uint32_t>(WASM::gcStorageBytes(storage));
@@ -3655,7 +3655,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
 			: sharedAtomicNumericWidth(storage.value.opcode);
 	if (width == 0)
-		throw std::runtime_error("AsmJit does not lower shared atomics for reference or v128 elements yet");
+		throw std::runtime_error("AsmJit shared atomic: v128 element slots are not atomic-addressable");
 	const uint32_t lengthOffset = static_cast<uint32_t>(WASM::GcHeader::kArrayLengthOffset);
 	const uint32_t dataOffset = static_cast<uint32_t>(WASM::gcArrayDataOffset(storage));
 	const uint32_t elementBytes = static_cast<uint32_t>(WASM::gcStorageBytes(storage));
@@ -3682,7 +3682,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
 			: sharedAtomicNumericWidth(storage.value.opcode);
 	if (width == 0)
-		throw std::runtime_error("AsmJit does not lower shared atomics for reference or v128 elements yet");
+		throw std::runtime_error("AsmJit shared atomic: v128 element slots are not atomic-addressable");
 	const uint32_t lengthOffset = static_cast<uint32_t>(WASM::GcHeader::kArrayLengthOffset);
 	const uint32_t dataOffset = static_cast<uint32_t>(WASM::gcArrayDataOffset(storage));
 	const uint32_t elementBytes = static_cast<uint32_t>(WASM::gcStorageBytes(storage));
@@ -3709,7 +3709,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
 			: sharedAtomicNumericWidth(storage.value.opcode);
 	if (width == 0)
-		throw std::runtime_error("AsmJit does not lower shared atomics for reference or v128 elements yet");
+		throw std::runtime_error("AsmJit shared atomic: v128 element slots are not atomic-addressable");
 	const uint32_t lengthOffset = static_cast<uint32_t>(WASM::GcHeader::kArrayLengthOffset);
 	const uint32_t dataOffset = static_cast<uint32_t>(WASM::gcArrayDataOffset(storage));
 	const uint32_t elementBytes = static_cast<uint32_t>(WASM::gcStorageBytes(storage));
@@ -3736,7 +3736,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
 			: sharedAtomicNumericWidth(storage.value.opcode);
 	if (width == 0)
-		throw std::runtime_error("AsmJit does not lower shared atomics for reference or v128 elements yet");
+		throw std::runtime_error("AsmJit shared atomic: v128 element slots are not atomic-addressable");
 	const uint32_t lengthOffset = static_cast<uint32_t>(WASM::GcHeader::kArrayLengthOffset);
 	const uint32_t dataOffset = static_cast<uint32_t>(WASM::gcArrayDataOffset(storage));
 	const uint32_t elementBytes = static_cast<uint32_t>(WASM::gcStorageBytes(storage));
@@ -3763,7 +3763,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
 			: sharedAtomicNumericWidth(storage.value.opcode);
 	if (width == 0)
-		throw std::runtime_error("AsmJit does not lower shared atomics for reference or v128 elements yet");
+		throw std::runtime_error("AsmJit shared atomic: v128 element slots are not atomic-addressable");
 	const uint32_t lengthOffset = static_cast<uint32_t>(WASM::GcHeader::kArrayLengthOffset);
 	const uint32_t dataOffset = static_cast<uint32_t>(WASM::gcArrayDataOffset(storage));
 	const uint32_t elementBytes = static_cast<uint32_t>(WASM::gcStorageBytes(storage));
@@ -3794,7 +3794,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
 			: sharedAtomicNumericWidth(storage.value.opcode);
 	if (width == 0)
-		throw std::runtime_error("AsmJit does not lower shared atomics for reference or v128 elements yet");
+		throw std::runtime_error("AsmJit shared atomic: v128 element slots are not atomic-addressable");
 	const uint32_t lengthOffset = static_cast<uint32_t>(WASM::GcHeader::kArrayLengthOffset);
 	const uint32_t dataOffset = static_cast<uint32_t>(WASM::gcArrayDataOffset(storage));
 	const uint32_t elementBytes = static_cast<uint32_t>(WASM::gcStorageBytes(storage));
