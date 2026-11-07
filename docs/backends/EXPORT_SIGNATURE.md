@@ -1495,3 +1495,35 @@ reverts on smaller changes -- would violate the one rule this campaign has kept
 without exception: land green, or land nothing.
 
 Suite 21850 assertions in 773 cases, green.
+
+## 41. SLJIT N results, subtask 1a: the per-result model (inert)
+
+```cpp
+std::vector<WASM::ValueTypeCode> resultKinds_;
+std::vector<int> resultWidths_;
+```
+
+populated from `prepared.allReturns` **before** the support check, so the model is
+complete whether or not multiple results are accepted. Behaviour is unchanged and the
+refusal at `:959` still stands, which is the point of a subtask: the suite proves the
+addition is inert (21850 assertions in 773 cases, unchanged).
+
+### Why this field-first order
+
+The alternative -- gate the refusal and write the return loop in one edit -- is what
+turned into reverts earlier in this campaign. Populating first means the next subtask
+(`1b`) is a *use* of data that is already known to be correct and already proven not to
+disturb anything.
+
+### Remaining subtasks for SLJIT N results
+
+| # | Change | Risk |
+|---|---|---|
+| 1a | per-result model fields (**done**) | none, inert |
+| 1b | gate the `> 1` refusal on `frameAbi_` | low: the register form keeps refusing |
+| 1c | return site: store each result at `frameArgumentsBytes + offset(i)` | **the real work** -- the return path is a single-value store |
+| 1d | operand-stack unwinding for N values | medium |
+| 1e | gate test: three vectors in, two results out, read from the frame | the existing fixture was deleted; recreate it |
+
+1b and 1c belong in **one** commit: gating the refusal without the store would accept a
+shape that then stores nothing.

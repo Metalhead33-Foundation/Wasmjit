@@ -1030,6 +1030,11 @@ private:
 	std::size_t localSlots_ = 0; //!< Parameters plus declared locals.
 	int resultWidth_ = 0; //!< 0 (void), 4 (i32/f32) or 8 (i64/f64).
 	WASM::ValueTypeCode resultKind_ = WASM::ValueTypeCode::Void; //!< Declared result kind.
+	//! Every result's kind and byte width, in declaration order. Populated whether or
+	//! not multiple results are supported, so the frame-form return site can use one
+	//! loop for one result or many (docs/backends/EXPORT_SIGNATURE.md section 40).
+	std::vector<WASM::ValueTypeCode> resultKinds_;
+	std::vector<int> resultWidths_;
 
 	std::vector<int> stackWidths_; //!< Widths of the live operand stack, bottom first.
 	std::size_t maxStackDepth_ = 0; //!< High-water mark of the operand stack.

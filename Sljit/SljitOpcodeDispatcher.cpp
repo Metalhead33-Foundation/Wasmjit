@@ -956,6 +956,10 @@ OpcodeDispatcher::OpcodeDispatcher(const WASM::Module& module, const WASM::FuncT
 			return;
 		}
 	}
+	for (const WASM::ValueType& result : prepared.allReturns) {
+		resultKinds_.push_back(result.opcode);
+		resultWidths_.push_back(widthOf(result));
+	}
 	if (prepared.allReturns.size() > 1) {
 		unsupportedReason_ = "the SLJIT backend does not support multiple results";
 		return;
