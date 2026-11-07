@@ -1,0 +1,16 @@
+;; Same shape as the reference probe, but with a plain i32 block result.
+(module
+  (func (export "i32_taken") (result i32)
+    (block $b (result i32)
+      (i32.const 7)
+      (i32.const 1)
+      (br_if $b)
+      (drop)
+      (i32.const -1)))
+  (func (export "i32_not_taken") (result i32)
+    (block $b (result i32)
+      (i32.const 7)
+      (i32.const 0)
+      (br_if $b)
+      (drop)
+      (i32.const -1))))

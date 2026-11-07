@@ -12,6 +12,45 @@
 
 namespace Sljit {
 
+WASM::Callable* ModuleCompiler::resolveCallable(WASM::VMContext* vm,
+		std::uint32_t functionIndex) noexcept
+{
+	if (vm == nullptr) {
+		WASM::reportTrap(WASM::TrapKind::Internal, "SLJIT call has no VMContext");
+		return nullptr;
+	}
+	auto* instance = reinterpret_cast<WASM::ModuleInstance*>(vm);
+	WASM::ModuleInstanceInternals& internals = instanceInternals(*instance);
+	const std::uint32_t importedCount = vm->importedFunctionCount;
+	if (functionIndex < importedCount) {
+		if (functionIndex >= internals.importStorage.size()) {
+			WASM::reportTrap(WASM::TrapKind::Internal,
+					"SLJIT call references an unknown function import");
+			return nullptr;
+		}
+		WASM::Callable* callable = &internals.importStorage[functionIndex];
+		if (callable->fnPtr == nullptr) {
+			WASM::reportTrap(WASM::TrapKind::Internal,
+					"SLJIT call references an unresolved function import");
+			return nullptr;
+		}
+		return callable;
+	}
+	const std::uint32_t internalIndex = functionIndex - importedCount;
+	if (internalIndex >= internals.internalCallables.size()) {
+		WASM::reportTrap(WASM::TrapKind::Internal,
+				"SLJIT call function index is out of range");
+		return nullptr;
+	}
+	WASM::Callable* callable = &internals.internalCallables[internalIndex];
+	if (callable->fnPtr == nullptr) {
+		WASM::reportTrap(WASM::TrapKind::Internal,
+				"SLJIT call target has no compiled body");
+		return nullptr;
+	}
+	return callable;
+}
+
 void ModuleCompiler::translateTypes(WASM::ModuleInstance& instance, const WASM::Module& module,
 		WASM::ModuleInstanceInternals& internals)
 {
@@ -49,8 +88,23 @@ void ModuleCompiler::declareFunctions(WASM::ModuleInstance& instance, const WASM
 void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM::Module& module,
 		WASM::ModuleInstanceInternals& internals)
 {
-	(void)instance;
 	unsupportedFunctions_.clear();
+
+	// A module compiles entirely in one form: if any signature needs more argument
+	// slots than SLJIT's register form allows, the whole module uses the staging
+	// frame (docs/backends/STAGING_CALL_ABI.md). SLJIT's own ceiling is four
+	// argument entries -- `function_check_arguments`, sljitLir.c:924 -- because a
+	// declared argument must own a saved register.
+	bool frameMode = false;
+	for (const uint32_t typeIdx : module.internalFunctionTypeIndices) {
+		const WASM::FuncType type = module.funcTypeAt(typeIdx);
+		std::uint32_t slots = 1;
+		for (const auto& parameter : type.params)
+			slots += WASM::argSlotCount(WASM::valueKindOf(parameter.val.opcode));
+		if (slots > 4)
+			frameMode = true;
+	}
+	instance.setFrameCallAbi(frameMode);
 
 	for (std::size_t i = 0; i < module.functionBodies.size(); ++i) {
 		const uint32_t typeIdx = module.internalFunctionTypeIndices[i];
@@ -60,7 +114,8 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM
 		const uint32_t functionIndex =
 				static_cast<uint32_t>(module.importFunctions.size() + i);
 
-		OpcodeDispatcher dispatcher(module, funcType, module.functionBodies[i], functionIndex);
+		OpcodeDispatcher dispatcher(module, funcType, module.functionBodies[i], functionIndex,
+				frameMode);
 		void* entry = nullptr;
 		if (!dispatcher.compile(entry)) {
 			// The function stays uncallable; the core refuses it at the call

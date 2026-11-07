@@ -18,9 +18,11 @@ asmjit::TypeId TypeTranslator::translateValueType(const WASM::ValueType& type)
 	case ValueTypeCode::F64:
 		return asmjit::TypeId::kFloat64;
 	case ValueTypeCode::V128:
-		// WasmJit's ABI defines V128 as a 16-byte, 16-byte-aligned value.
-		// AsmJit's vector TypeId lets FuncSignature/FuncDetail apply the
-		// platform's native vector argument and return convention.
+		// The *internal* materialisation of a v128: a 16-byte value with a
+		// native vector type, which is what lane operations and the result
+		// register use. It is deliberately **not** the argument boundary: a
+		// v128 parameter crosses as two scalar words, expanded in
+		// translateFunctionType (docs/ABI_REFACTOR_STUDY.md §27).
 		return asmjit::TypeId::kInt32x4;
 
 	// Every reference kind has the same machine representation in the
@@ -84,6 +86,20 @@ asmjit::FuncSignature TypeTranslator::translateFunctionType(const WASM::FuncType
 	for (const WASM::StorageType& parameter : function.params) {
 		if (parameter.isPacked)
 			throw std::runtime_error("AsmJit ABI translation: packed function parameter is invalid Wasm");
+		if (parameter.val.opcode == WASM::ValueTypeCode::V128) {
+			// Canonical boundary: two scalar words, low first. Not the platform's
+			// native vector convention, which differs per target (SysV, MS x64,
+			// AAPCS64) and cannot be expressed by the other backends at all
+			// (docs/ABI_PORTABILITY.md; docs/ABI_REFACTOR_STUDY.md §27). Inside
+			// the body a v128 stays a 16-byte buffer, so lane access does not
+			// move -- only the spelling at this boundary changes.
+			for (int word = 0; word < 2; ++word) {
+				if (!signature.can_add_arg())
+					throw std::runtime_error("AsmJit ABI translation: function has too many arguments");
+				signature.add_arg(asmjit::TypeId::kUInt64);
+			}
+			continue;
+		}
 		if (!signature.can_add_arg())
 			throw std::runtime_error("AsmJit ABI translation: function has too many arguments");
 		signature.add_arg(translateStorageType(parameter));
@@ -93,7 +109,19 @@ asmjit::FuncSignature TypeTranslator::translateFunctionType(const WASM::FuncType
 		const WASM::StorageType& result = function.results.front();
 		if (result.isPacked)
 			throw std::runtime_error("AsmJit ABI translation: packed function result is invalid Wasm");
-		signature.set_ret(translateStorageType(result));
+		if (!result.isPacked && result.val.opcode == WASM::ValueTypeCode::V128) {
+			// A v128 result cannot come back in one return register, so it travels
+			// through a caller-supplied 16-byte buffer as a trailing pointer
+			// parameter and the function returns void -- the canonical rule, and the
+			// same path multi-value tuples and SLJIT already use
+			// (docs/backends/V128_SIGNATURE_DECISION.md).
+			if (!signature.can_add_arg())
+				throw std::runtime_error("AsmJit ABI translation: no room for v128 result buffer");
+			signature.add_arg(asmjit::TypeId::kUIntPtr);
+			signature.set_ret(asmjit::TypeId::kVoid);
+		} else {
+			signature.set_ret(translateStorageType(result));
+		}
 	} else if (function.results.size() > 1) {
 		// Multi-value tuples are written through the caller-provided trailing
 		// result buffer. Do not rely on a platform's aggregate-return ABI.

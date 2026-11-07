@@ -3,8 +3,8 @@
 *Experimental AsmJit backend*
 
 This directory contains an experimental, deliberately limited WebAssembly
-backend. It implements the four `ModuleInstantiator` hooks and executes an
-initial i32/i64 integer subset. It is not feature-complete and must not be treated as a
+backend. It implements the four `ModuleInstantiator` hooks and executes a
+scalar `i32`/`i64`/`f32`/`f64` subset. It is not feature-complete and must not be treated as a
 drop-in replacement for GNU LibJIT.
 
 ## What exists
@@ -26,27 +26,34 @@ drop-in replacement for GNU LibJIT.
 the two-pass instantiation contract and enabling forward and mutually recursive
 direct calls. Each generated function emits the required
   `wasm_stack_check(VMContext*)` prologue call.
-- The body compiler currently supports i32/i64 parameters, results, and locals;
-  i32/i64 constants and local access; i32.wrap_i64, i64.extend_i32_s/u and i64.extend8/16/32_s; i64 arithmetic (`add/sub/mul/div/rem`),
+- The body compiler currently supports i32/i64/f32/f64 parameters, results, and
+  locals; i32/i64 constants and local access; i32.wrap_i64, i64.extend_i32_s/u and i64.extend8/16/32_s; i64 arithmetic (`add/sub/mul/div/rem`),
   bitwise operations, shifts, rotations, comparisons, and `eqz`; i32 arithmetic,
   bit counts, sign extension, comparisons, bitwise operations, shifts, and rotations;
-  `drop`, untyped and typed i32/i64 `select`; i32/i64 globals; void and single-i32/i64-result `block`/`loop`/`if`/`else`, `br`/`br_if`/`br_table`,
+  scalar `f32`/`f64` constants, arithmetic, `min`/`max`, `abs`/`neg`/`sqrt`,
+  rounding (`ceil`/`floor`/`trunc`/`nearest`), `copysign`, all comparisons, the
+  checked and saturating integer conversions, `demote`/`promote`, and
+  reinterpretation. A float travels through the value stack as its IEEE bit
+  pattern in a Gp and materialises in an Xmm only at an arithmetic/compare/ABI
+  boundary, so `select`, block transfer and locals are the same code as for
+  integers;
+  `drop`, untyped and typed scalar `select`; i32/i64/f32/f64 globals; void and single-scalar-result `block`/`loop`/`if`/`else`, `br`/`br_if`/`br_table`,
   branches to the implicit function label, and explicit/implicit returns; direct calls
   (native imports, forward calls and mutual recursion), typed `call_indirect`,
-  with i32/i64 signatures including native and cross-instance Wasm imports;
+  with scalar signatures including native and cross-instance Wasm imports;
   i32-only direct/indirect tail-call opcodes (currently lowered to call+return;
   true tail-call stack semantics and machine-level elimination remain outstanding);
-  and memory32 i32/i64 loads/stores, including signed/unsigned narrow extensions,
-  plus `memory.size`/`memory.grow`, checked memory32 `memory.copy` (with overlap-safe `memmove` semantics), `memory.fill`, `memory.init`, `data.drop`, `table.init`, `elem.drop`, `table.size`, and checked overlap-safe `table.copy`.
+  and memory32/memory64 i32/i64/f32/f64 loads/stores, including signed/unsigned narrow extensions,
+  `memory.size`/`memory.grow` at both index widths, checked memory32 `memory.copy` (with overlap-safe `memmove` semantics), `memory.fill`, `memory.init`, `data.drop`, `table.init`, `elem.drop`, `table.size`, and checked overlap-safe `table.copy`.
   Memory accesses use a checked helper that observes the shared-memory size
   accessor and reports out-of-bounds traps through the pending-trap protocol.
   Function nodes are declared in one CodeHolder before any bodies are emitted,
   so direct-call labels resolve across the entire module. Result-bearing blocks
-  currently support only one i32 or i64 result and no block parameters; `br_table`
+  currently support only one scalar result and no block parameters; `br_table`
   requires identical target stack heights/signatures. The `unreachable`
   instruction reports a trap and supplies a limited single-result placeholder,
-  but general unreachable-stack polymorphism remains unsupported. Cross-instance i32/i64 Wasm imports are covered by tests. I32/i64 globals are lowered; Memory64, floating-point values, references, and
-most remaining instructions are still unsupported and fail explicitly.
+  but general unreachable-stack polymorphism remains unsupported. Cross-instance scalar Wasm imports are covered by tests. Scalar globals are lowered; the first four `v128` slices (const/load/store, locals, `i32x4` lane access, the bitwise family, `any_true`, integer lane arithmetic, the comparison families, `all_true`, the shifts, saturating arithmetic, `min`/`max`, `avgr_u`, `abs`/`popcnt`, widening, `extmul`, `extadd_pairwise`, `dot`, both narrowing families, the `f32x4`/`f64x2` arithmetic/comparison/unary/conversion families, float lane access and the transport families (extending/splat/zero loads, lane loads and stores, `i8x16.swizzle`, `i8x16.shuffle`), through the shared helper ABI, and `ref.null`/`ref.is_null`/`ref.eq`/`ref.as_non_null`/`ref.func` (internal and imported) /`br_on_null`) are lowered, while `v128` signatures and block types (deferred by decision — see `docs/backends/V128_SIGNATURE_DECISION.md`), `ref.func`, `f16`, bulk memory on a memory64 and
+  most remaining instructions are still unsupported and fail explicitly.
 - `Test/TestBackend.cpp` exposes an `AsmJitSession` through
   `WASMJIT_BACKEND=asmjit`, including i32 invocation marshalling, aggregate
   layout calculation, and the existing lane-wise SIMD diagnostic interface.
@@ -74,16 +81,24 @@ most remaining instructions are still unsupported and fail explicitly.
   allocation before propagating the host-side exception. Module compilation
   emits a module into one CodeHolder and installs it only after every function
   body succeeds, so a failed module leaves no partially installed code.
+- The backend registers as `asmjit` through `AsmjitBackend.cpp`
+  (`AsmjitBackend.cpp`, `WASMJIT_REGISTER_BACKEND`), so `WASM::Runtime::create("asmjit")`
+  reaches it the same way the LibJIT and SLJIT backends are reached, and the
+  keep-alive `BackendInstance` holds the shared `Context`. `ModuleCompiler`
+  overrides `releaseInstance`, which returns the instance's one installed
+  allocation through `Context::release` on `Runtime::unload`; a second instance
+  of the same module keeps its own allocation and stays callable.
 - `Test/AsmjitBackendTests.cpp` checks that emitted machine code executes,
-  returns the expected scalar value, and performs lane-wise, vector, and
-  packed-storage operations.
+  returns the expected scalar value, performs lane-wise, vector, and
+  packed-storage operations, and that the registry reaches the backend by name.
 - The dependency is confined to this subproject. `WasmBase/` remains
   backend-agnostic and does not include or link AsmJit.
 
 The module compiler is an initial execution slice, not full Wasm ABI or semantic
-coverage. In particular, the SIMD and packed-storage probes are still native
-code-generation diagnostics; the module compiler does not yet lower Wasm SIMD
-instructions or packed GC field operations.
+coverage. It lowers the first Wasm SIMD slice (value transport, bitwise
+operations and `i32x4` lane access) by calling the core's shared `wasm_v128_*`
+helper ABI; the packed-storage probes are still native code-generation
+diagnostics, and packed GC field operations are not lowered.
 
 ## Build dependency
 
@@ -101,10 +116,17 @@ target-architecture check).
 
 ## Next implementation stages
 
-1. Extend structured control flow to block parameters, multi-value results, full branch-stack semantics, and general unreachable-stack polymorphism.
-2. Implement true tail-call ABI/stack semantics for i32/i64 signatures.
-3. Expand linear memory to memory64 and finish remaining bulk-memory/table operations.
-4. Add floating-point arithmetic and conversions, floating-point and reference globals, references/GC, exceptions, continuations, and Wasm SIMD lowering.
+1. `ref.func`, then the remaining reference/exception work. `v128` in signatures
+   is deferred by decision and must be revisited before the saga closes; SLJIT
+   landed the same slices, so the shared
+   `[sljit][asmjit][parity][simd]` fixture grows with both. See
+   [`docs/backends/ASMJIT_SLJIT_P3_SIMD1.md`](../docs/backends/ASMJIT_SLJIT_P3_SIMD1.md)
+   and [`docs/backends/ASMJIT_SLJIT_P3_SIMD2.md`](../docs/backends/ASMJIT_SLJIT_P3_SIMD2.md).
+2. Extend structured control flow to general unreachable-stack polymorphism
+   (SLJIT already covers block parameters and multi-value block results, so the
+   two backends currently differ there).
+3. References/GC, exceptions, continuations and packed GC field operations
+   (P4/P5).
    When references/GC arrive, implement the ownership rule in
    [`docs/WRITING_A_BACKEND.md`](../docs/WRITING_A_BACKEND.md) §6
    “Reference ownership”: a reference parameter is the caller's borrow, a
@@ -114,9 +136,10 @@ target-architecture check).
    example, and `F3d` in
    [`docs/languages/LF2_DEEP_F3_GC.md`](../docs/languages/LF2_DEEP_F3_GC.md)
    §7.1 is what skipping it costs.
-5. Meet every applicable item in
+4. Meet every applicable item in
    [`docs/WRITING_A_BACKEND.md`](../docs/WRITING_A_BACKEND.md) before calling
    the backend complete.
 
-GNU LibJIT remains the only full-featured WebAssembly backend; AsmJit is an experimental partial execution backend.
-`Sljit/` is the separate, provisional SLJIT backend and is not affected by this one.
+GNU LibJIT remains the only full-featured WebAssembly backend. AsmJit and SLJIT
+are the two partial execution backends and, since 2026-11-05, they execute the
+same P0–P2 slice.

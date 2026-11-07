@@ -82,11 +82,26 @@ protected:
 	void callStartFunction(WASM::ModuleInstance& instance, uint32_t funcIdx,
 			WASM::ModuleInstanceInternals& internals) override;
 
+	/*!
+	 * \brief Gives one instance's executable module back to the context.
+	 *
+	 * The module compiler installs every function of a module into one
+	 * allocation and records that base here, so the release is per instance and
+	 * leaves a second instance of the same module callable
+	 * (docs/WRITING_A_BACKEND.md §9, `Runtime::unload`).
+	 *
+	 * \param instance Instance whose entry points are released.
+	 */
+	void releaseInstance(WASM::ModuleInstance& instance) noexcept override;
+
 private:
 	struct FunctionRecord;
 	Context& context;
 	std::vector<std::unique_ptr<asmjit::FuncSignature>> signatures;
 	std::vector<std::unique_ptr<FunctionRecord>> functionRecords;
+	//! Installed allocation base per instance, so `releaseInstance` frees exactly
+	//! that module's code.
+	std::vector<std::pair<const WASM::ModuleInstance*, void*>> moduleBases;
 };
 
 } // namespace AsmJitBackend

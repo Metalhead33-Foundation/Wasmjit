@@ -81,6 +81,19 @@ void Context::releaseAllocationsSince(std::size_t checkpoint) noexcept
 	}
 }
 
+void Context::release(void* entry) noexcept
+{
+	if (entry == nullptr)
+		return;
+	for (auto it = moduleAllocations.begin(); it != moduleAllocations.end(); ++it) {
+		if (*it == entry) {
+			moduleAllocations.erase(it);
+			runtime.release(entry);
+			return;
+		}
+	}
+}
+
 Context::Return42Entry Context::compileReturn42()
 {
 	asmjit::CodeHolder code;

@@ -27,11 +27,30 @@ std::string cppReturnType(const Json &entry) {
 	return results.size() == 1 ? cType(results[0]) : "void";
 }
 
+//! Emits one C parameter, expanding a vector into the canonical two scalar words.
+//! @param out Stream to write to.
+//! @param entry The function entry the parameter belongs to.
+//! @param i Parameter index.
+//! @param param Storage type of the parameter.
+void emitCppParam(std::ostringstream& out, const Json& entry, std::size_t i, const Json& param)
+{
+if (cType(param) == "wasm_v128") {
+// Native side: two scalar words, low first (decision note section 28). An
+// aggregate would be passed by reference on MS x64.
+out << "uint64_t " << argumentName(entry, i) << "_lo, uint64_t "
+<< argumentName(entry, i) << "_hi";
+} else {
+out << cType(param) << " " << argumentName(entry, i);
+}
+}
+
 void emitCppParams(std::ostringstream &out, const Json &entry) {
 	const Json &params = signatureParams(entry);
 	out << "WASM::VMContext* context";
-	for (std::size_t i = 0; i < params.size(); ++i)
-		out << ", " << cType(params[i]) << " " << argumentName(entry, i);
+	for (std::size_t i = 0; i < params.size(); ++i) {
+		out << ", ";
+		emitCppParam(out, entry, i, params[i]);
+	}
 	if (signatureResults(entry).size() > 1u)
 		out << ", void* result";
 }
@@ -281,7 +300,10 @@ std::string emitCppTypedefsImpl(const Json& schema)
 		<< sanitize(schema.value("module", "module")) << "_CALLABLES_HPP\n\n";
 	out << "#include <cstdint>\n\n";
 	out << "namespace WASM { struct VMContext; struct ModuleInstance; class RegistryImportResolver; }\n";
-	out << "struct wasm_v128 { std::uint8_t bytes[16]; };\n";
+	// A v128 crosses the C boundary as two scalar words, low first (decision
+	// note §28); a parameter is emitted as two uint64_t, never as this struct,
+	// because MS x64 passes 16-byte aggregates by reference.
+	out << "struct wasm_v128 { std::uint64_t lo; std::uint64_t hi; };\n";
 	emitWitOpaqueTypes(out, schema, true);
 	emitWitCppTypeDefinitions(out, schema);
 	for (const std::string& ref : refs) {
@@ -443,7 +465,10 @@ std::string emitCppAdapterImpl(const Json& schema)
 	out << "#include <cstdint>\n";
 	out << "#include <stdexcept>\n";
 	out << "#include <string>\n\n";
-	out << "struct wasm_v128 { std::uint8_t bytes[16]; };\n";
+	// A v128 crosses the C boundary as two scalar words, low first (decision
+	// note §28); a parameter is emitted as two uint64_t, never as this struct,
+	// because MS x64 passes 16-byte aggregates by reference.
+	out << "struct wasm_v128 { std::uint64_t lo; std::uint64_t hi; };\n";
 	emitWitOpaqueTypes(out, schema, true);
 	for (const std::string& ref : refs)
 		out << "struct " << ref << ";\n";
@@ -498,7 +523,7 @@ std::string emitCppAdapterImpl(const Json& schema)
 			out << "void";
 		for (std::size_t i = 0; i < params.size(); ++i) {
 			if (i != 0) out << ", ";
-			out << cType(params[i]) << " " << argumentName(entry, i);
+			emitCppParam(out, entry, i, params[i]);
 		}
 		if (multiValue) {
 			if (!params.empty()) out << ", ";
@@ -511,7 +536,12 @@ std::string emitCppAdapterImpl(const Json& schema)
 			if (isReference(params[i]))
 				callArgs += "reinterpret_cast<void*>(" + argumentName(entry, i) + ")";
 			else
-				callArgs += argumentName(entry, i);
+				if (cType(params[i]) == "wasm_v128") {
+					callArgs += argumentName(entry, i) + "_lo, "
+						+ argumentName(entry, i) + "_hi";
+				} else {
+					callArgs += argumentName(entry, i);
+				}
 		}
 		if (multiValue) {
 			out << "\tcallExportWithResults(\"" << exportName << "\", result";

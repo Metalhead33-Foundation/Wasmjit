@@ -43,6 +43,9 @@ struct ModuleFfiEntry {
 	std::vector<ffi_type*> argTypes; //!< Argument types including the context pointer.
 	ffi_type* returnType = nullptr; //!< The libffi result type.
 	std::size_t paramCount = 0; //!< Wasm parameters, excluding VMContext*.
+	//! Declared kind of each Wasm parameter, in order; a `V128` occupies two
+	//! argument slots at the canonical two-word convention (decision note §28).
+	std::vector<WASM::ValueTypeCode> paramKinds;
 	bool multiResult = false; //!< True when the ABI has a trailing result buffer.
 };
 

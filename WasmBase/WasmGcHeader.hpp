@@ -145,6 +145,33 @@ inline size_t gcArrayDataOffset(const StorageType& element)
 	return gcAlignUp(GcHeader::kArrayHeaderBytes, gcStorageAlign(element));
 }
 
+/** \brief Computes the byte offset of one struct field. \param fields The struct's field list in declaration order. \param index Zero-based field index. \return Byte offset of the field's storage within the struct object, header included. */
+inline size_t gcStructFieldOffset(std::span<const CanonFieldType> fields, size_t index)
+{
+	size_t offset = GcHeader::kHeaderBytes;
+	for (size_t i = 0; i < fields.size(); ++i) {
+		offset = gcAlignUp(offset, gcStorageAlign(fields[i].storage));
+		if (i == index)
+			return offset;
+		offset += gcStorageBytes(fields[i].storage);
+	}
+	return offset;
+}
+
+/** \brief Computes the total byte size of a struct object. \param fields The struct's field list in declaration order. \return Size in bytes, including the header and the trailing padding required by the strictest field alignment. */
+inline size_t gcStructSize(std::span<const CanonFieldType> fields)
+{
+	size_t offset = GcHeader::kHeaderBytes;
+	size_t alignment = 1;
+	for (const CanonFieldType& field : fields) {
+		const size_t fieldAlignment = gcStorageAlign(field.storage);
+		if (fieldAlignment > alignment)
+			alignment = fieldAlignment;
+		offset = gcAlignUp(offset, fieldAlignment) + gcStorageBytes(field.storage);
+	}
+	return gcAlignUp(offset, alignment);
+}
+
 /** \brief Computes the first-element offset for a canonical element type. \param element Canonical element storage type. \return Byte offset of the inline element payload. */
 inline size_t gcArrayDataOffset(const CanonStorageType& element)
 {

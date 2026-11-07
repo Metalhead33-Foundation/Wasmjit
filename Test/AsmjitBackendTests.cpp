@@ -1,9 +1,32 @@
 #include <catch2/catch_all.hpp>
 
 #include "Asmjit/AsmjitContext.hpp"
+#include "TestFixtures.hpp"
+#include "WasmBase/WasmBackendRegistry.hpp"
+#include "WasmBase/WasmRegistryImportResolver.hpp"
+#include "WasmBase/WasmRuntime.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
+#include <string>
+#include <vector>
+
+TEST_CASE("AsmJit registers under its name and instantiates a module", "[asmjit]")
+{
+	const std::vector<std::string> names = WASM::backendNames();
+	REQUIRE(std::find(names.begin(), names.end(), "asmjit") != names.end());
+	const WASM::BackendInstance backend = WASM::createBackendInstance("asmjit");
+	REQUIRE(backend.instantiator != nullptr);
+	REQUIRE(backend.keepAlive != nullptr);
+
+	auto runtime = WASM::Runtime::create("asmjit");
+	REQUIRE(runtime->backendName() == "asmjit");
+	auto module = runtime->loadBytes(TestFixtures::answerModuleBytes());
+	WASM::RegistryImportResolver imports;
+	WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+	REQUIRE(runtime->callExport<std::int32_t>(instance, "answer") == 42);
+}
 
 TEST_CASE("AsmJit emits and executes a native function", "[asmjit]")
 {
@@ -101,4 +124,58 @@ TEST_CASE("AsmJit extends packed i8 and i16 storage to i32", "[asmjit][storage]"
 	const std::uint16_t i16 = 0x8001;
 	CHECK(i16Signed(&i16) == 0xFFFF8001u);
 	CHECK(i16Unsigned(&i16) == 0x00008001u);
+}
+
+TEST_CASE("AsmJIT returns a v128 through the caller's buffer", "[asmjit][v128][abi]")
+{
+	// The canonical rule: a v128 result crosses through a caller-supplied 16-byte
+	// buffer, so the compiled signature is void(VMContext*, void* out). The buffer is
+	// pre-filled so a function that wrote nothing would fail
+	// (docs/ABI_REFACTOR_POST_MORTEM.md section 6, follow-up 1).
+	auto runtime = WASM::Runtime::create("asmjit");
+	REQUIRE(runtime != nullptr);
+	auto module = runtime->loadFile(
+			std::filesystem::path(WASM_TEST_DIR) / "asmjit_vec_result.wasm");
+	WASM::RegistryImportResolver imports;
+	WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+
+	const std::optional<WASM::Callable> callable = instance.exportedFunction("vec_result");
+	REQUIRE(callable.has_value());
+	REQUIRE(callable->fnPtr != nullptr);
+
+	alignas(16) std::uint32_t lanes[4] = {0xffffffffu, 0xffffffffu, 0xffffffffu,
+			0xffffffffu};
+	using Entry = void (*)(void*, void*);
+	reinterpret_cast<Entry>(callable->fnPtr)(callable->context, lanes);
+	CHECK(lanes[0] == 7u);
+	CHECK(lanes[1] == 8u);
+	CHECK(lanes[2] == 9u);
+	CHECK(lanes[3] == 10u);
+}
+
+TEST_CASE("the vector-result helper works on every buffered backend",
+"[v128][abi][buffered]")
+{
+	// Both AsmJIT and SLJIT return a v128 through the caller's buffer, so the same
+// fixture and the same helper must produce the same four lanes on each. LibJIT
+// returns the aggregate itself, so it is deliberately not part of this list
+// (docs/backends/LIBJIT_ARGUMENT_DEFECT.md section 8.1).
+for (const char* backend : {"asmjit", "sljit"}) {
+auto runtime = WASM::Runtime::create(backend);
+REQUIRE(runtime != nullptr);
+auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "asmjit_vec_result.wasm");
+WASM::RegistryImportResolver imports;
+WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+
+const std::optional<WASM::Callable> callable = instance.exportedFunction("vec_result");
+REQUIRE(callable.has_value());
+REQUIRE(callable->fnPtr != nullptr);
+const std::array<std::uint32_t, 4> lanes =
+WASM::callCallableVector(*callable);
+CHECK(lanes[0] == 7u);
+CHECK(lanes[1] == 8u);
+CHECK(lanes[2] == 9u);
+CHECK(lanes[3] == 10u);
+}
 }

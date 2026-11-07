@@ -1,5 +1,7 @@
 #include <catch2/catch_all.hpp>
 
+#include "WasmBase/WasmBackendAbi.hpp"
+
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
@@ -178,4 +180,163 @@ TEST_CASE("every public header has a compile-only translation unit", "[tiers]")
 		}
 	}
 	REQUIRE(checked == 49); // one TU per public header; bump when a header lands
+}
+
+
+TEST_CASE("gc layout: struct field offsets follow the H1 contract", "[gc][layout]")
+{
+	// Header (16) + i32, i64, v128, reference, packed i8: every alignment rule in
+	// one struct, so a drift between the runtime, LibJIT and a new backend shows
+	// up as an offset rather than as a corrupted heap object.
+	std::vector<WASM::CanonFieldType> fields(5);
+	fields[0].storage.value.opcode = WASM::ValueTypeCode::I32;
+	fields[1].storage.value.opcode = WASM::ValueTypeCode::I64;
+	fields[2].storage.value.opcode = WASM::ValueTypeCode::V128;
+	fields[3].storage.value.opcode = WASM::ValueTypeCode::ExternRef;
+	fields[4].storage.isPacked = true;
+	fields[4].storage.packed = WASM::ValueTypeCode::I8;
+
+	CHECK(WASM::gcStructFieldOffset(fields, 0) == WASM::GcHeader::kHeaderBytes);
+	CHECK(WASM::gcStructFieldOffset(fields, 1) == 24);   // i64 re-aligns from 20
+	CHECK(WASM::gcStructFieldOffset(fields, 2) == 32);   // v128 is 16-aligned
+	CHECK(WASM::gcStructFieldOffset(fields, 3) == 48);   // pointer after 16 bytes
+	CHECK(WASM::gcStructFieldOffset(fields, 4) == 56);   // packed i8 needs no padding
+	CHECK(WASM::gcStructSize(fields) == 64);             // padded to v128's alignment
+
+// Two words: no padding, no trailing slack beyond the strictest alignment.
+std::vector<WASM::CanonFieldType> pair(2);
+pair[0].storage.value.opcode = WASM::ValueTypeCode::I32;
+pair[1].storage.value.opcode = WASM::ValueTypeCode::I32;
+CHECK(WASM::gcStructFieldOffset(pair, 1) == 20);
+CHECK(WASM::gcStructSize(pair) == 24);
+
+// An empty struct is exactly its header.
+const std::span<const WASM::CanonFieldType> none{};
+CHECK(WASM::gcStructSize(none) == WASM::GcHeader::kHeaderBytes);
+}
+
+
+TEST_CASE("a v128 crosses the C boundary as two little-endian words",
+"[v128][abi][layout]")
+{
+	// The canonical signature passes a v128 as two `uint64_t`, low word first, with
+	// a result carried in the multi-value buffer as lo, hi
+	// (docs/backends/V128_SIGNATURE_DECISION.md §28). This test pins the half that
+	// needs no backend: the storage size/alignment the convention rests on, and the
+	// losslessness of the decomposition every backend must perform.
+	WASM::CanonFieldType vectorField {};
+	vectorField.storage.value.opcode = WASM::ValueTypeCode::V128;
+	CHECK(WASM::gcStorageBytes(vectorField.storage) == 16);
+	CHECK(WASM::gcStorageAlign(vectorField.storage) == 16);
+
+	// Two scalar words must be enough, and they must be adjacent with no padding:
+	// a signature with a gap would not be register-passed uniformly.
+	static_assert(sizeof(std::uint64_t) * 2 == 16, "two words must be exactly one vector");
+
+	// The decomposition: lo is the first eight bytes, hi the second. Round-tripping
+	// must be lossless for arbitrary bits, including a sign bit and a NaN payload
+	// pattern that a float conversion would disturb if one crept into the path.
+	alignas(16) unsigned char lane[16] = {};
+	const std::uint64_t lo = 0x0123456789ABCDEFull;
+	const std::uint64_t hi = 0xFFF8000000000001ull;
+	std::memcpy(lane, &lo, sizeof(lo));
+	std::memcpy(lane + 8, &hi, sizeof(hi));
+
+	std::uint64_t roundLo = 0;
+	std::uint64_t roundHi = 0;
+	std::memcpy(&roundLo, lane, sizeof(roundLo));
+	std::memcpy(&roundHi, lane + 8, sizeof(roundHi));
+	CHECK(roundLo == lo);
+	CHECK(roundHi == hi);
+
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+	// On a little-endian host the low word occupies the first eight bytes; the rule
+	// is defined by bit position, so a big-endian port must revisit this assertion
+	// rather than swap the words in the signature.
+	CHECK(lane[0] == 0xEF);
+	CHECK(lane[7] == 0x01);
+	CHECK(lane[8] == 0x01);
+	CHECK(lane[15] == 0xFF);
+#endif
+}
+
+
+TEST_CASE("a v128 parameter occupies two C argument slots", "[v128][abi][layout]")
+{
+	using WASM::ValueKind;
+
+	// The canonical rule, as a number rather than as prose.
+	CHECK(WASM::argSlotCount(ValueKind::I32) == 1);
+	CHECK(WASM::argSlotCount(ValueKind::I64) == 1);
+	CHECK(WASM::argSlotCount(ValueKind::Ref) == 1);
+	CHECK(WASM::argSlotCount(ValueKind::V128) == 2);
+
+	const ValueKind kinds[] = {ValueKind::I32, ValueKind::V128, ValueKind::I64};
+	const std::vector<WASM::ArgSlot> slots = WASM::mapArgSlots(kinds);
+	REQUIRE(slots.size() == 3);
+	CHECK(slots[0].firstSlot == 0);
+	CHECK(slots[0].slots == 1);
+	CHECK(slots[1].firstSlot == 1);
+	CHECK(slots[1].slots == 2);
+	// The parameter *after* the vector is the one a hand-written walk gets wrong: it
+	// starts at slot 3, not 2. This assertion is the whole point of the mapping.
+	CHECK(slots[2].firstSlot == 3);
+	CHECK(slots[2].slots == 1);
+
+	// Every kind answers, so no caller has to remember a default.
+	CHECK(WASM::argSlotCount(ValueKind::Void) == 1);
+	CHECK(WASM::argSlotCount(ValueKind::F32) == 1);
+	CHECK(WASM::argSlotCount(ValueKind::F64) == 1);
+
+	// A vector in first position still starts at slot 0 and shifts the next.
+	const ValueKind vectorFirst[] = {ValueKind::V128, ValueKind::I32};
+	const std::vector<WASM::ArgSlot> first = WASM::mapArgSlots(vectorFirst);
+	REQUIRE(first.size() == 2);
+	CHECK(first[0].firstSlot == 0);
+	CHECK(first[0].slots == 2);
+	CHECK(first[1].firstSlot == 2);
+
+	// Two vectors are four slots, and the second one does not start at 1.
+	const ValueKind twoVectors[] = {ValueKind::V128, ValueKind::V128};
+	const std::vector<WASM::ArgSlot> both = WASM::mapArgSlots(twoVectors);
+	REQUIRE(both.size() == 2);
+	CHECK(both[0].firstSlot == 0);
+	CHECK(both[1].firstSlot == 2);
+
+	// No parameters is not an error: the context pointer is still argument 0.
+	CHECK(WASM::mapArgSlots({}).empty());
+}
+
+TEST_CASE("the staging frame layout is defined by bytes, not registers",
+"[abi][frame]")
+{
+	// docs/backends/STAGING_CALL_ABI.md: a compiled function is
+	// void fn(VMContext*, void* frame), and both sides derive every offset from the
+	// same FuncType. These numbers are the contract.
+	using WASM::ValueKind;
+
+	CHECK(WASM::frameValueBytes(ValueKind::I32) == 8u);
+	CHECK(WASM::frameValueBytes(ValueKind::I64) == 8u);
+	CHECK(WASM::frameValueBytes(ValueKind::V128) == 16u);
+
+	const ValueKind mixed[] = {ValueKind::I32, ValueKind::V128, ValueKind::I64};
+	CHECK(WASM::frameArgumentsBytes(mixed) == 32u);
+	CHECK(WASM::frameArgumentOffset(mixed, 0) == 0u);
+	CHECK(WASM::frameArgumentOffset(mixed, 1) == 8u);
+	CHECK(WASM::frameArgumentOffset(mixed, 2) == 24u);
+	// Out of range reads as zero rather than indexing past the block.
+	CHECK(WASM::frameArgumentOffset(mixed, 3) == 0u);
+
+	// The result block starts after the argument block.
+	const ValueKind results[] = {ValueKind::V128, ValueKind::I32};
+	CHECK(WASM::frameResultOffset(mixed, results, 0) == 32u);
+	CHECK(WASM::frameResultOffset(mixed, results, 1) == 48u);
+	CHECK(WASM::frameResultOffset(mixed, results, 2) == 0u);
+	CHECK(WASM::frameBytes(mixed, results) == 56u);
+
+	// A three-vector signature -- the shape SLJIT cannot even declare today -- is
+	// just three 16-byte blocks in a frame: 48 argument bytes and two C arguments.
+	const ValueKind threeVectors[] = {ValueKind::V128, ValueKind::V128, ValueKind::V128};
+	CHECK(WASM::frameArgumentsBytes(threeVectors) == 48u);
+	CHECK(WASM::frameArgumentOffset(threeVectors, 2) == 32u);
 }

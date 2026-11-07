@@ -339,6 +339,44 @@ public:
 	void* allocateStructObject(uint32_t size, uint32_t localTypeIdx, void* descriptor = nullptr);
 	//! Allocates a GC array of `length` elements.
 	void* allocateArrayObject(uint32_t dataOffset, uint32_t elementSize, uint32_t length, uint32_t localTypeIdx);
+	/** \brief Allocates an array of a declared type, deriving its element layout from the type. \param localTypeIdx Module-local array type index. \param length Element count. \return The new object, or nullptr after reporting a trap. */
+	void* allocateArrayObject(uint32_t localTypeIdx, uint32_t length);
+//! Copies a data segment into an allocated GC array object.
+//! \param array Object from `allocateArrayObject`, already of the right length.
+//! \param localTypeIdx The array's module-local type index.
+	//! \param dataIdx Data segment index.
+	//! \param srcOffset Byte offset inside the data segment.
+	void arrayInitFromData(void* array, uint32_t localTypeIdx, uint32_t dataIdx, uint32_t srcOffset);
+	//! Copies an element segment into an allocated GC array of function references.
+	//! \param array Object from `allocateArrayObject`, already of the right length.
+	//! \param localTypeIdx The array's module-local type index.
+	//! \param elemIdx Element segment index.
+	//! \param packedOffsetAndIndex `segmentElementIndex << 32 | elementIndex`, packed
+	//!        because the helper ABI carries four arguments at most.
+	//! Only `funcref` arrays are lowered: a GC reference element would need a
+	//! retain per element, and this path does not do ownership yet.
+	void arrayInitFromElem(void* array, uint32_t localTypeIdx, uint32_t elemIdx,
+			uint64_t packedOffsetAndIndex);
+	//! Tests whether one runtime type id is a subtype of another.
+	//! \param actualTypeId Type id stored in the object header.
+	//! \param expectedTypeId Type id of the target type.
+	//! \return true when the object type is the target or a subtype of it.
+	//! This is the runtime half of `Module::isSubtype`: the header carries a
+	//! store-scoped id, so the module-local indices are recovered first.
+	bool typeIdIsSubtype(uint32_t actualTypeId, uint32_t expectedTypeId) const;
+	//! Tests whether a runtime type id belongs to an abstract heap kind.
+	//! \param typeId The type id stored in the object header.
+	//! \param kind The abstract heap type, as an `AbstractHeapType` value.
+	//! \return true when the type is of that kind.
+	//! Only the kinds a GC object can have are answered: `struct`, `array`, and the
+	//! `any`/`eq` supertypes of both. Function and external references are not
+	//! header-tagged objects, so they answer false here.
+	bool typeIdMatchesAbstractKind(uint32_t typeId, uint32_t kind) const;
+	//! Test hook: makes the next N allocations throw `std::bad_alloc`.
+	//! \param count Number of allocations to fail; 0 disables the hook.
+	//! Exists so the helper exception guards can be exercised by a test; it is
+	//! never armed in production, and it changes no layout or calling convention.
+	static void failAllocationsForTesting(uint32_t count);
 	//! Custom Descriptors: the RTT/descriptor reference stored in a struct's
 	//! header, or nullptr for a null/non-struct reference. `ref.get_desc` traps
 	//! when this returns nullptr.
@@ -452,6 +490,48 @@ public:
 	void leaveCall() noexcept { activeCalls.fetch_sub(1, std::memory_order_acq_rel); }
 	/** \brief Tests whether any agent is currently inside this instance. \return true when active call count is non-zero. */
 	bool inCall() const noexcept { return activeCalls.load(std::memory_order_acquire) != 0; }
+
+	//! How this module's backend spells a `v128` parameter at the C boundary.
+	//! `false` (the canonical default) means two 64-bit words, low first
+	//! (`docs/backends/V128_SIGNATURE_DECISION.md` §28). A backend that cannot
+	//! implement that rule sets this to true and passes the value as one 16-byte
+	//! aggregate instead; the call cache then describes the same shape to libffi
+	//! (`docs/backends/LIBJIT_ARGUMENT_DEFECT.md` §12). The two spellings are the
+	//! same ABI on SysV and differ on MS x64, where an aggregate is passed by
+	//! reference.
+	bool v128ParameterIsAggregate_ = false;
+
+	/** \brief Records how the backend spells a `v128` parameter. \param aggregate true when it is one 16-byte aggregate. */
+	void setV128ParameterIsAggregate(bool aggregate) noexcept { v128ParameterIsAggregate_ = aggregate; }
+	/** \brief Reports how the backend spells a `v128` parameter. \return true when a vector crosses as one 16-byte aggregate. */
+	bool v128ParameterIsAggregate() const noexcept { return v128ParameterIsAggregate_; }
+
+	//! How this module's backend returns a `v128` result. `false` (the default) means
+	//! the backend returns it itself -- in a register or an aggregate, as its own
+	//! convention says. `true` means the canonical rule: the caller passes a 16-byte
+	//! buffer as a trailing pointer parameter and the function returns void
+	//! (`docs/backends/V128_SIGNATURE_DECISION.md`). The call cache needs to know,
+	//! because the two describe different C signatures to libffi.
+	bool v128ResultIsBuffered_ = false;
+
+	/** \brief Records whether a `v128` result crosses through the caller's buffer. \param buffered true when it does. */
+	void setV128ResultIsBuffered(bool buffered) noexcept { v128ResultIsBuffered_ = buffered; }
+	/** \brief Reports whether a `v128` result crosses through the caller's buffer. \return true when the caller supplies the 16-byte result buffer. */
+	bool v128ResultIsBuffered() const noexcept { return v128ResultIsBuffered_; }
+
+	//! Whether this module's compiled functions use the **staging-frame** call ABI
+	//! (`docs/backends/STAGING_CALL_ABI.md`): the C signature is
+	//! `void fn(VMContext*, void* frame)`, with every parameter and result in a
+	//! caller-allocated, 16-byte-aligned frame whose layout both sides derive from
+	//! the same `FuncType`. Default `false`: the per-backend register spellings
+	//! stay in force until a backend flips, one at a time, each behind its own
+	//! pins.
+	bool frameCallAbi_ = false;
+
+	/** \brief Records whether this module's functions use the staging-frame call ABI. \param enabled true when they do. */
+	void setFrameCallAbi(bool enabled) noexcept { frameCallAbi_ = enabled; }
+	/** \brief Reports whether this module's functions use the staging-frame call ABI. \return true when `fn(VMContext*, void* frame)` applies. */
+	bool frameCallAbi() const noexcept { return frameCallAbi_; }
 
 	//! Objects whose count reached zero are only *queued*; `gcCollect()` does
 	//! the actual recycling. Call it only at a safepoint where no Wasm frame is

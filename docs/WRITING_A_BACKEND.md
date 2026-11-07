@@ -2,7 +2,7 @@
 
 *The checklist and the walkthrough*
 
-Status: how-to note, revision 3 (2026-11-03). It is both the checklist of what a
+Status: how-to note, revision 4 (2026-11-05). It is both the checklist of what a
 code generator must provide and the walkthrough of how to provide it; §14 is the
 production plan for the AsmJit and SLJIT backends and the post-mortem they must
 produce. It contains no engine behaviour of its own.
@@ -13,7 +13,7 @@ order). [`LAYERING.md`](LAYERING.md) §4 states what a backend **may not violate
 this note states what it **must provide** and how to provide it.
 
 **If you only read one section**, read §3 (the four hooks), §6 (the ABI you emit —
-including reference ownership) and §11 (what the SLJIT scaffold does and
+including reference ownership) and §11 (what the SLJIT backend does and
 deliberately does not do). A backend author continuing one of the two partial
 implementations should also read §14 before planning a slice.
 
@@ -30,7 +30,7 @@ implementations should also read §14 before planning a slice.
 | §8 | How is the backend packaged, registered, given capabilities and selected? |
 | §9 | What may I allocate, and what belongs to the `Store`? |
 | §10 | Which helpers do I call, and which must I bring? |
-| §11 | What does the SLJIT scaffold contain, and what does it not do yet? |
+| §11 | What does the SLJIT backend contain, and what does it not do yet? |
 | §12 | How do I test it, and what counts as done? |
 | §13 | References |
 | §14 | What is the production plan for AsmJit and SLJIT, and what must their post-mortem contain? |
@@ -365,11 +365,13 @@ layering violation with extra steps.
 
 
 
-## 11. The SLJIT scaffold — a worked example, and its honest limits
+## 11. The SLJIT backend — a worked example, and its honest limits
 
-`Sljit/` is the second backend, deliberately **provisional**. It exists to make
-the seam concrete and to give the vector work a real starting point, not to
-claim parity with LibJIT.
+`Sljit/` is the second executing backend. As of **snapshot 2026-11-05** it
+covers the same scalar integer and floating-point slice as `Asmjit/` — P0–P3
+(scalar) in the plan's terms — so the two can act as each other's oracle; it
+still claims no parity with LibJIT, whose references/GC, exceptions and
+continuations are the next target.
 
 | File | Role |
 |---|---|
@@ -381,35 +383,51 @@ claim parity with LibJIT.
 **What it executes today** (and therefore what the tests may assert):
 
 - up to **three** Wasm parameters, each `i32` or `i64`, plus `VMContext*`
-  (SLJIT's `sljit_emit_enter` accepts at most four arguments);
+  (SLJIT's `sljit_emit_enter` and its call ABI accept at most four arguments);
 - zero or one result, `i32` or `i64`;
-- `local.get`, `local.set`, `local.tee`, `i32.const`, `i64.const`,
-  `i32`/`i64` `add`/`sub`/`mul`/`and`/`or`/`xor`/`shl`/`shr_s`/`shr_u`,
-  `drop`, `nop`, `return`, and the implicit `end`;
+- `local.get`, `local.set`, `local.tee`, `i32.const`, `i64.const`;
+- `i32`/`i64` `add`/`sub`/`mul`, checked `div`/`rem`, `and`/`or`/`xor`,
+  `shl`/`shr_s`/`shr_u`, `rotl`/`rotr`, `i32` `clz`/`ctz`/`popcnt`, every
+  comparison and `eqz`, the sign-extensions and `i32.wrap_i64`;
+- `block`/`loop`/`if`/`else`, `br`/`br_if`/`br_table`, including block
+  parameters and multi-value block results, plus `select`/`select_t`,
+  `unreachable`, `drop`, `nop`, `return` and the implicit `end`;
+- direct and indirect calls, forward/mutually recursive targets, native and
+  cross-instance imports, and `return_call*` lowered to call + return;
+- `f32`/`f64` constants, locals, globals, arithmetic, `min`/`max`,
+  `abs`/`neg`/`sqrt`, rounding, `copysign`, comparisons, checked and saturating
+  integer conversions, `demote`/`promote` and reinterpretation;
+- `i32`/`i64` globals, memory32 and memory64 loads/stores at every integer and
+  float width, `memory.size`/`grow` at both index widths, `memory.copy`/`fill`/`init`
+  (memory32), `data.drop`, `table.init`/`copy`/`size` and `elem.drop`;
 - the stack guard and a pending-trap epilogue, so a call reports a
   `CallStackExhausted` trap as a pending status rather than crashing.
 
-**What it refuses, loudly and safely:** any other opcode (control flow, calls,
-memory, globals, floating point, references, SIMD, exceptions) leaves that
-function's `Callable::fnPtr` **null**. The core then refuses the call at the
-boundary with the existing "no compiled body" error. Nothing is miscompiled,
-nothing is interpreted, and no half-emitted code is ever installed.
+**What it refuses, loudly and safely:** `v128`/SIMD, the `f16` proposal,
+references/GC, exceptions, continuations, atomics, bulk memory on a memory64,
+a call with more than three parameters and a function with more than one result.
+Each leaves
+that function's `Callable::fnPtr` **null**. The core then refuses the call at
+the boundary with the existing "no compiled body" error. Nothing is
+miscompiled, nothing is interpreted, and no half-emitted code is ever installed.
 
 **Known limitations, recorded rather than hidden:**
 
 | Limitation | Why | What replaces it |
 |---|---|---|
-| no control flow | `block`/`loop`/`if`/`br` need labels and a merge model; a half-implemented branch is worse than none | later |
-| no `call`/`call_indirect` | needs the call ABI plus type checks; direct calls are the next step | later |
-| no memory/globals/SIMD/exceptions | the helper layer and the GC layout are whole projects of their own | LibJIT |
-| references are refused, not half-owned | neither this scaffold nor Asmjit lowers `ref.*`/`struct.*`/`array.*`; a reference it moves without counting is worse than one it refuses. When either adds them, [`WRITING_A_BACKEND.md`](WRITING_A_BACKEND.md) §6 “Reference ownership” is the rule to implement, not an optional refinement | LibJIT (`emitReferenceParameterRetains`) |
-| one executable mapping per function | the W^X allocator maps each block separately | acceptable for a provisional backend; the default pooled allocator trades W^X for density |
+| three parameters, one result | SLJIT's `sljit_emit_enter`/`sljit_emit_icall` take at most four integer arguments, and `VMContext*` is one of them | LibJIT for wider signatures |
+| no `v128`/SIMD | the vector helper layer is the next slice; a half-lowered vector is worse than a refused one | LibJIT |
+| no references/GC/exceptions | the GC layout and ownership model are whole projects of their own | LibJIT (`emitReferenceParameterRetains`) |
+| references are refused, not half-owned | neither this backend nor Asmjit lowers `ref.*`/`struct.*`/`array.*`; a reference it moves without counting is worse than one it refuses. When either adds them, §6 “Reference ownership” is the rule to implement, not an optional refinement | LibJIT |
+| one executable mapping per function | the W^X allocator maps each block separately | acceptable for a second backend; the default pooled allocator trades W^X for density |
+| one indirect call per direct call | a body is emitted in its own SLJIT compiler, so `ModuleCompiler::resolveCallable` resolves the target at run time | an inlining slice once the post-mortem measures the cost |
 
 The list no longer contains "generated code is never freed": since the unloader
 shipped (2026-11-01), `Runtime::unload` — and runtime teardown — reaches
 `releaseInstance`, which is where this backend calls `sljit_free_code` for every
-entry point it handed out. That row is now a *requirement* a backend satisfies,
-not a limitation it documents (§9 item 6).
+entry point it handed out. AsmJit implements the same hook by releasing the
+module's one installed allocation. That is now a *requirement* a backend
+satisfies, not a limitation it documents (§9 item 6).
 
 `Sljit.pro` compiles the vendored `extern/sljit` sources into `libSljit.so` — no
 external `-lsljit` — and defines `SLJIT_WX_EXECUTABLE_ALLOCATOR=1` so the
@@ -466,6 +484,10 @@ shape — not a silent wrong answer (§11's limitations table is the worked exam
   §4's contract rows this note elaborates.
 - [`ABI.md`](ABI.md) — the calling convention, tuples, `v128`, traps, tail calls,
   continuations.
+- [`ABI_PORTABILITY.md`](ABI_PORTABILITY.md) — the C ABI contract: the host C
+  convention with C linkage on every target, portability over performance, what a
+  backend may **not** do while lowering it (§4), the target matrix you must declare
+  (§7.2), and the GC object/allocator ABI (§8).
 - [`SAFETY.md`](SAFETY.md) — budgets, bounds, and traps versus `abort`.
 - [`SIMD_BACKENDS.md`](SIMD_BACKENDS.md) — what each toolkit can do for SIMD.
 - [`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md) — the dynamic form, its
@@ -491,19 +513,23 @@ every semantic question unless a row below explicitly says otherwise.
 
 ### 14.1 Dated starting point
 
-**Snapshot (2026-11-03, `877e716`):**
+**Snapshot (2026-11-05):**
 
 - `LibJit/` is the complete backend: all lowered opcodes, references/GC,
   exceptions, continuations, SIMD helpers and the full test corpus.
-- `Asmjit/` executes an i32/i64 integer and memory slice, structured
-  control flow for scalar results, direct/indirect calls and part of bulk
-  memory/table. Floating point, references/GC, exceptions, continuations and
-  Wasm SIMD lowering remain unsupported and are refused at the call boundary.
-- `Sljit/` executes a straight-line i32/i64 subset only. Calls, control flow,
-  memory access, floating point, references, exceptions and SIMD are refused.
-- Both partial backends pass `[backendabi]`, their own `[asmjit]`/`[sljit]`
-  cases, and the install/plugin checks where applicable. Neither is a
-  replacement for LibJIT.
+- `Asmjit/` and `Sljit/` execute the same **P0–P3 scalar slice**: i32/i64 and
+  f32/f64 arithmetic, conversions, globals, structured control flow (block
+  parameters and multi-value block results on SLJIT), direct/indirect/tail
+  calls, memory32 and memory64 loads/stores at every scalar width,
+  `memory.size`/`grow` at both index widths, bulk memory32 and the table
+  operations. Both register under their own name, both implement
+  `releaseInstance`, and both pass `[backendabi]`, `[asmjit]`/`[sljit]` and the
+  shared `[sljit][module][parity]` fixtures over the same `.wat` modules.
+- Neither lowers `v128`/SIMD, references/GC, exceptions, continuations, atomics
+  or `f16`, and bulk memory on a memory64 is refused; those stay refused at the
+  call boundary. SLJIT additionally caps generated functions at three
+  parameters and one result (SLJIT's four-argument call ABI).
+- Neither is a replacement for LibJIT.
 
 ### 14.2 Why they ship together
 
@@ -534,14 +560,20 @@ that is borrowed there, a tuple offset that disagrees by four bytes. Therefore:
 | **P5 — calls, tail calls, continuations** | `call_ref`, cross-instance imports, `return_call*` where applicable, the continuation invoker and the stack-switching fixtures. | `[continuation]`, tail-call fixtures, TSan narrowed runs and the unload/re-instantiate test pass. | tail-call elimination may be call+return if documented |
 | **P6 — hardening and performance** | ASan/TSan, unload/release, plugin ABI, W^X, benchmark parity, refusal inventory, documentation. | The full §12 definition-of-done table is green for both; every remaining refusal is named in the backend README and a test. | none |
 
-Each slice is a **review gate**, not a calendar promise. P1 and P2 are the
-largest gaps in SLJIT; P3 is the largest in AsmJit. Work on AsmJit's control and
-memory slices first so it can act as the second oracle while SLJIT catches up,
-but do not merge the "complete" label for either until its row is green on both.
+Each slice is a **review gate**, not a calendar promise. P0–P3 (scalar) are
+green for both backends against the shared fixtures (2026-11-05 snapshot), with
+one documented P2 residual: bulk memory on a memory64 is refused. `v128`/SIMD is
+the remaining P3 item, and P4/P5 stay LibJIT-only until it lands. Extend the
+`[sljit][module][parity]` fixture set before moving a row to green, and do not
+merge the "complete" label for either until its row is green on both.
 
 ### 14.4 Tests that are part of every slice
 
 - `[backendabi]` — tuple/layout and calling-convention conformance.
+- `[parity]` — one module instantiated with both generators, outcomes compared
+  (`... integer module` over `asmjit_i32_basic`, `... floating-point module`
+  over `float_basic`, `... memory64 module` over `memory64_basic`).
+  Duplicated expectation tables are not a substitute.
 - `Test/install-check.sh` — installed headers plus the selected backend.
 - `[runtime]` unload/re-instantiate — executable memory is returned.
 - `[plugin]` — the backend behind the C descriptor, if the plugin build is
@@ -581,7 +613,23 @@ it is still provisional. It must contain:
 
 The post-mortem is written by the implementer, reviewed by the backend
 reviewer, and kept current: when a later slice invalidates a paragraph, update
-the paragraph rather than appending a correction footnote.
+the paragraph rather than appending a correction footnote. The thirteen so far are
+[`docs/backends/ASMJIT_SLJIT_P0_P2.md`](backends/ASMJIT_SLJIT_P0_P2.md),
+[`docs/backends/ASMJIT_SLJIT_P3.md`](backends/ASMJIT_SLJIT_P3.md),
+[`docs/backends/ASMJIT_SLJIT_P2_MEMORY64.md`](backends/ASMJIT_SLJIT_P2_MEMORY64.md),
+[`docs/backends/ASMJIT_SLJIT_P3_SIMD1.md`](backends/ASMJIT_SLJIT_P3_SIMD1.md),
+[`docs/backends/ASMJIT_SLJIT_P3_SIMD2.md`](backends/ASMJIT_SLJIT_P3_SIMD2.md),
+[`docs/backends/ASMJIT_SLJIT_P3_SIMD3.md`](backends/ASMJIT_SLJIT_P3_SIMD3.md),
+[`docs/backends/ASMJIT_SLJIT_P3_SIMD4.md`](backends/ASMJIT_SLJIT_P3_SIMD4.md),
+[`docs/backends/ASMJIT_SLJIT_P3_SIMD5.md`](backends/ASMJIT_SLJIT_P3_SIMD5.md),
+[`docs/backends/ASMJIT_SLJIT_P3_SIMD6.md`](backends/ASMJIT_SLJIT_P3_SIMD6.md),
+[`docs/backends/ASMJIT_SLJIT_P3_SIMD7.md`](backends/ASMJIT_SLJIT_P3_SIMD7.md),
+[`docs/backends/ASMJIT_SLJIT_P3_SIMD8.md`](backends/ASMJIT_SLJIT_P3_SIMD8.md),
+[`docs/backends/ASMJIT_SLJIT_P3_SIMD9.md`](backends/ASMJIT_SLJIT_P3_SIMD9.md) and
+[`docs/backends/ASMJIT_SLJIT_P3_REFS1.md`](backends/ASMJIT_SLJIT_P3_REFS1.md).
+The `v128` signature seam is analysed in
+[`docs/backends/V128_SIGNATURE_DECISION.md`](backends/V128_SIGNATURE_DECISION.md)
+and is deferred; it must be revisited before the AsmJit/SLJIT saga can close.
 
 ### 14.6 Candidate backends for a fourth implementation
 
@@ -617,3 +665,150 @@ Before writing a line of code, read §3, §6 and §12; then produce:
 The measure of success is not "it runs the benchmark". It is that another
 author can read this note, the new backend's README and its post-mortem, and
 write the next backend without rediscovering the same ABI or ownership failure.
+
+## 15. What the second-and-third-backend arc taught a fourth author
+
+Distilled from the AsmJit/SLJIT parity arc
+([`backends/ASMJIT_SLJIT_P3.md`](backends/ASMJIT_SLJIT_P3.md) and its `SIMD*`,
+`REFS1`, `GC1` companions). These are the things that cost real time once and
+would cost it again; each is cheaper to honour than to rediscover.
+
+**1. Put every shared contract in the core before the second backend needs it.**
+The GC layout functions (`gcStructFieldOffset`, `gcStructSize`, `gcArrayDataOffset`)
+plus one offset test were written *before* either backend lowered a struct access.
+The payoff was measurable: structs, references, packed struct fields and packed array
+elements each cost **one patch and zero debugging cycles**, because no backend ever
+had an opinion about an offset. A layout that lives in a backend is a layout that
+forks.
+
+**2. The narrow-register rule is not a tip, it is a class of bug.** `mov r64, r32` is
+invalid; moving an `i32` through a 64-bit register keeps whatever sits above bit 31.
+This bit the arc **twice**, the second time in freshly written code, and the second
+time it produced a crash (`SIGSEGV`) rather than a wrong value because the garbage
+became a loop counter. Use `.r32()`/`.r8()`/`.r16()` views; when a value becomes a
+loop bound, zero-extension is not cosmetic.
+
+**3. Silent mis-encoding beats loud failure for wasted time.** `SLJIT_MEM2` with a
+displacement mis-encoded a store on x86 without any error. The escape is to keep
+memories simple: a constant offset on `MEM1`, or the offset folded into a register
+first. Assume your toolkit's documented-but-rare addressing form is untested until a
+fixture proves otherwise.
+
+**4. Helper arity is an architectural constraint.** A five-argument helper cannot be
+called from a four-argument helper ABI. The fix was not a fifth register: it was a
+type-derived entry point (`allocateArrayObject(typeIdx, length)`) so the backend passes
+what it knows. Design helper signatures for the *narrowest* calling convention you
+support, not the widest you can emit.
+
+**5. Trap kinds are observable, per-aggregate, and easy to get wrong.** A generic
+`NullReference` where the core distinguishes `NullStructureReference` from
+`NullArrayReference` is a silent fidelity bug — and a global textual substitution across
+the per-kind wrappers then gave `array.len` the *structure* kind. Write one assertion
+per kind per backend (`trapKindOf`), and prefer a single entry point taking the kind as
+an argument over a wall of per-kind functions.
+
+**6. A limitation nobody asserts is a bug that looks like a feature.** `array.new`
+initialised element 0 only; it was recorded as a limitation and survived until a
+fixture happened to read element *1*. Assert the second element, not the first: reading
+index 0 is what everyone writes.
+
+**7. Loops: countdown counter plus walking pointer.** Not index-times-stride. It keeps
+every store at a zero displacement (see 3), needs no multiply, lets the element width
+stay a compile-time constant (packed elements become a store-opcode choice), and makes
+the termination condition a single `test`/`cmp` against zero.
+
+**8. Range checks belong in 64-bit arithmetic.** `index + length <= arrayLength` in 32
+bits wraps, and a wrapped bound walks off the object. Zero-extend both operands and sum
+in 64 bits: the trap then cannot be avoided.
+
+**9. Trap emission clobbers your scratch registers.** Reload the operands after the
+trap blocks (SLJIT: re-read the slots; AsmJit: let the register allocator re-materialise
+them). Anything held across a trap call must be re-derivable.
+
+**10. Parity is behaviour, not instruction sequences.** `ref.func` is a runtime resolver
+call on SLJIT and an address `lea` on AsmJit; both are correct. Compare exports' answers
+and trap kinds, never the emitted code — a second backend that emits different
+instructions is the normal case, not the suspicious one.
+
+**11. Classify the remaining work before starting it.** Every opcode is either
+*mechanical lowering on a proven contract* (one patch, no debug cycle) or *gated on one
+structural capability* (block parameters, a loop shape, a core subtype query). Open a
+gate **once**; never pick off gated opcodes one at a time, because each costs a full
+cycle and unlocks nothing else.
+
+**12. Documentation is compiled here.** A note that is not listed in
+[`index.md`](index.md) fails the `[docs]` test, and a header comment that is not
+Doxygen-shaped fails `[headerdoc]`. Treat a doc edit as a code change with a build.
+
+What this list is *for*: the measure of a backend is not how many opcodes it lowers.
+It is whether its **refusal inventory is explicit**, whether its **trap kinds match**
+the other backends, and whether its **post-mortem was opened on day one** — so that the
+next author inherits the failures instead of the debugging.
+
+## 16. Post-mortem: the parity arc, and what it hands the ABI refactor
+
+**Snapshot (2026-11-06, branch `AbiRefactor`, commit `d7b628e`):** 51 entries in
+[`backends/ASMJIT_SLJIT_P3_GC1.md`](backends/ASMJIT_SLJIT_P3_GC1.md), 14 commits on the refactor branch,
+**21591 assertions in 728 test cases**, `abi-check.sh` OK, Doxygen 0 warnings.
+
+### The numbers that matter more than the opcode count
+
+| Measure | Value | Why it is the interesting number |
+|---|---|---|
+| Opcodes brought to parity | ~60 | the part everyone measures |
+| Corruption investigations | 3 (§30, §44, §49) | one root cause, three symptoms |
+| Reverted changes with reasons recorded | 4 (§25, §34, §45-part, emitter ×2) | each cost a build, none cost a wrong answer |
+| Audits that found a real defect | **6 of 6** | and two were defects in the author's own work |
+| Fixtures that had not built when a result was read | 2 (§37, §38) | both produced confident, fictitious answers |
+
+### The five recurring families
+
+1. **Positional ABI arithmetic.** `SLJIT_ARGSn` is a descriptor, not a type check. Getting an argument
+   index wrong is silent: §30 put `actual` where `expected` belonged and every pair answered `false`;
+   §25's eighteen-site sweep looked "semantically non-neutral" and was simply clobbering. The fix that
+   holds is a **shared, tested mapping** (`argSlotCount`/`mapArgSlots`), not per-site care.
+2. **Helper calls clobber registers.** §22, §44, §49: a call destroys `R0`–`R3`, so anything a caller
+   still needs must be parked — and `emitCheckedMemoryAddress` had known this locally for months while
+   `emitPendingTrapCheck` did not. The lesson generalises: **an invariant that lives at a call site is
+   a rumour; one that lives in the primitive is a guarantee.**
+3. **Fixtures that did not build.** §37/§38: a failed `.wat` conversion left yesterday's `.wasm` in
+   place, and the test reported a stable, reproducible, entirely fictitious pass. The fix is a build
+   rule (`rm -f` before parsing), not discipline.
+4. **Gates whose output went unread.** §46/§48: three hypotheses were disproved by experiment and the
+   fourth question was answered by *reading `compile.log`*. The cheapest diagnostic is the message the
+   failing gate already printed.
+5. **Bundled changes.** A correct edit (the C typedef rename) looked guilty for two rounds because it
+   was tested together with a Rust change (§48, §50). One variable per build, or the result is
+   uninterpretable.
+
+### The rules, each with the evidence that produced it
+
+| Rule | Evidence |
+|---|---|
+| **Contracts first, tests at the seam** — prove the predicate/layout *before* touching a backend | a predicate tested without a backend cost one patch; the same work started at a backend cost three rewrites (§12, §30, §37) |
+| **Invariants in primitives, not call sites** | §45 made `emitPendingTrapCheck` non-destructive and fixed all 21 sites at once |
+| **One variable per build; bisect by subset** | converting 3 of 4 sites localised a fault in one build; converting 4 twice said only "somewhere in four" (§49) |
+| **Anchor edits on unique content, never on structure** | §34's deletion matched a brace in the wrong function; §43's filter deleted 21 lines when 6 were intended |
+| **A failed fixture is not a result** | §37, §38 — and the fix is in the build, because discipline had already failed twice |
+| **Read the gate's output before hypothesising** | the union was disproved and the struct cleared in one build, after two rounds of guessing (§50) |
+| **A reverted experiment is only as general as its evidence** | "the C header cannot move alone" was wrong; only the *union* could not (§50) |
+| **The additive-only rule measures symbols, not layouts** | B1: `ModuleFfiEntry` grew, `abi-check.sh` passed, an embedder's offsets would not (§record B1) |
+
+### What the ABI refactor inherits, and why it is starting well
+
+Three artefacts exist before a single backend is touched: a **frozen decision** (two `uint64_t`, low word
+first, with the MS x64 reason recorded), a **proof that needs no codegen** (`[v128][abi][layout]`), and a
+**shared mapping already in use** by the libffi cache with a cache-versus-compiled parity case.
+
+That ordering is the post-mortem's whole content: the arc's expensive failures were never in the place
+the feature was. Four times a "missing" capability sat on a defect one level down — the layout contract,
+the trap kinds, the operand-stack height, the reference merge — and the refactor's phases are arranged so
+that the same discovery is cheap: **audit the records, prove the contract, then port.**
+
+### The one open thread worth naming
+
+The emitter unification is a single commit (§14 of
+[`ABI_REFACTOR_STUDY.md`](ABI_REFACTOR_STUDY.md)) that could not be finished in this session. Every piece
+of it has now been shown to be *pinned by a test* — declarations moved alone; parameters did not — which is
+itself the evidence that the tests are doing their job. The next author inherits a line-numbered
+inventory, not a half-applied sweep.

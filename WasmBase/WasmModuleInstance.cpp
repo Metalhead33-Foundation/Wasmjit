@@ -1491,6 +1491,125 @@ bool ModuleInstance::growTable(uint32_t tableIdx, uint64_t deltaEntries) {
 	return store().growTable(internals.tableRefs[tableIdx], deltaEntries);
 }
 
+bool ModuleInstance::typeIdMatchesAbstractKind(uint32_t typeId, uint32_t kind) const
+{
+	const std::optional<uint32_t> index = module->typeIndexForId(TypeId {typeId});
+	if (!index)
+		return false;
+	const CoreTypeView view = module->typeView(*index);
+	const bool isStruct = view.kind() == CanonTypeKind::Struct;
+	const bool isArray = view.kind() == CanonTypeKind::Array;
+	switch (static_cast<AbstractHeapType>(static_cast<std::int32_t>(kind))) {
+	case AbstractHeapType::Struct:
+		return isStruct;
+	case AbstractHeapType::Array:
+		return isArray;
+	case AbstractHeapType::Any:
+	case AbstractHeapType::Eq:
+		return isStruct || isArray;
+	default:
+		return false;
+	}
+}
+
+bool ModuleInstance::typeIdIsSubtype(uint32_t actualTypeId, uint32_t expectedTypeId) const
+{
+	if (actualTypeId == expectedTypeId)
+		return true;
+	const std::optional<uint32_t> actual = module->typeIndexForId(TypeId {actualTypeId});
+	const std::optional<uint32_t> expected = module->typeIndexForId(TypeId {expectedTypeId});
+	if (!actual || !expected)
+		return false;
+	return module->isSubtype(*actual, *expected);
+}
+
+namespace {
+//! Armed by `failAllocationsForTesting`; test-only, never set in production.
+std::atomic<uint32_t> g_allocationFailuresForTesting {0};
+} // namespace
+
+void ModuleInstance::failAllocationsForTesting(uint32_t count)
+{
+	g_allocationFailuresForTesting.store(count, std::memory_order_relaxed);
+}
+
+void ModuleInstance::arrayInitFromElem(void* array, uint32_t localTypeIdx, uint32_t elemIdx,
+uint64_t packedOffsetAndIndex)
+{
+if (elemIdx >= module->elementSegments.size()) {
+		reportTrap(TrapKind::Internal, "element segment index out of range");
+		return;
+	}
+	const CoreTypeView view = module->typeView(localTypeIdx);
+	const CanonFieldType& element = view.arrayElement();
+	if (element.storage.value.opcode != ValueTypeCode::FuncRef) {
+		reportTrap(TrapKind::Internal, "array.new_elem only lowers funcref elements");
+		return;
+	}
+	const uint32_t length = *reinterpret_cast<const uint32_t*>(
+			static_cast<const std::uint8_t*>(array) + GcHeader::kArrayLengthOffset);
+	const uint32_t srcOffset = static_cast<uint32_t>(packedOffsetAndIndex & 0xFFFFFFFFu);
+
+	// Same rule as `table.init`: a dropped segment behaves as empty, and the source
+	// range is checked before anything is written.
+	const ElementSegment& seg = module->elementSegments[elemIdx];
+	const std::size_t entryCount = internals.elementSegmentDropped[elemIdx]
+			.load(std::memory_order_acquire)
+			? 0
+			: (seg.initIndices.empty() ? seg.initExprs.size() : seg.initIndices.size());
+	if (static_cast<uint64_t>(srcOffset) + length > entryCount) {
+		reportTrap(TrapKind::OutOfBoundsTableAccess, "out of bounds array.new_elem source");
+		return;
+	}
+	if (length == 0)
+		return;
+
+	// Only index-based segments are lowered; an `initExprs` segment needs const
+	// expression evaluation, which no backend in this tree does yet.
+	if (seg.initIndices.empty()) {
+		reportTrap(TrapKind::Internal, "array.new_elem does not lower init-expression segments");
+		return;
+	}
+
+	const uint32_t importedFuncCount = static_cast<uint32_t>(module->importFunctions.size());
+	std::uint8_t* data = static_cast<std::uint8_t*>(array) + gcArrayDataOffset(element.storage);
+	for (uint32_t i = 0; i < length; ++i) {
+		const uint32_t funcIdx = seg.initIndices[srcOffset + i];
+		void* reference = funcIdx < importedFuncCount
+				? static_cast<void*>(&internals.importStorage[funcIdx])
+				: static_cast<void*>(&internals.internalCallables[funcIdx - importedFuncCount]);
+		std::memcpy(data + static_cast<std::size_t>(i) * sizeof(void*), &reference, sizeof(void*));
+	}
+}
+
+void ModuleInstance::arrayInitFromData(void* array, uint32_t localTypeIdx, uint32_t dataIdx, uint32_t srcOffset)
+{
+	if (dataIdx >= module->dataSegments.size()) {
+		reportTrap(TrapKind::Internal, "data segment index out of range");
+		return;
+	}
+	const CoreTypeView view = module->typeView(localTypeIdx);
+	const CanonFieldType& element = view.arrayElement();
+	const uint32_t storageBytes = static_cast<uint32_t>(gcStorageBytes(element.storage));
+	const uint32_t length = *reinterpret_cast<const uint32_t*>(
+			static_cast<const std::uint8_t*>(array) + GcHeader::kArrayLengthOffset);
+	const uint64_t byteLength = static_cast<uint64_t>(length) * storageBytes;
+
+	// Same rule as `memory.init`: a dropped segment behaves as empty, and the
+	// source range is checked before anything is written.
+	const DataSegment& seg = module->dataSegments[dataIdx];
+	const uint64_t segmentSize =
+			internals.dataSegmentDropped[dataIdx].load(std::memory_order_acquire) ? 0 : seg.data.size();
+	if (static_cast<uint64_t>(srcOffset) + byteLength > segmentSize) {
+		reportTrap(TrapKind::OutOfBoundsMemoryAccess, "out of bounds array.new_data source");
+		return;
+	}
+	if (byteLength == 0)
+		return;
+	std::memcpy(static_cast<std::uint8_t*>(array) + gcArrayDataOffset(element.storage),
+			seg.data.data() + srcOffset, static_cast<std::size_t>(byteLength));
+}
+
 void ModuleInstance::memoryInit(uint32_t memIdx, uint32_t dataIdx, uint32_t dstOffset, uint32_t srcOffset, uint32_t len)
 {
 	if (memIdx >= internals.memoryRefs.size()) {
@@ -1691,6 +1810,10 @@ void ModuleInstance::bufferInitFromElems(uint32_t elemIdx, void* dst, uint32_t s
 
 void* ModuleInstance::allocateStructObject(uint32_t size, uint32_t localTypeIdx, void* descriptor)
 {
+	if (g_allocationFailuresForTesting.load(std::memory_order_relaxed) > 0) {
+		g_allocationFailuresForTesting.fetch_sub(1, std::memory_order_relaxed);
+		throw std::bad_alloc();
+	}
 	// Resolve the module-local index against this instance's module and stamp the
 	// canonical TypeId into the header, so a later cast can match it even from
 	// another module (M6).
@@ -1762,8 +1885,23 @@ void* ModuleInstance::descriptorPrototype(const void* ref) const
 			static_cast<const uint8_t*>(descriptor) + offset);
 }
 
+void* ModuleInstance::allocateArrayObject(uint32_t localTypeIdx, uint32_t length)
+{
+	// The element layout is a property of the type, not of the caller: deriving it
+	// here keeps every backend's call site inside a four-argument call ABI.
+	const WASM::CoreTypeView view = module->typeView(localTypeIdx);
+	const CanonFieldType& element = view.arrayElement();
+	const uint32_t elementSize = static_cast<uint32_t>(WASM::gcStorageBytes(element.storage));
+	const uint32_t dataOffset = static_cast<uint32_t>(WASM::gcArrayDataOffset(element.storage));
+	return allocateArrayObject(dataOffset, elementSize, length, localTypeIdx);
+}
+
 void* ModuleInstance::allocateArrayObject(uint32_t dataOffset, uint32_t elementSize, uint32_t length, uint32_t localTypeIdx)
 {
+	if (g_allocationFailuresForTesting.load(std::memory_order_relaxed) > 0) {
+		g_allocationFailuresForTesting.fetch_sub(1, std::memory_order_relaxed);
+		throw std::bad_alloc();
+	}
 	const TypeId typeId = module->typeId(LocalTypeIdx{localTypeIdx});
 
 	// One block: header + inline elements (D13/GC-9). The whole size is charged

@@ -1434,7 +1434,9 @@ TEST_CASE("host-side callable typedefs follow the engine ABI", "[bindings]")
 	REQUIRE(header.find("namespace WASM { struct VMContext; struct ModuleInstance; class RegistryImportResolver; }")
 			!= std::string::npos);
 	REQUIRE(header.find("#include <cstdint>") != std::string::npos);
-	REQUIRE(header.find("struct wasm_v128 { std::uint8_t bytes[16]; };")
+	// A v128 is two scalar words, low first: a single 16-byte aggregate would be
+	// passed by reference on MS x64 (docs/backends/V128_SIGNATURE_DECISION.md §28).
+	REQUIRE(header.find("struct wasm_v128 { std::uint64_t lo; std::uint64_t hi; };")
 			!= std::string::npos);
 	REQUIRE(header.find("#ifdef __cplusplus") == std::string::npos);
 	REQUIRE(header.find("extern \"C\" {") == std::string::npos);
@@ -2511,3 +2513,58 @@ TEST_CASE("candidate schemas keep one entry per function name", "[bindings]")
 	REQUIRE(schema.at("imports")[0].at("name") == "host_add");
 }
 
+
+
+TEST_CASE("bindings spell a v128 parameter", "[bindings][v128][abi]")
+{
+	// Pins how the emitters spell a vector today, so moving a family to its own side
+	// of the boundary becomes a visible, deliberate change rather than a silent one.
+	// Per docs/ABI_REFACTOR_STUDY.md §16 the guest-facing emitters must end up on the
+	// wasm spelling; this case records where they are now.
+	const Json schema = WASM::Bindings::moduleSchema(loadTestModule("v128_param"),
+testStore().types(), WASM::Bindings::Direction::HostToGuest, "v128_param");
+	REQUIRE(!schema.is_null());
+
+	const std::string header = WASM::Bindings::emit(schema, WASM::Bindings::Language::CHeader);
+	const std::size_t lane = header.find("lane1");
+	INFO(header);
+	REQUIRE(lane != std::string::npos);
+	// The parameter as declared, whatever the spelling: this assertion is the record.
+	// Measured 2026-11-06. Today the guest-facing C header declares ONE
+	// aggregate parameter whose type is the NATIVE pair -- neither the wasm
+	// spelling (one wasm v128) nor the native one (two scalars). This pins the
+	// current text so moving the header to the wasm side is a visible change.
+	CHECK(header.find("wasmjit_lane1(wasm_v128 arg0)") != std::string::npos);
+	CHECK(header.find("lane1") != std::string::npos);
+
+	const std::string rust = WASM::Bindings::emit(schema, WASM::Bindings::Language::Rust);
+	INFO(rust);
+	// Guest-side Rust: one wasm vector parameter, not the native pair.
+	CHECK(rust.find("wasm_v128") != std::string::npos);
+	CHECK(rust.find("arg0_lo") == std::string::npos);
+
+	// The WasmJIT-facing family is the mirror image: the native side must spell a
+	// vector as TWO scalar words, because the embedder copies this declaration and
+	// calls the compiled code directly (study §16). An aggregate here would be
+	// passed by reference on MS x64.
+	const std::string cpp = WASM::Bindings::emit(schema, WASM::Bindings::Language::CppTypedefs);
+	INFO(cpp);
+	CHECK(cpp.find("uint64_t arg0_lo, uint64_t arg0_hi") != std::string::npos);
+	CHECK(cpp.find("wasm_v128 arg0") == std::string::npos);
+
+	// Every other guest-facing emitter must obey the same boundary rule: no
+	// language may adopt WasmJIT's native pair split, because the conversion
+	// happens at instantiation (study §16). Asserting an absence keeps this
+	// honest for emitters that refuse a schema rather than emit it.
+	for (const WASM::Bindings::Language language : {
+		WASM::Bindings::Language::TypeScript, WASM::Bindings::Language::AssemblyScript,
+		WASM::Bindings::Language::Zig, WASM::Bindings::Language::Kotlin,
+		WASM::Bindings::Language::MoonBit, WASM::Bindings::Language::Go,
+		WASM::Bindings::Language::Dart, WASM::Bindings::Language::Java,
+		WASM::Bindings::Language::CSharp, WASM::Bindings::Language::FSharp,
+		WASM::Bindings::Language::Python, WASM::Bindings::Language::Ruby}) {
+		const std::string text = WASM::Bindings::emit(schema, language);
+		INFO("language index " << static_cast<int>(language));
+		CHECK(text.find("arg0_lo") == std::string::npos);
+	}
+}

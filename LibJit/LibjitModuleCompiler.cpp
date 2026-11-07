@@ -272,6 +272,13 @@ void ModuleCompiler::declareFunctions(WASM::ModuleInstance& instance, const WASM
 
 void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM::Module& module, WASM::ModuleInstanceInternals& internals)
 {
+	// This backend spells every `v128` parameter as one 16-byte aggregate rather
+	// than the canonical two scalar words, because libjit loses the sixth
+	// integer argument (docs/backends/LIBJIT_ARGUMENT_DEFECT.md §8.1/§12). The
+	// call cache needs to know, so it describes the same shape to libffi; on
+	// SysV the two spellings are the same ABI, on MS x64 they are not.
+	instance.setV128ParameterIsAggregate(true);
+
 	// The import count tells us where the "internal function" index space
 	// begins. Function index N refers to an internal function at
 	// compiledFunctions[N - importedFuncCount].

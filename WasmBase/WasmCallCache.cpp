@@ -1,5 +1,7 @@
 #include "WasmCallCache.hpp"
 
+#include "WasmBase/WasmBackendAbi.hpp"
+
 #include "WasmModule.hpp"
 #include "WasmStore.hpp"
 #include "WasmType.hpp"
@@ -110,11 +112,36 @@ ModuleCallCache::ModuleCallCache(ModuleInstance& instance)
 		entry.argTypes.reserve(1u + entry.paramCount
 				+ (entry.multiResult ? 1u : 0u));
 		entry.argTypes.push_back(&ffi_type_pointer); // VMContext*
-		for (const CanonStorageType& parameter : view.funcParams())
-			entry.argTypes.push_back(ffiTypeFor(parameter));
-		if (entry.multiResult)
+		for (const CanonStorageType& parameter : view.funcParams()) {
+			entry.paramKinds.push_back(parameter.value.opcode);
+			const std::uint32_t slots = argSlotCount(valueKindOf(parameter.value.opcode));
+			if (slots == 1) {
+				entry.argTypes.push_back(ffiTypeFor(parameter));
+			} else if (instance.v128ParameterIsAggregate()) {
+				// This backend spells a vector as one 16-byte aggregate, so the
+				// cif must describe that shape or the call is misclassified on
+				// MS x64 (docs/backends/LIBJIT_ARGUMENT_DEFECT.md §12).
+				entry.argTypes.push_back(v128Type());
+			} else {
+				// `argSlotCount` decides how many C arguments a kind occupies; a vector
+				// occupies two scalar words (decision note §28), because a 16-byte
+				// aggregate is passed by reference on MS x64.
+				for (std::uint32_t slot = 0; slot < slots; ++slot)
+					entry.argTypes.push_back(&ffi_type_uint64);
+			}
+		}
+		// A backend that returns a v128 through a caller-supplied buffer describes the
+		// same shape as a multi-value tuple: a trailing pointer argument and a void
+		// return (docs/backends/V128_SIGNATURE_DECISION.md).
+		const bool bufferedVectorResult = !entry.multiResult
+				&& view.funcResults().size() == 1u
+				&& view.funcResults().front().value.opcode
+						== WASM::ValueTypeCode::V128
+				&& instance.v128ResultIsBuffered();
+		if (entry.multiResult || bufferedVectorResult)
 			entry.argTypes.push_back(&ffi_type_pointer); // result buffer
 		entry.returnType = view.funcResults().empty() || entry.multiResult
+				|| bufferedVectorResult
 				? &ffi_type_void
 				: ffiTypeFor(view.funcResults().front());
 		auto cif = std::make_unique<ffi_cif>();
@@ -158,8 +185,18 @@ void ModuleCallCache::call(const ModuleFfiEntry& entry, void* result,
 			? static_cast<void*>(entry.callable.context)
 			: static_cast<void*>(instance_->context());
 	arguments[0] = &context;
-	for (std::size_t i = 0; i < entry.paramCount; ++i)
-		arguments[i + 1u] = args[i];
+	std::size_t slot = 1; // argument 0 is the VMContext*
+	for (std::size_t i = 0; i < entry.paramCount; ++i) {
+		const std::uint32_t count = argSlotCount(valueKindOf(entry.paramKinds[i]));
+		if (count == 1) {
+			arguments[slot++] = args[i];
+		} else {
+			// A vector is handed over as its low word, then its high word.
+			auto* bytes = static_cast<std::uint8_t*>(args[i]);
+			for (std::uint32_t word = 0; word < count; ++word)
+				arguments[slot++] = bytes + word * sizeof(std::uint64_t);
+		}
+	}
 	void* resultBuffer = result;
 	if (entry.multiResult)
 		arguments.back() = &resultBuffer;

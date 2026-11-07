@@ -62,9 +62,12 @@ TEST_CASE("AsmJit lowers references as opaque native pointers", "[asmjit][abi]")
 			== asmjit::TypeId::kUIntPtr);
 }
 
-TEST_CASE("AsmJit lowers V128 as a native 128-bit vector ABI value", "[asmjit][abi][simd]")
+TEST_CASE("AsmJit passes V128 as two scalar words, not a vector register",
+		"[asmjit][abi][simd]")
 {
 	const WASM::ValueType vector{WASM::ValueTypeCode::V128, -1};
+	// The internal type is still a native vector: that is what lane operations
+	// and the result register use.
 	CHECK(AsmJitBackend::TypeTranslator::translateValueType(vector)
 			== asmjit::TypeId::kInt32x4);
 	CHECK(asmjit::TypeUtils::size_of(asmjit::TypeId::kInt32x4) == 16);
@@ -73,10 +76,19 @@ TEST_CASE("AsmJit lowers V128 as a native 128-bit vector ABI value", "[asmjit][a
 			{scalar(WASM::ValueTypeCode::V128)});
 	const asmjit::FuncSignature signature =
 			AsmJitBackend::TypeTranslator::translateFunctionType(type);
-	CHECK(signature.ret() == asmjit::TypeId::kInt32x4);
-	REQUIRE(signature.arg_count() == 2);
+	// Parameters cross as two 64-bit words, low first -- the canonical rule
+	// (docs/ABI_PORTABILITY.md; docs/ABI_REFACTOR_STUDY.md §27). A vector
+	// register at the boundary is what MS x64, SysV and AAPCS64 disagree about.
+	// The fourth argument is the result buffer, checked below.
+	REQUIRE(signature.arg_count() == 4);
 	CHECK(signature.arg(0) == asmjit::TypeId::kUIntPtr); // VMContext*
-	CHECK(signature.arg(1) == asmjit::TypeId::kInt32x4); // V128 by value
+	CHECK(signature.arg(1) == asmjit::TypeId::kUInt64);  // v128 low word
+	CHECK(signature.arg(2) == asmjit::TypeId::kUInt64);  // v128 high word
+	// A v128 result travels through the caller's buffer: a trailing pointer
+	// parameter and a void return (docs/backends/V128_SIGNATURE_DECISION.md).
+	CHECK(signature.ret() == asmjit::TypeId::kVoid);
+	REQUIRE(signature.arg_count() == 4);
+	CHECK(signature.arg(3) == asmjit::TypeId::kUIntPtr);
 }
 
 TEST_CASE("AsmJit preserves packed i8 and i16 storage widths", "[asmjit][abi][storage]")
