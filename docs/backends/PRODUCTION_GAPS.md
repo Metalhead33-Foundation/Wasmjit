@@ -673,3 +673,76 @@ Section 19 recorded "Suite 21891 assertions in 780 cases, green" at the moment o
 commit; the run it quoted was one of the passing orders. The honest statement is:
 **21891 assertions in 780 cases under a fixed seed; intermittent, pre-existing
 order-dependent failures otherwise.**
+
+## 21. The matrix, consolidated (supersedes section 17)
+
+**Read with section 20 in mind**: the suite is deterministic under a fixed seed, so every
+row below is reproducible.
+
+| Feature | SLJIT | AsmJIT | LibJIT | Probe |
+|---|---|---|---|---|
+| `v128` parameters / results | ✅ | ✅ | ✅ aggregate | step-5 gates |
+| multi-result | ✅ frame | ✅ frame | ✅ register (MV5); ⛔ frame | `[multi]` |
+| compiled-to-compiled calls | ✅ | ✅ | ⛔ frame mode | 3b / 5d / P0a |
+| imports in frame mode | n/a (typed) | ⛔ refused | ⛔ refused | P0b / P0a |
+| **exceptions (`throw`)** | ⛔ refused | ⛔ refused | ❌ **silent wrong answer** | `[exceptions]` |
+| **`externref`** | ✅ | ✅ | ✅ | `[refs]` |
+| **`funcref`** | ✅ | ✅ | ✅ | `[refs][tail]` |
+| **tail calls, register form** | ✅ | ✅ | ✅ | `[refs][tail]` |
+| **tail calls, FRAME form** | ⛔ refused | unprobed | unprobed | next probe |
+| GC refs, structs, arrays | unprobed | unprobed | unprobed | — |
+| atomics / threads | unprobed | unprobed | unprobed | — |
+| memory64 | partial (bulk refuses) | unprobed | unprobed | `[m64]` |
+
+### How to read the symbols
+
+* ✅ -- the probe measured it working, with the probe's fixture shape quoted in the last
+  column;
+* ⛔ -- **refused at instantiation with a reason**. Under the no-partial-modules ruling
+  this is a *correct* answer: the module is rejected, not half-built;
+* ❌ -- **wrong answer**: the backend accepted the module and did the wrong thing. There
+  is exactly one, and it is pinned by a test so it cannot be forgotten;
+* *unprobed* -- nobody has run a fixture. **Not** the same as unsupported, and this note
+  keeps the two words apart deliberately: the differences between "we do not know" and
+  "it refuses" is the whole reason this matrix exists.
+
+### The one ❌ is the whole point of the exercise
+
+Every other cell is either working or honestly refused. LibJIT's silent `throw` is the
+only place where an embedder is told nothing and gets the wrong answer -- and finding it
+required a probe, because the tree was *silent* rather than wrong-sounding.
+
+## 22. Probe 5: the frame-form tail call -- refused, correctly, by both backends that have it
+
+```
+TAILFRAME libjit: register form -- probe does not apply
+TAILFRAME asmjit: REFUSED: AsmJit currently supports only i32 tail-call parameters
+TAILFRAME sljit:  REFUSED: the SLJIT backend does not lower return_call
+                           (a frame-form module with internal calls)
+```
+
+Three honest answers, and **no silent wrong behaviour**. The matrix row is filled:
+
+| Feature | SLJIT | AsmJIT | LibJIT |
+|---|---|---|---|
+| tail call from a frame-form function | ⛔ refused | ⛔ refused | **n/a** -- register form handles the fixture |
+
+### Why LibJIT is "n/a" rather than a pass
+
+The same fixture gives LibJIT **three `v128` parameters**, which its register form
+already delivers as aggregates -- so it never enters frame mode and the question does not
+arise. Calling that a ✓ would be wrong: it would say "LibJIT supports frame-form tail
+calls" when the honest statement is "LibJIT never needed the frame here".
+
+That distinction is worth keeping in the matrix vocabulary: **n/a is not a pass**, and a
+row that silently counts it as one flatters the backend.
+
+### What closing this row would take
+
+* **SLJIT**: the trampoline must carry the frame pointer -- the thunk already takes five
+  arguments, so a sixth is the least invasive shape (PRODUCTION_GAPS §2.1);
+* **AsmJIT**: the tail-call path is scalar-only (`i32` parameters); a frame-form tail
+  call needs the same packing the direct call path already does in `frameMode`;
+* **LibJIT**: nothing, unless its frame form ever becomes the default.
+
+Suite 21894 assertions in 781 cases under `--rng-seed 12345`, green.
