@@ -244,6 +244,12 @@ void ModuleCallCache::call(const ModuleFfiEntry& entry, void* result,
 		const std::uint32_t count = argSlotCount(valueKindOf(entry.paramKinds[i]));
 		if (count == 1) {
 			arguments[slot++] = args[i];
+		} else if (instance_->v128ParameterIsAggregate()) {
+			// This backend's cif describes the vector as ONE 16-byte aggregate
+			// (docs/backends/LIBJIT_ARGUMENT_DEFECT.md section 12), so it takes one
+			// pointer to 16 bytes -- not two word pointers, which is what the
+			// canonical two-word spelling wants and what the branch below does.
+			arguments[slot++] = args[i];
 		} else {
 			// A vector is handed over as its low word, then its high word.
 			auto* bytes = static_cast<std::uint8_t*>(args[i]);

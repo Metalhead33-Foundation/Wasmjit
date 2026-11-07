@@ -463,3 +463,26 @@ CHECK(lanes[1] == 8u);
 CHECK(lanes[2] == 9u);
 CHECK(lanes[3] == 10u);
 }
+
+// The third circle: LibJIT reaches the same typed call through the cache, on its
+// register form, with no frame involved at all
+// (docs/backends/EXPORT_SIGNATURE.md section 23).
+TEST_CASE("The call cache reaches a LibJIT register-form export",
+"[staging][callcache][abi][libjit]")
+{
+auto runtime = WASM::Runtime::create("libjit");
+REQUIRE(runtime != nullptr);
+auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "v128_multi.wasm");
+WASM::RegistryImportResolver imports;
+WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+// No frame here: the backend delivers the vectors as aggregates.
+CHECK_FALSE(instance.frameCallAbi());
+REQUIRE(instance.v128ParameterIsAggregate());
+
+WASM::ModuleCallCache cache(instance);
+std::uint32_t lanes[3][4] = {{1, 1, 1, 1}, {2, 2, 2, 2}, {3, 3, 3, 3}};
+const std::int32_t sum = cache.call<std::int32_t>(
+"three_lanes", lanes[0], lanes[1], lanes[2]);
+CHECK(sum == 6);
+}

@@ -786,3 +786,44 @@ case visible anywhere above the cache.
 | bound guard | **green** (refuses above 512 bytes) |
 | LibJIT through the cache | **not tested** -- its register form should need none of this, which is exactly why it deserves the test |
 | multi-result through the frame | not started |
+
+## 24. All three backends answer the same typed call (the requirement, met)
+
+```
+The call cache reaches a LibJIT register-form export
+[staging][callcache][abi][libjit]   ->  green
+```
+
+`v128_multi` on **LibJIT**, no opt-in, `frameCallAbi()` asserted **false** and
+`v128ParameterIsAggregate()` asserted **true** -- and the very same typed call:
+
+```cpp
+cache.call<std::int32_t>("three_lanes", lanes[0], lanes[1], lanes[2]);  // == 6
+```
+
+The three cache tests now cover the three possible situations:
+
+| Backend | Internally | Through the cache |
+|---|---|---|
+| SLJIT | frame (six argument words force it) | **6** |
+| AsmJIT | frame (`v128` result) | **lanes 7,8,9,10** |
+| LibJIT | register form, aggregates | **6** |
+
+**That is the mandatory requirement, demonstrated:** one spelling to call a compiled
+wasm function from C++, on every backend, with the frame -- and even LibJIT's
+aggregate spelling -- invisible above the cache.
+
+### A real bug found on the way
+
+`ModuleCallCache::call` built its argument vector by **splitting every vector into
+two word pointers**, which is right for the canonical two-word spelling and **wrong**
+for LibJIT: its cif describes one 16-byte aggregate, so the vector must be passed as
+**one pointer to 16 bytes**. The old code wrote two entries into a vector sized for
+one -- a heap overrun that only needed a LibJIT vector call to happen.
+
+No test had ever called a LibJIT export with a vector parameter *through the cache*,
+which is exactly why it survived: the ffi path was exercised with scalars only.
+
+**Rule, third time in this campaign:** the untested combination is where the bug
+lives -- not the untested function. Here every function was tested; the *pair*
+(backend, calling path) was not.
