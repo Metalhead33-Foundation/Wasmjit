@@ -9,7 +9,7 @@ actually happened, the root cause of every surprise, and what is still open.
 | # | Item | Status | Evidence / blocker |
 |---|---|---|---|
 | 1 | constant-stack tail calls | **done for every lowered form** | self, direct, indirect and frame (scalar and v128) chains go through the libffi driver (`TAILSELF`/`TAILMUTUAL`/`TAILINDIRECT`/`TAILFRAME`/`TAILV128FRAME`, 1,000,000 links, `run()=1`); `ref` is not lowered by either backend |
-| 2 | shared reference/table atomics | **blocked** | numeric family done; the parser rejects shared composite references (`malformed mutability`), table atomics need `table.get`/`table.set`, and SLJIT's four-argument ceiling needs a record for `cmpxchg` |
+| 2 | shared reference/table atomics | **blocked** | numeric family and `table.get`/`table.set` are done; the parser still rejects shared composite references (`malformed mutability`), and SLJIT's four-argument ceiling needs a record for reference `cmpxchg` |
 | 3 | AsmJIT block parameters | **done** | `BLOCKPARAM` block=42 if=11/12 loop=0 on all three |
 | 4 | bulk memory on memory64 | **done** | `MEM64BULK` copy=97 fill=65 init=97 on all three |
 
@@ -359,6 +359,28 @@ recorded as a blocker, not claimed as done.
   designing the lowering.
 * **A prerequisite hidden behind a feature is still a prerequisite.** Table
   atomics need table accessors; there is no shortcut through the atomic helper.
+
+### Table accessors (same session)
+
+Neither SLJIT nor AsmJIT lowered `table.get`/`table.set` at all, which was the
+prerequisite for table atomics. Core helpers `wasm_table_get`/`wasm_table_set`
+now do the bounds check and, for a write, the same `wasm_atomic_ref_store`
+reference barrier as any other slot; the backends only pass `(ctx, table index,
+element index)` and the value. `table.get` returns the opaque slot pointer and a
+trap leaves it null; the backend's pending-trap check unwinds the function.
+
+Evidence (`table_access_probe.wat`, externref and funcref tables, plus an
+out-of-bounds get):
+
+```
+TABLEACCESS libjit: ext=1 fun=0
+TABLEACCESS asmjit: ext=1 fun=0
+TABLEACCESS sljit: ext=1 fun=0
+```
+
+`ext=1` is a null externref round-trip; `fun=0` is a `ref.func` staying non-null;
+the out-of-bounds `table.get` throws at the host boundary. AsmJIT's first build
+rejected the 32->64 index widening as a `mov`; `movzx` is the explicit form.
 
 ## Item 3 — AsmJIT block parameters
 

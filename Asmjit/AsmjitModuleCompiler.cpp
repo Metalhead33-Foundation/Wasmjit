@@ -5438,6 +5438,77 @@ return address;
 		values.push_back(result);
 	}
 
+	void dispatchTableGet(WASM::TableIdx tableIndex) override
+	{
+		if (values.empty())
+			throw std::runtime_error("AsmJit table.get operand stack underflow");
+		if (tableIndex >= module.importTables.size() + module.tables.size())
+			throw std::runtime_error("AsmJit table.get references an unknown table");
+		auto index = values.back();
+		values.pop_back();
+		auto table = compiler.new_gp32("tableGetIndex");
+		checkError(compiler.mov(table, static_cast<uint32_t>(tableIndex)),
+				"AsmJit table.get index materialisation failed");
+		asmjit::x86::Gp index64 = index;
+		if (index.size() == 4) {
+			index64 = compiler.new_gp64("tableGetElement");
+			checkError(compiler.movzx(index64, index.r32()),
+					"AsmJit table.get index widening failed");
+		}
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		signature.add_arg(asmjit::TypeId::kUInt64);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke),
+				reinterpret_cast<uint64_t>(&WASM::wasm_table_get), signature),
+				"AsmJit table.get helper emission failed");
+		invoke->set_arg(0, vmContext);
+		invoke->set_arg(1, table);
+		invoke->set_arg(2, index64);
+		auto result = compiler.new_gp_ptr("tableGetResult");
+		invoke->set_ret(0, result);
+		emitPendingTrapReturn();
+		values.push_back(result);
+	}
+
+	void dispatchTableSet(WASM::TableIdx tableIndex) override
+	{
+		if (values.size() < 2)
+			throw std::runtime_error("AsmJit table.set operand stack underflow");
+		if (tableIndex >= module.importTables.size() + module.tables.size())
+			throw std::runtime_error("AsmJit table.set references an unknown table");
+		auto value = values.back();
+		values.pop_back();
+		auto index = values.back();
+		values.pop_back();
+		auto table = compiler.new_gp32("tableSetIndex");
+		checkError(compiler.mov(table, static_cast<uint32_t>(tableIndex)),
+				"AsmJit table.set index materialisation failed");
+		asmjit::x86::Gp index64 = index;
+		if (index.size() == 4) {
+			index64 = compiler.new_gp64("tableSetElement");
+			checkError(compiler.movzx(index64, index.r32()),
+					"AsmJit table.set index widening failed");
+		}
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kVoid);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		signature.add_arg(asmjit::TypeId::kUInt64);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke),
+				reinterpret_cast<uint64_t>(&WASM::wasm_table_set), signature),
+				"AsmJit table.set helper emission failed");
+		invoke->set_arg(0, vmContext);
+		invoke->set_arg(1, table);
+		invoke->set_arg(2, index64);
+		invoke->set_arg(3, value);
+		emitPendingTrapReturn();
+	}
+
 	void dispatchRefFunc(WASM::FuncIdx index) override
 	{
 		const size_t importedCount = module.importFunctions.size();

@@ -61,6 +61,11 @@ public:
 	bool grow(uint64_t deltaEntries);
 };
 
+/** \brief Bounds-checked table element read for generated code. \param context Current module VM context. \param tableIndex Table index. \param elementIndex Element index (zero-extended from i32). \return The element pointer, or null after reporting an out-of-bounds trap. */
+extern "C" void* wasm_table_get(VMContext* context, uint32_t tableIndex, uint64_t elementIndex) noexcept;
+/** \brief Bounds-checked table element write with the reference barrier. \param context Current module VM context. \param tableIndex Table index. \param elementIndex Element index. \param value New element pointer. */
+extern "C" void wasm_table_set(VMContext* context, uint32_t tableIndex, uint64_t elementIndex, void* value) noexcept;
+
 } // namespace WASM
 
 WASMJIT_VISIBLE_END

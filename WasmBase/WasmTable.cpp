@@ -1,4 +1,7 @@
 #include "WasmTable.hpp"
+#include "WasmVMContext.hpp"
+#include "WasmTrap.hpp"
+#include "wasm_atomic.hpp"
 #include <limits>
 #include <stdexcept>
 
@@ -35,6 +38,50 @@ bool StoreOwnedTable::grow(uint64_t deltaEntries)
 	table.base = slots.data();
 	table.size = newSize;
 	return true;
+}
+
+extern "C" void* wasm_table_get(VMContext* context, uint32_t tableIndex,
+		uint64_t elementIndex) noexcept
+{
+	if (context == nullptr || context->tables == nullptr
+			|| tableIndex >= context->tableCount) {
+		WASM::reportTrap(WASM::TrapKind::Internal, "table.get index is invalid");
+		return nullptr;
+	}
+	WASM::TableInstance* table = context->tables[tableIndex];
+	if (table == nullptr) {
+		WASM::reportTrap(WASM::TrapKind::Internal, "table.get table is null");
+		return nullptr;
+	}
+	if (elementIndex >= table->size) {
+		WASM::reportTrap(WASM::TrapKind::OutOfBoundsTableAccess);
+		return nullptr;
+	}
+	return table->base[elementIndex];
+}
+
+extern "C" void wasm_table_set(VMContext* context, uint32_t tableIndex,
+		uint64_t elementIndex, void* value) noexcept
+{
+	if (context == nullptr || context->tables == nullptr
+			|| tableIndex >= context->tableCount) {
+		WASM::reportTrap(WASM::TrapKind::Internal, "table.set index is invalid");
+		return;
+	}
+	WASM::TableInstance* table = context->tables[tableIndex];
+	if (table == nullptr) {
+		WASM::reportTrap(WASM::TrapKind::Internal, "table.set table is null");
+		return;
+	}
+	if (elementIndex >= table->size) {
+		WASM::reportTrap(WASM::TrapKind::OutOfBoundsTableAccess);
+		return;
+	}
+	// A table slot is a reference; the write goes through the same retain/
+	// release barrier as any other reference store (docs/proposals/GC.md D15).
+	wasm_atomic_ref_store(context,
+			reinterpret_cast<void**>(&table->base[elementIndex]), value,
+			static_cast<uint32_t>(std::memory_order_seq_cst));
 }
 
 } // namespace WASM

@@ -110,6 +110,8 @@ protected:
 	void dispatchReturn() override; //!< `return`.
 	void dispatchReturnCall(WASM::FuncIdx arg) override; //!< `return_call`.
 	void dispatchCallRef(WASM::TypeIdx arg) override; //!< `call_ref`.
+	void dispatchTableGet(WASM::TableIdx arg) override; //!< `table.get`.
+	void dispatchTableSet(WASM::TableIdx arg) override; //!< `table.set`.
 	void dispatchReturnCallRef(WASM::TypeIdx arg) override; //!< `return_call_ref`.
 	void dispatchReturnCallIndirect(WASM::TypeIdx arg1, WASM::TableIdx arg2) override; //!< `return_call_indirect`.
 	void dispatchTryTable(const WASM::BlockType& arg1, std::vector<WASM::CatchClause>&& arg2) override; //!< `try_table`.

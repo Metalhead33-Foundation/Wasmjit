@@ -5239,6 +5239,47 @@ void OpcodeDispatcher::dispatchStructGet(WASM::TypeIdx arg1, uint32_t arg2)
 	stackWidths_.back() = width;
 }
 
+void OpcodeDispatcher::dispatchTableGet(WASM::TableIdx arg)
+{
+	if (!reachable_)
+		return;
+	requireTableIndex(arg);
+	requireStack(1);
+	const int indexWidth = stackWidths_.back();
+	const std::size_t depth = stackWidths_.size() - 1;
+	if (!measureOnly_) {
+		loadContext(SLJIT_R0);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R1, 0, SLJIT_IMM,
+				static_cast<sljit_sw>(arg)));
+		loadSlot(SLJIT_R2, depth, indexWidth);
+		emitHelper(SLJIT_ARGS3(P, P, 32, W), &WASM::wasm_table_get);
+		storeSlot(SLJIT_R0, depth, 8);
+		emitPendingTrapCheck();
+	}
+	stackWidths_.back() = 8;
+}
+
+void OpcodeDispatcher::dispatchTableSet(WASM::TableIdx arg)
+{
+	if (!reachable_)
+		return;
+	requireTableIndex(arg);
+	requireStack(2);
+	const std::size_t valueDepth = stackWidths_.size() - 1;
+	const std::size_t indexDepth = stackWidths_.size() - 2;
+	const int indexWidth = stackWidths_[indexDepth];
+	if (!measureOnly_) {
+		loadContext(SLJIT_R0);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R1, 0, SLJIT_IMM,
+				static_cast<sljit_sw>(arg)));
+		loadSlot(SLJIT_R2, indexDepth, indexWidth);
+		loadSlot(SLJIT_R3, valueDepth, 8);
+		emitHelper(SLJIT_ARGS4V(P, 32, W, P), &WASM::wasm_table_set);
+		emitPendingTrapCheck();
+	}
+	stackWidths_.resize(stackWidths_.size() - 2);
+}
+
 void OpcodeDispatcher::dispatchRefFunc(WASM::FuncIdx arg)
 {
 	if (!reachable_)

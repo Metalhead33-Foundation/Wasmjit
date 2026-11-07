@@ -1750,3 +1750,42 @@ CHECK(false);
 }
 }
 }
+
+// Table accessors: externref/funcref round-trip and the bounds trap.
+TEST_CASE("table.get and table.set round-trip references", "[staging][table]")
+{
+for (const char* backend : {"libjit", "asmjit", "sljit"}) {
+std::fprintf(stderr, "TABLEACCESS %s: ", backend);
+auto runtime = WASM::Runtime::create(backend);
+REQUIRE(runtime != nullptr);
+auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "table_access_probe.wasm");
+WASM::RegistryImportResolver imports;
+WASM::ModuleInstance* instance = nullptr;
+try {
+instance = &runtime->instantiate(*module, imports);
+} catch (const std::exception& error) {
+std::fprintf(stderr, "REFUSED: %s\n", error.what());
+CHECK(false);
+continue;
+}
+const auto ext = instance->exportedFunction("ext");
+const auto fun = instance->exportedFunction("fun");
+const auto oob = instance->exportedFunction("oob");
+REQUIRE(ext.has_value());
+REQUIRE(fun.has_value());
+REQUIRE(oob.has_value());
+try {
+const std::int32_t nullRoundTrip = WASM::callCallable<std::int32_t>(*ext, 0,
+static_cast<void*>(nullptr));
+const std::int32_t nonNull = WASM::callCallable<std::int32_t>(*fun);
+std::fprintf(stderr, "ext=%d fun=%d\n", (int)nullRoundTrip, (int)nonNull);
+CHECK(nullRoundTrip == 1);
+CHECK(nonNull == 0);
+CHECK_THROWS(WASM::callCallable<std::int32_t>(*oob));
+} catch (const std::exception& error) {
+std::fprintf(stderr, "FAILED: %s\n", error.what());
+CHECK(false);
+}
+}
+}
