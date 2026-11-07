@@ -1233,3 +1233,39 @@ tree has a meaning, and it is whatever the tree says -- not what the new code ne
 to be.**
 
 Suite restored to 21845 assertions in 770 cases, green; the change was reverted.
+
+## 35. Reconciliation: which sections this note supersedes
+
+This note grew by correction, and a reader arriving now should not have to reconstruct
+which parts are live. The map:
+
+| Section | Status |
+|---|---|
+| §4, §6 | live: cost, defaults, and the cross-backend rule (legal, forbidden in production) |
+| §7-§13 | live: the step-5 site map and its measured history |
+| **§16** | **superseded by §17 and §20** -- the adapter belongs on the *host* side (a packer), not in the JIT |
+| §17 | live: the packer design, implemented in §22 |
+| §20 | live: "virtual register file" is a register file mapped into memory; the frame is a contract, not an IR |
+| §21-§26 | live: the packer, its bound, its coverage |
+| §27 | **superseded by §28** -- the parameter limit was ours, not SLJIT's |
+| §31 | live for AsmJIT; **§32 corrects it for SLJIT** (multi-result traps) |
+| §32 | **partly superseded by §33** -- the refusal existed; reporting was missing |
+| §33, §34 | live: the remaining work, and a refuted approach |
+
+### `D-L1` re-scoped
+
+`docs/backends/LIBJIT_ARGUMENT_DEFECT.md` described the sixth-argument loss as an ABI
+defect. With the frame form and the cache packer in place, the honest scope is:
+
+* **as an internal convention it is no longer a defect**: LibJIT spells `v128` as one
+  16-byte aggregate, the register form delivers it correctly, and no embedder can see
+  the difference because the packer converts;
+* **as a portability fact it remains**: a cross-backend *call* into a LibJIT function
+  would hand it the canonical two-word spelling, so the aggregate convention is still a
+  reason that cross-backend calls stay forbidden in production;
+* the canonical rule now lives in **one place** -- the frame layout, `8` bytes per
+  scalar slot and `16` per vector -- and the boundary converts to it.
+
+That is a documentation correction, not a code change: nothing in the tree needs to
+move for it, and the tests already pin both behaviours (register form returning 6, and
+the frame path returning 6 through the cache).
