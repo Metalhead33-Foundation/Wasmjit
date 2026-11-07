@@ -105,3 +105,45 @@ largest bodies of work left, and both are per-backend *body* work rather than AB
 the opposite of what this campaign spent its time on. What the campaign bought is that
 the *boundary* no longer varies by backend, so those bodies of work can be done one
 backend at a time without moving the contract.
+
+## 5. 2b landed: SLJIT publishes its reasons
+
+```
+SLJIT reports why an export could not be compiled   [staging][sljit][abi][reason]  -> green
+```
+
+`SljitModuleCompiler` already collected the text in `unsupportedFunctions_`; a single
+additional call publishes it per function:
+
+```cpp
+instance.setFunctionUnsupported(static_cast<std::uint32_t>(i),
+        dispatcher.unsupportedReason());
+```
+
+The test asks a narrow two-result module (register form, where SLJIT has nowhere to put
+the second result) and receives text containing **"multiple results"**. That is the
+first time the tree answers *why* instead of merely failing -- section 34 refuted the
+null-`fnPtr` inference, and this is the additive query that replaces it.
+
+**Remaining for 2b:** AsmJIT (it `throw`s from the dispatcher rather than recording a
+reason, so it needs the same "record instead of throw" treatment) and LibJIT (whose
+refusals are module-level `std::runtime_error`s, which should also become recorded
+reasons).
+
+## 6. Item A is a migration, measured
+
+Making AsmJIT decide the frame form by measurement is **not** a one-line change:
+`Test/AsmjitBackendTests.cpp` references `v128` **16 times**, and **31 fixtures** under
+`Test/wasm_wat/` contain `v128`. Flipping AsmJIT's default would move every one of them
+to the frame form at once, and each has to keep passing.
+
+**Plan, when taken on:**
+
+1. land the measurement *behind* the existing flag first (flag OR measurement), so the
+   code path exists and is exercised by the frame tests that already set the flag;
+2. flip the default for **vectors only** -- the smallest shape AsmJIT cannot do without
+   the frame -- and fix the fixtures that move;
+3. then widen to argument counts.
+
+Each step is green-or-revert on its own, which is the only way a 31-fixture migration
+stays reviewable.

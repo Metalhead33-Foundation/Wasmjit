@@ -2966,3 +2966,22 @@ std::memcpy(&second, frame + 56, sizeof(second));
 CHECK(first == 6);
 CHECK(second == 9);
 }
+
+// 2b: an unsupported function must say WHY. A narrow two-result module keeps the
+// register form, which has nowhere to put the second result
+// (docs/backends/PRODUCTION_GAPS.md section 3).
+TEST_CASE("SLJIT reports why an export could not be compiled",
+"[staging][sljit][abi][reason]")
+{
+auto runtime = WASM::Runtime::create("sljit");
+REQUIRE(runtime != nullptr);
+auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "asmjit_multi_result.wasm");
+WASM::RegistryImportResolver imports;
+WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+CHECK_FALSE(instance.frameCallAbi());
+
+const std::optional<std::string> reason = instance.unsupportedReason("pair");
+REQUIRE(reason.has_value());
+CHECK(reason->find("multiple results") != std::string::npos);
+}

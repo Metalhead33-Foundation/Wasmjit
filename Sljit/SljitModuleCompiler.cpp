@@ -119,8 +119,12 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM
 		void* entry = nullptr;
 		if (!dispatcher.compile(entry)) {
 			// The function stays uncallable; the core refuses it at the call
-			// boundary. Never install a partially emitted body.
+			// boundary. Never install a partially emitted body. The reason is
+			// published so an embedder can ask why rather than infer it from a null
+			// entry (docs/backends/EXPORT_SIGNATURE.md section 43).
 			unsupportedFunctions_.push_back(dispatcher.unsupportedReason());
+			instance.setFunctionUnsupported(static_cast<std::uint32_t>(i),
+					dispatcher.unsupportedReason());
 			continue;
 		}
 		internals.internalCallables[i].fnPtr = entry;
