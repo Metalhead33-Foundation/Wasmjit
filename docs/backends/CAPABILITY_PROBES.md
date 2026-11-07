@@ -2,8 +2,8 @@
 
 **Status:** living note, 2026-11-07 (`backendsMh33`). Companion to
 [`PRODUCTION_GAPS.md`](PRODUCTION_GAPS.md), which holds the **matrix**; this note holds
-the **instruments** that fill it. Section 16 records the defect round that corrected the probes; section 17
-records the capability close-out and its re-run.
+the **instruments** that fill it. Section 16 records the corrected probes; 17 the capability close-out; 18 the
+V-1/multi-value/shared-atomic follow-up.
 
 A probe is a fixture plus one test that runs it on every backend and records one of
 exactly three outcomes. The rule that governs all of them:
@@ -544,3 +544,41 @@ and the validator gap is recorded as V-1 in `PRODUCTION_GAPS.md` section 26.
 > **Rule reinforced:** run `wasm-tools validate` on every probe fixture before
 > believing an outcome. The engine accepting a module is not evidence that the
 > module is valid.
+
+## 18. Session 4 (2026-11-07): V-1, multi-value catches, numeric shared atomics
+
+**Snapshot (2026-11-07, `backendsMh33`):** full suite **22122 assertions in 795
+cases**, `--rng-seed 12345`, green.
+
+```
+EXCMULTI libjit:  catch2=22 catch2i32=33 block2=33 direct=33 catchref=33
+EXCMULTI asmjit: catch2=22 catch2i32=33 block2=33 direct=33 catchref=33
+EXCMULTI sljit:  catch2=22 catch2i32=33 block2=33 direct=33 catchref=33
+SHAREDATOMIC libjit/asmjit/sljit: global=5 struct32=7 struct64=9 array=11
+validator: a catch does not disable block-end stack checks: passed
+[spec] throw_ref: passed=13 failed=0 skipped=2
+```
+
+### V-1: the probe that the validator taint hid
+
+The old validator set `typeTainted` on any `try_table` with catches, disabling
+all later stack checks. Removing it made the invalid fixture
+`invalid_catch_stack.wat` fail validation (as `wasm-tools validate` says), and
+exposed four invalid hand-written fixtures and two real validator defects
+(`throw_ref`'s operand type and `moduleNeedsFrame` scanning block types). All
+are fixed; see `PRODUCTION_GAPS.md` section 27.
+
+### The new probes
+
+`exceptions_multi_probe.wat` covers a two-value catch payload, `catch_ref`, two
+i32 payloads and a plain two-result block. `shared_atomics_probe.wat` covers a
+shared global, i32/i64 struct fields and an array element. Both are in the WAT
+glob and are validated with `wasm-tools validate --features
+shared-everything-threads` where the proposal needs it.
+
+### Remaining probe rows
+
+* `TAILFRAME`: correct value, but still call + return, not constant-stack.
+* shared **reference/table** atomics: no valid upstream fixture yet; the backend
+  refusals are explicit.
+* AsmJIT structured block **parameters** remain refused.

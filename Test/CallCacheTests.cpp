@@ -1249,3 +1249,103 @@ std::fprintf(stderr, "REFUSED: %s\n", error.what());
 }
 }
 }
+
+// V-1 regression: a `try_table` catch must not disable the block-end stack check.
+TEST_CASE("validator: a catch does not disable block-end stack checks",
+"[validator][exceptions]")
+{
+auto runtime = WASM::Runtime::create("libjit");
+REQUIRE(runtime != nullptr);
+// The fixture declares `try_table (result i32)` and then pushes another value
+// before its enclosing block ends. `wasm-tools validate` rejects it; the
+// validator must too (PRODUCTION_GAPS.md section 26, V-1).
+REQUIRE_THROWS(runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "invalid_catch_stack.wasm"));
+// The corrected handler fixture is still accepted and answers 42.
+auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "exc_handler_probe.wasm");
+WASM::RegistryImportResolver imports;
+WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+const std::optional<WASM::Callable> caught = instance.exportedFunction("caught");
+REQUIRE(caught.has_value());
+CHECK(WASM::callCallable<std::int32_t>(*caught) == 42);
+}
+
+// Item 3: shared-everything atomics over numeric slots.
+TEST_CASE("shared atomics: globals, struct fields and array elements",
+"[staging][abi][atomics][shared]")
+{
+for (const char* backend : {"libjit", "asmjit", "sljit"}) {
+std::fprintf(stderr, "SHAREDATOMIC %s: ", backend);
+auto runtime = WASM::Runtime::create(backend);
+REQUIRE(runtime != nullptr);
+auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "shared_atomics_probe.wasm");
+WASM::RegistryImportResolver imports;
+WASM::ModuleInstance* instance = nullptr;
+try {
+instance = &runtime->instantiate(*module, imports);
+} catch (const std::exception& error) {
+std::fprintf(stderr, "REFUSED: %s\n", error.what());
+continue;
+}
+const auto integer = [&](const char* name) -> std::int32_t {
+const std::optional<WASM::Callable> fn = instance->exportedFunction(name);
+REQUIRE(fn.has_value());
+return WASM::callCallable<std::int32_t>(*fn);
+};
+const std::int32_t global = integer("global_probe");
+const std::int32_t struct32 = integer("struct_probe");
+const std::int32_t array = integer("array_probe");
+const std::optional<WASM::Callable> struct64 =
+instance->exportedFunction("struct64_probe");
+REQUIRE(struct64.has_value());
+const std::int64_t struct64Value = WASM::callCallable<std::int64_t>(*struct64);
+std::fprintf(stderr, "global=%d struct32=%d struct64=%lld array=%d\n",
+(int)global, (int)struct32, (long long)struct64Value, (int)array);
+CHECK(global == 5);
+CHECK(struct32 == 7);
+CHECK(struct64Value == 9);
+CHECK(array == 11);
+}
+}
+
+// Item 2: multi-value catch payloads and catch_ref.
+TEST_CASE("exceptions: multi-value payloads and catch_ref",
+"[staging][abi][exceptions][multi]")
+{
+for (const char* backend : {"libjit", "asmjit", "sljit"}) {
+std::fprintf(stderr, "EXCMULTI %s: ", backend);
+auto runtime = WASM::Runtime::create(backend);
+REQUIRE(runtime != nullptr);
+auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "exceptions_multi_probe.wasm");
+WASM::RegistryImportResolver imports;
+WASM::ModuleInstance* instance = nullptr;
+try {
+instance = &runtime->instantiate(*module, imports);
+} catch (const std::exception& error) {
+std::fprintf(stderr, "REFUSED: %s\n", error.what());
+continue;
+}
+const auto call32 = [&](const char* name) -> std::int32_t {
+const std::optional<WASM::Callable> fn = instance->exportedFunction(name);
+REQUIRE(fn.has_value());
+return WASM::callCallable<std::int32_t>(*fn);
+};
+const std::optional<WASM::Callable> wide = instance->exportedFunction("catch2");
+REQUIRE(wide.has_value());
+const std::int64_t two = WASM::callCallable<std::int64_t>(*wide);
+const std::int32_t ref = call32("catchref");
+const std::int32_t two32 = call32("catch2i32");
+const std::int32_t plainBlock = call32("block2");
+const std::int32_t directBlock = call32("block2direct");
+std::fprintf(stderr, "catch2=%lld catch2i32=%d block2=%d direct=%d catchref=%d\n",
+(long long)two, (int)two32, (int)plainBlock, (int)directBlock, (int)ref);
+CHECK(two == 22);
+CHECK(two32 == 33);
+CHECK(plainBlock == 33);
+CHECK(directBlock == 33);
+CHECK(ref == 33);
+}
+}

@@ -340,7 +340,10 @@ Two further properties of the tail-call lowering:
   order and the alignment trap are shared. `Test/CallCacheTests.cpp` asserts the
   produced value, not just an export: RMW add/xor/cmpxchg, i64 store/add/load,
   and the one- and two-byte wrapping forms (`i32=9 i64=10 i8=0 i16=0`).
-  Shared-everything atomics (globals, tables, GC fields) remain LibJIT-only.
+  **Shared-everything numeric atomics** (a shared global, struct fields and array
+  elements) now work on all three too (`global=5 struct32=7 struct64=9
+  array=11`). Reference slots and table slots still refuse: the former need the
+  GC retain/release barrier and the latter need table.get/set lowering.
 
 ## 5. Gaps
 

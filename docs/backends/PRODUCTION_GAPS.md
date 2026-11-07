@@ -2,8 +2,8 @@
 
 **Status:** living note, 2026-11-07 (`backendsMh33`). Companions:
 [`EXPORT_SIGNATURE.md`](EXPORT_SIGNATURE.md) (the ABI itself),
-[`STAGING_CALL_ABI.md`](STAGING_CALL_ABI.md) (its history). **Section 26 is the current
-defect/gap ledger**; sections 23-25 are the superseded record.
+[`STAGING_CALL_ABI.md`](STAGING_CALL_ABI.md) (its history). **Section 27 is the current
+defect/gap ledger**; 23-26 are history.
 
 This note exists because a survey of refusal strings (EXPORT_SIGNATURE §44) described
 "limits" that are **not limits**: the frame form exists precisely to remove them.
@@ -959,3 +959,66 @@ returned in an Xmm from a void signature. Frame branches now come first; one
 helpers pushed their result only in the emit pass; the measuring pass then underflowed
 on the next instruction. Every new lowering must update the compile-time stack model
 in both passes.
+
+## 27. V-1 fixed, multi-value catches and numeric shared atomics closed (2026-11-07)
+
+**Snapshot (2026-11-07, `backendsMh33`):** suite **22122 assertions in 795
+cases** under `--rng-seed 12345`, green; `[headerdoc]`, `[docs]`, `doxygen`
+(0 warnings) and `abi-check` all pass. This section supersedes section 26.
+
+### Closed
+
+| Capability | SLJIT | AsmJIT | LibJIT | Evidence |
+|---|---|---|---|---|
+| `catch_ref` / `catch_all_ref` and multi-value catch payloads | OK | OK | OK | `catch2=22 catch2i32=33 catchref=33` |
+| multi-value structured blocks | OK | OK | OK | `block2=33 direct=33` |
+| numeric shared-everything atomics (global/struct/array) | OK | OK | OK | `global=5 struct32=7 struct64=9 array=11` |
+| V-1: block-end stack check after a `try_table` | n/a | n/a | n/a | `validator: a catch does not disable block-end stack checks` |
+
+### V-1: the taint, and what it hid
+
+`Validator::dispatchTryTable` set `typeTainted = true` for any `try_table` with
+catches. That flag makes `popAny`/`pushValue` skip the operand stack for the
+rest of the module, so a module could leave arbitrary extra values at a block
+end and still validate. The catch payload is already checked against the target
+label at the `try_table` instruction, so the taint was removed. The regression
+fixture `invalid_catch_stack.wat` is rejected by the validator and by
+`wasm-tools validate`.
+
+The taint had hidden four invalid hand-written fixtures (`exceptions.wat`,
+`native_import_exceptions.wat`, `cont_throw.wat`, `cont_throw_handler.wat`); all
+are corrected. Removing it also exposed two real validator defects, both fixed:
+
+* **`throw_ref`** popped the bare `ExnRef` opcode, but the stack holds a
+  `(ref null exn)` (`Ref`/`RefNull` with the exn heap type). `refSubtype` now
+  checks the reference form, and `spec: throw_ref` is 13/0/2 again.
+* **`TypeTranslator::moduleNeedsFrame`** scanned the whole type section, so a
+  synthetic multi-result *block* type switched an AsmJIT module to the frame
+  ABI. It now scans only import and internal function signatures.
+
+### Multi-value blocks and catches
+
+AsmJIT's control frames now hold a vector of result registers, so a block can
+carry N results; `br`, `br_if`, `br_table`, `else` and `end` transfer all of
+them. `emitCatchBranch` writes each payload field (plus the `exnref` for
+`catch_ref`) into the target's result registers. The old single-result refusals
+are gone. `dispatchUnreachable` now returns a correctly sized zero for i64 and
+uses the frame ABI when the signature is frame-mode.
+
+### Numeric shared-everything atomics
+
+Globals, struct fields and array elements now lower `atomic.get/set/rmw/*`
+through the same `wasm_atomic_*` helpers as linear memory, including packed
+fields and the 64-bit forms. Reference slots still refuse: they need the GC
+retain/release barrier, and the table forms additionally need table.get/set,
+which neither SLJIT nor AsmJIT lowers yet.
+
+### Still open
+
+| Gap | Backends | Reason |
+|---|---|---|
+| constant-stack tail-call trampolines | SLJIT, AsmJIT | call + return; no driver/thunk loop yet |
+| shared reference/table atomics | SLJIT, AsmJIT | GC barrier / missing table.get/set |
+| structured block parameters | AsmJIT | results work; parameters do not |
+| bulk memory on memory64 | SLJIT, AsmJIT | "yet" |
+| LibJIT frame-mode calls/imports/multi-result | LibJIT | policy |

@@ -5625,6 +5625,985 @@ void OpcodeDispatcher::dispatchAtomicPause()
 	emitHelper(SLJIT_ARGS0V(), &wasm_atomic_pause);
 }
 
+
+// ── Shared-everything atomics: numeric slots ────────────────────────────────
+// The same helper ABI as the linear-memory family. Reference slots need the
+// GC retain/release barrier and are refused below; the table forms are
+// reference-only and remain refused. Numeric globals, struct fields and array
+// elements share the address-plus-width lowering.
+
+static std::uint32_t sharedAtomicWidth(WASM::ValueTypeCode code) noexcept
+{
+	switch (code) {
+	case WASM::ValueTypeCode::I32:
+	case WASM::ValueTypeCode::F32: return 4;
+	case WASM::ValueTypeCode::I64:
+	case WASM::ValueTypeCode::F64: return 8;
+	default: return 0;
+	}
+}
+
+void OpcodeDispatcher::emitGlobalAtomicAddress(WASM::GlobalIdx arg)
+{
+	loadContext(SLJIT_R0);
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0, SLJIT_MEM1(SLJIT_R0),
+			static_cast<sljit_sw>(offsetof(WASM::VMContext, globals))));
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0, SLJIT_MEM1(SLJIT_R0),
+			static_cast<sljit_sw>(arg * sizeof(WASM::Value*))));
+}
+
+void OpcodeDispatcher::emitStructAtomicAddress(std::size_t refDepth, std::size_t fieldOffset)
+{
+	loadSlot(SLJIT_R1, refDepth, 8);
+	sljit_jump* notNull = sljit_emit_cmp(compiler_, SLJIT_NOT_EQUAL,
+			SLJIT_R1, 0, SLJIT_IMM, 0);
+	if (notNull == nullptr)
+		ok_ = false;
+	emitTrap(WASM::TrapKind::NullStructureReference);
+	sljit_label* done = sljit_emit_label(compiler_);
+	if (done == nullptr)
+		ok_ = false;
+	else if (notNull != nullptr)
+		sljit_set_label(notNull, done);
+	loadSlot(SLJIT_R1, refDepth, 8);
+	emit(sljit_emit_op2(compiler_, SLJIT_ADD, SLJIT_R0, 0, SLJIT_R1, 0, SLJIT_IMM,
+			static_cast<sljit_sw>(fieldOffset)));
+}
+
+void OpcodeDispatcher::emitArrayAtomicAddress(std::size_t refDepth, std::size_t indexDepth,
+		std::size_t lengthOffset, std::size_t dataOffset, std::uint32_t elementBytes)
+{
+	loadSlot(SLJIT_R1, refDepth, 8);
+	sljit_jump* notNull = sljit_emit_cmp(compiler_, SLJIT_NOT_EQUAL,
+			SLJIT_R1, 0, SLJIT_IMM, 0);
+	if (notNull == nullptr)
+		ok_ = false;
+	emitTrap(WASM::TrapKind::NullArrayReference);
+	sljit_label* afterNull = sljit_emit_label(compiler_);
+	if (afterNull == nullptr)
+		ok_ = false;
+	else if (notNull != nullptr)
+		sljit_set_label(notNull, afterNull);
+	loadSlot(SLJIT_R1, refDepth, 8);
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV_U32, SLJIT_R2, 0, SLJIT_MEM1(SLJIT_R1),
+			static_cast<sljit_sw>(lengthOffset)));
+	loadSlot(SLJIT_R3, indexDepth, 4);
+	sljit_jump* inBounds = sljit_emit_cmp(compiler_, SLJIT_LESS,
+			SLJIT_R3, 0, SLJIT_R2, 0);
+	if (inBounds == nullptr)
+		ok_ = false;
+	emitTrap(WASM::TrapKind::OutOfBoundsArrayAccess);
+	sljit_label* afterBounds = sljit_emit_label(compiler_);
+	if (afterBounds == nullptr)
+		ok_ = false;
+	else if (inBounds != nullptr)
+		sljit_set_label(inBounds, afterBounds);
+	loadSlot(SLJIT_R1, refDepth, 8);
+	loadSlot(SLJIT_R2, indexDepth, 4);
+	if (elementBytes != 1)
+		emit(sljit_emit_op2(compiler_, SLJIT_MUL, SLJIT_R2, 0, SLJIT_R2, 0, SLJIT_IMM,
+				static_cast<sljit_sw>(elementBytes)));
+	emit(sljit_emit_op2(compiler_, SLJIT_ADD, SLJIT_R1, 0, SLJIT_R1, 0, SLJIT_R2, 0));
+	emit(sljit_emit_op2(compiler_, SLJIT_ADD, SLJIT_R0, 0, SLJIT_R1, 0, SLJIT_IMM,
+			static_cast<sljit_sw>(dataOffset)));
+}
+
+void OpcodeDispatcher::emitSharedAtomicLoad(uint8_t ordering, std::uint32_t width,
+		int resultWidth, std::size_t depth, int signBits)
+{
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R1, 0, SLJIT_IMM,
+			static_cast<sljit_sw>(width)));
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R2, 0, SLJIT_IMM,
+			static_cast<sljit_sw>(ordering)));
+	emitHelper(SLJIT_ARGS3(W, P, 32, 32), &wasm_atomic_load);
+	emitPendingTrapCheck();
+	if (signBits > 0) {
+		const sljit_sw shift = 64 - signBits;
+		emit(sljit_emit_op2(compiler_, SLJIT_SHL, SLJIT_R0, 0, SLJIT_R0, 0, SLJIT_IMM, shift));
+		emit(sljit_emit_op2(compiler_, SLJIT_ASHR, SLJIT_R0, 0, SLJIT_R0, 0, SLJIT_IMM, shift));
+	}
+	storeSlot(SLJIT_R0, depth, resultWidth);
+}
+
+void OpcodeDispatcher::emitSharedAtomicStore(uint8_t ordering, std::uint32_t width,
+		int valueWidth, std::size_t valueDepth)
+{
+	loadSlot(SLJIT_R1, valueDepth, valueWidth);
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R2, 0, SLJIT_IMM,
+			static_cast<sljit_sw>(width)));
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R3, 0, SLJIT_IMM,
+			static_cast<sljit_sw>(ordering)));
+	emitHelper(SLJIT_ARGS4V(P, W, 32, 32), &wasm_atomic_store);
+	emitPendingTrapCheck();
+}
+
+void OpcodeDispatcher::emitSharedAtomicRmw(uint8_t ordering, std::uint32_t width,
+		std::uint32_t op, int valueWidth, std::size_t valueDepth, std::size_t resultDepth)
+{
+	loadSlot(SLJIT_R1, valueDepth, valueWidth);
+	const std::uint32_t packed = width | (op << 8) | (static_cast<std::uint32_t>(ordering) << 16);
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R2, 0, SLJIT_IMM,
+			static_cast<sljit_sw>(packed)));
+	emitHelper(SLJIT_ARGS3(W, P, W, 32), &sljitAtomicRmw);
+	emitPendingTrapCheck();
+	storeSlot(SLJIT_R0, resultDepth, valueWidth);
+}
+
+void OpcodeDispatcher::emitSharedAtomicCmpxchg(uint8_t ordering, std::uint32_t width,
+		int valueWidth, std::size_t expectedDepth, std::size_t replacementDepth,
+		std::size_t resultDepth)
+{
+	loadSlot(SLJIT_R1, expectedDepth, valueWidth);
+	loadSlot(SLJIT_R2, replacementDepth, valueWidth);
+	const std::uint32_t packed = width | (static_cast<std::uint32_t>(ordering) << 8);
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R3, 0, SLJIT_IMM,
+			static_cast<sljit_sw>(packed)));
+	emitHelper(SLJIT_ARGS4(W, P, W, W, 32), &sljitAtomicCmpxchg);
+	emitPendingTrapCheck();
+	storeSlot(SLJIT_R0, resultDepth, valueWidth);
+}
+
+void OpcodeDispatcher::dispatchGlobalAtomicGet(uint8_t ordering, WASM::GlobalIdx arg)
+{
+	if (!reachable_)
+		return;
+	const WASM::GlobalType type = requireGlobalIndex(arg);
+	const std::uint32_t width = sharedAtomicWidth(type.contentType.opcode);
+	require(width != 0,
+			"the SLJIT backend does not lower shared atomics for reference or v128 globals yet");
+	const int resultWidth = width <= 4 ? 4 : 8;
+	push(resultWidth);
+	if (measureOnly_)
+		return;
+	emitGlobalAtomicAddress(arg);
+	emitSharedAtomicLoad(ordering, width, resultWidth, stackWidths_.size() - 1);
+}
+
+void OpcodeDispatcher::dispatchGlobalAtomicSet(uint8_t ordering, WASM::GlobalIdx arg)
+{
+	if (!reachable_)
+		return;
+	const WASM::GlobalType type = requireGlobalIndex(arg);
+	const std::uint32_t width = sharedAtomicWidth(type.contentType.opcode);
+	require(width != 0,
+			"the SLJIT backend does not lower shared atomics for reference or v128 globals yet");
+	const int resultWidth = width <= 4 ? 4 : 8;
+	require(type.isMutable, "global.atomic.set references an immutable global");
+	requireStack(1);
+	const std::size_t valueDepth = stackWidths_.size() - 1;
+	pop();
+	if (measureOnly_)
+		return;
+	emitGlobalAtomicAddress(arg);
+	emitSharedAtomicStore(ordering, width, resultWidth, valueDepth);
+}
+
+void OpcodeDispatcher::dispatchGlobalAtomicRmwAdd(uint8_t ordering, WASM::GlobalIdx arg)
+{
+	if (!reachable_)
+		return;
+	const WASM::GlobalType type = requireGlobalIndex(arg);
+	const std::uint32_t width = sharedAtomicWidth(type.contentType.opcode);
+	require(width != 0,
+			"the SLJIT backend does not lower shared atomics for reference or v128 globals yet");
+	const int resultWidth = width <= 4 ? 4 : 8;
+	require(type.isMutable, "global.atomic.rmw references an immutable global");
+	requireStack(1);
+	const std::size_t valueDepth = stackWidths_.size() - 1;
+	pop();
+	if (!measureOnly_) {
+		emitGlobalAtomicAddress(arg);
+		emitSharedAtomicRmw(ordering, width, WASM_ATOMIC_ADD, resultWidth, valueDepth, valueDepth);
+	}
+	push(resultWidth);
+}
+
+void OpcodeDispatcher::dispatchGlobalAtomicRmwSub(uint8_t ordering, WASM::GlobalIdx arg)
+{
+	if (!reachable_)
+		return;
+	const WASM::GlobalType type = requireGlobalIndex(arg);
+	const std::uint32_t width = sharedAtomicWidth(type.contentType.opcode);
+	require(width != 0,
+			"the SLJIT backend does not lower shared atomics for reference or v128 globals yet");
+	const int resultWidth = width <= 4 ? 4 : 8;
+	require(type.isMutable, "global.atomic.rmw references an immutable global");
+	requireStack(1);
+	const std::size_t valueDepth = stackWidths_.size() - 1;
+	pop();
+	if (!measureOnly_) {
+		emitGlobalAtomicAddress(arg);
+		emitSharedAtomicRmw(ordering, width, WASM_ATOMIC_SUB, resultWidth, valueDepth, valueDepth);
+	}
+	push(resultWidth);
+}
+
+void OpcodeDispatcher::dispatchGlobalAtomicRmwAnd(uint8_t ordering, WASM::GlobalIdx arg)
+{
+	if (!reachable_)
+		return;
+	const WASM::GlobalType type = requireGlobalIndex(arg);
+	const std::uint32_t width = sharedAtomicWidth(type.contentType.opcode);
+	require(width != 0,
+			"the SLJIT backend does not lower shared atomics for reference or v128 globals yet");
+	const int resultWidth = width <= 4 ? 4 : 8;
+	require(type.isMutable, "global.atomic.rmw references an immutable global");
+	requireStack(1);
+	const std::size_t valueDepth = stackWidths_.size() - 1;
+	pop();
+	if (!measureOnly_) {
+		emitGlobalAtomicAddress(arg);
+		emitSharedAtomicRmw(ordering, width, WASM_ATOMIC_AND, resultWidth, valueDepth, valueDepth);
+	}
+	push(resultWidth);
+}
+
+void OpcodeDispatcher::dispatchGlobalAtomicRmwOr(uint8_t ordering, WASM::GlobalIdx arg)
+{
+	if (!reachable_)
+		return;
+	const WASM::GlobalType type = requireGlobalIndex(arg);
+	const std::uint32_t width = sharedAtomicWidth(type.contentType.opcode);
+	require(width != 0,
+			"the SLJIT backend does not lower shared atomics for reference or v128 globals yet");
+	const int resultWidth = width <= 4 ? 4 : 8;
+	require(type.isMutable, "global.atomic.rmw references an immutable global");
+	requireStack(1);
+	const std::size_t valueDepth = stackWidths_.size() - 1;
+	pop();
+	if (!measureOnly_) {
+		emitGlobalAtomicAddress(arg);
+		emitSharedAtomicRmw(ordering, width, WASM_ATOMIC_OR, resultWidth, valueDepth, valueDepth);
+	}
+	push(resultWidth);
+}
+
+void OpcodeDispatcher::dispatchGlobalAtomicRmwXor(uint8_t ordering, WASM::GlobalIdx arg)
+{
+	if (!reachable_)
+		return;
+	const WASM::GlobalType type = requireGlobalIndex(arg);
+	const std::uint32_t width = sharedAtomicWidth(type.contentType.opcode);
+	require(width != 0,
+			"the SLJIT backend does not lower shared atomics for reference or v128 globals yet");
+	const int resultWidth = width <= 4 ? 4 : 8;
+	require(type.isMutable, "global.atomic.rmw references an immutable global");
+	requireStack(1);
+	const std::size_t valueDepth = stackWidths_.size() - 1;
+	pop();
+	if (!measureOnly_) {
+		emitGlobalAtomicAddress(arg);
+		emitSharedAtomicRmw(ordering, width, WASM_ATOMIC_XOR, resultWidth, valueDepth, valueDepth);
+	}
+	push(resultWidth);
+}
+
+void OpcodeDispatcher::dispatchGlobalAtomicRmwXchg(uint8_t ordering, WASM::GlobalIdx arg)
+{
+	if (!reachable_)
+		return;
+	const WASM::GlobalType type = requireGlobalIndex(arg);
+	const std::uint32_t width = sharedAtomicWidth(type.contentType.opcode);
+	require(width != 0,
+			"the SLJIT backend does not lower shared atomics for reference or v128 globals yet");
+	const int resultWidth = width <= 4 ? 4 : 8;
+	require(type.isMutable, "global.atomic.rmw references an immutable global");
+	requireStack(1);
+	const std::size_t valueDepth = stackWidths_.size() - 1;
+	pop();
+	if (!measureOnly_) {
+		emitGlobalAtomicAddress(arg);
+		emitSharedAtomicRmw(ordering, width, WASM_ATOMIC_XCHG, resultWidth, valueDepth, valueDepth);
+	}
+	push(resultWidth);
+}
+
+void OpcodeDispatcher::dispatchGlobalAtomicRmwCmpxchg(uint8_t ordering, WASM::GlobalIdx arg)
+{
+	if (!reachable_)
+		return;
+	const WASM::GlobalType type = requireGlobalIndex(arg);
+	const std::uint32_t width = sharedAtomicWidth(type.contentType.opcode);
+	require(width != 0,
+			"the SLJIT backend does not lower shared atomics for reference or v128 globals yet");
+	const int resultWidth = width <= 4 ? 4 : 8;
+	require(type.isMutable, "global.atomic.rmw references an immutable global");
+	requireStack(2);
+	const std::size_t replacementDepth = stackWidths_.size() - 1;
+	const std::size_t expectedDepth = stackWidths_.size() - 2;
+	pop();
+	pop();
+	if (!measureOnly_) {
+		emitGlobalAtomicAddress(arg);
+		emitSharedAtomicCmpxchg(ordering, width, resultWidth, expectedDepth, replacementDepth, expectedDepth);
+	}
+	push(resultWidth);
+}
+
+void OpcodeDispatcher::dispatchStructAtomicGet(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2)
+{
+	if (!reachable_)
+		return;
+	const auto fields = module_.typeView(arg1).structFields();
+	require(arg2 < fields.size(), "the struct field index is out of range");
+	const WASM::CanonFieldType& field = fields[arg2];
+	const WASM::CanonStorageType& storage = field.storage;
+	std::uint32_t width = storage.isPacked
+			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
+			: sharedAtomicWidth(storage.value.opcode);
+	require(width != 0,
+			"the SLJIT backend does not lower shared atomics for reference or v128 fields yet");
+	const std::size_t offset = WASM::gcStructFieldOffset(fields, arg2);
+	const int resultWidth = width <= 4 ? 4 : 8;
+	const int valueWidth = width <= 4 ? 4 : 8;
+	requireStack(1);
+	const std::size_t refDepth = stackWidths_.size() - 1;
+	if (!measureOnly_) {
+		emitStructAtomicAddress(refDepth, offset);
+		emitSharedAtomicLoad(ordering, width, resultWidth, refDepth, 0);
+	}
+	stackWidths_.back() = resultWidth;
+}
+
+void OpcodeDispatcher::dispatchStructAtomicGetS(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2)
+{
+	if (!reachable_)
+		return;
+	const auto fields = module_.typeView(arg1).structFields();
+	require(arg2 < fields.size(), "the struct field index is out of range");
+	const WASM::CanonFieldType& field = fields[arg2];
+	const WASM::CanonStorageType& storage = field.storage;
+	std::uint32_t width = storage.isPacked
+			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
+			: sharedAtomicWidth(storage.value.opcode);
+	require(width != 0,
+			"the SLJIT backend does not lower shared atomics for reference or v128 fields yet");
+	const std::size_t offset = WASM::gcStructFieldOffset(fields, arg2);
+	const int resultWidth = width <= 4 ? 4 : 8;
+	const int valueWidth = width <= 4 ? 4 : 8;
+	require(storage.isPacked, "struct.atomic.get_s requires a packed field");
+	requireStack(1);
+	const std::size_t refDepth = stackWidths_.size() - 1;
+	if (!measureOnly_) {
+		emitStructAtomicAddress(refDepth, offset);
+		emitSharedAtomicLoad(ordering, width, resultWidth, refDepth, width * 8);
+	}
+	stackWidths_.back() = resultWidth;
+}
+
+void OpcodeDispatcher::dispatchStructAtomicGetU(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2)
+{
+	if (!reachable_)
+		return;
+	const auto fields = module_.typeView(arg1).structFields();
+	require(arg2 < fields.size(), "the struct field index is out of range");
+	const WASM::CanonFieldType& field = fields[arg2];
+	const WASM::CanonStorageType& storage = field.storage;
+	std::uint32_t width = storage.isPacked
+			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
+			: sharedAtomicWidth(storage.value.opcode);
+	require(width != 0,
+			"the SLJIT backend does not lower shared atomics for reference or v128 fields yet");
+	const std::size_t offset = WASM::gcStructFieldOffset(fields, arg2);
+	const int resultWidth = width <= 4 ? 4 : 8;
+	const int valueWidth = width <= 4 ? 4 : 8;
+	require(storage.isPacked, "struct.atomic.get_u requires a packed field");
+	requireStack(1);
+	const std::size_t refDepth = stackWidths_.size() - 1;
+	if (!measureOnly_) {
+		emitStructAtomicAddress(refDepth, offset);
+		emitSharedAtomicLoad(ordering, width, resultWidth, refDepth, 0);
+	}
+	stackWidths_.back() = resultWidth;
+}
+
+void OpcodeDispatcher::dispatchStructAtomicSet(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2)
+{
+	if (!reachable_)
+		return;
+	const auto fields = module_.typeView(arg1).structFields();
+	require(arg2 < fields.size(), "the struct field index is out of range");
+	const WASM::CanonFieldType& field = fields[arg2];
+	const WASM::CanonStorageType& storage = field.storage;
+	std::uint32_t width = storage.isPacked
+			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
+			: sharedAtomicWidth(storage.value.opcode);
+	require(width != 0,
+			"the SLJIT backend does not lower shared atomics for reference or v128 fields yet");
+	const std::size_t offset = WASM::gcStructFieldOffset(fields, arg2);
+	const int resultWidth = width <= 4 ? 4 : 8;
+	const int valueWidth = width <= 4 ? 4 : 8;
+	require(field.isMutable, "struct.atomic operation on an immutable field");
+	requireStack(2);
+	const std::size_t refDepth = stackWidths_.size() - 2;
+	const std::size_t valueDepth = stackWidths_.size() - 1;
+	pop();
+	pop();
+	if (measureOnly_)
+		return;
+	emitStructAtomicAddress(refDepth, offset);
+	emitSharedAtomicStore(ordering, width, valueWidth, valueDepth);
+}
+
+void OpcodeDispatcher::dispatchStructAtomicRmwAdd(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2)
+{
+	if (!reachable_)
+		return;
+	const auto fields = module_.typeView(arg1).structFields();
+	require(arg2 < fields.size(), "the struct field index is out of range");
+	const WASM::CanonFieldType& field = fields[arg2];
+	const WASM::CanonStorageType& storage = field.storage;
+	std::uint32_t width = storage.isPacked
+			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
+			: sharedAtomicWidth(storage.value.opcode);
+	require(width != 0,
+			"the SLJIT backend does not lower shared atomics for reference or v128 fields yet");
+	const std::size_t offset = WASM::gcStructFieldOffset(fields, arg2);
+	const int resultWidth = width <= 4 ? 4 : 8;
+	const int valueWidth = width <= 4 ? 4 : 8;
+	require(field.isMutable, "struct.atomic operation on an immutable field");
+	requireStack(2);
+	const std::size_t refDepth = stackWidths_.size() - 2;
+	const std::size_t valueDepth = stackWidths_.size() - 1;
+	pop();
+	pop();
+	if (!measureOnly_) {
+		emitStructAtomicAddress(refDepth, offset);
+		emitSharedAtomicRmw(ordering, width, WASM_ATOMIC_ADD, valueWidth, valueDepth, refDepth);
+	}
+	push(resultWidth);
+}
+
+void OpcodeDispatcher::dispatchStructAtomicRmwSub(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2)
+{
+	if (!reachable_)
+		return;
+	const auto fields = module_.typeView(arg1).structFields();
+	require(arg2 < fields.size(), "the struct field index is out of range");
+	const WASM::CanonFieldType& field = fields[arg2];
+	const WASM::CanonStorageType& storage = field.storage;
+	std::uint32_t width = storage.isPacked
+			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
+			: sharedAtomicWidth(storage.value.opcode);
+	require(width != 0,
+			"the SLJIT backend does not lower shared atomics for reference or v128 fields yet");
+	const std::size_t offset = WASM::gcStructFieldOffset(fields, arg2);
+	const int resultWidth = width <= 4 ? 4 : 8;
+	const int valueWidth = width <= 4 ? 4 : 8;
+	require(field.isMutable, "struct.atomic operation on an immutable field");
+	requireStack(2);
+	const std::size_t refDepth = stackWidths_.size() - 2;
+	const std::size_t valueDepth = stackWidths_.size() - 1;
+	pop();
+	pop();
+	if (!measureOnly_) {
+		emitStructAtomicAddress(refDepth, offset);
+		emitSharedAtomicRmw(ordering, width, WASM_ATOMIC_SUB, valueWidth, valueDepth, refDepth);
+	}
+	push(resultWidth);
+}
+
+void OpcodeDispatcher::dispatchStructAtomicRmwAnd(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2)
+{
+	if (!reachable_)
+		return;
+	const auto fields = module_.typeView(arg1).structFields();
+	require(arg2 < fields.size(), "the struct field index is out of range");
+	const WASM::CanonFieldType& field = fields[arg2];
+	const WASM::CanonStorageType& storage = field.storage;
+	std::uint32_t width = storage.isPacked
+			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
+			: sharedAtomicWidth(storage.value.opcode);
+	require(width != 0,
+			"the SLJIT backend does not lower shared atomics for reference or v128 fields yet");
+	const std::size_t offset = WASM::gcStructFieldOffset(fields, arg2);
+	const int resultWidth = width <= 4 ? 4 : 8;
+	const int valueWidth = width <= 4 ? 4 : 8;
+	require(field.isMutable, "struct.atomic operation on an immutable field");
+	requireStack(2);
+	const std::size_t refDepth = stackWidths_.size() - 2;
+	const std::size_t valueDepth = stackWidths_.size() - 1;
+	pop();
+	pop();
+	if (!measureOnly_) {
+		emitStructAtomicAddress(refDepth, offset);
+		emitSharedAtomicRmw(ordering, width, WASM_ATOMIC_AND, valueWidth, valueDepth, refDepth);
+	}
+	push(resultWidth);
+}
+
+void OpcodeDispatcher::dispatchStructAtomicRmwOr(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2)
+{
+	if (!reachable_)
+		return;
+	const auto fields = module_.typeView(arg1).structFields();
+	require(arg2 < fields.size(), "the struct field index is out of range");
+	const WASM::CanonFieldType& field = fields[arg2];
+	const WASM::CanonStorageType& storage = field.storage;
+	std::uint32_t width = storage.isPacked
+			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
+			: sharedAtomicWidth(storage.value.opcode);
+	require(width != 0,
+			"the SLJIT backend does not lower shared atomics for reference or v128 fields yet");
+	const std::size_t offset = WASM::gcStructFieldOffset(fields, arg2);
+	const int resultWidth = width <= 4 ? 4 : 8;
+	const int valueWidth = width <= 4 ? 4 : 8;
+	require(field.isMutable, "struct.atomic operation on an immutable field");
+	requireStack(2);
+	const std::size_t refDepth = stackWidths_.size() - 2;
+	const std::size_t valueDepth = stackWidths_.size() - 1;
+	pop();
+	pop();
+	if (!measureOnly_) {
+		emitStructAtomicAddress(refDepth, offset);
+		emitSharedAtomicRmw(ordering, width, WASM_ATOMIC_OR, valueWidth, valueDepth, refDepth);
+	}
+	push(resultWidth);
+}
+
+void OpcodeDispatcher::dispatchStructAtomicRmwXor(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2)
+{
+	if (!reachable_)
+		return;
+	const auto fields = module_.typeView(arg1).structFields();
+	require(arg2 < fields.size(), "the struct field index is out of range");
+	const WASM::CanonFieldType& field = fields[arg2];
+	const WASM::CanonStorageType& storage = field.storage;
+	std::uint32_t width = storage.isPacked
+			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
+			: sharedAtomicWidth(storage.value.opcode);
+	require(width != 0,
+			"the SLJIT backend does not lower shared atomics for reference or v128 fields yet");
+	const std::size_t offset = WASM::gcStructFieldOffset(fields, arg2);
+	const int resultWidth = width <= 4 ? 4 : 8;
+	const int valueWidth = width <= 4 ? 4 : 8;
+	require(field.isMutable, "struct.atomic operation on an immutable field");
+	requireStack(2);
+	const std::size_t refDepth = stackWidths_.size() - 2;
+	const std::size_t valueDepth = stackWidths_.size() - 1;
+	pop();
+	pop();
+	if (!measureOnly_) {
+		emitStructAtomicAddress(refDepth, offset);
+		emitSharedAtomicRmw(ordering, width, WASM_ATOMIC_XOR, valueWidth, valueDepth, refDepth);
+	}
+	push(resultWidth);
+}
+
+void OpcodeDispatcher::dispatchStructAtomicRmwXchg(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2)
+{
+	if (!reachable_)
+		return;
+	const auto fields = module_.typeView(arg1).structFields();
+	require(arg2 < fields.size(), "the struct field index is out of range");
+	const WASM::CanonFieldType& field = fields[arg2];
+	const WASM::CanonStorageType& storage = field.storage;
+	std::uint32_t width = storage.isPacked
+			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
+			: sharedAtomicWidth(storage.value.opcode);
+	require(width != 0,
+			"the SLJIT backend does not lower shared atomics for reference or v128 fields yet");
+	const std::size_t offset = WASM::gcStructFieldOffset(fields, arg2);
+	const int resultWidth = width <= 4 ? 4 : 8;
+	const int valueWidth = width <= 4 ? 4 : 8;
+	require(field.isMutable, "struct.atomic operation on an immutable field");
+	requireStack(2);
+	const std::size_t refDepth = stackWidths_.size() - 2;
+	const std::size_t valueDepth = stackWidths_.size() - 1;
+	pop();
+	pop();
+	if (!measureOnly_) {
+		emitStructAtomicAddress(refDepth, offset);
+		emitSharedAtomicRmw(ordering, width, WASM_ATOMIC_XCHG, valueWidth, valueDepth, refDepth);
+	}
+	push(resultWidth);
+}
+
+void OpcodeDispatcher::dispatchStructAtomicRmwCmpxchg(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2)
+{
+	if (!reachable_)
+		return;
+	const auto fields = module_.typeView(arg1).structFields();
+	require(arg2 < fields.size(), "the struct field index is out of range");
+	const WASM::CanonFieldType& field = fields[arg2];
+	const WASM::CanonStorageType& storage = field.storage;
+	std::uint32_t width = storage.isPacked
+			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
+			: sharedAtomicWidth(storage.value.opcode);
+	require(width != 0,
+			"the SLJIT backend does not lower shared atomics for reference or v128 fields yet");
+	const std::size_t offset = WASM::gcStructFieldOffset(fields, arg2);
+	const int resultWidth = width <= 4 ? 4 : 8;
+	const int valueWidth = width <= 4 ? 4 : 8;
+	require(field.isMutable, "struct.atomic operation on an immutable field");
+	requireStack(3);
+	const std::size_t refDepth = stackWidths_.size() - 3;
+	const std::size_t expectedDepth = stackWidths_.size() - 2;
+	const std::size_t replacementDepth = stackWidths_.size() - 1;
+	pop();
+	pop();
+	pop();
+	if (!measureOnly_) {
+		emitStructAtomicAddress(refDepth, offset);
+		emitSharedAtomicCmpxchg(ordering, width, valueWidth, expectedDepth, replacementDepth, refDepth);
+	}
+	push(resultWidth);
+}
+
+void OpcodeDispatcher::dispatchArrayAtomicGet(uint8_t ordering, WASM::TypeIdx arg)
+{
+	if (!reachable_)
+		return;
+	const WASM::CoreTypeView view = module_.typeView(arg);
+	require(view.kind() == WASM::CanonTypeKind::Array, "an array atomic requires an array type");
+	const WASM::CanonFieldType& element = view.arrayElement();
+	const WASM::CanonStorageType& storage = element.storage;
+	std::uint32_t width = storage.isPacked
+			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
+			: sharedAtomicWidth(storage.value.opcode);
+	require(width != 0,
+			"the SLJIT backend does not lower shared atomics for reference or v128 elements yet");
+	const std::size_t lengthOffset = WASM::GcHeader::kArrayLengthOffset;
+	const std::size_t dataOffset = WASM::gcArrayDataOffset(storage);
+	const std::uint32_t elementBytes = WASM::gcStorageBytes(storage);
+	const int resultWidth = width <= 4 ? 4 : 8;
+	const int valueWidth = width <= 4 ? 4 : 8;
+	requireStack(2);
+	const std::size_t refDepth = stackWidths_.size() - 2;
+	const std::size_t indexDepth = stackWidths_.size() - 1;
+	if (!measureOnly_) {
+		emitArrayAtomicAddress(refDepth, indexDepth, lengthOffset, dataOffset, elementBytes);
+		emitSharedAtomicLoad(ordering, width, resultWidth, refDepth, 0);
+	}
+	stackWidths_.resize(refDepth);
+	push(resultWidth);
+}
+
+void OpcodeDispatcher::dispatchArrayAtomicGetS(uint8_t ordering, WASM::TypeIdx arg)
+{
+	if (!reachable_)
+		return;
+	const WASM::CoreTypeView view = module_.typeView(arg);
+	require(view.kind() == WASM::CanonTypeKind::Array, "an array atomic requires an array type");
+	const WASM::CanonFieldType& element = view.arrayElement();
+	const WASM::CanonStorageType& storage = element.storage;
+	std::uint32_t width = storage.isPacked
+			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
+			: sharedAtomicWidth(storage.value.opcode);
+	require(width != 0,
+			"the SLJIT backend does not lower shared atomics for reference or v128 elements yet");
+	const std::size_t lengthOffset = WASM::GcHeader::kArrayLengthOffset;
+	const std::size_t dataOffset = WASM::gcArrayDataOffset(storage);
+	const std::uint32_t elementBytes = WASM::gcStorageBytes(storage);
+	const int resultWidth = width <= 4 ? 4 : 8;
+	const int valueWidth = width <= 4 ? 4 : 8;
+	require(storage.isPacked, "array.atomic.get_s requires a packed element");
+	requireStack(2);
+	const std::size_t refDepth = stackWidths_.size() - 2;
+	const std::size_t indexDepth = stackWidths_.size() - 1;
+	if (!measureOnly_) {
+		emitArrayAtomicAddress(refDepth, indexDepth, lengthOffset, dataOffset, elementBytes);
+		emitSharedAtomicLoad(ordering, width, resultWidth, refDepth, width * 8);
+	}
+	stackWidths_.resize(refDepth);
+	push(resultWidth);
+}
+
+void OpcodeDispatcher::dispatchArrayAtomicGetU(uint8_t ordering, WASM::TypeIdx arg)
+{
+	if (!reachable_)
+		return;
+	const WASM::CoreTypeView view = module_.typeView(arg);
+	require(view.kind() == WASM::CanonTypeKind::Array, "an array atomic requires an array type");
+	const WASM::CanonFieldType& element = view.arrayElement();
+	const WASM::CanonStorageType& storage = element.storage;
+	std::uint32_t width = storage.isPacked
+			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
+			: sharedAtomicWidth(storage.value.opcode);
+	require(width != 0,
+			"the SLJIT backend does not lower shared atomics for reference or v128 elements yet");
+	const std::size_t lengthOffset = WASM::GcHeader::kArrayLengthOffset;
+	const std::size_t dataOffset = WASM::gcArrayDataOffset(storage);
+	const std::uint32_t elementBytes = WASM::gcStorageBytes(storage);
+	const int resultWidth = width <= 4 ? 4 : 8;
+	const int valueWidth = width <= 4 ? 4 : 8;
+	require(storage.isPacked, "array.atomic.get_u requires a packed element");
+	requireStack(2);
+	const std::size_t refDepth = stackWidths_.size() - 2;
+	const std::size_t indexDepth = stackWidths_.size() - 1;
+	if (!measureOnly_) {
+		emitArrayAtomicAddress(refDepth, indexDepth, lengthOffset, dataOffset, elementBytes);
+		emitSharedAtomicLoad(ordering, width, resultWidth, refDepth, 0);
+	}
+	stackWidths_.resize(refDepth);
+	push(resultWidth);
+}
+
+void OpcodeDispatcher::dispatchArrayAtomicSet(uint8_t ordering, WASM::TypeIdx arg)
+{
+	if (!reachable_)
+		return;
+	const WASM::CoreTypeView view = module_.typeView(arg);
+	require(view.kind() == WASM::CanonTypeKind::Array, "an array atomic requires an array type");
+	const WASM::CanonFieldType& element = view.arrayElement();
+	const WASM::CanonStorageType& storage = element.storage;
+	std::uint32_t width = storage.isPacked
+			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
+			: sharedAtomicWidth(storage.value.opcode);
+	require(width != 0,
+			"the SLJIT backend does not lower shared atomics for reference or v128 elements yet");
+	const std::size_t lengthOffset = WASM::GcHeader::kArrayLengthOffset;
+	const std::size_t dataOffset = WASM::gcArrayDataOffset(storage);
+	const std::uint32_t elementBytes = WASM::gcStorageBytes(storage);
+	const int resultWidth = width <= 4 ? 4 : 8;
+	const int valueWidth = width <= 4 ? 4 : 8;
+	require(element.isMutable, "array.atomic operation on an immutable array");
+	requireStack(3);
+	const std::size_t refDepth = stackWidths_.size() - 3;
+	const std::size_t indexDepth = stackWidths_.size() - 2;
+	const std::size_t valueDepth = stackWidths_.size() - 1;
+	pop();
+	pop();
+	pop();
+	if (measureOnly_)
+		return;
+	emitArrayAtomicAddress(refDepth, indexDepth, lengthOffset, dataOffset, elementBytes);
+	emitSharedAtomicStore(ordering, width, valueWidth, valueDepth);
+}
+
+void OpcodeDispatcher::dispatchArrayAtomicRmwAdd(uint8_t ordering, WASM::TypeIdx arg)
+{
+	if (!reachable_)
+		return;
+	const WASM::CoreTypeView view = module_.typeView(arg);
+	require(view.kind() == WASM::CanonTypeKind::Array, "an array atomic requires an array type");
+	const WASM::CanonFieldType& element = view.arrayElement();
+	const WASM::CanonStorageType& storage = element.storage;
+	std::uint32_t width = storage.isPacked
+			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
+			: sharedAtomicWidth(storage.value.opcode);
+	require(width != 0,
+			"the SLJIT backend does not lower shared atomics for reference or v128 elements yet");
+	const std::size_t lengthOffset = WASM::GcHeader::kArrayLengthOffset;
+	const std::size_t dataOffset = WASM::gcArrayDataOffset(storage);
+	const std::uint32_t elementBytes = WASM::gcStorageBytes(storage);
+	const int resultWidth = width <= 4 ? 4 : 8;
+	const int valueWidth = width <= 4 ? 4 : 8;
+	require(element.isMutable, "array.atomic operation on an immutable array");
+	requireStack(3);
+	const std::size_t refDepth = stackWidths_.size() - 3;
+	const std::size_t indexDepth = stackWidths_.size() - 2;
+	const std::size_t valueDepth = stackWidths_.size() - 1;
+	pop();
+	pop();
+	pop();
+	if (!measureOnly_) {
+		emitArrayAtomicAddress(refDepth, indexDepth, lengthOffset, dataOffset, elementBytes);
+		emitSharedAtomicRmw(ordering, width, WASM_ATOMIC_ADD, valueWidth, valueDepth, refDepth);
+	}
+	push(resultWidth);
+}
+
+void OpcodeDispatcher::dispatchArrayAtomicRmwSub(uint8_t ordering, WASM::TypeIdx arg)
+{
+	if (!reachable_)
+		return;
+	const WASM::CoreTypeView view = module_.typeView(arg);
+	require(view.kind() == WASM::CanonTypeKind::Array, "an array atomic requires an array type");
+	const WASM::CanonFieldType& element = view.arrayElement();
+	const WASM::CanonStorageType& storage = element.storage;
+	std::uint32_t width = storage.isPacked
+			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
+			: sharedAtomicWidth(storage.value.opcode);
+	require(width != 0,
+			"the SLJIT backend does not lower shared atomics for reference or v128 elements yet");
+	const std::size_t lengthOffset = WASM::GcHeader::kArrayLengthOffset;
+	const std::size_t dataOffset = WASM::gcArrayDataOffset(storage);
+	const std::uint32_t elementBytes = WASM::gcStorageBytes(storage);
+	const int resultWidth = width <= 4 ? 4 : 8;
+	const int valueWidth = width <= 4 ? 4 : 8;
+	require(element.isMutable, "array.atomic operation on an immutable array");
+	requireStack(3);
+	const std::size_t refDepth = stackWidths_.size() - 3;
+	const std::size_t indexDepth = stackWidths_.size() - 2;
+	const std::size_t valueDepth = stackWidths_.size() - 1;
+	pop();
+	pop();
+	pop();
+	if (!measureOnly_) {
+		emitArrayAtomicAddress(refDepth, indexDepth, lengthOffset, dataOffset, elementBytes);
+		emitSharedAtomicRmw(ordering, width, WASM_ATOMIC_SUB, valueWidth, valueDepth, refDepth);
+	}
+	push(resultWidth);
+}
+
+void OpcodeDispatcher::dispatchArrayAtomicRmwAnd(uint8_t ordering, WASM::TypeIdx arg)
+{
+	if (!reachable_)
+		return;
+	const WASM::CoreTypeView view = module_.typeView(arg);
+	require(view.kind() == WASM::CanonTypeKind::Array, "an array atomic requires an array type");
+	const WASM::CanonFieldType& element = view.arrayElement();
+	const WASM::CanonStorageType& storage = element.storage;
+	std::uint32_t width = storage.isPacked
+			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
+			: sharedAtomicWidth(storage.value.opcode);
+	require(width != 0,
+			"the SLJIT backend does not lower shared atomics for reference or v128 elements yet");
+	const std::size_t lengthOffset = WASM::GcHeader::kArrayLengthOffset;
+	const std::size_t dataOffset = WASM::gcArrayDataOffset(storage);
+	const std::uint32_t elementBytes = WASM::gcStorageBytes(storage);
+	const int resultWidth = width <= 4 ? 4 : 8;
+	const int valueWidth = width <= 4 ? 4 : 8;
+	require(element.isMutable, "array.atomic operation on an immutable array");
+	requireStack(3);
+	const std::size_t refDepth = stackWidths_.size() - 3;
+	const std::size_t indexDepth = stackWidths_.size() - 2;
+	const std::size_t valueDepth = stackWidths_.size() - 1;
+	pop();
+	pop();
+	pop();
+	if (!measureOnly_) {
+		emitArrayAtomicAddress(refDepth, indexDepth, lengthOffset, dataOffset, elementBytes);
+		emitSharedAtomicRmw(ordering, width, WASM_ATOMIC_AND, valueWidth, valueDepth, refDepth);
+	}
+	push(resultWidth);
+}
+
+void OpcodeDispatcher::dispatchArrayAtomicRmwOr(uint8_t ordering, WASM::TypeIdx arg)
+{
+	if (!reachable_)
+		return;
+	const WASM::CoreTypeView view = module_.typeView(arg);
+	require(view.kind() == WASM::CanonTypeKind::Array, "an array atomic requires an array type");
+	const WASM::CanonFieldType& element = view.arrayElement();
+	const WASM::CanonStorageType& storage = element.storage;
+	std::uint32_t width = storage.isPacked
+			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
+			: sharedAtomicWidth(storage.value.opcode);
+	require(width != 0,
+			"the SLJIT backend does not lower shared atomics for reference or v128 elements yet");
+	const std::size_t lengthOffset = WASM::GcHeader::kArrayLengthOffset;
+	const std::size_t dataOffset = WASM::gcArrayDataOffset(storage);
+	const std::uint32_t elementBytes = WASM::gcStorageBytes(storage);
+	const int resultWidth = width <= 4 ? 4 : 8;
+	const int valueWidth = width <= 4 ? 4 : 8;
+	require(element.isMutable, "array.atomic operation on an immutable array");
+	requireStack(3);
+	const std::size_t refDepth = stackWidths_.size() - 3;
+	const std::size_t indexDepth = stackWidths_.size() - 2;
+	const std::size_t valueDepth = stackWidths_.size() - 1;
+	pop();
+	pop();
+	pop();
+	if (!measureOnly_) {
+		emitArrayAtomicAddress(refDepth, indexDepth, lengthOffset, dataOffset, elementBytes);
+		emitSharedAtomicRmw(ordering, width, WASM_ATOMIC_OR, valueWidth, valueDepth, refDepth);
+	}
+	push(resultWidth);
+}
+
+void OpcodeDispatcher::dispatchArrayAtomicRmwXor(uint8_t ordering, WASM::TypeIdx arg)
+{
+	if (!reachable_)
+		return;
+	const WASM::CoreTypeView view = module_.typeView(arg);
+	require(view.kind() == WASM::CanonTypeKind::Array, "an array atomic requires an array type");
+	const WASM::CanonFieldType& element = view.arrayElement();
+	const WASM::CanonStorageType& storage = element.storage;
+	std::uint32_t width = storage.isPacked
+			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
+			: sharedAtomicWidth(storage.value.opcode);
+	require(width != 0,
+			"the SLJIT backend does not lower shared atomics for reference or v128 elements yet");
+	const std::size_t lengthOffset = WASM::GcHeader::kArrayLengthOffset;
+	const std::size_t dataOffset = WASM::gcArrayDataOffset(storage);
+	const std::uint32_t elementBytes = WASM::gcStorageBytes(storage);
+	const int resultWidth = width <= 4 ? 4 : 8;
+	const int valueWidth = width <= 4 ? 4 : 8;
+	require(element.isMutable, "array.atomic operation on an immutable array");
+	requireStack(3);
+	const std::size_t refDepth = stackWidths_.size() - 3;
+	const std::size_t indexDepth = stackWidths_.size() - 2;
+	const std::size_t valueDepth = stackWidths_.size() - 1;
+	pop();
+	pop();
+	pop();
+	if (!measureOnly_) {
+		emitArrayAtomicAddress(refDepth, indexDepth, lengthOffset, dataOffset, elementBytes);
+		emitSharedAtomicRmw(ordering, width, WASM_ATOMIC_XOR, valueWidth, valueDepth, refDepth);
+	}
+	push(resultWidth);
+}
+
+void OpcodeDispatcher::dispatchArrayAtomicRmwXchg(uint8_t ordering, WASM::TypeIdx arg)
+{
+	if (!reachable_)
+		return;
+	const WASM::CoreTypeView view = module_.typeView(arg);
+	require(view.kind() == WASM::CanonTypeKind::Array, "an array atomic requires an array type");
+	const WASM::CanonFieldType& element = view.arrayElement();
+	const WASM::CanonStorageType& storage = element.storage;
+	std::uint32_t width = storage.isPacked
+			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
+			: sharedAtomicWidth(storage.value.opcode);
+	require(width != 0,
+			"the SLJIT backend does not lower shared atomics for reference or v128 elements yet");
+	const std::size_t lengthOffset = WASM::GcHeader::kArrayLengthOffset;
+	const std::size_t dataOffset = WASM::gcArrayDataOffset(storage);
+	const std::uint32_t elementBytes = WASM::gcStorageBytes(storage);
+	const int resultWidth = width <= 4 ? 4 : 8;
+	const int valueWidth = width <= 4 ? 4 : 8;
+	require(element.isMutable, "array.atomic operation on an immutable array");
+	requireStack(3);
+	const std::size_t refDepth = stackWidths_.size() - 3;
+	const std::size_t indexDepth = stackWidths_.size() - 2;
+	const std::size_t valueDepth = stackWidths_.size() - 1;
+	pop();
+	pop();
+	pop();
+	if (!measureOnly_) {
+		emitArrayAtomicAddress(refDepth, indexDepth, lengthOffset, dataOffset, elementBytes);
+		emitSharedAtomicRmw(ordering, width, WASM_ATOMIC_XCHG, valueWidth, valueDepth, refDepth);
+	}
+	push(resultWidth);
+}
+
+void OpcodeDispatcher::dispatchArrayAtomicRmwCmpxchg(uint8_t ordering, WASM::TypeIdx arg)
+{
+	if (!reachable_)
+		return;
+	const WASM::CoreTypeView view = module_.typeView(arg);
+	require(view.kind() == WASM::CanonTypeKind::Array, "an array atomic requires an array type");
+	const WASM::CanonFieldType& element = view.arrayElement();
+	const WASM::CanonStorageType& storage = element.storage;
+	std::uint32_t width = storage.isPacked
+			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
+			: sharedAtomicWidth(storage.value.opcode);
+	require(width != 0,
+			"the SLJIT backend does not lower shared atomics for reference or v128 elements yet");
+	const std::size_t lengthOffset = WASM::GcHeader::kArrayLengthOffset;
+	const std::size_t dataOffset = WASM::gcArrayDataOffset(storage);
+	const std::uint32_t elementBytes = WASM::gcStorageBytes(storage);
+	const int resultWidth = width <= 4 ? 4 : 8;
+	const int valueWidth = width <= 4 ? 4 : 8;
+	require(element.isMutable, "array.atomic operation on an immutable array");
+	requireStack(4);
+	const std::size_t refDepth = stackWidths_.size() - 4;
+	const std::size_t indexDepth = stackWidths_.size() - 3;
+	const std::size_t expectedDepth = stackWidths_.size() - 2;
+	const std::size_t replacementDepth = stackWidths_.size() - 1;
+	pop();
+	pop();
+	pop();
+	pop();
+	if (!measureOnly_) {
+		emitArrayAtomicAddress(refDepth, indexDepth, lengthOffset, dataOffset, elementBytes);
+		emitSharedAtomicCmpxchg(ordering, width, valueWidth, expectedDepth, replacementDepth, refDepth);
+	}
+	push(resultWidth);
+}
+
 void OpcodeDispatcher::dispatchI32Load(WASM::MemArg arg)
 { emitMemoryLoad(arg, 4, SLJIT_MOV_U32, 4); }
 void OpcodeDispatcher::dispatchI32Load8S(WASM::MemArg arg)

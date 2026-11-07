@@ -10,7 +10,7 @@
 
   (func $gen (type $ft)
     (block $caught (result i32)
-      (try_table (catch $abort $caught)
+      (try_table (result i32) (catch $abort $caught)
         i32.const 7
         suspend $yield
         drop

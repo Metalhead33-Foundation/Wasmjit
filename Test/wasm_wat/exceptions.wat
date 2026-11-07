@@ -6,7 +6,7 @@
   ;; Catches the payload and returns payload + 1.
   (func (export "catch") (param i32) (result i32)
     (block $h (result i32)
-      (try_table (catch $e $h)
+      (try_table (result i32) (catch $e $h)
         (throw $e (local.get 0))
       )
     )

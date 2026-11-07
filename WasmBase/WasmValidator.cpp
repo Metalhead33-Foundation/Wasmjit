@@ -1923,7 +1923,11 @@ void Validator::dispatchThrow(TagIdx arg)
 
 void Validator::dispatchThrowRef()
 {
-	popExpect(ValueTypeCode::ExnRef);
+	// The operand is `(ref null exn)`, which the type system spells as a
+	// `Ref`/`RefNull` with the `exn` heap type -- not the bare `ExnRef` code.
+	const auto actual = popAny();
+	if (actual && !refSubtype(*actual, ValueType{ValueTypeCode::ExnRef, -1}))
+		fail("type mismatch: throw_ref operand is not an exnref");
 	setUnreachable();
 }
 
@@ -2376,11 +2380,10 @@ void Validator::dispatchTryTable(const BlockType& blockType, std::vector<CatchCl
 		}
 	}
 	beginBlock(blockType, false, false);
-	// A catch injects its payload into an *outer* label, which this linear
-	// stack does not model; keep immediate/index checks for the rest of the
-	// body but stop trusting the operand stack when there are catches.
-	if (!catches.empty())
-		typeTainted = true;
+	// A catch payload is checked against the outer label's types above; it does
+	// not flow through the linear operand stack, so the body keeps its normal
+	// stack typing. (Tainting the rest of the module here hid invalid modules
+	// that left extra values at a block end -- V-1.)
 }
 
 void Validator::dispatchSelectT(std::vector<ValueType>&& types)

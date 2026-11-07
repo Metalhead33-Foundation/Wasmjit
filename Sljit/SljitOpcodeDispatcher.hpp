@@ -545,6 +545,38 @@ protected:
 	void dispatchTableCopy(WASM::TableIdx arg1, WASM::TableIdx arg2) override; //!< `table.copy`.
 	void dispatchTableSize(WASM::TableIdx arg) override; //!< `table.size`.
 
+	void dispatchGlobalAtomicGet(uint8_t ordering, WASM::GlobalIdx arg) override;
+	void dispatchGlobalAtomicSet(uint8_t ordering, WASM::GlobalIdx arg) override;
+	void dispatchGlobalAtomicRmwAdd(uint8_t ordering, WASM::GlobalIdx arg) override;
+	void dispatchGlobalAtomicRmwSub(uint8_t ordering, WASM::GlobalIdx arg) override;
+	void dispatchGlobalAtomicRmwAnd(uint8_t ordering, WASM::GlobalIdx arg) override;
+	void dispatchGlobalAtomicRmwOr(uint8_t ordering, WASM::GlobalIdx arg) override;
+	void dispatchGlobalAtomicRmwXor(uint8_t ordering, WASM::GlobalIdx arg) override;
+	void dispatchGlobalAtomicRmwXchg(uint8_t ordering, WASM::GlobalIdx arg) override;
+	void dispatchGlobalAtomicRmwCmpxchg(uint8_t ordering, WASM::GlobalIdx arg) override;
+	void dispatchStructAtomicGet(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override;
+	void dispatchStructAtomicGetS(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override;
+	void dispatchStructAtomicGetU(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override;
+	void dispatchStructAtomicSet(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override;
+	void dispatchStructAtomicRmwAdd(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override;
+	void dispatchStructAtomicRmwSub(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override;
+	void dispatchStructAtomicRmwAnd(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override;
+	void dispatchStructAtomicRmwOr(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override;
+	void dispatchStructAtomicRmwXor(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override;
+	void dispatchStructAtomicRmwXchg(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override;
+	void dispatchStructAtomicRmwCmpxchg(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override;
+	void dispatchArrayAtomicGet(uint8_t ordering, WASM::TypeIdx arg) override;
+	void dispatchArrayAtomicGetS(uint8_t ordering, WASM::TypeIdx arg) override;
+	void dispatchArrayAtomicGetU(uint8_t ordering, WASM::TypeIdx arg) override;
+	void dispatchArrayAtomicSet(uint8_t ordering, WASM::TypeIdx arg) override;
+	void dispatchArrayAtomicRmwAdd(uint8_t ordering, WASM::TypeIdx arg) override;
+	void dispatchArrayAtomicRmwSub(uint8_t ordering, WASM::TypeIdx arg) override;
+	void dispatchArrayAtomicRmwAnd(uint8_t ordering, WASM::TypeIdx arg) override;
+	void dispatchArrayAtomicRmwOr(uint8_t ordering, WASM::TypeIdx arg) override;
+	void dispatchArrayAtomicRmwXor(uint8_t ordering, WASM::TypeIdx arg) override;
+	void dispatchArrayAtomicRmwXchg(uint8_t ordering, WASM::TypeIdx arg) override;
+	void dispatchArrayAtomicRmwCmpxchg(uint8_t ordering, WASM::TypeIdx arg) override;
+
 	void dispatchI32AtomicLoad(WASM::MemArg arg) override; //!< Atomic load (4 byte(s), 4-byte value).
 	void dispatchI64AtomicLoad(WASM::MemArg arg) override; //!< Atomic load (8 byte(s), 8-byte value).
 	void dispatchI32AtomicLoad8U(WASM::MemArg arg) override; //!< Atomic load (1 byte(s), 4-byte value).
@@ -1156,6 +1188,69 @@ private:
 	 * \param valueWidth Width of the expected operand (4 or 8).
 	 */
 	void emitAtomicWait(const WASM::MemArg& arg, std::uint32_t width, int valueWidth);
+	/*!
+	 * \brief Loads a global's Value cell address into R0.
+	 * \param arg Global index.
+	 */
+	void emitGlobalAtomicAddress(WASM::GlobalIdx arg);
+	/*!
+	 * \brief Loads a struct field's address into R0, trapping on null.
+	 * \param refDepth Operand-stack depth of the struct reference.
+	 * \param fieldOffset Byte offset of the field in the object.
+	 */
+	void emitStructAtomicAddress(std::size_t refDepth, std::size_t fieldOffset);
+	/*!
+	 * \brief Loads an array element's address into R0, trapping on null/bounds.
+	 * \param refDepth Operand-stack depth of the array reference.
+	 * \param indexDepth Operand-stack depth of the index.
+	 * \param lengthOffset Byte offset of the length word in the header.
+	 * \param dataOffset Byte offset of element 0.
+	 * \param elementBytes Size of one element in bytes.
+	 */
+	void emitArrayAtomicAddress(std::size_t refDepth, std::size_t indexDepth,
+			std::size_t lengthOffset, std::size_t dataOffset, std::uint32_t elementBytes);
+	/*!
+	 * \brief Calls the atomic-load helper with the address in R0.
+	 * \param ordering Acquire-release ordering byte.
+	 * \param width Access width in bytes.
+	 * \param resultWidth Width of the result slot.
+	 * \param depth Operand-stack depth receiving the result.
+	 * \param signBits Sign-extend from this bit width (8 or 16), or 0 to leave the
+	 *        helper's zero extension in place.
+	 */
+	void emitSharedAtomicLoad(uint8_t ordering, std::uint32_t width, int resultWidth,
+			std::size_t depth, int signBits = 0);
+	/*!
+	 * \brief Calls the atomic-store helper with the address in R0.
+	 * \param ordering Acquire-release ordering byte.
+	 * \param width Access width in bytes.
+	 * \param valueWidth Width of the stored operand.
+	 * \param valueDepth Operand-stack depth of the value.
+	 */
+	void emitSharedAtomicStore(uint8_t ordering, std::uint32_t width, int valueWidth,
+			std::size_t valueDepth);
+	/*!
+	 * \brief Calls the atomic RMW helper with the address in R0.
+	 * \param ordering Acquire-release ordering byte.
+	 * \param width Access width in bytes.
+	 * \param op The `WASM_ATOMIC_*` selector.
+	 * \param valueWidth Width of the operand and the result.
+	 * \param valueDepth Operand-stack depth of the operand.
+	 * \param resultDepth Operand-stack depth receiving the old value.
+	 */
+	void emitSharedAtomicRmw(uint8_t ordering, std::uint32_t width, std::uint32_t op,
+			int valueWidth, std::size_t valueDepth, std::size_t resultDepth);
+	/*!
+	 * \brief Calls the atomic compare-exchange helper with the address in R0.
+	 * \param ordering Acquire-release ordering byte.
+	 * \param width Access width in bytes.
+	 * \param valueWidth Width of the operands and the result.
+	 * \param expectedDepth Operand-stack depth of the expected value.
+	 * \param replacementDepth Operand-stack depth of the replacement.
+	 * \param resultDepth Operand-stack depth receiving the observed value.
+	 */
+	void emitSharedAtomicCmpxchg(uint8_t ordering, std::uint32_t width, int valueWidth,
+			std::size_t expectedDepth, std::size_t replacementDepth, std::size_t resultDepth);
 	/*!
 	 * \brief Validates a global index and returns its type.
 	 * \param index Global index.

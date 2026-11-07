@@ -108,6 +108,18 @@ struct ExceptionPayloadLayout {
 //! Computes the payload layout of a tag's parameter list.
 //! \param payload The tag's function type; its parameters are the payload.
 //! \return The canonical field layout.
+//! Width of a shared-atomic numeric slot, or 0 for a type this backend refuses.
+uint32_t sharedAtomicNumericWidth(WASM::ValueTypeCode code) noexcept
+{
+	switch (code) {
+	case WASM::ValueTypeCode::I32:
+	case WASM::ValueTypeCode::F32: return 4;
+	case WASM::ValueTypeCode::I64:
+	case WASM::ValueTypeCode::F64: return 8;
+	default: return 0;
+	}
+}
+
 ExceptionPayloadLayout exceptionPayloadLayout(const WASM::FuncType& payload)
 {
 	ExceptionPayloadLayout layout;
@@ -1253,17 +1265,12 @@ protected:
 					|| clause.kind == WASM::CatchKind::CatchAllRef;
 			const bool carryExn = clause.kind == WASM::CatchKind::CatchRef
 					|| clause.kind == WASM::CatchKind::CatchAllRef;
-			if (carryExn)
-				throw std::runtime_error(
-						"AsmJit does not lower catch_ref yet: a structured block carries at most one result");
 			const std::size_t payloadCount = catchAll
 					? 0u : tagPayloadType(clause.tagIdx).params.size();
-			if (payloadCount > 1)
-				throw std::runtime_error(
-						"AsmJit catches at most one payload value: a structured block carries at most one result");
+			const std::size_t carried = payloadCount + (carryExn ? 1u : 0u);
 			const std::size_t targetValues =
 					target.kind == ControlKind::Loop ? 0u : target.resultCount;
-			if (targetValues != payloadCount)
+			if (targetValues != carried)
 				throw std::runtime_error("AsmJit try_table catch arity does not match its target label");
 		}
 	}
@@ -1412,8 +1419,8 @@ protected:
 		}
 		checkError(compiler.bind(frame.end), "AsmJit structured block end binding failed");
 		values.resize(frame.stackHeight);
-		if (frame.resultCount != 0)
-			values.push_back(frame.result);
+		for (const asmjit::x86::Gp& result : frame.results)
+			values.push_back(result);
 	}
 
 	void dispatchBrIf(WASM::LabelIdx depth) override
@@ -1446,7 +1453,10 @@ protected:
 			auto skip = compiler.new_label();
 			checkError(compiler.test(condition, condition), "AsmJit br_if condition test failed");
 			checkError(compiler.jz(skip), "AsmJit br_if conditional skip emission failed");
-			checkError(compiler.mov(target.result, values.back()), "AsmJit br_if result transfer failed");
+			const size_t first = values.size() - branchValues;
+			for (size_t i = 0; i < branchValues; ++i)
+				checkError(compiler.mov(target.results[i], values[first + i]),
+						"AsmJit br_if result transfer failed");
 			checkError(compiler.jmp(label), "AsmJit br_if branch emission failed");
 			checkError(compiler.bind(skip), "AsmJit br_if skip label binding failed");
 		} else {
@@ -1472,8 +1482,12 @@ protected:
 		const size_t branchValues = target.kind == ControlKind::Loop ? 0 : target.resultCount;
 		if (values.size() != target.stackHeight + branchValues)
 			throw std::runtime_error("AsmJit br operand stack does not match target label signature");
-		if (branchValues != 0)
-			checkError(compiler.mov(target.result, values.back()), "AsmJit br result transfer failed");
+		if (branchValues != 0) {
+			const size_t first = values.size() - branchValues;
+			for (size_t i = 0; i < branchValues; ++i)
+				checkError(compiler.mov(target.results[i], values[first + i]),
+						"AsmJit br result transfer failed");
+		}
 		const asmjit::Label label = target.kind == ControlKind::Loop ? target.begin : target.end;
 		checkError(compiler.jmp(label), "AsmJit br emission failed");
 	}
@@ -1485,28 +1499,34 @@ protected:
 		values.pop_back();
 		size_t expectedStackHeight = 0;
 		size_t expectedBranchValues = 0;
-		WASM::ValueTypeCode expectedBranchType = WASM::ValueTypeCode::Void;
+		std::vector<WASM::ValueTypeCode> expectedBranchTypes;
 		bool first = true;
+		auto targetTypes = [&](WASM::LabelIdx depth) -> std::vector<WASM::ValueTypeCode> {
+			if (depth == controls.size())
+				return resultTypes;
+			const ControlFrame& target = controls[controls.size() - 1 - depth];
+			if (target.kind == ControlKind::Loop)
+				return {};
+			return target.resultTypes;
+		};
 		auto validateTarget = [&](WASM::LabelIdx depth) {
 			if (depth > controls.size())
 				throw std::runtime_error("AsmJit br_table label depth is out of range");
 			size_t stackHeight = 0;
 			size_t branchValues = resultCount;
-			WASM::ValueTypeCode branchType = resultType;
 			if (depth < controls.size()) {
 				const ControlFrame& target = controls[controls.size() - 1 - depth];
 				stackHeight = target.stackHeight;
 				branchValues = target.kind == ControlKind::Loop ? 0 : target.resultCount;
-				branchType = target.kind == ControlKind::Loop
-						? WASM::ValueTypeCode::Void : target.resultType;
 			}
+			const std::vector<WASM::ValueTypeCode> types = targetTypes(depth);
 			if (first) {
 				expectedStackHeight = stackHeight;
 				expectedBranchValues = branchValues;
-				expectedBranchType = branchType;
+				expectedBranchTypes = types;
 				first = false;
 			} else if (stackHeight != expectedStackHeight || branchValues != expectedBranchValues
-					|| branchType != expectedBranchType) {
+					|| types != expectedBranchTypes) {
 				throw std::runtime_error("AsmJit br_table targets require identical stack heights and label signatures");
 			}
 		};
@@ -1517,15 +1537,22 @@ protected:
 			throw std::runtime_error("AsmJit br_table operand stack does not match its target labels");
 		auto emitTarget = [&](WASM::LabelIdx depth) {
 			if (depth == controls.size()) {
-				if (resultCount == 0)
+				if (resultCount == 0) {
 					checkError(compiler.ret(), "AsmJit br_table function return failed");
-				else
+				} else if (resultCount == 1) {
 					emitFunctionReturn(values.back());
+				} else {
+					throw std::runtime_error("AsmJit br_table to a multi-result function label is not implemented");
+				}
 				return;
 			}
 			ControlFrame& target = controls[controls.size() - 1 - depth];
-			if (target.kind != ControlKind::Loop && target.resultCount != 0)
-				checkError(compiler.mov(target.result, values.back()), "AsmJit br_table result transfer failed");
+			if (target.kind != ControlKind::Loop && target.resultCount != 0) {
+				const size_t firstValue = values.size() - target.resultCount;
+				for (size_t i = 0; i < target.resultCount; ++i)
+					checkError(compiler.mov(target.results[i], values[firstValue + i]),
+							"AsmJit br_table result transfer failed");
+			}
 			const asmjit::Label label = target.kind == ControlKind::Loop ? target.begin : target.end;
 			checkError(compiler.jmp(label), "AsmJit br_table branch emission failed");
 		};
@@ -2011,23 +2038,17 @@ protected:
 						|| clause.kind == WASM::CatchKind::CatchAllRef;
 				const bool carryExn = clause.kind == WASM::CatchKind::CatchRef
 						|| clause.kind == WASM::CatchKind::CatchAllRef;
-				if (carryExn)
-					throw std::runtime_error(
-							"AsmJit does not lower catch_ref yet: a structured block carries at most one result");
 				if (catchAll) {
-					emitCatchBranch(target, WASM::FuncType{});
+					emitCatchBranch(target, WASM::FuncType{}, carryExn);
 					return;
 				}
 				const WASM::FuncType payload = tagPayloadType(clause.tagIdx);
-				if (payload.params.size() > 1)
-					throw std::runtime_error(
-							"AsmJit catches at most one payload value: a structured block carries at most one result");
 				const WASM::TagId tagId = tagIdForClause(clause);
 				auto next = compiler.new_label();
 				checkError(compiler.cmp(tag, static_cast<uint32_t>(tagId)),
 						"AsmJit exception tag comparison failed");
 				checkError(compiler.jne(next), "AsmJit exception tag branch failed");
-				emitCatchBranch(target, payload);
+				emitCatchBranch(target, payload, carryExn);
 				checkError(compiler.bind(next), "AsmJit exception next-clause binding failed");
 			}
 		}
@@ -2037,19 +2058,17 @@ protected:
 		emitZeroReturn();
 	}
 
-	void emitCatchBranch(ControlFrame& target, const WASM::FuncType& payload)
+	void emitCatchBranch(ControlFrame& target, const WASM::FuncType& payload, bool carryExn)
 	{
 		const std::size_t payloadCount = payload.params.size();
-		if (payloadCount > 1)
-			throw std::runtime_error(
-					"AsmJit catches at most one payload value: a structured block carries at most one result");
+		const std::size_t carried = payloadCount + (carryExn ? 1u : 0u);
 		if (target.kind == ControlKind::Loop) {
-			if (payloadCount != 0)
+			if (carried != 0)
 				throw std::runtime_error("AsmJit cannot route a catch payload to a loop label");
 			checkError(compiler.jmp(target.begin), "AsmJit catch-to-loop jump failed");
 			return;
 		}
-		if (target.resultCount != payloadCount)
+		if (target.resultCount != carried)
 			throw std::runtime_error("AsmJit catch arity does not match its target label");
 
 		// A caught exception is consumed: clearing first means the caller and the
@@ -2060,24 +2079,31 @@ protected:
 		checkError(compiler.invoke(asmjit::Out(clear),
 				reinterpret_cast<uint64_t>(&::wasm_exn_clear_pending), clearSignature),
 				"AsmJit failed to emit pending-exception clear");
-		if (payloadCount == 1) {
-			auto exn = compiler.new_gp_ptr("caughtException");
-			checkError(compiler.mov(exn, exceptionPtrSlot),
-					"AsmJit caught-exception slot load failed");
+		auto exn = compiler.new_gp_ptr("caughtException");
+		checkError(compiler.mov(exn, exceptionPtrSlot),
+				"AsmJit caught-exception slot load failed");
+		if (payloadCount != 0) {
 			const ExceptionPayloadLayout layout = exceptionPayloadLayout(payload);
-			asmjit::x86::Gp value = kindWidth(payload.params.front().val.opcode) == 8
-					? compiler.new_gp64("caughtPayload")
-					: compiler.new_gp32("caughtPayload");
-			checkError(compiler.mov(value,
-					asmjit::x86::Mem(exn, static_cast<int32_t>(layout.fields.front().offset),
-							value.size())),
-					"AsmJit caught-payload load failed");
-			checkError(compiler.mov(target.result, value),
-					"AsmJit caught-payload transfer failed");
+			for (std::size_t i = 0; i < payloadCount; ++i) {
+				const int width = kindWidth(payload.params[i].val.opcode);
+				if (width != 4 && width != 8)
+					throw std::runtime_error("AsmJit cannot route a v128 catch payload yet");
+				asmjit::x86::Gp value = width == 8
+						? compiler.new_gp64("caughtPayload")
+						: compiler.new_gp32("caughtPayload");
+				checkError(compiler.mov(value,
+						asmjit::x86::Mem(exn, static_cast<int32_t>(layout.fields[i].offset),
+								value.size())),
+						"AsmJit caught-payload load failed");
+				checkError(compiler.mov(target.results[i], value),
+						"AsmJit caught-payload transfer failed");
+			}
 		}
+		if (carryExn)
+			checkError(compiler.mov(target.results[payloadCount], exn),
+					"AsmJit caught-exnref transfer failed");
 		checkError(compiler.jmp(target.end), "AsmJit catch-target jump failed");
 	}
-
 
 // ── Memory atomics (docs/proposals/THREADS.md TH-1) ─────────────────────
 // The bounds-checked address comes from the same helper as every scalar
@@ -2370,6 +2396,934 @@ reinterpret_cast<uint64_t>(&::wasm_atomic_pause), signature),
 	void dispatchI64AtomicRmw8CmpxchgU(WASM::MemArg arg) override { emitAtomicCmpxchg(arg, 1, 8); }
 	void dispatchI64AtomicRmw16CmpxchgU(WASM::MemArg arg) override { emitAtomicCmpxchg(arg, 2, 8); }
 	void dispatchI64AtomicRmw32CmpxchgU(WASM::MemArg arg) override { emitAtomicCmpxchg(arg, 4, 8); }
+
+
+// ── Shared-everything atomics: numeric slots ───────────────────────────────
+// The address comes from the same object/global machinery as the non-atomic
+// path; the atomicity and ordering live in the shared helper ABI. Reference
+// slots need the GC barrier and are refused below, as are table slots.
+
+void emitSharedAtomicLoad(uint8_t ordering, uint32_t width, int valueWidth,
+const asmjit::x86::Gp& address, int signBits = 0)
+{
+asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+signature.set_ret(asmjit::TypeId::kUInt64);
+signature.add_arg(asmjit::TypeId::kUIntPtr);
+signature.add_arg(asmjit::TypeId::kUInt32);
+signature.add_arg(asmjit::TypeId::kUInt32);
+asmjit::InvokeNode* invoke = nullptr;
+checkError(compiler.invoke(asmjit::Out(invoke),
+reinterpret_cast<uint64_t>(&::wasm_atomic_load), signature),
+"AsmJit shared atomic load emission failed");
+auto loaded = compiler.new_gp64("sharedAtomicLoaded");
+invoke->set_arg(0, address);
+invoke->set_arg(1, asmjit::Imm(width));
+invoke->set_arg(2, asmjit::Imm(ordering));
+invoke->set_ret(0, loaded);
+emitPendingTrapReturn();
+if (valueWidth == 8) {
+values.push_back(loaded);
+return;
+}
+auto result = compiler.new_gp32("sharedAtomicResult");
+checkError(compiler.mov(result, loaded.r32()),
+"AsmJit shared atomic load truncation failed");
+if (signBits == 8) {
+auto signExtended = compiler.new_gp32("sharedAtomicSign");
+checkError(compiler.movsx(signExtended, result.r8()),
+"AsmJit shared atomic sign extension failed");
+result = signExtended;
+} else if (signBits == 16) {
+auto signExtended = compiler.new_gp32("sharedAtomicSign");
+checkError(compiler.movsx(signExtended, result.r16()),
+"AsmJit shared atomic sign extension failed");
+result = signExtended;
+}
+values.push_back(result);
+}
+
+void emitSharedAtomicStore(uint8_t ordering, uint32_t width, int valueWidth,
+const asmjit::x86::Gp& address, const asmjit::x86::Gp& value)
+{
+auto value64 = atomicValue64(value, valueWidth);
+asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+signature.set_ret(asmjit::TypeId::kVoid);
+signature.add_arg(asmjit::TypeId::kUIntPtr);
+signature.add_arg(asmjit::TypeId::kUInt64);
+signature.add_arg(asmjit::TypeId::kUInt32);
+signature.add_arg(asmjit::TypeId::kUInt32);
+asmjit::InvokeNode* invoke = nullptr;
+checkError(compiler.invoke(asmjit::Out(invoke),
+reinterpret_cast<uint64_t>(&::wasm_atomic_store), signature),
+"AsmJit shared atomic store emission failed");
+invoke->set_arg(0, address);
+invoke->set_arg(1, value64);
+invoke->set_arg(2, asmjit::Imm(width));
+invoke->set_arg(3, asmjit::Imm(ordering));
+emitPendingTrapReturn();
+}
+
+void emitSharedAtomicRmw(uint8_t ordering, uint32_t width, uint32_t op, int valueWidth,
+const asmjit::x86::Gp& address, const asmjit::x86::Gp& value)
+{
+auto value64 = atomicValue64(value, valueWidth);
+asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+signature.set_ret(asmjit::TypeId::kUInt64);
+signature.add_arg(asmjit::TypeId::kUIntPtr);
+signature.add_arg(asmjit::TypeId::kUInt64);
+signature.add_arg(asmjit::TypeId::kUInt32);
+signature.add_arg(asmjit::TypeId::kUInt32);
+signature.add_arg(asmjit::TypeId::kUInt32);
+asmjit::InvokeNode* invoke = nullptr;
+checkError(compiler.invoke(asmjit::Out(invoke),
+reinterpret_cast<uint64_t>(&::wasm_atomic_rmw), signature),
+"AsmJit shared atomic rmw emission failed");
+auto old = compiler.new_gp64("sharedAtomicOld");
+invoke->set_arg(0, address);
+invoke->set_arg(1, value64);
+invoke->set_arg(2, asmjit::Imm(width));
+invoke->set_arg(3, asmjit::Imm(op));
+invoke->set_arg(4, asmjit::Imm(ordering));
+invoke->set_ret(0, old);
+emitPendingTrapReturn();
+if (valueWidth == 8) {
+values.push_back(old);
+} else {
+auto result = compiler.new_gp32("sharedAtomicRmwResult");
+checkError(compiler.mov(result, old.r32()),
+"AsmJit shared atomic rmw truncation failed");
+values.push_back(result);
+}
+}
+
+void emitSharedAtomicCmpxchg(uint8_t ordering, uint32_t width, int valueWidth,
+const asmjit::x86::Gp& address, const asmjit::x86::Gp& expected,
+const asmjit::x86::Gp& replacement)
+{
+auto expected64 = atomicValue64(expected, valueWidth);
+auto replacement64 = atomicValue64(replacement, valueWidth);
+asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+signature.set_ret(asmjit::TypeId::kUInt64);
+signature.add_arg(asmjit::TypeId::kUIntPtr);
+signature.add_arg(asmjit::TypeId::kUInt64);
+signature.add_arg(asmjit::TypeId::kUInt64);
+signature.add_arg(asmjit::TypeId::kUInt32);
+signature.add_arg(asmjit::TypeId::kUInt32);
+asmjit::InvokeNode* invoke = nullptr;
+checkError(compiler.invoke(asmjit::Out(invoke),
+reinterpret_cast<uint64_t>(&::wasm_atomic_cmpxchg), signature),
+"AsmJit shared atomic cmpxchg emission failed");
+auto old = compiler.new_gp64("sharedAtomicCmpxchgResult");
+invoke->set_arg(0, address);
+invoke->set_arg(1, expected64);
+invoke->set_arg(2, replacement64);
+invoke->set_arg(3, asmjit::Imm(width));
+invoke->set_arg(4, asmjit::Imm(ordering));
+invoke->set_ret(0, old);
+emitPendingTrapReturn();
+if (valueWidth == 8) {
+values.push_back(old);
+} else {
+auto result = compiler.new_gp32("sharedAtomicCmpxchgTruncated");
+checkError(compiler.mov(result, old.r32()),
+"AsmJit shared atomic cmpxchg truncation failed");
+values.push_back(result);
+}
+}
+
+asmjit::x86::Gp emitStructAtomicAddress(const asmjit::x86::Gp& ref, uint32_t fieldOffset)
+{
+auto notNull = compiler.new_label();
+checkError(compiler.test(ref, ref), "AsmJit shared struct null test failed");
+checkError(compiler.jnz(notNull), "AsmJit shared struct null branch failed");
+asmjit::FuncSignature reportSignature(asmjit::CallConvId::kCDecl);
+reportSignature.set_ret(asmjit::TypeId::kVoid);
+asmjit::InvokeNode* report = nullptr;
+checkError(compiler.invoke(asmjit::Out(report),
+reinterpret_cast<uint64_t>(&asmjitReportNullStructure), reportSignature),
+"AsmJit shared struct null trap emission failed");
+emitZeroReturn();
+checkError(compiler.bind(notNull), "AsmJit shared struct null continuation failed");
+auto address = compiler.new_gp_ptr("sharedStructAddress");
+checkError(compiler.mov(address, ref), "AsmJit shared struct address copy failed");
+checkError(compiler.add(address, asmjit::Imm(fieldOffset)),
+"AsmJit shared struct address offset failed");
+return address;
+}
+
+asmjit::x86::Gp emitArrayAtomicAddress(const asmjit::x86::Gp& ref,
+const asmjit::x86::Gp& index, uint32_t lengthOffset, uint32_t dataOffset,
+uint32_t elementBytes)
+{
+auto notNull = compiler.new_label();
+checkError(compiler.test(ref, ref), "AsmJit shared array null test failed");
+checkError(compiler.jnz(notNull), "AsmJit shared array null branch failed");
+asmjit::FuncSignature nullSignature(asmjit::CallConvId::kCDecl);
+nullSignature.set_ret(asmjit::TypeId::kVoid);
+asmjit::InvokeNode* nullReport = nullptr;
+checkError(compiler.invoke(asmjit::Out(nullReport),
+reinterpret_cast<uint64_t>(&asmjitReportNullArray), nullSignature),
+"AsmJit shared array null trap emission failed");
+emitZeroReturn();
+checkError(compiler.bind(notNull), "AsmJit shared array null continuation failed");
+
+auto length = compiler.new_gp32("sharedArrayLength");
+checkError(compiler.mov(length, asmjit::x86::dword_ptr(ref, lengthOffset)),
+"AsmJit shared array length load failed");
+auto inBounds = compiler.new_label();
+checkError(compiler.cmp(index, length), "AsmJit shared array bounds compare failed");
+checkError(compiler.jb(inBounds), "AsmJit shared array bounds branch failed");
+asmjit::FuncSignature oobSignature(asmjit::CallConvId::kCDecl);
+oobSignature.set_ret(asmjit::TypeId::kVoid);
+asmjit::InvokeNode* oobReport = nullptr;
+checkError(compiler.invoke(asmjit::Out(oobReport),
+reinterpret_cast<uint64_t>(&asmjitReportArrayOob), oobSignature),
+"AsmJit shared array bounds trap emission failed");
+emitZeroReturn();
+checkError(compiler.bind(inBounds), "AsmJit shared array bounds continuation failed");
+
+auto offset = compiler.new_gp64("sharedArrayOffset");
+checkError(compiler.mov(offset.r32(), index.r32()),
+"AsmJit shared array index widening failed");
+if (elementBytes != 1) {
+int shift = 0;
+for (uint32_t bytes = elementBytes; bytes > 1; bytes >>= 1)
+++shift;
+checkError(compiler.shl(offset, shift), "AsmJit shared array scaling failed");
+}
+auto address = compiler.new_gp_ptr("sharedArrayAddress");
+checkError(compiler.mov(address, ref), "AsmJit shared array address copy failed");
+checkError(compiler.add(address, offset), "AsmJit shared array offset add failed");
+checkError(compiler.add(address, asmjit::Imm(dataOffset)),
+"AsmJit shared array data offset failed");
+return address;
+}
+
+	void dispatchGlobalAtomicGet(uint8_t ordering, WASM::GlobalIdx arg) override
+	{
+		const WASM::GlobalType& type = validateGlobalIndex(arg);
+		const std::uint32_t width = sharedAtomicNumericWidth(type.contentType.opcode);
+		if (width == 0)
+			throw std::runtime_error("AsmJit does not lower shared atomics for reference or v128 globals yet");
+		const int valueWidth = width <= 4 ? 4 : 8;
+		auto cell = emitGlobalCell(arg);
+		emitSharedAtomicLoad(ordering, width, valueWidth, cell);
+	}
+
+	void dispatchGlobalAtomicSet(uint8_t ordering, WASM::GlobalIdx arg) override
+	{
+		const WASM::GlobalType& type = validateGlobalIndex(arg);
+		const std::uint32_t width = sharedAtomicNumericWidth(type.contentType.opcode);
+		if (width == 0)
+			throw std::runtime_error("AsmJit does not lower shared atomics for reference or v128 globals yet");
+		const int valueWidth = width <= 4 ? 4 : 8;
+		if (!type.isMutable)
+			throw std::runtime_error("AsmJit global.atomic.set references an immutable global");
+		if (values.empty())
+			throw std::runtime_error("AsmJit global.atomic.set operand stack underflow");
+		auto value = values.back(); values.pop_back();
+		auto cell = emitGlobalCell(arg);
+		emitSharedAtomicStore(ordering, width, valueWidth, cell, value);
+	}
+
+	void dispatchGlobalAtomicRmwAdd(uint8_t ordering, WASM::GlobalIdx arg) override
+	{
+		const WASM::GlobalType& type = validateGlobalIndex(arg);
+		const std::uint32_t width = sharedAtomicNumericWidth(type.contentType.opcode);
+		if (width == 0)
+			throw std::runtime_error("AsmJit does not lower shared atomics for reference or v128 globals yet");
+		const int valueWidth = width <= 4 ? 4 : 8;
+		if (!type.isMutable)
+			throw std::runtime_error("AsmJit global.atomic.rmw references an immutable global");
+		if (values.empty())
+			throw std::runtime_error("AsmJit global.atomic.rmw operand stack underflow");
+		auto value = values.back(); values.pop_back();
+		auto cell = emitGlobalCell(arg);
+		emitSharedAtomicRmw(ordering, width, WASM_ATOMIC_ADD, valueWidth, cell, value);
+	}
+
+	void dispatchGlobalAtomicRmwSub(uint8_t ordering, WASM::GlobalIdx arg) override
+	{
+		const WASM::GlobalType& type = validateGlobalIndex(arg);
+		const std::uint32_t width = sharedAtomicNumericWidth(type.contentType.opcode);
+		if (width == 0)
+			throw std::runtime_error("AsmJit does not lower shared atomics for reference or v128 globals yet");
+		const int valueWidth = width <= 4 ? 4 : 8;
+		if (!type.isMutable)
+			throw std::runtime_error("AsmJit global.atomic.rmw references an immutable global");
+		if (values.empty())
+			throw std::runtime_error("AsmJit global.atomic.rmw operand stack underflow");
+		auto value = values.back(); values.pop_back();
+		auto cell = emitGlobalCell(arg);
+		emitSharedAtomicRmw(ordering, width, WASM_ATOMIC_SUB, valueWidth, cell, value);
+	}
+
+	void dispatchGlobalAtomicRmwAnd(uint8_t ordering, WASM::GlobalIdx arg) override
+	{
+		const WASM::GlobalType& type = validateGlobalIndex(arg);
+		const std::uint32_t width = sharedAtomicNumericWidth(type.contentType.opcode);
+		if (width == 0)
+			throw std::runtime_error("AsmJit does not lower shared atomics for reference or v128 globals yet");
+		const int valueWidth = width <= 4 ? 4 : 8;
+		if (!type.isMutable)
+			throw std::runtime_error("AsmJit global.atomic.rmw references an immutable global");
+		if (values.empty())
+			throw std::runtime_error("AsmJit global.atomic.rmw operand stack underflow");
+		auto value = values.back(); values.pop_back();
+		auto cell = emitGlobalCell(arg);
+		emitSharedAtomicRmw(ordering, width, WASM_ATOMIC_AND, valueWidth, cell, value);
+	}
+
+	void dispatchGlobalAtomicRmwOr(uint8_t ordering, WASM::GlobalIdx arg) override
+	{
+		const WASM::GlobalType& type = validateGlobalIndex(arg);
+		const std::uint32_t width = sharedAtomicNumericWidth(type.contentType.opcode);
+		if (width == 0)
+			throw std::runtime_error("AsmJit does not lower shared atomics for reference or v128 globals yet");
+		const int valueWidth = width <= 4 ? 4 : 8;
+		if (!type.isMutable)
+			throw std::runtime_error("AsmJit global.atomic.rmw references an immutable global");
+		if (values.empty())
+			throw std::runtime_error("AsmJit global.atomic.rmw operand stack underflow");
+		auto value = values.back(); values.pop_back();
+		auto cell = emitGlobalCell(arg);
+		emitSharedAtomicRmw(ordering, width, WASM_ATOMIC_OR, valueWidth, cell, value);
+	}
+
+	void dispatchGlobalAtomicRmwXor(uint8_t ordering, WASM::GlobalIdx arg) override
+	{
+		const WASM::GlobalType& type = validateGlobalIndex(arg);
+		const std::uint32_t width = sharedAtomicNumericWidth(type.contentType.opcode);
+		if (width == 0)
+			throw std::runtime_error("AsmJit does not lower shared atomics for reference or v128 globals yet");
+		const int valueWidth = width <= 4 ? 4 : 8;
+		if (!type.isMutable)
+			throw std::runtime_error("AsmJit global.atomic.rmw references an immutable global");
+		if (values.empty())
+			throw std::runtime_error("AsmJit global.atomic.rmw operand stack underflow");
+		auto value = values.back(); values.pop_back();
+		auto cell = emitGlobalCell(arg);
+		emitSharedAtomicRmw(ordering, width, WASM_ATOMIC_XOR, valueWidth, cell, value);
+	}
+
+	void dispatchGlobalAtomicRmwXchg(uint8_t ordering, WASM::GlobalIdx arg) override
+	{
+		const WASM::GlobalType& type = validateGlobalIndex(arg);
+		const std::uint32_t width = sharedAtomicNumericWidth(type.contentType.opcode);
+		if (width == 0)
+			throw std::runtime_error("AsmJit does not lower shared atomics for reference or v128 globals yet");
+		const int valueWidth = width <= 4 ? 4 : 8;
+		if (!type.isMutable)
+			throw std::runtime_error("AsmJit global.atomic.rmw references an immutable global");
+		if (values.empty())
+			throw std::runtime_error("AsmJit global.atomic.rmw operand stack underflow");
+		auto value = values.back(); values.pop_back();
+		auto cell = emitGlobalCell(arg);
+		emitSharedAtomicRmw(ordering, width, WASM_ATOMIC_XCHG, valueWidth, cell, value);
+	}
+
+	void dispatchGlobalAtomicRmwCmpxchg(uint8_t ordering, WASM::GlobalIdx arg) override
+	{
+		const WASM::GlobalType& type = validateGlobalIndex(arg);
+		const std::uint32_t width = sharedAtomicNumericWidth(type.contentType.opcode);
+		if (width == 0)
+			throw std::runtime_error("AsmJit does not lower shared atomics for reference or v128 globals yet");
+		const int valueWidth = width <= 4 ? 4 : 8;
+		if (!type.isMutable)
+			throw std::runtime_error("AsmJit global.atomic.rmw references an immutable global");
+		if (values.size() < 2)
+			throw std::runtime_error("AsmJit global.atomic.rmw operand stack underflow");
+		auto replacement = values.back(); values.pop_back();
+		auto expected = values.back(); values.pop_back();
+		auto cell = emitGlobalCell(arg);
+		emitSharedAtomicCmpxchg(ordering, width, valueWidth, cell, expected, replacement);
+	}
+
+	void dispatchStructAtomicGet(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override
+	{
+	const WASM::CoreTypeView view = module.typeView(arg1);
+	if (view.kind() != WASM::CanonTypeKind::Struct)
+		throw std::runtime_error("AsmJit shared struct atomic requires a struct type");
+	const std::span<const WASM::CanonFieldType> fields = view.structFields();
+	if (arg2 >= fields.size())
+		throw std::runtime_error("AsmJit shared struct atomic field index is out of range");
+	const WASM::CanonFieldType& field = fields[arg2];
+	const WASM::CanonStorageType& storage = field.storage;
+	std::uint32_t width = storage.isPacked
+			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
+			: sharedAtomicNumericWidth(storage.value.opcode);
+	if (width == 0)
+		throw std::runtime_error("AsmJit does not lower shared atomics for reference or v128 fields yet");
+	const uint32_t fieldOffset = static_cast<uint32_t>(WASM::gcStructFieldOffset(fields, arg2));
+	const int valueWidth = width <= 4 ? 4 : 8;
+		if (values.empty())
+			throw std::runtime_error("AsmJit struct.atomic.get operand stack underflow");
+		auto ref = values.back(); values.pop_back();
+		auto address = emitStructAtomicAddress(ref, fieldOffset);
+		emitSharedAtomicLoad(ordering, width, valueWidth, address, 0);
+	}
+
+	void dispatchStructAtomicGetS(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override
+	{
+	const WASM::CoreTypeView view = module.typeView(arg1);
+	if (view.kind() != WASM::CanonTypeKind::Struct)
+		throw std::runtime_error("AsmJit shared struct atomic requires a struct type");
+	const std::span<const WASM::CanonFieldType> fields = view.structFields();
+	if (arg2 >= fields.size())
+		throw std::runtime_error("AsmJit shared struct atomic field index is out of range");
+	const WASM::CanonFieldType& field = fields[arg2];
+	const WASM::CanonStorageType& storage = field.storage;
+	std::uint32_t width = storage.isPacked
+			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
+			: sharedAtomicNumericWidth(storage.value.opcode);
+	if (width == 0)
+		throw std::runtime_error("AsmJit does not lower shared atomics for reference or v128 fields yet");
+	const uint32_t fieldOffset = static_cast<uint32_t>(WASM::gcStructFieldOffset(fields, arg2));
+	const int valueWidth = width <= 4 ? 4 : 8;
+		if (!storage.isPacked)
+			throw std::runtime_error("AsmJit struct.atomic.get_s requires a packed field");
+		if (values.empty())
+			throw std::runtime_error("AsmJit struct.atomic.get operand stack underflow");
+		auto ref = values.back(); values.pop_back();
+		auto address = emitStructAtomicAddress(ref, fieldOffset);
+		emitSharedAtomicLoad(ordering, width, valueWidth, address, width * 8);
+	}
+
+	void dispatchStructAtomicGetU(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override
+	{
+	const WASM::CoreTypeView view = module.typeView(arg1);
+	if (view.kind() != WASM::CanonTypeKind::Struct)
+		throw std::runtime_error("AsmJit shared struct atomic requires a struct type");
+	const std::span<const WASM::CanonFieldType> fields = view.structFields();
+	if (arg2 >= fields.size())
+		throw std::runtime_error("AsmJit shared struct atomic field index is out of range");
+	const WASM::CanonFieldType& field = fields[arg2];
+	const WASM::CanonStorageType& storage = field.storage;
+	std::uint32_t width = storage.isPacked
+			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
+			: sharedAtomicNumericWidth(storage.value.opcode);
+	if (width == 0)
+		throw std::runtime_error("AsmJit does not lower shared atomics for reference or v128 fields yet");
+	const uint32_t fieldOffset = static_cast<uint32_t>(WASM::gcStructFieldOffset(fields, arg2));
+	const int valueWidth = width <= 4 ? 4 : 8;
+		if (!storage.isPacked)
+			throw std::runtime_error("AsmJit struct.atomic.get_u requires a packed field");
+		if (values.empty())
+			throw std::runtime_error("AsmJit struct.atomic.get operand stack underflow");
+		auto ref = values.back(); values.pop_back();
+		auto address = emitStructAtomicAddress(ref, fieldOffset);
+		emitSharedAtomicLoad(ordering, width, valueWidth, address, 0);
+	}
+
+	void dispatchStructAtomicSet(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override
+	{
+	const WASM::CoreTypeView view = module.typeView(arg1);
+	if (view.kind() != WASM::CanonTypeKind::Struct)
+		throw std::runtime_error("AsmJit shared struct atomic requires a struct type");
+	const std::span<const WASM::CanonFieldType> fields = view.structFields();
+	if (arg2 >= fields.size())
+		throw std::runtime_error("AsmJit shared struct atomic field index is out of range");
+	const WASM::CanonFieldType& field = fields[arg2];
+	const WASM::CanonStorageType& storage = field.storage;
+	std::uint32_t width = storage.isPacked
+			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
+			: sharedAtomicNumericWidth(storage.value.opcode);
+	if (width == 0)
+		throw std::runtime_error("AsmJit does not lower shared atomics for reference or v128 fields yet");
+	const uint32_t fieldOffset = static_cast<uint32_t>(WASM::gcStructFieldOffset(fields, arg2));
+	const int valueWidth = width <= 4 ? 4 : 8;
+		if (!field.isMutable)
+			throw std::runtime_error("AsmJit struct.atomic operation on an immutable field");
+		if (values.size() < 2)
+			throw std::runtime_error("AsmJit struct.atomic.set operand stack underflow");
+		auto value = values.back(); values.pop_back();
+		auto ref = values.back(); values.pop_back();
+		auto address = emitStructAtomicAddress(ref, fieldOffset);
+		emitSharedAtomicStore(ordering, width, valueWidth, address, value);
+	}
+
+	void dispatchStructAtomicRmwAdd(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override
+	{
+	const WASM::CoreTypeView view = module.typeView(arg1);
+	if (view.kind() != WASM::CanonTypeKind::Struct)
+		throw std::runtime_error("AsmJit shared struct atomic requires a struct type");
+	const std::span<const WASM::CanonFieldType> fields = view.structFields();
+	if (arg2 >= fields.size())
+		throw std::runtime_error("AsmJit shared struct atomic field index is out of range");
+	const WASM::CanonFieldType& field = fields[arg2];
+	const WASM::CanonStorageType& storage = field.storage;
+	std::uint32_t width = storage.isPacked
+			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
+			: sharedAtomicNumericWidth(storage.value.opcode);
+	if (width == 0)
+		throw std::runtime_error("AsmJit does not lower shared atomics for reference or v128 fields yet");
+	const uint32_t fieldOffset = static_cast<uint32_t>(WASM::gcStructFieldOffset(fields, arg2));
+	const int valueWidth = width <= 4 ? 4 : 8;
+		if (!field.isMutable)
+			throw std::runtime_error("AsmJit struct.atomic operation on an immutable field");
+		if (values.size() < 2)
+			throw std::runtime_error("AsmJit struct.atomic.rmw operand stack underflow");
+		auto value = values.back(); values.pop_back();
+		auto ref = values.back(); values.pop_back();
+		auto address = emitStructAtomicAddress(ref, fieldOffset);
+		emitSharedAtomicRmw(ordering, width, WASM_ATOMIC_ADD, valueWidth, address, value);
+	}
+
+	void dispatchStructAtomicRmwSub(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override
+	{
+	const WASM::CoreTypeView view = module.typeView(arg1);
+	if (view.kind() != WASM::CanonTypeKind::Struct)
+		throw std::runtime_error("AsmJit shared struct atomic requires a struct type");
+	const std::span<const WASM::CanonFieldType> fields = view.structFields();
+	if (arg2 >= fields.size())
+		throw std::runtime_error("AsmJit shared struct atomic field index is out of range");
+	const WASM::CanonFieldType& field = fields[arg2];
+	const WASM::CanonStorageType& storage = field.storage;
+	std::uint32_t width = storage.isPacked
+			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
+			: sharedAtomicNumericWidth(storage.value.opcode);
+	if (width == 0)
+		throw std::runtime_error("AsmJit does not lower shared atomics for reference or v128 fields yet");
+	const uint32_t fieldOffset = static_cast<uint32_t>(WASM::gcStructFieldOffset(fields, arg2));
+	const int valueWidth = width <= 4 ? 4 : 8;
+		if (!field.isMutable)
+			throw std::runtime_error("AsmJit struct.atomic operation on an immutable field");
+		if (values.size() < 2)
+			throw std::runtime_error("AsmJit struct.atomic.rmw operand stack underflow");
+		auto value = values.back(); values.pop_back();
+		auto ref = values.back(); values.pop_back();
+		auto address = emitStructAtomicAddress(ref, fieldOffset);
+		emitSharedAtomicRmw(ordering, width, WASM_ATOMIC_SUB, valueWidth, address, value);
+	}
+
+	void dispatchStructAtomicRmwAnd(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override
+	{
+	const WASM::CoreTypeView view = module.typeView(arg1);
+	if (view.kind() != WASM::CanonTypeKind::Struct)
+		throw std::runtime_error("AsmJit shared struct atomic requires a struct type");
+	const std::span<const WASM::CanonFieldType> fields = view.structFields();
+	if (arg2 >= fields.size())
+		throw std::runtime_error("AsmJit shared struct atomic field index is out of range");
+	const WASM::CanonFieldType& field = fields[arg2];
+	const WASM::CanonStorageType& storage = field.storage;
+	std::uint32_t width = storage.isPacked
+			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
+			: sharedAtomicNumericWidth(storage.value.opcode);
+	if (width == 0)
+		throw std::runtime_error("AsmJit does not lower shared atomics for reference or v128 fields yet");
+	const uint32_t fieldOffset = static_cast<uint32_t>(WASM::gcStructFieldOffset(fields, arg2));
+	const int valueWidth = width <= 4 ? 4 : 8;
+		if (!field.isMutable)
+			throw std::runtime_error("AsmJit struct.atomic operation on an immutable field");
+		if (values.size() < 2)
+			throw std::runtime_error("AsmJit struct.atomic.rmw operand stack underflow");
+		auto value = values.back(); values.pop_back();
+		auto ref = values.back(); values.pop_back();
+		auto address = emitStructAtomicAddress(ref, fieldOffset);
+		emitSharedAtomicRmw(ordering, width, WASM_ATOMIC_AND, valueWidth, address, value);
+	}
+
+	void dispatchStructAtomicRmwOr(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override
+	{
+	const WASM::CoreTypeView view = module.typeView(arg1);
+	if (view.kind() != WASM::CanonTypeKind::Struct)
+		throw std::runtime_error("AsmJit shared struct atomic requires a struct type");
+	const std::span<const WASM::CanonFieldType> fields = view.structFields();
+	if (arg2 >= fields.size())
+		throw std::runtime_error("AsmJit shared struct atomic field index is out of range");
+	const WASM::CanonFieldType& field = fields[arg2];
+	const WASM::CanonStorageType& storage = field.storage;
+	std::uint32_t width = storage.isPacked
+			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
+			: sharedAtomicNumericWidth(storage.value.opcode);
+	if (width == 0)
+		throw std::runtime_error("AsmJit does not lower shared atomics for reference or v128 fields yet");
+	const uint32_t fieldOffset = static_cast<uint32_t>(WASM::gcStructFieldOffset(fields, arg2));
+	const int valueWidth = width <= 4 ? 4 : 8;
+		if (!field.isMutable)
+			throw std::runtime_error("AsmJit struct.atomic operation on an immutable field");
+		if (values.size() < 2)
+			throw std::runtime_error("AsmJit struct.atomic.rmw operand stack underflow");
+		auto value = values.back(); values.pop_back();
+		auto ref = values.back(); values.pop_back();
+		auto address = emitStructAtomicAddress(ref, fieldOffset);
+		emitSharedAtomicRmw(ordering, width, WASM_ATOMIC_OR, valueWidth, address, value);
+	}
+
+	void dispatchStructAtomicRmwXor(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override
+	{
+	const WASM::CoreTypeView view = module.typeView(arg1);
+	if (view.kind() != WASM::CanonTypeKind::Struct)
+		throw std::runtime_error("AsmJit shared struct atomic requires a struct type");
+	const std::span<const WASM::CanonFieldType> fields = view.structFields();
+	if (arg2 >= fields.size())
+		throw std::runtime_error("AsmJit shared struct atomic field index is out of range");
+	const WASM::CanonFieldType& field = fields[arg2];
+	const WASM::CanonStorageType& storage = field.storage;
+	std::uint32_t width = storage.isPacked
+			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
+			: sharedAtomicNumericWidth(storage.value.opcode);
+	if (width == 0)
+		throw std::runtime_error("AsmJit does not lower shared atomics for reference or v128 fields yet");
+	const uint32_t fieldOffset = static_cast<uint32_t>(WASM::gcStructFieldOffset(fields, arg2));
+	const int valueWidth = width <= 4 ? 4 : 8;
+		if (!field.isMutable)
+			throw std::runtime_error("AsmJit struct.atomic operation on an immutable field");
+		if (values.size() < 2)
+			throw std::runtime_error("AsmJit struct.atomic.rmw operand stack underflow");
+		auto value = values.back(); values.pop_back();
+		auto ref = values.back(); values.pop_back();
+		auto address = emitStructAtomicAddress(ref, fieldOffset);
+		emitSharedAtomicRmw(ordering, width, WASM_ATOMIC_XOR, valueWidth, address, value);
+	}
+
+	void dispatchStructAtomicRmwXchg(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override
+	{
+	const WASM::CoreTypeView view = module.typeView(arg1);
+	if (view.kind() != WASM::CanonTypeKind::Struct)
+		throw std::runtime_error("AsmJit shared struct atomic requires a struct type");
+	const std::span<const WASM::CanonFieldType> fields = view.structFields();
+	if (arg2 >= fields.size())
+		throw std::runtime_error("AsmJit shared struct atomic field index is out of range");
+	const WASM::CanonFieldType& field = fields[arg2];
+	const WASM::CanonStorageType& storage = field.storage;
+	std::uint32_t width = storage.isPacked
+			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
+			: sharedAtomicNumericWidth(storage.value.opcode);
+	if (width == 0)
+		throw std::runtime_error("AsmJit does not lower shared atomics for reference or v128 fields yet");
+	const uint32_t fieldOffset = static_cast<uint32_t>(WASM::gcStructFieldOffset(fields, arg2));
+	const int valueWidth = width <= 4 ? 4 : 8;
+		if (!field.isMutable)
+			throw std::runtime_error("AsmJit struct.atomic operation on an immutable field");
+		if (values.size() < 2)
+			throw std::runtime_error("AsmJit struct.atomic.rmw operand stack underflow");
+		auto value = values.back(); values.pop_back();
+		auto ref = values.back(); values.pop_back();
+		auto address = emitStructAtomicAddress(ref, fieldOffset);
+		emitSharedAtomicRmw(ordering, width, WASM_ATOMIC_XCHG, valueWidth, address, value);
+	}
+
+	void dispatchStructAtomicRmwCmpxchg(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override
+	{
+	const WASM::CoreTypeView view = module.typeView(arg1);
+	if (view.kind() != WASM::CanonTypeKind::Struct)
+		throw std::runtime_error("AsmJit shared struct atomic requires a struct type");
+	const std::span<const WASM::CanonFieldType> fields = view.structFields();
+	if (arg2 >= fields.size())
+		throw std::runtime_error("AsmJit shared struct atomic field index is out of range");
+	const WASM::CanonFieldType& field = fields[arg2];
+	const WASM::CanonStorageType& storage = field.storage;
+	std::uint32_t width = storage.isPacked
+			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
+			: sharedAtomicNumericWidth(storage.value.opcode);
+	if (width == 0)
+		throw std::runtime_error("AsmJit does not lower shared atomics for reference or v128 fields yet");
+	const uint32_t fieldOffset = static_cast<uint32_t>(WASM::gcStructFieldOffset(fields, arg2));
+	const int valueWidth = width <= 4 ? 4 : 8;
+		if (!field.isMutable)
+			throw std::runtime_error("AsmJit struct.atomic operation on an immutable field");
+		if (values.size() < 3)
+			throw std::runtime_error("AsmJit struct.atomic.rmw operand stack underflow");
+		auto replacement = values.back(); values.pop_back();
+		auto expected = values.back(); values.pop_back();
+		auto ref = values.back(); values.pop_back();
+		auto address = emitStructAtomicAddress(ref, fieldOffset);
+		emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacement);
+	}
+
+	void dispatchArrayAtomicGet(uint8_t ordering, WASM::TypeIdx arg) override
+	{
+	const WASM::CoreTypeView view = module.typeView(arg);
+	if (view.kind() != WASM::CanonTypeKind::Array)
+		throw std::runtime_error("AsmJit shared array atomic requires an array type");
+	const WASM::CanonFieldType& element = view.arrayElement();
+	const WASM::CanonStorageType& storage = element.storage;
+	std::uint32_t width = storage.isPacked
+			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
+			: sharedAtomicNumericWidth(storage.value.opcode);
+	if (width == 0)
+		throw std::runtime_error("AsmJit does not lower shared atomics for reference or v128 elements yet");
+	const uint32_t lengthOffset = static_cast<uint32_t>(WASM::GcHeader::kArrayLengthOffset);
+	const uint32_t dataOffset = static_cast<uint32_t>(WASM::gcArrayDataOffset(storage));
+	const uint32_t elementBytes = static_cast<uint32_t>(WASM::gcStorageBytes(storage));
+	const int valueWidth = width <= 4 ? 4 : 8;
+		if (values.size() < 2)
+			throw std::runtime_error("AsmJit array.atomic.get operand stack underflow");
+		auto index = values.back(); values.pop_back();
+		auto ref = values.back(); values.pop_back();
+		auto address = emitArrayAtomicAddress(ref, index, lengthOffset, dataOffset, elementBytes);
+		emitSharedAtomicLoad(ordering, width, valueWidth, address, 0);
+	}
+
+	void dispatchArrayAtomicGetS(uint8_t ordering, WASM::TypeIdx arg) override
+	{
+	const WASM::CoreTypeView view = module.typeView(arg);
+	if (view.kind() != WASM::CanonTypeKind::Array)
+		throw std::runtime_error("AsmJit shared array atomic requires an array type");
+	const WASM::CanonFieldType& element = view.arrayElement();
+	const WASM::CanonStorageType& storage = element.storage;
+	std::uint32_t width = storage.isPacked
+			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
+			: sharedAtomicNumericWidth(storage.value.opcode);
+	if (width == 0)
+		throw std::runtime_error("AsmJit does not lower shared atomics for reference or v128 elements yet");
+	const uint32_t lengthOffset = static_cast<uint32_t>(WASM::GcHeader::kArrayLengthOffset);
+	const uint32_t dataOffset = static_cast<uint32_t>(WASM::gcArrayDataOffset(storage));
+	const uint32_t elementBytes = static_cast<uint32_t>(WASM::gcStorageBytes(storage));
+	const int valueWidth = width <= 4 ? 4 : 8;
+		if (!storage.isPacked)
+			throw std::runtime_error("AsmJit array.atomic.get_s requires a packed element");
+		if (values.size() < 2)
+			throw std::runtime_error("AsmJit array.atomic.get operand stack underflow");
+		auto index = values.back(); values.pop_back();
+		auto ref = values.back(); values.pop_back();
+		auto address = emitArrayAtomicAddress(ref, index, lengthOffset, dataOffset, elementBytes);
+		emitSharedAtomicLoad(ordering, width, valueWidth, address, width * 8);
+	}
+
+	void dispatchArrayAtomicGetU(uint8_t ordering, WASM::TypeIdx arg) override
+	{
+	const WASM::CoreTypeView view = module.typeView(arg);
+	if (view.kind() != WASM::CanonTypeKind::Array)
+		throw std::runtime_error("AsmJit shared array atomic requires an array type");
+	const WASM::CanonFieldType& element = view.arrayElement();
+	const WASM::CanonStorageType& storage = element.storage;
+	std::uint32_t width = storage.isPacked
+			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
+			: sharedAtomicNumericWidth(storage.value.opcode);
+	if (width == 0)
+		throw std::runtime_error("AsmJit does not lower shared atomics for reference or v128 elements yet");
+	const uint32_t lengthOffset = static_cast<uint32_t>(WASM::GcHeader::kArrayLengthOffset);
+	const uint32_t dataOffset = static_cast<uint32_t>(WASM::gcArrayDataOffset(storage));
+	const uint32_t elementBytes = static_cast<uint32_t>(WASM::gcStorageBytes(storage));
+	const int valueWidth = width <= 4 ? 4 : 8;
+		if (!storage.isPacked)
+			throw std::runtime_error("AsmJit array.atomic.get_u requires a packed element");
+		if (values.size() < 2)
+			throw std::runtime_error("AsmJit array.atomic.get operand stack underflow");
+		auto index = values.back(); values.pop_back();
+		auto ref = values.back(); values.pop_back();
+		auto address = emitArrayAtomicAddress(ref, index, lengthOffset, dataOffset, elementBytes);
+		emitSharedAtomicLoad(ordering, width, valueWidth, address, 0);
+	}
+
+	void dispatchArrayAtomicSet(uint8_t ordering, WASM::TypeIdx arg) override
+	{
+	const WASM::CoreTypeView view = module.typeView(arg);
+	if (view.kind() != WASM::CanonTypeKind::Array)
+		throw std::runtime_error("AsmJit shared array atomic requires an array type");
+	const WASM::CanonFieldType& element = view.arrayElement();
+	const WASM::CanonStorageType& storage = element.storage;
+	std::uint32_t width = storage.isPacked
+			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
+			: sharedAtomicNumericWidth(storage.value.opcode);
+	if (width == 0)
+		throw std::runtime_error("AsmJit does not lower shared atomics for reference or v128 elements yet");
+	const uint32_t lengthOffset = static_cast<uint32_t>(WASM::GcHeader::kArrayLengthOffset);
+	const uint32_t dataOffset = static_cast<uint32_t>(WASM::gcArrayDataOffset(storage));
+	const uint32_t elementBytes = static_cast<uint32_t>(WASM::gcStorageBytes(storage));
+	const int valueWidth = width <= 4 ? 4 : 8;
+		if (!element.isMutable)
+			throw std::runtime_error("AsmJit array.atomic operation on an immutable array");
+		if (values.size() < 3)
+			throw std::runtime_error("AsmJit array.atomic.set operand stack underflow");
+		auto value = values.back(); values.pop_back();
+		auto index = values.back(); values.pop_back();
+		auto ref = values.back(); values.pop_back();
+		auto address = emitArrayAtomicAddress(ref, index, lengthOffset, dataOffset, elementBytes);
+		emitSharedAtomicStore(ordering, width, valueWidth, address, value);
+	}
+
+	void dispatchArrayAtomicRmwAdd(uint8_t ordering, WASM::TypeIdx arg) override
+	{
+	const WASM::CoreTypeView view = module.typeView(arg);
+	if (view.kind() != WASM::CanonTypeKind::Array)
+		throw std::runtime_error("AsmJit shared array atomic requires an array type");
+	const WASM::CanonFieldType& element = view.arrayElement();
+	const WASM::CanonStorageType& storage = element.storage;
+	std::uint32_t width = storage.isPacked
+			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
+			: sharedAtomicNumericWidth(storage.value.opcode);
+	if (width == 0)
+		throw std::runtime_error("AsmJit does not lower shared atomics for reference or v128 elements yet");
+	const uint32_t lengthOffset = static_cast<uint32_t>(WASM::GcHeader::kArrayLengthOffset);
+	const uint32_t dataOffset = static_cast<uint32_t>(WASM::gcArrayDataOffset(storage));
+	const uint32_t elementBytes = static_cast<uint32_t>(WASM::gcStorageBytes(storage));
+	const int valueWidth = width <= 4 ? 4 : 8;
+		if (!element.isMutable)
+			throw std::runtime_error("AsmJit array.atomic operation on an immutable array");
+		if (values.size() < 3)
+			throw std::runtime_error("AsmJit array.atomic.rmw operand stack underflow");
+		auto value = values.back(); values.pop_back();
+		auto index = values.back(); values.pop_back();
+		auto ref = values.back(); values.pop_back();
+		auto address = emitArrayAtomicAddress(ref, index, lengthOffset, dataOffset, elementBytes);
+		emitSharedAtomicRmw(ordering, width, WASM_ATOMIC_ADD, valueWidth, address, value);
+	}
+
+	void dispatchArrayAtomicRmwSub(uint8_t ordering, WASM::TypeIdx arg) override
+	{
+	const WASM::CoreTypeView view = module.typeView(arg);
+	if (view.kind() != WASM::CanonTypeKind::Array)
+		throw std::runtime_error("AsmJit shared array atomic requires an array type");
+	const WASM::CanonFieldType& element = view.arrayElement();
+	const WASM::CanonStorageType& storage = element.storage;
+	std::uint32_t width = storage.isPacked
+			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
+			: sharedAtomicNumericWidth(storage.value.opcode);
+	if (width == 0)
+		throw std::runtime_error("AsmJit does not lower shared atomics for reference or v128 elements yet");
+	const uint32_t lengthOffset = static_cast<uint32_t>(WASM::GcHeader::kArrayLengthOffset);
+	const uint32_t dataOffset = static_cast<uint32_t>(WASM::gcArrayDataOffset(storage));
+	const uint32_t elementBytes = static_cast<uint32_t>(WASM::gcStorageBytes(storage));
+	const int valueWidth = width <= 4 ? 4 : 8;
+		if (!element.isMutable)
+			throw std::runtime_error("AsmJit array.atomic operation on an immutable array");
+		if (values.size() < 3)
+			throw std::runtime_error("AsmJit array.atomic.rmw operand stack underflow");
+		auto value = values.back(); values.pop_back();
+		auto index = values.back(); values.pop_back();
+		auto ref = values.back(); values.pop_back();
+		auto address = emitArrayAtomicAddress(ref, index, lengthOffset, dataOffset, elementBytes);
+		emitSharedAtomicRmw(ordering, width, WASM_ATOMIC_SUB, valueWidth, address, value);
+	}
+
+	void dispatchArrayAtomicRmwAnd(uint8_t ordering, WASM::TypeIdx arg) override
+	{
+	const WASM::CoreTypeView view = module.typeView(arg);
+	if (view.kind() != WASM::CanonTypeKind::Array)
+		throw std::runtime_error("AsmJit shared array atomic requires an array type");
+	const WASM::CanonFieldType& element = view.arrayElement();
+	const WASM::CanonStorageType& storage = element.storage;
+	std::uint32_t width = storage.isPacked
+			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
+			: sharedAtomicNumericWidth(storage.value.opcode);
+	if (width == 0)
+		throw std::runtime_error("AsmJit does not lower shared atomics for reference or v128 elements yet");
+	const uint32_t lengthOffset = static_cast<uint32_t>(WASM::GcHeader::kArrayLengthOffset);
+	const uint32_t dataOffset = static_cast<uint32_t>(WASM::gcArrayDataOffset(storage));
+	const uint32_t elementBytes = static_cast<uint32_t>(WASM::gcStorageBytes(storage));
+	const int valueWidth = width <= 4 ? 4 : 8;
+		if (!element.isMutable)
+			throw std::runtime_error("AsmJit array.atomic operation on an immutable array");
+		if (values.size() < 3)
+			throw std::runtime_error("AsmJit array.atomic.rmw operand stack underflow");
+		auto value = values.back(); values.pop_back();
+		auto index = values.back(); values.pop_back();
+		auto ref = values.back(); values.pop_back();
+		auto address = emitArrayAtomicAddress(ref, index, lengthOffset, dataOffset, elementBytes);
+		emitSharedAtomicRmw(ordering, width, WASM_ATOMIC_AND, valueWidth, address, value);
+	}
+
+	void dispatchArrayAtomicRmwOr(uint8_t ordering, WASM::TypeIdx arg) override
+	{
+	const WASM::CoreTypeView view = module.typeView(arg);
+	if (view.kind() != WASM::CanonTypeKind::Array)
+		throw std::runtime_error("AsmJit shared array atomic requires an array type");
+	const WASM::CanonFieldType& element = view.arrayElement();
+	const WASM::CanonStorageType& storage = element.storage;
+	std::uint32_t width = storage.isPacked
+			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
+			: sharedAtomicNumericWidth(storage.value.opcode);
+	if (width == 0)
+		throw std::runtime_error("AsmJit does not lower shared atomics for reference or v128 elements yet");
+	const uint32_t lengthOffset = static_cast<uint32_t>(WASM::GcHeader::kArrayLengthOffset);
+	const uint32_t dataOffset = static_cast<uint32_t>(WASM::gcArrayDataOffset(storage));
+	const uint32_t elementBytes = static_cast<uint32_t>(WASM::gcStorageBytes(storage));
+	const int valueWidth = width <= 4 ? 4 : 8;
+		if (!element.isMutable)
+			throw std::runtime_error("AsmJit array.atomic operation on an immutable array");
+		if (values.size() < 3)
+			throw std::runtime_error("AsmJit array.atomic.rmw operand stack underflow");
+		auto value = values.back(); values.pop_back();
+		auto index = values.back(); values.pop_back();
+		auto ref = values.back(); values.pop_back();
+		auto address = emitArrayAtomicAddress(ref, index, lengthOffset, dataOffset, elementBytes);
+		emitSharedAtomicRmw(ordering, width, WASM_ATOMIC_OR, valueWidth, address, value);
+	}
+
+	void dispatchArrayAtomicRmwXor(uint8_t ordering, WASM::TypeIdx arg) override
+	{
+	const WASM::CoreTypeView view = module.typeView(arg);
+	if (view.kind() != WASM::CanonTypeKind::Array)
+		throw std::runtime_error("AsmJit shared array atomic requires an array type");
+	const WASM::CanonFieldType& element = view.arrayElement();
+	const WASM::CanonStorageType& storage = element.storage;
+	std::uint32_t width = storage.isPacked
+			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
+			: sharedAtomicNumericWidth(storage.value.opcode);
+	if (width == 0)
+		throw std::runtime_error("AsmJit does not lower shared atomics for reference or v128 elements yet");
+	const uint32_t lengthOffset = static_cast<uint32_t>(WASM::GcHeader::kArrayLengthOffset);
+	const uint32_t dataOffset = static_cast<uint32_t>(WASM::gcArrayDataOffset(storage));
+	const uint32_t elementBytes = static_cast<uint32_t>(WASM::gcStorageBytes(storage));
+	const int valueWidth = width <= 4 ? 4 : 8;
+		if (!element.isMutable)
+			throw std::runtime_error("AsmJit array.atomic operation on an immutable array");
+		if (values.size() < 3)
+			throw std::runtime_error("AsmJit array.atomic.rmw operand stack underflow");
+		auto value = values.back(); values.pop_back();
+		auto index = values.back(); values.pop_back();
+		auto ref = values.back(); values.pop_back();
+		auto address = emitArrayAtomicAddress(ref, index, lengthOffset, dataOffset, elementBytes);
+		emitSharedAtomicRmw(ordering, width, WASM_ATOMIC_XOR, valueWidth, address, value);
+	}
+
+	void dispatchArrayAtomicRmwXchg(uint8_t ordering, WASM::TypeIdx arg) override
+	{
+	const WASM::CoreTypeView view = module.typeView(arg);
+	if (view.kind() != WASM::CanonTypeKind::Array)
+		throw std::runtime_error("AsmJit shared array atomic requires an array type");
+	const WASM::CanonFieldType& element = view.arrayElement();
+	const WASM::CanonStorageType& storage = element.storage;
+	std::uint32_t width = storage.isPacked
+			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
+			: sharedAtomicNumericWidth(storage.value.opcode);
+	if (width == 0)
+		throw std::runtime_error("AsmJit does not lower shared atomics for reference or v128 elements yet");
+	const uint32_t lengthOffset = static_cast<uint32_t>(WASM::GcHeader::kArrayLengthOffset);
+	const uint32_t dataOffset = static_cast<uint32_t>(WASM::gcArrayDataOffset(storage));
+	const uint32_t elementBytes = static_cast<uint32_t>(WASM::gcStorageBytes(storage));
+	const int valueWidth = width <= 4 ? 4 : 8;
+		if (!element.isMutable)
+			throw std::runtime_error("AsmJit array.atomic operation on an immutable array");
+		if (values.size() < 3)
+			throw std::runtime_error("AsmJit array.atomic.rmw operand stack underflow");
+		auto value = values.back(); values.pop_back();
+		auto index = values.back(); values.pop_back();
+		auto ref = values.back(); values.pop_back();
+		auto address = emitArrayAtomicAddress(ref, index, lengthOffset, dataOffset, elementBytes);
+		emitSharedAtomicRmw(ordering, width, WASM_ATOMIC_XCHG, valueWidth, address, value);
+	}
+
+	void dispatchArrayAtomicRmwCmpxchg(uint8_t ordering, WASM::TypeIdx arg) override
+	{
+	const WASM::CoreTypeView view = module.typeView(arg);
+	if (view.kind() != WASM::CanonTypeKind::Array)
+		throw std::runtime_error("AsmJit shared array atomic requires an array type");
+	const WASM::CanonFieldType& element = view.arrayElement();
+	const WASM::CanonStorageType& storage = element.storage;
+	std::uint32_t width = storage.isPacked
+			? (storage.packed == WASM::ValueTypeCode::I8 ? 1u : 2u)
+			: sharedAtomicNumericWidth(storage.value.opcode);
+	if (width == 0)
+		throw std::runtime_error("AsmJit does not lower shared atomics for reference or v128 elements yet");
+	const uint32_t lengthOffset = static_cast<uint32_t>(WASM::GcHeader::kArrayLengthOffset);
+	const uint32_t dataOffset = static_cast<uint32_t>(WASM::gcArrayDataOffset(storage));
+	const uint32_t elementBytes = static_cast<uint32_t>(WASM::gcStorageBytes(storage));
+	const int valueWidth = width <= 4 ? 4 : 8;
+		if (!element.isMutable)
+			throw std::runtime_error("AsmJit array.atomic operation on an immutable array");
+		if (values.size() < 4)
+			throw std::runtime_error("AsmJit array.atomic.rmw operand stack underflow");
+		auto replacement = values.back(); values.pop_back();
+		auto expected = values.back(); values.pop_back();
+		auto index = values.back(); values.pop_back();
+		auto ref = values.back(); values.pop_back();
+		auto address = emitArrayAtomicAddress(ref, index, lengthOffset, dataOffset, elementBytes);
+		emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacement);
+	}
 
 	void dispatchGlobalGet(WASM::GlobalIdx index) override { emitGlobalGet(index); }
 	void dispatchGlobalSet(WASM::GlobalIdx index) override { emitGlobalSet(index); }
@@ -4445,15 +5399,27 @@ reinterpret_cast<uint64_t>(&::wasm_atomic_pause), signature),
 		const size_t stackHeight = controls.empty() ? 0 : controls.back().stackHeight;
 		const size_t placeholderCount = controls.empty() ? resultCount : controls.back().resultCount;
 		values.resize(stackHeight);
-		if (resultCount == 0) {
+		if (frameMode || resultCount == 0 || bufferedVectorResult) {
 			checkError(compiler.ret(), "AsmJit unreachable void return emission failed");
+		} else if (resultCount == 1) {
+			const WASM::ValueTypeCode code = resultTypes.front();
+			if (isFloatKind(code)) {
+				auto zero = compiler.new_xmm("unreachableFloatResult");
+				checkError(compiler.xorps(zero, zero),
+						"AsmJit unreachable float result initialisation failed");
+				checkError(compiler.ret(zero), "AsmJit unreachable float return emission failed");
+			} else {
+				auto zero = kindWidth(code) == 8
+						? compiler.new_gp64("unreachableResult")
+						: compiler.new_gp32("unreachableResult");
+				checkError(compiler.xor_(zero, zero),
+						"AsmJit unreachable result initialisation failed");
+				checkError(compiler.ret(zero), "AsmJit unreachable result return emission failed");
+			}
 		} else {
-			auto zero = resultType == WASM::ValueTypeCode::I64
-					? compiler.new_gp64("unreachableResult") : compiler.new_gp32("unreachableResult");
-			checkError(compiler.xor_(zero, zero), "AsmJit unreachable result initialisation failed");
-			checkError(compiler.ret(zero), "AsmJit unreachable result return emission failed");
+			checkError(compiler.ret(), "AsmJit unreachable multi-result return failed");
 		}
-		if (placeholderCount != 0) {
+		for (size_t i = 0; i < placeholderCount; ++i) {
 			auto placeholder = compiler.new_gp32("unreachableStackPlaceholder");
 			checkError(compiler.xor_(placeholder, placeholder), "AsmJit unreachable placeholder initialisation failed");
 			values.push_back(placeholder);
@@ -4755,8 +5721,10 @@ private:
 		ControlKind kind = ControlKind::Block;
 		size_t stackHeight = 0;
 		size_t resultCount = 0;
-		WASM::ValueTypeCode resultType = WASM::ValueTypeCode::Void;
-		asmjit::x86::Gp result;
+		//! Declared result types, in order (multi-value blocks included).
+		std::vector<WASM::ValueTypeCode> resultTypes;
+		//! One register per declared result, filled by a branch and read at `end`.
+		std::vector<asmjit::x86::Gp> results;
 		asmjit::Label begin;
 		asmjit::Label alternate;
 		asmjit::Label end;
@@ -5253,11 +6221,13 @@ private:
 		ControlFrame frame;
 		frame.kind = kind;
 		frame.stackHeight = values.size();
-		frame.resultType = blockResultType(type);
-		frame.resultCount = frame.resultType == WASM::ValueTypeCode::Void ? 0 : 1;
-		if (frame.resultCount != 0) {
-			frame.result = kindWidth(frame.resultType) == 8
-					? compiler.new_gp64("blockResult") : compiler.new_gp32("blockResult");
+		frame.resultTypes = blockResultTypes(type);
+		frame.resultCount = frame.resultTypes.size();
+		for (WASM::ValueTypeCode code : frame.resultTypes) {
+			if (kindWidth(code) == 0)
+				throw std::runtime_error("AsmJit structured control flow supports only scalar block results");
+			frame.results.push_back(kindWidth(code) == 8
+					? compiler.new_gp64("blockResult") : compiler.new_gp32("blockResult"));
 		}
 		if (kind == ControlKind::Loop) {
 			frame.begin = compiler.new_label();
@@ -5268,26 +6238,27 @@ private:
 		controls.push_back(frame);
 	}
 
-	WASM::ValueTypeCode blockResultType(const WASM::BlockType& type) const
+	std::vector<WASM::ValueTypeCode> blockResultTypes(const WASM::BlockType& type) const
 	{
+		std::vector<WASM::ValueTypeCode> results;
 		if (type.isVoid())
-			return WASM::ValueTypeCode::Void;
+			return results;
 		if (type.isTypeIndex) {
 			if (type.typeIndex < 0 || static_cast<uint32_t>(type.typeIndex) >= module.typeCount())
 				throw std::runtime_error("AsmJit block type index is out of range");
 			const WASM::FuncType blockType = module.funcTypeAt(static_cast<uint32_t>(type.typeIndex));
 			if (!blockType.params.empty())
 				throw std::runtime_error("AsmJit block parameters are not supported yet");
-			if (blockType.results.size() > 1)
-				throw std::runtime_error("AsmJit block multi-value results are not supported yet");
-			if (blockType.results.empty())
-				return WASM::ValueTypeCode::Void;
-			requireScalar(blockType.results.front().val, "block results");
-			return blockType.results.front().val.opcode;
+			for (const auto& result : blockType.results) {
+				requireScalar(result.val, "block results");
+				results.push_back(result.val.opcode);
+			}
+			return results;
 		}
 		if (kindWidth(type.valType) == 0)
 			throw std::runtime_error("AsmJit structured control flow supports only scalar block results");
-		return type.valType;
+		results.push_back(type.valType);
+		return results;
 	}
 
 	void storeBlockResult(const ControlFrame& frame, const char* description)
@@ -5295,8 +6266,10 @@ private:
 		if (values.size() != frame.stackHeight + frame.resultCount)
 			throw std::runtime_error(std::string("AsmJit ") + description
 					+ " leaves an unexpected operand stack shape");
-		if (frame.resultCount != 0)
-			checkError(compiler.mov(frame.result, values.back()), "AsmJit structured result transfer failed");
+		const size_t first = values.size() - frame.resultCount;
+		for (size_t i = 0; i < frame.resultCount; ++i)
+			checkError(compiler.mov(frame.results[i], values[first + i]),
+					"AsmJit structured result transfer failed");
 	}
 	void emitBinary(BinaryOp operation)
 	{
