@@ -1,0 +1,118 @@
+# Staging call ABI: two arguments, one frame {#doc_staging_call_abi}
+
+**Status:** proposal, 2026-11-06. Amends
+[`V128_SIGNATURE_DECISION.md`](V128_SIGNATURE_DECISION.md) §28 (not yet adopted).
+**Author of the idea:** the observation that a compiled function only ever *needs*
+two arguments — the `VMContext*` and a pointer to an argument/result frame.
+
+## 1. Why
+
+Four independent defects and limits share one cause: we ask the **register file**
+to carry a wasm call's whole argument and result shape.
+
+| Problem | Where it bites | Root cause |
+|---|---|---|
+| `D-L1`: libjit loses the sixth integer argument (`r9`) | LibJIT | argument words in registers |
+| SLJIT caps a function at **four** arguments | SLJIT | `function_check_arguments`, `sljitLir.c:924` |
+| SLJIT cannot *declare* an argument with no saved register | SLJIT | same |
+| `v128` results in a vector register (AsmJIT) | AsmJIT | result in a register class |
+| `v128` parameter spelling differs per backend | LibJIT vs the rest | register/aggregate classification |
+| Cross-backend calls are **illegal** | the seam | spellings cannot agree across backends |
+
+Every row disappears if the arguments and results are **memory**, not parameters.
+
+## 2. The contract
+
+> **A compiled wasm function has the C signature `void fn(VMContext*, void* frame)`.**
+>
+> `frame` is a caller-allocated, 16-byte-aligned region. The first
+> `argsBytes(ft)` bytes hold the parameter values in declaration order, each
+> `v128` as 16 bytes little-endian, every other value as its natural width
+> rounded up to 8. The next `resultsBytes(ft)` bytes receive the results in the
+> same layout.
+
+Consequences, stated plainly:
+
+* **Two C arguments, always.** SLJIT's four-argument cap is never approached;
+  nothing is ever stack-passed by the host ABI.
+* **No register-class questions.** An aggregate, two words and a vector register
+  all become the same thing: 16 bytes at an offset.
+* **`D-L1` retires.** LibJIT's `r9` defect cannot occur because no parameter ever
+  occupies `r9` beyond the context pointer.
+* **The per-backend spelling divergence disappears**, so the cross-backend
+  prohibition can be lifted.
+* **`v128` results need no special case** -- they are bytes in the frame, exactly
+  like a multi-value tuple already is.
+
+## 3. Layout
+
+The existing rules already define the bytes; nothing new is needed:
+
+| Concern | Existing owner |
+|---|---|
+| tuple field offsets, alignment, `v128` = 16 bytes LE | `docs/ABI.md`, "The result tuple layout"; `WASM::aggregateLayout` |
+| how many words a kind occupies | `argSlotCount` / `mapArgSlots` in `WasmBackendAbi.hpp` |
+| the `v128` stored form | `WasmGcHeader.hpp` (16 bytes, 16-aligned, little-endian) |
+
+New core helpers only, purely arithmetic:
+`argsBytes(const FuncType&)`, `resultsBytes(const FuncType&)`, `frameBytes(ft)`,
+and `argumentOffset(ft, parameter)` / `resultOffset(ft, index)`.
+
+## 4. What each side does
+
+**Caller** (host, or compiled code making a call): reserve
+`frameBytes(ft)` bytes; write the arguments at their offsets; call
+`fn(ctx, frame)`; read the results at `argsBytes(ft) + resultOffset(i)`.
+
+**Callee** (a compiled wasm function): in the prologue, load each parameter from
+`frame + argumentOffset(i)` into its local slot; in the epilogue, store each
+result at `frame + argsBytes + resultOffset(i)` and return.
+
+Both sides derive the offsets from the **same `FuncType`**, which is the property
+that makes the ABI canonical: it is defined by bytes, not by registers, so it is
+identical on SysV, MS x64, AAPCS64, RISC-V and MIPS.
+
+## 5. What this costs
+
+* **One memory round trip per call and per return.** For scalar-heavy code this
+  is a real regression: today a three-argument call costs three registers, and
+  would cost three stores plus three loads. That is the price of portability, and
+  it should be measured (`docs/ABI_PORTABILITY.md` already ranks portability
+  above performance, but the number belongs in the record).
+* **Every backend's prologue and epilogue change**, and the core's invocation
+  path (`callCallable`, the call cache, the harness) must speak the frame form.
+* **Tail calls** need the frame pointer carried through the trampoline, or a copy
+  from caller frame to callee frame.
+* **This is a decision change**, not an implementation detail: the frozen
+  surfaces in `docs/API_ABI_STABILITY.md` include the embedder-facing invocation
+  shape.
+
+## 6. Migration (additive, per backend)
+
+1. **Core**: add the arithmetic helpers and a `FrameCall` capability on the
+   backend seam. Nothing existing changes.
+2. **Per backend**: emit the two-argument form behind that capability; keep the
+   current form working. Each backend flips when *its* pins pass.
+3. **Invocation**: `callCallableFrame(callable, ft, args...)` alongside the
+   existing `callCallable`; the cache grows a frame mode.
+4. **Retire**: once all three backends and the harness speak the frame form, the
+   register-form spellings, `D-L1`, the SLJIT four-argument refusal and the
+   cross-backend prohibition all go away together.
+
+## 7. Why this beats the alternatives
+
+| Alternative | Why not |
+|---|---|
+| keep per-backend spellings | four live divergences, and cross-backend calls must stay illegal |
+| SLJIT context-pointer only | fixes SLJIT and leaves LibJIT's `r9` and AsmJIT's vector result |
+| raise SLJIT's cap upstream | cannot be done from here, and does not touch the other three |
+
+## 8. Gates
+
+* `[staging][abi]` per backend: a function with `(v128, v128, v128) -> v128`
+  round-trips through a frame on **all three** backends, including LibJIT --
+  which is the case that cannot work today at all.
+* Every existing pin keeps passing until its backend flips, then is re-pointed at
+  the frame form rather than deleted.
+* A cross-backend call test, un-skipped, once the policy can be lifted.
+

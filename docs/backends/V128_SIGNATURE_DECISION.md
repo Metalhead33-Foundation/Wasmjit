@@ -750,6 +750,13 @@ there; on MS x64 the aggregate is passed by reference, which is a divergence tha
 because of the policy below. The host boundary follows it: `WasmCallCache` asks the module
 instance for the spelling and describes the matching shape to libffi.
 
+**Open proposal (2026-11-06):** [`STAGING_CALL_ABI.md`](STAGING_CALL_ABI.md)
+amends §28 with a two-argument form -- `void fn(VMContext*, void* frame)` -- in
+which every parameter and result lives in one caller-allocated, 16-byte-aligned
+frame. Its motivation is that a single change retires four limits at once: LibJIT's
+sixth-argument loss (`D-L1`), SLJIT's four-argument cap, AsmJIT's vector-register
+result, and the need for the cross-backend prohibition below. Not adopted.
+
 **Policy (2026-11-06): cross-backend calls are illegal.** No call may have its caller compiled by
 one backend and its callee by another. This is what lets the three spellings above coexist: no
 call ever crosses between them, so the parameter rules never have to agree across backends. A
