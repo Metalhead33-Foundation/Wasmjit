@@ -50,13 +50,14 @@ public:
 	/*!
 	 * \brief Reports whether a signature cannot be delivered by the register form.
 	 * \param function Wasm function type.
-	 * \return True when the signature needs the staging frame: a `v128` anywhere, more
-	 *         than one result, or more argument entries than the C ABI call allows.
+	 * \return True when the signature needs the staging frame: a `v128` anywhere,
+	 *         more than one result, or more argument entries than the C ABI allows.
 	 *
-	 * This is the measurement that makes the frame form a *decision* instead of a
-	 * process-wide switch (docs/backends/PRODUCTION_GAPS.md section 1). It is not yet
-	 * consulted by the module compiler, so it changes no behaviour today.
+	 * Not yet consulted by the module compiler, so it changes no behaviour alone
+	 * (docs/backends/PRODUCTION_GAPS.md section 10).
 	 */
+	static bool signatureNeedsFrame(const WASM::FuncType& function);
+
 	/*!
 	 * \brief Reports whether any signature in a module needs the frame form.
 	 * \param module Module whose function types are examined.
@@ -64,10 +65,9 @@ public:
 	 * \return True when the module must use the frame form throughout.
 	 *
 	 * Option 1 of docs/backends/PRODUCTION_GAPS.md section 11: the mode is module-wide,
-	 * so one signature that cannot be delivered by the register form decides for all.
+	 * so one signature the register form cannot deliver decides for all of them.
 	 */
 	static bool moduleNeedsFrame(const WASM::Module& module, bool optIn);
-	static bool signatureNeedsFrame(const WASM::FuncType& function);
 /*!
 	 * \brief Builds the native function signature used by generated code.
 	 * \param function Wasm function type.
