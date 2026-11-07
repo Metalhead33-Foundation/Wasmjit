@@ -384,3 +384,31 @@ std::filesystem::path(WASM_TEST_DIR) / "v128_boundary_order.wasm");
 		CHECK_FALSE(instance.frameCallAbi());
 	}
 }
+
+TEST_CASE("SLJIT passes a frame between compiled functions",
+"[staging][sljit][abi][call]")
+{
+	// Step 3b: the export calls a callee that also takes three vectors, so both
+	// argument packing and result unpacking cross the staging frame
+	// (docs/backends/STAGING_CALL_ABI.md).
+	auto runtime = WASM::Runtime::create("sljit");
+	REQUIRE(runtime != nullptr);
+	auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "staging_call.wasm");
+	WASM::RegistryImportResolver imports;
+	WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+	CHECK(instance.frameCallAbi());
+
+	const std::optional<WASM::Callable> callable = instance.exportedFunction("via_call");
+	REQUIRE(callable.has_value());
+	REQUIRE(callable->fnPtr != nullptr);
+
+	alignas(16) std::uint8_t frame[56] = {};
+	const std::uint32_t lanes[3][4] = {{1, 1, 1, 1}, {2, 2, 2, 2}, {3, 3, 3, 3}};
+	for (int i = 0; i < 3; ++i)
+		std::memcpy(frame + 16 * i, lanes[i], 16);
+	WASM::callCallableFrame(*callable, frame);
+	std::int32_t result = 0;
+	std::memcpy(&result, frame + 48, sizeof(result));
+	CHECK(result == 6);
+}

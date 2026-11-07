@@ -299,3 +299,35 @@ retrying.
 *Nothing else in step 3b is in doubt*: the scratch sizing, the packing loop, the
 `icall` shape and the result unpacking were all written and compiled; the only
 unknown is the address-taking primitive.
+
+### Step 3b, second attempt: done. The crash was our argument order
+
+The open crash was `FUNCTION_CHECK_DST` in `check_sljit_get_local_base`, and the
+cause was not SLJIT's contract but **our call to it**:
+
+```cpp
+sljit_get_local_base(compiler, dst, dstw, offset)
+```
+
+`dstw` must be **zero** -- the function checks `(p != SLJIT_SP) && (i == 0)` -- and
+the first attempt passed the *offset* in the `dstw` position. One transposed
+argument, one assertion four layers down.
+
+**Now working.** `[staging][sljit][abi][call]` instantiates `staging_call.wasm` -- an
+export that takes three vectors and calls a callee that also takes three -- builds
+a 56-byte frame, calls the export through `callCallableFrame`, and reads **6** from
+the result block. That exercises the whole path in both directions: arguments
+packed from the operand stack into the scratch area, `(ctx, frame)` called through
+the resolved `Callable`, and the result copied back into the operand slots.
+
+Details that mattered and are now in the code:
+
+* the scratch area is 16 slots after the operand stack (`callFrameOffset()`), so a
+  callee frame never disturbs a live operand;
+* the scratch address is taken with **`sljit_get_local_base(..., 0, offset)`** and
+  re-taken after the call, because `R1` is caller-saved;
+* the two call-path refusals (`kMaxWasmParameters`) apply only to the register
+  form, so a wide module may call a wide callee;
+* `call` and `call_indirect` lost their frame guards; **tail calls keep theirs**,
+  since the trampoline does not carry a frame pointer yet -- that is the remaining
+  refusal in the frame form, and it is honest.

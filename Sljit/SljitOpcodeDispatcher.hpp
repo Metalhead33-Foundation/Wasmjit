@@ -652,6 +652,8 @@ private:
 	//! Offset of the reserved slot holding the caller's staging-frame pointer.
 	/** \brief Offset of the reserved slot holding the frame pointer. \return Frame offset in bytes. */
 	sljit_sw frameSlotOffset() const;
+	/** \brief Offset of the staging scratch area used to build a callee frame. \return Frame offset in bytes. */
+	sljit_sw callFrameOffset() const;
 	//! True when this module compiles to the staging-frame ABI
 	//! (`docs/backends/STAGING_CALL_ABI.md`): `void fn(VMContext*, void* frame)`,
 	//! with every parameter and result in the caller's frame.

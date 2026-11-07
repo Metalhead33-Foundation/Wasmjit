@@ -1038,7 +1038,8 @@ bool OpcodeDispatcher::beginFunction()
 		return false;
 	}
 
-	const std::size_t frameSlots = localSlots_ + kReservedSlots + maxStackDepth_;
+	const std::size_t frameSlots = localSlots_ + kReservedSlots + maxStackDepth_
+			+ (frameAbi_ ? 16u : 0u); // 256 bytes of staging scratch for callee frames
 	if (frameSlots > SLJIT_MAX_LOCAL_SIZE / kSlotBytes) {
 		unsupportedReason_ = "the function frame exceeds SLJIT's local-area limit";
 		return false;
@@ -1385,6 +1386,14 @@ sljit_sw OpcodeDispatcher::frameSlotOffset() const
 	// Reserved slot 8, after the result buffer: the staging-frame pointer has to
 	// survive helper calls, which clobber R0-R3.
 	return static_cast<sljit_sw>((localSlots_ + 8) * kSlotBytes);
+}
+
+sljit_sw OpcodeDispatcher::callFrameOffset() const
+{
+	// The staging scratch area sits after the operand stack, so a callee frame is
+	// built without disturbing any live operand.
+	return static_cast<sljit_sw>(
+			(localSlots_ + kReservedSlots + maxStackDepth_) * kSlotBytes);
 }
 
 sljit_sw OpcodeDispatcher::selectorBlockOffset() const
@@ -1992,6 +2001,73 @@ void OpcodeDispatcher::emitResolvedCall(const WASM::FuncType& type, int callable
 	emit(sljit_emit_select(compiler_, SLJIT_EQUAL, SLJIT_R2,
 			SLJIT_MEM1(SLJIT_SP), contextSlotOffset(), SLJIT_R2));
 
+	// Frame form: pack the arguments into the caller's staging scratch area, call
+	// `(context, frame)`, then copy the results back into the operand slots
+	// (docs/backends/STAGING_CALL_ABI.md, step 3b).
+	if (frameAbi_) {
+		const std::size_t base = stackWidths_.size() - type.params.size();
+		std::vector<WASM::ValueKind> argumentKinds;
+		argumentKinds.reserve(type.params.size());
+		for (const WASM::StorageType& parameter : type.params) {
+			if (isFloatKind(parameter.val.opcode))
+				onUnhandledOpcode("a float argument to a frame-form call");
+			argumentKinds.push_back(WASM::valueKindOf(parameter.val.opcode));
+		}
+		const std::uint32_t argumentBytes = WASM::frameArgumentsBytes(argumentKinds);
+		const int resultWidth = type.results.empty() ? 0 : widthOf(type.results.front().val);
+		const std::uint32_t resultBytes = resultWidth == 0 ? 0u
+				: WASM::frameValueBytes(WASM::valueKindOf(type.results.front().val.opcode));
+		if (argumentBytes + resultBytes > 256u) {
+			onUnhandledOpcode("a frame-form call whose frame exceeds the staging scratch");
+			return;
+		}
+
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0, SLJIT_R2, 0));
+		// `sljit_get_local_base(compiler, dst, dstw, offset)`: dstw must be zero.
+		emit(sljit_get_local_base(compiler_, SLJIT_R1, 0, callFrameOffset()));
+		for (std::size_t i = 0; i < type.params.size(); ++i) {
+			const sljit_sw offset = static_cast<sljit_sw>(WASM::frameArgumentOffset(
+					argumentKinds, static_cast<std::uint32_t>(i)));
+			const int width = widthOf(type.params[i].val);
+			if (width == 16) {
+				emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R3, 0,
+						SLJIT_MEM1(SLJIT_SP), stackSlotOffset(base + i)));
+				emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_R1), offset,
+						SLJIT_R3, 0));
+				emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R3, 0,
+						SLJIT_MEM1(SLJIT_SP), stackSlotOffset(base + i) + 8));
+				emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_R1), offset + 8,
+						SLJIT_R3, 0));
+			} else {
+				loadSlot(SLJIT_R3, base + i, width);
+				emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_R1), offset,
+						SLJIT_R3, 0));
+			}
+		}
+		emit(sljit_emit_icall(compiler_, SLJIT_CALL, SLJIT_ARGS2V(P, P),
+				SLJIT_MEM1(SLJIT_SP), targetSlotOffset()));
+		if (resultWidth != 0) {
+			// R1 is caller-saved, so the scratch address is taken again.
+			emit(sljit_get_local_base(compiler_, SLJIT_R1, 0, callFrameOffset()));
+			if (resultWidth == 16) {
+				emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R3, 0,
+						SLJIT_MEM1(SLJIT_R1), static_cast<sljit_sw>(argumentBytes)));
+				emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+						stackSlotOffset(base), SLJIT_R3, 0));
+				emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R3, 0,
+						SLJIT_MEM1(SLJIT_R1), static_cast<sljit_sw>(argumentBytes) + 8));
+				emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+						stackSlotOffset(base) + 8, SLJIT_R3, 0));
+			} else {
+				emit(sljit_emit_op1(compiler_, resultWidth == 4 ? SLJIT_MOV_U32 : SLJIT_MOV,
+						SLJIT_R3, 0, SLJIT_MEM1(SLJIT_R1),
+						static_cast<sljit_sw>(argumentBytes)));
+				storeSlot(SLJIT_R3, base, resultWidth);
+			}
+		}
+		return;
+	}
+
 	const std::size_t base = stackWidths_.size() - type.params.size();
 	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0, SLJIT_R2, 0));
 	std::uint32_t integerIndex = 0;
@@ -2034,7 +2110,8 @@ void OpcodeDispatcher::emitCall(WASM::FuncIdx index, bool isTail)
 			? module_.importFunctions[index].typeIdx
 			: module_.internalFunctionTypeIndices[index - importedCount];
 	const WASM::FuncType calledType = module_.funcTypeAt(typeIndex);
-	require(calledType.params.size() <= kMaxWasmParameters,
+	if (0 == static_cast<int>(frameAbi_))
+		require(calledType.params.size() <= kMaxWasmParameters,
 			"the SLJIT backend cannot call a function with more than three parameters");
 	require(calledType.results.size() <= 1,
 			"the SLJIT backend cannot call a multi-result function");
@@ -2076,7 +2153,8 @@ void OpcodeDispatcher::emitCallIndirect(WASM::TypeIdx typeIndex, WASM::TableIdx 
 	require(static_cast<std::uint32_t>(typeIndex) < module_.typeCount(),
 			"the call_indirect type index is out of range");
 	const WASM::FuncType calledType = module_.funcTypeAt(typeIndex);
-	require(calledType.params.size() <= kMaxWasmParameters,
+	if (0 == static_cast<int>(frameAbi_))
+		require(calledType.params.size() <= kMaxWasmParameters,
 			"the SLJIT backend cannot call a function with more than three parameters");
 	require(calledType.results.size() <= 1,
 			"the SLJIT backend cannot call a multi-result function");
@@ -2119,22 +2197,11 @@ void OpcodeDispatcher::emitCallIndirect(WASM::TypeIdx typeIndex, WASM::TableIdx 
 
 void OpcodeDispatcher::dispatchCall(WASM::FuncIdx arg)
 {
-	if (frameAbi_) {
-		// The frame form is emitted for functions, not yet for call sites: a call
-		// would hand register arguments to a callee that reads a frame. Refuse
-		// rather than miscompile (docs/backends/STAGING_CALL_ABI.md, step 3 note).
-		onUnhandledOpcode("call (a frame-form module with internal calls)");
-		return;
-	}
 	emitCall(arg, false);
 }
 
 void OpcodeDispatcher::dispatchCallIndirect(WASM::TypeIdx arg1, WASM::TableIdx arg2)
 {
-	if (frameAbi_) {
-		onUnhandledOpcode("call_indirect (a frame-form module with internal calls)");
-		return;
-	}
 	emitCallIndirect(arg1, arg2, false);
 }
 
