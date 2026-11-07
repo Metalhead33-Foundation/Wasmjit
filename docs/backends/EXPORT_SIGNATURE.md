@@ -507,3 +507,40 @@ home.
 **Status:** §16's adapter is superseded for the boundary. It remains correct for a
 different question -- a same-process, cross-backend *call* -- which is optional and
 may stay forbidden.
+
+## 18. P0b landed: a frame-mode AsmJIT module with imports is refused
+
+```cpp
+if (frameMode && !module.importFunctions.empty())
+    throw std::runtime_error("AsmJIT frame ABI: calls into imports are not implemented");
+```
+
+in `ModuleCompiler::translateTypes`, before any code is generated. The reasoning is
+the same as LibJIT's P0a, with one addition: a **wasm-to-wasm** import is not safe
+either, because it is compiled by its own instance in whatever mode *that* instance
+chose. Handing either kind `(ctx, frame)` would be a silent ABI mismatch.
+
+**Evidence:** the whole suite stays at 21811 assertions in 763 cases and all five
+step-5 gates still pass (21 in 5) -- no existing AsmJIT gate uses a module with
+imports, which is exactly why the hole existed unnoticed.
+
+### What is missing, stated rather than implied
+
+**There is no gate test for P0b yet.** It needs a fixture with a *resolvable* import
+(an unresolved one would throw from import resolution instead, and the test would
+pass for the wrong reason). The honest gate is:
+
+* a `.wat` with an import and a call to it, registered through a resolver;
+* under the opt-in: instantiation throws with *this* message;
+* without it: the module compiles and the import call works.
+
+That is the first unit of the next session. Until it exists, P0b is a guard with no
+proof -- better than a silent mismatch, but not yet a verified refusal.
+
+### Where P0 stands now
+
+| Subtask | State |
+|---|---|
+| P0a -- LibJIT refuses calls in frame mode | **done**, gated by `[staging][libjit][abi][call]` |
+| P0a' -- instantiation failure leaves the runtime usable | **done**, gated by `WASMJIT_SAFETY_PROBES=1` |
+| P0b -- AsmJIT refuses modules with imports in frame mode | **guard landed**, gate test pending |

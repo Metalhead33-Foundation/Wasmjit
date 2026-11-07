@@ -5151,6 +5151,14 @@ void ModuleCompiler::translateTypes(WASM::ModuleInstance& instance, const WASM::
 	// is decided before translation, because the signature itself changes shape.
 	// Opt-in, never inferred -- see WasmBase/WasmBackendAbi.hpp.
 	const bool frameMode = WASM::frameCallAbiOptIn();
+	// An import expects the typed C signature -- a native one by definition, and a
+	// wasm-to-wasm one because it is compiled by its own instance in whatever mode
+	// that instance chose. Handing either of them (ctx, frame) would be a silent
+	// ABI mismatch, so a frame-mode module with imports is refused at module level
+	// (docs/backends/EXPORT_SIGNATURE.md sections 12 and 17).
+	if (frameMode && !module.importFunctions.empty())
+		throw std::runtime_error(
+				"AsmJIT frame ABI: calls into imports are not implemented");
 	instance.setFrameCallAbi(frameMode);
 	signatures.resize(module.typeIds.size());
 	internals.translatedTypes.assign(module.typeIds.size(), nullptr);
