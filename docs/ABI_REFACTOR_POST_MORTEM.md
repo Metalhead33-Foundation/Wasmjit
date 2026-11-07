@@ -377,3 +377,41 @@ about, and the comment must say which.
 | 5c | the three return sites | pending |
 | 5d | call sites | pending |
 | 5e | `bufferedVectorResult` deletion, gap pin inverted | pending |
+
+### 5b + 5c done: AsmJIT carries three vectors through a frame (green)
+
+The blocker named last round was one condition, not a redesign:
+
+```cpp
+if (frameMode || type.results.empty() || bufferedVectorResult)   // trap path
+```
+
+On a trap the results are undefined, so there is nothing to store and `ret()` is
+the honest emission. The site is *before* the frame pointer is captured, which is
+why the fix could not store anything even if it wanted to -- a detail worth noting
+because the ordering of the prologue made the decision for me.
+
+With that in place all three step-5 gates pass -- 10 assertions in 3 test cases --
+including **three vectors through a frame returning 6** on a backend that refuses
+vector parameters entirely in the register form. The default suite is unchanged at
+21805 assertions in 759 cases, because the whole path is behind the opt-in.
+
+### The cautious-pass finding
+
+The gate went green on the first try *because* the previous round had already named
+the failing site. The measurable difference between the two rounds was not effort
+but information: 25 minutes of code across two rounds, versus five reverts in the
+LibJIT attempt where the defect was undiagnosed.
+
+**Rule added:** a red gate whose message names a site is worth more than a green
+suite whose coverage is unknown.
+
+### Two smaller catches
+
+* **Doxygen caught a new parameter.** `bool frameAbi` arrived without a `\param`,
+  and `WARN_NO_PARAMDOC` flagged it immediately -- the header-doc discipline is
+  doing exactly the job it was adopted for.
+* **The gap pin still holds.** `[asmjit][abi][v128][gap]` asserts that a v128
+  parameter is *refused*; with the flag off it still is, so the pin remains
+  truthful for the default path. It will be inverted in 5e, when the register form
+  stops being the only option.

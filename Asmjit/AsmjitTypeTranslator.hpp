@@ -48,6 +48,7 @@ public:
 	/*!
 	 * \brief Builds the native function signature used by generated code.
 	 * \param function Wasm function type.
+	 * \param frameAbi Whether to spell the staging-frame form, `(ctx, frame) -> void`.
 	 * \return C-declaration host signature, including the implicit VMContext*.
 	 * \throws std::runtime_error for unsupported types or too many arguments.
 	 */

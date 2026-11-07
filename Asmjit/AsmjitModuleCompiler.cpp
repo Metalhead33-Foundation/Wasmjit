@@ -950,7 +950,10 @@ public:
 		asmjit::Label bodyLabel = compiler.new_label();
 		checkError(compiler.test(pending, pending), "AsmJit pending-trap test emission failed");
 		checkError(compiler.jz(bodyLabel), "AsmJit pending-trap branch emission failed");
-		if (type.results.empty() || bufferedVectorResult) {
+		if (frameMode || type.results.empty() || bufferedVectorResult) {
+			// Frame mode belongs here too: the signature returns void because the
+			// results travel in the frame, and on a trap they are undefined, so
+			// there is nothing to store (step 5c).
 			checkError(compiler.ret(), "AsmJit trap-path void return emission failed");
 		} else if (isFloatKind(resultType)) {
 			auto zero = compiler.new_xmm("trapFloatResult");
