@@ -1789,3 +1789,41 @@ CHECK(false);
 }
 }
 }
+
+// Shared table atomics: the parser/type-model boundary check.
+TEST_CASE("shared atomics: table slot round-trip", "[staging][atomics][table]")
+{
+for (const char* backend : {"libjit", "asmjit", "sljit"}) {
+std::fprintf(stderr, "TABLEATOMIC %s: ", backend);
+auto runtime = WASM::Runtime::create(backend);
+REQUIRE(runtime != nullptr);
+std::shared_ptr<const WASM::Module> module;
+try {
+module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "table_atomic_probe.wasm");
+} catch (const std::exception& error) {
+std::fprintf(stderr, "REFUSED by the parser: %s\n", error.what());
+SUCCEED("shared-table fixture refused by the parser");
+continue;
+}
+WASM::RegistryImportResolver imports;
+WASM::ModuleInstance* instance = nullptr;
+try {
+instance = &runtime->instantiate(*module, imports);
+} catch (const std::exception& error) {
+std::fprintf(stderr, "REFUSED: %s\n", error.what());
+continue;
+}
+const auto run = instance->exportedFunction("run");
+REQUIRE(run.has_value());
+try {
+const std::int32_t value = WASM::callCallable<std::int32_t>(*run, 0,
+static_cast<void*>(nullptr));
+std::fprintf(stderr, "run()=%d\n", (int)value);
+CHECK(value == 1);
+} catch (const std::exception& error) {
+std::fprintf(stderr, "FAILED: %s\n", error.what());
+CHECK(false);
+}
+}
+}

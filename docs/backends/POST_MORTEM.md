@@ -322,6 +322,12 @@ fields, array elements) and table slots, with the GC retain/release barrier.
 ### What we found (blockers, not a completion)
 
 * The numeric family is complete on all three backends (previous commit).
+* **Shared tables hit the same boundary.** A shared anyref table plus
+  `table.atomic.set/get` validates upstream, but `Runtime::loadFile` reports
+  *"malformed module: section read out of bounds"*. The parser consumes a
+  different byte count for the shared element type than the encoder wrote, so
+  the table index-space/type model, not the atomic opcode, is the next blocker.
+  `table_atomic_probe.wat` is kept as a valid fixture and a refusal probe.
 * **The core parser rejects the only valid upstream fixture.** A shared struct
   with `(ref null (shared any))` validates with the pinned `wasm-tools`, but
   `Runtime::loadFile` fails on all three backends with *"malformed mutability"*.

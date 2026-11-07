@@ -8,8 +8,8 @@ section 18 (the latest re-run).
 
 ## 1. Where the tree is
 
-**Snapshot (2026-11-07, this working tree):** `--rng-seed 12345` -> **22282
-assertions, 806 cases, green**. Gates: `[headerdoc]`, `[docs]`, `doxygen` 0
+**Snapshot (2026-11-07, this working tree):** `--rng-seed 12345` -> **22288
+assertions, 807 cases, green**. Gates: `[headerdoc]`, `[docs]`, `doxygen` 0
 warnings, `abi-check` OK.
 
 The frame ABI work is done on all three backends. Exceptions (including
