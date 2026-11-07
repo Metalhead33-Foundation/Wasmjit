@@ -270,3 +270,32 @@ yet and is the first artefact this step should add.
 **Why this is the right unit.** It is one conversion point plus one scratch sizing
 rule. Once it lands, the LibJIT and AsmJIT flips become the same edit with a
 different emitter, because the frame construction is identical in kind.
+
+### Step 3b, first attempt: one real finding and one open crash
+
+Implemented and reverted, 2026-11-06. What was built: the staging scratch area
+(`callFrameOffset()` after the operand stack, 16 extra slots reserved in frame
+mode), both call-path refusals relaxed, and the frame branch inside
+`emitResolvedCall` -- pack the arguments from the operand slots, take the scratch
+address with `sljit_get_local_base`, `icall (ctx, frame)`, then copy the result
+back. The fixture `staging_call.wat` (an export calling a three-vector callee)
+was added and built.
+
+**The finding:** the `frameAbi_` guards added to `dispatchCall` /
+`dispatchCallIndirect` on the day step 3 landed had to be **removed** for this
+step -- and doing so changed the failure from "clean refusal" to an SLJIT
+assertion, which is exactly the sequence the guard was designed to produce.
+
+**The open crash:** `sljitLir.c:3325`, `FUNCTION_CHECK_DST` inside
+`check_sljit_get_local_base`. The destination register passed to
+`sljit_get_local_base` is rejected, even though frame mode declares four
+scratches (R0-R3) and the call uses `SLJIT_R1`. So either the scratch count seen
+by the checker is not the four we pass (`sljit_emit_enter(..., 4 |
+SLJIT_ENTER_FLOAT(3), ...)`), or `sljit_get_local_base` takes something other
+than a plain scratch register here. **That is a read, not a guess:** the next move
+is to read `FUNCTION_CHECK_DST` and `sljit_get_local_base`'s contract before
+retrying.
+
+*Nothing else in step 3b is in doubt*: the scratch sizing, the packing loop, the
+`icall` shape and the result unpacking were all written and compiled; the only
+unknown is the address-taking primitive.
