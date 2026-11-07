@@ -1,5 +1,7 @@
 #include "SljitOpcodeDispatcher.hpp"
 
+#include <cstdio>
+
 #include "SljitModuleCompiler.hpp"
 
 #include "../WasmBase/WasmBackendAbi.hpp"
@@ -38,6 +40,12 @@ constexpr std::size_t kSlotBytes = 16;
 //! Reserved frame slots that follow the locals and precede the operand stack.
 //! Reserved frame cells: context, target, scratch, then the two-word selector
 //! block `i8x16.shuffle` passes to its adapter.
+//! SLJIT's own ceiling on a function's argument list: four entries, of which the
+//! first is the `VMContext*`. `function_check_arguments` in `sljitLir.c:924`
+//! rejects the fifth with a hard `return 0`, and letting it do so aborts the
+//! process rather than failing the compile.
+constexpr sljit_s32 kArgumentSlotCeiling = 4;
+
 constexpr std::size_t kReservedSlots = 8; //!< context, target, scratch, four parked argument registers, then the result buffer.
 
 //! Width of a local in bytes, or 0 when the type is outside the supported subset.
@@ -1090,11 +1098,11 @@ bool OpcodeDispatcher::beginFunction()
 	// count would trip SLJIT's own assertion and abort the whole process, which
 	// would take down every other module in the run
 	// (docs/ABI_REFACTOR_STUDY.md §35, §36).
-	if (savedCount > SLJIT_NUMBER_OF_SAVED_REGISTERS) {
+	if (savedCount > kArgumentSlotCeiling) {
 		unsupportedReason_ = "the SLJIT backend cannot pass "
 			+ std::to_string(static_cast<unsigned>(savedCount))
 			+ " argument slots: the target has only "
-			+ std::to_string(SLJIT_NUMBER_OF_SAVED_REGISTERS)
+			+ std::to_string(kArgumentSlotCeiling)
 			+ ", so this signature needs fewer vector parameters";
 		return false;
 	}

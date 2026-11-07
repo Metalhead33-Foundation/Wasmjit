@@ -209,6 +209,27 @@ Decisive probe: print `argTypes`, the scratch count and the saved count from
 `beginFunction` for a **working** `two_vectors` compile, and print the same for a failing
 probe configuration. One build, two lines of output, no guessing.
 
+### Resolved: SLJIT's ceiling is four argument slots, and the backend was too permissive
+
+The temporary probe settled the contradiction in one run. Printing `argTypes`,
+`nextSlot - 1` and `savedCount` from `beginFunction` for the **working** pins gave:
+
+```
+ENTER argTypes=0x11232 slots=4 saveds=4     (scalar then vector)
+ENTER argTypes=0x21132 slots=4 saveds=4     (vector then scalar)
+```
+
+Four slots -- exactly the `>= 4` cap in `function_check_arguments`. So nothing we compile
+today ever exceeds it: every earlier "five slots work" belief came from fixtures that had
+since been removed. The contradiction was in the study's memory, not in SLJIT.
+
+**Consequence: the backend's refusal threshold was wrong.** It refused above
+`SLJIT_NUMBER_OF_SAVED_REGISTERS` (6), so a five- or six-slot signature would have passed
+the check and then **aborted the process** inside `sljit_emit_enter`. It now refuses above
+`kArgumentSlotCeiling = 4`, with the reason in the constant's comment and a pointer at
+`sljitLir.c:924`. That turns a latent crash into a clean, diagnosable refusal -- three
+words after the context is the real capability, not five.
+
 ### Calling convention: all three backends already use the host C ABI
 
 Asked and answered from the source, because it is the assumption the whole `v128` rule
