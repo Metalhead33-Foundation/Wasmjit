@@ -502,6 +502,44 @@ which is exactly why two backends agreeing is not a spec check.
   for a rollback test; move the probe to a genuinely excluded shape (`v128`
   parameter) when the feature lands.
 
+## Remaining-gap pass — multi-result reference calls
+
+### Intended
+
+Let `call_ref` and `return_call_ref` carry the full result tuple, not just one
+value. Multi-result modules use the frame ABI, so the result block is the carrier.
+
+### What we did
+
+* AsmJIT's frame `emitCallRefInvocation` reads **every** result from the frame
+  result block (scalar register or vector buffer) and pushes it; the frame
+  multi-result return path writes every value at `frameResultOffset`.
+* SLJIT's `emitResolvedCall` frame branch copies every result to the operand-stack
+  slots starting at `base`; `dispatchCallRef` pushes all result widths; the tail
+  fallback uses `emitReturnValue`'s multi-result frame path.
+* SLJIT's ABI selection now chooses the frame form when a function has more than
+  one result, not only when its argument slots exceed four.
+
+### Evidence
+
+`tailcall_ref_multi_probe.wat`: `$tail` forwards to `$pair` with
+`return_call_ref`, both returning `(i32, i32)`; `run` adds them.
+
+```
+TAILREFMULTI asmjit: run()=11
+TAILREFMULTI sljit: run()=11
+```
+
+### Mistakes caught
+
+* The first AsmJIT edit hit the **ordinary frame call** block (same text), not
+  `emitCallRefInvocation`; the `call_ref` path still read one result. Fixing the
+  right block made the probe pass.
+* SLJIT's two-result module previously kept the register ABI and was refused at
+  the function prologue; the ABI selector now includes `results.size() > 1`.
+* `sljit: refuses a module whose function it cannot compile` used a two-result
+  fixture as its unsupported probe; it now uses a v128 block result.
+
 ## Remaining-gap pass — v128 block parameters (SLJIT, AsmJIT)
 
 ### Intended

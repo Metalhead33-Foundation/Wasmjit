@@ -1962,3 +1962,39 @@ CHECK(false);
 }
 }
 }
+
+// Multi-result call_ref/return_call_ref in the frame ABI.
+TEST_CASE("tail calls: multi-result return_call_ref is constant-stack",
+"[staging][abi][tail][ref][multi]")
+{
+for (const char* backend : {"asmjit", "sljit"}) {
+std::fprintf(stderr, "TAILREFMULTI %s: ", backend);
+auto runtime = WASM::Runtime::create(backend);
+REQUIRE(runtime != nullptr);
+auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "tailcall_ref_multi_probe.wasm");
+WASM::RegistryImportResolver imports;
+WASM::ModuleInstance* instance = nullptr;
+try {
+instance = &runtime->instantiate(*module, imports);
+} catch (const std::exception& error) {
+std::fprintf(stderr, "REFUSED: %s\n", error.what());
+CHECK(false);
+continue;
+}
+REQUIRE(instance->frameCallAbi());
+const auto run = instance->exportedFunction("run");
+REQUIRE(run.has_value());
+try {
+alignas(16) std::uint8_t frame[16] = {};
+WASM::callCallableFrame(*run, frame);
+std::int32_t value = 0;
+std::memcpy(&value, frame, sizeof(value));
+std::fprintf(stderr, "run()=%d\n", (int)value);
+CHECK(value == 11);
+} catch (const std::exception& error) {
+std::fprintf(stderr, "FAILED: %s\n", error.what());
+CHECK(false);
+}
+}
+}

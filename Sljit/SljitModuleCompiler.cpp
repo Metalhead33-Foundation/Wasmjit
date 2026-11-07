@@ -102,7 +102,9 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM
 		std::uint32_t slots = 1;
 		for (const auto& parameter : type.params)
 			slots += WASM::argSlotCount(WASM::valueKindOf(parameter.val.opcode));
-		if (slots > 4)
+		// A multi-result signature is also frame-form: the results travel in the
+		// caller's result block, not the single C return register.
+		if (slots > 4 || type.results.size() > 1)
 			frameMode = true;
 	}
 	instance.setFrameCallAbi(frameMode);

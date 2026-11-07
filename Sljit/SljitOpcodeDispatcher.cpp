@@ -2644,23 +2644,29 @@ void OpcodeDispatcher::emitResolvedCall(const WASM::FuncType& type, int callable
 		}
 		emit(sljit_emit_icall(compiler_, SLJIT_CALL, SLJIT_ARGS2V(P, P),
 				SLJIT_MEM1(SLJIT_SP), targetSlotOffset()));
-		if (resultWidth != 0) {
-			// R1 is caller-saved, so the scratch address is taken again.
+		if (!type.results.empty()) {
+			// R1 is caller-saved, so the scratch address is taken again. Results
+			// start where the argument block ends and overwrite the argument slots.
 			emit(sljit_get_local_base(compiler_, SLJIT_R1, 0, callFrameOffset()));
-			if (resultWidth == 16) {
-				emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R3, 0,
-						SLJIT_MEM1(SLJIT_R1), static_cast<sljit_sw>(argumentBytes)));
-				emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
-						stackSlotOffset(base), SLJIT_R3, 0));
-				emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R3, 0,
-						SLJIT_MEM1(SLJIT_R1), static_cast<sljit_sw>(argumentBytes) + 8));
-				emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
-						stackSlotOffset(base) + 8, SLJIT_R3, 0));
-			} else {
-				emit(sljit_emit_op1(compiler_, resultWidth == 4 ? SLJIT_MOV_U32 : SLJIT_MOV,
-						SLJIT_R3, 0, SLJIT_MEM1(SLJIT_R1),
-						static_cast<sljit_sw>(argumentBytes)));
-				storeSlot(SLJIT_R3, base, resultWidth);
+			std::uint32_t resultOffset = argumentBytes;
+			for (std::size_t i = 0; i < type.results.size(); ++i) {
+				const int width = widthOf(type.results[i].val);
+				if (width == 16) {
+					for (int word = 0; word < 2; ++word) {
+						emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R3, 0,
+								SLJIT_MEM1(SLJIT_R1),
+								static_cast<sljit_sw>(resultOffset) + word * 8));
+						emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+								stackSlotOffset(base + i) + word * 8, SLJIT_R3, 0));
+					}
+					resultOffset += 16;
+				} else {
+					emit(sljit_emit_op1(compiler_, width == 4 ? SLJIT_MOV_U32 : SLJIT_MOV,
+							SLJIT_R3, 0, SLJIT_MEM1(SLJIT_R1),
+							static_cast<sljit_sw>(resultOffset)));
+					storeSlot(SLJIT_R3, base + i, width);
+					resultOffset += 8;
+				}
 			}
 		}
 		emitPendingExceptionCheck();
@@ -2963,8 +2969,8 @@ void OpcodeDispatcher::emitTailCallIndirectState(WASM::TypeIdx typeIndex, WASM::
 	require(static_cast<std::uint32_t>(typeIndex) < module_.typeCount(),
 			"the return_call_indirect type index is out of range");
 	const WASM::FuncType calledType = module_.funcTypeAt(typeIndex);
-	require(calledType.results.size() <= 1,
-			"the SLJIT backend cannot tail-call a multi-result function");
+	require(frameAbi_ || calledType.results.size() <= 1,
+			"the SLJIT register form cannot tail-call a multi-result function");
 	for (const WASM::StorageType& parameter : calledType.params)
 		require(widthOf(parameter.val) != 0, "the SLJIT backend only calls i32/i64 signatures");
 	for (const WASM::StorageType& result : calledType.results)
@@ -3098,8 +3104,8 @@ void OpcodeDispatcher::dispatchCallRef(WASM::TypeIdx typeIndex)
 	require(static_cast<std::uint32_t>(typeIndex) < module_.typeCount(),
 			"the call_ref type index is out of range");
 	const WASM::FuncType calledType = module_.funcTypeAt(typeIndex);
-	require(calledType.results.size() <= 1,
-			"the SLJIT backend cannot call a multi-result function");
+	require(frameAbi_ || calledType.results.size() <= 1,
+			"the SLJIT register form cannot call a multi-result function");
 	if (!frameAbi_)
 		require(calledType.params.size() <= kMaxWasmParameters,
 				"the SLJIT backend cannot call a function with more than three parameters");
@@ -3116,8 +3122,8 @@ void OpcodeDispatcher::dispatchCallRef(WASM::TypeIdx typeIndex)
 		emitResolvedCall(calledType, SLJIT_R0);
 	}
 	stackWidths_.resize(stackWidths_.size() - calledType.params.size());
-	if (!calledType.results.empty())
-		push(widthOf(calledType.results.front().val));
+	for (const WASM::StorageType& result : calledType.results)
+		push(widthOf(result.val));
 }
 
 void OpcodeDispatcher::dispatchReturnCallRef(WASM::TypeIdx typeIndex)
@@ -3126,8 +3132,8 @@ void OpcodeDispatcher::dispatchReturnCallRef(WASM::TypeIdx typeIndex)
 	require(static_cast<std::uint32_t>(typeIndex) < module_.typeCount(),
 			"the return_call_ref type index is out of range");
 	const WASM::FuncType calledType = module_.funcTypeAt(typeIndex);
-	require(calledType.results.size() <= 1,
-			"the SLJIT backend cannot tail-call a multi-result function");
+	require(frameAbi_ || calledType.results.size() <= 1,
+			"the SLJIT register form cannot tail-call a multi-result function");
 	if (!frameAbi_)
 		require(calledType.params.size() <= kMaxWasmParameters,
 				"the SLJIT backend cannot tail-call a function with more than three parameters");

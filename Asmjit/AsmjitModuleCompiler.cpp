@@ -1988,26 +1988,28 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 					"AsmJit call_ref frame invocation failed");
 			invoke->set_arg(0, calleeContext);
 			invoke->set_arg(1, frameAddress);
-			if (calledType.results.size() == 1) {
-				const WASM::ValueType& declared = calledType.results.front().val;
-				if (declared.opcode == WASM::ValueTypeCode::V128) {
+			uint32_t resultOffset = offset;
+			for (const WASM::StorageType& resultType : calledType.results) {
+				if (resultType.val.opcode == WASM::ValueTypeCode::V128) {
 					auto buffer = newVectorBuffer("callRefVectorResult");
 					for (int word = 0; word < 2; ++word) {
 						auto bits = compiler.new_gp64("callRefResultWord");
 						checkError(compiler.mov(bits,
-								asmjit::x86::qword_ptr(frameAddress, offset + word * 8)),
+								asmjit::x86::qword_ptr(frameAddress, resultOffset + word * 8)),
 								"AsmJit call_ref frame vector result load failed");
 						checkError(compiler.mov(
 								asmjit::x86::qword_ptr(buffer, word * 8), bits),
 								"AsmJit call_ref frame vector result store failed");
 					}
 					values.push_back(buffer);
+					resultOffset += 16;
 				} else {
-					auto result = newIntegerRegister(compiler, declared, "callRefResult");
+					auto result = newIntegerRegister(compiler, resultType.val, "callRefResult");
 					checkError(compiler.mov(result,
-							asmjit::x86::Mem(frameAddress, offset, result.size())),
+							asmjit::x86::Mem(frameAddress, resultOffset, result.size())),
 							"AsmJit call_ref frame result load failed");
 					values.push_back(result);
+					resultOffset += 8;
 				}
 			}
 			emitPendingTrapReturn();
@@ -2028,8 +2030,8 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 	void dispatchCallRef(WASM::TypeIdx typeIndex) override
 	{
 		const WASM::FuncType calledType = module.funcTypeAt(typeIndex);
-		if (calledType.results.size() > 1)
-			throw std::runtime_error("AsmJit call_ref currently supports at most one result");
+		if (!frameMode && calledType.results.size() > 1)
+			throw std::runtime_error("AsmJit register-form call_ref supports at most one result");
 		if (!frameMode) {
 			for (const auto& parameter : calledType.params)
 				requireScalar(parameter.val, "call_ref parameters");
@@ -2190,27 +2192,29 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 			else
 				frameInvoke->set_arg(0, importedContext);
 			frameInvoke->set_arg(1, frameAddress);
-			if (calledType.results.size() == 1) {
-				const WASM::ValueType& declaredResult = calledType.results.front().val;
-				if (declaredResult.opcode == WASM::ValueTypeCode::V128) {
+			uint32_t resultOffset = offset;
+			for (const WASM::StorageType& resultType : calledType.results) {
+				if (resultType.val.opcode == WASM::ValueTypeCode::V128) {
 					asmjit::x86::Gp buffer = newVectorBuffer("callVectorResult");
 					for (int word = 0; word < 2; ++word) {
 						asmjit::x86::Gp bits = compiler.new_gp64("callResultWord");
 						checkError(compiler.mov(bits,
-								asmjit::x86::qword_ptr(frameAddress, offset + word * 8)),
+								asmjit::x86::qword_ptr(frameAddress, resultOffset + word * 8)),
 								"AsmJit call frame vector result load failed");
 						checkError(compiler.mov(
 								asmjit::x86::qword_ptr(buffer, word * 8), bits),
 								"AsmJit call frame vector result store failed");
 					}
 					values.push_back(buffer);
+					resultOffset += 16;
 				} else {
 					asmjit::x86::Gp resultRegister =
-							newIntegerRegister(compiler, declaredResult, "callResult");
+							newIntegerRegister(compiler, resultType.val, "callResult");
 					checkError(compiler.mov(resultRegister,
-							asmjit::x86::Mem(frameAddress, offset, resultRegister.size())),
+							asmjit::x86::Mem(frameAddress, resultOffset, resultRegister.size())),
 							"AsmJit call frame result load failed");
 					values.push_back(resultRegister);
+					resultOffset += 8;
 				}
 			}
 			emitPendingTrapReturn();
@@ -6433,9 +6437,34 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		if (values.empty())
 			throw std::runtime_error("AsmJit return operand stack underflow");
 		if (frameMode) {
-			if (resultCount > 1)
-				throw std::runtime_error("AsmJit frame-mode return with multiple results is not implemented");
-			emitFrameReturnValue(values.back());
+			if (resultCount == 1) {
+				emitFrameReturnValue(values.back());
+				return;
+			}
+			const std::size_t first = values.size() - resultCount;
+			uint32_t offset = frameResultOffset;
+			for (std::size_t i = 0; i < resultCount; ++i) {
+				const WASM::ValueTypeCode kind = resultTypes[i];
+				if (kind == WASM::ValueTypeCode::V128) {
+					for (int word = 0; word < 2; ++word) {
+						auto bits = compiler.new_gp64("frameResultWord");
+						checkError(compiler.mov(bits,
+								asmjit::x86::qword_ptr(values[first + i], word * 8)),
+								"AsmJit frame multi-result vector load failed");
+						checkError(compiler.mov(
+								asmjit::x86::qword_ptr(framePointer, offset + word * 8), bits),
+								"AsmJit frame multi-result vector store failed");
+					}
+					offset += 16;
+				} else {
+					const int width = kindWidth(kind) == 8 ? 8 : 4;
+					checkError(compiler.mov(
+							asmjit::x86::Mem(framePointer, offset, width), values[first + i]),
+							"AsmJit frame multi-result store failed");
+					offset += 8;
+				}
+			}
+			checkError(compiler.ret(), "AsmJit frame multi-result return failed");
 			return;
 		}
 		if (isFloatKind(resultType))

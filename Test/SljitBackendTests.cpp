@@ -2985,16 +2985,15 @@ CHECK(first == 6);
 CHECK(second == 9);
 }
 
-// 2b: an unsupported function must say WHY. A narrow two-result module keeps the
-// register form, which has nowhere to put the second result
-// (docs/backends/PRODUCTION_GAPS.md section 3).
+// 2b: an unsupported function must say WHY. A v128 block result is outside
+// SLJIT's block-result subset (multi-result functions now use the frame ABI).
 TEST_CASE("SLJIT refuses a module whose function it cannot compile",
 "[staging][sljit][abi][reason]")
 {
 	auto runtime = WASM::Runtime::create("sljit");
 	REQUIRE(runtime != nullptr);
 	auto module = runtime->loadFile(
-			std::filesystem::path(WASM_TEST_DIR) / "asmjit_multi_result.wasm");
+			std::filesystem::path(WASM_TEST_DIR) / "asmjit_i32_unsupported.wasm");
 	WASM::RegistryImportResolver imports;
 	// No partial modules: a shape the register form cannot deliver aborts the whole
 	// module with a reason, rather than yielding one with an uncallable export
