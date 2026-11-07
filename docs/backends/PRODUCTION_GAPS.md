@@ -335,7 +335,7 @@ Both failures are *informative*, and only one of them is a pin:
 | Test | What happened |
 |---|---|
 | `[asmjit][abi][v128][gap]` | my own gap pin, asserting that a `v128` parameter is **refused**. It is no longer refused -- the frame form handles it. The pin did exactly what it was for. |
-| "AsmJit rolls back code allocations when a later function is unsupported" | a **safety** test. Its fixture (`asmjit_i32_unsupported`) is now *supported*, so nothing throws and the allocation checkpoint is 1 instead of 0. |
+| "AsmJit rolls back code allocations when a later function is unsupported" | a **safety** test. Its fixture is now `asmjit_brtable_multi_unsupported` (`br_table` to a multi-result function label), because the old v128 block-result probe became supported. |
 
 The first is a one-line conversion to a positive test. The second is **not**: it guards
 rollback of code allocations when instantiation fails, and the only way to keep that
@@ -959,7 +959,7 @@ in both passes.
 
 ## 27. V-1 fixed, multi-value catches and numeric shared atomics closed (2026-11-07)
 
-**Snapshot (2026-11-07, `backendsMh33`):** suite **22379 assertions in 814
+**Snapshot (2026-11-07, `backendsMh33`):** suite **22410 assertions in 815
 cases** under `--rng-seed 12345`, green; `[headerdoc]`, `[docs]`, `doxygen`
 (0 warnings) and `abi-check` all pass. This section supersedes section 26.
 
@@ -1007,8 +1007,8 @@ are corrected. Removing it also exposed two real validator defects, both fixed:
 
 ### Multi-value blocks and catches
 
-AsmJIT's control frames now hold a vector of result registers, so a block can
-carry N results; `br`, `br_if`, `br_table`, `else` and `end` transfer all of
+AsmJIT's control frames now hold a vector of result entries, so a block can
+carry N results (scalar registers or a 16-byte vector buffer); `br`, `br_if`, `br_table`, `else` and `end` transfer all of
 them. `emitCatchBranch` writes each payload field (plus the `exnref` for
 `catch_ref`) into the target's result registers. The old single-result refusals
 are gone. `dispatchUnreachable` now returns a correctly sized zero for i64 and
@@ -1026,7 +1026,6 @@ proposal; the validator rejects them instead of leaving a backend refusal.
 
 | Gap | Backends | Reason |
 |---|---|---|
-| `v128` block results | SLJIT, AsmJIT | scalar block results only |
 | LibJIT frame-mode calls/imports/multi-result | LibJIT | **policy** |
 
 `v128` atomic slots are not in this table: the proposal does not allow them and

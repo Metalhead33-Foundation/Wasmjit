@@ -7135,10 +7135,13 @@ private:
 		frame.resultTypes = blockResultTypes(type);
 		frame.resultCount = frame.resultTypes.size();
 		for (WASM::ValueTypeCode code : frame.resultTypes) {
-			if (kindWidth(code) == 0)
-				throw std::runtime_error("AsmJit structured control flow supports only scalar block results");
-			frame.results.push_back(kindWidth(code) == 8
-					? compiler.new_gp64("blockResult") : compiler.new_gp32("blockResult"));
+			if (code == WASM::ValueTypeCode::V128)
+				frame.results.push_back(newVectorBuffer("blockVectorResult"));
+			else if (kindWidth(code) == 0)
+				throw std::runtime_error("AsmJit structured control flow does not model this block result");
+			else
+				frame.results.push_back(kindWidth(code) == 8
+						? compiler.new_gp64("blockResult") : compiler.new_gp32("blockResult"));
 		}
 		if (kind == ControlKind::Loop) {
 			frame.begin = compiler.new_label();
@@ -7175,13 +7178,14 @@ private:
 				throw std::runtime_error("AsmJit block type index is out of range");
 			const WASM::FuncType blockType = module.funcTypeAt(static_cast<uint32_t>(type.typeIndex));
 			for (const auto& result : blockType.results) {
-				requireScalar(result.val, "block results");
+				if (result.val.opcode != WASM::ValueTypeCode::V128)
+					requireScalar(result.val, "block results");
 				results.push_back(result.val.opcode);
 			}
 			return results;
 		}
-		if (kindWidth(type.valType) == 0)
-			throw std::runtime_error("AsmJit structured control flow supports only scalar block results");
+		if (type.valType != WASM::ValueTypeCode::V128 && kindWidth(type.valType) == 0)
+			throw std::runtime_error("AsmJit structured control flow does not model this block result");
 		results.push_back(type.valType);
 		return results;
 	}
@@ -7193,7 +7197,7 @@ private:
 					+ " leaves an unexpected operand stack shape");
 		const size_t first = values.size() - frame.resultCount;
 		for (size_t i = 0; i < frame.resultCount; ++i)
-			checkError(compiler.mov(frame.results[i], values[first + i]),
+			transferValue(frame.results[i], values[first + i], frame.resultTypes[i],
 					"AsmJit structured result transfer failed");
 	}
 	void emitBinary(BinaryOp operation)

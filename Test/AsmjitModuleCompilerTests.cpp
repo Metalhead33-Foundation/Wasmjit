@@ -333,7 +333,7 @@ TEST_CASE("AsmJit i64 calls preserve native and Wasm import contexts", "[asmjit]
 
 TEST_CASE("AsmJit rolls back code allocations when a later function is unsupported", "[asmjit][module][safety]")
 {
-	WASM::Module module = loadTestModule("asmjit_i32_unsupported");
+	WASM::Module module = loadTestModule("asmjit_brtable_multi_unsupported");
 	WASM::RegistryImportResolver imports;
 	AsmJitBackend::Context context;
 	AsmJitBackend::ModuleCompiler compiler(context);

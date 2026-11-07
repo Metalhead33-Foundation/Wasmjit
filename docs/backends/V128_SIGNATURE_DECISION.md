@@ -206,6 +206,10 @@ entries per parameter plus the two-slot index mapping in the prologue, the call
 path and the per-type signature cache), `v128` results (AsmJit only — §7), and
 `v128` block types (needs AsmJit block results, a pre-existing gap).
 
+**Update (2026-11-07): all three are closed.** AsmJit and SLJIT now carry v128
+block parameters (`BLOCKV128`) and block results (`BLOCKRESV128`); the fixture
+below is no longer a refusal.
+
 ## 9. What LibJIT does — and why the pointer idea is scratched (2026-11-05)
 
 The reference backend answers the question directly: **LibJIT supports `v128`
@@ -562,7 +566,8 @@ host C ABI". So the engine's contract is by-value aggregate, and LibJIT's
 | `Test/main.cpp` "three and four v128 parameters cross the boundary" | the S9 closure: "**several spec scripts pass three `v128` operands to one function**, where the third no longer fits in a vector register and is stack-passed" |
 | `Test/main.cpp` "`(param v128) (result v128)` — all four lanes must survive the boundary" | identity, through a local, through a block |
 | `Test/wasm_wat/profile_v128_type.wat`, `profile_relaxed_simd.wat`, `Test/consumer/consumer_abi.wat` | `(param v128) (result v128)`, `(result v128)`, `(param i32) (result v128)` |
-| `Test/wasm_wat/asmjit_i32_unsupported.wat` | `(param v128) (result v128)` as the **pinned refusal** for the new backends |
+| `Test/wasm_wat/asmjit_brtable_multi_unsupported.wat` | the current **pinned refusal** for AsmJIT: `br_table` to a multi-result function label |
+| `Test/wasm_wat/block_result_v128_probe.wat` | v128 block results are now positive coverage (`BLOCKRESV128`) |
 
 **The single most important line for this study** is the one in `main.cpp`: the
 Wasm **spec scripts** pass three `v128` operands to one function. That makes

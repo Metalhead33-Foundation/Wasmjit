@@ -2985,18 +2985,17 @@ CHECK(first == 6);
 CHECK(second == 9);
 }
 
-// 2b: an unsupported function must say WHY. A v128 block result is outside
-// SLJIT's block-result subset (multi-result functions now use the frame ABI).
-TEST_CASE("SLJIT refuses a module whose function it cannot compile",
-"[staging][sljit][abi][reason]")
+// A v128 result is a block result slot, not a scalar; SLJIT carries it through
+// the block signature and the stack-slot model.
+TEST_CASE("SLJIT compiles v128 block results",
+"[staging][sljit][abi][simd]")
 {
 	auto runtime = WASM::Runtime::create("sljit");
 	REQUIRE(runtime != nullptr);
 	auto module = runtime->loadFile(
 			std::filesystem::path(WASM_TEST_DIR) / "asmjit_i32_unsupported.wasm");
 	WASM::RegistryImportResolver imports;
-	// No partial modules: a shape the register form cannot deliver aborts the whole
-	// module with a reason, rather than yielding one with an uncallable export
-	// (docs/backends/PRODUCTION_GAPS.md section 15).
-	REQUIRE_THROWS(runtime->instantiate(*module, imports));
+	auto& instance = runtime->instantiate(*module, imports);
+	CHECK(instance.exportedFunction("already_compiled").has_value());
+	CHECK(instance.exportedFunction("unsupported").has_value());
 }

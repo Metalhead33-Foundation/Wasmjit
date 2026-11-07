@@ -2030,7 +2030,7 @@ OpcodeDispatcher::BlockSignature OpcodeDispatcher::blockSignature(const WASM::Bl
 			signature.results.push_back(8);
 			break;
 		case WASM::ValueTypeCode::V128:
-			require(false, "the SLJIT backend does not lower v128 block types yet");
+			signature.results.push_back(16);
 			break;
 		default:
 			require(false, "the SLJIT backend only models i32, i64, f32 and f64 block types");
@@ -2048,8 +2048,7 @@ OpcodeDispatcher::BlockSignature OpcodeDispatcher::blockSignature(const WASM::Bl
 	}
 	for (const WASM::StorageType& result : blockType.results) {
 		const int width = widthOf(result.val);
-		require(width != 0 && width != 16,
-				"the SLJIT backend does not lower v128 block results yet");
+		require(width != 0, "the SLJIT backend does not model this block result type");
 		signature.results.push_back(width);
 	}
 	return signature;

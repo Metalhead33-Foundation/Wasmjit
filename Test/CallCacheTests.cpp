@@ -2076,3 +2076,50 @@ CHECK(false);
 }
 }
 }
+
+// v128 block results: fallthrough, branch, if arms and loop.
+TEST_CASE("structured control flow carries v128 block results",
+"[staging][gc][blockparams][simd]")
+{
+for (const char* backend : {"libjit", "asmjit", "sljit"}) {
+std::fprintf(stderr, "BLOCKRESV128 %s: ", backend);
+auto runtime = WASM::Runtime::create(backend);
+REQUIRE(runtime != nullptr);
+auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "block_result_v128_probe.wasm");
+WASM::RegistryImportResolver imports;
+WASM::ModuleInstance* instance = nullptr;
+try {
+instance = &runtime->instantiate(*module, imports);
+} catch (const std::exception& error) {
+std::fprintf(stderr, "REFUSED: %s\n", error.what());
+CHECK(false);
+continue;
+}
+const auto block = instance->exportedFunction("block");
+const auto branch = instance->exportedFunction("branch");
+const auto ifFn = instance->exportedFunction("if");
+const auto loopFn = instance->exportedFunction("loop");
+REQUIRE(block.has_value());
+REQUIRE(branch.has_value());
+REQUIRE(ifFn.has_value());
+REQUIRE(loopFn.has_value());
+try {
+const auto b = WASM::callCallable<std::int32_t>(*block);
+const auto br = WASM::callCallable<std::int32_t>(*branch);
+const auto t = WASM::callCallable<std::int32_t>(*ifFn, 1);
+const auto f = WASM::callCallable<std::int32_t>(*ifFn, 0);
+const auto l = WASM::callCallable<std::int32_t>(*loopFn);
+std::fprintf(stderr, "block=%d branch=%d if=%d/%d loop=%d\n",
+(int)b, (int)br, (int)t, (int)f, (int)l);
+CHECK(b == 5);
+CHECK(br == 6);
+CHECK(t == 7);
+CHECK(f == 8);
+CHECK(l == 9);
+} catch (const std::exception& error) {
+std::fprintf(stderr, "FAILED: %s\n", error.what());
+CHECK(false);
+}
+}
+}

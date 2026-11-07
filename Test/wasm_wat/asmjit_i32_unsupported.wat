@@ -1,7 +1,7 @@
-;; AsmJIT supports scalar and v128 block parameters now, but a v128 block
-;; *result* is still outside the scalar result subset. This remains a durable
-;; "unsupported" probe for the rollback test: the body lowering fails and no
-;; executable allocation may survive.
+;; Historical name: this was the AsmJIT/SLJIT "unsupported" probe. Both now
+;; support v128 block results (BLOCKRESV128), so it is a small positive fixture
+;; for the SLJIT block-result path. The durable AsmJIT refusal probe is
+;; asmjit_brtable_multi_unsupported.wat.
 (module
   (func (export "already_compiled") (result i32)
     i32.const 42)

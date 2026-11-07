@@ -10,7 +10,7 @@ actually happened, the root cause of every surprise, and what is still open.
 |---|---|---|---|
 | 1 | constant-stack tail calls | **done for every lowered form** | self, direct, indirect and frame (scalar and v128) chains go through the libffi driver (`TAILSELF`/`TAILMUTUAL`/`TAILINDIRECT`/`TAILFRAME`/`TAILV128FRAME`, 1,000,000 links, `run()=1`); `ref` is not lowered by either backend |
 | 2 | shared reference/table atomics | **done** | numeric, struct/array reference, shared-table and global `eqref` atomics run on all three (`SHAREDREF`, `TABLEATOMIC`, `GLOBALREF`); v128 atomic slots are rejected by validation (`V128ATOMIC`) because the proposal does not allow them |
-| 3 | block parameters (scalar and v128) | **done** | `BLOCKPARAM` and `BLOCKV128` block=42 if=7/8 loop=7 on all three |
+| 3 | block parameters/results (scalar and v128) | **done** | `BLOCKPARAM` block=42 if=11/12 loop=0; `BLOCKV128` block=42 if=7/8 loop=7; `BLOCKRESV128` 5,6,7/8,9 |
 | 4 | bulk memory on memory64 | **done** | `MEM64BULK` copy=97 fill=65 init=97 on all three |
 
 Suite at the last commit: **22184 assertions in 798 cases** under
@@ -502,6 +502,37 @@ which is exactly why two backends agreeing is not a spec check.
   for a rollback test; move the probe to a genuinely excluded shape (`v128`
   parameter) when the feature lands.
 
+## Remaining-gap pass — v128 block results
+
+### Intended
+
+A structured block, loop or `if` may produce a `v128` result, not only a scalar.
+This was the last result-shape refusal on SLJIT and AsmJIT.
+
+### What we did
+
+* AsmJIT allocates a vector buffer for a v128 block result and `storeBlockResult`
+  uses the vector-aware `transferValue` (16-byte copy). Both the shorthand block
+  type and a type-index block signature accept v128.
+* SLJIT's shorthand block-type switch now maps v128 to a 16-byte result slot; the
+  type-index path already accepted it. Branch transfers were already 16-byte
+  aware from the block-parameter work.
+
+### Evidence
+
+`block_result_v128_probe.wat` (fallthrough, explicit `br`, both `if` arms, loop):
+
+```
+BLOCKRESV128 libjit: block=5 branch=6 if=7/8 loop=9
+BLOCKRESV128 asmjit: block=5 branch=6 if=7/8 loop=9
+BLOCKRESV128 sljit: block=5 branch=6 if=7/8 loop=9
+```
+
+The rollback fixture moved again: `asmjit_i32_unsupported` is fully supported,
+so the durable AsmJIT refusal is now `br_table` to a multi-result function label
+(`asmjit_brtable_multi_unsupported.wat`). The SLJIT refusal test became a
+positive `v128` block-result test.
+
 ## Remaining-gap pass — catch payload to a parameterised loop
 
 ### Intended
@@ -594,7 +625,8 @@ TAILREFMULTI sljit: run()=11
 * SLJIT's two-result module previously kept the register ABI and was refused at
   the function prologue; the ABI selector now includes `results.size() > 1`.
 * `sljit: refuses a module whose function it cannot compile` used a two-result
-  fixture as its unsupported probe; it now uses a v128 block result.
+  fixture as its unsupported probe; it became a positive v128 block-result test
+  when that shape landed.
 
 ## Remaining-gap pass — v128 block parameters (SLJIT, AsmJIT)
 
@@ -644,8 +676,8 @@ BLOCKV128 sljit: block=42 if=7/8 loop=7
 ```
 
 The rollback fixture (`asmjit_i32_unsupported.wat`) used v128 block *parameters*
-as its deliberate failure; it now uses a v128 block **result**, which AsmJIT still
-refuses.
+as its deliberate failure, then a v128 block **result**; both are supported now,
+so it moved to `br_table` to a multi-result function label.
 
 ### What is still open
 

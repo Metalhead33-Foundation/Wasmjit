@@ -64,7 +64,9 @@ reinterpretation and `select`. `v128`/SIMD and the `f16` proposal stay out.
   an f32 signature to force the rollback path; floats are now supported, so it
   uses `v128` (still outside the scalar slice). The SLJIT refusal test had
   already moved to `v128`. This is the P3 equivalent of entry 2's div→float
-  move, and it is the expected cost of a slice landing.
+  move, and it is the expected cost of a slice landing. *(Later superseded:
+  v128 block results landed and the fixture moved again; see
+  [`POST_MORTEM.md`](POST_MORTEM.md).)*
 - **Bug 4 (SLJIT block signatures): the value-type branch kept the old
   i32/i64 filter.** `block (type $f32_result)` worked, `block (result f32)`
   did not, because the two encodings take different paths in

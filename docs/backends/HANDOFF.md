@@ -8,8 +8,8 @@ section 18 (the latest re-run).
 
 ## 1. Where the tree is
 
-**Snapshot (2026-11-07, this working tree):** `--rng-seed 12345` -> **22379
-assertions, 814 cases, green**. Gates: `[headerdoc]`, `[docs]`, `doxygen` 0
+**Snapshot (2026-11-07, this working tree):** `--rng-seed 12345` -> **22410
+assertions, 815 cases, green**. Gates: `[headerdoc]`, `[docs]`, `doxygen` 0
 warnings, `abi-check` OK.
 
 The frame ABI work is done on all three backends. Exceptions (including
@@ -41,7 +41,7 @@ field as 4 bytes. The load and the slot width now follow the field type.
 | **numeric** shared-everything atomics (global/struct/array) | OK | OK | OK | `global=5 struct32=7 struct64=9 array=11` |
 | frame-form `return_call` / `return_call_indirect` | OK | OK | OK | `tail_wide=1` |
 | direct self-recursive `return_call` in constant stack | OK | OK | OK | `TAILSELF` 1,000,000 links, `run()=0` |
-| structured block/loop/if parameters | OK | OK | OK | `BLOCKPARAM` block=42 if=11/12 loop=0 |
+| structured block/loop/if parameters | OK | OK | OK | `BLOCKPARAM` block=42 if=11/12 loop=0; `BLOCKV128` block=42 if=7/8 loop=7 |
 | direct cross-function `return_call` (mutual) | OK | OK | OK | `TAILMUTUAL` 1,000,000 links, `run()=1` |
 | indirect cross-function `return_call_indirect` | OK | OK | OK | `TAILINDIRECT` 1,000,000 links, `run()=1` |
 | frame-form cross-function `return_call` (scalar) | OK | OK | OK | `TAILFRAME` 1,000,000 links, `run()=1` |
@@ -54,13 +54,16 @@ field as 4 bytes. The load and the slot width now follow the field type.
 | shared table atomics (anyref/eqref) | OK | OK | OK | `TABLEATOMIC` run=1 |
 | global reference atomics (eqref) | OK | OK | OK | `GLOBALREF` run=1 |
 | v128 atomic slots rejected at validation | OK | OK | OK | `V128ATOMIC` rejected (global/struct/array) |
+| structured `v128` block/loop/if results | OK | OK | OK | `BLOCKRESV128` block=5 branch=6 if=7/8 loop=9 |
+| multi-result `call_ref` / `return_call_ref` | OK | OK | n/a (policy) | `TAILREFMULTI` run()=11 |
+| frame-form indirect tail calls | OK | OK | OK | `TAILINDIRECTFRAME` 1,000,000 links, `run()=1` |
+| catch payload to a loop parameter | OK | OK | OK | `CATCHLOOP` run()=42 |
 | bulk memory on memory64 | OK | OK | OK | `MEM64BULK` copy=97 fill=65 init=97 |
 
 ### Remaining (honest refusals)
 
 | Gap | Backends | Reason |
 |---|---|---|
-| `v128` block results | SLJIT, AsmJIT | scalar block results only |
 | LibJIT frame-mode calls / imports / multi-result | LibJIT | **policy**: the frame form is opt-in and partial on purpose |
 
 `v128` atomic slots are **not** on this list: the atomic proposal does not allow
