@@ -634,3 +634,59 @@ today is *pointer to 16 bytes*, and the canonical two-word rule applies to the
 **frame**, not to the ffi boundary. The packer of section 17 must therefore
 **dereference** the cell and copy 16 bytes into the frame -- a smaller change than
 "change the spelling", and one that leaves every `Callable` signature untouched.
+
+## 21. The cache packer: design settled, two concrete blockers found
+
+Reading `WasmCallCache` end to end makes the packer a contained change inside
+`ModuleCallCache::call`, and turned up two details that must be handled rather than
+discovered later.
+
+### The shape
+
+```cpp
+if (instance_->frameCallAbi()) {
+    alignas(16) std::uint8_t frame[256];          // bounded: refused above 256 bytes
+    std::memset(frame, 0, sizeof frame);
+    for (i in params)
+        copy args[i] into frame + frameArgumentOffset(kinds, i)   // 4 or 8 bytes
+    reinterpret_cast<void(*)(void*, void*)>(entry.callable.fnPtr)(context, frame);
+    copy frame + frameArgumentsBytes(kinds) into *result          // 4 or 8 bytes
+    return;
+}
+```
+
+Everything it needs exists: `frameArgumentOffset`, `frameArgumentsBytes`,
+`frameValueBytes`, `valueKindOf`, `entry.paramKinds`, and `instance_->frameCallAbi()`.
+And `instance_->context()` already supplies the first argument.
+
+### Blocker 1: the result kind is not in the entry
+
+`ModuleFfiEntry` carries `paramKinds` but **not** the result kind -- it only keeps
+`returnType` (an `ffi_type*`), which cannot tell a 4-byte `i32` from a 4-byte `f32`,
+nor a 16-byte vector from anything else. The packer needs the **Wasm** result kind to
+know how many bytes to copy and where the result block starts.
+
+Fix: add `WASM::ValueTypeCode resultKind` (and a `resultCount`) to `ModuleFfiEntry`
+and set it where `entry.returnType` is chosen. Small, and useful to any future
+caller.
+
+### Blocker 2: the scalar copy width is not the slot width
+
+A frame slot is always 8 bytes, but an `i32`/`f32` argument points at **4** bytes.
+Copying 8 would read past the embedder's value. So the packer must
+*zero the slot, then copy the value's own width* -- never `memcpy(8)`. The same
+applies to the result. This is exactly the class of defect that produced the
+`v128` pointer-vs-16-bytes confusion in step 5e, so it is worth a test of its own:
+a cache call whose result is `i32` and whose neighbouring stack bytes are non-zero.
+
+### Why this was not implemented in this session
+
+The change is three edits across two files (header field, constructor, `call`) plus
+the packer body and a test. Attempting it with too little budget left would risk
+exactly the half-wired state the campaign has twice refused. The design above is
+complete enough that the next session's first action is an edit, not a reading.
+
+**Note also:** the `v128` case is already correct by construction -- the ffi boundary
+hands a *pointer* to 16 bytes, so the packer copies 16 bytes from `args[i]` into a
+16-byte slot, which is the canonical frame spelling. That is the one place where the
+canonical rule and the ffi spelling agree, and it is worth asserting in the test.
