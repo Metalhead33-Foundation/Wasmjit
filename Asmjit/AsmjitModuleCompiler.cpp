@@ -2550,17 +2550,14 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 	{
 		const std::size_t payloadCount = payload.params.size();
 		const std::size_t carried = payloadCount + (carryExn ? 1u : 0u);
-		if (target.kind == ControlKind::Loop) {
-			if (carried != 0)
-				throw std::runtime_error("AsmJit cannot route a catch payload to a loop label");
-			checkError(compiler.jmp(target.begin), "AsmJit catch-to-loop jump failed");
-			return;
-		}
-		if (target.resultCount != carried)
+		const bool loopTarget = target.kind == ControlKind::Loop;
+		const std::size_t targetValues = loopTarget ? target.paramCount : target.resultCount;
+		if (targetValues != carried)
 			throw std::runtime_error("AsmJit catch arity does not match its target label");
 
 		// A caught exception is consumed: clearing first means the caller and the
-		// embedder no longer observe it (EXD1).
+		// embedder no longer observe it (EXD1). A zero-payload catch to a loop is
+		// still a catch, so the clear also precedes the jump in that case.
 		asmjit::FuncSignature clearSignature(asmjit::CallConvId::kCDecl);
 		clearSignature.set_ret(asmjit::TypeId::kVoid);
 		asmjit::InvokeNode* clear = nullptr;
@@ -2570,27 +2567,52 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 		auto exn = compiler.new_gp_ptr("caughtException");
 		checkError(compiler.mov(exn, exceptionPtrSlot),
 				"AsmJit caught-exception slot load failed");
-		if (payloadCount != 0) {
-			const ExceptionPayloadLayout layout = exceptionPayloadLayout(payload);
-			for (std::size_t i = 0; i < payloadCount; ++i) {
-				const int width = kindWidth(payload.params[i].val.opcode);
-				if (width != 4 && width != 8)
-					throw std::runtime_error("AsmJit cannot route a v128 catch payload yet");
-				asmjit::x86::Gp value = width == 8
-						? compiler.new_gp64("caughtPayload")
-						: compiler.new_gp32("caughtPayload");
-				checkError(compiler.mov(value,
-						asmjit::x86::Mem(exn, static_cast<int32_t>(layout.fields[i].offset),
-								value.size())),
-						"AsmJit caught-payload load failed");
+		const ExceptionPayloadLayout layout = payloadCount != 0
+				? exceptionPayloadLayout(payload) : ExceptionPayloadLayout{};
+		for (std::size_t i = 0; i < payloadCount; ++i) {
+			const WASM::ValueTypeCode code = payload.params[i].val.opcode;
+			if (code == WASM::ValueTypeCode::V128) {
+				if (!loopTarget)
+					throw std::runtime_error("AsmJit cannot route a v128 catch payload to a block result");
+				for (int word = 0; word < 2; ++word) {
+					auto bits = compiler.new_gp64("caughtPayloadWord");
+					checkError(compiler.mov(bits,
+							asmjit::x86::qword_ptr(exn, static_cast<int32_t>(layout.fields[i].offset)
+									+ word * 8)),
+							"AsmJit caught-payload vector load failed");
+					checkError(compiler.mov(
+							asmjit::x86::qword_ptr(target.params[i], word * 8), bits),
+							"AsmJit caught-payload vector transfer failed");
+				}
+				continue;
+			}
+			const int width = kindWidth(code);
+			if (width != 4 && width != 8)
+				throw std::runtime_error("AsmJit cannot route this catch payload yet");
+			asmjit::x86::Gp value = width == 8
+					? compiler.new_gp64("caughtPayload")
+					: compiler.new_gp32("caughtPayload");
+			checkError(compiler.mov(value,
+					asmjit::x86::Mem(exn, static_cast<int32_t>(layout.fields[i].offset),
+							value.size())),
+					"AsmJit caught-payload load failed");
+			if (loopTarget)
+				checkError(compiler.mov(target.params[i], value),
+						"AsmJit caught-payload loop transfer failed");
+			else
 				checkError(compiler.mov(target.results[i], value),
 						"AsmJit caught-payload transfer failed");
-			}
 		}
-		if (carryExn)
-			checkError(compiler.mov(target.results[payloadCount], exn),
-					"AsmJit caught-exnref transfer failed");
-		checkError(compiler.jmp(target.end), "AsmJit catch-target jump failed");
+		if (carryExn) {
+			if (loopTarget)
+				checkError(compiler.mov(target.params[payloadCount], exn),
+						"AsmJit caught-exnref loop transfer failed");
+			else
+				checkError(compiler.mov(target.results[payloadCount], exn),
+						"AsmJit caught-exnref transfer failed");
+		}
+		checkError(compiler.jmp(loopTarget ? target.begin : target.end),
+				"AsmJit catch-target jump failed");
 	}
 
 // ── Memory atomics (docs/proposals/THREADS.md TH-1) ─────────────────────

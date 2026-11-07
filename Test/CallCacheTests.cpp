@@ -2037,3 +2037,42 @@ CHECK(false);
 }
 }
 }
+
+// A catch payload routed to a loop parameter (AsmJIT).
+TEST_CASE("exceptions: catch payload becomes a loop parameter",
+"[staging][exceptions][loop]")
+{
+for (const char* backend : {"libjit", "asmjit", "sljit"}) {
+std::fprintf(stderr, "CATCHLOOP %s: ", backend);
+auto runtime = WASM::Runtime::create(backend);
+REQUIRE(runtime != nullptr);
+auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "catch_loop_param_probe.wasm");
+WASM::RegistryImportResolver imports;
+WASM::ModuleInstance* instance = nullptr;
+try {
+instance = &runtime->instantiate(*module, imports);
+} catch (const std::exception& error) {
+std::fprintf(stderr, "REFUSED: %s\n", error.what());
+CHECK(false);
+continue;
+}
+const auto run = instance->exportedFunction("run");
+REQUIRE(run.has_value());
+try {
+std::int32_t value = 0;
+if (instance->frameCallAbi()) {
+alignas(16) std::uint8_t frame[16] = {};
+WASM::callCallableFrame(*run, frame);
+std::memcpy(&value, frame, sizeof(value));
+} else {
+value = WASM::callCallable<std::int32_t>(*run);
+}
+std::fprintf(stderr, "run()=%d\n", (int)value);
+CHECK(value == 42);
+} catch (const std::exception& error) {
+std::fprintf(stderr, "FAILED: %s\n", error.what());
+CHECK(false);
+}
+}
+}

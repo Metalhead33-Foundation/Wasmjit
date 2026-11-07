@@ -959,7 +959,7 @@ in both passes.
 
 ## 27. V-1 fixed, multi-value catches and numeric shared atomics closed (2026-11-07)
 
-**Snapshot (2026-11-07, `backendsMh33`):** suite **22370 assertions in 813
+**Snapshot (2026-11-07, `backendsMh33`):** suite **22379 assertions in 814
 cases** under `--rng-seed 12345`, green; `[headerdoc]`, `[docs]`, `doxygen`
 (0 warnings) and `abi-check` all pass. This section supersedes section 26.
 
@@ -1027,7 +1027,6 @@ proposal; the validator rejects them instead of leaving a backend refusal.
 | Gap | Backends | Reason |
 |---|---|---|
 | `v128` block results | SLJIT, AsmJIT | scalar block results only |
-| catch payload to a loop with parameters | AsmJIT | `emitCatchBranch` refuses a non-empty payload to a loop target |
 | LibJIT frame-mode calls/imports/multi-result | LibJIT | **policy** |
 
 `v128` atomic slots are not in this table: the proposal does not allow them and

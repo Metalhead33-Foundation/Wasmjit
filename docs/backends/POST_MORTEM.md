@@ -502,6 +502,33 @@ which is exactly why two backends agreeing is not a spec check.
   for a rollback test; move the probe to a genuinely excluded shape (`v128`
   parameter) when the feature lands.
 
+## Remaining-gap pass — catch payload to a parameterised loop
+
+### Intended
+
+A `try_table` catch may target a loop whose parameters receive the caught
+payload. AsmJIT refused every non-empty payload routed to a loop.
+
+### What we did
+
+`emitCatchBranch` no longer has a separate zero-payload-only loop path. It
+checks the carried arity against `paramCount` for a loop and `resultCount` for a
+block, clears the pending exception first (a zero-payload catch is still a
+catch), loads each payload field and writes it into the loop parameter (scalar
+register, or two qwords into the v128 buffer), writes the `exnref` when the
+clause carries one, and jumps to `begin` for a loop or `end` for a block.
+
+### Evidence
+
+`catch_loop_param_probe.wat`: loop parameter 0 enters the loop; the `try_table`
+throws 42; the catch restarts the loop with 42 and the loop exits with it.
+
+```
+CATCHLOOP libjit: run()=42
+CATCHLOOP asmjit: run()=42
+CATCHLOOP sljit: run()=42
+```
+
 ## Remaining-gap pass — frame-form indirect tail calls
 
 ### Intended
