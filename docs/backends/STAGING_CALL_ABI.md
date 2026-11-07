@@ -391,3 +391,33 @@ too. Passing both on a backend retires, for that backend, `D-L1` (LibJIT), the
 
 **Not implemented.** Steps 4 and 5 are each one step-3-plus-3b unit; the briefs
 above exist so they are executed, not explored.
+
+### Step 4a scope, clarified by reading (2026-11-06)
+
+LibJIT's frame flip splits the same way SLJIT's did: **4a** gives the frame form
+to functions, **4b** to calls inside a body. Reading `LibjitModuleCompiler.cpp`
+adds two facts the earlier table did not carry:
+
+1. **The mode must be set on the translator before `translateTypes` runs.**
+   `ModuleCompiler::translateTypes` has both the module and the instance, so the
+   decision lives there -- one line before
+   `typeTranslator.translateTypes(module.typeIds, ...)` -- and the translator
+   needs a `frameCallAbi_` setter plus the branch in its `CoreTypeView` overload.
+2. **The driver's forwarding collapses to two values.** It currently walks
+   `paramSlots` per wasm parameter; in frame mode the JIT signature has exactly
+   two parameters, so the driver emits `callArgs[0] = ctx`,
+   `callArgs[1] = jit_value_get_param(driver, 1)` and nothing else. That is the
+   fifth place this ABI simplifies code instead of complicating it, alongside the
+   vanishing slot walk, the vanishing ceiling, the vanishing `v128` result special
+   case and the vanishing `r9` defect.
+
+**4a must also guard the call sites.** LibJIT's dispatcher has no frame guard
+today (SLJIT's was removed in 3b because 3b implements calls). For 4a the guard is
+required from the start: `call`, `call_indirect`, the tail-call paths and the
+thunks must refuse in frame mode, exactly as SLJIT's did between steps 3 and 3b.
+
+Threshold for LibJIT: frame mode when `1 + sum(argSlotCount(param))` exceeds
+**5** -- the last slot the register form was measured to deliver.
+
+**Not implemented.** Nine edits across three files plus a fixture, which is one
+focused unit; the brief above is what makes it mechanical.
