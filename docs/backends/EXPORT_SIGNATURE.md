@@ -448,3 +448,62 @@ a form nobody is obliged to see.
 
 **Recommendation:** adopt the adapter. Implement it as P2's entry/exit thunk, and
 retire 4b rather than finish it.
+
+## 17. Correction: the wrapper belongs on the HOST side (embedder grammar stays typed)
+
+Section 16 put the adapter between two conventions inside the backend. The project
+owner corrected the seam, and the correction is right:
+
+> The embedder should never see a frame. Both directions -- a host function called
+> by the guest, and a guest function called by the host -- keep the typed
+> `R f(VMContext*, args...)` grammar. Packing and unpacking is an *internal*
+> concern of the backends that need frames (SLJIT, AsmJIT) and must be invisible.
+
+### It is possible, and the machinery exists
+
+`WASM::CallCache` is a **libffi-backed** per-export cache: it builds one `ffi_cif`
+per callable whose `argTypes` already include the context pointer, and `invoke()`
+takes pointers to Wasm arguments (`WasmBase/WasmCallCache.hpp`). libffi marshals
+according to the **host C ABI**, whose argument capacity is far larger than any
+backend's -- so the host side can carry the typed signature that the backend
+cannot:
+
+```
+embedder:  invoke(entry, args...)          <- typed, unchanged, backend-agnostic
+call cache: generic packer (host C++)      <- args -> frame using frameArgumentOffset()
+backend:   void compiled(VMContext*, void* frame)
+```
+
+The packer is **generic, not per signature**: it loops over the cif's `argTypes` and
+copies each argument into the frame at `frameArgumentOffset(kinds, i)`, reads the
+result back from `frameArgumentsBytes()`. One implementation, no JIT change, no
+template explosion.
+
+### Why this is better than section 16
+
+| | §16 (backend-side adapter) | §17 (host-side packer) |
+|---|---|---|
+| Embedder grammar | typed | **typed** (unchanged) |
+| Guest -> host imports | unchanged | **unchanged** (already typed) |
+| Extra JIT code | a thunk per signature | **none** |
+| Work in SLJIT/AsmJIT | a new JIT-side adapter | **none** |
+| Where frames appear | in the seam | **only inside a frame-mode backend** |
+
+So the mandatory requirement -- one spelling to expose C++ to wasm, one spelling to
+call compiled wasm from C++ -- is met **without asking any backend to change its
+internal convention**. LibJIT keeps the register form and needs no thunk at all;
+SLJIT and AsmJIT keep frames and the cache hides them.
+
+### The one real piece of work it exposes
+
+`v128` currently spells **differently per backend** at the boundary: LibJIT sets
+`instance.setV128ParameterIsAggregate(true)` and the call cache describes that to
+libffi, while the canonical rule is two `u64` words. That is a divergence the
+embedder *can* see today. The uniform grammar requires the cache to advertise the
+**canonical two-word** spelling always, with the packer converting for a backend that
+spells it otherwise -- which is precisely this refactor's `D-L1` defect, now with a
+home.
+
+**Status:** §16's adapter is superseded for the boundary. It remains correct for a
+different question -- a same-process, cross-backend *call* -- which is optional and
+may stay forbidden.
