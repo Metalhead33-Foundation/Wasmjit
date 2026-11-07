@@ -8,7 +8,7 @@ actually happened, the root cause of every surprise, and what is still open.
 
 | # | Item | Status | Evidence / blocker |
 |---|---|---|---|
-| 1 | constant-stack tail calls | **partial** | self, direct, indirect and scalar frame-form chains go through the libffi driver (`TAILSELF`/`TAILMUTUAL`/`TAILINDIRECT`/`TAILFRAME`, 1,000,000 links, `run()=1`) on all three; `ref` is not lowered and v128 frame chains still call + return |
+| 1 | constant-stack tail calls | **done for every lowered form** | self, direct, indirect and frame (scalar and v128) chains go through the libffi driver (`TAILSELF`/`TAILMUTUAL`/`TAILINDIRECT`/`TAILFRAME`/`TAILV128FRAME`, 1,000,000 links, `run()=1`); `ref` is not lowered by either backend |
 | 2 | shared reference/table atomics | **blocked** | numeric family done; the parser rejects shared composite references (`malformed mutability`), table atomics need `table.get`/`table.set`, and SLJIT's four-argument ceiling needs a record for `cmpxchg` |
 | 3 | AsmJIT block parameters | **done** | `BLOCKPARAM` block=42 if=11/12 loop=0 on all three |
 | 4 | bulk memory on memory64 | **done** | `MEM64BULK` copy=97 fill=65 init=97 on all three |
@@ -263,10 +263,33 @@ is only correct when eligibility is decided once, before emission.
 * `return_call_ref` is not lowered by SLJIT or AsmJIT at all (neither has a
   `call_ref` lowering), so there is no backend path to extend yet. When one is
   added, the runtime `tailEntry` check above is the pattern.
-* **v128 frame-form chains** still use call + return. `tailCallFrameSupported`
-  excludes `v128` because AsmJIT's register model keeps a vector as a buffer
-  pointer, so the slot-to-frame copy would need a separate 16-byte transfer. The
-  existing `tail_wide` probe returns the right value through the fallback.
+### v128 frame-form targets (same session)
+
+`tailCallFrameSupported` now accepts `v128`: a uniform slot is 16 bytes, the frame
+thunk copies `frameValueBytes(v128)`, and both backends store the vector into the
+slot before the pending write.
+
+* SLJIT copies the two 8-byte halves from the operand slot to `TailCallState::args`.
+* AsmJIT's register model keeps a v128 as a buffer pointer; the pending writer
+  loads 16 bytes with `movdqu` and stores them into the state slot.
+
+Evidence (`tailcall_v128_frame_probe.wat`, three vectors and a scalar counter,
+1,000,000 links):
+
+```
+TAILV128FRAME asmjit: run()=1
+TAILV128FRAME sljit: run()=1
+```
+
+The pre-existing `tail_wide` one-link probe now takes the trampoline as well
+(`tail_wide=1`). LibJIT is excluded from the v128 probe: its native trampoline has
+never carried `v128` (docs/TAILCALLS.md TC-3).
+
+### What is still open
+
+* `return_call_ref` is not lowered by SLJIT or AsmJIT at all (neither has a
+  `call_ref` lowering), so there is no backend path to extend yet. When one is
+  added, the runtime `tailEntry` check above is the pattern.
 
 ## Item 2 — shared reference/table atomics
 

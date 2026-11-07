@@ -930,7 +930,7 @@ staging-frame ABI is honoured end to end.
 |---|---|---|---|---|
 | `catch_ref` / `catch_all_ref`; a catch payload wider than one value | n/a (supported) | ⛔ | n/a (supported) | a structured block on AsmJIT carries at most one result |
 | shared-everything atomics on reference/table slots | ⛔ | ⛔ | ✅ | numeric global/struct/array slots are done; shared refs need shared composites and tables need table.get/set |
-| ref and v128 frame-form tail-call trampolines | ⛔ | ⛔ | ✅ | self, direct, indirect and scalar frame chains loop; ref is not lowered and v128 frame chains still call + return |
+| `return_call_ref` | ⛔ | ⛔ | ✅ | neither backend lowers `call_ref`; all other tail-call forms loop |
 | LibJIT frame-mode calls/imports/multi-result | n/a | n/a | ⛔ | **policy**: the frame form is opt-in and partial on purpose |
 
 ### Findings
@@ -960,7 +960,7 @@ in both passes.
 
 ## 27. V-1 fixed, multi-value catches and numeric shared atomics closed (2026-11-07)
 
-**Snapshot (2026-11-07, `backendsMh33`):** suite **22231 assertions in 802
+**Snapshot (2026-11-07, `backendsMh33`):** suite **22237 assertions in 803
 cases** under `--rng-seed 12345`, green; `[headerdoc]`, `[docs]`, `doxygen`
 (0 warnings) and `abi-check` all pass. This section supersedes section 26.
 
@@ -973,6 +973,7 @@ cases** under `--rng-seed 12345`, green; `[headerdoc]`, `[docs]`, `doxygen`
 | direct cross-function `return_call` (mutual) | OK | OK | OK | `TAILMUTUAL` 1,000,000 links, `run()=1` |
 | indirect cross-function `return_call_indirect` | OK | OK | OK | `TAILINDIRECT` 1,000,000 links, `run()=1` |
 | frame-form cross-function `return_call` (scalar) | OK | OK | OK | `TAILFRAME` 1,000,000 links, `run()=1` |
+| frame-form cross-function `return_call` (v128) | n/a | OK | OK | `TAILV128FRAME` 1,000,000 links, `run()=1`; LibJIT native trampoline excludes v128 |
 | numeric shared-everything atomics (global/struct/array) | OK | OK | OK | `global=5 struct32=7 struct64=9 array=11` |
 | V-1: block-end stack check after a `try_table` | n/a | n/a | n/a | `validator: a catch does not disable block-end stack checks` |
 

@@ -2878,10 +2878,23 @@ void OpcodeDispatcher::emitTailCallState(WASM::FuncIdx arg, const WASM::FuncType
 				static_cast<sljit_sw>(offsetof(WASM::TailCallState, target)), SLJIT_R1, 0));
 		for (std::size_t i = 0; i < type.params.size(); ++i) {
 			const int width = widthOf(type.params[i].val);
-			loadSlot(SLJIT_R1, base + i, width);
-			emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_R0),
-					static_cast<sljit_sw>(offsetof(WASM::TailCallState, args)
-							+ i * WASM::kTailCallSlotBytes), SLJIT_R1, 0));
+			if (width == 16) {
+				// A vector occupies the whole uniform slot.
+				for (int word = 0; word < 2; ++word) {
+					emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R1, 0,
+							SLJIT_MEM1(SLJIT_SP),
+							stackSlotOffset(base + i) + word * 8));
+					emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_R0),
+							static_cast<sljit_sw>(offsetof(WASM::TailCallState, args)
+									+ i * WASM::kTailCallSlotBytes + word * 8),
+							SLJIT_R1, 0));
+				}
+			} else {
+				loadSlot(SLJIT_R1, base + i, width);
+				emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_R0),
+						static_cast<sljit_sw>(offsetof(WASM::TailCallState, args)
+								+ i * WASM::kTailCallSlotBytes), SLJIT_R1, 0));
+			}
 		}
 		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_MEM1(SLJIT_R0),
 				static_cast<sljit_sw>(offsetof(WASM::TailCallState, pending)), SLJIT_IMM, 1));
@@ -2998,7 +3011,7 @@ void OpcodeDispatcher::emitTailCallIndirectState(WASM::TypeIdx typeIndex, WASM::
 
 void OpcodeDispatcher::dispatchReturnCallIndirect(WASM::TypeIdx arg1, WASM::TableIdx arg2)
 {
-	if (tailTrampoline_) {
+	if (tailTrampoline_ && !frameAbi_) {
 		require(static_cast<std::uint32_t>(arg1) < module_.typeCount(),
 				"the return_call_indirect type index is out of range");
 		const WASM::FuncType calledType = module_.funcTypeAt(arg1);

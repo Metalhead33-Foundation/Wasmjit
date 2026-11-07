@@ -164,16 +164,10 @@ inline bool tailCallSlotsSupported(const FuncType& ft)
 /** \brief Tests whether a signature fits the frame tail-call slot buffer. \param ft Function signature to inspect. \return false when either list exceeds the slot limit. */
 inline bool tailCallFrameSupported(const FuncType& ft)
 {
-	if (ft.params.size() > kTailCallArgSlots || ft.results.size() > kTailCallArgSlots)
-		return false;
-	const auto hasVector = [](const std::vector<StorageType>& types) {
-		for (const StorageType& type : types) {
-			if (!type.isPacked && type.val.opcode == ValueTypeCode::V128)
-				return true;
-		}
-		return false;
-	};
-	return !hasVector(ft.params) && !hasVector(ft.results);
+	//! A 16-byte slot holds a v128; the frame thunk copies that width. Only the
+	//! slot count limits the form.
+	return ft.params.size() <= kTailCallArgSlots
+			&& ft.results.size() <= kTailCallArgSlots;
 }
 
 //! True when a result tuple cannot come back in one return word.
