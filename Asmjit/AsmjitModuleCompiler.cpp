@@ -2,6 +2,7 @@
 
 #include "../WasmBase/WasmOpcodeDispatcher.hpp"
 #include "../WasmBase/WasmSafety.hpp"
+#include "../WasmBase/WasmBackendAbi.hpp"
 #include "../WasmBase/WasmStack.hpp"
 #include "../WasmBase/WasmStore.hpp"
 #include "../WasmBase/WasmTrap.hpp"
@@ -888,8 +889,13 @@ public:
 
 		if (type.results.size() > 1)
 			throw std::runtime_error("AsmJit initial compiler does not support multi-value results");
-		for (const auto& parameter : type.params)
-			requireScalar(parameter.val, "parameters");
+		// A vector parameter is exactly what the frame form exists to carry, so
+		// the entry refusal applies only to the register form.
+		const bool frameAbi = WASM::frameCallAbiOptIn();
+		for (const auto& parameter : type.params) {
+			if (!frameAbi)
+				requireScalar(parameter.val, "parameters");
+		}
 		for (const auto& result : type.results) {
 			// A v128 result is allowed: it travels through the caller-supplied buffer,
 			// which the signature spells as a trailing pointer and a void return.
@@ -958,6 +964,35 @@ public:
 		}
 		checkError(compiler.bind(bodyLabel), "AsmJit body label binding failed");
 
+		if (frameAbi) {
+			// Staging-frame ABI (step 5b): the parameters are already in the
+			// caller's frame, so each one is copied out of it instead of arriving
+			// in a register. A `v128` is 16 bytes and gets a local buffer, the
+			// same kind the register form allocates for a vector local.
+			framePointer = compiler.new_gp_ptr("frame");
+			function.set_arg(1, framePointer);
+			uint32_t offset = 0;
+			for (uint32_t i = 0; i < stack.parameterCount; ++i) {
+				const WASM::ValueType& declared = stack.allLocals[i];
+				if (declared.opcode == WASM::ValueTypeCode::V128) {
+					asmjit::x86::Gp buffer = newVectorBuffer("v128Param");
+					asmjit::x86::Gp source = compiler.new_gp_ptr("paramAddress");
+					checkError(compiler.lea(source, asmjit::x86::Mem(framePointer, offset)),
+							"AsmJit frame parameter address failed");
+					copyVector(buffer, source);
+					locals.push_back(buffer);
+					offset += 16;
+					continue;
+				}
+				// Scalars -- integers and float bit patterns alike -- load
+				// straight out of the frame into their register.
+				asmjit::x86::Gp parameter = newIntegerRegister(compiler, declared, "parameter");
+				checkError(compiler.mov(parameter, asmjit::x86::Mem(framePointer, offset)),
+						"AsmJit frame parameter load failed");
+				locals.push_back(parameter);
+				offset += 8;
+			}
+		} else
 		for (uint32_t i = 0; i < stack.parameterCount; ++i) {
 			const WASM::ValueType& declared = stack.allLocals[i];
 			if (isFloatKind(declared.opcode)) {
@@ -1036,6 +1071,21 @@ public:
 				checkError(compiler.mov(asmjit::x86::qword_ptr(destination, 8), word),
 						"AsmJit v128 result high word store failed");
 				checkError(compiler.ret(), "AsmJit v128 result return emission failed");
+			} else if (frameMode) {
+				// Staging-frame ABI (step 5c): the result goes into the frame --
+				// AsmJIT has no driver to collect it -- and the signature returns
+				// void. The result block begins where the argument block ends.
+				uint32_t resultOffset = 0;
+				for (const WASM::StorageType& p : type.params)
+					resultOffset += p.val.opcode == WASM::ValueTypeCode::V128 ? 16u : 8u;
+				asmjit::x86::Gp destination = compiler.new_gp_ptr("resultAddress");
+				checkError(compiler.lea(destination,
+						asmjit::x86::Mem(framePointer, resultOffset)),
+						"AsmJit frame result address failed");
+				checkError(compiler.mov(
+						asmjit::x86::Mem(destination, 0, values.back().size()),
+						values.back()), "AsmJit frame result store failed");
+				checkError(compiler.ret(), "AsmJit frame result return failed");
 			} else
 				checkError(compiler.ret(values.back()),
 						"AsmJit function return emission failed");
@@ -4945,6 +4995,10 @@ private:
 	const std::vector<asmjit::FuncNode*>& functions;
 	const std::vector<std::unique_ptr<asmjit::FuncSignature>>& signatures;
 	asmjit::x86::Gp vmContext;
+	//! The frame pointer in frame mode (docs/backends/EXPORT_SIGNATURE.md).
+	asmjit::x86::Gp framePointer;
+	//! Whether this function is compiled in the staging-frame form.
+	const bool frameMode = WASM::frameCallAbiOptIn();
 	std::vector<asmjit::x86::Gp> locals;
 	//! Slot width of every local (4/8, or 16 for a v128 buffer).
 	std::vector<int> localWidths;
@@ -4973,10 +5027,15 @@ ModuleCompiler::ModuleCompiler(Context& context)
 
 ModuleCompiler::~ModuleCompiler() = default;
 
-void ModuleCompiler::translateTypes(WASM::ModuleInstance&, const WASM::Module& module,
+void ModuleCompiler::translateTypes(WASM::ModuleInstance& instance, const WASM::Module& module,
 		WASM::ModuleInstanceInternals& internals)
 {
 	signatures.clear();
+	// Staging-frame ABI (docs/backends/EXPORT_SIGNATURE.md section 11): the mode
+	// is decided before translation, because the signature itself changes shape.
+	// Opt-in, never inferred -- see WasmBase/WasmBackendAbi.hpp.
+	const bool frameMode = WASM::frameCallAbiOptIn();
+	instance.setFrameCallAbi(frameMode);
 	signatures.resize(module.typeIds.size());
 	internals.translatedTypes.assign(module.typeIds.size(), nullptr);
 
@@ -4985,7 +5044,7 @@ void ModuleCompiler::translateTypes(WASM::ModuleInstance&, const WASM::Module& m
 			continue;
 		const WASM::FuncType type = module.funcTypeAt(i);
 		signatures[i] = std::make_unique<asmjit::FuncSignature>(
-				TypeTranslator::translateFunctionType(type));
+				TypeTranslator::translateFunctionType(type, frameMode));
 		internals.translatedTypes[i] = signatures[i].get();
 	}
 }

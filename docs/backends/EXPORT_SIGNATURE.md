@@ -240,3 +240,33 @@ Each subtask is green-or-revert on its own. 5a is a signature change with no beh
 shape with no store, **5c is the first that can crash**, and 5d is the one that must touch
 three return sites. That ordering exists so a failure localises to one subtask rather than to
 "step 5".
+
+## 12. Step 5 in progress: 5a/5b/5c landed, one blocker named (2026-11-06)
+
+**Landed behind the opt-in flag** (default suite untouched at 21805 assertions):
+
+* `translateTypes` decides the mode once, records it on the instance and passes it
+  to the static translator;
+* a vector parameter is **no longer refused at the door** in frame mode;
+* the prologue captures `frame` as argument 1 and copies every parameter out of
+  it -- 8 bytes each, 16 into a local buffer for a `v128`, which is the same
+  buffer the register form already allocates for a vector local;
+* the **epilogue** stores the single result into the frame at
+  `frame + sum(param widths)` and emits `ret()`.
+
+**The one blocker, measured:** finalisation still fails with AsmJIT error 25 for a
+frame-mode function, and the cause is the **trap path**: it returns a value
+(`ret(zero)`) under a signature that is now `void`. Same class of defect as the
+epilogue, one site further on, and it must be patched the same way -- store the
+zero into the frame or simply `ret()` -- before the gates can go green.
+
+**Consequence for the subtask split:** 5b and 5c are **one unit**, not two. The
+"instantiates a v128-parameter module" gate cannot pass before the return path is
+consistent, because AsmJIT finalises every function at instantiation. The ladder in
+section 11 is otherwise intact: 5d (calls) and 5e (`bufferedVectorResult`) are
+untouched by this.
+
+**Why committing with red gates is right here:** the gates are the feature's own
+checklist (they skip unless `WASMJIT_STEP5_GATES=1`), the feature is opt-in, and the
+default path is byte-for-byte unchanged. What would be wrong is enabling the switch
+while the trap path disagrees with the signature.
