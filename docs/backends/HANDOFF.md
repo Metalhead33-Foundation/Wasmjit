@@ -8,8 +8,8 @@ section 18 (the latest re-run).
 
 ## 1. Where the tree is
 
-**Snapshot (2026-11-07, this working tree):** `--rng-seed 12345` -> **22329
-assertions, 810 cases, green**. Gates: `[headerdoc]`, `[docs]`, `doxygen` 0
+**Snapshot (2026-11-07, this working tree):** `--rng-seed 12345` -> **22353
+assertions, 811 cases, green**. Gates: `[headerdoc]`, `[docs]`, `doxygen` 0
 warnings, `abi-check` OK.
 
 The frame ABI work is done on all three backends. Exceptions (including
@@ -60,7 +60,7 @@ field as 4 bytes. The load and the slot width now follow the field type.
 
 | Gap | Backends | Reason |
 |---|---|---|
-| `v128` block parameters | AsmJIT | scalar block parameters work; vector parameters are outside the register-form subset |
+| `v128` block results | SLJIT, AsmJIT | scalar block results only |
 | multi-result `call_ref` / `return_call_ref` | SLJIT, AsmJIT | reference calls currently take at most one result |
 | frame-form `return_call_indirect` trampoline | SLJIT, AsmJIT | direct self/mutual/indirect and all reference tails loop; a frame-form indirect tail still uses call + return |
 | catch payload routed to a loop with parameters | AsmJIT | `emitCatchBranch` refuses a non-empty payload to a loop target |

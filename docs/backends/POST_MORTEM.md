@@ -10,7 +10,7 @@ actually happened, the root cause of every surprise, and what is still open.
 |---|---|---|---|
 | 1 | constant-stack tail calls | **done for every lowered form** | self, direct, indirect and frame (scalar and v128) chains go through the libffi driver (`TAILSELF`/`TAILMUTUAL`/`TAILINDIRECT`/`TAILFRAME`/`TAILV128FRAME`, 1,000,000 links, `run()=1`); `ref` is not lowered by either backend |
 | 2 | shared reference/table atomics | **done** | numeric, struct/array reference, shared-table and global `eqref` atomics run on all three (`SHAREDREF`, `TABLEATOMIC`, `GLOBALREF`); v128 atomic slots are rejected by validation (`V128ATOMIC`) because the proposal does not allow them |
-| 3 | AsmJIT block parameters | **done** | `BLOCKPARAM` block=42 if=11/12 loop=0 on all three |
+| 3 | block parameters (scalar and v128) | **done** | `BLOCKPARAM` and `BLOCKV128` block=42 if=7/8 loop=7 on all three |
 | 4 | bulk memory on memory64 | **done** | `MEM64BULK` copy=97 fill=65 init=97 on all three |
 
 Suite at the last commit: **22184 assertions in 798 cases** under
@@ -501,6 +501,62 @@ which is exactly why two backends agreeing is not a spec check.
 * **Do not use a feature you intend to implement as the "unsupported" fixture**
   for a rollback test; move the probe to a genuinely excluded shape (`v128`
   parameter) when the feature lands.
+
+## Remaining-gap pass — v128 block parameters (SLJIT, AsmJIT)
+
+### Intended
+
+Lift the last structured-control parameter restriction: a block/loop/if may carry
+a `v128` parameter. The value is a 16-byte cell, not a scalar.
+
+### What we did
+
+* AsmJIT's `blockParamTypes` now accepts `v128`; a loop back-edge uses
+  `transferValue`, which copies 16 bytes with `copyVector` instead of moving a
+  pointer.
+* SLJIT's block signature accepts a 16-byte parameter and `transferToBase` copies
+  the two 8-byte halves; the single-word `loadSlot`/`storeSlot` cannot transfer a
+  vector.
+
+### The AsmJIT control-flow bug this exposed
+
+An `if (result i32)` whose **else** arm ended in `br $loop` left the branch
+operands in the compile-time value stack. `dispatchEnd` then called
+`storeBlockResult` on the unreachable else arm and refused the module
+(*"structured block leaves an unexpected operand stack shape"*). AsmJIT had no
+reachability tracking at all.
+
+`IntegerFunctionEmitter` now tracks an `armTerminated` flag:
+
+* `br`, `br_table`, `return`, every `return_call` form and `unreachable` clear it;
+* a control frame records `entryReachable` and, for an `if`, `thenReachable`;
+* `else` stores the then result only when the then arm fell through;
+* `end` stores the current arm only when it is live; a block counts as reachable
+  when it was entered live, a branch targets its end, or the then arm reached it;
+* an unconditional branch to a block marks `endTargeted`, so its transferred
+  result survives an otherwise dead arm.
+
+This is the same class of defect as the earlier SLJIT `thenReachable` fix; AsmJIT
+had simply never needed the flag while its block results were scalar-only.
+
+### Evidence
+
+`block_params_v128_probe.wat`:
+
+```
+BLOCKV128 libjit: block=42 if=7/8 loop=7
+BLOCKV128 asmjit: block=42 if=7/8 loop=7
+BLOCKV128 sljit: block=42 if=7/8 loop=7
+```
+
+The rollback fixture (`asmjit_i32_unsupported.wat`) used v128 block *parameters*
+as its deliberate failure; it now uses a v128 block **result**, which AsmJIT still
+refuses.
+
+### What is still open
+
+`v128` block **results** remain outside the scalar result subset; the parameter
+form above is complete.
 
 ## Item 4 — bulk memory on memory64 (SLJIT, AsmJIT)
 

@@ -1480,12 +1480,15 @@ protected:
 		if (controls.empty() || controls.back().kind != ControlKind::If || controls.back().hasElse)
 			throw std::runtime_error("AsmJit encountered an unmatched or duplicate else");
 		ControlFrame& frame = controls.back();
-		storeBlockResult(frame, "if then");
+		frame.thenReachable = !armTerminated;
+		if (frame.thenReachable)
+			storeBlockResult(frame, "if then");
 		checkError(compiler.jmp(frame.end), "AsmJit if/else end jump failed");
 		checkError(compiler.bind(frame.alternate), "AsmJit else label binding failed");
 		values.resize(frame.stackHeight);
 		for (const asmjit::x86::Gp& param : frame.params)
 			values.push_back(param);
+		armTerminated = !frame.entryReachable;
 		frame.hasElse = true;
 	}
 
@@ -1495,19 +1498,26 @@ protected:
 			return;
 		ControlFrame frame = controls.back();
 		controls.pop_back();
+		bool endReachable = true;
 		if (frame.kind == ControlKind::If && !frame.hasElse) {
 			if (frame.resultCount != 0)
 				throw std::runtime_error("AsmJit if-without-else cannot produce a result");
-			if (values.size() != frame.stackHeight)
+			if (!armTerminated && values.size() != frame.stackHeight)
 				throw std::runtime_error("AsmJit if arm leaves an unexpected operand stack shape");
 			checkError(compiler.bind(frame.alternate), "AsmJit implicit else label binding failed");
 		} else {
-			storeBlockResult(frame, "structured block");
+			const bool armLive = !armTerminated;
+			endReachable = armLive || frame.endTargeted;
+			if (frame.kind == ControlKind::If && frame.hasElse)
+				endReachable = endReachable || frame.thenReachable;
+			if (armLive)
+				storeBlockResult(frame, "structured block");
 		}
 		checkError(compiler.bind(frame.end), "AsmJit structured block end binding failed");
 		values.resize(frame.stackHeight);
 		for (const asmjit::x86::Gp& result : frame.results)
 			values.push_back(result);
+		armTerminated = !endReachable;
 	}
 
 	void dispatchBrIf(WASM::LabelIdx depth) override
@@ -1543,10 +1553,14 @@ protected:
 			checkError(compiler.jz(skip), "AsmJit br_if conditional skip emission failed");
 			const size_t first = values.size() - branchValues;
 			const std::vector<asmjit::x86::Gp>& destinations = loopTarget ? target.params : target.results;
+			const std::vector<WASM::ValueTypeCode>& codes = loopTarget
+					? target.paramTypes : target.resultTypes;
 			for (size_t i = 0; i < branchValues; ++i)
-				checkError(compiler.mov(destinations[i], values[first + i]),
+				transferValue(destinations[i], values[first + i], codes[i],
 						"AsmJit br_if result transfer failed");
 			checkError(compiler.jmp(label), "AsmJit br_if branch emission failed");
+			if (!loopTarget)
+				target.endTargeted = true;
 			checkError(compiler.bind(skip), "AsmJit br_if skip label binding failed");
 		} else {
 			checkError(compiler.test(condition, condition), "AsmJit br_if condition test failed");
@@ -1575,12 +1589,17 @@ protected:
 		if (branchValues != 0) {
 			const size_t first = values.size() - branchValues;
 			const std::vector<asmjit::x86::Gp>& destinations = loopTarget ? target.params : target.results;
+			const std::vector<WASM::ValueTypeCode>& codes = loopTarget
+					? target.paramTypes : target.resultTypes;
 			for (size_t i = 0; i < branchValues; ++i)
-				checkError(compiler.mov(destinations[i], values[first + i]),
+				transferValue(destinations[i], values[first + i], codes[i],
 						"AsmJit br result transfer failed");
 		}
 		const asmjit::Label label = loopTarget ? target.begin : target.end;
 		checkError(compiler.jmp(label), "AsmJit br emission failed");
+		if (!loopTarget)
+			target.endTargeted = true;
+		armTerminated = true;
 	}
 	void dispatchBrTable(std::vector<WASM::LabelIdx>&& depths, WASM::LabelIdx defaultDepth) override
 	{
@@ -1644,12 +1663,16 @@ protected:
 			if (transferCount != 0) {
 				const size_t firstValue = values.size() - transferCount;
 				const std::vector<asmjit::x86::Gp>& destinations = loopTarget ? target.params : target.results;
+				const std::vector<WASM::ValueTypeCode>& codes = loopTarget
+						? target.paramTypes : target.resultTypes;
 				for (size_t i = 0; i < transferCount; ++i)
-					checkError(compiler.mov(destinations[i], values[firstValue + i]),
+					transferValue(destinations[i], values[firstValue + i], codes[i],
 							"AsmJit br_table result transfer failed");
 			}
 			const asmjit::Label label = loopTarget ? target.begin : target.end;
 			checkError(compiler.jmp(label), "AsmJit br_table branch emission failed");
+			if (!loopTarget)
+				target.endTargeted = true;
 		};
 		for (size_t i = 0; i < depths.size(); ++i) {
 			auto matched = compiler.new_label();
@@ -1662,10 +1685,12 @@ protected:
 			checkError(compiler.bind(next), "AsmJit br_table next-case label binding failed");
 		}
 		emitTarget(defaultDepth);
+		armTerminated = true;
 	}
 
 	void dispatchReturnCall(WASM::FuncIdx index) override
 	{
+		armTerminated = true;
 		const size_t importedCount = module.importFunctions.size();
 		const size_t totalCount = importedCount + module.internalFunctionTypeIndices.size();
 		if (index >= totalCount)
@@ -1753,6 +1778,7 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 
 	void dispatchReturnCallIndirect(WASM::TypeIdx typeIndex, WASM::TableIdx tableIndex) override
 	{
+		armTerminated = true;
 		const WASM::FuncType calledType = module.funcTypeAt(typeIndex);
 		if (values.size() != calledType.params.size() + 1)
 			throw std::runtime_error("AsmJit return_call_indirect has unexpected values below its arguments");
@@ -2025,6 +2051,7 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 
 	void dispatchReturnCallRef(WASM::TypeIdx typeIndex) override
 	{
+		armTerminated = true;
 		const WASM::FuncType calledType = module.funcTypeAt(typeIndex);
 		if (values.size() != calledType.params.size() + 1)
 			throw std::runtime_error("AsmJit return_call_ref has unexpected values below its reference");
@@ -6102,6 +6129,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 
 	void dispatchUnreachable() override
 	{
+		armTerminated = true;
 		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
 		signature.set_ret(asmjit::TypeId::kVoid);
 		asmjit::InvokeNode* invoke = nullptr;
@@ -6397,6 +6425,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 
 	void dispatchReturn() override
 	{
+		armTerminated = true;
 		if (resultCount == 0) {
 			checkError(compiler.ret(), "AsmJit return emission failed");
 			return;
@@ -6445,6 +6474,12 @@ private:
 		asmjit::Label alternate;
 		asmjit::Label end;
 		bool hasElse = false;
+		//! True when the frame was entered in live code.
+		bool entryReachable = true;
+		//! True when the then arm fell through to `else`.
+		bool thenReachable = false;
+		//! True once a `br` targets this block's end.
+		bool endTargeted = false;
 		//! True for a `try_table` frame; its clauses route a pending exception.
 		bool tryTable = false;
 		//! Decoded catch clauses of a `try_table`, in source order.
@@ -6529,6 +6564,20 @@ private:
 			checkError(compiler.mov(asmjit::x86::qword_ptr(destination, word * 8), value),
 					"AsmJit v128 word store failed");
 		}
+	}
+
+	//! Transfers one block/loop value, copying a vector's 16 bytes.
+	//! \param destination Destination buffer or register.
+	//! \param source Source buffer or register.
+	//! \param code Value type code.
+	//! \param description Error description.
+	void transferValue(const asmjit::x86::Gp& destination, const asmjit::x86::Gp& source,
+			WASM::ValueTypeCode code, const char* description)
+	{
+		if (code == WASM::ValueTypeCode::V128)
+			copyVector(destination, source);
+		else
+			checkError(compiler.mov(destination, source), description);
 	}
 
 	//! Writes 16 zero bytes to a buffer.
@@ -6953,6 +7002,7 @@ private:
 			throw std::runtime_error("AsmJit control nesting is too deep");
 		ControlFrame frame;
 		frame.kind = kind;
+		frame.entryReachable = !armTerminated;
 		frame.paramTypes = blockParamTypes(type);
 		frame.paramCount = frame.paramTypes.size();
 		if (values.size() < frame.paramCount)
@@ -6986,7 +7036,8 @@ private:
 			throw std::runtime_error("AsmJit block type index is out of range");
 		const WASM::FuncType blockType = module.funcTypeAt(static_cast<uint32_t>(type.typeIndex));
 		for (const auto& param : blockType.params) {
-			requireScalar(param.val, "block parameters");
+			if (param.val.opcode != WASM::ValueTypeCode::V128)
+				requireScalar(param.val, "block parameters");
 			params.push_back(param.val.opcode);
 		}
 		return params;
@@ -7556,6 +7607,8 @@ private:
 	//! Slot width of every local (4/8, or 16 for a v128 buffer).
 	std::vector<int> localWidths;
 	std::vector<asmjit::x86::Gp> values;
+	//! True while the current arm can fall through; a branch or return clears it.
+	bool armTerminated = false;
 	std::vector<ControlFrame> controls;
 	uint32_t resultCount = 0;
 	WASM::ValueTypeCode resultType = WASM::ValueTypeCode::Void;

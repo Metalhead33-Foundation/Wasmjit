@@ -1653,8 +1653,17 @@ void OpcodeDispatcher::transferToBase(const std::vector<int>& widths, std::size_
 	// overwrites a value that has not been read yet.
 	for (std::size_t i = 0; i < count; ++i) {
 		const std::size_t source = stackWidths_.size() - count + i;
-		loadSlot(SLJIT_R0, source, widths[i]);
-		storeSlot(SLJIT_R0, base + i, widths[i]);
+		if (widths[i] == 16) {
+			for (int word = 0; word < 2; ++word) {
+				emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0,
+						SLJIT_MEM1(SLJIT_SP), stackSlotOffset(source) + word * 8));
+				emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+						stackSlotOffset(base + i) + word * 8, SLJIT_R0, 0));
+			}
+		} else {
+			loadSlot(SLJIT_R0, source, widths[i]);
+			storeSlot(SLJIT_R0, base + i, widths[i]);
+		}
 	}
 }
 
@@ -2034,8 +2043,7 @@ OpcodeDispatcher::BlockSignature OpcodeDispatcher::blockSignature(const WASM::Bl
 	const WASM::FuncType blockType = module_.funcTypeAt(static_cast<std::uint32_t>(type.typeIndex));
 	for (const WASM::StorageType& parameter : blockType.params) {
 		const int width = widthOf(parameter.val);
-		require(width != 0 && width != 16,
-				"the SLJIT backend does not lower v128 block parameters yet");
+		require(width != 0, "the SLJIT backend does not model this block parameter type");
 		signature.params.push_back(width);
 	}
 	for (const WASM::StorageType& result : blockType.results) {
