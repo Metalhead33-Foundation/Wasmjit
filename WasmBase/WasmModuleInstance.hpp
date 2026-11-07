@@ -72,6 +72,12 @@ struct ModuleInstanceInternals {
 	std::vector<TableInstance*> tableRefs;
 	//! One `Callable` per defined function, indexed by defined-function order.
 	std::vector<Callable> internalCallables;
+	//! Why each defined function could not be compiled, by defined-function index.
+	//! Empty for a function the backend compiled, and for a backend that reports
+	//! nothing. A null `fnPtr` alone cannot carry this: it also means this backend
+	//! provides no compiled entries, so support cannot be inferred from it
+	//! (docs/backends/EXPORT_SIGNATURE.md section 39).
+	std::vector<std::string> internalUnsupportedReasons;
 	std::vector<Callable>  importStorage; //!< Owns the WasmCallable objects for imports
 	//! Tags are process-wide identities owned by the Store (`TagId`); this is the
 	//! module's tag index space, imports first, then the module's own tags
@@ -271,6 +277,21 @@ public:
 	//! default dependency-free boundary.
 	/** \brief Returns the optional borrowed host bridge. \return Installed bridge, or nullptr when none was supplied. */
 	const HostBridge* hostBridge() const { return ctx.hostBridge; }
+	/*!
+	 * \brief Records why a defined function could not be compiled.
+	 * \param internalIndex Index in the defined-function (internal) index space.
+	 * \param reason Backend-supplied explanation; an empty reason clears the entry.
+	 */
+	void setFunctionUnsupported(std::uint32_t internalIndex, std::string reason);
+
+	/*!
+	 * \brief Reports why an exported function could not be compiled.
+	 * \param name Export name.
+	 * \return The backend reason, or nullopt when the export is compiled, is not a
+	 *         function, is an import, or was never reported.
+	 */
+	std::optional<std::string> unsupportedReason(std::string_view name) const;
+
 	/** \brief Looks up an exported function by name. \param name Export field name. \return Callable descriptor, or nullopt when no function export has that name. */
 	std::optional<Callable> exportedFunction(std::string_view name) const;
 	/** \brief Looks up several exported functions in one pass. \param names Export field names. \return One optional callable per requested name, in the same order. */

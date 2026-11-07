@@ -1564,3 +1564,72 @@ the frame -- which is what the frame form was supposed to buy, and the last item
 capability list.
 
 Suite 21855 assertions in 774 cases, green.
+
+## 43. `unsupportedReason(name)`: the API landed (2a), the wiring is 2b
+
+```cpp
+void setFunctionUnsupported(std::uint32_t internalIndex, std::string reason);
+std::optional<std::string> unsupportedReason(std::string_view name) const;
+```
+
+Storage is `ModuleInstanceInternals::internalUnsupportedReasons`, indexed by the
+defined-function space beside `internalCallables`. The getter maps an export name to
+that index and returns the recorded reason; it answers nullopt for a compiled export,
+an import, an unknown name, or an unreported function.
+
+**Test (green):** a supported export reports no reason, and neither does a name that
+does not exist. The new query cannot invent support problems -- which is the property
+section 34's refutation demanded.
+
+**Subtask 2b (next):** the backends must *report*. SLJIT already computes the text
+(`unsupportedReason_`), so 2b is "carry it out of the dispatcher into the instance"
+for each function whose `fnPtr` stayed null.
+
+### The markdown lesson from this subtask
+
+Two mechanical slips, both caught by gates the project already had: appending the
+implementation after the namespace's closing brace (a build error), and leaving
+`exportedFunction`'s own doc block orphaned above the new declaration, so Doxygen
+merged two docs onto one function (**three `WARN_NO_PARAMDOC` warnings** -- the header
+doc gate earning its place again).
+
+## 44. Parity survey: what each backend refuses today (from the code)
+
+Extracted by grepping each backend's own refusal strings, so this is what the code
+says, not what anyone remembers:
+
+| Class | SLJIT | AsmJIT | LibJIT |
+|---|---|---|---|
+| **Parameters** | "at most three parameters" (register form only) | "too many arguments" | sixth-argument loss (aggregate spelling) |
+| **Multiple results** | register form refuses; **frame form works** | **works** | register form via MV5 (**works**); frame form refuses |
+| **`v128`** | supported (frame form); "only returns i32/i64/f32/f64" for the register path | parameters and results work in frame mode | aggregate spelling, sound |
+| **Locals** | "only models i32, i64, f32 and f64 locals" | packed-element limits in `array.get/set/fill/copy` | aggregates for vectors |
+| **Reference / GC types** | "the SLJIT backend cannot pass ..." | "unsupported Wasm value type" in ABI translation | not exercised in this campaign |
+| **Frame size** | "the function frame exceeds SLJIT's local-area limit" | not seen | not seen |
+| **Calls in frame mode** | works (step 3b) | works (5d) | **refused** (4b deferred) |
+| **Imports in frame mode** | n/a (imports are typed) | **refused** (P0b) | **refused** (P0a) |
+| **Tail calls** | refused in frame mode (trampoline lacks a frame pointer) | not seen | thunks keep the register form |
+
+### What the table means for "production-ready parity"
+
+The frame ABI work is complete; **what remains is not ABI shape but feature coverage**,
+and it is uneven in a specific way:
+
+1. **Reference and GC types are the biggest gap.** Neither SLJIT nor AsmJIT advertises
+them in the ABI translation, while LibJIT grew up with GC references as its normal
+case. Any embedder using `externref`/`anyref`/structs/arrays is LibJIT-only today.
+2. **Exceptions**: no refusal string was found for `try_table`/tags in SLJIT or AsmJIT,
+which means either support or silence -- worth an explicit test either way, since
+silence is not the same as support.
+3. **SIMD is asymmetric by *path*, not by feature**: both frames handle `v128`; the
+register paths differ.
+4. **Tail calls in frame mode** are refused on SLJIT and unimplemented elsewhere -- a
+small, well-understood gap.
+
+**Recommendation:** the next body of work is a **capability matrix driven by tests**,
+not by reading: one fixture per feature (refs, GC, exceptions, tail calls, atoms,
+memory64), run on all three backends, recording pass/refuse/trap. That converts this
+table from "what the strings say" into "what the engines do", which is the only
+version an embedder can rely on.
+
+Suite 21858 assertions in 775 cases, green.

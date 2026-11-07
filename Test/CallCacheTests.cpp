@@ -547,3 +547,18 @@ std::memcpy(&second, results + 8, sizeof(second));
 CHECK(first == 7);
 CHECK(second == 9);
 }
+
+// A supported export reports no reason: the query must not invent one
+// (docs/backends/EXPORT_SIGNATURE.md section 39).
+TEST_CASE("unsupportedReason is absent for an export that compiled",
+"[staging][abi][reason]")
+{
+auto runtime = WASM::Runtime::create("libjit");
+REQUIRE(runtime != nullptr);
+auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "v128_multi.wasm");
+WASM::RegistryImportResolver imports;
+WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+CHECK_FALSE(instance.unsupportedReason("three_lanes").has_value());
+CHECK_FALSE(instance.unsupportedReason("no_such_export").has_value());
+}

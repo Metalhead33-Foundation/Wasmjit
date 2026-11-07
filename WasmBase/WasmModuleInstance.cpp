@@ -2682,4 +2682,31 @@ void ModuleInstance::gcCollect()
 	collectCycles();
 }
 
+void ModuleInstance::setFunctionUnsupported(std::uint32_t internalIndex, std::string reason)
+{
+if (internals.internalUnsupportedReasons.size() <= internalIndex)
+internals.internalUnsupportedReasons.resize(internalIndex + 1);
+internals.internalUnsupportedReasons[internalIndex] = std::move(reason);
+}
+
+std::optional<std::string> ModuleInstance::unsupportedReason(std::string_view name) const
+{
+const uint32_t importedFuncCount =
+static_cast<uint32_t>(module->importFunctions.size());
+for (const Export& ex : module->exports) {
+if (ex.kind != ExternalKind::Function || ex.name != name)
+continue;
+if (ex.index < importedFuncCount)
+return std::nullopt;
+const uint32_t internalIdx = ex.index - importedFuncCount;
+if (internalIdx >= internals.internalUnsupportedReasons.size())
+return std::nullopt;
+const std::string& reason = internals.internalUnsupportedReasons[internalIdx];
+if (reason.empty())
+return std::nullopt;
+return reason;
+}
+return std::nullopt;
+}
+
 }
