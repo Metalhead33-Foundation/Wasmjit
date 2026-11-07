@@ -1926,6 +1926,67 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 		checkError(compiler.jnz(callerContext), "AsmJit call_ref context branch failed");
 		checkError(compiler.mov(calleeContext, vmContext), "AsmJit call_ref native context selection failed");
 		checkError(compiler.bind(callerContext), "AsmJit call_ref context label binding failed");
+		if (frameMode) {
+			// Staging-frame ABI: pack the arguments, invoke (ctx, frame), read the
+			// result block back into the value stack.
+			uint32_t argBytes = 0;
+			for (const WASM::StorageType& parameter : calledType.params)
+				argBytes += parameter.val.opcode == WASM::ValueTypeCode::V128 ? 16u : 8u;
+			asmjit::x86::Mem frameStorage = compiler.new_stack(argBytes + 16, 16, "refCallFrame");
+			asmjit::x86::Gp frameAddress = compiler.new_gp_ptr("refCallFrame");
+			checkError(compiler.lea(frameAddress, frameStorage),
+					"AsmJit call_ref frame address failed");
+			uint32_t offset = 0;
+			for (std::size_t i = 0; i < arguments.size(); ++i) {
+				if (calledType.params[i].val.opcode == WASM::ValueTypeCode::V128) {
+					for (int word = 0; word < 2; ++word) {
+						auto bits = compiler.new_gp64("refCallFrameWord");
+						checkError(compiler.mov(bits,
+								asmjit::x86::qword_ptr(arguments[i], word * 8)),
+								"AsmJit call_ref frame vector load failed");
+						checkError(compiler.mov(
+								asmjit::x86::qword_ptr(frameAddress, offset + word * 8), bits),
+								"AsmJit call_ref frame vector store failed");
+					}
+					offset += 16;
+					continue;
+				}
+				checkError(compiler.mov(
+						asmjit::x86::Mem(frameAddress, offset, arguments[i].size()),
+						arguments[i]), "AsmJit call_ref frame store failed");
+				offset += 8;
+			}
+			asmjit::InvokeNode* invoke = nullptr;
+			checkError(compiler.invoke(asmjit::Out(invoke), target, *signatures[typeIndex]),
+					"AsmJit call_ref frame invocation failed");
+			invoke->set_arg(0, calleeContext);
+			invoke->set_arg(1, frameAddress);
+			if (calledType.results.size() == 1) {
+				const WASM::ValueType& declared = calledType.results.front().val;
+				if (declared.opcode == WASM::ValueTypeCode::V128) {
+					auto buffer = newVectorBuffer("callRefVectorResult");
+					for (int word = 0; word < 2; ++word) {
+						auto bits = compiler.new_gp64("callRefResultWord");
+						checkError(compiler.mov(bits,
+								asmjit::x86::qword_ptr(frameAddress, offset + word * 8)),
+								"AsmJit call_ref frame vector result load failed");
+						checkError(compiler.mov(
+								asmjit::x86::qword_ptr(buffer, word * 8), bits),
+								"AsmJit call_ref frame vector result store failed");
+					}
+					values.push_back(buffer);
+				} else {
+					auto result = newIntegerRegister(compiler, declared, "callRefResult");
+					checkError(compiler.mov(result,
+							asmjit::x86::Mem(frameAddress, offset, result.size())),
+							"AsmJit call_ref frame result load failed");
+					values.push_back(result);
+				}
+			}
+			emitPendingTrapReturn();
+			emitPendingExceptionCheck();
+			return;
+		}
 		auto preparedArguments = prepareCallArguments(calledType, arguments);
 		asmjit::InvokeNode* invoke = nullptr;
 		checkError(compiler.invoke(asmjit::Out(invoke), target, *signatures[typeIndex]),
@@ -1939,8 +2000,6 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 
 	void dispatchCallRef(WASM::TypeIdx typeIndex) override
 	{
-		if (frameMode)
-			throw std::runtime_error("AsmJit frame-form call_ref is not implemented");
 		const WASM::FuncType calledType = module.funcTypeAt(typeIndex);
 		if (calledType.results.size() > 1)
 			throw std::runtime_error("AsmJit call_ref currently supports at most one result");
@@ -1963,8 +2022,6 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 
 	void dispatchReturnCallRef(WASM::TypeIdx typeIndex) override
 	{
-		if (frameMode)
-			throw std::runtime_error("AsmJit frame-form return_call_ref is not implemented");
 		const WASM::FuncType calledType = module.funcTypeAt(typeIndex);
 		if (values.size() != calledType.params.size() + 1)
 			throw std::runtime_error("AsmJit return_call_ref has unexpected values below its reference");

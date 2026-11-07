@@ -287,39 +287,30 @@ function returned the stale callable slot (a pointer). Resizing by the parameter
 count before the result push fixed it. The reflection is a useful reminder that
 the stack model is not the machine stack: every pop/push pair must be mirrored.
 
-### What is still open
+### Frame-form function references (same session)
 
-* **Frame-form `call_ref` / `return_call_ref`** are refused on SLJIT and AsmJIT;
-  the frame call path would need the same staging-frame construction as an
-  indirect frame call. No test claims otherwise.
+Both backends already had a frame staging path for ordinary calls; AsmJIT's
+`emitCallRefInvocation` now uses it for a `Callable` in a register: pack the
+arguments into a 16-byte-aligned stack frame, invoke `(ctx, frame)`, read the
+result block back, and let the existing trap/exception checks run. SLJIT already
+routed a resolved callable through `emitResolvedCall`, which has both forms, so
+its reference call and tail fallback needed no separate frame code.
 
-### v128 frame-form targets (same session)
-
-`tailCallFrameSupported` now accepts `v128`: a uniform slot is 16 bytes, the frame
-thunk copies `frameValueBytes(v128)`, and both backends store the vector into the
-slot before the pending write.
-
-* SLJIT copies the two 8-byte halves from the operand slot to `TailCallState::args`.
-* AsmJIT's register model keeps a v128 as a buffer pointer; the pending writer
-  loads 16 bytes with `movdqu` and stores them into the state slot.
-
-Evidence (`tailcall_v128_frame_probe.wat`, three vectors and a scalar counter,
-1,000,000 links):
+Evidence (`tailcall_ref_frame_probe.wat`, four scalar parameters force the frame
+ABI, 1,000,000 `return_call_ref` links):
 
 ```
-TAILV128FRAME asmjit: run()=1
-TAILV128FRAME sljit: run()=1
+TAILREFFRAME libjit: run()=1
+TAILREFFRAME asmjit: run()=1
+TAILREFFRAME sljit: run()=1
 ```
-
-The pre-existing `tail_wide` one-link probe now takes the trampoline as well
-(`tail_wide=1`). LibJIT is excluded from the v128 probe: its native trampoline has
-never carried `v128` (docs/TAILCALLS.md TC-3).
 
 ### What is still open
 
-* `return_call_ref` is not lowered by SLJIT or AsmJIT at all (neither has a
-  `call_ref` lowering), so there is no backend path to extend yet. When one is
-  added, the runtime `tailEntry` check above is the pattern.
+No tail-call form that either backend lowers is left. `v128` reference calls in
+frame form are not separately probed (the frame path copies vectors, so the
+missing coverage is a test, not a known refusal); the scalar frame-reference
+probe above is the guard for that path.
 
 ## Item 2 — shared reference/table atomics
 

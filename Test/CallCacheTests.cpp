@@ -1711,3 +1711,42 @@ CHECK(false);
 }
 }
 }
+
+// Frame-form function-reference calls: call_ref entry and return_call_ref links.
+TEST_CASE("tail calls: frame-form return_call_ref is constant-stack",
+"[staging][abi][tail][frame][ref]")
+{
+for (const char* backend : {"libjit", "asmjit", "sljit"}) {
+std::fprintf(stderr, "TAILREFFRAME %s: ", backend);
+auto runtime = WASM::Runtime::create(backend);
+REQUIRE(runtime != nullptr);
+auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "tailcall_ref_frame_probe.wasm");
+WASM::RegistryImportResolver imports;
+WASM::ModuleInstance* instance = nullptr;
+try {
+instance = &runtime->instantiate(*module, imports);
+} catch (const std::exception& error) {
+std::fprintf(stderr, "REFUSED: %s\n", error.what());
+CHECK(false);
+continue;
+}
+const auto run = instance->exportedFunction("run");
+REQUIRE(run.has_value());
+try {
+std::int32_t value = 0;
+if (instance->frameCallAbi()) {
+alignas(16) std::uint8_t frame[16] = {};
+WASM::callCallableFrame(*run, frame);
+std::memcpy(&value, frame, sizeof(value));
+} else {
+value = WASM::callCallable<std::int32_t>(*run);
+}
+std::fprintf(stderr, "run()=%d\n", (int)value);
+CHECK(value == 1);
+} catch (const std::exception& error) {
+std::fprintf(stderr, "FAILED: %s\n", error.what());
+CHECK(false);
+}
+}
+}
