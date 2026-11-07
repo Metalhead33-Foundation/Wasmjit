@@ -514,3 +514,36 @@ std::int32_t result = 0;
 cache.call(*entry, &result, arguments.data());
 CHECK(result == 6);
 }
+
+// Two results through the cache on a frame-mode backend: the embedder supplies a
+// typed buffer and the frame stays internal
+// (docs/backends/EXPORT_SIGNATURE.md section 31).
+TEST_CASE("The call cache returns two results without exposing the frame",
+"[staging][callcache][abi][multi]")
+{
+WASM::setFrameCallAbiOptIn(true);
+auto runtime = WASM::Runtime::create("asmjit");
+REQUIRE(runtime != nullptr);
+auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "asmjit_multi_result.wasm");
+WASM::RegistryImportResolver imports;
+WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+WASM::setFrameCallAbiOptIn(false);
+REQUIRE(instance.frameCallAbi());
+
+WASM::ModuleCallCache cache(instance);
+const WASM::ModuleFfiEntry* entry = cache.find("pair");
+REQUIRE(entry != nullptr);
+CHECK(entry->resultCount == 2u);
+CHECK(entry->frameBytes == 16u); // two scalar slots, no parameters
+
+alignas(16) std::uint8_t results[32] = {};
+cache.call(*entry, results, nullptr);
+
+std::int32_t first = 0;
+std::int64_t second = 0;
+std::memcpy(&first, results, sizeof(first));
+std::memcpy(&second, results + 8, sizeof(second));
+CHECK(first == 7);
+CHECK(second == 9);
+}

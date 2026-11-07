@@ -110,6 +110,8 @@ ModuleCallCache::ModuleCallCache(ModuleInstance& instance)
 		entry.paramCount = view.funcParams().size();
 		entry.multiResult = view.funcResults().size() > 1u;
 		entry.resultCount = view.funcResults().size();
+		for (const CanonStorageType& result : view.funcResults())
+			entry.resultKinds.push_back(result.value.opcode);
 		if (entry.resultCount == 1u)
 			entry.resultKind = view.funcResults().front().value.opcode;
 		entry.argTypes.reserve(1u + entry.paramCount
@@ -144,8 +146,8 @@ ModuleCallCache::ModuleCallCache(ModuleInstance& instance)
 			std::size_t bytes = 0;
 			for (const WASM::ValueTypeCode code : entry.paramKinds)
 				bytes += slotWidth(code);
-			if (entry.resultCount == 1u)
-				bytes += slotWidth(entry.resultKind);
+			for (const WASM::ValueTypeCode code : entry.resultKinds)
+				bytes += slotWidth(code);
 			entry.frameBytes = bytes;
 		}
 		// A backend that returns a v128 through a caller-supplied buffer describes the
@@ -237,8 +239,21 @@ void ModuleCallCache::call(const ModuleFfiEntry& entry, void* result,
 				? static_cast<void*>(entry.callable.context)
 				: static_cast<void*>(instance_->context());
 		entryPoint(frameContext, frame);
-		if (result != nullptr && entry.resultCount == 1u)
-			std::memcpy(result, frame + offset, widthOf(entry.resultKind));
+		if (result != nullptr) {
+			// Results land in the caller's buffer as slots, in declaration order --
+			// the same layout the frame uses. That is the invariant: the embedder
+			// never learns which backend produced the values
+			// (docs/backends/EXPORT_SIGNATURE.md section 31).
+			std::size_t frameOffset = offset;
+			std::size_t bufferOffset = 0;
+			for (const WASM::ValueTypeCode code : entry.resultKinds) {
+				const std::size_t width = widthOf(code);
+				std::memcpy(static_cast<std::uint8_t*>(result) + bufferOffset,
+						frame + frameOffset, width);
+				frameOffset += width == 16 ? 16 : 8;
+				bufferOffset += width == 16 ? 16 : 8;
+			}
+		}
 		return;
 	}
 

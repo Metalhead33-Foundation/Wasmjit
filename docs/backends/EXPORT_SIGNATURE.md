@@ -1067,3 +1067,44 @@ cannot close silently.
 | SLJIT | already emits multi-result from the frame (its `allReturns` path); **untested under the opt-in** |
 
 Suite 21838 assertions in 769 cases, step-5 gates 31 in 7.
+
+## 31. Two results through the cache: the invariant, held
+
+```
+The call cache returns two results without exposing the frame
+[staging][callcache][abi][multi]   ->  green
+```
+
+A `(result i32 i64)` export on **AsmJIT** under the opt-in: the entry reports
+`resultCount == 2` and `frameBytes == 16` (two slots, no parameters), the backend
+stores both results into its frame, and the cache copies them into the caller's
+typed buffer as **7** then **9**.
+
+The embedder supplies a buffer and receives typed values. Nothing above the cache
+mentions a frame, a slot or a backend -- which is the invariant as stated:
+
+> The embedder only ever sees typed, non-frame signatures in both directions.
+> What happens underneath is the backend's business.
+
+### The layout decision this forced
+
+The frame path writes results as **slots in declaration order** (8 bytes per scalar,
+16 per `v128`), and the caller's buffer uses the *same* layout. That is deliberate:
+the buffer layout must be backend-independent, or the embedder could tell which
+backend ran -- the exact leak this design exists to prevent.
+
+Consequence: process-wide invariants now are `frameArgumentsBytes` for arguments and
+slot order for results -- and that single rule covers every backend, including the
+register form, because the *cache* is what converts.
+
+### What remains
+
+| Site | Change |
+|---|---|
+| LibJIT `emitFunctionReturn` | frame branch for N results; MV5 stays for the register form |
+| SLJIT multi-result under the opt-in | already emits from the frame; **untested** |
+| dead branch (B) in the AsmJIT epilogue | unreachable; delete on the next touch |
+| compile cache keyed by mode | section 19; makes the opt-in honest |
+| doc reconciliation | section 16 is superseded by 17/20/24 |
+
+Suite 21838 assertions in 769 cases; cache tests 28 in 5.
