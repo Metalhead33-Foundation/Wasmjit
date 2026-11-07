@@ -1633,3 +1633,41 @@ table from "what the strings say" into "what the engines do", which is the only
 version an embedder can rely on.
 
 Suite 21858 assertions in 775 cases, green.
+
+## 45. 3b done: the mode is refused, not re-keyed
+
+`Runtime::instances_` is not a compilation cache -- it is an **idempotency invariant**:
+`std::unordered_map<const Module*, LoadedModule>`, documented as *"at most one instance
+per module"*. So "key the cache by mode" was the wrong shape: two instances of one
+module in two ABIs would break the invariant the map exists to enforce.
+
+**What the invariant needed instead was a refusal:**
+
+```cpp
+if (existing->second.instance->frameCallAbi() != WASM::frameCallAbiOptIn())
+    throw std::runtime_error("the module is already instantiated with the other call ABI;"
+            " load it again to instantiate it in this one ...");
+```
+
+Before this, the second call silently returned an instance compiled the other way --
+the trap that made two diagnostic rounds wrong (section 19's caveat, and the failing
+test in section 38 that compiled the same module object twice).
+
+### Test
+
+```
+Re-instantiating a module in the other call ABI is refused   [staging][abi][mode]  -> green
+```
+
+It asserts all three behaviours in one case: the first instantiation is register form;
+the same module under the other opt-in **throws**; and the same module with the **same**
+ABI stays idempotent (same object address).
+
+### Why this is better than keying by mode
+
+* the invariant stays true -- one instance per module, always;
+* the failure is **loud and actionable** ("load it again") instead of a second silent
+  mode that an embedder would have to discover;
+* nothing new needs freeing or unloading, because nothing new is created.
+
+Suite 21862 assertions in 776 cases, green.

@@ -562,3 +562,27 @@ WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
 CHECK_FALSE(instance.unsupportedReason("three_lanes").has_value());
 CHECK_FALSE(instance.unsupportedReason("no_such_export").has_value());
 }
+
+// 3b: one instance per module is an invariant, so asking for the other call ABI on an
+// already-instantiated module must REFUSE rather than return a mismatch
+// (docs/backends/EXPORT_SIGNATURE.md section 45).
+TEST_CASE("Re-instantiating a module in the other call ABI is refused",
+"[staging][abi][mode]")
+{
+auto runtime = WASM::Runtime::create("libjit");
+REQUIRE(runtime != nullptr);
+auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "v128_multi.wasm");
+WASM::RegistryImportResolver imports;
+
+WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+CHECK_FALSE(instance.frameCallAbi());
+
+// Same module object, other ABI: the second call cannot change what was compiled.
+WASM::setFrameCallAbiOptIn(true);
+REQUIRE_THROWS(runtime->instantiate(*module, imports));
+WASM::setFrameCallAbiOptIn(false);
+
+// And the same ABI stays idempotent.
+CHECK(&runtime->instantiate(*module, imports) == &instance);
+}
