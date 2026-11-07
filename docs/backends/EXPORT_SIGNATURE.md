@@ -577,3 +577,60 @@ Three consequences:
 
 **State:** suite 21816 assertions in 764 cases, `[staging][asmjit]` 14 in 6, all
 green.
+
+## 20. Is it a "virtual register file"? A precise answer
+
+**Short answer: no, not in the compiler sense -- but yes in one specific, defensible
+sense, and the distinction is worth keeping.**
+
+### What a virtual register is
+
+A virtual register is an **unbounded symbolic** register in an intermediate
+representation: SSA values, liveness, coalescing, allocation to physical registers,
+and spills decided by a register allocator. Nothing in the frame form is that:
+nothing is allocated, nothing is live-range analysed, and no pass chooses between a
+register and a slot.
+
+### What the frame form actually is
+
+A **memory-based calling convention**: a fixed-layout parameter-and-result block
+the caller fills and the callee reads. The classical names are the *argument home
+area*, a *spill file*, or a *static parameter block* -- Win64's shadow space is the
+familiar cousin.
+
+| Backend | Convention | Why |
+|---|---|---|
+| LibJIT | native C ABI (`jit_abi_cdecl`) | libjit *has* a register allocator, so the sixth-argument defect is a bug to fix, not a design limit to route around |
+| SLJIT | fixed block | "stack-less" by design: no argument declarations without saved registers, and a hard four-entry cap |
+| AsmJIT | fixed block | a four-entry cap plus a vector-register result special case |
+
+### The one sense in which "virtual register file" is right
+
+The block is **addressable storage for the call's value set**: a fixed-stride array
+of slots (8 bytes each, 16 for `v128`) where every parameter has a *nominal index*
+and the callee materialises each slot into a real register exactly when it needs it.
+Arity is therefore bounded by **memory**, not by the machine's register file -- which
+is precisely the property the two backends lack.
+
+So the honest phrase is **"a register file mapped into memory"** -- a *virtual
+register file* -- rather than "virtual registers". The adjectives do different work:
+`virtual` because it is unbounded and nominal; `file` because it is an indexed
+array; `memory` because there is no allocator behind it.
+
+### Why the distinction is not pedantry
+
+Calling it "virtual registers" would imply an IR that could be **optimised and
+allocated** -- and there is none, deliberately. SLJIT and AsmJIT exist to be small
+and predictable; adding an allocator to save eight bytes per call would be the wrong
+trade. The frame is a **contract between caller and callee**, not a program
+representation, which is also why it could be defined in `WasmBackendAbi.hpp` with
+pure arithmetic and why every backend can honour it without sharing any IR.
+
+### A detail this check turned up
+
+`WasmCallCache` already maps `v128` to an **opaque pointer-sized cell** at the
+`Callable` ABI (`ffiTypeFor`), not to two words. So the embedder-visible spelling
+today is *pointer to 16 bytes*, and the canonical two-word rule applies to the
+**frame**, not to the ffi boundary. The packer of section 17 must therefore
+**dereference** the cell and copy 16 bytes into the frame -- a smaller change than
+"change the spelling", and one that leaves every `Callable` signature untouched.
