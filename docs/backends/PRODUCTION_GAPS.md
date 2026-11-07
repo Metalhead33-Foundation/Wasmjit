@@ -959,7 +959,7 @@ in both passes.
 
 ## 27. V-1 fixed, multi-value catches and numeric shared atomics closed (2026-11-07)
 
-**Snapshot (2026-11-07, `backendsMh33`):** suite **22288 assertions in 807
+**Snapshot (2026-11-07, `backendsMh33`):** suite **22296 assertions in 808
 cases** under `--rng-seed 12345`, green; `[headerdoc]`, `[docs]`, `doxygen`
 (0 warnings) and `abi-check` all pass. This section supersedes section 26.
 
@@ -975,6 +975,7 @@ cases** under `--rng-seed 12345`, green; `[headerdoc]`, `[docs]`, `doxygen`
 | frame-form cross-function `return_call` (v128) | n/a | OK | OK | `TAILV128FRAME` 1,000,000 links, `run()=1`; LibJIT native trampoline excludes v128 |
 | `call_ref` / `return_call_ref` (register form) | OK | OK | OK | `TAILREF` 1,000,000 links, `even0=1 run()=1` |
 | frame-form `call_ref` / `return_call_ref` | OK | OK | OK | `TAILREFFRAME` 1,000,000 links, `run()=1` |
+| v128 frame-form `return_call_ref` | n/a | OK | OK | `TAILV128REFFRAME` 1,000,000 links, `run()=1`; LibJIT native trampoline excludes v128 |
 | `table.get` / `table.set` (externref/funcref, OOB trap) | OK | OK | OK | `TABLEACCESS` ext=1 fun=0 |
 | numeric shared-everything atomics (global/struct/array) | OK | OK | OK | `global=5 struct32=7 struct64=9 array=11` |
 | V-1: block-end stack check after a `try_table` | n/a | n/a | n/a | `validator: a catch does not disable block-end stack checks` |

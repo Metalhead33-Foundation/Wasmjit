@@ -1827,3 +1827,40 @@ CHECK(false);
 }
 }
 }
+
+// v128 function-reference frame calls: vector through the frame driver.
+TEST_CASE("tail calls: v128 frame-form return_call_ref is constant-stack",
+"[staging][abi][tail][frame][ref][simd]")
+{
+// LibJIT's native trampoline has never carried v128; the frame driver does.
+for (const char* backend : {"asmjit", "sljit"}) {
+std::fprintf(stderr, "TAILV128REFFRAME %s: ", backend);
+auto runtime = WASM::Runtime::create(backend);
+REQUIRE(runtime != nullptr);
+auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "tailcall_v128_ref_frame_probe.wasm");
+WASM::RegistryImportResolver imports;
+WASM::ModuleInstance* instance = nullptr;
+try {
+instance = &runtime->instantiate(*module, imports);
+} catch (const std::exception& error) {
+std::fprintf(stderr, "REFUSED: %s\n", error.what());
+CHECK(false);
+continue;
+}
+REQUIRE(instance->frameCallAbi());
+const auto run = instance->exportedFunction("run");
+REQUIRE(run.has_value());
+try {
+alignas(16) std::uint8_t frame[16] = {};
+WASM::callCallableFrame(*run, frame);
+std::int32_t value = 0;
+std::memcpy(&value, frame, sizeof(value));
+std::fprintf(stderr, "run()=%d\n", (int)value);
+CHECK(value == 1);
+} catch (const std::exception& error) {
+std::fprintf(stderr, "FAILED: %s\n", error.what());
+CHECK(false);
+}
+}
+}

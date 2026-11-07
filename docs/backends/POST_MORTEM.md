@@ -305,12 +305,22 @@ TAILREFFRAME asmjit: run()=1
 TAILREFFRAME sljit: run()=1
 ```
 
-### What is still open
+A second probe carries a scalar counter and **two v128 parameters** through the
+same frame reference loop (two vectors force the frame ABI even where one would
+fit SLJIT's register budget):
 
-No tail-call form that either backend lowers is left. `v128` reference calls in
-frame form are not separately probed (the frame path copies vectors, so the
-missing coverage is a test, not a known refusal); the scalar frame-reference
-probe above is the guard for that path.
+```
+TAILV128REFFRAME asmjit: run()=1
+TAILV128REFFRAME sljit: run()=1
+```
+
+LibJIT is excluded there because its native trampoline has never carried v128.
+
+### Status
+
+No tail-call form that either backend lowers is left. The matrix covers self,
+direct, indirect and ref targets, scalar and v128 frames, and register and frame
+ABIs.
 
 ## Item 2 — shared reference/table atomics
 
@@ -354,9 +364,10 @@ fields, array elements) and table slots, with the GC retain/release barrier.
 
 ### What is still open
 
-Shared-reference atomics on globals/structs/arrays, and table atomics (which
-first need `table.get`/`table.set`). The numeric family is not affected. This is
-recorded as a blocker, not claimed as done.
+Shared-reference atomics on globals/structs/arrays and shared-table atomics. The
+numeric family and the ordinary table accessors are done; the parser/type model
+rejects the shared fixtures before any atomic lowering runs. This is recorded as
+a blocker, not claimed as done.
 
 ### Lessons
 

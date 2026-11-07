@@ -2003,10 +2003,12 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 		const WASM::FuncType calledType = module.funcTypeAt(typeIndex);
 		if (calledType.results.size() > 1)
 			throw std::runtime_error("AsmJit call_ref currently supports at most one result");
-		for (const auto& parameter : calledType.params)
-			requireScalar(parameter.val, "call_ref parameters");
-		for (const auto& result : calledType.results)
-			requireScalar(result.val, "call_ref results");
+		if (!frameMode) {
+			for (const auto& parameter : calledType.params)
+				requireScalar(parameter.val, "call_ref parameters");
+			for (const auto& result : calledType.results)
+				requireScalar(result.val, "call_ref results");
+		}
 		if (values.size() < calledType.params.size() + 1)
 			throw std::runtime_error("AsmJit call_ref operand stack underflow");
 		auto callable = values.back();
@@ -2033,8 +2035,10 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 			values.pop_back();
 		}
 		emitNullRefCheck(callable);
-		if (WASM::tailCallTrampolinesEligible(module, false)
-				&& WASM::tailCallSlotsSupported(calledType)) {
+		const bool refTailSupported = frameMode
+				? WASM::tailCallFrameSupported(calledType)
+				: WASM::tailCallSlotsSupported(calledType);
+		if (WASM::tailCallTrampolinesEligible(module, frameMode) && refTailSupported) {
 			auto thunk = compiler.new_gp_ptr("tailThunk");
 			checkError(compiler.mov(thunk, asmjit::x86::ptr(callable,
 					static_cast<int32_t>(offsetof(WASM::Callable, tailEntry)))),
