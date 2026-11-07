@@ -333,3 +333,47 @@ before this campaign (hard cap: four), impossible on LibJIT (sixth argument lost
 and a special case on AsmJIT (vector-register result). One observation, one ABI,
 three backends converging -- which is the entire argument for a canonical boundary
 in the first place.
+
+## 9. Step 5 executed one subtask at a time (2026-11-06)
+
+### 5a: the frame shape, and nothing else (done)
+
+`translateFunctionType` is **static**, so the mode had to arrive as a parameter
+rather than a member flag -- the opposite of LibJIT, where the translator is an
+object. It now takes `bool frameAbi = false`, so every existing caller compiles
+unchanged, and the frame branch returns after two words:
+
+```
+(ctx, frame) -> void
+```
+
+Three vectors and a vector result still make **two** words, which is the whole
+claim: shape does not depend on the signature's width.
+
+**What made 5a safe to land alone**: it emits a signature nothing uses yet, so no
+behaviour moved. Its gate is green the moment the shape is right, and it also
+asserts the register form is *untouched* -- eight arguments for three vectors plus
+a vector result, because the result buffer pointer is the special case the frame
+retires later in 5f.
+
+### The failure it produced, and the lesson
+
+The first version of the gate expected **seven** arguments for the register form and
+failed on eight: it forgot the trailing result-buffer pointer. Caught by the test,
+not by a crash, and corrected *in the test's comment* rather than by relaxing the
+assertion -- the number 8 is now documented at the assertion, so the next reader
+learns the convention from the test that pins it.
+
+**Rule reinforced:** an assertion about a count is also an assertion about a
+*convention*. When the count surprises you, the convention is what you were wrong
+about, and the comment must say which.
+
+### Subtask ledger
+
+| # | Subtask | State |
+|---|---|---|
+| 5a | mode into the static translator | **done**, `[staging][asmjit][abi][sig]` green |
+| 5b | prologue from frame + entry refusals | next |
+| 5c | the three return sites | pending |
+| 5d | call sites | pending |
+| 5e | `bufferedVectorResult` deletion, gap pin inverted | pending |

@@ -287,3 +287,35 @@ TEST_CASE("AsmJIT takes three vectors through a frame and returns 6",
 	std::memcpy(&result, frame + 48, sizeof(result));
 	CHECK(result == 6);
 }
+
+// Step 5a gate: the frame *shape* in the translator, before anything emits it.
+// Green as soon as the shape is right, which is what makes 5a a self-contained
+// subtask (docs/backends/EXPORT_SIGNATURE.md section 11).
+TEST_CASE("AsmJIT translates a frame-mode signature as (ctx, frame) -> void",
+"[staging][asmjit][abi][sig]")
+{
+	WASM::StorageType vector;
+	vector.isPacked = false;
+	vector.val.opcode = WASM::ValueTypeCode::V128;
+	vector.val.heapType = -1;
+
+	WASM::FuncType type;
+	type.params.assign(3, vector);
+	type.results.push_back(vector);
+
+	const asmjit::FuncSignature signature =
+		AsmJitBackend::TypeTranslator::translateFunctionType(type, true);
+	// Two words whatever the parameters were -- three vectors, a vector result,
+	// still two -- and a void return, because the frame carries the results.
+	CHECK(signature.arg_count() == 2u);
+	CHECK(signature.args()[0] == asmjit::TypeId::kUIntPtr);
+	CHECK(signature.args()[1] == asmjit::TypeId::kUIntPtr);
+	CHECK(signature.ret() == asmjit::TypeId::kVoid);
+
+	// And the register form is untouched when the flag is absent.
+	const asmjit::FuncSignature registerForm =
+		AsmJitBackend::TypeTranslator::translateFunctionType(type);
+	// Eight, not seven: a v128 *result* adds the caller-supplied buffer pointer
+	// in the register form, which is the special case the frame retires.
+	CHECK(registerForm.arg_count() == 8u);
+}

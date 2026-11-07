@@ -73,7 +73,8 @@ asmjit::TypeId TypeTranslator::translateStorageType(const WASM::StorageType& typ
 	}
 }
 
-asmjit::FuncSignature TypeTranslator::translateFunctionType(const WASM::FuncType& function)
+asmjit::FuncSignature TypeTranslator::translateFunctionType(const WASM::FuncType& function,
+		bool frameAbi)
 {
 	asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
 	signature.set_ret(asmjit::TypeId::kVoid);
@@ -82,6 +83,16 @@ asmjit::FuncSignature TypeTranslator::translateFunctionType(const WASM::FuncType
 	if (!signature.can_add_arg())
 		throw std::runtime_error("AsmJit ABI translation: no room for VMContext argument");
 	signature.add_arg(asmjit::TypeId::kUIntPtr);
+
+	if (frameAbi) {
+		// Staging-frame ABI (docs/backends/EXPORT_SIGNATURE.md §10): the context
+		// plus one opaque frame pointer, and a void return -- AsmJIT has no
+		// driver to collect a value, so a frame-mode function stores its own
+		// results into the frame. Step 5a: the *shape* only; nothing emits this
+		// signature yet, so no behaviour changes.
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		return signature;
+	}
 
 	for (const WASM::StorageType& parameter : function.params) {
 		if (parameter.isPacked)

@@ -51,7 +51,8 @@ public:
 	 * \return C-declaration host signature, including the implicit VMContext*.
 	 * \throws std::runtime_error for unsupported types or too many arguments.
 	 */
-	static asmjit::FuncSignature translateFunctionType(const WASM::FuncType& function);
+	static asmjit::FuncSignature translateFunctionType(const WASM::FuncType& function,
+			bool frameAbi = false);
 };
 
 } // namespace AsmJitBackend
