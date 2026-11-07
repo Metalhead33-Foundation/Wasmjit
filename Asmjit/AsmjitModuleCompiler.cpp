@@ -1053,12 +1053,47 @@ public:
 				throw std::runtime_error("AsmJit function ended with an unexpected operand stack value");
 			checkError(compiler.ret(), "AsmJit void function return emission failed");
 		} else {
-			if (values.size() != 1)
-				throw std::runtime_error("AsmJit function must end with exactly one result");
+			const std::size_t expectedResults = frameMode ? resultCount : 1u;
+			if (values.size() != expectedResults)
+				throw std::runtime_error("AsmJit function ended with the wrong number of results");
 			if (isFloatKind(resultType))
 				checkError(compiler.ret(
 						materializeFloat(values.back(), kindWidth(resultType))),
 						"AsmJit float function return emission failed");
+			else if (frameMode && resultCount > 1) {
+				// Multi-result (docs/backends/EXPORT_SIGNATURE.md section 29): every
+				// result goes into the frame in declaration order, 8 bytes per scalar
+				// slot and 16 for a `v128` taken from its local buffer. The result
+				// block starts where the argument block ends.
+				asmjit::x86::Gp destination = compiler.new_gp_ptr("resultAddress");
+				checkError(compiler.lea(destination,
+						asmjit::x86::Mem(framePointer, frameResultOffsetBytes(type))),
+						"AsmJit frame result address failed");
+				const std::size_t firstResult = values.size() - resultCount;
+				uint32_t offset = 0;
+				for (uint32_t i = 0; i < resultCount; ++i) {
+					const WASM::ValueTypeCode code = type.results[i].val.opcode;
+					const asmjit::x86::Gp value = values[firstResult + i];
+					if (code == WASM::ValueTypeCode::V128) {
+						for (int word = 0; word < 2; ++word) {
+							asmjit::x86::Gp bits = compiler.new_gp64("frameResultWord");
+							checkError(compiler.mov(bits,
+									asmjit::x86::qword_ptr(value, word * 8)),
+									"AsmJit frame vector result load failed");
+							checkError(compiler.mov(
+									asmjit::x86::qword_ptr(destination, offset + word * 8), bits),
+									"AsmJit frame vector result store failed");
+						}
+						offset += 16;
+						continue;
+					}
+					checkError(compiler.mov(
+							asmjit::x86::Mem(destination, offset, value.size()), value),
+							"AsmJit frame result store failed");
+					offset += 8;
+				}
+				checkError(compiler.ret(), "AsmJit frame result return failed");
+			}
 			else if (frameMode) {
 				// Staging-frame ABI (steps 5c/5e): the result goes into the frame --
 				// AsmJIT has no driver to collect it -- and the signature returns

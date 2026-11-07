@@ -1028,3 +1028,42 @@ the day multi-result lands it fails and forces the positive test to be written.
 | `frameBytes` | already counts one result slot; extend to all of them |
 
 Suite 21838 assertions in 769 cases; step-5 gates 28 in 7.
+
+## 30. Multi-result through the frame works on AsmJIT
+
+```
+AsmJIT stores two results in a frame   [staging][asmjit][abi][multi]   ->  green
+```
+
+A `(result i32 i64)` function under the opt-in: `7` arrives at frame offset **0** and
+`9` at offset **8**, because the result block starts at `frameArgumentsBytes` (zero
+parameters here) and each scalar takes an 8-byte slot.
+
+Three edits made it work, all of them **additive**:
+
+1. the arity check became `values.size() != (frameMode ? resultCount : 1)`;
+2. a new branch `frameMode && resultCount > 1` stores every result in declaration
+   order, 8 bytes per scalar and 16 per `v128` taken from its buffer;
+3. the entry refusal at `:890` is gated on the mode (section 29).
+
+The existing single-result frame branch was left untouched, which is why the change
+was additive: a new branch *before* it, rather than a rewrite of it.
+
+### The gap pin did its job
+
+The previous round's pin asserted *"AsmJIT still refuses multi-result in the epilogue"*.
+When the epilogue learned to store N results, that pin **failed** -- and rewriting it
+into the positive test above is exactly the workflow the pin exists to force. A gap
+cannot close silently.
+
+### What multi-result still needs
+
+| Site | Change |
+|---|---|
+| cache `callWithResults` | frame-aware: copy `resultCount` results out of the frame instead of passing a buffer |
+| cache `frameBytes` | count **all** result slots, not just one |
+| dead branch (B) | still there, still unreachable (section 29) |
+| LibJIT | `emitFunctionReturn` needs the same frame branch; MV5 stays for its register form |
+| SLJIT | already emits multi-result from the frame (its `allReturns` path); **untested under the opt-in** |
+
+Suite 21838 assertions in 769 cases, step-5 gates 31 in 7.

@@ -422,12 +422,9 @@ REQUIRE_THROWS(runtime->instantiate(*reloaded, imports));
 WASM::setFrameCallAbiOptIn(false);
 }
 
-// Gap pin for multi-result through the frame (docs/backends/EXPORT_SIGNATURE.md
-// section 29). The entry refusal at :891 is now gated on the mode, so a frame-mode
-// multi-result module reaches the epilogue instead -- which still handles exactly one
-// value. This test asserts the CURRENT refusal; it must be rewritten when the
-// epilogue stores N results.
-TEST_CASE("AsmJIT still refuses multi-result in the epilogue",
+// Multi-result through the frame (docs/backends/EXPORT_SIGNATURE.md section 29):
+// two results land in the frame in declaration order, and the signature returns void.
+TEST_CASE("AsmJIT stores two results in a frame",
 "[staging][asmjit][abi][multi]")
 {
 if (std::getenv("WASMJIT_STEP5_GATES") == nullptr) {
@@ -440,6 +437,21 @@ REQUIRE(runtime != nullptr);
 auto module = runtime->loadFile(
 std::filesystem::path(WASM_TEST_DIR) / "asmjit_multi_result.wasm");
 WASM::RegistryImportResolver imports;
-REQUIRE_THROWS(runtime->instantiate(*module, imports));
+WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+CHECK(instance.frameCallAbi());
+
+const std::optional<WASM::Callable> callable = instance.exportedFunction("pair");
+REQUIRE(callable.has_value());
+
+// No parameters, so the result block starts at offset zero: i32 at 0, i64 at 8.
+alignas(16) std::uint8_t frame[32] = {};
+WASM::callCallableFrame(*callable, frame);
 WASM::setFrameCallAbiOptIn(false);
+
+std::int32_t first = 0;
+std::int64_t second = 0;
+std::memcpy(&first, frame, sizeof(first));
+std::memcpy(&second, frame + 8, sizeof(second));
+CHECK(first == 7);
+CHECK(second == 9);
 }
