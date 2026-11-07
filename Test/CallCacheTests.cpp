@@ -649,7 +649,9 @@ if (!callable.has_value()) {
 std::fprintf(stderr, "no export\n");
 continue;
 }
-void* const token = reinterpret_cast<void*>(static_cast<std::uintptr_t>(0x1234));
+// A NULL reference is still a round-trip, and it cannot corrupt any host-handle
+	// table the way a fabricated pointer does (it broke an AssemblyScript test).
+	void* const token = nullptr;
 void* returned = nullptr;
 try {
 returned = WASM::callCallable<void*>(*callable, token);

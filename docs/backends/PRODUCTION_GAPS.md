@@ -566,3 +566,36 @@ Each probe asserts the **property** it can prove:
   backend without a debugger.
 
 Suite 21876 assertions in 779 cases, green.
+
+## 18. Probe hygiene: a fabricated pointer is not a neutral test value
+
+The `externref` probe's first version passed **`0x1234`** as the reference and still
+reported a clean round-trip on all three backends. It also broke an unrelated test far
+later in the suite:
+
+```
+"AssemblyScript arrays and cached host handles cross the native-import boundary"
+Test/main.cpp:12066 FAILED
+```
+
+The fabricated pointer was retained in host-handle bookkeeping, and the next test that
+used that machinery found it. The probe still works with **`nullptr`**, which is a legal
+`externref` and a valid round-trip property.
+
+### The two lessons, one of which is about my own process
+
+1. **Test data must be inert.** A pointer-shaped value handed to a runtime that tracks
+   pointers is not neutral: it is an input to a global table. `nullptr` proves the same
+   property without entering any structure.
+2. **I committed with a red suite.** The probe passed in isolation, and I trusted that
+   instead of running the full suite before committing -- the exact shortcut this
+   campaign has been avoiding all along. The check is one command and it caught the
+   problem one commit late.
+
+> **A filtered green run is not a green tree.** `[refs]` passing says the probe works;
+> only the whole suite says the probe is safe.
+
+### Matrix state after the correction
+
+`externref` remains **✅ on all three backends**, measured with a null reference, and the
+probe now leaves no trace in shared state. Suite 21876 assertions in 779 cases, green.
