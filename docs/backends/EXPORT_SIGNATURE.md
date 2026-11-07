@@ -744,3 +744,45 @@ inside the backend that needed it.
   than 512 bytes would overrun. It must either be sized from `frameBytes()` or
   guarded by a refusal. **This is a real defect, not a note**, and it is the first
   item of the next session.
+
+## 23. The bound is guarded, and the vector result works through the cache
+
+**Section 22's defect is closed.** `ModuleFfiEntry` now carries `frameBytes`
+(computed once in the constructor: 8 per scalar slot, 16 per vector, arguments then
+results), and the packer refuses a signature that does not fit its buffer instead of
+overrunning it:
+
+```
+module call cache: signature needs N frame bytes, more than the 512 the packer holds
+```
+
+That is a refusal, not a fix: the limit is still 512 bytes. Lifting it means sizing
+the block from `frameBytes` -- a heap block per call, or a cache-owned scratch buffer
+reused across calls. Worth doing when a signature that wide appears; the guard makes
+the current limit **safe** rather than merely unstated.
+
+### The vector result through the cache
+
+```
+The call cache copies a v128 result out of a backend frame
+[staging][callcache][abi][v128]   ->  green
+```
+
+`asmjit_vec_result` on **AsmJIT** under the opt-in: the entry reports
+`resultCount == 1` and `frameBytes == 16`, the backend stores 16 bytes into its frame,
+and the cache copies 16 bytes out -- lanes **7, 8, 9, 10** arrive intact.
+
+That closes the loop the campaign opened: a `v128` used to be three separate special
+cases (SLJIT's ceiling, LibJIT's aggregate spelling, AsmJIT's buffered result). It is
+now **one typed call** from an embedder on two of three backends, with no special
+case visible anywhere above the cache.
+
+### Cache status
+
+| | |
+|---|---|
+| SLJIT, six argument words -> 6 | **green** |
+| AsmJIT, `v128` result -> 16 bytes | **green** |
+| bound guard | **green** (refuses above 512 bytes) |
+| LibJIT through the cache | **not tested** -- its register form should need none of this, which is exactly why it deserves the test |
+| multi-result through the frame | not started |

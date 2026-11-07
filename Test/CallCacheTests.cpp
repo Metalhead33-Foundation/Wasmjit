@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <filesystem>
 
+#include "WasmBase/WasmBackendAbi.hpp"
 #include "WasmBase/WasmCallCache.hpp"
 #include "WasmBase/WasmRegistryImportResolver.hpp"
 #include "WasmBase/WasmRuntime.hpp"
@@ -432,4 +433,33 @@ std::uint32_t lanes[3][4] = {{1, 1, 1, 1}, {2, 2, 2, 2}, {3, 3, 3, 3}};
 const std::int32_t sum = cache.call<std::int32_t>(
 "three_lanes", lanes[0], lanes[1], lanes[2]);
 CHECK(sum == 6);
+}
+
+// A v128 result crosses the frame and the cache copies 16 bytes out of it
+// (docs/backends/EXPORT_SIGNATURE.md sections 20-22).
+TEST_CASE("The call cache copies a v128 result out of a backend frame",
+"[staging][callcache][abi][v128]")
+{
+WASM::setFrameCallAbiOptIn(true);
+auto runtime = WASM::Runtime::create("asmjit");
+REQUIRE(runtime != nullptr);
+auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "asmjit_vec_result.wasm");
+WASM::RegistryImportResolver imports;
+WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+WASM::setFrameCallAbiOptIn(false);
+REQUIRE(instance.frameCallAbi());
+
+WASM::ModuleCallCache cache(instance);
+const WASM::ModuleFfiEntry* entry = cache.find("vec_result");
+REQUIRE(entry != nullptr);
+CHECK(entry->resultCount == 1u);
+CHECK(entry->frameBytes == 16u);
+
+alignas(16) std::uint32_t lanes[4] = {};
+cache.call(*entry, lanes, nullptr);
+CHECK(lanes[0] == 7u);
+CHECK(lanes[1] == 8u);
+CHECK(lanes[2] == 9u);
+CHECK(lanes[3] == 10u);
 }

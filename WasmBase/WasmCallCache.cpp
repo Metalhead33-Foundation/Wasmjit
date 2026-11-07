@@ -112,6 +112,19 @@ ModuleCallCache::ModuleCallCache(ModuleInstance& instance)
 		entry.resultCount = view.funcResults().size();
 		if (entry.resultCount == 1u)
 			entry.resultKind = view.funcResults().front().value.opcode;
+		// The packer's buffer has to hold the whole frame: 8 bytes per scalar slot,
+		// 16 per vector, arguments first and then the results.
+		{
+			const auto slotWidth = [](WASM::ValueTypeCode code) {
+				return code == WASM::ValueTypeCode::V128 ? 16u : 8u;
+			};
+			std::size_t bytes = 0;
+			for (const WASM::ValueTypeCode code : entry.paramKinds)
+				bytes += slotWidth(code);
+			if (entry.resultCount == 1u)
+				bytes += slotWidth(entry.resultKind);
+			entry.frameBytes = bytes;
+		}
 		entry.argTypes.reserve(1u + entry.paramCount
 				+ (entry.multiResult ? 1u : 0u));
 		entry.argTypes.push_back(&ffi_type_pointer); // VMContext*
@@ -196,6 +209,11 @@ void ModuleCallCache::call(const ModuleFfiEntry& entry, void* result,
 			}
 		};
 		alignas(16) std::uint8_t frame[512] = {};
+		if (entry.frameBytes > sizeof(frame))
+			throw std::runtime_error(
+					"module call cache: signature needs " + std::to_string(entry.frameBytes)
+					+ " frame bytes, more than the " + std::to_string(sizeof(frame))
+					+ " the packer holds");
 		std::size_t offset = 0;
 		for (std::size_t i = 0; i < entry.paramCount; ++i) {
 			const std::size_t width = widthOf(entry.paramKinds[i]);

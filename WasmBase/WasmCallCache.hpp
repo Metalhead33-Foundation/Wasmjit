@@ -52,6 +52,10 @@ struct ModuleFfiEntry {
 	//! cannot express (docs/backends/EXPORT_SIGNATURE.md section 21).
 	WASM::ValueTypeCode resultKind = WASM::ValueTypeCode::Void;
 	std::size_t resultCount = 0; //!< Number of declared results.
+	//! Bytes the staging frame needs for this signature (argument block plus result
+	//! block). The packer refuses a signature that does not fit its buffer rather
+	//! than overrunning it (docs/backends/EXPORT_SIGNATURE.md section 22).
+	std::size_t frameBytes = 0;
 };
 
 //! A name-indexed ffi cache over one module instance's function exports.
