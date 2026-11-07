@@ -147,3 +147,39 @@ recorded.
 `throw`, and the only ⛔ rows are honest refusals with reasons.
 
 Suite 21916 assertions in 784 cases under `--rng-seed 12345`, green.
+
+## 6. Probes 9 and 10: GC arrays work everywhere; memory64 + bulk memory does not
+
+```
+GCARR    libjit/asmjit/sljit: array ref non-null
+M64BULK  libjit: instantiated
+M64BULK  asmjit: REFUSED: AsmJit does not lower bulk memory on memory64 yet
+M64BULK  sljit:  REFUSED: does not lower bulk memory on memory64 yet
+```
+
+| # | Probe | SLJIT | AsmJIT | LibJIT |
+|---|---|---|---|---|
+| 9 | GC array (`array.new`, called) | ✅ reference | ✅ | ✅ |
+| 10 | memory64 **with bulk memory** | ⛔ refuses | ⛔ refuses | ✅ |
+
+### This completes the memory64 picture, and it is a two-row story
+
+* **memory itself** (`memory i64`, `memory.size`): ✅ on all three (probe 8);
+* **memory64 + bulk memory**: ⛔ on SLJIT and AsmJIT, ✅ on LibJIT.
+
+Both rows are needed: a single "memory64" row would have been wrong in whichever direction
+it was filled in. The refusal message is also precise -- *"does not lower bulk memory on
+memory64 YET"* -- which reads as a scheduled limitation rather than a design boundary.
+
+### GC arrays pass the same test structs passed
+
+`array.new` returns a **non-null reference** on all three backends. Together with probe 6
+that makes two GC constructors (`struct.new`, `array.new`) measured as *working*, not
+merely *accepted*.
+
+### Probe 10 was already a test -- in the wrong place
+
+SLJIT's `memory64_bulk` refusal had a test of its own (`[sljit][m64][refusal]`), and it
+encodes the current policy correctly. Probe 10 duplicates it deliberately: the *point* of
+a probe is that it runs the **same fixture on every backend**, so the matrix row is
+measured rather than assembled from three differently-shaped tests.

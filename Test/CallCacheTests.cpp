@@ -838,3 +838,50 @@ std::fprintf(stderr, "pages=%lld\n", (long long)count);
 CHECK(count == 1);
 }
 }
+
+// Item 4, probes 9 and 10: GC arrays, and memory64 WITH bulk memory (the row where
+// only SLJIT had been measured). Refuse or answer correctly, never silently
+// (docs/backends/CAPABILITY_PROBES.md section 6).
+TEST_CASE("GC arrays and memory64 bulk memory: refuse or answer correctly",
+"[staging][abi][gc][m64]")
+{
+for (const char* backend : {"libjit", "asmjit", "sljit"}) {
+{
+std::fprintf(stderr, "GCARR %s: ", backend);
+auto runtime = WASM::Runtime::create(backend);
+REQUIRE(runtime != nullptr);
+auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "gc_array_probe.wasm");
+WASM::RegistryImportResolver imports;
+try {
+WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+const std::optional<WASM::Callable> make = instance.exportedFunction("make");
+if (!make.has_value()) {
+std::fprintf(stderr, "no export\n");
+continue;
+}
+const void* object = WASM::callCallable<const void*>(*make);
+std::fprintf(stderr, "array ref %s\n", object != nullptr ? "non-null" : "NULL");
+CHECK(object != nullptr);
+} catch (const std::exception& error) {
+std::fprintf(stderr, "REFUSED: %s\n", error.what());
+}
+}
+{
+std::fprintf(stderr, "M64BULK %s: ", backend);
+auto runtime = WASM::Runtime::create(backend);
+REQUIRE(runtime != nullptr);
+auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "memory64_bulk.wasm");
+WASM::RegistryImportResolver imports;
+try {
+WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+std::fprintf(stderr, "instantiated\n");
+const std::optional<WASM::Callable> copy = instance.exportedFunction("copy");
+CHECK(copy.has_value());
+} catch (const std::exception& error) {
+std::fprintf(stderr, "REFUSED: %s\n", error.what());
+}
+}
+}
+}
