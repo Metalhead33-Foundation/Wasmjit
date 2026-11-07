@@ -306,3 +306,53 @@ message no longer named the site. The next attempt should isolate the suspect wi
 **unit test of the emitted call** -- compile one function that calls a three-vector
 callee and inspect `compiler.code()` -- rather than bisecting the generated function
 against a gate.
+
+## 14. Step 5d done: the deep look found the culprit outside the suspect list
+
+The three suspects were investigated in order and **all three were innocent**, which
+is itself the finding:
+
+| # | Suspect | Verdict |
+|---|---|---|
+| 1 | `asmjit::x86::Mem(base, offset, size)` is not a valid sized operand | **cleared by evidence** -- the same form already works in the epilogue's frame result store, which passes |
+| 2 | a `v128` value in `values` is not a buffer address | **cleared** -- `dispatchLocalGet` pushes exactly such an address for a vector local, and `copyVector` consumes it the same way |
+| 3 | `set_arg` on a void-returning invoke | **cleared** -- the frame signature has two arguments and the code sets two |
+
+**Suspect 4 -- the real one -- was found by following the call rather than the error
+code.** `emitPendingTrapReturn()` is invoked by *every* call site, and it ends with
+`ret(zero)` whenever `resultCount != 0`:
+
+```cpp
+if (frameMode || resultCount == 0)   // was: if (resultCount == 0)
+```
+
+In frame mode the signature returns void, so that `ret(zero)` is an operand mismatch
+-- error 25 -- at **every call site**, not merely at the trap path fixed in 5c. That
+is why `v128_multi` (no calls) passed while `staging_call` failed: the failing code
+only exists in functions that call something.
+
+### The reasoning that located it
+
+The error code was identical to the trap-path failure fixed earlier. Two different
+defects sharing one code means the code no longer names the site -- so the question
+becomes *which code runs only in a function containing a call?* The answer is the
+post-call trap check, and the answer arrived before any test was written.
+
+**Rule added:** when an error code repeats, stop reading the code and start asking
+**which code became reachable**. Reachability is the discriminator; the message no
+longer is.
+
+### Result
+
+All four step-5 gates pass -- 14 assertions in 4 test cases -- including a compiled
+function **calling another through a frame** and returning 6 on AsmJIT. The default
+suite is 21806 assertions in 760 cases.
+
+### Suspects that remain unexercised, and are worth a test later
+
+* the `v128` **return** path through the frame (5e still carries
+  `bufferedVectorResult`);
+* indirect calls in frame mode -- the *direct* site is patched, the indirect one
+  still uses `prepareCallArguments`;
+* frame calls into a **native import**, where the callee expects the typed signature
+  and must therefore be excluded from the frame path.

@@ -1497,10 +1497,12 @@ protected:
 		const WASM::FuncType calledType = module.funcTypeAt(typeIndex);
 		if (calledType.results.size() > 1)
 			throw std::runtime_error("AsmJit calls currently support at most one result");
-		for (const auto& parameter : calledType.params)
-			requireScalar(parameter.val, "call parameters");
-		for (const auto& result : calledType.results)
-			requireScalar(result.val, "call results");
+		if (!frameMode) {
+			for (const auto& parameter : calledType.params)
+				requireScalar(parameter.val, "call parameters");
+			for (const auto& result : calledType.results)
+				requireScalar(result.val, "call results");
+		}
 		if (values.size() < calledType.params.size())
 			throw std::runtime_error("AsmJit call operand stack underflow");
 
@@ -1522,6 +1524,75 @@ protected:
 			checkError(compiler.mov(importedContext,
 					reinterpret_cast<uint64_t>(importedCallee)),
 					"AsmJit imported VMContext materialisation failed");
+		}
+
+		if (frameMode) {
+			// Staging-frame ABI (step 5d): the arguments are packed into a frame
+			// built BEFORE the invoke node exists, and the results are read back
+			// out of the same block, which starts where the arguments end.
+			uint32_t argBytes = 0;
+			for (const WASM::StorageType& p : calledType.params)
+				argBytes += p.val.opcode == WASM::ValueTypeCode::V128 ? 16u : 8u;
+			asmjit::x86::Mem frameStorage = compiler.new_stack(argBytes + 16, 16, "callFrame");
+			asmjit::x86::Gp frameAddress = compiler.new_gp_ptr("callFrame");
+			checkError(compiler.lea(frameAddress, frameStorage),
+					"AsmJit call frame address failed");
+			uint32_t offset = 0;
+			for (size_t i = 0; i < arguments.size(); ++i) {
+				const WASM::ValueType& declared = calledType.params[i].val;
+				if (declared.opcode == WASM::ValueTypeCode::V128) {
+					for (int word = 0; word < 2; ++word) {
+						asmjit::x86::Gp bits = compiler.new_gp64("callFrameWord");
+						checkError(compiler.mov(bits,
+								asmjit::x86::qword_ptr(arguments[i], word * 8)),
+								"AsmJit call frame vector load failed");
+						checkError(compiler.mov(
+								asmjit::x86::qword_ptr(frameAddress, offset + word * 8), bits),
+								"AsmJit call frame vector store failed");
+					}
+					offset += 16;
+					continue;
+				}
+				checkError(compiler.mov(
+						asmjit::x86::Mem(frameAddress, offset, arguments[i].size()),
+						arguments[i]), "AsmJit call frame store failed");
+				offset += 8;
+			}
+			asmjit::InvokeNode* frameInvoke = nullptr;
+			const asmjit::Error frameError = isInternal
+					? compiler.invoke(asmjit::Out(frameInvoke), targetLabel, *signatures[typeIndex])
+					: compiler.invoke(asmjit::Out(frameInvoke), target, *signatures[typeIndex]);
+			checkError(frameError, "AsmJit frame-call emission failed");
+			if (importedCallee == nullptr)
+				frameInvoke->set_arg(0, vmContext);
+			else
+				frameInvoke->set_arg(0, importedContext);
+			frameInvoke->set_arg(1, frameAddress);
+			if (calledType.results.size() == 1) {
+				const WASM::ValueType& declaredResult = calledType.results.front().val;
+				if (declaredResult.opcode == WASM::ValueTypeCode::V128) {
+					asmjit::x86::Gp buffer = newVectorBuffer("callVectorResult");
+					for (int word = 0; word < 2; ++word) {
+						asmjit::x86::Gp bits = compiler.new_gp64("callResultWord");
+						checkError(compiler.mov(bits,
+								asmjit::x86::qword_ptr(frameAddress, offset + word * 8)),
+								"AsmJit call frame vector result load failed");
+						checkError(compiler.mov(
+								asmjit::x86::qword_ptr(buffer, word * 8), bits),
+								"AsmJit call frame vector result store failed");
+					}
+					values.push_back(buffer);
+				} else {
+					asmjit::x86::Gp resultRegister =
+							newIntegerRegister(compiler, declaredResult, "callResult");
+					checkError(compiler.mov(resultRegister,
+							asmjit::x86::Mem(frameAddress, offset, resultRegister.size())),
+							"AsmJit call frame result load failed");
+					values.push_back(resultRegister);
+				}
+			}
+			emitPendingTrapReturn();
+			return;
 		}
 
 		auto preparedArguments = prepareCallArguments(calledType, arguments);
@@ -1556,7 +1627,11 @@ protected:
 		auto noTrap = compiler.new_label();
 		checkError(compiler.test(pending, pending), "AsmJit post-call trap test failed");
 		checkError(compiler.jz(noTrap), "AsmJit post-call trap branch failed");
-		if (resultCount == 0) {
+		if (frameMode || resultCount == 0) {
+			// Frame mode returns void: the results live in the caller's frame, and
+			// on a trap they are undefined, so there is nothing to return
+			// (step 5d). Without this the post-call trap return disagrees with the
+			// signature and finalisation fails with error 25 at EVERY call site.
 			checkError(compiler.ret(), "AsmJit post-call void trap return failed");
 		} else if (isFloatKind(resultType)) {
 			auto zero = compiler.new_xmm("postCallTrapFloatResult");
