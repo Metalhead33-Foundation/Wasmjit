@@ -101,3 +101,49 @@ and no silent wrong answer anywhere.
 | **GC struct declarations** | ✅ (weak) | ✅ (weak) | ✅ (weak) |
 | **atomics** | ⛔ | ⛔ | ✅ |
 | memory64 (beyond bulk) | unprobed | unprobed | unprobed |
+
+## 5. Probes 6 (strengthened) and 8: GC structs and memory64 both work everywhere
+
+```
+GC  libjit: struct ref non-null      M64 libjit: pages=1
+GC  asmjit: struct ref non-null      M64 asmjit: pages=1
+GC  sljit:  struct ref non-null      M64 sljit:  pages=1
+```
+
+| # | Probe | SLJIT | AsmJIT | LibJIT |
+|---|---|---|---|---|
+| 6 | GC struct, **called** | ✅ returns a reference | ✅ | ✅ |
+| 8 | memory64 (`memory i64`, `memory.size`) | ✅ 1 page | ✅ 1 page | ✅ 1 page |
+
+### Probe 6 is no longer the weak row
+
+The previous version only proved that a module *declaring* a struct instantiated. Calling
+`make` and requiring a **non-null reference** proves `struct.new` produced a real object
+on every backend -- which is the difference between "accepted" and "works" that section 4
+of this note is about.
+
+### memory64 was the last unprobed row, and it passes
+
+`(memory i64 1)` plus `memory.size` answering **1** on all three backends. Note this does
+not contradict SLJIT's documented bulk-memory refusal (`PRODUCTION_GAPS` §15's
+`memory64_bulk` fixture): that fixture uses bulk-memory instructions, which SLJIT does not
+lower; the *memory itself* is fine. Two different questions, two different answers, both
+recorded.
+
+### The matrix after eight probes
+
+| Feature | SLJIT | AsmJIT | LibJIT |
+|---|---|---|---|
+| `v128`, multi-result, calls, imports | per PRODUCTION_GAPS §21 | | |
+| **exceptions** | ⛔ | ⛔ | ❌ |
+| `externref`, `funcref` | ✅ | ✅ | ✅ |
+| tail calls (register / frame) | ✅ / ⛔ | ✅ / ⛔ | ✅ / n/a |
+| GC struct (`struct.new`, called) | ✅ | ✅ | ✅ |
+| **atomics** | ⛔ | ⛔ | ✅ |
+| memory64 (memory itself) | ✅ | ✅ | ✅ |
+| memory64 + bulk memory | ⛔ | unprobed | unprobed |
+
+**Every row now has a measured answer.** The only ❌ in the matrix remains LibJIT's silent
+`throw`, and the only ⛔ rows are honest refusals with reasons.
+
+Suite 21916 assertions in 784 cases under `--rng-seed 12345`, green.

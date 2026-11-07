@@ -775,3 +775,66 @@ CHECK(callable.has_value());
 }
 }
 }
+
+// Item 4, probe 6 strengthened: CALL struct.new and inspect the reference. The old row
+// only proved the module instantiated (docs/backends/CAPABILITY_PROBES.md section 5).
+TEST_CASE("GC struct: struct.new returns a reference",
+"[staging][abi][gc]")
+{
+for (const char* backend : {"libjit", "asmjit", "sljit"}) {
+std::fprintf(stderr, "GC %s: ", backend);
+auto runtime = WASM::Runtime::create(backend);
+REQUIRE(runtime != nullptr);
+auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "gc_struct_probe.wasm");
+WASM::RegistryImportResolver imports;
+WASM::ModuleInstance* instance = nullptr;
+try {
+instance = &runtime->instantiate(*module, imports);
+} catch (const std::exception& error) {
+std::fprintf(stderr, "REFUSED: %s\n", error.what());
+continue;
+}
+const std::optional<WASM::Callable> make = instance->exportedFunction("make");
+if (!make.has_value()) {
+std::fprintf(stderr, "no export\n");
+continue;
+}
+try {
+const void* object = WASM::callCallable<const void*>(*make);
+std::fprintf(stderr, "struct ref %s\n", object != nullptr ? "non-null" : "NULL");
+CHECK(object != nullptr);
+} catch (const std::exception& error) {
+std::fprintf(stderr, "threw at call: %s\n", error.what());
+}
+}
+}
+
+// Item 4, probe 8: memory64. Refuse or answer correctly, never silently
+// (docs/backends/CAPABILITY_PROBES.md section 5).
+TEST_CASE("memory64: refuse or answer correctly", "[staging][abi][m64]")
+{
+for (const char* backend : {"libjit", "asmjit", "sljit"}) {
+std::fprintf(stderr, "M64 %s: ", backend);
+auto runtime = WASM::Runtime::create(backend);
+REQUIRE(runtime != nullptr);
+auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "memory64_probe.wasm");
+WASM::RegistryImportResolver imports;
+WASM::ModuleInstance* instance = nullptr;
+try {
+instance = &runtime->instantiate(*module, imports);
+} catch (const std::exception& error) {
+std::fprintf(stderr, "REFUSED: %s\n", error.what());
+continue;
+}
+const std::optional<WASM::Callable> pages = instance->exportedFunction("pages");
+if (!pages.has_value()) {
+std::fprintf(stderr, "no export\n");
+continue;
+}
+const std::int64_t count = WASM::callCallable<std::int64_t>(*pages);
+std::fprintf(stderr, "pages=%lld\n", (long long)count);
+CHECK(count == 1);
+}
+}
