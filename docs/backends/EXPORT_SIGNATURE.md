@@ -176,3 +176,33 @@ the frame is a parity option.
 
 **Not implemented.** The two tests of checklist item 4 come first: the translated
 signature's shape, and a three-vector module returning 6 through the frame.
+
+## 10. Step 5 design consequence: AsmJIT has no driver
+
+`AsmjitModuleCompiler.cpp:5070` sets `rawFnPtr = fnPtr = functionRecords[i]->entry`,
+so in AsmJIT the **exported entry is the compiled function itself**. LibJIT hides
+the frame's result store in a generated driver; AsmJIT has nowhere to hide it.
+
+Therefore step 5's signature is `(ctx, frame) -> void` and the **function writes
+its own results** into the frame at `frame + frameArgumentsBytes`. Two consequences:
+
+* **Every return site needs the frame store**, not just the epilogue: the normal
+  epilogue (`:1014` onward), the trap path (`:948`-`:957`), and the explicit
+  `return` the dispatcher emits. LibJIT needed one site because the driver
+  collected the value; AsmJIT needs all of them, which is why step 5 is a larger
+  unit than step 4a despite having fewer files.
+* **`bufferedVectorResult` retires rather than adapts.** The current design threads
+  a caller-supplied buffer through a trailing pointer argument (`:900`-`:910`).
+  The frame *is* that buffer, so the special case disappears instead of being
+  ported -- the capability gain the note promised for AsmJIT.
+
+Prologue shape, for the same reason: the parameters arrive as frame words, so the
+`set_arg(i + 1, …)` loop at `:960`-`:985` becomes a copy out of the frame, and the
+`requireScalar` refusals at `:892` and `:1358` are skipped in frame mode rather
+than relaxed.
+
+**Not implemented.** Six edits across three files plus the return sites, with the
+prologue and return paths of a register-allocating backend. The two tests come
+first (signature shape; `v128_multi` returning 6 through the frame), then the
+edits in this order: signature, prologue, entry refusals, return sites, call-site
+refusals.
