@@ -208,12 +208,18 @@ void ModuleCallCache::call(const ModuleFfiEntry& entry, void* result,
 			default: return 8;
 			}
 		};
-		alignas(16) std::uint8_t frame[512] = {};
-		if (entry.frameBytes > sizeof(frame))
-			throw std::runtime_error(
-					"module call cache: signature needs " + std::to_string(entry.frameBytes)
-					+ " frame bytes, more than the " + std::to_string(sizeof(frame))
-					+ " the packer holds");
+		alignas(16) std::uint8_t inlineFrame[512] = {};
+		std::unique_ptr<std::uint8_t[]> heapFrame;
+		std::uint8_t* frame = inlineFrame;
+		if (entry.frameBytes > sizeof(inlineFrame)) {
+			// A signature wider than the inline block gets an exactly sized heap
+			// frame. `operator new[]` returns storage aligned for `max_align_t`,
+			// which is 16 on every target this project supports, so a `v128` slot
+			// stays aligned (docs/backends/EXPORT_SIGNATURE.md section 23).
+			heapFrame = std::make_unique<std::uint8_t[]>(entry.frameBytes + 16);
+			frame = heapFrame.get();
+			std::memset(frame, 0, entry.frameBytes + 16);
+		}
 		std::size_t offset = 0;
 		for (std::size_t i = 0; i < entry.paramCount; ++i) {
 			const std::size_t width = widthOf(entry.paramKinds[i]);

@@ -882,3 +882,32 @@ ever acquire it.
 path currently asserts exactly one value (`:1056`) and the operand stack is unwound
 for one result, so multi-result touches the epilogue's value handling, not just a
 store. That is the first unit of the next session, with the sites named above.
+
+## 26. The frame is sized from the signature (item 2 closed)
+
+The 512-byte refusal of section 23 is gone. The packer now uses:
+
+* a **512-byte aligned inline block** for ordinary signatures -- no allocation on the
+  path an embedder actually takes;
+* an **exactly sized heap frame** (`frameBytes + 16`) above that, so a wide signature
+  is served rather than refused. `operator new[]` returns storage aligned for
+  `max_align_t` (16 on every supported target), which is what a `v128` slot needs, and
+  the extra 16 bytes keep the arithmetic in `frameResultOffset` in range.
+
+Suite 21832 assertions in 767 cases, cache tests 16 in 3 -- unchanged, because every
+current fixture fits the inline block.
+
+**What is not tested:** the heap branch. It needs a fixture with more than 512 bytes
+of arguments -- 33 `v128` parameters is the cheapest shape -- and until that fixture
+exists the branch is **code without coverage**. That is a deliberate, stated gap
+rather than a hidden one: the inline path is exercised by all three backend tests,
+the heap path by none.
+
+### Remaining, in order
+
+| # | Item | Size |
+|---|---|---|
+| 1 | multi-result through the frame | large: AsmJIT epilogue value handling (`:1056`), LibJIT `emitFunctionReturn`, cache loop, `frameBytes` over N results |
+| 2 | heap-frame fixture (>512 bytes of arguments) | small: one `.wat` with 33 vectors, one test |
+| 3 | compile cache keyed by mode | medium, and it makes the opt-in honest (section 19) |
+| 4 | doc reconciliation | small: section 16 is superseded by 17/20/24; `D-L1` re-scopes to a note about *where* the canonical rule applies |
