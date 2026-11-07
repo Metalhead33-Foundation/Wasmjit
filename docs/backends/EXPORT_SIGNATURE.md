@@ -943,3 +943,45 @@ frame-slot allocation or the parameter loop) refuses this width silently.
 
 **Landed:** the `frameBytes` ordering fix, verified by the whole suite (21832 in 767)
 and the three cache tests (16 in 3).
+
+## 28. Section 27's conclusion was wrong: the limit was OURS
+
+Section 27 blamed SLJIT for a parameter-count limit. It is not SLJIT's. In
+`Sljit/SljitOpcodeDispatcher.cpp` there was an **unconditional** guard, older than the
+frame form:
+
+```cpp
+if (parameterCount_ > kMaxWasmParameters) {      // kMaxWasmParameters = 3
+    unsupportedReason_ = "the SLJIT backend supports at most three parameters";
+    return;
+}
+```
+
+It marked every frame-mode function with four or more parameters *unsupported*, so no
+compiled function was created and the export had a null `fnPtr` -- which is exactly
+the symptom section 27 misread as a backend limit.
+
+**The frame really does bypass it**, which is what it was built for. The guard now
+reads `if (!frameAbi_ && parameterCount_ > kMaxWasmParameters)`, matching the shape of
+the argument-ceiling check at `:1118`.
+
+### Proof, and the heap branch finally covered
+
+```
+The call cache sizes a frame past its inline block   [staging][callcache][abi][wide]
+->  21 assertions in 4 test cases, green
+```
+
+65 scalar parameters are 520 bytes of arguments; `frameBytes` reports **528** (65 slots
+plus the result slot), which exceeds the 512-byte inline block, so the **heap frame**
+is exercised -- and the call returns **6**. The packer's heap branch is no longer code
+without coverage.
+
+### The lesson, which is the third of its kind
+
+Section 26 assumed the packer's limit was reached only by huge signatures; section 27
+assumed a null `fnPtr` meant a backend limit. **Both times the obstacle was our own
+code**, and both times one grep found it. The habit that would have saved a round
+each time: before blaming the dependency, grep the backend for its *own* constants --
+`kMaxWasmParameters`, `kArgumentSlotCeiling` -- and check whether they are gated on the
+mode.

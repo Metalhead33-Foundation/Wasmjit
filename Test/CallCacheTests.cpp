@@ -486,3 +486,31 @@ const std::int32_t sum = cache.call<std::int32_t>(
 "three_lanes", lanes[0], lanes[1], lanes[2]);
 CHECK(sum == 6);
 }
+
+// The heap branch: 65 scalar parameters are 520 bytes of arguments, past the
+// 512-byte inline block, so the packer sizes a frame from the signature
+// (docs/backends/EXPORT_SIGNATURE.md section 27).
+TEST_CASE("The call cache sizes a frame past its inline block",
+"[staging][callcache][abi][wide]")
+{
+auto runtime = WASM::Runtime::create("sljit");
+REQUIRE(runtime != nullptr);
+auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "sljit_wide_args.wasm");
+WASM::RegistryImportResolver imports;
+WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+REQUIRE(instance.frameCallAbi());
+
+WASM::ModuleCallCache cache(instance);
+const WASM::ModuleFfiEntry* entry = cache.find("wide");
+REQUIRE(entry != nullptr);
+CHECK(entry->frameBytes == 528u); // 65 scalars plus the result slot
+
+std::int32_t values[65] = {};
+std::vector<void*> arguments(65, nullptr);
+for (std::size_t i = 0; i < 65; ++i)
+arguments[i] = &values[i];
+std::int32_t result = 0;
+cache.call(*entry, &result, arguments.data());
+CHECK(result == 6);
+}

@@ -942,7 +942,11 @@ OpcodeDispatcher::OpcodeDispatcher(const WASM::Module& module, const WASM::FuncT
 		localKinds_.push_back(local.opcode);
 	}
 
-	if (parameterCount_ > kMaxWasmParameters) {
+	// The three-parameter limit is a *register-form* limit: it is the point where
+	// SLJIT's argument entries run out. In frame form the parameters travel in the
+	// caller's frame, so any count is expressible -- that is the whole reason the
+	// frame form exists (docs/backends/STAGING_CALL_ABI.md).
+	if (!frameAbi_ && parameterCount_ > kMaxWasmParameters) {
 		unsupportedReason_ = "the SLJIT backend supports at most three parameters";
 		return;
 	}
