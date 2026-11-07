@@ -1108,3 +1108,43 @@ register form, because the *cache* is what converts.
 | doc reconciliation | section 16 is superseded by 17/20/24 |
 
 Suite 21838 assertions in 769 cases; cache tests 28 in 5.
+
+## 32. SLJIT's multi-result frame path TRAPS (a claim corrected by a test)
+
+Section 31 said SLJIT "already emits multi-result from the frame; untested". That was
+wrong, and the test written to confirm it says so:
+
+```
+SLJIT stores two results in a frame for a wide signature
+->  IOT instruction (SIGILL), 3 of 4 cases passed
+```
+
+The fixture is the only shape that reaches SLJIT's frame form *with* more than one
+result: three `v128` parameters (48 bytes, so the frame is forced) and
+`(result i32 i64)`. It traps.
+
+### Why this was predictable in hindsight
+
+SLJIT handles multiple results in the **register** form through its `allReturns`
+mechanism, which returns them in registers. In frame form the results must be
+**stored into the frame's result block**, and that code does not exist -- the callee
+falls through to a return path that was never given the frame.
+
+So the correct status is not "untested" but **"not implemented"**, and the difference
+matters: an untested path might work; this one traps deterministically.
+
+### What this means for the mandatory requirement
+
+The requirement -- one typed way to call compiled wasm, every backend -- is **met for
+single results on all three backends** and for **multi-result on AsmJIT**. SLJIT's
+multi-result frame form is a gap, and it is now a *known-broken* gap rather than an
+assumed-working one.
+
+**Interim rule, worth stating:** a wide signature with more than one result is
+supported on AsmJIT only. SLJIT refuses nothing here -- it traps -- so until the store
+is implemented, SLJIT should **refuse** such signatures rather than miscompile. That
+refusal is a one-line guard in the same place as `kMaxWasmParameters`, and it is the
+next unit.
+
+Suite 21845 assertions in 770 cases, green; the fixture and test were removed rather
+than left red.
