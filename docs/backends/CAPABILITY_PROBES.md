@@ -203,3 +203,62 @@ the **second** memory reports **1** page.
 
 That detail matters for the row: `memory.size 1` reads an *indexed* memory, so a backend
 that quietly ignored the index would answer 0 or crash. It answers 1 on all three.
+
+## 8. Probes 13 and 14: exception handlers work on LibJIT; GC array ops are D-2 and inconclusive
+
+### Probe 13 -- exception HANDLERS
+
+```
+EXCH libjit: caught()=42
+EXCH asmjit: REFUSED: opcode dispatch is not implemented: dispatchTryTable
+EXCH sljit:  REFUSED: does not lower dispatchTryTable
+```
+
+| SLJIT | AsmJIT | LibJIT |
+|---|---|---|
+| ⛔ refuses | ⛔ refuses | **✅ handler runs, returns 42** |
+
+This sharpens D-1 considerably: **LibJIT's exception support is real, not absent.** The
+handler path works -- a `throw` inside a `try_table` reaches the catch and the function
+returns the payload. What D-1 records is narrower than "exceptions are broken":
+
+> **LibJIT handles a caught `throw` correctly and silently returns from an UNCAUGHT one.**
+
+So the defect is in the *uncaught* path: a throw with no handler must trap (pending-status)
+and instead the function returns `0`. That is a much smaller and better-aimed bug than the
+matrix suggested, and finding it took a second fixture.
+
+### Probe 14 -- GC array operations: D-2, and a probe that is still inconclusive
+
+```
+GCARROP libjit: SKIPPED -- known abort (D-2)
+GCARROP asmjit: REFUSED: out of bounds array access
+GCARROP sljit:  REFUSED: out of bounds array access
+```
+
+**D-2 (LibJIT):** `array.set` / `array.fill` **abort the process** --
+`Assertion '!valueStack.empty()' failed` in `LibjitOpcodeDispatcher.cpp:1783`. An abort is
+worse than a trap: it cannot be caught, so the probe skips LibJIT entirely and says so.
+
+**The AsmJIT/SLJIT result is a RUNTIME TRAP, not a refusal**, and it is reported as such to
+be honest about what is known: the module instantiated, then the call trapped with *out of
+bounds array access*. Two explanations fit, and the probe cannot yet tell them apart:
+
+1. **my fixture's operand order is wrong** for `array.set` / `array.fill` (two earlier
+   versions of this fixture were invalid for exactly this reason -- a missing `array.fill`
+   count, then a `get` on a consumed array); or
+2. the backends pop `array.set` operands in a different order than the spec's
+   `(array, index, value)`, making index and value swap -- which would make a legitimate
+   access out of bounds.
+
+**Next step, not a conclusion:** cross-check the fixture against the spec text and the
+reference interpreter before recording anything as a defect. The third version of this
+fixture is the one that would tell us; the first two measured the probe, not the feature.
+
+### The meta-lesson, twice in one probe
+
+A probe that is *invalid wasm* makes every backend look broken -- and the messages
+(*operand stack underflow*, *consumes more operands than it produces*) sound like backend
+bugs when they are correct rejections. **The fixture must be validated before its results
+are believed**, which is the same rule as "inert test data" and "assert the property",
+applied one step earlier.

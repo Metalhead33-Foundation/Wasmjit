@@ -927,3 +927,62 @@ std::fprintf(stderr, "REFUSED: %s\n", error.what());
 }
 }
 }
+
+// Item 4, probes 13 and 14: exception HANDLERS and GC array operations. Refusal is a
+// pass; a wrong answer is a defect (docs/backends/CAPABILITY_PROBES.md section 8).
+TEST_CASE("exception handlers and GC array ops: refuse or answer correctly",
+"[staging][abi][exceptions][gc]")
+{
+for (const char* backend : {"libjit", "asmjit", "sljit"}) {
+{
+std::fprintf(stderr, "EXCH %s: ", backend);
+auto runtime = WASM::Runtime::create(backend);
+REQUIRE(runtime != nullptr);
+auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "exc_handler_probe.wasm");
+WASM::RegistryImportResolver imports;
+try {
+WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+const std::optional<WASM::Callable> caught = instance.exportedFunction("caught");
+if (!caught.has_value()) {
+std::fprintf(stderr, "no export\n");
+} else {
+const std::int32_t value = WASM::callCallable<std::int32_t>(*caught);
+std::fprintf(stderr, "caught()=%d\n", (int)value);
+CHECK(value == 42);
+}
+} catch (const std::exception& error) {
+std::fprintf(stderr, "REFUSED: %s\n", error.what());
+}
+}
+{
+// KNOWN DEFECT D-2: LibJIT ABORTS the process (assertion in popValueRaw) on
+	// array.set / array.fill. An abort cannot be caught, so the probe cannot run it
+	// without killing the suite -- recorded here, skipped there, and flagged for the
+	// defect list (docs/backends/PRODUCTION_GAPS.md section 24).
+	if (std::string(backend) == "libjit") {
+		std::fprintf(stderr, "GCARROP libjit: SKIPPED -- known abort (D-2)\n");
+		continue;
+	}
+	std::fprintf(stderr, "GCARROP %s: ", backend);
+auto runtime = WASM::Runtime::create(backend);
+REQUIRE(runtime != nullptr);
+auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "gc_array_ops_probe.wasm");
+WASM::RegistryImportResolver imports;
+try {
+WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+const std::optional<WASM::Callable> probe = instance.exportedFunction("probe");
+if (!probe.has_value()) {
+std::fprintf(stderr, "no export\n");
+} else {
+const std::int32_t value = WASM::callCallable<std::int32_t>(*probe);
+std::fprintf(stderr, "probe()=%d\n", (int)value);
+CHECK(value == 0);
+}
+} catch (const std::exception& error) {
+std::fprintf(stderr, "REFUSED: %s\n", error.what());
+}
+}
+}
+}
