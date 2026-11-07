@@ -8,7 +8,7 @@ actually happened, the root cause of every surprise, and what is still open.
 
 | # | Item | Status | Evidence / blocker |
 |---|---|---|---|
-| 1 | constant-stack tail calls | **done for every lowered form** | self, direct, indirect and frame (scalar and v128) chains go through the libffi driver (`TAILSELF`/`TAILMUTUAL`/`TAILINDIRECT`/`TAILFRAME`/`TAILV128FRAME`, 1,000,000 links, `run()=1`); `ref` is not lowered by either backend |
+| 1 | constant-stack tail calls | **done for the register/frame tails that use the driver** | self, direct, indirect and frame (scalar and v128) chains plus `call_ref`/`return_call_ref` (register, frame, v128 and multi-result) go through the driver (`TAILSELF`/`TAILMUTUAL`/`TAILINDIRECT`/`TAILFRAME`/`TAILV128FRAME`/`TAILREF`/`TAILREFFRAME`/`TAILV128REFFRAME`/`TAILREFMULTI`/`TAILINDIRECTFRAME`, 1,000,000 links, `run()=1`); LibJIT frame tails are call+return, not constant-stack |
 | 2 | shared reference/table atomics | **done** | numeric, struct/array reference, shared-table and global `eqref` atomics run on all three (`SHAREDREF`, `TABLEATOMIC`, `GLOBALREF`); v128 atomic slots are rejected by validation (`V128ATOMIC`) because the proposal does not allow them |
 | 3 | block parameters/results (scalar and v128) | **done** | `BLOCKPARAM` block=42 if=11/12 loop=0; `BLOCKV128` block=42 if=7/8 loop=7; `BLOCKRESV128` 5,6,7/8,9 |
 | 4 | bulk memory on memory64 | **done** | `MEM64BULK` copy=97 fill=65 init=97 on all three |
