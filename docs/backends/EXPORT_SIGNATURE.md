@@ -827,3 +827,58 @@ which is exactly why it survived: the ffi path was exercised with scalars only.
 **Rule, third time in this campaign:** the untested combination is where the bug
 lives -- not the untested function. Here every function was tested; the *pair*
 (backend, calling path) was not.
+
+## 25. The trailing result buffer (MV5): what it is, and what multi-result does to it
+
+**The question:** LibJIT implements multi-result by appending a `void*` result buffer
+to the signature and returning void. What becomes of that, and does it apply to the
+frame-based backends?
+
+### Why it exists
+
+It is a **LibJIT-specific** workaround with a documented cause: libjit's
+aggregate-return ABI reads a hidden result-buffer pointer from an **unwritten frame
+slot** when the callee has parameters, so returning a result tuple by value crashed
+(`segfault at 8` or a general-protection fault) on every JIT-to-JIT call in
+`call.wast`, `if.wast` and `fac.wast`. The fix was to pass the buffer explicitly as a
+trailing pointer and return void (`docs/proposals/MULTI_VALUE.md` MV5).
+
+### Does it apply to SLJIT and AsmJIT?
+
+**No, and it never did.** Those backends have no aggregate-return ABI to work around.
+Today:
+
+| Backend | Multi-result today |
+|---|---|
+| LibJIT | MV5 trailing buffer, **necessary** for the register form |
+| SLJIT | nothing special -- the frame's result block is already N slots |
+| AsmJIT | **refused outright** (`AsmjitModuleCompiler.cpp:891`), plus a second refusal for block multi-values (`:4576`) |
+
+So MV5 is not a portable convention that the frame improves; it is a scar from one
+backend's calling convention, and the frame form makes it **unnecessary rather than
+applicable**: `frameArgumentsBytes()` to `frameBytes()` is a contiguous block of N
+result slots, so multi-result is *the same mechanism as one result, with a bigger
+block*.
+
+### What multi-result through the frame requires, per site
+
+| Backend | Site | Change |
+|---|---|---|
+| AsmJIT | `:891` | refuse only when **not** in frame mode |
+| AsmJIT | `:1056` (`values.size() != 1`) | frame mode accepts `values.size() == resultCount`, storing each at `frame + argBytes + frameResultOffset(i)` |
+| AsmJIT | `:4576` | block multi-values stay refused -- out of scope |
+| LibJIT | `emitFunctionReturn` | frame branch storing each result at its offset; the trailing-buffer path stays for the register form |
+| Cache | `call` | loop `resultCount`, copying each result at `frameResultOffset` |
+| `ModuleFfiEntry` | -- | `frameBytes` must count **all** result slots, not just one |
+
+### The honest verdict on MV5
+
+It **survives**, but its scope shrinks to LibJIT's register form -- which is now an
+implementation detail, not a boundary anyone sees. If LibJIT were ever to be
+frame-only, MV5 could be deleted; until then it stays, and no other backend should
+ever acquire it.
+
+**Not implemented in this session.** The AsmJIT change is not a one-liner: the return
+path currently asserts exactly one value (`:1056`) and the operand stack is unwound
+for one result, so multi-result touches the epilogue's value handling, not just a
+store. That is the first unit of the next session, with the sites named above.
