@@ -586,3 +586,38 @@ WASM::setFrameCallAbiOptIn(false);
 // And the same ABI stays idempotent.
 CHECK(&runtime->instantiate(*module, imports) == &instance);
 }
+
+// Item 4: exceptions on every backend, reported rather than assumed. The assertion
+// is the property, not the outcome: a `throw` must never return normally, and a
+// backend that cannot compile it must refuse at instantiation
+// (docs/backends/PRODUCTION_GAPS.md section 16).
+TEST_CASE("exceptions: AsmJIT and SLJIT refuse, LibJIT is a KNOWN DEFECT",
+"[staging][abi][exceptions]")
+{
+// Measured, not assumed: AsmJIT and SLJIT refuse a `throw` at instantiation, while
+// LibJIT executes it and RETURNS NORMALLY -- a trap silently becoming a value. That
+// is the worst of the three answers and is recorded as a defect, not as support
+// (docs/backends/PRODUCTION_GAPS.md section 16).
+for (const char* backend : {"asmjit", "sljit"}) {
+auto runtime = WASM::Runtime::create(backend);
+REQUIRE(runtime != nullptr);
+auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "exceptions_probe.wasm");
+WASM::RegistryImportResolver imports;
+REQUIRE_THROWS(runtime->instantiate(*module, imports));
+}
+
+// LibJIT: the defect is pinned so it cannot be forgotten, and the day it turns into
+// a refusal or a real trap this assertion fails and the test gets rewritten.
+auto runtime = WASM::Runtime::create("libjit");
+REQUIRE(runtime != nullptr);
+auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "exceptions_probe.wasm");
+WASM::RegistryImportResolver imports;
+WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+const std::optional<WASM::Callable> callable = instance.exportedFunction("do_throw");
+REQUIRE(callable.has_value());
+// KNOWN DEFECT: this returns instead of trapping.
+std::int32_t returned = WASM::callCallable<std::int32_t>(*callable, 7);
+CHECK(returned == 0);
+}

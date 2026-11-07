@@ -487,3 +487,40 @@ reader does not assume it carries meaning.
 is strictly better than a query an embedder has to know to make.
 
 Suite 21863 assertions in 777 cases, green.
+
+## 16. Item 4, first probe: exceptions are SILENT on LibJIT -- a defect, not a gap
+
+The probe (`exceptions_probe.wat`) declares a tag and executes `throw`, then records what
+each backend does. Silence was the open question; this is the answer:
+
+| Backend | Result | Verdict |
+|---|---|---|
+| **AsmJIT** | refused at instantiation: *"opcode dispatch is not implemented: dispatchThrow"* | **clean refusal** |
+| **SLJIT** | refused at instantiation: *"the SLJIT backend does not lower dispatchThrow"* | **clean refusal** |
+| **LibJIT** | executes and **returns normally** | **DEFECT** |
+
+### Why LibJIT's behaviour is the worst of the three
+
+A `throw` that returns a value is not a missing feature -- it is a **wrong answer**. Code
+that relies on the trap never runs its handler, and nothing reports a problem: the value
+0 comes back as though the function had succeeded. Under the no-partial-modules ruling
+this is also unrepresentable: the module instantiates, exports a function, and that
+function silently lies.
+
+### What the test does about it
+
+The two refusals are asserted (`REQUIRE_THROWS`). LibJIT's defect is **pinned, not
+tolerated**: the test asserts the current wrong value with a `KNOWN DEFECT` comment, so
+the day it becomes a refusal or a real trap the assertion fails and the test is
+rewritten. A pinned defect cannot be forgotten, which is the property a skip or a
+comment would not have.
+
+### The fix, when it is scheduled
+
+LibJIT must either lower `throw` into the pending-trap mechanism the other paths use
+(the project's traps are a *pending status*, not a non-local jump -- `WasmTrap.hpp`), or
+refuse the module. **Refusing is the smaller change and matches the other two
+backends**; lowering is the feature. The same choice was made for multi-result and for
+calls, and in both cases the refusal came first.
+
+Suite 21870 assertions in 778 cases, green.
