@@ -77,6 +77,7 @@ const std::set<std::string>& internalHeaders()
 		"WasmComponentRuntime.hpp", "WasmComponentSection.hpp",
 		"WasmComponentValidation.hpp", "WasmComponentParser.inc",
 		"WasmLegacyEh.hpp",
+		"WasmTailTrampoline.hpp",
 	};
 	return headers;
 }

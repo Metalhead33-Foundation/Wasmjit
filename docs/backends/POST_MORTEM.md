@@ -8,7 +8,7 @@ actually happened, the root cause of every surprise, and what is still open.
 
 | # | Item | Status | Evidence / blocker |
 |---|---|---|---|
-| 1 | constant-stack tail calls | **partial** | direct self-recursion is a loop on all three (`TAILSELF` 1,000,000 links, `run()=0`); mutual/indirect chains still call + return |
+| 1 | constant-stack tail calls | **partial** | direct self-recursion is a loop, and direct mutual recursion goes through the libffi driver (`TAILMUTUAL` 1,000,000 links, `run()=1`) on all three; indirect/ref and frame-form chains still call + return |
 | 2 | shared reference/table atomics | **blocked** | numeric family done; shared-ref fixtures need shared composites, and table atomics need `table.get`/`table.set`; SLJIT's four-argument ceiling needs a record for `cmpxchg` |
 | 3 | AsmJIT block parameters | **done** | `BLOCKPARAM` block=42 if=11/12 loop=0 on all three |
 | 4 | bulk memory on memory64 | **done** | `MEM64BULK` copy=97 fill=65 init=97 on all three |
@@ -113,6 +113,95 @@ handoff must not claim the constant-stack guarantee for mutual/indirect chains.
 * **A backend's names are not the core's names.** `internals`, `fuelMetering`
   and `emitFuelCharge` are LibJIT concepts; copy the *contract*, not the
   identifiers.
+
+## Item 1b — cross-function direct trampolines (new)
+
+### Intended
+
+Let a direct `return_call` to a *different* function run in constant native
+stack on SLJIT and AsmJIT, not only a self-recursive one.
+
+### Design that landed
+
+`WasmBase/WasmTailTrampoline.{hpp,cpp}` is a backend-neutral table of **libffi
+closures**:
+
+* one **driver** per internal function, with the function's own C signature,
+  exposed as `Callable::fnPtr`; the raw compiled entry moves to
+  `Callable::rawFnPtr`;
+* one **thunk** per function type, exposed as `Callable::tailEntry`, with the
+  uniform `(ctx, fn, slots, results, buffer)` ABI;
+* a driver calls the raw entry once, then loops while `TailCallState::pending`
+  and the trap slot is clear, re-entering the target through its thunk until
+  the chain ends. A single-result driver copies the final `results` slot into
+  its return storage; a multi-result driver's buffer is already shared by the
+  caller.
+
+`Module::hasTailCalls()` is set by the validator, so a module without a tail
+call keeps its raw entries and pays nothing. Installation is register-form
+only (the frame ABI would need a frame pointer in `TailCallState`); a register
+module's tail calls are marked at compile time with the same condition, and a
+failed installation now **refuses the module** rather than emitting a pending
+write whose driver does not exist.
+
+The backends only learned to write `TailCallState` and return a typed zero. The
+SLJIT direct-target address and the AsmJIT target materialisation are the only
+backend-specific parts; both point at the instance's `Callable` vector, which is
+sized before compilation and never moves afterwards.
+
+### Evidence
+
+`tailcall_mutual_probe.wat`, even/odd through direct `return_call`, 1,000,000
+links:
+
+```
+TAILMUTUAL libjit: even0=1 run()=1
+TAILMUTUAL asmjit: even0=1 run()=1
+TAILMUTUAL sljit: even0=1 run()=1
+```
+
+`even0` is a direct `even(0)` call through a driver and guards the raw function
+itself; `run` is the 1,000,000-link chain. The old call+return lowering hits the
+guest stack guard on `run`.
+
+### The five bugs this item exposed (in the order they appeared)
+
+1. **Stale core ABI.** Adding a member to `Module` and a destructor/member to
+   `ModuleInstanceInternals` changes their layout. LibJIT still used the old
+   headers and crashed in `PreparedFunctionStack::prepare` before the first
+   `TAILMUTUAL` line. Rebuilding every backend (not just the one under test)
+   fixed it. **A core header change is a whole-tree rebuild.**
+2. **The thunk read `args[2]` as the slot array.** libffi hands the handler an
+   array of pointers to argument *values*; `args[2]` is the address of the slot
+   pointer. It must be dereferenced like `args[3]`/`args[4]`. The first AsmJIT
+   run segfaulted in the thunk for this reason.
+3. **AsmJIT truncated the target pointer.** `mov(mem64, Imm(ptr))` is encoded as
+   sign-extended imm32 when the pointer does not fit; the low 32 bits of
+   `0x55ff9fd421a8` became `0xffffffff9fd421a8`. Materialising the pointer in a
+   `Gp64` first fixes it. (SLJIT's `MOV reg, IMM` already handled 64 bits.)
+4. **SLJIT's dummy return used an unmeasured stack slot.** The measure pass
+   resized the model but the emit pass pushed a zero result and stored it;
+   `stackSlotOffset` then pointed outside the allocated frame and SLJIT aborted
+   in `sljit_emit_op1`. The dummy return is now emitted directly (void, integer,
+   or float), with no operand-stack slot.
+5. **SLJIT's `if/else` merge ignored the reachable arm.** When the else arm ended
+   in a tail call (unreachable), `dispatchEnd` computed `endReachable` from the
+   *current* (else) reachability only, so a reachable then arm was treated as
+   dead and the raw function returned the dummy zero. `ControlFrame::thenReachable`
+   records the then arm's end state; `endReachable` includes it. This was a
+   **pre-existing** bug, not introduced by the trampoline; `even(0)` is its
+   minimal reproducer.
+
+### What is still open
+
+* `return_call_indirect` and `return_call_ref` still use call + return. The core
+  driver already supports any target with a `tailEntry`; the missing work is the
+  runtime `tailEntry != null` branch and the pending write in each backend.
+  SLJIT does not lower `call_ref` at all, so only the indirect form is reachable
+  there today.
+* Cross-function chains in **frame form** (a module with a `v128` or more than
+  three parameters) still use call + return. The driver needs a frame pointer (or
+  a packed frame) in `TailCallState`.
 
 ## Item 2 — shared reference/table atomics
 

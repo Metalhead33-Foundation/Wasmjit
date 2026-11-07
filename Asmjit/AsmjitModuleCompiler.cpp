@@ -11,6 +11,7 @@
 #include "../WasmBase/WasmVMContext.hpp"
 #include "../WasmBase/wasm_simd_scalar.hpp"
 #include "../WasmBase/WasmType.hpp"
+#include "../WasmBase/WasmTailTrampoline.hpp"
 
 #include <Euphemy/Io/EuphConstBufferDevice.hpp>
 
@@ -1699,6 +1700,47 @@ protected:
 							"AsmJit self tail-call local reset failed");
 			}
 			checkError(compiler.jmp(bodyStart), "AsmJit self tail-call jump failed");
+			emitUnreachablePlaceholders();
+			return;
+		}
+		if (!frameMode && module.hasTailCalls()
+				&& WASM::tailCallSlotsSupported(calledType)) {
+			// Cross-function trampoline: the driver wrapping this function observes
+			// the pending state and re-enters the target through its type thunk.
+			std::vector<asmjit::x86::Gp> tailArgs(calledType.params.size());
+			for (std::size_t i = calledType.params.size(); i-- > 0; ) {
+				tailArgs[i] = values.back();
+				values.pop_back();
+			}
+			asmjit::FuncSignature stateSignature(asmjit::CallConvId::kCDecl);
+			stateSignature.set_ret(asmjit::TypeId::kUIntPtr);
+			asmjit::InvokeNode* stateInvoke = nullptr;
+			checkError(compiler.invoke(asmjit::Out(stateInvoke),
+					reinterpret_cast<uint64_t>(&WASM::currentTailCallState), stateSignature),
+					"AsmJit tail-call state call emission failed");
+			auto state = compiler.new_gp_ptr("tailState");
+			stateInvoke->set_ret(0, state);
+			const std::size_t imported = module.importFunctions.size();
+			const void* target = index < imported
+					? static_cast<const void*>(&internals.importStorage[index])
+					: static_cast<const void*>(&internals.internalCallables[index - imported]);
+			auto targetRegister = compiler.new_gp64("tailTarget");
+			checkError(compiler.mov(targetRegister,
+					asmjit::Imm(reinterpret_cast<uint64_t>(target))),
+					"AsmJit tail-call target materialisation failed");
+			checkError(compiler.mov(asmjit::x86::Mem(state,
+					static_cast<int32_t>(offsetof(WASM::TailCallState, target)), 8),
+					targetRegister),
+					"AsmJit tail-call target store failed");
+			for (std::size_t i = 0; i < tailArgs.size(); ++i)
+				checkError(compiler.mov(asmjit::x86::Mem(state,
+						static_cast<int32_t>(offsetof(WASM::TailCallState, args)
+								+ i * WASM::kTailCallSlotBytes), tailArgs[i].size()),
+						tailArgs[i]), "AsmJit tail-call argument store failed");
+			checkError(compiler.mov(asmjit::x86::Mem(state,
+					static_cast<int32_t>(offsetof(WASM::TailCallState, pending)), 4),
+					asmjit::Imm(1)), "AsmJit tail-call pending store failed");
+			emitZeroReturn();
 			emitUnreachablePlaceholders();
 			return;
 		}
@@ -7108,6 +7150,10 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance,
 			internals.internalCallables[i].fnPtr = functionRecords[i]->entry;
 			internals.compiledFunctions[i] = functionRecords[i]->entry;
 		}
+		if (!TypeTranslator::moduleNeedsFrame(module, WASM::frameCallAbiOptIn())
+				&& module.hasTailCalls()
+				&& !WASM::installTailCallTrampolines(module, internals))
+			throw std::runtime_error("AsmJit could not install tail-call trampolines");
 		// FuncNodes belong to the temporary CodeHolder. Runtime handles are the
 		// installed entry pointers above, so discard all compiler-side records.
 		functionRecords.clear();
@@ -7129,6 +7175,7 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance,
 void ModuleCompiler::releaseInstance(WASM::ModuleInstance& instance) noexcept
 {
 	WASM::ModuleInstanceInternals& internals = instanceInternals(instance);
+	WASM::releaseTailCallTrampolines(internals);
 	for (WASM::Callable& callable : internals.internalCallables) {
 		callable.fnPtr = nullptr;
 		callable.rawFnPtr = nullptr;

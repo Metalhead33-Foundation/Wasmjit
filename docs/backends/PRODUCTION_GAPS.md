@@ -930,7 +930,7 @@ staging-frame ABI is honoured end to end.
 |---|---|---|---|---|
 | `catch_ref` / `catch_all_ref`; a catch payload wider than one value | n/a (supported) | ⛔ | n/a (supported) | a structured block on AsmJIT carries at most one result |
 | shared-everything atomics on reference/table slots | ⛔ | ⛔ | ✅ | numeric global/struct/array slots are done; shared refs need shared composites and tables need table.get/set |
-| mutual/indirect tail-call trampolines | ⛔ | ⛔ | ✅ | self-recursion is a loop on all three; cross-function chains still call + return |
+| indirect/ref and frame-form tail-call trampolines | ⛔ | ⛔ | ✅ | direct self and mutual chains loop on all three; indirect/ref and frame-form chains still call + return |
 | LibJIT frame-mode calls/imports/multi-result | n/a | n/a | ⛔ | **policy**: the frame form is opt-in and partial on purpose |
 
 ### Findings
@@ -960,7 +960,7 @@ in both passes.
 
 ## 27. V-1 fixed, multi-value catches and numeric shared atomics closed (2026-11-07)
 
-**Snapshot (2026-11-07, `backendsMh33`):** suite **22184 assertions in 798
+**Snapshot (2026-11-07, `backendsMh33`):** suite **22201 assertions in 799
 cases** under `--rng-seed 12345`, green; `[headerdoc]`, `[docs]`, `doxygen`
 (0 warnings) and `abi-check` all pass. This section supersedes section 26.
 
@@ -970,6 +970,7 @@ cases** under `--rng-seed 12345`, green; `[headerdoc]`, `[docs]`, `doxygen`
 |---|---|---|---|---|
 | `catch_ref` / `catch_all_ref` and multi-value catch payloads | OK | OK | OK | `catch2=22 catch2i32=33 catchref=33` |
 | multi-value structured blocks | OK | OK | OK | `block2=33 direct=33` |
+| direct cross-function `return_call` (mutual) | OK | OK | OK | `TAILMUTUAL` 1,000,000 links, `run()=1` |
 | numeric shared-everything atomics (global/struct/array) | OK | OK | OK | `global=5 struct32=7 struct64=9 array=11` |
 | V-1: block-end stack check after a `try_table` | n/a | n/a | n/a | `validator: a catch does not disable block-end stack checks` |
 

@@ -1,6 +1,7 @@
 #include "SljitModuleCompiler.hpp"
 
 #include "SljitOpcodeDispatcher.hpp"
+#include "../WasmBase/WasmTailTrampoline.hpp"
 
 #include "../WasmBase/WasmStore.hpp"
 #include "../WasmBase/WasmTrap.hpp"
@@ -115,7 +116,7 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM
 				static_cast<uint32_t>(module.importFunctions.size() + i);
 
 		OpcodeDispatcher dispatcher(module, funcType, module.functionBodies[i], functionIndex,
-				frameMode, internals.tagIds);
+				frameMode, internals.tagIds, internals);
 		void* entry = nullptr;
 		if (!dispatcher.compile(entry)) {
 			// No partial modules: an instantiable module must have every function
@@ -127,24 +128,29 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM
 					+ dispatcher.unsupportedReason());
 		}
 		internals.internalCallables[i].fnPtr = entry;
-		// No trampoline driver wraps this entry, so the raw pointer and the
-		// callable's entry are the same address. `tailEntry` stays null and the
-		// core falls back to `call` + `return` for a tail call
-		// (docs/proposals/TAILCALLS.md TC-5).
 		internals.internalCallables[i].rawFnPtr = entry;
 	}
+	// Register-form modules with a tail call get one driver per internal function
+	// and one thunk per type, so a cross-function chain loops instead of growing
+	// the native stack. A module without one is left exactly as compiled; if the
+	// table cannot be installed, refuse the module rather than emit state-writing
+	// tail calls whose driver does not exist.
+	if (module.hasTailCalls() && !frameMode
+			&& !WASM::installTailCallTrampolines(module, internals))
+		throw std::runtime_error("the SLJIT backend could not install tail-call trampolines");
 }
 
 void ModuleCompiler::releaseInstance(WASM::ModuleInstance& instance) noexcept
 {
 	// `sljit_generate_code` handed back executable memory from the process-wide
 	// allocator; nothing else owns it once the per-body compiler object is freed.
-	// `rawFnPtr` is the same address as `fnPtr` here (no trampoline wraps it), so
-	// freeing fnPtr and clearing both is enough — and clearing makes a second
-	// call harmless (`ModuleInstantiator::releaseInstance`'s contract).
+	// The callable's `fnPtr` may be a libffi driver, so the SLJIT code is
+	// `rawFnPtr`; the trampoline table (closures) is released first. Clearing
+	// makes a second call harmless (`ModuleInstantiator::releaseInstance`).
+	WASM::releaseTailCallTrampolines(instanceInternals(instance));
 	for (WASM::Callable& callable : instanceInternals(instance).internalCallables) {
-		if (callable.fnPtr != nullptr)
-			sljit_free_code(callable.fnPtr, nullptr);
+		if (callable.rawFnPtr != nullptr)
+			sljit_free_code(callable.rawFnPtr, nullptr);
 		callable.fnPtr = nullptr;
 		callable.rawFnPtr = nullptr;
 		callable.tailEntry = nullptr;

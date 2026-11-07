@@ -1824,6 +1824,7 @@ void Validator::dispatchCall(FuncIdx arg)
 
 void Validator::dispatchReturnCall(FuncIdx arg)
 {
+	module.markTailCalls();
 	const FuncType& type = functionType(arg);
 	popTypes(paramTypes(type));
 	checkTailCallResults(type);
@@ -1844,6 +1845,7 @@ void Validator::dispatchCallIndirect(TypeIdx typeIdx, TableIdx tableIdx)
 
 void Validator::dispatchReturnCallIndirect(TypeIdx typeIdx, TableIdx tableIdx)
 {
+	module.markTailCalls();
 	const FuncType& type = funcTypeAt(typeIdx);
 	requireTableIndex(tableIdx);
 	if (!tableIsFuncRef(tableIdx))
@@ -1865,6 +1867,7 @@ void Validator::dispatchCallRef(TypeIdx typeIdx)
 
 void Validator::dispatchReturnCallRef(TypeIdx typeIdx)
 {
+	module.markTailCalls();
 	const FuncType& type = funcTypeAt(typeIdx);
 	popExpect(ValueType{ValueTypeCode::RefNull, static_cast<int32_t>(typeIdx)});
 	popTypes(paramTypes(type));

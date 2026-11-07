@@ -1,4 +1,5 @@
 #include "WasmModuleInstance.hpp"
+#include "WasmTailTrampoline.hpp"
 #include "WasmContinuation.hpp"
 #include "WasmException.hpp"
 #include "WasmOpcode.hpp"
@@ -15,6 +16,11 @@
 #include <stdexcept>
 #include <utility>
 namespace WASM {
+
+ModuleInstanceInternals::~ModuleInstanceInternals()
+{
+	releaseTailCallTrampolines(*this);
+}
 
 namespace {
 // Defined with the GC layout helpers below; forward-declared for the global

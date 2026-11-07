@@ -1071,12 +1071,13 @@ sljit_s32 callArgTypes(const WASM::FuncType& type, WASM::ValueTypeCode resultKin
 
 OpcodeDispatcher::OpcodeDispatcher(const WASM::Module& module, const WASM::FuncType& funcType,
 		const WASM::FunctionBody& body, std::uint32_t functionIndex, bool frameCallAbi,
-		const std::vector<WASM::TagId>& tagIds)
+		const std::vector<WASM::TagId>& tagIds, WASM::ModuleInstanceInternals& internals)
 	: module_(module)
 	, funcType_(funcType)
 	, body_(body)
 	, tagIds_(tagIds)
 	, functionIndex_(functionIndex)
+	, internals_(internals)
 	, frameAbi_(frameCallAbi)
 {
 	const std::string* name = module.findName(WASM::NameKind::Function, functionIndex);
@@ -1216,6 +1217,10 @@ bool OpcodeDispatcher::run(bool measure)
 
 bool OpcodeDispatcher::beginFunction()
 {
+	// Cross-function trampolines are register-form only: the driver's host
+	// signature is the function signature, and the frame ABI needs a frame
+	// pointer that TailCallState does not carry.
+	tailTrampoline_ = module_.hasTailCalls() && !frameAbi_;
 	compiler_ = sljit_create_compiler(nullptr);
 	if (compiler_ == nullptr) {
 		unsupportedReason_ = "SLJIT could not create a compiler";
@@ -2155,6 +2160,9 @@ void OpcodeDispatcher::dispatchElse()
 			sljit_set_label(frame.alternateJump, label);
 	}
 	frame.hasElse = true;
+	// Remember whether the then arm fell through: the else arm may end in a
+	// tail call, and the block still has a live result from the other arm.
+	frame.thenReachable = reachable_;
 	reachable_ = frame.entryReachable;
 	stackWidths_.resize(frame.baseDepth);
 	if (reachable_) {
@@ -2211,7 +2219,8 @@ void OpcodeDispatcher::dispatchEnd()
 				sljit_set_label(frame.alternateJump, label);
 		}
 	} else {
-		endReachable = (frame.entryReachable && reachable_) || frame.endTargeted;
+		endReachable = (frame.entryReachable && reachable_)
+				|| frame.thenReachable || frame.endTargeted;
 	}
 
 	if (!measureOnly_) {
@@ -2773,6 +2782,17 @@ void OpcodeDispatcher::dispatchReturnCall(WASM::FuncIdx arg)
 		emitSelfTailCall();
 		return;
 	}
+	const std::uint32_t importedCount = static_cast<std::uint32_t>(module_.importFunctions.size());
+	if (arg < importedCount + module_.internalFunctionTypeIndices.size()) {
+		const std::uint32_t typeIndex = arg < importedCount
+				? module_.importFunctions[arg].typeIdx
+				: module_.internalFunctionTypeIndices[arg - importedCount];
+		const WASM::FuncType calleeType = module_.funcTypeAt(typeIndex);
+		if (tailTrampoline_ && WASM::tailCallSlotsSupported(calleeType)) {
+			emitTailCallState(arg, calleeType);
+			return;
+		}
+	}
 	// A frame-form tail call is a call plus a frame-mode return: the callee
 	// writes its result into the staging frame and `emitReturnValue` moves it
 	// into the caller's result block. This is not a true trampoline (the host
@@ -2828,6 +2848,53 @@ void OpcodeDispatcher::emitSelfTailCall()
 			sljit_set_label(jump, bodyStart_);
 		else
 			ok_ = false;
+	}
+
+	stackWidths_.resize(base);
+	markUnreachable();
+}
+
+void OpcodeDispatcher::emitTailCallState(WASM::FuncIdx arg, const WASM::FuncType& type)
+{
+	require(reachable_, "a return_call appears in unreachable code");
+	requireStack(type.params.size());
+	const std::size_t base = stackWidths_.size() - type.params.size();
+
+	if (!measureOnly_) {
+		// state = currentTailCallState(); the helper returns it in R0 and clobbers
+		// R1-R3, so every state write happens after it without another call.
+		emitHelper(SLJIT_ARGS0(P), &WASM::currentTailCallState);
+		const std::uint32_t importedCount = static_cast<std::uint32_t>(module_.importFunctions.size());
+		const void* target = arg < importedCount
+				? static_cast<const void*>(&internals_.importStorage[arg])
+				: static_cast<const void*>(&internals_.internalCallables[arg - importedCount]);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R1, 0, SLJIT_IMM,
+				static_cast<sljit_sw>(reinterpret_cast<std::uintptr_t>(target))));
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_R0),
+				static_cast<sljit_sw>(offsetof(WASM::TailCallState, target)), SLJIT_R1, 0));
+		for (std::size_t i = 0; i < type.params.size(); ++i) {
+			const int width = widthOf(type.params[i].val);
+			loadSlot(SLJIT_R1, base + i, width);
+			emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_R0),
+					static_cast<sljit_sw>(offsetof(WASM::TailCallState, args)
+							+ i * WASM::kTailCallSlotBytes), SLJIT_R1, 0));
+		}
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_MEM1(SLJIT_R0),
+				static_cast<sljit_sw>(offsetof(WASM::TailCallState, pending)), SLJIT_IMM, 1));
+		if (resultKinds_.size() > 1 || resultWidth_ == 0) {
+			emit(sljit_emit_return_void(compiler_));
+		} else if (isFloatKind(resultKind_)) {
+			// The driver ignores the dummy result; it exists only for the ABI.
+			emit(resultWidth_ == 4
+					? sljit_emit_fset32(compiler_, SLJIT_FR0, 0.0f)
+					: sljit_emit_fset64(compiler_, SLJIT_FR0, 0.0));
+			emit(sljit_emit_return(compiler_, resultWidth_ == 4 ? SLJIT_MOV_F32 : SLJIT_MOV_F64,
+					SLJIT_FR0, 0));
+		} else {
+			emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R1, 0, SLJIT_IMM, 0));
+			emit(sljit_emit_return(compiler_, resultWidth_ == 4 ? SLJIT_MOV32 : SLJIT_MOV,
+					SLJIT_R1, 0));
+		}
 	}
 
 	stackWidths_.resize(base);

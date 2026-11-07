@@ -149,6 +149,11 @@ struct ModuleInstanceInternals {
 	{
 		return trapMessages.insert(std::move(message)).first->c_str();
 	}
+	//! Backend-neutral cross-function tail-call drivers/thunks, or null.
+	void* tailTrampolines = nullptr;
+	//! Releases the trampoline table; defined out of line because the concrete
+	//! type is private to the backend-neutral trampoline implementation.
+	~ModuleInstanceInternals();
 };
 
 //! \brief The C++ owner of the VMContext and all its allocations.

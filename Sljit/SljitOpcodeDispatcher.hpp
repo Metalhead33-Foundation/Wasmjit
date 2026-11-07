@@ -65,10 +65,12 @@ public:
 	 * \param functionIndex Module function index, used for the trap-site annotation.
 	 * \param frameCallAbi True to emit the staging-frame ABI (`void fn(VMContext*, void* frame)`) instead of the register form; set module-wide by the compiler (docs/backends/STAGING_CALL_ABI.md).
 	 * \param tagIds The instance's tag index space, imports first, so a `throw tagidx` folds to its canonical id (docs/proposals/EXCEPTIONS.md EX-2).
+	 * \param internals Instance callables, used to embed a direct tail-call target.
 	 */
 	OpcodeDispatcher(const WASM::Module& module, const WASM::FuncType& funcType,
 			const WASM::FunctionBody& body, std::uint32_t functionIndex,
-			bool frameCallAbi, const std::vector<WASM::TagId>& tagIds);
+			bool frameCallAbi, const std::vector<WASM::TagId>& tagIds,
+			WASM::ModuleInstanceInternals& internals);
 
 	/*!
 	 * \brief Emits the function and hands back its executable entry point.
@@ -665,6 +667,7 @@ private:
 		std::vector<sljit_jump*> endJumps; //!< Branches to the merge point.
 		bool hasElse = false; //!< True once `else` was seen.
 		bool entryReachable = false; //!< True when the block was entered in live code.
+		bool thenReachable = false; //!< True when the then arm ended in live code.
 		bool endTargeted = false; //!< True once a `br` targets `end`.
 	};
 
@@ -694,6 +697,18 @@ private:
 	 * stack.
 	 */
 	void emitSelfTailCall();
+	/*!
+	 * \brief Lowers a direct cross-function tail call to a pending dispatch.
+	 *
+	 * The callee and its arguments are written to `TailCallState`; the function
+	 * then returns a dummy result. The libffi driver wrapping this function
+	 * re-enters the target through its type thunk, so the native stack does not
+	 * grow.
+	 *
+	 * \param arg Callee function index.
+	 * \param type Callee signature.
+	 */
+	void emitTailCallState(WASM::FuncIdx arg, const WASM::FuncType& type);
 	/*!
 	 * \brief Emits the trap epilogue, finalises the code and returns its entry.
 	 * \param entry Receives the executable entry point.
@@ -1277,6 +1292,8 @@ private:
 	const WASM::FunctionBody& body_; //!< Body being lowered.
 	const std::vector<WASM::TagId>& tagIds_; //!< Instance tag index space, imports first.
 	std::uint32_t functionIndex_; //!< Module function index (trap-site annotation).
+	WASM::ModuleInstanceInternals& internals_; //!< Instance callables for direct tail targets.
+	bool tailTrampoline_ = false; //!< True when this body may write TailCallState.
 	const char* functionName_ = nullptr; //!< Name-section name, or null.
 
 	std::vector<int> localWidths_; //!< Slot width per local, parameters first.
