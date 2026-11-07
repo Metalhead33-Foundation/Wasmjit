@@ -746,3 +746,32 @@ std::fprintf(stderr, "tail_wide=%d\n", (int)first);
 CHECK(first == 1);
 }
 }
+
+// Item 4, probes 6 and 7: GC struct types and atomics. Refusal is a pass; a silent
+// wrong answer is a defect (docs/backends/CAPABILITY_PROBES.md section 1).
+TEST_CASE("GC structs and atomics: refuse or answer correctly",
+"[staging][abi][gc][atomics]")
+{
+for (const char* backend : {"libjit", "asmjit", "sljit"}) {
+for (const char* fixture : {"gc_struct_probe", "atomics_probe"}) {
+std::fprintf(stderr, "PROBE %s on %s: ", fixture, backend);
+auto runtime = WASM::Runtime::create(backend);
+REQUIRE(runtime != nullptr);
+auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / (std::string(fixture) + ".wasm"));
+WASM::RegistryImportResolver imports;
+WASM::ModuleInstance* instance = nullptr;
+try {
+instance = &runtime->instantiate(*module, imports);
+} catch (const std::exception& error) {
+std::fprintf(stderr, "REFUSED: %s\n", error.what());
+continue;
+}
+const std::string exportName = std::string(fixture) == "atomics_probe"
+? "bump" : "make";
+const std::optional<WASM::Callable> callable = instance->exportedFunction(exportName);
+std::fprintf(stderr, "export %s=%d\n", exportName.c_str(), (int)callable.has_value());
+CHECK(callable.has_value());
+}
+}
+}
