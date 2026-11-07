@@ -85,9 +85,9 @@ check.
   never falls through, so `emitUnreachablePlaceholders()` fills the compile-time
   stack after the jump; the emitted placeholder instructions are dead.
 
-### What is still open
+### What was still open at the end of the first slice
 
-**Mutual and indirect tail calls still use call + return.** A cross-function
+**Mutual and indirect tail calls still used call + return.** (Superseded by item 1b below.) A cross-function
 trampoline needs:
 
 1. a driver per function (same C signature, exposed as `fnPtr`, raw body in
@@ -260,9 +260,39 @@ is only correct when eligibility is decided once, before emission.
 
 ### What is still open
 
-* `return_call_ref` is not lowered by SLJIT or AsmJIT at all (neither has a
-  `call_ref` lowering), so there is no backend path to extend yet. When one is
-  added, the runtime `tailEntry` check above is the pattern.
+### Function-reference targets (same session)
+
+`call_ref` and `return_call_ref` are now lowered in the register form. AsmJIT's
+`ref.func` representation changed from the function's **code address** to the
+instance's **`Callable*`** (the representation SLJIT and LibJIT already used): a
+reference call needs the context, dispatch and thunk fields, and pointer equality
+is still function equality. `call_ref` checks the reference for null, selects the
+native caller context when the callee has none, and invokes `fnPtr`; the tail form
+loads `tailEntry` and takes the pending path, falling back to call + return for a
+foreign reference without a thunk. Both backends refuse `call_ref` in frame form
+rather than half-lower it.
+
+Evidence (`tailcall_ref_probe.wat`, `ref.func` + `call_ref` entry, `return_call_ref`
+links, 1,000,000 iterations):
+
+```
+TAILREF libjit: even0=1 run()=1
+TAILREF asmjit: even0=1 run()=1
+TAILREF sljit: even0=1 run()=1
+```
+
+One SLJIT bug: `dispatchCallRef` popped the reference from the operand-stack
+model but did not resize the *argument* slots before pushing the result, so the
+function returned the stale callable slot (a pointer). Resizing by the parameter
+count before the result push fixed it. The reflection is a useful reminder that
+the stack model is not the machine stack: every pop/push pair must be mirrored.
+
+### What is still open
+
+* **Frame-form `call_ref` / `return_call_ref`** are refused on SLJIT and AsmJIT;
+  the frame call path would need the same staging-frame construction as an
+  indirect frame call. No test claims otherwise.
+
 ### v128 frame-form targets (same session)
 
 `tailCallFrameSupported` now accepts `v128`: a uniform slot is 16 bytes, the frame

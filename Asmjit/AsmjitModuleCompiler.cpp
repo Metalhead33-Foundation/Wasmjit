@@ -1892,6 +1892,109 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 		emitPendingExceptionCheck();
 	}
 
+	//! Traps when a function reference is null, continuing on the non-null path.
+	void emitNullRefCheck(const asmjit::x86::Gp& callable)
+	{
+		auto nonNull = compiler.new_label();
+		checkError(compiler.test(callable, callable), "AsmJit null-reference test failed");
+		checkError(compiler.jnz(nonNull), "AsmJit null-reference branch failed");
+		asmjit::FuncSignature reportSignature(asmjit::CallConvId::kCDecl);
+		reportSignature.set_ret(asmjit::TypeId::kVoid);
+		asmjit::InvokeNode* report = nullptr;
+		checkError(compiler.invoke(asmjit::Out(report),
+				reinterpret_cast<uint64_t>(&asmjitReportNullReference), reportSignature),
+				"AsmJit null-reference trap emission failed");
+		emitZeroReturn();
+		checkError(compiler.bind(nonNull), "AsmJit null-reference continuation binding failed");
+	}
+
+	//! Invokes a `Callable` whose address is already in a register.
+	void emitCallRefInvocation(const asmjit::x86::Gp& callable,
+			const std::vector<asmjit::x86::Gp>& arguments,
+			const WASM::FuncType& calledType, uint32_t typeIndex)
+	{
+		auto target = compiler.new_gp_ptr("refFunction");
+		checkError(compiler.mov(target, asmjit::x86::ptr(callable,
+				static_cast<int32_t>(offsetof(WASM::Callable, fnPtr)))),
+				"AsmJit call_ref function load failed");
+		auto calleeContext = compiler.new_gp_ptr("refContext");
+		checkError(compiler.mov(calleeContext, asmjit::x86::ptr(callable,
+				static_cast<int32_t>(offsetof(WASM::Callable, context)))),
+				"AsmJit call_ref context load failed");
+		auto callerContext = compiler.new_label();
+		checkError(compiler.test(calleeContext, calleeContext), "AsmJit call_ref context test failed");
+		checkError(compiler.jnz(callerContext), "AsmJit call_ref context branch failed");
+		checkError(compiler.mov(calleeContext, vmContext), "AsmJit call_ref native context selection failed");
+		checkError(compiler.bind(callerContext), "AsmJit call_ref context label binding failed");
+		auto preparedArguments = prepareCallArguments(calledType, arguments);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke), target, *signatures[typeIndex]),
+				"AsmJit call_ref invocation emission failed");
+		invoke->set_arg(0, calleeContext);
+		setCallArguments(invoke, preparedArguments);
+		emitCallResult(invoke, calledType, "callRefResult");
+		emitPendingTrapReturn();
+		emitPendingExceptionCheck();
+	}
+
+	void dispatchCallRef(WASM::TypeIdx typeIndex) override
+	{
+		if (frameMode)
+			throw std::runtime_error("AsmJit frame-form call_ref is not implemented");
+		const WASM::FuncType calledType = module.funcTypeAt(typeIndex);
+		if (calledType.results.size() > 1)
+			throw std::runtime_error("AsmJit call_ref currently supports at most one result");
+		for (const auto& parameter : calledType.params)
+			requireScalar(parameter.val, "call_ref parameters");
+		for (const auto& result : calledType.results)
+			requireScalar(result.val, "call_ref results");
+		if (values.size() < calledType.params.size() + 1)
+			throw std::runtime_error("AsmJit call_ref operand stack underflow");
+		auto callable = values.back();
+		values.pop_back();
+		std::vector<asmjit::x86::Gp> arguments(calledType.params.size());
+		for (size_t i = calledType.params.size(); i > 0; --i) {
+			arguments[i - 1] = values.back();
+			values.pop_back();
+		}
+		emitNullRefCheck(callable);
+		emitCallRefInvocation(callable, arguments, calledType, typeIndex);
+	}
+
+	void dispatchReturnCallRef(WASM::TypeIdx typeIndex) override
+	{
+		if (frameMode)
+			throw std::runtime_error("AsmJit frame-form return_call_ref is not implemented");
+		const WASM::FuncType calledType = module.funcTypeAt(typeIndex);
+		if (values.size() != calledType.params.size() + 1)
+			throw std::runtime_error("AsmJit return_call_ref has unexpected values below its reference");
+		auto callable = values.back();
+		values.pop_back();
+		std::vector<asmjit::x86::Gp> arguments(calledType.params.size());
+		for (size_t i = calledType.params.size(); i > 0; --i) {
+			arguments[i - 1] = values.back();
+			values.pop_back();
+		}
+		emitNullRefCheck(callable);
+		if (WASM::tailCallTrampolinesEligible(module, false)
+				&& WASM::tailCallSlotsSupported(calledType)) {
+			auto thunk = compiler.new_gp_ptr("tailThunk");
+			checkError(compiler.mov(thunk, asmjit::x86::ptr(callable,
+					static_cast<int32_t>(offsetof(WASM::Callable, tailEntry)))),
+					"AsmJit return_call_ref thunk load failed");
+			auto fallback = compiler.new_label();
+			checkError(compiler.test(thunk, thunk), "AsmJit return_call_ref thunk test failed");
+			checkError(compiler.jz(fallback), "AsmJit return_call_ref fallback branch failed");
+			emitTailCallState(callable, arguments, calledType);
+			checkError(compiler.bind(fallback), "AsmJit return_call_ref fallback label failed");
+			emitCallRefInvocation(callable, arguments, calledType, typeIndex);
+			dispatchReturn();
+			return;
+		}
+		emitCallRefInvocation(callable, arguments, calledType, typeIndex);
+		dispatchReturn();
+	}
+
 	void dispatchCallIndirect(WASM::TypeIdx typeIndex, WASM::TableIdx tableIndex) override
 	{
 		const WASM::FuncType calledType = module.funcTypeAt(typeIndex);
@@ -5284,23 +5387,20 @@ return address;
 		const size_t totalCount = importedCount + module.internalFunctionTypeIndices.size();
 		if (index >= totalCount)
 			throw std::runtime_error("AsmJit ref.func index is out of range");
-		// The reference is the function's own code address, so no call and no
-		// memory load are needed. Equality is all Wasm can observe, and distinct
-		// functions have distinct bodies.
+		// A function reference is the instance's Callable*, the representation
+		// SLJIT and LibJIT already use: call_ref needs the context and dispatch
+		// fields, and pointer equality is the same as code-address equality.
+		const void* referencePtr = index >= importedCount
+				? static_cast<const void*>(&internals.internalCallables[index - importedCount])
+				: static_cast<const void*>(&internals.importStorage[index]);
+		if (index < importedCount
+				&& (index >= internals.importStorage.size()
+						|| internals.importStorage[index].fnPtr == nullptr))
+			throw std::runtime_error("AsmJit ref.func references an unresolved function import");
 		auto reference = compiler.new_gp_ptr("funcRef");
-		if (index >= importedCount) {
-			const size_t internalIndex = static_cast<size_t>(index) - importedCount;
-			checkError(compiler.lea(reference,
-					asmjit::x86::ptr(functions[internalIndex]->label())),
-					"AsmJit ref.func address emission failed");
-		} else {
-			if (index >= internals.importStorage.size()
-					|| internals.importStorage[index].fnPtr == nullptr)
-				throw std::runtime_error("AsmJit ref.func references an unresolved function import");
-			checkError(compiler.mov(reference,
-					reinterpret_cast<uint64_t>(internals.importStorage[index].fnPtr)),
-					"AsmJit ref.func import materialisation failed");
-		}
+		checkError(compiler.mov(reference,
+				asmjit::Imm(reinterpret_cast<uint64_t>(referencePtr))),
+				"AsmJit ref.func materialisation failed");
 		values.push_back(reference);
 	}
 

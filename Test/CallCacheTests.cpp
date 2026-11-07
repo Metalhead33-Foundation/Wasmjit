@@ -1675,3 +1675,39 @@ CHECK(false);
 }
 }
 }
+
+// Function-reference tail calls: call_ref entry and return_call_ref links.
+TEST_CASE("tail calls: return_call_ref mutual recursion is constant-stack",
+"[staging][abi][tail][ref]")
+{
+for (const char* backend : {"libjit", "asmjit", "sljit"}) {
+std::fprintf(stderr, "TAILREF %s: ", backend);
+auto runtime = WASM::Runtime::create(backend);
+REQUIRE(runtime != nullptr);
+auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "tailcall_ref_probe.wasm");
+WASM::RegistryImportResolver imports;
+WASM::ModuleInstance* instance = nullptr;
+try {
+instance = &runtime->instantiate(*module, imports);
+} catch (const std::exception& error) {
+std::fprintf(stderr, "REFUSED: %s\n", error.what());
+CHECK(false);
+continue;
+}
+const auto run = instance->exportedFunction("run");
+const auto even0 = instance->exportedFunction("even0");
+REQUIRE(run.has_value());
+REQUIRE(even0.has_value());
+try {
+const std::int32_t direct = WASM::callCallable<std::int32_t>(*even0);
+const std::int32_t chain = WASM::callCallable<std::int32_t>(*run);
+std::fprintf(stderr, "even0=%d run()=%d\n", (int)direct, (int)chain);
+CHECK(direct == 1);
+CHECK(chain == 1);
+} catch (const std::exception& error) {
+std::fprintf(stderr, "FAILED: %s\n", error.what());
+CHECK(false);
+}
+}
+}

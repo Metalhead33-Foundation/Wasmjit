@@ -3009,6 +3009,136 @@ void OpcodeDispatcher::emitTailCallIndirectState(WASM::TypeIdx typeIndex, WASM::
 	markUnreachable();
 }
 
+void OpcodeDispatcher::emitNullRefCheck(int callableReg)
+{
+	sljit_jump* nonNull = sljit_emit_cmp(compiler_, SLJIT_NOT_EQUAL,
+			callableReg, 0, SLJIT_IMM, 0);
+	if (nonNull == nullptr)
+		ok_ = false;
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R1, 0, SLJIT_IMM,
+			static_cast<sljit_sw>(WASM::TrapKind::NullFunctionReference)));
+	emitHelper(SLJIT_ARGS1V(32), &sljitReportTrap);
+	emitTrapBranch();
+	sljit_label* continuation = sljit_emit_label(compiler_);
+	if (continuation == nullptr)
+		ok_ = false;
+	else if (nonNull != nullptr)
+		sljit_set_label(nonNull, continuation);
+}
+
+void OpcodeDispatcher::emitTailCallStateFromReg(int callableReg, const WASM::FuncType& type)
+{
+	// The callable must survive `currentTailCallState`, which clobbers R0-R3.
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+			scratchSlotOffset(), callableReg, 0));
+	emitHelper(SLJIT_ARGS0(P), &WASM::currentTailCallState);
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R1, 0, SLJIT_MEM1(SLJIT_SP),
+			scratchSlotOffset()));
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_R0),
+			static_cast<sljit_sw>(offsetof(WASM::TailCallState, target)), SLJIT_R1, 0));
+	const std::size_t base = stackWidths_.size() - type.params.size();
+	for (std::size_t i = 0; i < type.params.size(); ++i) {
+		const int width = widthOf(type.params[i].val);
+		if (width == 16) {
+			for (int word = 0; word < 2; ++word) {
+				emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R1, 0,
+						SLJIT_MEM1(SLJIT_SP), stackSlotOffset(base + i) + word * 8));
+				emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_R0),
+						static_cast<sljit_sw>(offsetof(WASM::TailCallState, args)
+								+ i * WASM::kTailCallSlotBytes + word * 8), SLJIT_R1, 0));
+			}
+		} else {
+			loadSlot(SLJIT_R1, base + i, width);
+			emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_R0),
+					static_cast<sljit_sw>(offsetof(WASM::TailCallState, args)
+							+ i * WASM::kTailCallSlotBytes), SLJIT_R1, 0));
+		}
+	}
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_MEM1(SLJIT_R0),
+			static_cast<sljit_sw>(offsetof(WASM::TailCallState, pending)), SLJIT_IMM, 1));
+	if (frameAbi_)
+		emit(sljit_emit_return_void(compiler_));
+	else
+		emitTailCallDummyReturn();
+}
+
+void OpcodeDispatcher::dispatchCallRef(WASM::TypeIdx typeIndex)
+{
+	require(reachable_, "a call_ref appears in unreachable code");
+	require(static_cast<std::uint32_t>(typeIndex) < module_.typeCount(),
+			"the call_ref type index is out of range");
+	const WASM::FuncType calledType = module_.funcTypeAt(typeIndex);
+	require(calledType.results.size() <= 1,
+			"the SLJIT backend cannot call a multi-result function");
+	if (!frameAbi_)
+		require(calledType.params.size() <= kMaxWasmParameters,
+				"the SLJIT backend cannot call a function with more than three parameters");
+	for (const WASM::StorageType& parameter : calledType.params)
+		require(widthOf(parameter.val) != 0, "the SLJIT backend only calls i32/i64 signatures");
+	for (const WASM::StorageType& result : calledType.results)
+		require(widthOf(result.val) != 0, "the SLJIT backend only calls i32/i64 signatures");
+	requireStack(calledType.params.size() + 1);
+	const std::size_t callableDepth = stackWidths_.size() - 1;
+	pop();
+	if (!measureOnly_) {
+		loadSlot(SLJIT_R0, callableDepth, 8);
+		emitNullRefCheck(SLJIT_R0);
+		emitResolvedCall(calledType, SLJIT_R0);
+	}
+	stackWidths_.resize(stackWidths_.size() - calledType.params.size());
+	if (!calledType.results.empty())
+		push(widthOf(calledType.results.front().val));
+}
+
+void OpcodeDispatcher::dispatchReturnCallRef(WASM::TypeIdx typeIndex)
+{
+	require(reachable_, "a return_call_ref appears in unreachable code");
+	require(static_cast<std::uint32_t>(typeIndex) < module_.typeCount(),
+			"the return_call_ref type index is out of range");
+	const WASM::FuncType calledType = module_.funcTypeAt(typeIndex);
+	require(calledType.results.size() <= 1,
+			"the SLJIT backend cannot tail-call a multi-result function");
+	if (!frameAbi_)
+		require(calledType.params.size() <= kMaxWasmParameters,
+				"the SLJIT backend cannot tail-call a function with more than three parameters");
+	for (const WASM::StorageType& parameter : calledType.params)
+		require(widthOf(parameter.val) != 0, "the SLJIT backend only calls i32/i64 signatures");
+	for (const WASM::StorageType& result : calledType.results)
+		require(widthOf(result.val) != 0, "the SLJIT backend only calls i32/i64 signatures");
+	requireStack(calledType.params.size() + 1);
+	const std::size_t callableDepth = stackWidths_.size() - 1;
+	const std::size_t base = callableDepth - calledType.params.size();
+	pop();
+	if (!measureOnly_) {
+		loadSlot(SLJIT_R0, callableDepth, 8);
+		emitNullRefCheck(SLJIT_R0);
+		const bool supported = frameAbi_
+				? WASM::tailCallFrameSupported(calledType)
+				: WASM::tailCallSlotsSupported(calledType);
+		if (tailTrampoline_ && supported) {
+			emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R1, 0, SLJIT_MEM1(SLJIT_R0),
+					static_cast<sljit_sw>(offsetof(WASM::Callable, tailEntry))));
+			sljit_jump* fallback = sljit_emit_cmp(compiler_, SLJIT_EQUAL,
+					SLJIT_R1, 0, SLJIT_IMM, 0);
+			if (fallback == nullptr)
+				ok_ = false;
+			emitTailCallStateFromReg(SLJIT_R0, calledType);
+			sljit_label* fallbackLabel = sljit_emit_label(compiler_);
+			if (fallbackLabel == nullptr)
+				ok_ = false;
+			else if (fallback != nullptr)
+				sljit_set_label(fallback, fallbackLabel);
+			emitResolvedCall(calledType, SLJIT_R0);
+			emitReturnValue();
+		} else {
+			emitResolvedCall(calledType, SLJIT_R0);
+			emitReturnValue();
+		}
+	}
+	stackWidths_.resize(base);
+	markUnreachable();
+}
+
 void OpcodeDispatcher::dispatchReturnCallIndirect(WASM::TypeIdx arg1, WASM::TableIdx arg2)
 {
 	if (tailTrampoline_ && !frameAbi_) {
