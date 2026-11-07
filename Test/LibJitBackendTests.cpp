@@ -25,6 +25,17 @@
 #include "WasmBase/WasmStore.hpp"
 #include "WasmBase/WasmType.hpp"
 
+// A native import in the frame form: (ctx, frame), results after the arguments.
+static void libjitFrameAdd(void*, void* frame)
+{
+	std::int32_t left = 0;
+	std::int32_t right = 0;
+	std::memcpy(&left, frame, sizeof(left));
+	std::memcpy(&right, frame + 8, sizeof(right));
+	const std::int32_t sum = left + right;
+	std::memcpy(static_cast<std::uint8_t*>(frame) + 16, &sum, sizeof(sum));
+}
+
 TEST_CASE("LibJitTypeTranslator does not leak type caches across modules")
 {
 	const auto makeStructType = [](WASM::ValueTypeCode fieldOpcode) {
@@ -740,7 +751,7 @@ CHECK(jit_type_get_size(jit_type_get_param(signature, 1)) == 16u);
 // Step 4a diagnostic: the frame signature's shape in isolation, so the return
 // path defect is located by measurement rather than by inspection
 // (docs/backends/STAGING_CALL_ABI.md, "Step 4a, first attempt").
-TEST_CASE("LibJIT spells a frame signature as (ctx, frame) -> scalar",
+TEST_CASE("LibJIT spells a frame signature as (ctx, frame) -> void",
 		"[staging][libjit][abi][frame]")
 {
 	WASM::StorageType vector;
@@ -765,10 +776,9 @@ TEST_CASE("LibJIT spells a frame signature as (ctx, frame) -> scalar",
 	CHECK(jit_type_num_params(signature) == 2u);
 	CHECK(jit_type_get_size(jit_type_get_param(signature, 0)) == sizeof(void*));
 	CHECK(jit_type_get_size(jit_type_get_param(signature, 1)) == sizeof(void*));
-	// The scalar result crosses in a register, not in a pointer slot.
+	// The result block is in the frame; the signature returns void.
 	const jit_type_t ret = jit_type_get_return(signature);
-	CHECK(jit_type_get_size(ret) == 4u);
-	CHECK(ret != jit_type_void_ptr);
+	CHECK(ret == jit_type_void);
 }
 
 TEST_CASE("LibJIT keeps a wide vector signature on the register form",
@@ -823,7 +833,7 @@ TEST_CASE("LibJIT takes a three-vector signature through an opted-in frame",
 // P0.1 probe: after a hook throws during instantiation, the runtime must still
 // work. Set WASMJIT_SAFETY_PROBES=1 to run it
 // (docs/backends/STAGING_CALL_ABI.md section 12).
-TEST_CASE("LibJIT instantiation failure leaves the runtime usable",
+TEST_CASE("LibJIT rejected module leaves the runtime usable",
 "[safety][instantiate][libjit]")
 {
 if (std::getenv("WASMJIT_SAFETY_PROBES") == nullptr) {
@@ -832,16 +842,14 @@ return;
 }
 auto runtime = WASM::Runtime::create("libjit");
 REQUIRE(runtime != nullptr);
-auto bad = runtime->loadFile(
-std::filesystem::path(WASM_TEST_DIR) / "staging_call.wasm");
 auto good = runtime->loadFile(
 std::filesystem::path(WASM_TEST_DIR) / "v128_multi.wasm");
 WASM::RegistryImportResolver imports;
 
-// A frame-mode refusal makes a hook throw -- the cheapest way to test recovery.
-WASM::setFrameCallAbiOptIn(true);
-REQUIRE_THROWS(runtime->instantiate(*bad, imports));
-WASM::setFrameCallAbiOptIn(false);
+// A rejected artifact must not poison the runtime. (Frame calls now compile,
+// so this probe uses a validation failure rather than a backend refusal.)
+REQUIRE_THROWS(runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "invalid_catch_stack.wasm"));
 
 // The very next instantiation must succeed and behave normally.
 WASM::ModuleInstance& instance = runtime->instantiate(*good, imports);
@@ -851,9 +859,9 @@ instance.exportedFunction("three_lanes");
 REQUIRE(callable.has_value());
 }
 
-// P0a gate: a call inside a frame-mode body must refuse at module level, before
-// any JIT context is built (docs/backends/STAGING_CALL_ABI.md section 12).
-TEST_CASE("LibJIT refuses a call inside a frame-mode function",
+// A frame-mode body stages a local call frame and invokes the callee through
+// the same (ctx, frame) contract (STAGING_CALL_ABI.md step 4b).
+TEST_CASE("LibJIT calls another function through an opted-in frame",
 "[staging][libjit][abi][call]")
 {
 auto runtime = WASM::Runtime::create("libjit");
@@ -861,14 +869,136 @@ REQUIRE(runtime != nullptr);
 auto module = runtime->loadFile(
 std::filesystem::path(WASM_TEST_DIR) / "staging_call.wasm");
 WASM::RegistryImportResolver imports;
-
-// The register form compiles this fixture; the frame form must refuse it.
 WASM::setFrameCallAbiOptIn(true);
-REQUIRE_THROWS(runtime->instantiate(*module, imports));
+WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+CHECK(instance.frameCallAbi());
+const auto callable = instance.exportedFunction("via_call");
+REQUIRE(callable.has_value());
+alignas(16) std::uint8_t frame[56] = {};
+const std::uint32_t lanes[3][4] = {{1, 1, 1, 1}, {2, 2, 2, 2}, {3, 3, 3, 3}};
+for (int i = 0; i < 3; ++i)
+std::memcpy(frame + 16 * i, lanes[i], 16);
+WASM::callCallableFrame(*callable, frame);
+std::int32_t result = 0;
+std::memcpy(&result, frame + 48, sizeof(result));
 WASM::setFrameCallAbiOptIn(false);
+CHECK(result == 6);
+}
 
-WASM::ModuleInstance& registerForm = runtime->instantiate(*module, imports);
-CHECK_FALSE(registerForm.frameCallAbi());
+// A native import uses the same (ctx, frame) contract as a compiled callee.
+TEST_CASE("LibJIT calls a native import through an opted-in frame",
+"[staging][libjit][abi][import]")
+{
+auto runtime = WASM::Runtime::create("libjit");
+REQUIRE(runtime != nullptr);
+auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "libjit_frame_import_probe.wasm");
+WASM::RegistryImportResolver imports;
+registerHostFunction(imports, "env", "add", &libjitFrameAdd);
+WASM::setFrameCallAbiOptIn(true);
+WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+CHECK(instance.frameCallAbi());
+const auto run = instance.exportedFunction("run");
+REQUIRE(run.has_value());
+alignas(16) std::uint8_t frame[32] = {};
+WASM::callCallableFrame(*run, frame);
+WASM::setFrameCallAbiOptIn(false);
+std::int32_t result = 0;
+std::memcpy(&result, frame, sizeof(result));
+CHECK(result == 42);
+}
+
+// Frame tails are lowered as a frame call plus a frame return; this pins
+// correctness at a depth that does not depend on constant-stack behavior.
+TEST_CASE("LibJIT tail calls through an opted-in frame",
+"[staging][libjit][abi][tail][frame]")
+{
+auto runtime = WASM::Runtime::create("libjit");
+REQUIRE(runtime != nullptr);
+auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "libjit_frame_tail_probe.wasm");
+WASM::RegistryImportResolver imports;
+WASM::setFrameCallAbiOptIn(true);
+WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+CHECK(instance.frameCallAbi());
+const auto run = instance.exportedFunction("run");
+REQUIRE(run.has_value());
+alignas(16) std::uint8_t frame[16] = {};
+WASM::callCallableFrame(*run, frame);
+WASM::setFrameCallAbiOptIn(false);
+std::int32_t result = 0;
+std::memcpy(&result, frame, sizeof(result));
+CHECK(result == 1);
+}
+
+// A multi-result call_ref chain in the frame form: `$tail` forwards a pair
+// through return_call_ref, and `run` adds both results of call_ref.
+TEST_CASE("LibJIT carries multi-result call_ref through an opted-in frame",
+"[staging][libjit][abi][ref][multi]")
+{
+auto runtime = WASM::Runtime::create("libjit");
+REQUIRE(runtime != nullptr);
+auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "tailcall_ref_multi_probe.wasm");
+WASM::RegistryImportResolver imports;
+WASM::setFrameCallAbiOptIn(true);
+WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+CHECK(instance.frameCallAbi());
+const auto run = instance.exportedFunction("run");
+REQUIRE(run.has_value());
+alignas(16) std::uint8_t frame[16] = {};
+WASM::callCallableFrame(*run, frame);
+WASM::setFrameCallAbiOptIn(false);
+std::int32_t result = 0;
+std::memcpy(&result, frame, sizeof(result));
+CHECK(result == 11);
+}
+
+// A v128 result is a 16-byte frame cell, copied by the epilogue.
+TEST_CASE("LibJIT returns a v128 through an opted-in frame",
+"[staging][libjit][abi][simd][frame]")
+{
+auto runtime = WASM::Runtime::create("libjit");
+REQUIRE(runtime != nullptr);
+auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "asmjit_vec_result.wasm");
+WASM::RegistryImportResolver imports;
+WASM::setFrameCallAbiOptIn(true);
+WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+CHECK(instance.frameCallAbi());
+const auto vec = instance.exportedFunction("vec_result");
+REQUIRE(vec.has_value());
+alignas(16) std::uint8_t frame[16] = {};
+WASM::callCallableFrame(*vec, frame);
+WASM::setFrameCallAbiOptIn(false);
+std::uint32_t lanes[4] = {};
+std::memcpy(lanes, frame, sizeof(lanes));
+CHECK(lanes[0] == 7u);
+CHECK(lanes[1] == 8u);
+CHECK(lanes[2] == 9u);
+CHECK(lanes[3] == 10u);
+}
+
+// A table call uses the same staged call frame as a direct call.
+TEST_CASE("LibJIT calls indirectly through an opted-in frame",
+"[staging][libjit][abi][indirect][frame]")
+{
+auto runtime = WASM::Runtime::create("libjit");
+REQUIRE(runtime != nullptr);
+auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "libjit_frame_indirect_probe.wasm");
+WASM::RegistryImportResolver imports;
+WASM::setFrameCallAbiOptIn(true);
+WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+CHECK(instance.frameCallAbi());
+const auto run = instance.exportedFunction("run");
+REQUIRE(run.has_value());
+alignas(16) std::uint8_t frame[16] = {};
+WASM::callCallableFrame(*run, frame);
+WASM::setFrameCallAbiOptIn(false);
+std::int32_t result = 0;
+std::memcpy(&result, frame, sizeof(result));
+CHECK(result == 10);
 }
 
 // EXPERIMENT (docs/backends/EXPORT_SIGNATURE.md section 37): does LibJIT's
@@ -959,11 +1089,9 @@ WASM::setFrameCallAbiOptIn(false);
 std::fprintf(stderr, "PROBE done\n");
 }
 
-// Gate: LibJIT refuses multiple results in frame mode, and the fixture must be
-// FRESHLY LOADED -- instantiation caches compiled code per module object, so a
-// second instantiation of the same object never re-decides the mode
-// (docs/backends/EXPORT_SIGNATURE.md section 38).
-TEST_CASE("LibJIT refuses multiple results in frame mode",
+// The frame form carries the whole result tuple, so multi-result exports work
+// under the same opt-in as any other frame module.
+TEST_CASE("LibJIT returns multiple results through an opted-in frame",
 "[staging][libjit][abi][multi]")
 {
 const auto path =
@@ -971,17 +1099,19 @@ std::filesystem::path(WASM_TEST_DIR) / "asmjit_multi_result.wasm";
 auto runtime = WASM::Runtime::create("libjit");
 REQUIRE(runtime != nullptr);
 WASM::RegistryImportResolver imports;
-
-// The register form handles it -- MV5's trailing result buffer, measured sound.
-{
-auto shared = runtime->loadFile(path);
-WASM::ModuleInstance& instance = runtime->instantiate(*shared, imports);
-CHECK_FALSE(instance.frameCallAbi());
-}
-
-// The frame form must refuse, and needs its own module object to be asked.
 WASM::setFrameCallAbiOptIn(true);
 auto fresh = runtime->loadFile(path);
-REQUIRE_THROWS(runtime->instantiate(*fresh, imports));
+WASM::ModuleInstance& instance = runtime->instantiate(*fresh, imports);
+CHECK(instance.frameCallAbi());
+const auto pair = instance.exportedFunction("pair");
+REQUIRE(pair.has_value());
+alignas(16) std::uint8_t frame[16] = {};
+WASM::callCallableFrame(*pair, frame);
 WASM::setFrameCallAbiOptIn(false);
+std::int32_t first = 0;
+std::int64_t second = 0;
+std::memcpy(&first, frame, sizeof(first));
+std::memcpy(&second, frame + 8, sizeof(second));
+CHECK(first == 7);
+CHECK(second == 9);
 }

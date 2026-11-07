@@ -571,8 +571,8 @@ purpose: a module with one function and no imports cannot contain a call.
 
 | Test | Tag | Purpose |
 |---|---|---|
-| refuses a call inside a frame-mode function | `[staging][libjit][abi][call]` | the frame form refuses; the register form still compiles the fixture |
-| instantiation failure leaves the runtime usable | `[safety][instantiate][libjit]`, `WASMJIT_SAFETY_PROBES=1` | a throw from a hook must not poison the runtime |
+| calls another function through an opted-in frame | `[staging][libjit][abi][call]` | the frame form stages a local frame and returns 6; the register form still compiles the fixture |
+| rejected module leaves the runtime usable | `[safety][instantiate][libjit]`, `WASMJIT_SAFETY_PROBES=1` | a rejected artifact must not poison the runtime |
 
 ### The theory that was wrong
 
@@ -595,3 +595,21 @@ That mistake cost two reverts and a wrong architectural claim. The claim is now
 struck from the record, and section 12's reasoning -- "throwing mid-build corrupts a
 half-built context" -- stands only as *plausible for the dispatcher variant*, not as
 established fact.
+
+## 14. Step 4b landed: LibJIT frame calls, imports and multi-result (2026-11-07)
+
+The module-level refusal from section 13 is gone. The frame signature is the canonical
+`void fn(VMContext*, void* frame)`; a frame call allocates a local call frame, stages
+arguments at the shared `WASM::frameValueBytes` offsets, invokes `(ctx, frame)`, and
+unpacks every result. Direct, indirect, `call_ref` and native-import calls share that
+path, and a multi-result frame function writes its whole tuple into the caller's result
+block.
+
+The opt-in rule is unchanged: the register form is the default and the frame form is
+only selected by `WASM::setFrameCallAbiOptIn(true)`.
+
+**Limitation:** a frame `return_call` is a frame call plus a frame return. It is correct
+but not constant-stack; the register trampoline remains the constant-stack path.
+
+**Evidence:** frame call 6, native import 42, multi-result 7/9, 100-link frame tail 1,
+multi-result `call_ref` 11; suite 22435 assertions in 820 cases, seed 12345.

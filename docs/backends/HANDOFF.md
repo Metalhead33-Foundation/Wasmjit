@@ -8,14 +8,15 @@ section 18 (the latest re-run).
 
 ## 1. Where the tree is
 
-**Snapshot (2026-11-07, this working tree):** `--rng-seed 12345` -> **22410
-assertions, 815 cases, green**. Gates: `[headerdoc]`, `[docs]`, `doxygen` 0
+**Snapshot (2026-11-07, this working tree):** `--rng-seed 12345` -> **22435
+assertions, 820 cases, green**. Gates: `[headerdoc]`, `[docs]`, `doxygen` 0
 warnings, `abi-check` OK.
 
 The frame ABI work is done on all three backends. Exceptions (including
 `catch_ref` and multi-value payloads), the memory-atomics family, the numeric
 shared-everything atomics and frame-form tail calls are implemented on SLJIT and
-AsmJIT. The remaining rows are listed in section 3.
+AsmJIT. No backend capability gap remains; the LibJIT frame form stays opt-in and its
+frame tails are call+return rather than constant-stack.
 
 ## 2. The sweep defects
 
@@ -55,16 +56,17 @@ field as 4 bytes. The load and the slot width now follow the field type.
 | global reference atomics (eqref) | OK | OK | OK | `GLOBALREF` run=1 |
 | v128 atomic slots rejected at validation | OK | OK | OK | `V128ATOMIC` rejected (global/struct/array) |
 | structured `v128` block/loop/if results | OK | OK | OK | `BLOCKRESV128` block=5 branch=6 if=7/8 loop=9 |
-| multi-result `call_ref` / `return_call_ref` | OK | OK | n/a (policy) | `TAILREFMULTI` run()=11 |
+| multi-result `call_ref` / `return_call_ref` | OK | OK | OK (frame opt-in) | `TAILREFMULTI` run()=11; LibJIT frame probe run()=11 |
 | frame-form indirect tail calls | OK | OK | OK | `TAILINDIRECTFRAME` 1,000,000 links, `run()=1` |
 | catch payload to a loop parameter | OK | OK | OK | `CATCHLOOP` run()=42 |
 | bulk memory on memory64 | OK | OK | OK | `MEM64BULK` copy=97 fill=65 init=97 |
+| LibJIT frame calls / native imports / multi-result | n/a | n/a | OK | frame call 6, import 42, multi-result 7/9, frame tail 1, multi-result `call_ref` 11 |
 
 ### Remaining (honest refusals)
 
 | Gap | Backends | Reason |
 |---|---|---|
-| LibJIT frame-mode calls / imports / multi-result | LibJIT | **policy**: the frame form is opt-in and partial on purpose |
+| *(none)* | -- | The LibJIT frame form remains opt-in; that is policy, not a missing capability. |
 
 `v128` atomic slots are **not** on this list: the atomic proposal does not allow
 them, and the validator now rejects them (`V128ATOMIC`).

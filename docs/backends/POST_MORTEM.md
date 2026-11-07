@@ -12,13 +12,13 @@ actually happened, the root cause of every surprise, and what is still open.
 | 2 | shared reference/table atomics | **done** | numeric, struct/array reference, shared-table and global `eqref` atomics run on all three (`SHAREDREF`, `TABLEATOMIC`, `GLOBALREF`); v128 atomic slots are rejected by validation (`V128ATOMIC`) because the proposal does not allow them |
 | 3 | block parameters/results (scalar and v128) | **done** | `BLOCKPARAM` block=42 if=11/12 loop=0; `BLOCKV128` block=42 if=7/8 loop=7; `BLOCKRESV128` 5,6,7/8,9 |
 | 4 | bulk memory on memory64 | **done** | `MEM64BULK` copy=97 fill=65 init=97 on all three |
+| 5 | exceptions and catch payloads | **done** | local/cross-instance catch, `catch_ref`, multi-value payloads and a catch payload routed to a loop parameter (`CATCHLOOP` 42) |
+| 6 | LibJIT frame form | **done** | frame call 6, import 42, multi-result 7/9, frame tail 1, multi-result `call_ref` 11; the form remains opt-in and default-off |
 
-Suite at the last commit: **22184 assertions in 798 cases** under
-`--rng-seed 12345`, green; `[headerdoc]`, `[docs]` and `doxygen` are warning-free.
-
-The two open rows are the honest remainder. Item 1 is a cross-function driver/thunk
-problem, not a local lowering; item 2 is blocked on a prerequisite (table accessors) and
-on a fixture shape the pinned tool accepts.
+Suite at the last commit: **22435 assertions in 820 cases** under
+`--rng-seed 12345`, green; `[headerdoc]`, `[docs]`, `doxygen` and `abi-check` are clean.
+No backend capability gap remains. The frame form on LibJIT stays opt-in, and its
+frame tails are call+return rather than constant-stack.
 
 ## Item 1 — constant-stack tail calls
 
@@ -501,6 +501,71 @@ which is exactly why two backends agreeing is not a spec check.
 * **Do not use a feature you intend to implement as the "unsupported" fixture**
   for a rollback test; move the probe to a genuinely excluded shape (`v128`
   parameter) when the feature lands.
+
+## Remaining-gap pass — LibJIT frame calls, imports and multi-result
+
+### Intended
+
+Make the opted-in LibJIT frame form complete without changing the policy: the
+register form stays the default and the frame form remains opt-in. Once selected,
+a call, a native import, a multi-result signature and a frame tail must all work.
+
+### Contract correction
+
+The frame signature is now the canonical `void fn(VMContext*, void* frame)`.
+The callee writes every result into the caller's result block; the driver no
+longer receives a scalar return or writes it itself. Frame slots use the shared
+`WASM::frameValueBytes` layout (8 bytes per scalar, 16 per v128), so the prologue
+and result block agree with every other backend.
+
+### What we did
+
+* `LibJitTypeTranslator` spells both signature overloads as `(ctx, frame) -> void`.
+* The prologue advances by `frameValueBytes`; the epilogue writes one or N results
+  into the current frame (`storeFrameResults`) for implicit, explicit and trap exits.
+* `emitFrameInvocation` allocates a local call frame with `jit_insn_alloca`, stages
+  arguments at canonical offsets, invokes `fnPtr(ctx, frame)`, checks the pending
+  exception slot, and reads the result block back.
+* Direct, indirect and `call_ref` calls use that helper; native imports use the
+  same `(ctx, frame)` contract.
+* Frame tails are a frame call followed by a frame return. They are correct but
+  not constant-stack; the register trampoline remains the constant-stack path.
+* Frame thunks and the driver's trailing result-buffer parameter are disabled in
+  frame mode, because the canonical signature has neither.
+
+### Evidence
+
+| Probe | Result |
+|---|---|
+| `LibJIT calls another function through an opted-in frame` | `via_call` result 6 at frame+48 |
+| `LibJIT returns multiple results through an opted-in frame` | pair 7 / 9 |
+| `LibJIT calls a native import through an opted-in frame` | host `(ctx, frame)` returns 42 |
+| `LibJIT tail calls through an opted-in frame` | 100 links, result 1 |
+| `LibJIT carries multi-result call_ref through an opted-in frame` | result 11 |
+| `LibJIT returns a v128 through an opted-in frame` | lanes 7/8/9/10 |
+| `LibJIT calls indirectly through an opted-in frame` | table call result 10 |
+| `LibJIT rejected module leaves the runtime usable` | runtime survives a rejected artifact |
+
+The register-form tests stay green and the opt-in is still default-off.
+
+### Mistakes caught
+
+* The two call lowering bodies (`dispatchCall` and `dispatchCallThroughCallable`)
+  share their stack-pop text; the first edit landed each frame block in the other
+  function. Scoped replacement fixed it.
+* The driver still tried to read the trailing result-buffer parameter in frame
+  mode, where the signature has only `(ctx, frame)`; that was the multi-result
+  `call_ref` crash.
+* Frame-mode tail thunks were still built against the two-parameter frame signature;
+  frame mode now has no tail thunks.
+* The `FuncType` overload of `translateFunctionSignature` still returned a scalar;
+  the `CoreTypeView` overload had been changed first.
+
+### Remaining limitation
+
+Frame tails are call+return, so they grow the host stack. Constant-stack frame tails
+in LibJIT would need a frame-aware trampoline; that is separate from the call,
+import and multi-result contract this pass closes.
 
 ## Remaining-gap pass — v128 block results
 

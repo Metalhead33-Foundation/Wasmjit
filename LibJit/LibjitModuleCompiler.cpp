@@ -210,7 +210,7 @@ void ModuleCompiler::compileFunction(jit_function_t fn, uint32_t funcTypeIdx, co
 				}
 			}
 			locals.push_back(slot);
-			offset += static_cast<uint32_t>(width);
+			offset += WASM::frameValueBytes(WASM::valueKindOf(vt.opcode));
 		}
 	} else {
 		for (uint32_t i = 0; i < stack.parameterCount; ++i)
@@ -268,25 +268,8 @@ void ModuleCompiler::translateTypes(WASM::ModuleInstance& instance, const WASM::
 	// changes shape.
 	{
 		const bool frame = WASM::frameCallAbiOptIn();
-		// A call inside a frame-mode body is step 4b, which is not implemented:
-		// the register form there would hand a callee expecting (ctx, frame) a set
-		// of typed arguments. Refused at module level, before any JIT context is
-		// built (docs/backends/STAGING_CALL_ABI.md section 12).
-		if (frame && (module.functionBodies.size() > 1 || !module.importFunctions.empty()))
-			throw std::runtime_error(
-					"LibJIT frame ABI: a call inside a frame-mode function is not implemented");
-		// Multiple results in frame mode are not implemented: the epilogue still
-		// expects the register form's trailing result-buffer parameter, which the
-		// frame signature does not have (docs/backends/EXPORT_SIGNATURE.md section 38).
-		if (frame) {
-			for (uint32_t ti = 0; ti < module.typeCount(); ++ti) {
-				if (module.typeView(ti).kind() != WASM::CanonTypeKind::Func)
-					continue;
-				if (module.funcTypeAt(ti).results.size() > 1)
-					throw std::runtime_error(
-							"LibJIT frame ABI: multiple results are not implemented");
-			}
-		}
+		// The frame form is still opt-in, but once selected it is complete:
+		// calls, imports and multi-result signatures use the same frame contract.
 		typeTranslator.setFrameCallAbi(frame);
 		instance.setFrameCallAbi(frame);
 	}
@@ -425,6 +408,11 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM
 
 	std::unordered_map<uint32_t, void*> tailThunks;
 	const auto generateTailThunk = [&](uint32_t typeIdx) -> void* {
+		// Frame tails use a frame call followed by a frame return. A register-form
+		// thunk would stage typed arguments against the (ctx, frame) signature, so
+		// the frame mode deliberately has no tail thunks.
+		if (instance.frameCallAbi())
+			return nullptr;
 		const auto known = tailThunks.find(typeIdx);
 		if (known != tailThunks.end())
 			return known->second;
@@ -542,7 +530,7 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM
 		jit_value_t state = jit_value_create(driver, jit_type_void_ptr);
 		jit_insn_store(driver, state, jit_insn_call_native(driver, "wasm_tail_call_state",
 			reinterpret_cast<void*>(&WASM::currentTailCallState), stateSig, nullptr, 0, 0));
-		if (hasResultBuffer) {
+		if (hasResultBuffer && !frameAbi) {
 			jit_insn_store_relative(driver, state,
 				static_cast<jit_nint>(offsetof(WASM::TailCallState, resultBuffer)),
 				jit_value_get_param(driver, paramCount + 1));
@@ -573,18 +561,6 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM
 		}
 		jit_value_t callRet = jit_insn_call_indirect(driver, fnPtr, sig, callArgs.data(),
 			static_cast<unsigned>(callArgs.size()), 0);
-		if (frameAbi && singleResult) {
-			// The results begin where the arguments end.
-			uint32_t argBytes = 0;
-			for (const WASM::StorageType& pv : driverSig.params)
-				argBytes += static_cast<uint32_t>(jit_type_get_size(
-					typeTranslator.translateType(pv.val)));
-			jit_value_t resultAddr = jit_insn_add(driver,
-				jit_value_get_param(driver, 1),
-				jit_value_create_nint_constant(driver, jit_type_void_ptr,
-					static_cast<jit_nint>(argBytes)));
-			jit_insn_store_relative(driver, resultAddr, 0, callRet);
-		}
 		if (slotResult) {
 			jit_insn_store_relative(driver, state,
 				static_cast<jit_nint>(offsetof(WASM::TailCallState, results)), callRet);
@@ -688,6 +664,19 @@ void ModuleCompiler::callStartFunction(WASM::ModuleInstance& instance, uint32_t 
 		throw std::runtime_error("start function has no compiled body");
 
 	using StartFn = void (*)(WASM::VMContext*);
+	using StartFrameFn = void (*)(WASM::VMContext*, void*);
+	if (instance.frameCallAbi()) {
+		// A start function has no parameters or results, but in frame mode its
+		// signature is still (ctx, frame). The frame is never read.
+		alignas(16) std::uint8_t frame[16] = {};
+		StartFrameFn frameFn = reinterpret_cast<StartFrameFn>(callable->fnPtr);
+		{
+			WASM::CallDepthScope depth;
+			frameFn(callable->context, frame);
+		}
+		WASM::checkTrap();
+		return;
+	}
 	StartFn fn = reinterpret_cast<StartFn>(callable->fnPtr);
 	// The start function runs at the host boundary: a trap it reports comes back
 	// here as a `WASM::Trap` exception, so `instantiate` unwinds normally and the

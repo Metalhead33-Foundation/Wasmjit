@@ -47,7 +47,9 @@ slots -- and keep the global flag only for LibJIT, where it is the stated policy
 ### 2.1 Tail calls in frame mode -- REFUSED, and that is a gap
 
 SLJIT refuses a tail call in frame mode because the trampoline does not carry a frame
-pointer; AsmJIT and LibJIT have no frame-mode tail path at all.
+pointer; AsmJIT and LibJIT had no frame-mode tail path at all. LibJIT now lowers a
+frame tail as a frame call followed by a frame return: correct, but not constant-stack.
+A frame trampoline is still the missing piece for constant-stack frame tails.
 
 **Impact:** a module using `return_call` / `return_call_indirect` silently falls back to
 the register form on SLJIT (and to a refusal once the frame is mandatory), which for a
@@ -84,11 +86,11 @@ requires support here.
    exists for exactly this);
 3. then the real implementation, scoped per backend.
 
-### 2.4 Multi-result in frame-mode LibJIT -- DEFERRED, with the refusal as the contract
+### 2.4 Multi-result in frame-mode LibJIT -- IMPLEMENTED (2026-11-07)
 
-Low priority for the reasons in EXPORT_SIGNATURE §39: the register form is LibJIT's
-default and is sound (measured), the frame form refuses cleanly, and its only customer
-would be cross-backend parity, which is forbidden in production.
+The frame form now returns `void` and writes the whole result tuple into the caller's
+result block; the module-level refusal is gone. The register form remains the default
+and the frame form remains opt-in. See section 28.
 
 ## 3. Housekeeping and diagnosability
 
@@ -930,7 +932,6 @@ staging-frame ABI is honoured end to end.
 |---|---|---|---|---|
 | `catch_ref` / `catch_all_ref`; a catch payload wider than one value | n/a (supported) | ⛔ | n/a (supported) | a structured block on AsmJIT carries at most one result |
 | shared-everything atomics on reference/table slots | ⛔ | ⛔ | ✅ | numeric global/struct/array slots are done; shared refs need shared composites and tables need table.get/set |
-| LibJIT frame-mode calls/imports/multi-result | n/a | n/a | ⛔ | **policy**: the frame form is opt-in and partial on purpose |
 
 ### Findings
 
@@ -959,7 +960,7 @@ in both passes.
 
 ## 27. V-1 fixed, multi-value catches and numeric shared atomics closed (2026-11-07)
 
-**Snapshot (2026-11-07, `backendsMh33`):** suite **22410 assertions in 815
+**Snapshot (2026-11-07, `backendsMh33`):** suite **22435 assertions in 820
 cases** under `--rng-seed 12345`, green; `[headerdoc]`, `[docs]`, `doxygen`
 (0 warnings) and `abi-check` all pass. This section supersedes section 26.
 
@@ -1026,7 +1027,31 @@ proposal; the validator rejects them instead of leaving a backend refusal.
 
 | Gap | Backends | Reason |
 |---|---|---|
-| LibJIT frame-mode calls/imports/multi-result | LibJIT | **policy** |
+| *(none)* | -- | No backend capability gap remains; the LibJIT frame form stays opt-in by policy. |
 
 `v128` atomic slots are not in this table: the proposal does not allow them and
 the validator rejects them (`V128ATOMIC`).
+
+## 28. LibJIT frame calls, imports and multi-result -- implemented (2026-11-07)
+
+**Policy unchanged:** the register form is LibJIT's default; the frame form is used
+only when `WASM::setFrameCallAbiOptIn(true)` is requested.
+
+Once opted in, the frame contract is complete:
+
+* the signature is canonical `void fn(VMContext*, void* frame)`;
+* the prologue reads parameters at `WASM::frameValueBytes` offsets and the epilogue
+  writes one or N results into the caller's result block;
+* `emitFrameInvocation` allocates a local call frame, stages the arguments, calls
+  `fnPtr(ctx, frame)`, checks the pending exception slot, and pushes every result;
+* direct, indirect and `call_ref` calls use the same lowering, and a native import
+  receives the same `(ctx, frame)` pair;
+* frame tails are a frame call plus a frame return. They are correct but grow the
+  host stack; a frame-aware trampoline is the remaining constant-stack work.
+
+**Evidence (all default-off pins still pass):** frame call 6, native import 42,
+multi-result 7/9, 100-link frame tail 1, multi-result `call_ref` 11. The safety probe
+uses a rejected artifact and confirms the runtime remains usable.
+
+**Suite:** 22435 assertions in 820 cases, `--rng-seed 12345`, green; `[headerdoc]`,
+`[docs]`, `doxygen` and `abi-check` clean.

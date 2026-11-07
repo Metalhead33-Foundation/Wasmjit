@@ -19,7 +19,7 @@ exactly three outcomes. The rule that governs all of them:
 | 2 | `externref` | `externref_probe.wat` -- identity | if it instantiates, the reference must round-trip **identically** | all three ✅ |
 | 3 | `funcref` | `funcref_probe.wat` -- `ref.func` plus a declarative elem | both exports exist when the module instantiates | all three ✅ |
 | 4 | tail calls, register form | `tailcall_probe.wat` -- `(i32)->i32` via `return_call` | the call returns the argument it was given | all three ✅ |
-| 5 | tail calls, frame form | `tailcall_frame_probe.wat` -- three `v128` + `return_call` | the call returns lane 0 of the first vector | SLJIT ⛔ · AsmJIT ⛔ · LibJIT **n/a** |
+| 5 | tail calls, frame form | `tailcall_frame_probe.wat` -- three `v128` + `return_call` | the call returns lane 0 of the first vector | SLJIT OK · AsmJIT OK · LibJIT OK (register form; the opt-in frame tail is call+return) |
 
 Each probe prints one line per backend with a `PROBE`/`EXC`/`REF`/`TAILFRAME` prefix, so a
 red run **names the backend** without a debugger.
@@ -152,7 +152,7 @@ section 6). Two different questions, two different answers, both recorded.
 `throw`, and the only ⛔ rows are honest refusals with reasons.
 
 Suite 21916 assertions in 784 cases under `--rng-seed 12345`, green. (Revision
-2026-11-07: suite 22184 assertions in 798 cases, same seed.)
+2026-11-07: suite 22435 assertions in 820 cases, same seed.)
 
 ## 6. Probes 9 and 10: GC arrays work everywhere; memory64 + bulk memory (now does)
 

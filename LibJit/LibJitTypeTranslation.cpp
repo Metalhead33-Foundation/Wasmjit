@@ -208,13 +208,10 @@ jit_type_t LibJitTypeTranslator::translateFunctionSignature(const WASM::FuncType
 		// spelled here as well as in the CoreTypeView overload. The context plus
 		// one opaque frame pointer replace the typed parameters, which lifts the
 		// sixth-argument defect (docs/backends/LIBJIT_ARGUMENT_DEFECT.md). The
-		// return stays typed: the compiled function hands its single scalar back
-		// in a register, and the driver stores it into the frame.
+		// The canonical frame signature returns void; every result is written into
+		// the caller's result block by the callee.
 		params.push_back(jit_type_void_ptr);
-		jit_type_t frameReturn = jit_type_void;
-		if (wasm_func.results.size() == 1)
-			frameReturn = translateType(wasm_func.results.front().val);
-		return jit_type_create_signature(jit_abi_cdecl, frameReturn,
+		return jit_type_create_signature(jit_abi_cdecl, jit_type_void,
 			params.data(), params.size(), 1);
 	}
 	for(const auto& it : wasm_func.params) {
@@ -324,10 +321,11 @@ jit_type_t LibJitTypeTranslator::translateFunctionSignature(WASM::CoreTypeView v
 		// driver -- the only entry an embedder sees -- stores it into the frame,
 		// so both halves honour one contract.
 		params.push_back(jit_type_void_ptr);
-		jit_type_t frameReturn = jit_type_void;
-		if (view.funcResults().size() == 1)
-			frameReturn = translateCanonStorage(view.funcResults().front());
-		return jit_type_create_signature(jit_abi_cdecl, frameReturn,
+		// The canonical staging-frame signature returns void; every result is
+		// written into the caller's result block (docs/EXPORT_SIGNATURE.md §40).
+		// Keeping a scalar return here would make a callee's result appear in a
+		// register while a frame caller expects it in the frame.
+		return jit_type_create_signature(jit_abi_cdecl, jit_type_void,
 			params.data(), params.size(), 1);
 	}
 	for (const WASM::CanonStorageType& p : view.funcParams())

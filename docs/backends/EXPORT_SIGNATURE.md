@@ -449,6 +449,9 @@ a form nobody is obliged to see.
 **Recommendation:** adopt the adapter. Implement it as P2's entry/exit thunk, and
 retire 4b rather than finish it.
 
+**Update (2026-11-07): 4b was finished instead.** LibJIT frame calls, imports and
+multi-result work under the opt-in; the adapter remains optional, not a prerequisite.
+
 ## 17. Correction: the wrapper belongs on the HOST side (embedder grammar stays typed)
 
 Section 16 put the adapter between two conventions inside the backend. The project
@@ -541,8 +544,8 @@ proof -- better than a silent mismatch, but not yet a verified refusal.
 
 | Subtask | State |
 |---|---|
-| P0a -- LibJIT refuses calls in frame mode | **done**, gated by `[staging][libjit][abi][call]` |
-| P0a' -- instantiation failure leaves the runtime usable | **done**, gated by `WASMJIT_SAFETY_PROBES=1` |
+| P0a -- LibJIT refuses calls in frame mode | historical; the refusal was removed when step 4b landed (2026-11-07) |
+| P0a' -- rejected module leaves the runtime usable | **done**, gated by `WASMJIT_SAFETY_PROBES=1` |
 | P0b -- AsmJIT refuses modules with imports in frame mode | **guard landed**, gate test pending |
 
 ## 19. P0b gated, and a caching caveat the gate exposed
@@ -1276,6 +1279,10 @@ the frame path returning 6 through the cache).
 trailing result-buffer parameter, which the frame signature does not have, so a
 frame-mode multi-result function would read a parameter that does not exist.
 
+**Update (2026-11-07): closed.** The frame signature is now `void(ctx, frame)`, the
+epilogue writes the result tuple into the caller's block, and the module-level refusal
+is gone. The register form is still the default and the frame form is still opt-in.
+
 A module-level refusal was written exactly like P0a's -- a type scan in
 `translateTypes`, before any JIT context -- plus a gate that instantiates
 `asmjit_multi_result` on the register form (must succeed) and then under the opt-in
@@ -1425,6 +1432,11 @@ Reasoning, in order of weight:
 
 **Decision: defer, and keep the refusal as the contract.** If the opt-in is ever
 advertised, revisit; the refusal is what makes deferring safe.
+
+**Update (2026-11-07): implemented instead.** The canonical frame signature returns
+`void`, writes the result tuple into the caller's block, and supports calls, imports and
+multi-result. The opt-in policy is unchanged; frame tails are call+return, not
+constant-stack.
 
 ### Priority order for what remains
 
