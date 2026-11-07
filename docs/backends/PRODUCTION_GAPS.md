@@ -147,3 +147,51 @@ to the frame form at once, and each has to keep passing.
 
 Each step is green-or-revert on its own, which is the only way a 31-fixture migration
 stays reviewable.
+
+## 7. 2b for AsmJIT is a migration; the dead branch has exact coordinates
+
+### AsmJIT cannot simply "record instead of throw"
+
+`AsmjitModuleCompiler.cpp` contains **191** `throw std::runtime_error` sites, and two
+tests in `AsmjitBackendTests.cpp` assert on those throws (`REQUIRE_THROWS`). Converting
+refusals from thrown errors into recorded reasons would therefore:
+
+* change instantiation from "fails loudly" to "succeeds with a missing export" for
+every one of those shapes at once;
+* break the two tests that pin the current behaviour;
+* blur the distinction callers already rely on (`throw` = this module is unusable,
+  recorded reason = this *function* is unusable).
+
+So 2b for AsmJIT is a **semantic migration**, and it should be scoped deliberately:
+record reasons for the shapes that are *per-function* (unsupported signature, body
+shape) and keep throwing for module-level failures. That is a design decision first.
+
+LibJIT is the mirror image: its refusals are module-level `std::runtime_error`s raised
+before codegen, so "record" does not apply there either -- it needs *function-level*
+reasons, which means moving the checks from the module scan into the per-function
+compile.
+
+### The dead epilogue branch: exact coordinates
+
+```
+:1097  } else if (frameMode) {   <- LIVE  (comment: "steps 5c/5e")
+:1124  } else if (bufferedVectorResult) {
+:1141  } else if (frameMode) {   <- DEAD  (comment: "step 5c"), unreachable
+```
+
+Both branches open with the **identical text** `} else if (frameMode) {`, so a
+`old_text` replacement cannot target the second one -- and the leading `}` must be
+kept, because it closes the `bufferedVectorResult` branch. The deletion is therefore a
+**ranged** edit:
+
+* keep the `}` that opens line 1141;
+* delete from ` else if (frameMode) {` through the matching `}` at the end of that
+  branch's body;
+* the following `else` (the `ret(values.back())` fallback) then attaches to
+  `bufferedVectorResult`, which is the correct chain.
+
+Verified by the grep above; not applied here because the body is ~27 lines and a
+mis-matched brace would compile silently into a wrong branch chain -- the one failure
+mode this campaign has learned to refuse.
+
+Suite 21862 assertions in 776 cases, green.
