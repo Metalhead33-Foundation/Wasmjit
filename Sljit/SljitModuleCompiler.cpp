@@ -88,8 +88,23 @@ void ModuleCompiler::declareFunctions(WASM::ModuleInstance& instance, const WASM
 void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM::Module& module,
 		WASM::ModuleInstanceInternals& internals)
 {
-	(void)instance;
 	unsupportedFunctions_.clear();
+
+	// A module compiles entirely in one form: if any signature needs more argument
+	// slots than SLJIT's register form allows, the whole module uses the staging
+	// frame (docs/backends/STAGING_CALL_ABI.md). SLJIT's own ceiling is four
+	// argument entries -- `function_check_arguments`, sljitLir.c:924 -- because a
+	// declared argument must own a saved register.
+	bool frameMode = false;
+	for (const uint32_t typeIdx : module.internalFunctionTypeIndices) {
+		const WASM::FuncType type = module.funcTypeAt(typeIdx);
+		std::uint32_t slots = 1;
+		for (const auto& parameter : type.params)
+			slots += WASM::argSlotCount(WASM::valueKindOf(parameter.val.opcode));
+		if (slots > 4)
+			frameMode = true;
+	}
+	instance.setFrameCallAbi(frameMode);
 
 	for (std::size_t i = 0; i < module.functionBodies.size(); ++i) {
 		const uint32_t typeIdx = module.internalFunctionTypeIndices[i];
@@ -99,7 +114,8 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM
 		const uint32_t functionIndex =
 				static_cast<uint32_t>(module.importFunctions.size() + i);
 
-		OpcodeDispatcher dispatcher(module, funcType, module.functionBodies[i], functionIndex);
+		OpcodeDispatcher dispatcher(module, funcType, module.functionBodies[i], functionIndex,
+				frameMode);
 		void* entry = nullptr;
 		if (!dispatcher.compile(entry)) {
 			// The function stays uncallable; the core refuses it at the call

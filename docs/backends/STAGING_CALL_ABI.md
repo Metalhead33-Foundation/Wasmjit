@@ -182,3 +182,28 @@ above is uncertain; it is a mechanical edit with the sites named.
 
 
 
+
+**Step 3 -- SLJIT emits the frame form. Done 2026-11-06.**
+All eight sites landed as planned: constructor flag and `frameKinds_`, the ninth
+reserved slot holding the frame pointer, the two-argument list with `nextSlot = 3`
+and no ceiling, the prologue loading each parameter from
+`frame + frameArgumentOffset(...)` (pointer reloaded into `R2` per parameter), the
+result-block offset, the epilogue storing the result and returning void, the trap
+epilogue returning void, and the module-wide decision in `SljitModuleCompiler.cpp`.
+
+**The gate passes.** `[staging][sljit][v128][abi]` compiles the three-vector fixture
+through a 56-byte frame -- arguments at 0/16/32, the `i32` result at 48 -- and reads
+back **6**. SLJIT's four-argument ceiling no longer applies to a signature of any
+width, because a signature no longer occupies arguments.
+
+*What this changes about earlier work:* `kArgumentSlotCeiling` and the "cannot pass
+N argument slots" refusal are unreachable in frame mode. They stay, because they
+still guard the **register** form that narrow modules use -- which is also why every
+pre-existing pin kept passing unchanged: the mode is chosen per module, and only a
+module carrying a wide signature switches.
+
+*What went wrong:* two attempts died on shell/Python quoting before the third used
+the editor tool block by block, which applied cleanly first time. The lesson is
+recorded in the post-mortem: multi-site patches are written with the editor, never
+through a heredoc. The header's Doxygen gate then caught the new constructor
+parameter lacking a `\param`, fixed in place.

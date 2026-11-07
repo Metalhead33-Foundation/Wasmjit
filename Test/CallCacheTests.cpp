@@ -1,5 +1,7 @@
 #include <catch2/catch_all.hpp>
 
+#include <cstring>
+
 #include <cstdint>
 #include <filesystem>
 
@@ -278,24 +280,34 @@ std::filesystem::path(WASM_TEST_DIR) / "v128_boundary_order.wasm");
 	CHECK_FALSE(sljitInstance.v128ParameterIsAggregate());
 }
 
-TEST_CASE("a three-vector signature is refused, not crashed, by SLJIT",
-"[sljit][v128][abi][shapes]")
+TEST_CASE("SLJIT compiles a three-vector signature through the staging frame",
+		"[staging][sljit][v128][abi]")
 {
-	// A signature needing seven argument slots cannot be expressed by SLJIT, whose
-	// targets provide six saved registers. It must be *refused* -- the export keeps
-	// a null entry point -- rather than tripping SLJIT's own argument assertion,
-// which aborts the process and takes every other module down with it
-// (docs/ABI_REFACTOR_STUDY.md §35/§36).
-auto runtime = WASM::Runtime::create("sljit");
-REQUIRE(runtime != nullptr);
-auto module = runtime->loadFile(
-std::filesystem::path(WASM_TEST_DIR) / "v128_multi.wasm");
-WASM::RegistryImportResolver imports;
-WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+	// Three vector parameters are 48 argument bytes: two C arguments and a frame.
+	// This is the shape that used to trip SLJIT's four-argument ceiling, so passing
+	// it is the point of the whole staging-frame ABI
+	// (docs/backends/STAGING_CALL_ABI.md).
+	auto runtime = WASM::Runtime::create("sljit");
+	REQUIRE(runtime != nullptr);
+	auto module = runtime->loadFile(
+			std::filesystem::path(WASM_TEST_DIR) / "v128_multi.wasm");
+	WASM::RegistryImportResolver imports;
+	WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
 
-const std::optional<WASM::Callable> callable = instance.exportedFunction("three_lanes");
-REQUIRE(callable.has_value());
-CHECK(callable->fnPtr == nullptr);
+	CHECK(instance.frameCallAbi());
+	const std::optional<WASM::Callable> callable = instance.exportedFunction("three_lanes");
+	REQUIRE(callable.has_value());
+	REQUIRE(callable->fnPtr != nullptr);
+
+	// Arguments at 0, 16, 32; the i32 result at 48.
+	alignas(16) std::uint8_t frame[56] = {};
+	const std::uint32_t lanes[3][4] = {{1, 1, 1, 1}, {2, 2, 2, 2}, {3, 3, 3, 3}};
+	for (int i = 0; i < 3; ++i)
+		std::memcpy(frame + 16 * i, lanes[i], 16);
+	WASM::callCallableFrame(*callable, frame);
+	std::int32_t result = 0;
+	std::memcpy(&result, frame + 48, sizeof(result));
+	CHECK(result == 6);
 }
 
 TEST_CASE("the same three-vector signature compiles on LibJIT",

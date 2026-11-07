@@ -4,6 +4,8 @@
 #include "../WasmBase/WasmModuleInstance.hpp"
 #include "../WasmBase/WasmOpcodeDispatcher.hpp"
 
+#include "../WasmBase/WasmBackendAbi.hpp"
+
 #include <sljitLir.h>
 
 #include <cstddef>
@@ -61,9 +63,11 @@ public:
 	 * \param funcType Declared signature of the function.
 	 * \param body Decoded body whose opcode stream is walked.
 	 * \param functionIndex Module function index, used for the trap-site annotation.
+	 * \param frameCallAbi True to emit the staging-frame ABI (`void fn(VMContext*, void* frame)`) instead of the register form; set module-wide by the compiler (docs/backends/STAGING_CALL_ABI.md).
 	 */
 	OpcodeDispatcher(const WASM::Module& module, const WASM::FuncType& funcType,
-			const WASM::FunctionBody& body, std::uint32_t functionIndex);
+			const WASM::FunctionBody& body, std::uint32_t functionIndex,
+			bool frameCallAbi = false);
 
 	/*!
 	 * \brief Emits the function and hands back its executable entry point.
@@ -645,6 +649,17 @@ private:
 	//! (docs/ABI_REFACTOR_STUDY.md §25).
 	/** \brief Offset of the reserved slot holding the caller-supplied result buffer. \return Frame offset in bytes. */
 	sljit_sw resultBufferSlotOffset() const;
+	//! Offset of the reserved slot holding the caller's staging-frame pointer.
+	/** \brief Offset of the reserved slot holding the frame pointer. \return Frame offset in bytes. */
+	sljit_sw frameSlotOffset() const;
+	//! True when this module compiles to the staging-frame ABI
+	//! (`docs/backends/STAGING_CALL_ABI.md`): `void fn(VMContext*, void* frame)`,
+	//! with every parameter and result in the caller's frame.
+	bool frameAbi_ = false;
+	//! Parameter kinds in declaration order, for the frame offsets.
+	std::vector<WASM::ValueKind> frameKinds_;
+	//! Byte offset of the result block inside the frame, after the argument block.
+	sljit_sw frameResultOffset_ = 0;
 	sljit_sw payloadSlotOffset(std::size_t index = 0) const;
 	//! Offset of the two-word shuffle selector block.
 	sljit_sw selectorBlockOffset() const;
