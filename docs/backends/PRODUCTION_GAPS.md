@@ -599,3 +599,39 @@ used that machinery found it. The probe still works with **`nullptr`**, which is
 
 `externref` remains **✅ on all three backends**, measured with a null reference, and the
 probe now leaves no trace in shared state. Suite 21876 assertions in 779 cases, green.
+
+## 19. Probes 3 and 4: `funcref` and tail calls both work everywhere
+
+```
+PROBE funcref_probe  on libjit: keep=1 ref=1     PROBE tailcall_probe on libjit: tail(7)=7
+PROBE funcref_probe  on asmjit: keep=1 ref=1     PROBE tailcall_probe on asmjit: tail(7)=7
+PROBE funcref_probe  on sljit:  keep=1 ref=1     PROBE tailcall_probe on sljit:  tail(7)=7
+```
+
+Zero refusals across six combinations. Two matrix rows filled, and both were cheaper than
+feared:
+
+| Feature | SLJIT | AsmJIT | LibJIT |
+|---|---|---|---|
+| **`funcref` parameters and results** | ✅ | ✅ | ✅ |
+| **tail calls (`return_call`)** | ✅ (register form) | ✅ | ✅ |
+
+### The distinction the tail-call row needs
+
+The probe's signature is `(i32) -> i32`, so **every backend keeps the register form** and
+the tail call never touches the frame trampoline. SLJIT's documented refusal ("the
+trampoline carries no frame pointer") therefore does not appear here.
+
+So the correct reading is: **tail calls work in the register form on all three; the
+unprobed question is a tail call from a FRAME-FORM function.** That is a different
+fixture -- three `v128` parameters plus a `return_call` -- and it is now the only known
+hole in this row.
+
+### A fixture-validation lesson, worth one line
+
+The first `funcref` fixture failed to validate: *"undeclared function reference 0"*.
+`ref.func` requires the function to appear in a declarative element segment. That is a
+test-authoring rule, not a backend fact -- and it is worth recording because the failure
+looked like a backend refusal for a moment.
+
+Suite 21891 assertions in 780 cases, green.

@@ -663,3 +663,44 @@ std::fprintf(stderr, "round-trip %s\n", returned == token ? "OK" : "WRONG");
 CHECK(returned == token);
 }
 }
+
+// Item 4, probes 3 and 4: funcref and tail calls. A backend either refuses the module
+// or answers correctly -- never a silent wrong answer
+// (docs/backends/PRODUCTION_GAPS.md section 19).
+TEST_CASE("funcref and tail calls: refuse or answer correctly",
+"[staging][abi][refs][tail]")
+{
+for (const char* backend : {"libjit", "asmjit", "sljit"}) {
+for (const char* fixture : {"funcref_probe", "tailcall_probe"}) {
+std::fprintf(stderr, "PROBE %s on %s: ", fixture, backend);
+auto runtime = WASM::Runtime::create(backend);
+REQUIRE(runtime != nullptr);
+auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / (std::string(fixture) + ".wasm"));
+WASM::RegistryImportResolver imports;
+WASM::ModuleInstance* instance = nullptr;
+try {
+instance = &runtime->instantiate(*module, imports);
+} catch (const std::exception& error) {
+std::fprintf(stderr, "REFUSED: %s\n", error.what());
+continue;
+}
+if (std::string(fixture) == "tailcall_probe") {
+const std::optional<WASM::Callable> tail = instance->exportedFunction("tail");
+if (!tail.has_value()) {
+std::fprintf(stderr, "no export\n");
+continue;
+}
+const std::int32_t answer = WASM::callCallable<std::int32_t>(*tail, 7);
+std::fprintf(stderr, "tail(7)=%d\n", (int)answer);
+CHECK(answer == 7);
+} else {
+const std::optional<WASM::Callable> keep = instance->exportedFunction("keep");
+const std::optional<WASM::Callable> ref = instance->exportedFunction("ref");
+std::fprintf(stderr, "keep=%d ref=%d\n", (int)keep.has_value(), (int)ref.has_value());
+CHECK(keep.has_value());
+CHECK(ref.has_value());
+}
+}
+}
+}
