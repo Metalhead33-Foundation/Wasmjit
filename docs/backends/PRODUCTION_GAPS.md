@@ -402,3 +402,42 @@ like coverage.
   21866 to 21867 assertions with **one** test converted and **one** fixture replaced;
 * the opt-in remains meaningful for LibJIT, where it is the stated policy, and as an
   escape hatch for AsmJIT (step 3 can now remove it there).
+
+## 14. A step 3 attempted and deferred: the opt-in still has a job on AsmJIT
+
+Dropping the opt-in from AsmJIT's three sites (passing `false` to `moduleNeedsFrame`)
+produced, immediately:
+
+| Failure | Meaning |
+|---|---|
+| "AsmJIT refuses a frame-mode module that calls an import" (P0b) | the fixture has scalar signatures, so nothing needs the frame now, so the module never enters frame mode and the refusal is unreachable -- **the test stops testing the guard** |
+| "GC reclamation: a cycle still referenced from outside survives the trial" | collateral: the P0b failure leaves a half-instantiated module, and a later GC test faults |
+| segfault after the GC failure | same cascade |
+
+Reverted; suite back to 21867 assertions in 777 cases.
+
+### Why the opt-in is not redundant (yet)
+
+It is the only lever that can put a **narrow** module into frame mode, and two things
+depend on that:
+
+1. **P0b's guard is only reachable in frame mode** -- a module with imports and scalar
+   signatures is refused *because* it is frame-mode. Without the lever the guard is
+   dead code with a passing test, which is the exact failure mode section 13 warns
+   about ("a safety test that flips looks like coverage").
+2. **The frame-mode tests for imports, multi-result and vectors all set it**, and one
+   of them (imports) needs it because its shape is deliberately narrow.
+
+### What step 3 actually requires
+
+Either
+
+* make the P0b fixture **wide** (add a `v128` parameter next to the import), so the
+  guard is reachable through the measurement instead of the lever; or
+* accept that the opt-in is part of AsmJIT's contract as a *testing and escape* lever,
+  and strike step 3 from the plan.
+
+The first is a two-line fixture change and keeps the option open; the second is
+honest if nobody wants per-process control. **Neither is urgent** -- the reported
+defect (a per-signature property decided by a global switch) is already fixed by
+option 1.
