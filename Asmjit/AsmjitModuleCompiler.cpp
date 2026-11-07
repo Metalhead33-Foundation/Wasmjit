@@ -1703,8 +1703,10 @@ protected:
 			emitUnreachablePlaceholders();
 			return;
 		}
-		if (!frameMode && module.hasTailCalls()
-				&& WASM::tailCallSlotsSupported(calledType)) {
+		const bool tailSupported = frameMode
+? WASM::tailCallFrameSupported(calledType)
+: WASM::tailCallSlotsSupported(calledType);
+if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 			// Cross-function trampoline: the driver wrapping this function observes
 			// the pending state and re-enters the target through its type thunk.
 			std::vector<asmjit::x86::Gp> tailArgs(calledType.params.size());
@@ -1770,7 +1772,7 @@ protected:
 			return;
 		}
 		validateTailCallType(typeIndex);
-		if (!frameMode && module.hasTailCalls()
+		if (!frameMode && WASM::tailCallTrampolinesEligible(module, false)
 				&& WASM::tailCallSlotsSupported(calledType)) {
 			const ResolvedIndirect resolved = resolveIndirectTarget(typeIndex, tableIndex);
 			auto thunk = compiler.new_gp_ptr("tailThunk");
@@ -7196,10 +7198,11 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance,
 			internals.internalCallables[i].fnPtr = functionRecords[i]->entry;
 			internals.compiledFunctions[i] = functionRecords[i]->entry;
 		}
-		if (!TypeTranslator::moduleNeedsFrame(module, WASM::frameCallAbiOptIn())
-				&& module.hasTailCalls()
-				&& !WASM::installTailCallTrampolines(module, internals))
-			throw std::runtime_error("AsmJit could not install tail-call trampolines");
+		if (WASM::tailCallTrampolinesEligible(module,
+TypeTranslator::moduleNeedsFrame(module, WASM::frameCallAbiOptIn()))
+&& !WASM::installTailCallTrampolines(module, internals,
+TypeTranslator::moduleNeedsFrame(module, WASM::frameCallAbiOptIn())))
+throw std::runtime_error("AsmJit could not install tail-call trampolines");
 		// FuncNodes belong to the temporary CodeHolder. Runtime handles are the
 		// installed entry pointers above, so discard all compiler-side records.
 		functionRecords.clear();

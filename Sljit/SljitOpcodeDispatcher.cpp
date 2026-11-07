@@ -5,6 +5,7 @@
 #include "SljitModuleCompiler.hpp"
 
 #include "../WasmBase/WasmBackendAbi.hpp"
+#include "../WasmBase/WasmTailTrampoline.hpp"
 #include "../WasmBase/WasmExn.hpp"
 #include "../WasmBase/wasm_atomic.hpp"
 #include "../WasmBase/WasmMemory.hpp"
@@ -1220,7 +1221,7 @@ bool OpcodeDispatcher::beginFunction()
 	// Cross-function trampolines are register-form only: the driver's host
 	// signature is the function signature, and the frame ABI needs a frame
 	// pointer that TailCallState does not carry.
-	tailTrampoline_ = module_.hasTailCalls() && !frameAbi_;
+	tailTrampoline_ = WASM::tailCallTrampolinesEligible(module_, frameAbi_);
 	compiler_ = sljit_create_compiler(nullptr);
 	if (compiler_ == nullptr) {
 		unsupportedReason_ = "SLJIT could not create a compiler";
@@ -2788,7 +2789,10 @@ void OpcodeDispatcher::dispatchReturnCall(WASM::FuncIdx arg)
 				? module_.importFunctions[arg].typeIdx
 				: module_.internalFunctionTypeIndices[arg - importedCount];
 		const WASM::FuncType calleeType = module_.funcTypeAt(typeIndex);
-		if (tailTrampoline_ && WASM::tailCallSlotsSupported(calleeType)) {
+		const bool supported = frameAbi_
+				? WASM::tailCallFrameSupported(calleeType)
+				: WASM::tailCallSlotsSupported(calleeType);
+		if (tailTrampoline_ && supported) {
 			emitTailCallState(arg, calleeType);
 			return;
 		}
@@ -2881,7 +2885,10 @@ void OpcodeDispatcher::emitTailCallState(WASM::FuncIdx arg, const WASM::FuncType
 		}
 		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_MEM1(SLJIT_R0),
 				static_cast<sljit_sw>(offsetof(WASM::TailCallState, pending)), SLJIT_IMM, 1));
-		emitTailCallDummyReturn();
+		if (frameAbi_)
+			emit(sljit_emit_return_void(compiler_));
+		else
+			emitTailCallDummyReturn();
 	}
 
 	stackWidths_.resize(base);

@@ -129,6 +129,12 @@ struct TailCallState {
 	//! every link in a tail chain shares the caller's result tuple, so the
 	//! driver publishes its own out-buffer pointer here once.
 	void*     resultBuffer = nullptr;
+	//! Scratch staging frame for a frame-form tail chain. The thunk lays the
+	//! callee's arguments out with the canonical byte offsets and the driver
+	//! copies the final result block back to the original caller's frame.
+	alignas(16) std::uint8_t frame[kTailCallArgSlots * 2 * 16] = {};
+	//! Byte offset of the result block inside `frame`, set by the last thunk.
+	std::uint32_t frameResultOffset = 0;
 };
 
 //! True when `ft` fits the trampoline's uniform 16-byte slot representation.
@@ -141,6 +147,24 @@ struct TailCallState {
 inline bool tailCallSlotsSupported(const FuncType& ft)
 {
 	if (ft.params.size() > kTailCallArgSlots)
+		return false;
+	const auto hasVector = [](const std::vector<StorageType>& types) {
+		for (const StorageType& type : types) {
+			if (!type.isPacked && type.val.opcode == ValueTypeCode::V128)
+				return true;
+		}
+		return false;
+	};
+	return !hasVector(ft.params) && !hasVector(ft.results);
+}
+
+//! True when `ft` fits the frame-form tail-call slot representation.
+//! The frame thunk copies each value into a staging frame, so a `v128` (16
+//! bytes) is representable; only the uniform slot count limits it.
+/** \brief Tests whether a signature fits the frame tail-call slot buffer. \param ft Function signature to inspect. \return false when either list exceeds the slot limit. */
+inline bool tailCallFrameSupported(const FuncType& ft)
+{
+	if (ft.params.size() > kTailCallArgSlots || ft.results.size() > kTailCallArgSlots)
 		return false;
 	const auto hasVector = [](const std::vector<StorageType>& types) {
 		for (const StorageType& type : types) {

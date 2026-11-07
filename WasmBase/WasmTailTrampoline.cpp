@@ -1,6 +1,7 @@
 #include "WasmTailTrampoline.hpp"
 
 #include "WasmModuleInstance.hpp"
+#include "WasmBackendAbi.hpp"
 #include "WasmTrap.hpp"
 #include "WasmValue.hpp"
 
@@ -50,6 +51,12 @@ struct CallShape {
 	bool single = false;
 	bool multi = false;
 	std::size_t resultSize = 0;
+	//! Staging-frame form: parameters and results live at canonical byte offsets.
+	bool frame = false;
+	std::vector<ValueKind> paramKinds;
+	std::vector<ValueKind> resultKinds;
+	std::uint32_t frameResultOffset = 0;
+	std::uint32_t resultBytes = 0;
 };
 
 //! Builds the host call shape of `ft`; false when it is outside the slot model.
@@ -76,6 +83,22 @@ bool buildCallShape(const FuncType& ft, CallShape& shape)
 	}
 	return ffi_prep_cif(&shape.cif, FFI_DEFAULT_ABI,
 			static_cast<unsigned>(shape.argTypes.size()), resultType,
+			shape.argTypes.data()) == FFI_OK;
+}
+
+//! Builds the frame-form host shape: `(VMContext*, void* frame) -> void`.
+bool buildFrameShape(const FuncType& ft, CallShape& shape)
+{
+	shape.frame = true;
+	shape.paramCount = ft.params.size();
+	shape.argTypes = {&ffi_type_pointer, &ffi_type_pointer};
+	for (const StorageType& param : ft.params)
+		shape.paramKinds.push_back(valueKindOf(param.val.opcode));
+	for (const StorageType& result : ft.results)
+		shape.resultKinds.push_back(valueKindOf(result.val.opcode));
+	shape.frameResultOffset = frameArgumentsBytes(shape.paramKinds);
+	shape.resultBytes = frameResultsBytes(shape.resultKinds);
+	return ffi_prep_cif(&shape.cif, FFI_DEFAULT_ABI, 2, &ffi_type_void,
 			shape.argTypes.data()) == FFI_OK;
 }
 
@@ -132,6 +155,19 @@ void thunkHandler(ffi_cif*, void*, void** args, void* userData)
 	void* buffer = *static_cast<void**>(args[4]);
 	if (fn == nullptr)
 		return;
+	if (thunk->shape.frame) {
+		TailCallState* state = currentTailCallState();
+		for (std::size_t i = 0; i < thunk->shape.paramCount; ++i)
+			std::memcpy(state->frame + frameArgumentOffset(thunk->shape.paramKinds,
+					static_cast<std::uint32_t>(i)),
+					reinterpret_cast<const char*>(slots) + i * kTailCallSlotBytes,
+					frameValueBytes(thunk->shape.paramKinds[i]));
+		state->frameResultOffset = thunk->shape.frameResultOffset;
+		void* frame = state->frame;
+		void* frameArgs[2] = {&ctx, &frame};
+		ffi_call(&thunk->shape.cif, FFI_FN(fn), nullptr, frameArgs);
+		return;
+	}
 	std::vector<void*> callArgs(thunk->shape.argTypes.size(), nullptr);
 	callArgs[0] = &ctx;
 	for (std::size_t i = 0; i < thunk->shape.paramCount; ++i)
@@ -149,12 +185,14 @@ void driverHandler(ffi_cif*, void* ret, void** args, void* userData)
 	FunctionDriver* driver = static_cast<FunctionDriver*>(userData);
 	TailCallState* state = currentTailCallState();
 	TrapSlot* trap = wasm_trap_slot();
+	void* originalFrame = driver->shape.frame
+			? *static_cast<void**>(args[1]) : nullptr;
 	state->pending = 0;
-	state->resultBuffer = driver->shape.multi
+	state->resultBuffer = driver->shape.multi && !driver->shape.frame
 			? *static_cast<void**>(args[1 + driver->shape.paramCount])
 			: nullptr;
 	ffi_call(&driver->shape.cif, FFI_FN(driver->raw),
-			driver->shape.single ? ret : nullptr, args);
+			driver->shape.single && !driver->shape.frame ? ret : nullptr, args);
 	bool dispatched = false;
 	while (state->pending != 0 && trap->pending == 0) {
 		Callable* target = state->target;
@@ -176,31 +214,59 @@ void driverHandler(ffi_cif*, void* ret, void** args, void* userData)
 		ffi_call(driver->thunkCif, FFI_FN(target->tailEntry), nullptr, thunkArgs);
 		dispatched = true;
 	}
-	if (dispatched && driver->shape.single && trap->pending == 0)
-		std::memcpy(ret, state->results, driver->shape.resultSize);
+	if (dispatched && trap->pending == 0) {
+		if (driver->shape.frame && driver->shape.resultBytes != 0)
+			std::memcpy(static_cast<char*>(originalFrame) + driver->shape.frameResultOffset,
+					state->frame + state->frameResultOffset, driver->shape.resultBytes);
+		else if (driver->shape.single)
+			std::memcpy(ret, state->results, driver->shape.resultSize);
+	}
 }
 
 } // namespace
 
 
-bool installTailCallTrampolines(const Module& module, ModuleInstanceInternals& internals)
+bool tailCallTrampolinesEligible(const Module& module, bool frameAbi)
 {
 	if (!module.hasTailCalls())
+		return false;
+	const auto supported = [frameAbi](const FuncType& ft) {
+		return frameAbi ? tailCallFrameSupported(ft) : tailCallSlotsSupported(ft);
+	};
+	for (uint32_t typeIndex : module.internalFunctionTypeIndices)
+		if (!supported(module.funcTypeAt(typeIndex)))
+			return false;
+	for (const ImportFunction& import : module.importFunctions)
+		if (!supported(module.funcTypeAt(import.typeIdx)))
+			return false;
+	return true;
+}
+
+bool installTailCallTrampolines(const Module& module, ModuleInstanceInternals& internals,
+		bool frameAbi)
+{
+	if (!tailCallTrampolinesEligible(module, frameAbi))
 		return false;
 	if (internals.internalCallables.size() != module.internalFunctionTypeIndices.size())
 		return false;
 
 	auto table = std::make_unique<TrampolineTable>();
+	const auto supported = [frameAbi](const FuncType& ft) {
+		return frameAbi ? tailCallFrameSupported(ft) : tailCallSlotsSupported(ft);
+	};
+	const auto build = [frameAbi](const FuncType& ft, CallShape& shape) {
+		return frameAbi ? buildFrameShape(ft, shape) : buildCallShape(ft, shape);
+	};
 	const auto thunkFor = [&](uint32_t typeIndex) -> TypeThunk* {
 		if (typeIndex >= table->thunks.size())
 			table->thunks.resize(typeIndex + 1);
 		if (table->thunks[typeIndex])
 			return table->thunks[typeIndex].get();
 		const FuncType ft = module.funcTypeAt(typeIndex);
-		if (!tailCallSlotsSupported(ft))
+		if (!supported(ft))
 			return nullptr;
 		auto thunk = std::make_unique<TypeThunk>();
-		if (!buildCallShape(ft, thunk->shape))
+		if (!build(ft, thunk->shape))
 			return nullptr;
 		void* code = nullptr;
 		thunk->closure = static_cast<ffi_closure*>(ffi_closure_alloc(sizeof(ffi_closure), &code));
@@ -218,7 +284,7 @@ bool installTailCallTrampolines(const Module& module, ModuleInstanceInternals& i
 	for (uint32_t i = 0; i < module.internalFunctionTypeIndices.size(); ++i) {
 		const uint32_t typeIndex = module.internalFunctionTypeIndices[i];
 		const FuncType ft = module.funcTypeAt(typeIndex);
-		if (!tailCallSlotsSupported(ft))
+		if (!supported(ft))
 			return false;
 		TypeThunk* thunk = thunkFor(typeIndex);
 		if (thunk == nullptr || internals.internalCallables[i].fnPtr == nullptr)
@@ -226,7 +292,7 @@ bool installTailCallTrampolines(const Module& module, ModuleInstanceInternals& i
 		auto driver = std::make_unique<FunctionDriver>();
 		driver->raw = internals.internalCallables[i].fnPtr;
 		driver->thunkCif = &table->thunkCif;
-		if (!buildCallShape(ft, driver->shape))
+		if (!build(ft, driver->shape))
 			return false;
 		void* code = nullptr;
 		driver->closure = static_cast<ffi_closure*>(ffi_closure_alloc(sizeof(ffi_closure), &code));
@@ -240,7 +306,7 @@ bool installTailCallTrampolines(const Module& module, ModuleInstanceInternals& i
 
 	for (uint32_t i = 0; i < module.importFunctions.size(); ++i) {
 		const FuncType ft = module.funcTypeAt(module.importFunctions[i].typeIdx);
-		if (!tailCallSlotsSupported(ft))
+		if (!supported(ft))
 			return false;
 		if (thunkFor(module.importFunctions[i].typeIdx) == nullptr)
 			return false;

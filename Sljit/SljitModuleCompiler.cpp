@@ -135,8 +135,8 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM
 	// the native stack. A module without one is left exactly as compiled; if the
 	// table cannot be installed, refuse the module rather than emit state-writing
 	// tail calls whose driver does not exist.
-	if (module.hasTailCalls() && !frameMode
-			&& !WASM::installTailCallTrampolines(module, internals))
+	if (WASM::tailCallTrampolinesEligible(module, frameMode)
+			&& !WASM::installTailCallTrampolines(module, internals, frameMode))
 		throw std::runtime_error("the SLJIT backend could not install tail-call trampolines");
 }
 

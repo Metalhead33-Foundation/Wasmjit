@@ -8,7 +8,7 @@ actually happened, the root cause of every surprise, and what is still open.
 
 | # | Item | Status | Evidence / blocker |
 |---|---|---|---|
-| 1 | constant-stack tail calls | **partial** | direct self, direct mutual and indirect mutual chains go through the libffi driver (`TAILMUTUAL`/`TAILINDIRECT` 1,000,000 links, `run()=1`) on all three; ref and frame-form chains still call + return |
+| 1 | constant-stack tail calls | **partial** | self, direct, indirect and scalar frame-form chains go through the libffi driver (`TAILSELF`/`TAILMUTUAL`/`TAILINDIRECT`/`TAILFRAME`, 1,000,000 links, `run()=1`) on all three; `ref` is not lowered and v128 frame chains still call + return |
 | 2 | shared reference/table atomics | **blocked** | numeric family done; shared-ref fixtures need shared composites, and table atomics need `table.get`/`table.set`; SLJIT's four-argument ceiling needs a record for `cmpxchg` |
 | 3 | AsmJIT block parameters | **done** | `BLOCKPARAM` block=42 if=11/12 loop=0 on all three |
 | 4 | bulk memory on memory64 | **done** | `MEM64BULK` copy=97 fill=65 init=97 on all three |
@@ -222,14 +222,51 @@ scripted edit also turned a `//! \return` in a `.cpp` comment into a carriage
 return, splitting the line (`eturn ...`); a plain prose comment avoids the
 escape.
 
+### Frame-form targets (same session)
+
+`TailCallState` now owns a 512-byte, 16-byte-aligned staging frame and the byte
+offset of the last callee's result block. A frame driver is still
+`(ctx, frame) -> void`; the thunk for a frame type lays the arguments out with
+`frameArgumentOffset`/`frameValueBytes`, records `frameResultOffset`, and calls
+the raw entry with `(ctx, TailCallState::frame)`. After the chain the driver
+copies `resultBytes` from that result block back to the **original** caller's
+frame at its own result offset. The backends' pending path in frame mode stores
+the arguments in the uniform slots and returns `void`.
+
+Evidence (`tailcall_frame_mutual_probe.wat`, four scalar parameters force the
+frame ABI, 1,000,000 links):
+
+```
+TAILFRAME libjit: register even0=1 run()=1
+TAILFRAME asmjit: even0=1 run()=1
+TAILFRAME sljit: even0=1 run()=1
+```
+
+LibJIT keeps four scalar parameters in its register form, so that branch uses its
+native trampoline; the frame driver is the SLJIT/AsmJIT path. The test asserts
+both shapes.
+
+### The eligibility bug this exposed
+
+The first frame build made installation fatal when *any* type was outside the
+model, but the emitters had already selected the pending path per callee. A frame
+module with a `v128` (`tail_wide`) therefore refused installation while its body
+still wrote `TailCallState`; the resulting mismatch crashed later tests and
+`Runtime::unload`. `tailCallTrampolinesEligible(module, frameAbi)` is now a
+**module-wide** decision computed by both the emitter and the installer, so a
+module with one unsupported type keeps call + return for every tail call. This
+was the direct lesson of the earlier "install failure must be fatal" fix: fatal
+is only correct when eligibility is decided once, before emission.
+
 ### What is still open
 
 * `return_call_ref` is not lowered by SLJIT or AsmJIT at all (neither has a
   `call_ref` lowering), so there is no backend path to extend yet. When one is
   added, the runtime `tailEntry` check above is the pattern.
-* Cross-function chains in **frame form** (a module with a `v128` or more than
-  three parameters) still use call + return. The driver needs a frame pointer (or
-  a packed frame) in `TailCallState`.
+* **v128 frame-form chains** still use call + return. `tailCallFrameSupported`
+  excludes `v128` because AsmJIT's register model keeps a vector as a buffer
+  pointer, so the slot-to-frame copy would need a separate 16-byte transfer. The
+  existing `tail_wide` probe returns the right value through the fallback.
 
 ## Item 2 — shared reference/table atomics
 
