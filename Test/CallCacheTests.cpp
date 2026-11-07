@@ -1097,3 +1097,66 @@ std::fprintf(stderr, "REFUSED: %s\n", error.what());
 }
 }
 }
+
+// Item 4, probes 19 and 20: reference-element arrays, and tags across a module
+// boundary (docs/backends/CAPABILITY_PROBES.md section 13).
+TEST_CASE("reference arrays and tag boundaries: refuse or answer correctly",
+"[staging][abi][gc][exceptions]")
+{
+for (const char* backend : {"libjit", "asmjit", "sljit"}) {
+{
+if (std::string(backend) != "libjit") { // D-2: LibJIT's GC array path may abort
+std::fprintf(stderr, "REFARR %s: ", backend);
+auto runtime = WASM::Runtime::create(backend);
+REQUIRE(runtime != nullptr);
+auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "gc_ref_array_probe.wasm");
+WASM::RegistryImportResolver imports;
+try {
+WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+const std::optional<WASM::Callable> call = instance.exportedFunction("roundtrip");
+if (!call.has_value()) {
+std::fprintf(stderr, "no export\n");
+} else {
+const void* value = WASM::callCallable<const void*>(*call, nullptr);
+std::fprintf(stderr, "roundtrip(null)=%s\n", value == nullptr ? "null" : "non-null");
+// Measured: SLJIT round-trips a reference through an ARRAY correctly, so D-3 is
+// specific to STRUCT fields and must not be assumed here
+// (docs/backends/CAPABILITY_PROBES.md section 13).
+CHECK(value == nullptr);
+}
+} catch (const std::exception& error) {
+std::fprintf(stderr, "REFUSED: %s\n", error.what());
+}
+}
+}
+{
+std::fprintf(stderr, "TAGEXPORT %s: ", backend);
+auto runtime = WASM::Runtime::create(backend);
+REQUIRE(runtime != nullptr);
+auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "tag_export_probe.wasm");
+WASM::RegistryImportResolver imports;
+try {
+WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+std::fprintf(stderr, "exported=%d\n", (int)instance.exportedFunction("payload").has_value());
+} catch (const std::exception& error) {
+std::fprintf(stderr, "REFUSED: %s\n", error.what());
+}
+}
+{
+std::fprintf(stderr, "TAGIMPORT %s: ", backend);
+auto runtime = WASM::Runtime::create(backend);
+REQUIRE(runtime != nullptr);
+auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "tag_import_probe.wasm");
+WASM::RegistryImportResolver imports;
+try {
+runtime->instantiate(*module, imports);
+std::fprintf(stderr, "instantiated WITHOUT the tag registered\n");
+} catch (const std::exception& error) {
+std::fprintf(stderr, "REFUSED: %s\n", error.what());
+}
+}
+}
+}

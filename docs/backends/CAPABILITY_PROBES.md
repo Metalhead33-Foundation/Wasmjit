@@ -343,3 +343,48 @@ refusal is consistent across the atomics family rather than an accident of one o
 
 Everything else in the matrix now has a measured answer, a refusal with a reason, or an
 explicit `skipped`/`unknown` label.
+
+## 13. Probes 19 and 20: reference arrays work (including SLJIT), tag boundaries resolve correctly
+
+```
+REFARR    asmjit: roundtrip(null)=null      TAGEXPORT libjit/asmjit/sljit: exported=1
+REFARR    sljit:  roundtrip(null)=null      TAGIMPORT libjit/asmjit/sljit: REFUSED: Unresolved import: provider.e
+```
+
+| # | Probe | SLJIT | AsmJIT | LibJIT |
+|---|---|---|---|---|
+| 19 | array of `externref` elements | ✅ null | ✅ null | skipped (D-2) |
+| 20a | a module **exports** a tag | ✅ | ✅ | ✅ |
+| 20b | a module **imports** a tag (unregistered) | ⛔ unresolved | ⛔ unresolved | ⛔ unresolved |
+
+### D-3 is narrower than it looked, and this probe says so
+
+My first version of probe 19 **assumed** the struct-field defect would repeat for arrays and
+asserted SLJIT's *wrong* behaviour. It returned **null** -- correctly -- so the assumption
+was wrong and the assertion was changed to require the correct answer.
+
+> **D-3 is specific to STRUCT fields.** A reference round-trips correctly through an
+> *array* on SLJIT. The defect is in one lowering path, not in SLJIT's reference handling
+> as a whole.
+
+That is a materially better fix target than "SLJIT mangles references", and it was one
+assertion away from being recorded wrongly.
+
+### Probe 20: the tag boundary is *resolution*, not lowering
+
+All three backends accept a module that **exports** a tag, and all three refuse a module
+that **imports** one when no resolver provides it -- with the same message,
+*"Unresolved import: provider.e"*. So the tag's `ExternalKind` is understood by the
+boundary machinery on every backend; what is unproven is whether a tag actually thrown in
+one instance is caught in another, which needs a registered provider and two live
+instances. That is a larger fixture than the sweep budgeted for, and it is recorded as the
+remaining open question rather than half-tested.
+
+## 14. Sweep closed
+
+Nineteen probes over thirteen sections. Every matrix cell now carries one of: measured ✅,
+refused ⛔ with a reason, `skipped` (with why), or `unknown` (with what would resolve it).
+
+The one area left genuinely open is **a tag thrown in one instance and caught in another**,
+which needs a two-instance fixture. Everything else in `PRODUCTION_GAPS.md` §24's ledger
+stands as measured.
