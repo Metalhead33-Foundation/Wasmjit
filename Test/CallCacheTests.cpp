@@ -1043,3 +1043,57 @@ std::fprintf(stderr, "REFUSED: %s\n", error.what());
 }
 }
 }
+
+// Item 4, probes 17 and 18: array.get via new_fixed, and atomics beyond one RMW
+// (docs/backends/CAPABILITY_PROBES.md section 11).
+TEST_CASE("array.get and atomic store/load: refuse or answer correctly",
+"[staging][abi][gc][atomics]")
+{
+for (const char* backend : {"libjit", "asmjit", "sljit"}) {
+{
+// LibJIT is skipped: D-2 shows its GC array path can ABORT, which cannot be caught.
+if (std::string(backend) != "libjit") {
+std::fprintf(stderr, "ARRGET %s: ", backend);
+auto runtime = WASM::Runtime::create(backend);
+REQUIRE(runtime != nullptr);
+auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "gc_array_get_probe.wasm");
+WASM::RegistryImportResolver imports;
+try {
+WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+const std::optional<WASM::Callable> probe = instance.exportedFunction("probe");
+if (!probe.has_value()) {
+std::fprintf(stderr, "no export\n");
+} else {
+const std::int32_t value = WASM::callCallable<std::int32_t>(*probe);
+std::fprintf(stderr, "probe()=%d\n", (int)value);
+CHECK(value == 22);
+}
+} catch (const std::exception& error) {
+std::fprintf(stderr, "REFUSED: %s\n", error.what());
+}
+}
+}
+{
+std::fprintf(stderr, "THREADS %s: ", backend);
+auto runtime = WASM::Runtime::create(backend);
+REQUIRE(runtime != nullptr);
+auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "threads_probe.wasm");
+WASM::RegistryImportResolver imports;
+try {
+WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+const std::optional<WASM::Callable> probe = instance.exportedFunction("store_load");
+if (!probe.has_value()) {
+std::fprintf(stderr, "no export\n");
+} else {
+const std::int32_t value = WASM::callCallable<std::int32_t>(*probe);
+std::fprintf(stderr, "store_load()=%d\n", (int)value);
+CHECK(value == 123);
+}
+} catch (const std::exception& error) {
+std::fprintf(stderr, "REFUSED: %s\n", error.what());
+}
+}
+}
+}

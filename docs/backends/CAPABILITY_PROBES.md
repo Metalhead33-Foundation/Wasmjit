@@ -304,3 +304,42 @@ versions of the probe fixture, the honest conclusion is:
 `popValueRaw`, and the probe skips LibJIT so the suite survives. D-2 still needs a
 minimal reproduction that the spec tests do not already cover -- which is a task for the
 fix session, not for probing.
+
+## 11. Probes 17 and 18: `array.get` works on both non-LibJIT backends; threads stay LibJIT-only
+
+```
+ARRGET  asmjit: probe()=22        THREADS libjit:  store_load()=123
+ARRGET  sljit:  probe()=22        THREADS asmjit:  REFUSED: dispatchI32AtomicStore
+                                  THREADS sljit:   REFUSED: does not lower dispatchI32AtomicStore
+```
+
+| # | Probe | SLJIT | AsmJIT | LibJIT |
+|---|---|---|---|---|
+| 17 | `array.new_fixed` + `array.get` | ✅ 22 | ✅ 22 | **skipped** (D-2) |
+| 18 | atomic store + load on shared memory | ⛔ refuses | ⛔ refuses | ✅ 123 |
+
+### Probe 17 closes Q-1 in the direction the spec tests suggested
+
+`array.new_fixed` + `array.get` returns **22** on both SLJIT and AsmJIT. Combined with the
+passing `spec: array*` tests and my two invalid fixtures, the conclusion is settled: the
+earlier "out of bounds array access" was **my fixture**, not the backends.
+
+LibJIT is **skipped, not passed**, and labelled so: D-2 makes its GC array path capable of
+aborting the process, and an abort cannot be caught. The LibJIT cell is therefore
+*unknown* -- the only honest label.
+
+### Probe 18 keeps threads LibJIT-only, now with two instructions of evidence
+
+A single `atomic.rmw.add` (probe 7) and a `store`/`load` pair both work on LibJIT and are
+both refused by SLJIT and AsmJIT, with messages naming the missing dispatch. So the
+refusal is consistent across the atomics family rather than an accident of one opcode.
+
+## 12. The sweep is complete except for two areas
+
+| Area | Why it is still open |
+|---|---|
+| GC arrays with **reference** elements | only `i32` element arrays probed; a `(array (mut externref))` is a different lowering path |
+| exception payloads **across instances** | the handler probe is single-module; a tag thrown in one instance and caught in another exercises the instance-boundary rule |
+
+Everything else in the matrix now has a measured answer, a refusal with a reason, or an
+explicit `skipped`/`unknown` label.
