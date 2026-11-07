@@ -9,7 +9,7 @@ actually happened, the root cause of every surprise, and what is still open.
 | # | Item | Status | Evidence / blocker |
 |---|---|---|---|
 | 1 | constant-stack tail calls | **done for every lowered form** | self, direct, indirect and frame (scalar and v128) chains go through the libffi driver (`TAILSELF`/`TAILMUTUAL`/`TAILINDIRECT`/`TAILFRAME`/`TAILV128FRAME`, 1,000,000 links, `run()=1`); `ref` is not lowered by either backend |
-| 2 | shared reference/table atomics | **done except unprobed global refs** | struct/array reference slots and shared-table atomics run on all three; global reference atomics have backend branches but no valid upstream fixture |
+| 2 | shared reference/table atomics | **done** | numeric, struct/array reference and shared-table atomics run on all three, and so do global `eqref` atomics (`SHAREDREF`, `TABLEATOMIC`, `GLOBALREF`) |
 | 3 | AsmJIT block parameters | **done** | `BLOCKPARAM` block=42 if=11/12 loop=0 on all three |
 | 4 | bulk memory on memory64 | **done** | `MEM64BULK` copy=97 fill=65 init=97 on all three |
 
@@ -373,14 +373,24 @@ TABLEATOMIC sljit: run()=1
 (element) with set/xchg/cmpxchg/get; `table_atomic_probe.wat` covers shared
 anyref/eqref tables with set/xchg/cmpxchg/get. Both include a null round-trip.
 
+### Global reference atomics (same session)
+
+The earlier "no valid fixture" conclusion was too narrow: the proposal accepts
+an **unshared mutable `eqref`/`anyref`** global. `(global $g (mut eqref)
+(ref.null eq))` plus set/xchg/cmpxchg/get validates, and all three backends run it
+through the reference barrier.
+
+```
+GLOBALREF libjit: run()=1
+GLOBALREF asmjit: run()=1
+GLOBALREF sljit: run()=1
+```
+
 ### What is still open
 
-* **Global reference atomics** have backend branches but no valid upstream
-  fixture: the pinned tool rejects the shared-global shapes tried here (and
-  `global.atomic` on a non-shared global is invalid). They are implemented but
-  unprobed, so no claim is made.
-* **Shared v128 slots** are outside the atomic proposal surface and remain
-  refused with the numeric width check.
+No reference/table atomic shape in the tested proposal surface is left. Shared
+`v128` slots are outside the atomic proposal and remain refused by the numeric
+width check.
 
 ### Lessons
 

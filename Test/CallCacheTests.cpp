@@ -1869,3 +1869,36 @@ CHECK(false);
 }
 }
 }
+
+// Global reference atomics: set/xchg/cmpxchg/get through the barrier.
+TEST_CASE("shared atomics: global reference slot round-trip",
+"[staging][atomics][ref][global]")
+{
+for (const char* backend : {"libjit", "asmjit", "sljit"}) {
+std::fprintf(stderr, "GLOBALREF %s: ", backend);
+auto runtime = WASM::Runtime::create(backend);
+REQUIRE(runtime != nullptr);
+auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "global_ref_atomic_probe.wasm");
+WASM::RegistryImportResolver imports;
+WASM::ModuleInstance* instance = nullptr;
+try {
+instance = &runtime->instantiate(*module, imports);
+} catch (const std::exception& error) {
+std::fprintf(stderr, "REFUSED: %s\n", error.what());
+CHECK(false);
+continue;
+}
+const auto run = instance->exportedFunction("run");
+REQUIRE(run.has_value());
+try {
+const std::int32_t value = WASM::callCallable<std::int32_t>(*run,
+static_cast<void*>(nullptr));
+std::fprintf(stderr, "run()=%d\n", (int)value);
+CHECK(value == 1);
+} catch (const std::exception& error) {
+std::fprintf(stderr, "FAILED: %s\n", error.what());
+CHECK(false);
+}
+}
+}

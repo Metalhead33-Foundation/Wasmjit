@@ -959,7 +959,7 @@ in both passes.
 
 ## 27. V-1 fixed, multi-value catches and numeric shared atomics closed (2026-11-07)
 
-**Snapshot (2026-11-07, `backendsMh33`):** suite **22308 assertions in 808
+**Snapshot (2026-11-07, `backendsMh33`):** suite **22317 assertions in 809
 cases** under `--rng-seed 12345`, green; `[headerdoc]`, `[docs]`, `doxygen`
 (0 warnings) and `abi-check` all pass. This section supersedes section 26.
 
@@ -979,6 +979,7 @@ cases** under `--rng-seed 12345`, green; `[headerdoc]`, `[docs]`, `doxygen`
 | `table.get` / `table.set` (externref/funcref, OOB trap) | OK | OK | OK | `TABLEACCESS` ext=1 fun=0 |
 | shared reference atomics (struct/array) | OK | OK | OK | `SHAREDREF` run=1 array=1 |
 | shared table atomics (anyref/eqref) | OK | OK | OK | `TABLEATOMIC` run=1 |
+| global reference atomics (eqref) | OK | OK | OK | `GLOBALREF` run=1 |
 | numeric shared-everything atomics (global/struct/array) | OK | OK | OK | `global=5 struct32=7 struct64=9 array=11` |
 | V-1: block-end stack check after a `try_table` | n/a | n/a | n/a | `validator: a catch does not disable block-end stack checks` |
 
@@ -1025,5 +1026,4 @@ which neither SLJIT nor AsmJIT lowers yet.
 | Gap | Backends | Reason |
 |---|---|---|
 | mutual/indirect tail-call trampolines | SLJIT, AsmJIT | self-recursion loops; cross-function chains still call + return |
-| global reference atomics | SLJIT, AsmJIT | branches implemented; unprobed (no valid shared-global fixture) |
 | LibJIT frame-mode calls/imports/multi-result | LibJIT | policy |

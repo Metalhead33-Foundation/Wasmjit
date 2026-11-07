@@ -144,10 +144,9 @@ section 6). Two different questions, two different answers, both recorded.
 | memory64 + bulk memory | ✅ | ✅ | ✅ |
 
 > **Revision 2026-11-07:** the `atomics` row above predates the numeric
-> shared-everything family. Numeric slots are green on all three backends, and
-> so are reference struct/array slots and shared-table atomics; global reference
-> atomics have backend branches but no valid upstream fixture. See
-> `POST_MORTEM.md` item 2.
+> shared-everything family. Numeric, reference struct/array, shared-table and
+> global `eqref` atomics are green on all three backends. See `POST_MORTEM.md`
+> item 2.
 
 **Every row now has a measured answer.** The only ❌ in the matrix remains LibJIT's silent
 `throw`, and the only ⛔ rows are honest refusals with reasons.
