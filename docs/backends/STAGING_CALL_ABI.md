@@ -332,7 +332,7 @@ Details that mattered and are now in the code:
   since the trampoline does not carry a frame pointer yet -- that is the remaining
   refusal in the frame form, and it is honest.
 
-## 10. Policy update: cross-backend calls are technically legal, discouraged in production
+## 10. Policy update: cross-backend calls are legal but **forbidden in production**
 
 With the staging frame, the ABI is **identical on every backend** -- two C
 arguments and a byte-defined frame -- so the reason for the previous outright ban
@@ -340,11 +340,19 @@ arguments and a byte-defined frame -- so the reason for the previous outright ba
 **technically**: a call whose caller and callee are compiled by different backends
 is no longer ill-formed.
 
-It stays **discouraged in production**, and the note says why: the frame form is
-implemented per backend and each backend's parity is pinned only by its own tests,
-so a cross-backend call combines two independently-verified halves into one
-unverified whole. The recommendation stands until there is a dedicated
-cross-backend test suite, which is step 6's last gate.
+It remains **forbidden in serious production code**, and the rule is empirical, not
+stylistic: each backend's frame path is pinned only by its **own** tests, so a
+cross-backend call combines two independently-verified halves into one
+**unverified whole**. A divergence in a corner -- a `v128` result, a multi-result
+block, an import trampoline -- would surface as memory corruption in a program that
+"passed" each backend's suite separately. Until there is a dedicated cross-backend
+suite (step 6's last gate), the deployment rule is **one backend per process, or per
+module graph**. Permitted by the type system, refused by review: just because you
+can does not mean you should.
+
+The embedder-facing consequences of all of this -- the three call directions, the
+frame layout, the GC-root caveat and the AsmJIT plan -- are collected in
+[`EXPORT_SIGNATURE.md`](EXPORT_SIGNATURE.md).
 
 ## 11. Step 4 (LibJIT) and step 5 (AsmJIT): implementation briefs
 
