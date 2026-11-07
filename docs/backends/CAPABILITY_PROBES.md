@@ -183,3 +183,23 @@ SLJIT's `memory64_bulk` refusal had a test of its own (`[sljit][m64][refusal]`),
 encodes the current policy correctly. Probe 10 duplicates it deliberately: the *point* of
 a probe is that it runs the **same fixture on every backend**, so the matrix row is
 measured rather than assembled from three differently-shaped tests.
+
+## 7. Probes 11 and 12: bulk memory on memory32 and multi-memory both work
+
+```
+PROBE bulk32_probe      on libjit/asmjit/sljit: export=1  copied
+PROBE multimemory_probe on libjit/asmjit/sljit: export=1  memory1=1
+```
+
+| # | Probe | SLJIT | AsmJIT | LibJIT |
+|---|---|---|---|---|
+| 11 | bulk memory on a memory32 (`memory.copy`) | ✅ called | ✅ | ✅ |
+| 12 | multi-memory (`memory.size 1`) | ✅ 1 page | ✅ | ✅ |
+
+**Both were strengthened before being believed.** The first version only checked that the
+exports existed -- the weakness probe 6 was called out for. The final version **calls**
+`copy` (a zero-length copy cannot fault, but the lowering has to exist) and asserts that
+the **second** memory reports **1** page.
+
+That detail matters for the row: `memory.size 1` reads an *indexed* memory, so a backend
+that quietly ignored the index would answer 0 or crash. It answers 1 on all three.

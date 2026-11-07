@@ -885,3 +885,45 @@ std::fprintf(stderr, "REFUSED: %s\n", error.what());
 }
 }
 }
+
+// Item 4, probes 11 and 12: bulk memory on memory32, and multi-memory. Both are
+// accepted-or-refused questions; a silent wrong answer is a defect
+// (docs/backends/CAPABILITY_PROBES.md section 7).
+TEST_CASE("bulk memory on memory32, and multi-memory: refuse or export",
+"[staging][abi][bulk][mm]")
+{
+struct Question { const char* fixture; const char* exportName; };
+const Question questions[] = {{"bulk32_probe", "copy"},
+                              {"multimemory_probe", "second_size"}};
+for (const char* backend : {"libjit", "asmjit", "sljit"}) {
+for (const Question& question : questions) {
+std::fprintf(stderr, "PROBE %s on %s: ", question.fixture, backend);
+auto runtime = WASM::Runtime::create(backend);
+REQUIRE(runtime != nullptr);
+auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / (std::string(question.fixture) + ".wasm"));
+WASM::RegistryImportResolver imports;
+try {
+WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+const std::optional<WASM::Callable> callable =
+instance.exportedFunction(question.exportName);
+std::fprintf(stderr, "export=%d", (int)callable.has_value());
+CHECK(callable.has_value());
+if (callable.has_value() && std::string(question.exportName) == "second_size") {
+// A real answer, not just an export: the SECOND memory is one page.
+const std::int32_t pages = WASM::callCallable<std::int32_t>(*callable);
+std::fprintf(stderr, " memory1=%d", (int)pages);
+CHECK(pages == 1);
+}
+if (callable.has_value() && std::string(question.exportName) == "copy") {
+// Calling it proves the lowering exists; a zero-length copy cannot fault.
+WASM::callCallable<void>(*callable, 0, 0, 0);
+std::fprintf(stderr, " copied");
+}
+std::fprintf(stderr, "\n");
+} catch (const std::exception& error) {
+std::fprintf(stderr, "REFUSED: %s\n", error.what());
+}
+}
+}
+}

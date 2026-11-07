@@ -746,3 +746,50 @@ row that silently counts it as one flatters the backend.
 * **LibJIT**: nothing, unless its frame form ever becomes the default.
 
 Suite 21894 assertions in 781 cases under `--rng-seed 12345`, green.
+
+## 23. The full ledger: defects and honest refusals (probed on all three backends)
+
+This is the list the probe sweep was for. **Nothing is fixed here** -- the policy in force
+is *record, document, keep probing*.
+
+### Defects (a wrong answer -- the backend accepted the module and did the wrong thing)
+
+| # | Defect | Backend | Evidence | Status |
+|---|---|---|---|---|
+| **D-1** | a `throw` executes and the function **returns normally** -- the trap silently becomes a value | **LibJIT** | `[exceptions]` probe, pinned: the test asserts the wrong value with a `KNOWN DEFECT` comment | open, pinned |
+
+**One defect.** Every other cell in the matrix either works or refuses.
+
+### Honest refusals (temporary by definition -- each is a scheduled limitation)
+
+| # | Refused shape | SLJIT | AsmJIT | LibJIT | Message |
+|---|---|---|---|---|---|
+| R-1 | `throw` | ⛔ | ⛔ | (D-1) | *opcode dispatch is not implemented: dispatchThrow* |
+| R-2 | atomics (`i32.atomic.rmw.add`) | ⛔ | ⛔ | ✅ | *does not lower dispatchI32AtomicRmwAdd* |
+| R-3 | tail call from a frame-form function | ⛔ | ⛔ | n/a | *supports only i32 tail-call parameters* (AsmJIT) |
+| R-4 | bulk memory on memory64 | ⛔ | ⛔ | ✅ | *does not lower bulk memory on memory64 YET* |
+| R-5 | calls inside a frame-mode body | ✅ works | ✅ works | ⛔ | *a call inside a frame-mode function is not implemented* |
+| R-6 | imports in a frame-mode module | n/a | ⛔ | ⛔ | *calls into imports are not implemented* |
+| R-7 | multi-result in frame mode | ✅ works | ✅ works | ⛔ | *multiple results are not implemented* |
+| R-8 | unsupported functions | ⛔ module | ⛔ module | ⛔ module | module-level throw (policy, not a limitation) |
+
+### Unprobed (no fixture has run)
+
+| Area | Why it is open |
+|---|---|
+| exception **handlers** (`try_table`, `catch`) | only `throw` was probed; SLJIT and AsmJIT refuse the throw, so the handler path is untested even where the tag is parsed |
+| GC arrays **beyond `array.new`** (`array.get/set/fill/copy`) | AsmJIT's own refusals name packed-element gaps there |
+| `funcref` in **tables** / `call_indirect` through a reference | probes crossed references as *values* only |
+| threads (shared memory beyond a single atomic RMW) | one instruction probed |
+| reference types **as struct/array fields** | constructors probed, contents not |
+
+### Reading the ledger
+
+* **D-1 is the only defect**, and the only cell where an embedder gets a wrong answer
+  without being told;
+* **R-1 to R-4 are feature gaps** -- real work, honestly refused;
+* **R-5 to R-7 are *policy* choices** made in this campaign (LibJIT's frame form is
+  opt-in and deliberately partial), not defects;
+* **R-8 is the ruling**, not a limitation;
+* the unprobed list is where the next defect could still be hiding -- and the reason to
+  keep probing rather than declare victory.
