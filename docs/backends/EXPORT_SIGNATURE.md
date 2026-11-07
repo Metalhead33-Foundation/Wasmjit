@@ -1269,3 +1269,43 @@ defect. With the frame form and the cache packer in place, the honest scope is:
 That is a documentation correction, not a code change: nothing in the tree needs to
 move for it, and the tests already pin both behaviours (register form returning 6, and
 the frame path returning 6 through the cache).
+
+## 36. LibJIT multi-result: the guard was written, then reverted with a lead
+
+**The hole is real.** LibJIT's frame-mode epilogue still expects the register form's
+trailing result-buffer parameter, which the frame signature does not have, so a
+frame-mode multi-result function would read a parameter that does not exist.
+
+A module-level refusal was written exactly like P0a's -- a type scan in
+`translateTypes`, before any JIT context -- plus a gate that instantiates
+`asmjit_multi_result` on the register form (must succeed) and then under the opt-in
+(must throw).
+
+**Result: two `[staging][libjit]` failures and a segfault in the full suite.** Reverted.
+
+### The lead, which is worth more than the guard
+
+This is the **third** time the symptom "two staging failures plus a suite segfault"
+has appeared, and the first two were *test-file* defects (a test appended inside
+another test's body). This one cannot be that: the test was appended at EOF.
+
+So there are two candidates, and they are worth distinguishing before writing the
+guard again:
+
+1. **the guard itself** -- though it sits in the same block as P0a's, which is green;
+2. **the fixture** -- `asmjit_multi_result` has *never been instantiated on LibJIT*.
+   Every multi-result test so far ran on AsmJIT (frame) or through MV5 in scenarios
+   that may not have covered this shape. If LibJIT's register-form multi-result path
+   is itself broken, the crash comes from the test's **first** instantiation, not from
+   the guard, and the guard is innocent.
+
+**The one-line experiment for the next session**, before any code:
+
+```
+instantiate asmjit_multi_result on libjit with NO opt-in, and call "pair"
+```
+
+If that faults, LibJIT's MV5 multi-result path is broken -- a far more important fact
+than a missing refusal, and one that no test in the suite covers.
+
+Suite restored to 21845 assertions in 770 cases, green.
