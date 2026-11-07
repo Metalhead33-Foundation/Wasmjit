@@ -112,19 +112,6 @@ ModuleCallCache::ModuleCallCache(ModuleInstance& instance)
 		entry.resultCount = view.funcResults().size();
 		if (entry.resultCount == 1u)
 			entry.resultKind = view.funcResults().front().value.opcode;
-		// The packer's buffer has to hold the whole frame: 8 bytes per scalar slot,
-		// 16 per vector, arguments first and then the results.
-		{
-			const auto slotWidth = [](WASM::ValueTypeCode code) {
-				return code == WASM::ValueTypeCode::V128 ? 16u : 8u;
-			};
-			std::size_t bytes = 0;
-			for (const WASM::ValueTypeCode code : entry.paramKinds)
-				bytes += slotWidth(code);
-			if (entry.resultCount == 1u)
-				bytes += slotWidth(entry.resultKind);
-			entry.frameBytes = bytes;
-		}
 		entry.argTypes.reserve(1u + entry.paramCount
 				+ (entry.multiResult ? 1u : 0u));
 		entry.argTypes.push_back(&ffi_type_pointer); // VMContext*
@@ -145,6 +132,21 @@ ModuleCallCache::ModuleCallCache(ModuleInstance& instance)
 				for (std::uint32_t slot = 0; slot < slots; ++slot)
 					entry.argTypes.push_back(&ffi_type_uint64);
 			}
+		}
+		// The packer's buffer has to hold the whole frame: 8 bytes per scalar slot,
+		// 16 per vector, arguments first and then the results. Computed HERE, after
+		// `paramKinds` is filled -- the first version computed it before the loop,
+		// read an empty vector, and sized every frame at 8 bytes.
+		{
+			const auto slotWidth = [](WASM::ValueTypeCode code) {
+				return code == WASM::ValueTypeCode::V128 ? 16u : 8u;
+			};
+			std::size_t bytes = 0;
+			for (const WASM::ValueTypeCode code : entry.paramKinds)
+				bytes += slotWidth(code);
+			if (entry.resultCount == 1u)
+				bytes += slotWidth(entry.resultKind);
+			entry.frameBytes = bytes;
 		}
 		// A backend that returns a v128 through a caller-supplied buffer describes the
 		// same shape as a multi-value tuple: a trailing pointer argument and a void

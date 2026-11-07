@@ -911,3 +911,35 @@ the heap path by none.
 | 2 | heap-frame fixture (>512 bytes of arguments) | small: one `.wat` with 33 vectors, one test |
 | 3 | compile cache keyed by mode | medium, and it makes the opt-in honest (section 19) |
 | 4 | doc reconciliation | small: section 16 is superseded by 17/20/24; `D-L1` re-scopes to a note about *where* the canonical rule applies |
+
+## 27. The heap branch cannot be reached yet: SLJIT has a parameter-count limit
+
+Two attempts to exercise the heap frame failed, and the failures are the finding.
+
+**Attempt 1 -- 33 `v128` parameters (536 frame bytes).** `frameBytes` came out as
+**8**: the computation ran *before* `paramKinds` was filled, read an empty vector, and
+sized every frame from the result alone. A genuine bug, fixed by moving the block
+after the parameter loop; the three cache tests had passed regardless because none of
+them looked at `frameBytes`.
+
+**Attempt 2 -- 33 vectors, then 65 scalars (528 frame bytes), both correct after the
+fix.** `ModuleCallCache::call` threw *"invalid entry"*: the exported `Callable` has
+**`fnPtr == nullptr`**. Instantiation succeeds and `frameCallAbi()` is true, so the
+module compiled -- but SLJIT produced no entry for the function.
+
+That is a **SLJIT limit on the parameter count itself**, not on the register form: the
+frame bypasses the four-*entry* ceiling, and something else (most likely per-function
+frame-slot allocation or the parameter loop) refuses this width silently.
+
+### Consequences
+
+* the heap branch of the packer remains **code without coverage** -- now with a
+  *reason*, not just a note: no backend tested here can produce a signature wide
+  enough to reach it;
+* the real limit should be **named and refused loudly** rather than surfacing as a
+  null `fnPtr` an embedder has to discover. That is the next step, and it belongs in
+  SLJIT's frame-mode refusal path, next to `kArgumentSlotCeiling`;
+* the fixture and its test were removed rather than left red.
+
+**Landed:** the `frameBytes` ordering fix, verified by the whole suite (21832 in 767)
+and the three cache tests (16 in 3).
