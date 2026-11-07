@@ -1527,3 +1527,40 @@ disturb anything.
 
 1b and 1c belong in **one** commit: gating the refusal without the store would accept a
 shape that then stores nothing.
+
+## 42. SLJIT stores N results in a frame -- the last capability gap is closed
+
+```
+SLJIT stores two results in a frame for a wide signature
+[staging][sljit][abi][multi][frame]   ->  green (5 assertions)
+```
+
+Three `v128` parameters force the frame; the results then land in the result block as
+**6 at offset 48** and **9 at offset 56**.
+
+### The two edits, exactly as subtasked
+
+| Subtask | Change |
+|---|---|
+| 1b | the `> 1` refusal is gated on `!frameAbi_` -- the register form keeps refusing, because it has nowhere to put a second result |
+| 1c | `emitReturnValue` gained a multi-result frame branch **before** the `resultWidth_ == 0` test (which is 0 for such a signature), writing each result at `frameResultOffset_ + offset(i)`, 8 bytes per scalar slot and 16 per vector |
+
+The branch had to come first for the reason recorded in subtask 1a: `resultWidth_` is
+only set for a single result, so a multi-result signature looks like "void" to every
+existing path.
+
+### What this changes for the campaign
+
+**Every backend now stores N results where it can, or refuses cleanly where it cannot:**
+
+| Backend | Single | Multi |
+|---|---|---|
+| SLJIT | ✅ | ✅ **new** |
+| AsmJIT | ✅ | ✅ |
+| LibJIT | ✅ | register form via MV5 (sound, section 37); frame form refuses (section 38) |
+
+That is the first time the answer for multi-result is "yes" on both backends that use
+the frame -- which is what the frame form was supposed to buy, and the last item on the
+capability list.
+
+Suite 21855 assertions in 774 cases, green.

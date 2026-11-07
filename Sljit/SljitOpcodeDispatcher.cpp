@@ -960,7 +960,10 @@ OpcodeDispatcher::OpcodeDispatcher(const WASM::Module& module, const WASM::FuncT
 		resultKinds_.push_back(result.opcode);
 		resultWidths_.push_back(widthOf(result));
 	}
-	if (prepared.allReturns.size() > 1) {
+	// The register form has nowhere to put a second result, so it keeps refusing. The
+	// frame form does: the result block is a sequence of slots
+	// (docs/backends/EXPORT_SIGNATURE.md section 40).
+	if (prepared.allReturns.size() > 1 && !frameAbi_) {
 		unsupportedReason_ = "the SLJIT backend does not support multiple results";
 		return;
 	}
@@ -1443,6 +1446,39 @@ void OpcodeDispatcher::transferToBase(const std::vector<int>& widths, std::size_
 
 void OpcodeDispatcher::emitReturnValue()
 {
+	if (frameAbi_ && resultKinds_.size() > 1) {
+		// Multi-result in frame form (docs/backends/EXPORT_SIGNATURE.md section 40):
+		// every result is written into the caller's result block, in declaration
+		// order, 8 bytes per scalar slot and 16 per vector, then the function returns
+		// void. This must precede the `resultWidth_ == 0` test, which is 0 for a
+		// multi-result signature.
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R2, 0, SLJIT_MEM1(SLJIT_SP),
+				frameSlotOffset()));
+		std::uint32_t offset = frameResultOffset_;
+		const std::size_t resultCount = resultKinds_.size();
+		for (std::size_t i = 0; i < resultCount; ++i) {
+			const std::size_t index = stackWidths_.size() - resultCount + i;
+			const int width = resultWidths_[i];
+			if (width == 16) {
+				emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0,
+						SLJIT_MEM1(SLJIT_SP), stackSlotOffset(index)));
+				emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_R2),
+						static_cast<sljit_sw>(offset), SLJIT_R0, 0));
+				emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0,
+						SLJIT_MEM1(SLJIT_SP), stackSlotOffset(index) + 8));
+				emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_R2),
+						static_cast<sljit_sw>(offset + 8), SLJIT_R0, 0));
+				offset += 16;
+				continue;
+			}
+			loadSlot(SLJIT_R0, index, width);
+			emit(sljit_emit_op1(compiler_, width == 4 ? SLJIT_MOV32 : SLJIT_MOV,
+					SLJIT_MEM1(SLJIT_R2), static_cast<sljit_sw>(offset), SLJIT_R0, 0));
+			offset += 8;
+		}
+		emit(sljit_emit_return_void(compiler_));
+		return;
+	}
 	if (resultWidth_ == 0) {
 		emit(sljit_emit_return_void(compiler_));
 		return;

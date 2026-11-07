@@ -2934,3 +2934,35 @@ TEST_CASE("SLJIT: the argument-slot ceiling is its saved-register count",
 {
 	CHECK(SLJIT_NUMBER_OF_SAVED_REGISTERS == 6);
 }
+
+// SLJIT's frame form with TWO results: arguments force the frame, so the result
+// block gets two slots (docs/backends/EXPORT_SIGNATURE.md section 42).
+TEST_CASE("SLJIT stores two results in a frame for a wide signature",
+"[staging][sljit][abi][multi][frame]")
+{
+auto runtime = WASM::Runtime::create("sljit");
+REQUIRE(runtime != nullptr);
+auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "sljit_wide_multi.wasm");
+WASM::RegistryImportResolver imports;
+WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+REQUIRE(instance.frameCallAbi());
+
+const std::optional<WASM::Callable> callable =
+instance.exportedFunction("wide_pair");
+REQUIRE(callable.has_value());
+
+// Arguments are 48 bytes; results follow: i32 slot, then i64 slot.
+alignas(16) std::uint8_t frame[64] = {};
+const std::uint32_t lanes[3][4] = {{1, 1, 1, 1}, {2, 2, 2, 2}, {3, 3, 3, 3}};
+for (int i = 0; i < 3; ++i)
+std::memcpy(frame + 16 * i, lanes[i], 16);
+WASM::callCallableFrame(*callable, frame);
+
+std::int32_t first = 0;
+std::int64_t second = 0;
+std::memcpy(&first, frame + 48, sizeof(first));
+std::memcpy(&second, frame + 56, sizeof(second));
+CHECK(first == 6);
+CHECK(second == 9);
+}
