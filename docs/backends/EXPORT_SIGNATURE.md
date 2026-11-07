@@ -1404,3 +1404,59 @@ Both reverts blamed the guard. Both times the guard was right and the **test** w
 wrong -- once from a mid-file insertion (section 13), once from cached compilation
 (section 19). The distinguishing evidence took one instrumented run and was available
 from the first minute.
+
+## 39. Priorities, and the design of `unsupportedReason(name)`
+
+### Priority call: LibJIT frame-mode multi-result is LOW, and staying deferred
+
+Reasoning, in order of weight:
+
+1. **The register form is LibJIT's default and is sound.** Section 37 measured it: `7`
+   and `9` come back correctly through MV5. Nothing in the embedder path needs the
+   frame form.
+2. **The failure mode is already the right one.** Since section 38 the frame form
+   *refuses* a two-result signature with a clear message, before any JIT context. So
+   the gap costs a *diagnosable refusal*, not a trap or corruption.
+3. **Its only customer would be a deployment we forbid.** Frame-mode LibJIT exists for
+   cross-backend parity, and cross-backend calls are forbidden in production. Until
+   that changes, implementing N results there buys nothing anyone may rely on.
+4. **It is the most expensive of the remaining items** -- `emitFunctionReturn` plus the
+   MV5 interaction -- for the least benefit.
+
+**Decision: defer, and keep the refusal as the contract.** If the opt-in is ever
+advertised, revisit; the refusal is what makes deferring safe.
+
+### Priority order for what remains
+
+| Rank | Item | Why this order |
+|---|---|---|
+| 1 | **SLJIT stores N results into the frame** | the only backend that cannot, and the only remaining *capability* gap. AsmJIT does it; LibJIT refuses cleanly. |
+| 2 | `unsupportedReason(name)` | diagnosability across every backend; today a null `fnPtr` and a trap stub are indistinguishable (section 34) |
+| 3 | housekeeping | dead epilogue branch; compile cache keyed by mode |
+| -- | LibJIT frame multi-result | **deferred by decision**, above |
+
+### `unsupportedReason(name)`: design, grounded in what exists
+
+**No storage exists.** `ModuleInstanceInternals` carries `internalCallables` and the
+entity tables -- and nothing diagnostic (`WasmBase/WasmModuleInstance.hpp:52`). So the
+API has to be built, and it is a four-file change:
+
+| # | File | Change |
+|---|---|---|
+| 1 | `WasmModuleInstance.hpp` (internals) | `std::vector<std::string> internalUnsupportedReasons;` beside `internalCallables` |
+| 2 | same, `ModuleInstance` | `void setFunctionUnsupported(uint32_t internalIndex, std::string reason);` and `std::optional<std::string> unsupportedReason(std::string_view exportName) const;` |
+| 3 | `WasmModuleInstance.cpp` | implement both: the setter stores; the getter maps export name to internal index and returns the stored reason |
+| 4 | `Sljit/SljitModuleCompiler.cpp` | after compilation, for every function with a null `fnPtr` and a non-empty `unsupportedReason_`, call the setter |
+| 5 | `Test/SljitBackendTests.cpp` | a wide multi-result module: `exportedFunction` is null-ish **and** `unsupportedReason("wide_pair")` names the reason |
+
+**Two constraints, from the earlier refutation (section 34):**
+
+* do **not** change `Callable` -- it is a frozen embedder-facing struct
+  (`docs/API_ABI_STABILITY.md`);
+* do **not** infer support from a null `fnPtr` -- it also means "this backend provides
+  no compiled entries", which Runtime and Plugin tests rely on.
+
+An additive query satisfies both: it answers a *different question* from "is there a
+callable", so nothing existing changes behaviour.
+
+Suite 21850 assertions in 773 cases, green.
