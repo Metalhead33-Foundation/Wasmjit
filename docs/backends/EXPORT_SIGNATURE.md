@@ -544,3 +544,36 @@ proof -- better than a silent mismatch, but not yet a verified refusal.
 | P0a -- LibJIT refuses calls in frame mode | **done**, gated by `[staging][libjit][abi][call]` |
 | P0a' -- instantiation failure leaves the runtime usable | **done**, gated by `WASMJIT_SAFETY_PROBES=1` |
 | P0b -- AsmJIT refuses modules with imports in frame mode | **guard landed**, gate test pending |
+
+## 19. P0b gated, and a caching caveat the gate exposed
+
+`asmjit_import_call.wasm` (an import plus a call to it) now gates P0b:
+
+* **default form:** instantiates, exports `caller`, and calling it returns **14** --
+  the import really is reached with the typed signature `(ctx, i32) -> i32`;
+* **frame form:** `REQUIRE_THROWS` -- the module-level refusal fires.
+
+### The caveat: compiled code is cached per *module object*
+
+The first version of the gate re-instantiated the **same** `module` and asserted a
+throw. It did not throw, because the second instantiation reused the compiled code
+from the first -- the mode was never re-decided.
+
+That is worth stating generally, because it constrains the opt-in:
+
+> `setFrameCallAbiOptIn` affects the **first compilation of a given module object
+> only**. Toggling it afterwards and instantiating the same module again inherits
+> the earlier mode.
+
+Three consequences:
+
+1. Tests must **reload** the module to exercise the other mode (what the gate now
+   does).
+2. An embedder that wants one ABI throughout should set the preference **before
+   loading**, not before instantiating.
+3. If the preference is ever meant to be per-instance rather than per-process, the
+   compile cache must be **keyed by mode** -- a change worth making before the
+   opt-in is advertised to embedders, and cheap while there is one way to set it.
+
+**State:** suite 21816 assertions in 764 cases, `[staging][asmjit]` 14 in 6, all
+green.
