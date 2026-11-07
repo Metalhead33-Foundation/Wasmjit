@@ -621,3 +621,43 @@ REQUIRE(callable.has_value());
 std::int32_t returned = WASM::callCallable<std::int32_t>(*callable, 7);
 CHECK(returned == 0);
 }
+
+// Item 4, probe 2: reference types. The assertion is the property -- a backend either
+// refuses the module or round-trips the reference -- never a silent wrong answer
+// (docs/backends/PRODUCTION_GAPS.md section 17).
+TEST_CASE("externref: every backend refuses or round-trips",
+"[staging][abi][refs]")
+{
+for (const char* backend : {"libjit", "asmjit", "sljit"}) {
+std::fprintf(stderr, "REF %s: ", backend);
+auto runtime = WASM::Runtime::create(backend);
+REQUIRE(runtime != nullptr);
+auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "externref_probe.wasm");
+WASM::RegistryImportResolver imports;
+
+WASM::ModuleInstance* instance = nullptr;
+try {
+instance = &runtime->instantiate(*module, imports);
+} catch (const std::exception& error) {
+std::fprintf(stderr, "REFUSED: %s\n", error.what());
+continue;
+}
+
+const std::optional<WASM::Callable> callable = instance->exportedFunction("roundtrip");
+if (!callable.has_value()) {
+std::fprintf(stderr, "no export\n");
+continue;
+}
+void* const token = reinterpret_cast<void*>(static_cast<std::uintptr_t>(0x1234));
+void* returned = nullptr;
+try {
+returned = WASM::callCallable<void*>(*callable, token);
+} catch (const std::exception& error) {
+std::fprintf(stderr, "threw at call: %s\n", error.what());
+continue;
+}
+std::fprintf(stderr, "round-trip %s\n", returned == token ? "OK" : "WRONG");
+CHECK(returned == token);
+}
+}

@@ -524,3 +524,45 @@ backends**; lowering is the feature. The same choice was made for multi-result a
 calls, and in both cases the refusal came first.
 
 Suite 21870 assertions in 778 cases, green.
+
+## 17. The capability matrix, measured (started)
+
+Every row below is a **probe that runs on all three backends**, not a reading of refusal
+strings. The rule for every row: a backend either does the thing or refuses the
+**module** with a reason -- never a silent wrong answer.
+
+| Feature | SLJIT | AsmJIT | LibJIT | Probe |
+|---|---|---|---|---|
+| `v128` parameters / results | ✅ | ✅ | ✅ (aggregate) | step 5 gates |
+| multi-result | ✅ frame | ✅ frame | ✅ register (MV5) | `[multi]` gates |
+| compiled-to-compiled calls | ✅ | ✅ | ⛔ refuses in frame mode | step 3b / 5d / P0a |
+| imports in frame mode | n/a | ⛔ refuses | ⛔ refuses | P0b / P0a |
+| **exceptions (`throw`)** | ⛔ refuses | ⛔ refuses | ❌ **silent wrong answer** | `[exceptions]` |
+| **`externref`** | ✅ round-trips | ✅ round-trips | ✅ round-trips | `[refs]` |
+| `funcref` / GC refs / structs / arrays | **unprobed** | **unprobed** | **unprobed** | — |
+| tail calls in frame mode | ⛔ refuses | **unprobed** | **unprobed** | — |
+| atomics / threads | **unprobed** | **unprobed** | **unprobed** | — |
+| memory64 | partial (bulk-memory refuses) | **unprobed** | **unprobed** | `[m64]` |
+
+### Correction this matrix forced
+
+Section 44 of `EXPORT_SIGNATURE.md` claimed reference types were **LibJIT-only**. That
+was wrong, and the probe says so: **all three backends round-trip an `externref`** --
+the refusal strings it was based on (*"unsupported Wasm value type"*) evidently apply to
+other types, not to references generally.
+
+> A refusal string tells you what a backend *will not* do. Only a probe tells you what
+> it *does*. The survey was a hypothesis list; this table is evidence.
+
+### Why the assertions are shaped this way
+
+Each probe asserts the **property** it can prove:
+
+* exceptions: the two refusals are `REQUIRE_THROWS`; LibJIT's defect is **pinned**
+  (asserting the current wrong value) so it cannot be quietly forgotten;
+* `externref`: if a backend instantiates, the reference must **round-trip identically**
+  -- a backend that returns a different pointer is a defect, not a refusal;
+* every probe prints its outcome with an `EXC`/`REF` prefix, so a red run names the
+  backend without a debugger.
+
+Suite 21876 assertions in 779 cases, green.
