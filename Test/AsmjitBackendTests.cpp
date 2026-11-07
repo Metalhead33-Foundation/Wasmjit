@@ -421,3 +421,25 @@ WASM::setFrameCallAbiOptIn(true);
 REQUIRE_THROWS(runtime->instantiate(*reloaded, imports));
 WASM::setFrameCallAbiOptIn(false);
 }
+
+// Gap pin for multi-result through the frame (docs/backends/EXPORT_SIGNATURE.md
+// section 29). The entry refusal at :891 is now gated on the mode, so a frame-mode
+// multi-result module reaches the epilogue instead -- which still handles exactly one
+// value. This test asserts the CURRENT refusal; it must be rewritten when the
+// epilogue stores N results.
+TEST_CASE("AsmJIT still refuses multi-result in the epilogue",
+"[staging][asmjit][abi][multi]")
+{
+if (std::getenv("WASMJIT_STEP5_GATES") == nullptr) {
+SUCCEED("step 5 gate: set WASMJIT_STEP5_GATES=1 to run it");
+return;
+}
+WASM::setFrameCallAbiOptIn(true);
+auto runtime = WASM::Runtime::create("asmjit");
+REQUIRE(runtime != nullptr);
+auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "asmjit_multi_result.wasm");
+WASM::RegistryImportResolver imports;
+REQUIRE_THROWS(runtime->instantiate(*module, imports));
+WASM::setFrameCallAbiOptIn(false);
+}

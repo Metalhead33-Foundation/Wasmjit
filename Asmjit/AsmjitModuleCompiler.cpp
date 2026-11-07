@@ -887,7 +887,7 @@ public:
 		WASM::PreparedFunctionStack stack;
 		stack.prepare(type, body);
 
-		if (type.results.size() > 1)
+		if (type.results.size() > 1 && !frameMode)
 			throw std::runtime_error("AsmJit initial compiler does not support multi-value results");
 		// A vector parameter is exactly what the frame form exists to carry, so
 		// the entry refusal applies only to the register form.

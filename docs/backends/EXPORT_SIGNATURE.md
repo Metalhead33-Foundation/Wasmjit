@@ -985,3 +985,46 @@ code**, and both times one grep found it. The habit that would have saved a roun
 each time: before blaming the dependency, grep the backend for its *own* constants --
 `kMaxWasmParameters`, `kArgumentSlotCeiling` -- and check whether they are gated on the
 mode.
+
+## 29. Multi-result: the entry refusal is gated, the epilogue is pinned
+
+**Done this round:**
+
+```cpp
+if (type.results.size() > 1 && !frameMode)        // was: unconditional
+    throw std::runtime_error("AsmJit initial compiler does not support multi-value results");
+```
+
+The same shape as `kMaxWasmParameters`: the refusal was about the **register form**
+and is now gated on the mode. It also taught a small lesson in ordering -- the local
+`frameAbi` is declared further down, near the prologue, so the guard must use the
+**member** `frameMode`; the compiler caught it in one build.
+
+**Also found: a dead duplicate branch.** The epilogue has *two* `else if (frameMode)`
+branches in the same chain, the second unreachable. It is an artifact of the 5e patch
+inserting the frame branch before `bufferedVectorResult` while the earlier one stayed
+behind. Harmless today, and **removed as part of the multi-result edit** rather than
+left for a reader to trip over.
+
+### The gap pin
+
+```
+AsmJIT still refuses multi-result in the epilogue   [staging][asmjit][abi][multi]
+->  green (WASMJIT_STEP5_GATES=1)
+```
+
+A two-result fixture now reaches the epilogue and is refused there, because the
+epilogue still unwinds exactly one value. The pin asserts the **current** refusal, so
+the day multi-result lands it fails and forces the positive test to be written.
+
+### What multi-result still needs, exactly
+
+| Site | Change |
+|---|---|
+| `:1056` | accept `values.size() == resultCount` in frame mode |
+| frame branch (A) | store each result at `frame + argBytes + offset(i)`, 8 bytes per scalar slot, 16 for a `v128` taken from its buffer |
+| dead branch (B) | delete |
+| cache `call` | loop `resultCount`, copying each at its offset |
+| `frameBytes` | already counts one result slot; extend to all of them |
+
+Suite 21838 assertions in 769 cases; step-5 gates 28 in 7.
