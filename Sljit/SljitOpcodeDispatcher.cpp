@@ -808,6 +808,28 @@ extern "C" void sljitMemoryFill(WASM::VMContext* vm, uint64_t memoryAndValue,
 	std::memset(memory->memoryBase + destination, static_cast<unsigned char>(value), length);
 }
 
+extern "C" void sljitAtomicTableSet(WASM::VMContext* vm, uint64_t tableAndOrdering,
+		uint64_t index, void* value) noexcept
+{
+	wasm_atomic_table_set(vm, static_cast<uint32_t>(tableAndOrdering), index, value,
+			static_cast<uint32_t>(tableAndOrdering >> 32));
+}
+
+extern "C" void* sljitAtomicTableXchg(WASM::VMContext* vm, uint64_t tableAndOrdering,
+		uint64_t index, void* value) noexcept
+{
+	return wasm_atomic_table_xchg(vm, static_cast<uint32_t>(tableAndOrdering), index, value,
+			static_cast<uint32_t>(tableAndOrdering >> 32));
+}
+
+extern "C" void* sljitAtomicTableCmpxchg(WASM::VMContext* vm, uint64_t tableAndOrdering,
+		uint64_t index, const void** pair) noexcept
+{
+	return wasm_atomic_table_cmpxchg(vm, static_cast<uint32_t>(tableAndOrdering), index,
+			const_cast<void*>(pair[0]), const_cast<void*>(pair[1]),
+			static_cast<uint32_t>(tableAndOrdering >> 32));
+}
+
 extern "C" void sljitMemoryCopy64(WASM::VMContext* vm, uint64_t memoryPair,
 const uint64_t* slots) noexcept
 {
@@ -5280,6 +5302,106 @@ void OpcodeDispatcher::dispatchTableSet(WASM::TableIdx arg)
 	stackWidths_.resize(stackWidths_.size() - 2);
 }
 
+void OpcodeDispatcher::dispatchTableAtomicGet(uint8_t ordering, WASM::TableIdx arg)
+{
+	if (!reachable_)
+		return;
+	requireTableIndex(arg);
+	requireStack(1);
+	const int indexWidth = stackWidths_.back();
+	const std::size_t depth = stackWidths_.size() - 1;
+	if (!measureOnly_) {
+		loadContext(SLJIT_R0);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R1, 0, SLJIT_IMM,
+				static_cast<sljit_sw>(arg)));
+		loadSlot(SLJIT_R2, depth, indexWidth);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R3, 0, SLJIT_IMM,
+				static_cast<sljit_sw>(ordering)));
+		emitHelper(SLJIT_ARGS4(P, P, 32, W, 32), &WASM::wasm_atomic_table_get);
+		storeSlot(SLJIT_R0, depth, 8);
+		emitPendingTrapCheck();
+	}
+	stackWidths_.back() = 8;
+}
+
+void OpcodeDispatcher::dispatchTableAtomicSet(uint8_t ordering, WASM::TableIdx arg)
+{
+	if (!reachable_)
+		return;
+	requireTableIndex(arg);
+	requireStack(2);
+	const std::size_t valueDepth = stackWidths_.size() - 1;
+	const std::size_t indexDepth = stackWidths_.size() - 2;
+	const int indexWidth = stackWidths_[indexDepth];
+	if (!measureOnly_) {
+		loadContext(SLJIT_R0);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R1, 0, SLJIT_IMM,
+				static_cast<sljit_sw>((static_cast<std::uint64_t>(ordering) << 32)
+						| static_cast<std::uint64_t>(arg))));
+		loadSlot(SLJIT_R2, indexDepth, indexWidth);
+		loadSlot(SLJIT_R3, valueDepth, 8);
+		emitHelper(SLJIT_ARGS4V(P, W, W, P), &sljitAtomicTableSet);
+		emitPendingTrapCheck();
+	}
+	stackWidths_.resize(indexDepth);
+}
+
+void OpcodeDispatcher::dispatchTableAtomicRmwXchg(uint8_t ordering, WASM::TableIdx arg)
+{
+	if (!reachable_)
+		return;
+	requireTableIndex(arg);
+	requireStack(2);
+	const std::size_t valueDepth = stackWidths_.size() - 1;
+	const std::size_t indexDepth = stackWidths_.size() - 2;
+	const int indexWidth = stackWidths_[indexDepth];
+	if (!measureOnly_) {
+		loadContext(SLJIT_R0);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R1, 0, SLJIT_IMM,
+				static_cast<sljit_sw>((static_cast<std::uint64_t>(ordering) << 32)
+						| static_cast<std::uint64_t>(arg))));
+		loadSlot(SLJIT_R2, indexDepth, indexWidth);
+		loadSlot(SLJIT_R3, valueDepth, 8);
+		emitHelper(SLJIT_ARGS4(P, P, W, W, P), &sljitAtomicTableXchg);
+		storeSlot(SLJIT_R0, indexDepth, 8);
+		emitPendingTrapCheck();
+	}
+	stackWidths_.resize(indexDepth + 1);
+	stackWidths_.back() = 8;
+}
+
+void OpcodeDispatcher::dispatchTableAtomicRmwCmpxchg(uint8_t ordering, WASM::TableIdx arg)
+{
+	if (!reachable_)
+		return;
+	requireTableIndex(arg);
+	requireStack(3);
+	const std::size_t replacementDepth = stackWidths_.size() - 1;
+	const std::size_t expectedDepth = stackWidths_.size() - 2;
+	const std::size_t indexDepth = stackWidths_.size() - 3;
+	const int indexWidth = stackWidths_[indexDepth];
+	if (!measureOnly_) {
+		// The expected/replacement pair travels through the scratch cell.
+		loadSlot(SLJIT_R1, expectedDepth, 8);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+				scratchSlotOffset(), SLJIT_R1, 0));
+		loadSlot(SLJIT_R1, replacementDepth, 8);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+				scratchSlotOffset() + 8, SLJIT_R1, 0));
+		loadContext(SLJIT_R0);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R1, 0, SLJIT_IMM,
+				static_cast<sljit_sw>((static_cast<std::uint64_t>(ordering) << 32)
+						| static_cast<std::uint64_t>(arg))));
+		loadSlot(SLJIT_R2, indexDepth, indexWidth);
+		emit(sljit_get_local_base(compiler_, SLJIT_R3, 0, scratchSlotOffset()));
+		emitHelper(SLJIT_ARGS4(P, P, W, W, W), &sljitAtomicTableCmpxchg);
+		storeSlot(SLJIT_R0, indexDepth, 8);
+		emitPendingTrapCheck();
+	}
+	stackWidths_.resize(indexDepth + 1);
+	stackWidths_.back() = 8;
+}
+
 void OpcodeDispatcher::dispatchRefFunc(WASM::FuncIdx arg)
 {
 	if (!reachable_)
@@ -6143,8 +6265,70 @@ static std::uint32_t sharedAtomicWidth(WASM::ValueTypeCode code) noexcept
 	case WASM::ValueTypeCode::F32: return 4;
 	case WASM::ValueTypeCode::I64:
 	case WASM::ValueTypeCode::F64: return 8;
-	default: return 0;
+	case WASM::ValueTypeCode::V128: return 0;
+	default: return 8; // references
 	}
+}
+
+//! Four-argument reference cmpxchg wrapper: the expected/replacement pair lives
+//! in the scratch cell because the C ABI call ceiling is four arguments.
+extern "C" void* sljitAtomicRefCmpxchg(WASM::VMContext* vm, void** address,
+		const void** pair, uint32_t ordering) noexcept
+{
+	return wasm_atomic_ref_cmpxchg(vm, address, const_cast<void*>(pair[0]),
+			const_cast<void*>(pair[1]), ordering);
+}
+
+void OpcodeDispatcher::emitSharedAtomicRefStore(uint8_t ordering, std::size_t valueDepth)
+{
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+			targetSlotOffset(), SLJIT_R0, 0));
+	loadContext(SLJIT_R0);
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R1, 0, SLJIT_MEM1(SLJIT_SP),
+			targetSlotOffset()));
+	loadSlot(SLJIT_R2, valueDepth, 8);
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R3, 0, SLJIT_IMM,
+			static_cast<sljit_sw>(ordering)));
+	emitHelper(SLJIT_ARGS4(P, P, P, P, 32), &wasm_atomic_ref_store);
+	emitPendingTrapCheck();
+}
+
+void OpcodeDispatcher::emitSharedAtomicRefXchg(uint8_t ordering, std::size_t valueDepth,
+		std::size_t resultDepth)
+{
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+			targetSlotOffset(), SLJIT_R0, 0));
+	loadContext(SLJIT_R0);
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R1, 0, SLJIT_MEM1(SLJIT_SP),
+			targetSlotOffset()));
+	loadSlot(SLJIT_R2, valueDepth, 8);
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R3, 0, SLJIT_IMM,
+			static_cast<sljit_sw>(ordering)));
+	emitHelper(SLJIT_ARGS4(P, P, P, P, 32), &wasm_atomic_ref_xchg);
+	storeSlot(SLJIT_R0, resultDepth, 8);
+	emitPendingTrapCheck();
+}
+
+void OpcodeDispatcher::emitSharedAtomicRefCmpxchg(uint8_t ordering,
+		std::size_t expectedDepth, std::size_t replacementDepth, std::size_t resultDepth)
+{
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+			targetSlotOffset(), SLJIT_R0, 0));
+	loadSlot(SLJIT_R1, expectedDepth, 8);
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+			scratchSlotOffset(), SLJIT_R1, 0));
+	loadSlot(SLJIT_R1, replacementDepth, 8);
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+			scratchSlotOffset() + 8, SLJIT_R1, 0));
+	loadContext(SLJIT_R0);
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R1, 0, SLJIT_MEM1(SLJIT_SP),
+			targetSlotOffset()));
+	emit(sljit_get_local_base(compiler_, SLJIT_R2, 0, scratchSlotOffset()));
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R3, 0, SLJIT_IMM,
+			static_cast<sljit_sw>(ordering)));
+	emitHelper(SLJIT_ARGS4(P, P, P, P, 32), &sljitAtomicRefCmpxchg);
+	storeSlot(SLJIT_R0, resultDepth, 8);
+	emitPendingTrapCheck();
 }
 
 void OpcodeDispatcher::emitGlobalAtomicAddress(WASM::GlobalIdx arg)
@@ -6546,6 +6730,10 @@ void OpcodeDispatcher::dispatchStructAtomicSet(uint8_t ordering, WASM::TypeIdx a
 	if (measureOnly_)
 		return;
 	emitStructAtomicAddress(refDepth, offset);
+	if (!storage.isPacked && isReferenceType(storage.value.opcode)) {
+		emitSharedAtomicRefStore(ordering, valueDepth);
+		return;
+	}
 	emitSharedAtomicStore(ordering, width, valueWidth, valueDepth);
 }
 
@@ -6718,7 +6906,10 @@ void OpcodeDispatcher::dispatchStructAtomicRmwXchg(uint8_t ordering, WASM::TypeI
 	pop();
 	if (!measureOnly_) {
 		emitStructAtomicAddress(refDepth, offset);
-		emitSharedAtomicRmw(ordering, width, WASM_ATOMIC_XCHG, valueWidth, valueDepth, refDepth);
+		if (!storage.isPacked && isReferenceType(storage.value.opcode))
+			emitSharedAtomicRefXchg(ordering, valueDepth, refDepth);
+		else
+	emitSharedAtomicRmw(ordering, width, WASM_ATOMIC_XCHG, valueWidth, valueDepth, refDepth);
 	}
 	push(resultWidth);
 }
@@ -6749,7 +6940,10 @@ void OpcodeDispatcher::dispatchStructAtomicRmwCmpxchg(uint8_t ordering, WASM::Ty
 	pop();
 	if (!measureOnly_) {
 		emitStructAtomicAddress(refDepth, offset);
-		emitSharedAtomicCmpxchg(ordering, width, valueWidth, expectedDepth, replacementDepth, refDepth);
+		if (!storage.isPacked && isReferenceType(storage.value.opcode))
+			emitSharedAtomicRefCmpxchg(ordering, expectedDepth, replacementDepth, refDepth);
+		else
+	emitSharedAtomicCmpxchg(ordering, width, valueWidth, expectedDepth, replacementDepth, refDepth);
 	}
 	push(resultWidth);
 }
@@ -6872,7 +7066,11 @@ void OpcodeDispatcher::dispatchArrayAtomicSet(uint8_t ordering, WASM::TypeIdx ar
 	if (measureOnly_)
 		return;
 	emitArrayAtomicAddress(refDepth, indexDepth, lengthOffset, dataOffset, elementBytes);
-	emitSharedAtomicStore(ordering, width, valueWidth, valueDepth);
+	if (!storage.isPacked && isReferenceType(storage.value.opcode)) {
+			emitSharedAtomicRefStore(ordering, valueDepth);
+			return;
+		}
+		emitSharedAtomicStore(ordering, width, valueWidth, valueDepth);
 }
 
 void OpcodeDispatcher::dispatchArrayAtomicRmwAdd(uint8_t ordering, WASM::TypeIdx arg)
@@ -7068,6 +7266,9 @@ void OpcodeDispatcher::dispatchArrayAtomicRmwXchg(uint8_t ordering, WASM::TypeId
 	pop();
 	if (!measureOnly_) {
 		emitArrayAtomicAddress(refDepth, indexDepth, lengthOffset, dataOffset, elementBytes);
+		if (!storage.isPacked && isReferenceType(storage.value.opcode))
+				emitSharedAtomicRefXchg(ordering, valueDepth, refDepth);
+			else
 		emitSharedAtomicRmw(ordering, width, WASM_ATOMIC_XCHG, valueWidth, valueDepth, refDepth);
 	}
 	push(resultWidth);
@@ -7103,6 +7304,9 @@ void OpcodeDispatcher::dispatchArrayAtomicRmwCmpxchg(uint8_t ordering, WASM::Typ
 	pop();
 	if (!measureOnly_) {
 		emitArrayAtomicAddress(refDepth, indexDepth, lengthOffset, dataOffset, elementBytes);
+		if (!storage.isPacked && isReferenceType(storage.value.opcode))
+				emitSharedAtomicRefCmpxchg(ordering, expectedDepth, replacementDepth, refDepth);
+			else
 		emitSharedAtomicCmpxchg(ordering, width, valueWidth, expectedDepth, replacementDepth, refDepth);
 	}
 	push(resultWidth);

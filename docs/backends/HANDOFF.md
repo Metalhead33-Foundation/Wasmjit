@@ -8,7 +8,7 @@ section 18 (the latest re-run).
 
 ## 1. Where the tree is
 
-**Snapshot (2026-11-07, this working tree):** `--rng-seed 12345` -> **22296
+**Snapshot (2026-11-07, this working tree):** `--rng-seed 12345` -> **22308
 assertions, 808 cases, green**. Gates: `[headerdoc]`, `[docs]`, `doxygen` 0
 warnings, `abi-check` OK.
 
@@ -50,6 +50,8 @@ field as 4 bytes. The load and the slot width now follow the field type.
 | frame-form `call_ref` / `return_call_ref` | OK | OK | OK | `TAILREFFRAME` 1,000,000 links, `run()=1` |
 | v128 frame-form `return_call_ref` | n/a | OK | OK | `TAILV128REFFRAME` 1,000,000 links, `run()=1`; LibJIT native trampoline excludes v128 |
 | `table.get` / `table.set` (externref/funcref, OOB trap) | OK | OK | OK | `TABLEACCESS` ext=1 fun=0 |
+| shared reference atomics (struct/array) | OK | OK | OK | `SHAREDREF` run=1 array=1 |
+| shared table atomics (anyref/eqref) | OK | OK | OK | `TABLEATOMIC` run=1 |
 | bulk memory on memory64 | OK | OK | OK | `MEM64BULK` copy=97 fill=65 init=97 |
 
 ### Remaining (honest refusals)

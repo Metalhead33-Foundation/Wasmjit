@@ -3091,11 +3091,14 @@ void Validator::dispatchAtomicFence(uint8_t ordering) {
 void Validator::dispatchAtomicPause() {}
 
 namespace {
-ValueType sharedStorageValueType(const CanonStorageType& storage)
+ValueType sharedStorageValueType(const Module& module, const CanonStorageType& storage)
 {
 	if (storage.isPacked)
 		return ValueType{ValueTypeCode::I32, -1};
-	return ValueType{storage.value.opcode, -1};
+	ValueType type = module.storageTypeFromCanon(storage).val;
+	if (isReferenceType(type.opcode))
+		type.isShared = true;
+	return type;
 }
 
 // The operand type for a struct field or array element: packed storage is
@@ -3183,7 +3186,7 @@ void Validator::dispatchStructAtomicGet(uint8_t ordering, TypeIdx arg1, uint32_t
 		fail("struct.atomic: type is not a struct");
 	const CanonFieldType& f = requireStructField(arg1, arg2);
 	popExpect(ValueType{ValueTypeCode::RefNull, static_cast<int32_t>(arg1)});
-	pushValue(sharedStorageValueType(f.storage));
+	pushValue(sharedStorageValueType(module, f.storage));
 }
 void Validator::dispatchStructAtomicGetS(uint8_t ordering, TypeIdx arg1, uint32_t arg2)
 {
@@ -3212,7 +3215,7 @@ void Validator::dispatchStructAtomicSet(uint8_t ordering, TypeIdx arg1, uint32_t
 		fail("struct.atomic: type is not a struct");
 	const CanonFieldType& f = requireStructField(arg1, arg2);
 	if (!f.isMutable) fail("struct.atomic: field is immutable");
-	popExpect(sharedStorageValueType(f.storage));
+	popExpect(sharedStorageValueType(module, f.storage));
 	popExpect(ValueType{ValueTypeCode::RefNull, static_cast<int32_t>(arg1)});
 }
 
@@ -3223,7 +3226,7 @@ void Validator::dispatchStructAtomicRmw##n(uint8_t ordering, TypeIdx arg1, uint3
 		fail("struct.atomic: type is not a struct"); \
 	const CanonFieldType& f = requireStructField(arg1, arg2); \
 	if (!f.isMutable) fail("struct.atomic: field is immutable"); \
-	const ValueType t = sharedStorageValueType(f.storage); \
+	const ValueType t = sharedStorageValueType(module, f.storage); \
 	popExpect(t); \
 	popExpect(ValueType{ValueTypeCode::RefNull, static_cast<int32_t>(arg1)}); \
 	pushValue(t); \
@@ -3242,7 +3245,7 @@ void Validator::dispatchStructAtomicRmwCmpxchg(uint8_t ordering, TypeIdx arg1, u
 		fail("struct.atomic: type is not a struct");
 	const CanonFieldType& f = requireStructField(arg1, arg2);
 	if (!f.isMutable) fail("struct.atomic: field is immutable");
-	const ValueType t = sharedStorageValueType(f.storage);
+	const ValueType t = sharedStorageValueType(module, f.storage);
 	popExpect(t);
 	popExpect(t);
 	popExpect(ValueType{ValueTypeCode::RefNull, static_cast<int32_t>(arg1)});
@@ -3256,7 +3259,7 @@ void Validator::dispatchArrayAtomicGet(uint8_t ordering, TypeIdx arg)
 		fail("array.atomic: type is not an array");
 	popExpect(ValueTypeCode::I32);
 	popExpect(ValueType{ValueTypeCode::RefNull, static_cast<int32_t>(arg)});
-	pushValue(sharedStorageValueType(module.typeView(arg).arrayElement().storage));
+	pushValue(sharedStorageValueType(module, module.typeView(arg).arrayElement().storage));
 }
 void Validator::dispatchArrayAtomicGetS(uint8_t ordering, TypeIdx arg)
 {
@@ -3287,7 +3290,7 @@ void Validator::dispatchArrayAtomicSet(uint8_t ordering, TypeIdx arg)
 		fail("array.atomic: type is not an array");
 	const CanonFieldType& e = module.typeView(arg).arrayElement();
 	if (!e.isMutable) fail("array.atomic: array is immutable");
-	popExpect(sharedStorageValueType(e.storage));
+	popExpect(sharedStorageValueType(module, e.storage));
 	popExpect(ValueTypeCode::I32);
 	popExpect(ValueType{ValueTypeCode::RefNull, static_cast<int32_t>(arg)});
 }
@@ -3298,7 +3301,7 @@ void Validator::dispatchArrayAtomicRmw##n(uint8_t ordering, TypeIdx arg) { \
 		fail("array.atomic: type is not an array"); \
 	const CanonFieldType& e = module.typeView(arg).arrayElement(); \
 	if (!e.isMutable) fail("array.atomic: array is immutable"); \
-	const ValueType t = sharedStorageValueType(e.storage); \
+	const ValueType t = sharedStorageValueType(module, e.storage); \
 	popExpect(t); \
 	popExpect(ValueTypeCode::I32); \
 	popExpect(ValueType{ValueTypeCode::RefNull, static_cast<int32_t>(arg)}); \
@@ -3318,7 +3321,7 @@ void Validator::dispatchArrayAtomicRmwCmpxchg(uint8_t ordering, TypeIdx arg)
 		fail("array.atomic: type is not an array");
 	const CanonFieldType& e = module.typeView(arg).arrayElement();
 	if (!e.isMutable) fail("array.atomic: array is immutable");
-	const ValueType t = sharedStorageValueType(e.storage);
+	const ValueType t = sharedStorageValueType(module, e.storage);
 	popExpect(t);
 	popExpect(t);
 	popExpect(ValueTypeCode::I32);

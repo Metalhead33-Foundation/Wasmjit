@@ -9,7 +9,7 @@ actually happened, the root cause of every surprise, and what is still open.
 | # | Item | Status | Evidence / blocker |
 |---|---|---|---|
 | 1 | constant-stack tail calls | **done for every lowered form** | self, direct, indirect and frame (scalar and v128) chains go through the libffi driver (`TAILSELF`/`TAILMUTUAL`/`TAILINDIRECT`/`TAILFRAME`/`TAILV128FRAME`, 1,000,000 links, `run()=1`); `ref` is not lowered by either backend |
-| 2 | shared reference/table atomics | **blocked** | numeric family and `table.get`/`table.set` are done; the parser still rejects shared composite references (`malformed mutability`), and SLJIT's four-argument ceiling needs a record for reference `cmpxchg` |
+| 2 | shared reference/table atomics | **done except unprobed global refs** | struct/array reference slots and shared-table atomics run on all three; global reference atomics have backend branches but no valid upstream fixture |
 | 3 | AsmJIT block parameters | **done** | `BLOCKPARAM` block=42 if=11/12 loop=0 on all three |
 | 4 | bulk memory on memory64 | **done** | `MEM64BULK` copy=97 fill=65 init=97 on all three |
 
@@ -329,53 +329,70 @@ ABIs.
 Extend the numeric shared-everything atomics to reference slots (globals, struct
 fields, array elements) and table slots, with the GC retain/release barrier.
 
-### What we found (blockers, not a completion)
+### What we found, and fixed
 
-* The numeric family is complete on all three backends (previous commit).
-* **Shared tables hit the same boundary.** A shared anyref table plus
-  `table.atomic.set/get` validates upstream, but `Runtime::loadFile` reports
-  *"malformed module: section read out of bounds"*. The parser consumes a
-  different byte count for the shared element type than the encoder wrote, so
-  the table index-space/type model, not the atomic opcode, is the next blocker.
-  `table_atomic_probe.wat` is kept as a valid fixture and a refusal probe.
-* **The core parser rejects the only valid upstream fixture.** A shared struct
-  with `(ref null (shared any))` validates with the pinned `wasm-tools`, but
-  `Runtime::loadFile` fails on all three backends with *"malformed mutability"*.
-  The type model does not carry shared composite references yet, so no atomic
-  lowering can be exercised. `shared_ref_atomic_probe.wat` is kept as a valid
-  upstream fixture and a documented refusal; its round-trip assertion starts
-  running when the parser accepts it.
+This item started as a blocker and ended as an implementation. The blockers
+were real, in this order:
 
-* **Reference slots in a shared composite are not expressible in the pinned
-  `wasm-tools`.** `struct.atomic.set` on `anyref` is rejected; `externref`,
-  `funcref`, `eqref`, `structref`, `arrayref`, `i31ref` and the null types are
-  rejected too. The only combination that validates is a **shared** struct whose
-  field is `(ref null (shared any))`, i.e. the shared-everything reference type.
-  A fixture for it therefore needs shared-composite parsing and shared-reference
-  type identity, not just an atomic opcode.
-* **Table slots have no `table.get`/`table.set` lowering on SLJIT/AsmJIT at
-  all**, so a table-atomic row cannot be reached without first implementing the
-  ordinary table accessors.
-* SLJIT's four-argument C-call ceiling cannot express
-  `wasm_atomic_ref_cmpxchg(ctx, address, expected, replacement, ordering)`
-  (five arguments). It needs either a packed stack record (like the existing
-  numeric cmpxchg selector) or a core wrapper with the ordering folded into the
-  selector.
+1. **Shared reference shorthand was unparsed.** `(ref null (shared eq))` encodes
+   as `0x63 0x65 0x6D` in explicit form, but a shared shorthand is `0x65 ht` at
+   value-type position. The `0x65` byte is also the string-view `wtf16` value
+   type, so `ValueType::decodeAfterFirstByte` now peeks one byte and only treats
+   `0x65` as shared when it is followed by a known heap-type byte. Before this,
+   the field decoder read the heap byte as the mutability flag and reported
+   *malformed mutability*.
+2. **The validator dropped sharedness and the heap type.** `sharedStorageValueType`
+   built `ValueType{opcode, -1}`. It now goes through
+   `Module::storageTypeFromCanon` (preserving heap type) and sets `isShared` for
+   references, so a shared field operand matches its function parameter.
+3. **Shared tables were unparsed for the same reason.** With the value-type fix
+   and the table accessors below, the shared anyref/eqref table fixture loads and
+   validates.
+4. **The backends had no reference branches.** AsmJIT and SLJIT now route
+   `set`/`xchg`/`cmpxchg` on a reference field/element through
+   `wasm_atomic_ref_store`/`xchg`/`cmpxchg`; the numeric `wasm_atomic_*` family
+   stays for scalar slots. SLJIT's five-argument reference cmpxchg is wrapped as
+   `(ctx, address, pair, ordering)`, with the expected/replacement pair in the
+   frame's scratch cell.
+5. **Table atomics.** Core helpers `wasm_atomic_table_get/set/xchg/cmpxchg` do the
+   bounds check and reference barrier; SLJIT packs the table index and ordering
+   into one 32-bit selector where the four-argument ceiling requires it.
+
+### Evidence
+
+```
+SHAREDREF libjit: run()=1 array=1
+SHAREDREF asmjit: run()=1 array=1
+SHAREDREF sljit: run()=1 array=1
+TABLEATOMIC libjit: run()=1
+TABLEATOMIC asmjit: run()=1
+TABLEATOMIC sljit: run()=1
+```
+
+`shared_ref_atomic_probe.wat` covers a shared eqref struct field and array
+(element) with set/xchg/cmpxchg/get; `table_atomic_probe.wat` covers shared
+anyref/eqref tables with set/xchg/cmpxchg/get. Both include a null round-trip.
 
 ### What is still open
 
-Shared-reference atomics on globals/structs/arrays and shared-table atomics. The
-numeric family and the ordinary table accessors are done; the parser/type model
-rejects the shared fixtures before any atomic lowering runs. This is recorded as
-a blocker, not claimed as done.
+* **Global reference atomics** have backend branches but no valid upstream
+  fixture: the pinned tool rejects the shared-global shapes tried here (and
+  `global.atomic` on a non-shared global is invalid). They are implemented but
+  unprobed, so no claim is made.
+* **Shared v128 slots** are outside the atomic proposal surface and remain
+  refused with the numeric width check.
 
 ### Lessons
 
-* **"The opcode is in the proposal" is not the same as "the type is
-  expressible."** Always validate the *fixture* with the pinned tool before
-  designing the lowering.
-* **A prerequisite hidden behind a feature is still a prerequisite.** Table
-  atomics need table accessors; there is no shortcut through the atomic helper.
+* **A parser desynchronization looks like a semantic error.** "malformed
+  mutability" was a one-byte misread of a shared shorthand, not a mutability
+  rule.
+* **The type model is the gate.** Once `isShared` and the heap type survived
+  canonicalization, the validator and both backends needed only the reference
+  barrier branch.
+* **A five-argument helper is a record, not a limitation.** The SLJIT cmpxchg
+  pair in the scratch cell is the same technique the numeric selector already
+  uses.
 
 ### Table accessors (same session)
 
@@ -398,6 +415,12 @@ TABLEACCESS sljit: ext=1 fun=0
 `ext=1` is a null externref round-trip; `fun=0` is a `ref.func` staying non-null;
 the out-of-bounds `table.get` throws at the host boundary. AsmJIT's first build
 rejected the 32->64 index widening as a `mov`; `movzx` is the explicit form.
+
+### Shared table atomics
+
+The shared table fixture now loads and runs on all three backends; the four
+atomic operations share the core bounds/barrier helpers. See the evidence block
+above for `TABLEATOMIC`.
 
 ## Item 3 — AsmJIT block parameters
 

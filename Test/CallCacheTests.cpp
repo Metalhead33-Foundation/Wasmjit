@@ -1622,12 +1622,17 @@ std::fprintf(stderr, "REFUSED: %s\n", error.what());
 continue;
 }
 const auto run = instance->exportedFunction("run");
+const auto runArray = instance->exportedFunction("run_array");
 REQUIRE(run.has_value());
+REQUIRE(runArray.has_value());
 try {
 const std::int32_t value = WASM::callCallable<std::int32_t>(*run,
 static_cast<void*>(nullptr));
-std::fprintf(stderr, "run()=%d\n", (int)value);
+const std::int32_t arrayValue = WASM::callCallable<std::int32_t>(*runArray,
+static_cast<void*>(nullptr));
+std::fprintf(stderr, "run()=%d array=%d\n", (int)value, (int)arrayValue);
 CHECK(value == 1);
+CHECK(arrayValue == 1);
 } catch (const std::exception& error) {
 std::fprintf(stderr, "FAILED: %s\n", error.what());
 CHECK(false);

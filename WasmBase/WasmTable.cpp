@@ -84,4 +84,89 @@ extern "C" void wasm_table_set(VMContext* context, uint32_t tableIndex,
 			static_cast<uint32_t>(std::memory_order_seq_cst));
 }
 
+extern "C" void* wasm_atomic_table_get(VMContext* context, uint32_t tableIndex,
+		uint64_t elementIndex, uint32_t ordering) noexcept
+{
+	if (context == nullptr || context->tables == nullptr
+			|| tableIndex >= context->tableCount) {
+		WASM::reportTrap(WASM::TrapKind::Internal, "table.atomic.get index is invalid");
+		return nullptr;
+	}
+	WASM::TableInstance* table = context->tables[tableIndex];
+	if (table == nullptr) {
+		WASM::reportTrap(WASM::TrapKind::Internal, "table.atomic.get table is null");
+		return nullptr;
+	}
+	if (elementIndex >= table->size) {
+		WASM::reportTrap(WASM::TrapKind::OutOfBoundsTableAccess);
+		return nullptr;
+	}
+	return reinterpret_cast<void*>(wasm_atomic_load(&table->base[elementIndex], 8,
+			ordering));
+}
+
+extern "C" void wasm_atomic_table_set(VMContext* context, uint32_t tableIndex,
+		uint64_t elementIndex, void* value, uint32_t ordering) noexcept
+{
+	if (context == nullptr || context->tables == nullptr
+			|| tableIndex >= context->tableCount) {
+		WASM::reportTrap(WASM::TrapKind::Internal, "table.atomic.set index is invalid");
+		return;
+	}
+	WASM::TableInstance* table = context->tables[tableIndex];
+	if (table == nullptr) {
+		WASM::reportTrap(WASM::TrapKind::Internal, "table.atomic.set table is null");
+		return;
+	}
+	if (elementIndex >= table->size) {
+		WASM::reportTrap(WASM::TrapKind::OutOfBoundsTableAccess);
+		return;
+	}
+	wasm_atomic_ref_store(context,
+			reinterpret_cast<void**>(&table->base[elementIndex]), value, ordering);
+}
+
+extern "C" void* wasm_atomic_table_xchg(VMContext* context, uint32_t tableIndex,
+		uint64_t elementIndex, void* value, uint32_t ordering) noexcept
+{
+	if (context == nullptr || context->tables == nullptr
+			|| tableIndex >= context->tableCount) {
+		WASM::reportTrap(WASM::TrapKind::Internal, "table.atomic.xchg index is invalid");
+		return nullptr;
+	}
+	WASM::TableInstance* table = context->tables[tableIndex];
+	if (table == nullptr) {
+		WASM::reportTrap(WASM::TrapKind::Internal, "table.atomic.xchg table is null");
+		return nullptr;
+	}
+	if (elementIndex >= table->size) {
+		WASM::reportTrap(WASM::TrapKind::OutOfBoundsTableAccess);
+		return nullptr;
+	}
+	return wasm_atomic_ref_xchg(context,
+			reinterpret_cast<void**>(&table->base[elementIndex]), value, ordering);
+}
+
+extern "C" void* wasm_atomic_table_cmpxchg(VMContext* context, uint32_t tableIndex,
+		uint64_t elementIndex, void* expected, void* replacement, uint32_t ordering) noexcept
+{
+	if (context == nullptr || context->tables == nullptr
+			|| tableIndex >= context->tableCount) {
+		WASM::reportTrap(WASM::TrapKind::Internal, "table.atomic.cmpxchg index is invalid");
+		return nullptr;
+	}
+	WASM::TableInstance* table = context->tables[tableIndex];
+	if (table == nullptr) {
+		WASM::reportTrap(WASM::TrapKind::Internal, "table.atomic.cmpxchg table is null");
+		return nullptr;
+	}
+	if (elementIndex >= table->size) {
+		WASM::reportTrap(WASM::TrapKind::OutOfBoundsTableAccess);
+		return nullptr;
+	}
+	return wasm_atomic_ref_cmpxchg(context,
+			reinterpret_cast<void**>(&table->base[elementIndex]), expected, replacement,
+			ordering);
+}
+
 } // namespace WASM

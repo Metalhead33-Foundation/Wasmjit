@@ -112,6 +112,10 @@ protected:
 	void dispatchCallRef(WASM::TypeIdx arg) override; //!< `call_ref`.
 	void dispatchTableGet(WASM::TableIdx arg) override; //!< `table.get`.
 	void dispatchTableSet(WASM::TableIdx arg) override; //!< `table.set`.
+	void dispatchTableAtomicGet(uint8_t ordering, WASM::TableIdx arg) override; //!< `table.atomic.get`.
+	void dispatchTableAtomicSet(uint8_t ordering, WASM::TableIdx arg) override; //!< `table.atomic.set`.
+	void dispatchTableAtomicRmwXchg(uint8_t ordering, WASM::TableIdx arg) override; //!< `table.atomic.rmw.xchg`.
+	void dispatchTableAtomicRmwCmpxchg(uint8_t ordering, WASM::TableIdx arg) override; //!< `table.atomic.rmw.cmpxchg`.
 	void dispatchReturnCallRef(WASM::TypeIdx arg) override; //!< `return_call_ref`.
 	void dispatchReturnCallIndirect(WASM::TypeIdx arg1, WASM::TableIdx arg2) override; //!< `return_call_indirect`.
 	void dispatchTryTable(const WASM::BlockType& arg1, std::vector<WASM::CatchClause>&& arg2) override; //!< `try_table`.
@@ -737,6 +741,13 @@ private:
 	void emitNullRefCheck(int callableReg);
 	//! Emits the typed zero return a pending tail call leaves behind.
 	void emitTailCallDummyReturn();
+	/*! \brief Stores a reference slot with the GC barrier; the address is in R0. \param ordering Atomic ordering. \param valueDepth Operand depth of the value. */
+	void emitSharedAtomicRefStore(uint8_t ordering, std::size_t valueDepth);
+	/*! \brief Exchanges a reference slot; the address is in R0. \param ordering Atomic ordering. \param valueDepth Operand depth of the value. \param resultDepth Operand depth receiving the old reference. */
+	void emitSharedAtomicRefXchg(uint8_t ordering, std::size_t valueDepth, std::size_t resultDepth);
+	/*! \brief Compare-exchanges a reference slot; the address is in R0. \param ordering Atomic ordering. \param expectedDepth Operand depth of the expected reference. \param replacementDepth Operand depth of the replacement. \param resultDepth Operand depth receiving the old reference. */
+	void emitSharedAtomicRefCmpxchg(uint8_t ordering, std::size_t expectedDepth,
+			std::size_t replacementDepth, std::size_t resultDepth);
 	/*!
 	 * \brief Emits the trap epilogue, finalises the code and returns its entry.
 	 * \param entry Receives the executable entry point.

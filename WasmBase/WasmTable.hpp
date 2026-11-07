@@ -65,6 +65,14 @@ public:
 extern "C" void* wasm_table_get(VMContext* context, uint32_t tableIndex, uint64_t elementIndex) noexcept;
 /** \brief Bounds-checked table element write with the reference barrier. \param context Current module VM context. \param tableIndex Table index. \param elementIndex Element index. \param value New element pointer. */
 extern "C" void wasm_table_set(VMContext* context, uint32_t tableIndex, uint64_t elementIndex, void* value) noexcept;
+/** \brief Atomic table element read for generated code. \param context Current module VM context. \param tableIndex Table index. \param elementIndex Element index. \param ordering Atomic memory ordering. \return The element pointer, or null after reporting an out-of-bounds trap. */
+extern "C" void* wasm_atomic_table_get(VMContext* context, uint32_t tableIndex, uint64_t elementIndex, uint32_t ordering) noexcept;
+/** \brief Atomic table element write with the reference barrier. \param context Current module VM context. \param tableIndex Table index. \param elementIndex Element index. \param value New element pointer. \param ordering Atomic memory ordering. */
+extern "C" void wasm_atomic_table_set(VMContext* context, uint32_t tableIndex, uint64_t elementIndex, void* value, uint32_t ordering) noexcept;
+/** \brief Atomic table exchange. \param context Current module VM context. \param tableIndex Table index. \param elementIndex Element index. \param value Replacement. \param ordering Atomic memory ordering. \return Previous element. */
+extern "C" void* wasm_atomic_table_xchg(VMContext* context, uint32_t tableIndex, uint64_t elementIndex, void* value, uint32_t ordering) noexcept;
+/** \brief Atomic table compare-exchange. \param context Current module VM context. \param tableIndex Table index. \param elementIndex Element index. \param expected Expected element. \param replacement Replacement. \param ordering Atomic memory ordering. \return Observed previous element. */
+extern "C" void* wasm_atomic_table_cmpxchg(VMContext* context, uint32_t tableIndex, uint64_t elementIndex, void* expected, void* replacement, uint32_t ordering) noexcept;
 
 } // namespace WASM
 

@@ -117,7 +117,8 @@ uint32_t sharedAtomicNumericWidth(WASM::ValueTypeCode code) noexcept
 	case WASM::ValueTypeCode::F32: return 4;
 	case WASM::ValueTypeCode::I64:
 	case WASM::ValueTypeCode::F64: return 8;
-	default: return 0;
+	case WASM::ValueTypeCode::V128: return 0;
+	default: return 8; // references
 	}
 }
 
@@ -2881,6 +2882,74 @@ values.push_back(result);
 }
 }
 
+void emitSharedAtomicRefStore(uint8_t ordering, const asmjit::x86::Gp& address,
+        const asmjit::x86::Gp& value)
+{
+    asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+    signature.set_ret(asmjit::TypeId::kUIntPtr);
+    signature.add_arg(asmjit::TypeId::kUIntPtr);
+    signature.add_arg(asmjit::TypeId::kUIntPtr);
+    signature.add_arg(asmjit::TypeId::kUIntPtr);
+    signature.add_arg(asmjit::TypeId::kUInt32);
+    asmjit::InvokeNode* invoke = nullptr;
+    checkError(compiler.invoke(asmjit::Out(invoke),
+            reinterpret_cast<uint64_t>(&::wasm_atomic_ref_store), signature),
+            "AsmJit shared atomic reference store emission failed");
+    invoke->set_arg(0, vmContext);
+    invoke->set_arg(1, address);
+    invoke->set_arg(2, value);
+    invoke->set_arg(3, asmjit::Imm(ordering));
+    emitPendingTrapReturn();
+}
+
+void emitSharedAtomicRefXchg(uint8_t ordering, const asmjit::x86::Gp& address,
+        const asmjit::x86::Gp& value)
+{
+    asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+    signature.set_ret(asmjit::TypeId::kUIntPtr);
+    signature.add_arg(asmjit::TypeId::kUIntPtr);
+    signature.add_arg(asmjit::TypeId::kUIntPtr);
+    signature.add_arg(asmjit::TypeId::kUIntPtr);
+    signature.add_arg(asmjit::TypeId::kUInt32);
+    asmjit::InvokeNode* invoke = nullptr;
+    checkError(compiler.invoke(asmjit::Out(invoke),
+            reinterpret_cast<uint64_t>(&::wasm_atomic_ref_xchg), signature),
+            "AsmJit shared atomic reference xchg emission failed");
+    invoke->set_arg(0, vmContext);
+    invoke->set_arg(1, address);
+    invoke->set_arg(2, value);
+    invoke->set_arg(3, asmjit::Imm(ordering));
+    auto old = compiler.new_gp_ptr("sharedAtomicRefOld");
+    invoke->set_ret(0, old);
+    emitPendingTrapReturn();
+    values.push_back(old);
+}
+
+void emitSharedAtomicRefCmpxchg(uint8_t ordering, const asmjit::x86::Gp& address,
+        const asmjit::x86::Gp& expected, const asmjit::x86::Gp& replacement)
+{
+    asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+    signature.set_ret(asmjit::TypeId::kUIntPtr);
+    signature.add_arg(asmjit::TypeId::kUIntPtr);
+    signature.add_arg(asmjit::TypeId::kUIntPtr);
+    signature.add_arg(asmjit::TypeId::kUIntPtr);
+    signature.add_arg(asmjit::TypeId::kUIntPtr);
+    signature.add_arg(asmjit::TypeId::kUInt32);
+    asmjit::InvokeNode* invoke = nullptr;
+    checkError(compiler.invoke(asmjit::Out(invoke),
+            reinterpret_cast<uint64_t>(&::wasm_atomic_ref_cmpxchg), signature),
+            "AsmJit shared atomic reference cmpxchg emission failed");
+    invoke->set_arg(0, vmContext);
+    invoke->set_arg(1, address);
+    invoke->set_arg(2, expected);
+    invoke->set_arg(3, replacement);
+    invoke->set_arg(4, asmjit::Imm(ordering));
+    auto old = compiler.new_gp_ptr("sharedAtomicRefCmpOld");
+    invoke->set_ret(0, old);
+    emitPendingTrapReturn();
+    values.push_back(old);
+}
+
 void emitSharedAtomicCmpxchg(uint8_t ordering, uint32_t width, int valueWidth,
 const asmjit::x86::Gp& address, const asmjit::x86::Gp& expected,
 const asmjit::x86::Gp& replacement)
@@ -3008,7 +3077,11 @@ return address;
 			throw std::runtime_error("AsmJit global.atomic.set operand stack underflow");
 		auto value = values.back(); values.pop_back();
 		auto cell = emitGlobalCell(arg);
-		emitSharedAtomicStore(ordering, width, valueWidth, cell, value);
+		if (WASM::isReferenceType(type.contentType.opcode)) {
+emitSharedAtomicRefStore(ordering, cell, value);
+return;
+}
+emitSharedAtomicStore(ordering, width, valueWidth, cell, value);
 	}
 
 	void dispatchGlobalAtomicRmwAdd(uint8_t ordering, WASM::GlobalIdx arg) override
@@ -3104,7 +3177,11 @@ return address;
 			throw std::runtime_error("AsmJit global.atomic.rmw operand stack underflow");
 		auto value = values.back(); values.pop_back();
 		auto cell = emitGlobalCell(arg);
-		emitSharedAtomicRmw(ordering, width, WASM_ATOMIC_XCHG, valueWidth, cell, value);
+		if (WASM::isReferenceType(type.contentType.opcode)) {
+emitSharedAtomicRefXchg(ordering, cell, value);
+return;
+}
+emitSharedAtomicRmw(ordering, width, WASM_ATOMIC_XCHG, valueWidth, cell, value);
 	}
 
 	void dispatchGlobalAtomicRmwCmpxchg(uint8_t ordering, WASM::GlobalIdx arg) override
@@ -3121,7 +3198,11 @@ return address;
 		auto replacement = values.back(); values.pop_back();
 		auto expected = values.back(); values.pop_back();
 		auto cell = emitGlobalCell(arg);
-		emitSharedAtomicCmpxchg(ordering, width, valueWidth, cell, expected, replacement);
+		if (WASM::isReferenceType(type.contentType.opcode)) {
+emitSharedAtomicRefCmpxchg(ordering, cell, expected, replacement);
+return;
+}
+emitSharedAtomicCmpxchg(ordering, width, valueWidth, cell, expected, replacement);
 	}
 
 	void dispatchStructAtomicGet(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override
@@ -3224,7 +3305,11 @@ return address;
 		auto value = values.back(); values.pop_back();
 		auto ref = values.back(); values.pop_back();
 		auto address = emitStructAtomicAddress(ref, fieldOffset);
-		emitSharedAtomicStore(ordering, width, valueWidth, address, value);
+		if (!storage.isPacked && WASM::isReferenceType(storage.value.opcode)) {
+emitSharedAtomicRefStore(ordering, address, value);
+return;
+}
+emitSharedAtomicStore(ordering, width, valueWidth, address, value);
 	}
 
 	void dispatchStructAtomicRmwAdd(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override
@@ -3386,7 +3471,11 @@ return address;
 		auto value = values.back(); values.pop_back();
 		auto ref = values.back(); values.pop_back();
 		auto address = emitStructAtomicAddress(ref, fieldOffset);
-		emitSharedAtomicRmw(ordering, width, WASM_ATOMIC_XCHG, valueWidth, address, value);
+		if (!storage.isPacked && WASM::isReferenceType(storage.value.opcode)) {
+emitSharedAtomicRefXchg(ordering, address, value);
+return;
+}
+emitSharedAtomicRmw(ordering, width, WASM_ATOMIC_XCHG, valueWidth, address, value);
 	}
 
 	void dispatchStructAtomicRmwCmpxchg(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2) override
@@ -3414,7 +3503,11 @@ return address;
 		auto expected = values.back(); values.pop_back();
 		auto ref = values.back(); values.pop_back();
 		auto address = emitStructAtomicAddress(ref, fieldOffset);
-		emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacement);
+		if (!storage.isPacked && WASM::isReferenceType(storage.value.opcode)) {
+emitSharedAtomicRefCmpxchg(ordering, address, expected, replacement);
+return;
+}
+emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacement);
 	}
 
 	void dispatchArrayAtomicGet(uint8_t ordering, WASM::TypeIdx arg) override
@@ -3517,6 +3610,10 @@ return address;
 		auto index = values.back(); values.pop_back();
 		auto ref = values.back(); values.pop_back();
 		auto address = emitArrayAtomicAddress(ref, index, lengthOffset, dataOffset, elementBytes);
+		if (!storage.isPacked && WASM::isReferenceType(storage.value.opcode)) {
+			emitSharedAtomicRefStore(ordering, address, value);
+			return;
+		}
 		emitSharedAtomicStore(ordering, width, valueWidth, address, value);
 	}
 
@@ -3679,6 +3776,10 @@ return address;
 		auto index = values.back(); values.pop_back();
 		auto ref = values.back(); values.pop_back();
 		auto address = emitArrayAtomicAddress(ref, index, lengthOffset, dataOffset, elementBytes);
+		if (!storage.isPacked && WASM::isReferenceType(storage.value.opcode)) {
+			emitSharedAtomicRefXchg(ordering, address, value);
+			return;
+		}
 		emitSharedAtomicRmw(ordering, width, WASM_ATOMIC_XCHG, valueWidth, address, value);
 	}
 
@@ -3707,6 +3808,10 @@ return address;
 		auto index = values.back(); values.pop_back();
 		auto ref = values.back(); values.pop_back();
 		auto address = emitArrayAtomicAddress(ref, index, lengthOffset, dataOffset, elementBytes);
+		if (!storage.isPacked && WASM::isReferenceType(storage.value.opcode)) {
+			emitSharedAtomicRefCmpxchg(ordering, address, expected, replacement);
+			return;
+		}
 		emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacement);
 	}
 
@@ -5511,6 +5616,159 @@ return address;
 		invoke->set_arg(2, index64);
 		invoke->set_arg(3, value);
 		emitPendingTrapReturn();
+	}
+
+	void dispatchTableAtomicGet(uint8_t ordering, WASM::TableIdx tableIndex) override
+	{
+		if (values.empty())
+			throw std::runtime_error("AsmJit table.atomic.get operand stack underflow");
+		auto index = values.back();
+		values.pop_back();
+		auto table = compiler.new_gp32("tableAtomicGetIndex");
+		checkError(compiler.mov(table, static_cast<uint32_t>(tableIndex)),
+				"AsmJit table.atomic.get index materialisation failed");
+		asmjit::x86::Gp index64 = index;
+		if (index.size() == 4) {
+			index64 = compiler.new_gp64("tableAtomicGetElement");
+			checkError(compiler.movzx(index64, index.r32()),
+					"AsmJit table.atomic.get index widening failed");
+		}
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		signature.add_arg(asmjit::TypeId::kUInt64);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke),
+				reinterpret_cast<uint64_t>(&WASM::wasm_atomic_table_get), signature),
+				"AsmJit table.atomic.get helper emission failed");
+		invoke->set_arg(0, vmContext);
+		invoke->set_arg(1, table);
+		invoke->set_arg(2, index64);
+		invoke->set_arg(3, asmjit::Imm(ordering));
+		auto result = compiler.new_gp_ptr("tableAtomicGetResult");
+		invoke->set_ret(0, result);
+		emitPendingTrapReturn();
+		values.push_back(result);
+	}
+
+	void dispatchTableAtomicSet(uint8_t ordering, WASM::TableIdx tableIndex) override
+	{
+		if (values.size() < 2)
+			throw std::runtime_error("AsmJit table.atomic.set operand stack underflow");
+		auto value = values.back();
+		values.pop_back();
+		auto index = values.back();
+		values.pop_back();
+		auto table = compiler.new_gp32("tableAtomicSetIndex");
+		checkError(compiler.mov(table, static_cast<uint32_t>(tableIndex)),
+				"AsmJit table.atomic.set index materialisation failed");
+		asmjit::x86::Gp index64 = index;
+		if (index.size() == 4) {
+			index64 = compiler.new_gp64("tableAtomicSetElement");
+			checkError(compiler.movzx(index64, index.r32()),
+					"AsmJit table.atomic.set index widening failed");
+		}
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kVoid);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		signature.add_arg(asmjit::TypeId::kUInt64);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke),
+				reinterpret_cast<uint64_t>(&WASM::wasm_atomic_table_set), signature),
+				"AsmJit table.atomic.set helper emission failed");
+		invoke->set_arg(0, vmContext);
+		invoke->set_arg(1, table);
+		invoke->set_arg(2, index64);
+		invoke->set_arg(3, value);
+		invoke->set_arg(4, asmjit::Imm(ordering));
+		emitPendingTrapReturn();
+	}
+
+	void dispatchTableAtomicRmwXchg(uint8_t ordering, WASM::TableIdx tableIndex) override
+	{
+		if (values.size() < 2)
+			throw std::runtime_error("AsmJit table.atomic.xchg operand stack underflow");
+		auto value = values.back();
+		values.pop_back();
+		auto index = values.back();
+		values.pop_back();
+		auto table = compiler.new_gp32("tableAtomicXchgIndex");
+		checkError(compiler.mov(table, static_cast<uint32_t>(tableIndex)),
+				"AsmJit table.atomic.xchg index materialisation failed");
+		asmjit::x86::Gp index64 = index;
+		if (index.size() == 4) {
+			index64 = compiler.new_gp64("tableAtomicXchgElement");
+			checkError(compiler.movzx(index64, index.r32()),
+					"AsmJit table.atomic.xchg index widening failed");
+		}
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		signature.add_arg(asmjit::TypeId::kUInt64);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke),
+				reinterpret_cast<uint64_t>(&WASM::wasm_atomic_table_xchg), signature),
+				"AsmJit table.atomic.xchg helper emission failed");
+		invoke->set_arg(0, vmContext);
+		invoke->set_arg(1, table);
+		invoke->set_arg(2, index64);
+		invoke->set_arg(3, value);
+		invoke->set_arg(4, asmjit::Imm(ordering));
+		auto result = compiler.new_gp_ptr("tableAtomicXchgResult");
+		invoke->set_ret(0, result);
+		emitPendingTrapReturn();
+		values.push_back(result);
+	}
+
+	void dispatchTableAtomicRmwCmpxchg(uint8_t ordering, WASM::TableIdx tableIndex) override
+	{
+		if (values.size() < 3)
+			throw std::runtime_error("AsmJit table.atomic.cmpxchg operand stack underflow");
+		auto replacement = values.back();
+		values.pop_back();
+		auto expected = values.back();
+		values.pop_back();
+		auto index = values.back();
+		values.pop_back();
+		auto table = compiler.new_gp32("tableAtomicCmpxchgIndex");
+		checkError(compiler.mov(table, static_cast<uint32_t>(tableIndex)),
+				"AsmJit table.atomic.cmpxchg index materialisation failed");
+		asmjit::x86::Gp index64 = index;
+		if (index.size() == 4) {
+			index64 = compiler.new_gp64("tableAtomicCmpxchgElement");
+			checkError(compiler.movzx(index64, index.r32()),
+					"AsmJit table.atomic.cmpxchg index widening failed");
+		}
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		signature.add_arg(asmjit::TypeId::kUInt64);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke),
+				reinterpret_cast<uint64_t>(&WASM::wasm_atomic_table_cmpxchg), signature),
+				"AsmJit table.atomic.cmpxchg helper emission failed");
+		invoke->set_arg(0, vmContext);
+		invoke->set_arg(1, table);
+		invoke->set_arg(2, index64);
+		invoke->set_arg(3, expected);
+		invoke->set_arg(4, replacement);
+		invoke->set_arg(5, asmjit::Imm(ordering));
+		auto result = compiler.new_gp_ptr("tableAtomicCmpxchgResult");
+		invoke->set_ret(0, result);
+		emitPendingTrapReturn();
+		values.push_back(result);
 	}
 
 	void dispatchRefFunc(WASM::FuncIdx index) override
