@@ -144,4 +144,23 @@ asmjit::FuncSignature TypeTranslator::translateFunctionType(const WASM::FuncType
 	return signature;
 }
 
+
+bool TypeTranslator::signatureNeedsFrame(const WASM::FuncType& function)
+{
+	int entries = 1; // the VMContext*
+	for (const WASM::StorageType& parameter : function.params) {
+		if (parameter.isPacked)
+			continue;
+		if (parameter.val.opcode == WASM::ValueTypeCode::V128)
+			return true; // two words, and the register form spells it as an aggregate
+		entries += 1;
+	}
+	if (function.results.size() > 1)
+		return true;
+	if (!function.results.empty()
+			&& function.results.front().val.opcode == WASM::ValueTypeCode::V128)
+		return true; // a vector result needs the caller buffer today
+	return entries > 4;
+}
+
 } // namespace AsmJitBackend

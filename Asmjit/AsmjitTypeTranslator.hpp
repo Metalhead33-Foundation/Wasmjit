@@ -46,14 +46,26 @@ public:
 	static asmjit::TypeId translateStorageType(const WASM::StorageType& type);
 
 	/*!
+	 * \brief Reports whether a signature cannot be delivered by the register form.
+	 * \param function Wasm function type.
+	 * \return True when the signature needs the staging frame: a `v128` anywhere, more
+	 *         than one result, or more argument entries than the C ABI call allows.
+	 *
+	 * This is the measurement that makes the frame form a *decision* instead of a
+	 * process-wide switch (docs/backends/PRODUCTION_GAPS.md section 1). It is not yet
+	 * consulted by the module compiler, so it changes no behaviour today.
+	 */
+	static bool signatureNeedsFrame(const WASM::FuncType& function);
+/*!
 	 * \brief Builds the native function signature used by generated code.
 	 * \param function Wasm function type.
 	 * \param frameAbi Whether to spell the staging-frame form, `(ctx, frame) -> void`.
 	 * \return C-declaration host signature, including the implicit VMContext*.
 	 * \throws std::runtime_error for unsupported types or too many arguments.
 	 */
-	static asmjit::FuncSignature translateFunctionType(const WASM::FuncType& function,
+		static asmjit::FuncSignature translateFunctionType(const WASM::FuncType& function,
 			bool frameAbi = false);
+
 };
 
 } // namespace AsmJitBackend

@@ -235,3 +235,41 @@ a partial match would have deleted the *live* one -- which would still have comp
 because the dead one handled the same case. That is the silent-branch-chain failure
 this campaign has refused three times; the script asserted `keep < a2 < resume` before
 writing.
+
+## 10. Item A, step 1: the measurement exists (still inert)
+
+```cpp
+static bool TypeTranslator::signatureNeedsFrame(const WASM::FuncType& function);
+```
+
+True when a signature cannot be delivered by the register form:
+
+* any `v128` parameter -- two words, spelled as an aggregate by the register path;
+* more than one result;
+* a `v128` result -- it needs a caller buffer today;
+* more argument entries than the C ABI call allows (`ctx` plus more than three).
+
+**Behaviour is unchanged**: the module compiler still reads
+`WASM::frameCallAbiOptIn()`, so nothing moves and no fixture shifts. That is the point
+of step 1 -- the decision logic now exists, is documented, and can be reviewed on its
+own merits.
+
+### The two steps that remain for item A
+
+| Step | Change | Churn |
+|---|---|---|
+| 2 | `frameMode = optIn \|\| any signature needs it` and fix the fixtures that move | **31 fixtures contain `v128`**, 16 references in `AsmjitBackendTests` |
+| 3 | drop the opt-in for AsmJIT entirely once 2 is green | none |
+
+For step 2 the useful measurement is now *mechanical*: compile the suite, list every
+AsmJIT test whose fixture flipped to `frameCallAbi() == true`, and convert those to
+`callCallableFrame`. The list is finite, and each conversion is the same edit.
+
+### One recurring mechanical hazard, worth writing down
+
+The editor tool doubles backslashes inside Doxygen commands (`\brief` arrives as
+`\\brief`), and inserting a `/*! */` block above an already-documented declaration
+makes Doxygen **merge the two docs onto one function**. Both happened here, and both
+were caught by gates (`WARN_NO_PARAMDOC` and a build error). The fix pattern, now used
+twice: normalise `\\` -> `\`, then move the older block down beside its own
+declaration.
