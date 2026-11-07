@@ -270,3 +270,39 @@ untouched by this.
 checklist (they skip unless `WASMJIT_STEP5_GATES=1`), the feature is opt-in, and the
 default path is byte-for-byte unchanged. What would be wrong is enabling the switch
 while the trap path disagrees with the signature.
+
+## 13. Step 5d attempted: the frame call does not finalise (reverted)
+
+The direct-call site was written in full -- frame allocated with
+`compiler.new_stack(argBytes + 16, 16)`, arguments packed before the invoke node,
+`set_arg(0, ctx)` and `set_arg(1, frameAddress)`, results read back at
+`frame + argBytes` -- and the refusal relaxation that lets a vector argument reach
+the call. **`v128_multi` still passed** (10 assertions in 3 test cases), so 5b/5c
+survive; the new `staging_call` gate failed with
+
+```
+AsmJit compiler finalisation failed: 25
+```
+
+which is the same error code the trap path produced when a `ret` disagreed with the
+signature. That narrows it to an **operand/type mismatch in the emitted
+instructions**, and the three candidates worth checking first, in order:
+
+1. **`asmjit::x86::Mem(frameAddress, offset, size)`** -- a sized memory operand built
+   from a base and an offset. If v1.21 wants `.set_size()` or a `clone_adjusted()`
+   form, the store size is unknown at validation time -- exactly error 25.
+2. **The vector argument registers.** A `v128` value in `values` is a *buffer
+   address*, so `qword_ptr(arguments[i], word * 8)` is right only if the buffer is
+   the value; confirm that the same expression is used elsewhere for vectors.
+3. **`set_arg` on a void-returning invoke.** The frame signature returns void, and
+   the code sets two arguments; verify that `arg_count()` is 2 and not 3.
+
+Everything was reverted, so the branch is back to `e492712`: suite 21805 in 759
+cases, step-5 gates 10 in 3, all green.
+
+**Method note.** This is the one place in step 5 where the earlier pattern did not
+help: the gate failed with the same code as before but for a *new* reason, so the
+message no longer named the site. The next attempt should isolate the suspect with a
+**unit test of the emitted call** -- compile one function that calls a three-vector
+callee and inspect `compiler.code()` -- rather than bisecting the generated function
+against a gate.
