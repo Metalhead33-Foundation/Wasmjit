@@ -1460,3 +1460,38 @@ An additive query satisfies both: it answers a *different question* from "is the
 callable", so nothing existing changes behaviour.
 
 Suite 21850 assertions in 773 cases, green.
+
+## 40. SLJIT N results is a FEATURE, not a guard: the reading that says so
+
+`prepared.allReturns` appears in exactly three places, all in the **support check**:
+
+```
+:959  if (prepared.allReturns.size() > 1) { unsupportedReason_ = ...; return; }
+:963  if (prepared.allReturns.size() == 1) { resultKind_ = ...; resultWidth_ = ...; }
+:965      resultWidth_ = widthOf(prepared.allReturns[0]);
+```
+
+After that point the dispatcher models **one** result: a single `resultKind_`, a single
+`resultWidth_`, and a return site that stores one value. There is no per-result table,
+no result-offset arithmetic, and the operand stack is unwound for one value.
+
+So supporting N results in the frame form needs, at minimum:
+
+| # | Change |
+|---|---|
+| 1 | model fields for N results: a `std::vector` of kinds and widths, populated from `prepared.allReturns` |
+| 2 | the `> 1` refusal gated on `frameAbi_` (the register form keeps refusing, because it has no place to put them) |
+| 3 | the return site: store each result at `frameArgumentsBytes + offset(i)`, 8 bytes per scalar slot, 16 per `v128` |
+| 4 | the operand-stack unwinding: N values, in declaration order |
+| 5 | `frameResultOffset` arithmetic shared with the other backends rather than re-derived |
+
+That is a **feature with four code sites and a test**, not a one-line gate. It is the
+item the priority list ranks first, and it is also the one that most deserves its own
+session: SLJIT is the backend with a *hard* reason to use the frame, so its
+multi-result path is the one an embedder will actually reach.
+
+**Not started, deliberately.** Starting it at the end of a long session -- after four
+reverts on smaller changes -- would violate the one rule this campaign has kept
+without exception: land green, or land nothing.
+
+Suite 21850 assertions in 773 cases, green.
