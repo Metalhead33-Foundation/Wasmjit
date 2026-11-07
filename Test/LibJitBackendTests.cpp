@@ -870,3 +870,48 @@ WASM::setFrameCallAbiOptIn(false);
 WASM::ModuleInstance& registerForm = runtime->instantiate(*module, imports);
 CHECK_FALSE(registerForm.frameCallAbi());
 }
+
+// EXPERIMENT (docs/backends/EXPORT_SIGNATURE.md section 37): does LibJIT's
+// register-form multi-result work for this fixture at all? MV5 makes the entry
+// `void(ctx, void* resultBuffer)`, so a two-result function takes one trailing
+// pointer. Env-gated so a crash cannot take the suite with it.
+TEST_CASE("LibJIT register-form multi-result, instrumented",
+"[experiment][libjit][abi][multi]")
+{
+if (std::getenv("WASMJIT_SAFETY_PROBES") == nullptr) {
+SUCCEED("experiment: set WASMJIT_SAFETY_PROBES=1 to run it");
+return;
+}
+auto runtime = WASM::Runtime::create("libjit");
+REQUIRE(runtime != nullptr);
+auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "asmjit_multi_result.wasm");
+std::fprintf(stderr, "PROBE loaded\n");
+
+WASM::RegistryImportResolver imports;
+WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+std::fprintf(stderr, "PROBE instantiated, frameCallAbi=%d\n",
+(int)instance.frameCallAbi());
+
+const std::optional<WASM::Callable> callable = instance.exportedFunction("pair");
+std::fprintf(stderr, "PROBE callable=%d fnPtr=%p rawFnPtr=%p\n",
+(int)callable.has_value(),
+callable ? callable->fnPtr : nullptr,
+callable ? callable->rawFnPtr : nullptr);
+REQUIRE(callable.has_value());
+
+using Mv5Entry = void (*)(void*, void*);
+alignas(16) std::uint8_t results[32] = {};
+std::fprintf(stderr, "PROBE calling\n");
+reinterpret_cast<Mv5Entry>(callable->fnPtr)(nullptr, results);
+std::fprintf(stderr, "PROBE returned\n");
+
+std::int32_t first = 0;
+std::int64_t second = 0;
+std::memcpy(&first, results, sizeof(first));
+std::memcpy(&second, results + 8, sizeof(second));
+std::fprintf(stderr, "PROBE first=%d second=%lld\n", (int)first,
+(long long)second);
+CHECK(first == 7);
+CHECK(second == 9);
+}

@@ -1309,3 +1309,47 @@ If that faults, LibJIT's MV5 multi-result path is broken -- a far more important
 than a missing refusal, and one that no test in the suite covers.
 
 Suite restored to 21845 assertions in 770 cases, green.
+
+## 37. The experiment: LibJIT's register-form multi-result is SOUND
+
+```
+PROBE loaded
+PROBE instantiated, frameCallAbi=0
+PROBE callable=1 fnPtr=0x7fab81453473 rawFnPtr=0x7fab81453144
+PROBE calling
+PROBE returned
+PROBE first=7 second=9          <- both results correct
+```
+
+`asmjit_multi_result` on LibJIT, register form, through its MV5 entry
+(`void(ctx, void* resultBuffer)`): **7 and 9 come back correctly**. The 16-byte buffer
+holds the packed tuple, `i32` at 0 and `i64` at 8.
+
+### What this settles
+
+* **MV5 is sound.** The trailing-buffer mechanism works for this shape, exactly as it
+did when LibJIT was the only backend. The history is worth recording: the *struct
+return* approach was tried first and failed consistently -- libjit's aggregate-return
+ABI reads a hidden result-buffer pointer from an unwritten frame slot when the callee
+has parameters -- which is why MV5 exists at all.
+* **The reverts of the last two rounds were not caused by the register-form path.**
+  The fixture is fine; the guard's register-form assertion is fine.
+* **The remaining suspect is the opt-in branch itself** -- the module-level refusal
+  and/or the frame-mode instantiation of this fixture. That is now a narrow question:
+  the register half is measured and correct, so only the frame half can be at fault.
+
+### The probe is permanent
+
+`[experiment][libjit][abi][multi]`, gated by `WASMJIT_SAFETY_PROBES=1`, with the
+instrumented prints left in. It costs nothing in a normal run and turns the next
+investigation into a single command:
+
+```
+WASMJIT_SAFETY_PROBES=1 ./Test/WasmJit '[experiment]'
+```
+
+### Note on the method
+
+This is the first time in the campaign that instrumenting *before* theorising produced
+a clean answer in one run: three `fprintf`s and a call settled what two rounds of
+edit-and-revert could not. The prints are kept for that reason.
