@@ -279,3 +279,57 @@ The refusals are back in place, so the shape is still honestly refused.
 - A deviation is a documented, pinned, dated record -- never a silent absorption.
 - Backend-specific test shapes go in backend-specific fixtures.
 
+
+## 8. FrameCall campaign: the pattern, and its scoreboard (2026-11-06)
+
+The staging-frame ABI (`backends/STAGING_CALL_ABI.md`) was proposed, adopted and
+half-implemented in one session. Its shape came from a one-line observation -- *a
+compiled function only needs **two** arguments: the context and a frame* -- and
+that observation turned out to retire five separate limits at once.
+
+### 8.1 The pattern, stated so it can be repeated
+
+Every step of this campaign followed the same rhythm, and the rhythm is the
+deliverable:
+
+1. **Read the code the step depends on** before writing it. Three times this
+   turned a planned edit into a *smaller* one (the entry path, the call-site
+   conversion point, the driver's collapse) and twice it found the step was
+   **larger** than planned (call sites; libjit's mode-before-translation rule).
+2. **Write the gate first**, in the adversarial form -- pre-filled buffers, sums
+   that are wrong for the obvious wrong answer -- so a no-op fails.
+3. **Land one step per commit**, green, even when the step is only a brief.
+4. **Record what went wrong in the same document that records what worked.** The
+   failure list below is the useful half.
+
+### 8.2 What went wrong, and what each failure cost
+
+| Failure | Cost | Lesson now in the record |
+|---|---|---|
+| Patch applied through a heredoc inside a shell command | two failed attempts, one invalid C++ file | Multi-site patches are written with the editor; the escaping stack (JSON -> shell -> heredoc -> Python -> C++) eats quotes |
+| `sljit_get_local_base(compiler, dst, **dstw**, offset)` called with the offset as `dstw` | one assertion four layers down | Read the primitive's contract; `dstw` must be zero |
+| Header banner comment written as `//` | one gate failure | In a `.hpp` **every** comment is Doxygen |
+| Tripwire test instantiated a `v128` fixture on AsmJIT | one failure | A test's *scope* is part of its contract: AsmJIT refuses vectors, so it was never the test's subject |
+| Stale objects and a deleted fixture left a generated Makefile rule | three confusing red runs | Deleting a `.wat` requires touching `Test.pro`; `touch` alone does not force a relink |
+| Temptation to commit inert scaffolding ("the other half will come") | avoided twice | A step is a unit: half of it is worse than none of it |
+
+### 8.3 Scoreboard at the end of the campaign
+
+| Step | State |
+|---|---|
+| 1 core frame arithmetic | **done**, `[abi][frame]` 14 assertions |
+| 2 capability + `callCallableFrame` | **done**, tripwire pin |
+| 3 SLJIT functions | **done** -- SLJIT's four-argument ceiling is bypassed for any width |
+| 3b SLJIT compiled-to-compiled calls | **done** -- `staging_call.wasm` returns 6 through a frame |
+| 4a/4b LibJIT | **briefed to nine sites**, scope corrected by reading |
+| 5 AsmJIT | **briefed** |
+| 6 harness, cache, cross-backend suite | **pending** -- this is what would earn the un-ban |
+
+### 8.4 The one number worth carrying forward
+
+A signature that needs **six argument words** -- three `v128` parameters -- costs
+**two C arguments and 48 bytes** in the frame form. That was impossible on SLJIT
+before this campaign (hard cap: four), impossible on LibJIT (sixth argument lost)
+and a special case on AsmJIT (vector-register result). One observation, one ABI,
+three backends converging -- which is the entire argument for a canonical boundary
+in the first place.
