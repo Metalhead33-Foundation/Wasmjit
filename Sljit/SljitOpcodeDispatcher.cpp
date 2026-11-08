@@ -1080,13 +1080,33 @@ extern "C" WASM::Callable* sljitResolveIndirectCallable(WASM::VMContext* vm,
 sljit_s32 callArgTypes(const WASM::FuncType& type, WASM::ValueTypeCode resultKind,
 		int resultWidth)
 {
-	sljit_s32 types = resultWidth == 0
+	// A v128 result cannot arrive in one register. The caller passes a trailing
+	// 16-byte out-buffer, and the callee returns void, exactly as its prologue
+	// assumes (`resultViaBuffer` in beginFunction).
+	const bool resultViaBuffer = resultWidth == 16;
+	sljit_s32 types = resultWidth == 0 || resultViaBuffer
 			? SLJIT_ARG_RETURN(SLJIT_ARG_TYPE_RET_VOID)
 			: SLJIT_ARG_RETURN(argTypeOf(resultKind));
 	types |= SLJIT_ARG_VALUE(SLJIT_ARG_TYPE_P, 1);
-	for (std::size_t i = 0; i < type.params.size(); ++i)
-		types |= SLJIT_ARG_VALUE(argTypeOf(type.params[i].val.opcode),
-				static_cast<sljit_s32>(i) + 2);
+	std::vector<WASM::ValueKind> parameterKinds;
+	parameterKinds.reserve(type.params.size());
+	for (const WASM::StorageType& parameter : type.params)
+		parameterKinds.push_back(WASM::valueKindOf(parameter.val.opcode));
+	std::uint32_t nextSlot = 2;
+	for (const WASM::ArgSlot& slot : WASM::mapArgSlots(parameterKinds)) {
+		if (slot.slots == 2) {
+			types |= SLJIT_ARG_VALUE(SLJIT_ARG_TYPE_W, static_cast<sljit_s32>(nextSlot));
+			types |= SLJIT_ARG_VALUE(SLJIT_ARG_TYPE_W, static_cast<sljit_s32>(nextSlot + 1));
+			nextSlot += 2;
+		} else {
+			types |= SLJIT_ARG_VALUE(
+					argTypeOf(type.params[slot.parameter].val.opcode),
+					static_cast<sljit_s32>(nextSlot));
+			++nextSlot;
+		}
+	}
+	if (resultViaBuffer)
+		types |= SLJIT_ARG_VALUE(SLJIT_ARG_TYPE_P, static_cast<sljit_s32>(nextSlot));
 	return types;
 }
 
@@ -1256,8 +1276,10 @@ bool OpcodeDispatcher::beginFunction()
 		return false;
 	}
 
-	const std::size_t frameSlots = localSlots_ + kReservedSlots + maxStackDepth_
-			+ (frameAbi_ ? 16u : 0u); // 256 bytes of staging scratch for callee frames
+	// 16 slots (256 bytes) of staging scratch follow the operand stack. Frame-form
+	// calls pack a callee's arguments and results there; register-form calls use
+	// the first two slots as the out-buffer for a v128 result.
+	const std::size_t frameSlots = localSlots_ + kReservedSlots + maxStackDepth_ + 16u;
 	if (frameSlots > SLJIT_MAX_LOCAL_SIZE / kSlotBytes) {
 		unsupportedReason_ = "the function frame exceeds SLJIT's local-area limit";
 		return false;
@@ -2721,6 +2743,12 @@ void OpcodeDispatcher::emitResolvedCall(const WASM::FuncType& type, int callable
 		if (isFloatKind(kind)) {
 			loadFloatSlot(SLJIT_FR(static_cast<sljit_s32>(floatIndex)), base + i, width);
 			++floatIndex;
+		} else if (width == 16) {
+			// A v128 argument occupies two integer argument slots.
+			loadSlot(SLJIT_R(static_cast<int>(integerIndex) + 1), base + i, 8);
+			emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R(static_cast<int>(integerIndex) + 2),
+					0, SLJIT_MEM1(SLJIT_SP), stackSlotOffset(base + i) + 8));
+			integerIndex += 2;
 		} else {
 			loadSlot(SLJIT_R(static_cast<int>(integerIndex) + 1), base + i, width);
 			++integerIndex;
@@ -2730,10 +2758,28 @@ void OpcodeDispatcher::emitResolvedCall(const WASM::FuncType& type, int callable
 	const int resultWidth = type.results.empty() ? 0 : widthOf(type.results.front().val);
 	const WASM::ValueTypeCode resultKind = type.results.empty()
 			? WASM::ValueTypeCode::Void : type.results.front().val.opcode;
+	const bool resultViaBuffer = resultWidth == 16;
+	if (resultViaBuffer) {
+		// The trailing pointer argument follows every declared parameter. Its
+		// integer-register position is the first slot after the integer parameters;
+		// `callFrameOffset` is the staging area reserved for exactly this purpose.
+		emit(sljit_get_local_base(compiler_,
+				SLJIT_R(static_cast<int>(integerIndex) + 1), 0, callFrameOffset()));
+	}
 	emit(sljit_emit_icall(compiler_, SLJIT_CALL,
 			callArgTypes(type, resultKind, resultWidth),
 			SLJIT_MEM1(SLJIT_SP), targetSlotOffset()));
-	if (resultWidth != 0) {
+	if (resultViaBuffer) {
+		// R1 is caller-saved, so take the staging address again and copy both
+		// words into the one 16-byte operand slot.
+		emit(sljit_get_local_base(compiler_, SLJIT_R1, 0, callFrameOffset()));
+		for (int word = 0; word < 2; ++word) {
+			emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0,
+					SLJIT_MEM1(SLJIT_R1), static_cast<sljit_sw>(word * 8)));
+			emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+					stackSlotOffset(base) + word * 8, SLJIT_R0, 0));
+		}
+	} else if (resultWidth != 0) {
 		if (isFloatKind(resultKind))
 			storeFloatSlot(SLJIT_FR0, base, resultWidth);
 		else

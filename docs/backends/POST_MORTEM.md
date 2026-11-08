@@ -880,3 +880,81 @@ rethrow and the cleanup/exit path.
 * **Convert backend assertions into refusals at the first frame boundary.** The
   new `push` guard is a last line of defence; the measured capacity remains the
   primary contract.
+
+## Remaining-gap pass — SLJIT SIMD shuffle and v128 results
+
+### Intended
+
+Finish the `simd: shuffle and swizzle run through the JIT` case and the
+`v128` calling-convention cases under `WASMJIT_BACKEND=sljit`. The full generic
+run stopped here with a SIGSEGV inside generated code.
+
+### Symptom
+
+`simd_shuffle`'s first export crashed while writing its 16-byte result. The
+faulting instruction was `mov %rax,(%rdi)` with `%rdi` equal to the generated
+code page address. The callee had used its **second incoming argument** as the
+result-buffer pointer; the caller had never passed one.
+
+The next case, `simd: a v128 parameter and result round-trip through the JIT`,
+then crashed with `%rdi = 0x0807060504030201`, the first two lanes of the input
+vector. The test had called a frame-ABI module with `WASM::callCallable<V128>`,
+which passes the vector as the second C argument; the callee correctly treated
+that second argument as a frame pointer.
+
+### Root cause
+
+Two separate caller-side omissions:
+
+1. SLJIT's register-form call path handled a scalar result but not the canonical
+   `v128` result shape: `callArgTypes` declared the function as returning a
+   word, and the call supplied no trailing out-buffer. The callee's prologue
+   (`resultViaBuffer`) had always expected `void(VMContext*, params..., void* out)`.
+   The register file therefore contained the callable target where the callee
+   expected the buffer, and `emitReturnValue` wrote to executable memory.
+2. `ModuleCompiler` correctly switches a whole module to the staging-frame ABI
+   when any signature needs more than four argument slots. The `simd_abi`
+   fixture has a four-`v128` function, so all of its exports are frame-form. The
+   test's direct `callCallable` calls bypassed the frame ABI.
+
+### Fix
+
+* `callArgTypes` now derives parameter slots with `WASM::mapArgSlots` (a `v128`
+  parameter consumes two), declares a `v128` result as `void`, and adds the
+  trailing out-buffer pointer at the first slot after all parameters.
+* The register-form `emitResolvedCall` uses the 16-slot staging area after the
+  operand stack as that out-buffer, then copies both words into the one
+  16-byte operand slot. The staging area is reserved for both call forms now.
+* The `simd_abi` test marshals through `callCallableFrame` whenever
+  `instance.frameCallAbi()` is set, including v128, i32 and i64 results.
+
+### Evidence
+
+```
+WASMJIT_BACKEND=sljit ./Test/WasmJit 'simd: shuffle and swizzle run through the JIT'
+All tests passed (25 assertions in 1 test case)
+
+WASMJIT_BACKEND=sljit ./Test/WasmJit 'simd: a v128 parameter and result round-trip through the JIT'
+All tests passed (31 assertions in 1 test case)
+
+WASMJIT_BACKEND=sljit ./Test/WasmJit 'spec: simd_splat'
+All tests passed (2 assertions in 1 test case)
+```
+
+The full SLJIT run now reaches the component-script cases instead of stopping
+at SIMD shuffle.
+
+### Lessons
+
+* **A `v128` result is an extra hidden argument, not a wide return register.**
+  The caller and callee must agree on that trailing pointer or the callee writes
+  through whatever occupied the argument slot.
+* **Frame mode is module-wide, so tests must ask the instance which ABI it
+  got.** A direct native call is only valid for the register form.
+* **Use `mapArgSlots` on both sides.** It is exactly the helper whose contract
+  prevents the two-slot vector shift from being recomputed by hand.
+
+### What remains
+
+The full SLJIT run still stops later, in `component script marshals structured
+values`; that is the next item, not a SIMD issue.

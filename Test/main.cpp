@@ -6885,6 +6885,66 @@ TEST_CASE("simd: a v128 parameter and result round-trip through the JIT")
 	auto zeroLane0 = instance.exportedFunction("local_zero_lane0");
 	auto zeroLane3 = instance.exportedFunction("local_zero_lane3");
 	auto four = instance.exportedFunction("four");
+
+	// `four` makes SLJIT choose the staging-frame ABI for the whole module. A
+	// direct `callCallable` would then pass the vector as the frame pointer, so
+	// these helpers marshal the same canonical frame the embedder uses.
+	const auto callVector = [&instance](const WASM::Callable& callable,
+			const V128& arg) -> V128 {
+		if (!instance.frameCallAbi())
+			return WASM::callCallable<V128>(callable, arg);
+		alignas(16) std::array<std::uint8_t, 32> frame{};
+		std::memcpy(frame.data(), &arg, sizeof(arg));
+		WASM::callCallableFrame(callable, frame.data());
+		V128 result{};
+		std::memcpy(&result, frame.data() + 16, sizeof(result));
+		return result;
+	};
+	const auto callVector4 = [&instance](const WASM::Callable& callable,
+			const V128& a, const V128& b, const V128& c, const V128& d) -> V128 {
+		if (!instance.frameCallAbi())
+			return WASM::callCallable<V128>(callable, a, b, c, d);
+		alignas(16) std::array<std::uint8_t, 80> frame{};
+		std::memcpy(frame.data(), &a, sizeof(a));
+		std::memcpy(frame.data() + 16, &b, sizeof(b));
+		std::memcpy(frame.data() + 32, &c, sizeof(c));
+		std::memcpy(frame.data() + 48, &d, sizeof(d));
+		WASM::callCallableFrame(callable, frame.data());
+		V128 result{};
+		std::memcpy(&result, frame.data() + 64, sizeof(result));
+		return result;
+	};
+	const auto callLane = [&instance](const WASM::Callable& callable,
+			const V128& arg) -> std::int32_t {
+		if (!instance.frameCallAbi())
+			return WASM::callCallable<std::int32_t>(callable, arg);
+		alignas(16) std::array<std::uint8_t, 24> frame{};
+		std::memcpy(frame.data(), &arg, sizeof(arg));
+		WASM::callCallableFrame(callable, frame.data());
+		std::int32_t result = 0;
+		std::memcpy(&result, frame.data() + 16, sizeof(result));
+		return result;
+	};
+	const auto callLane64 = [&instance](const WASM::Callable& callable,
+			const V128& arg) -> std::int64_t {
+		if (!instance.frameCallAbi())
+			return WASM::callCallable<std::int64_t>(callable, arg);
+		alignas(16) std::array<std::uint8_t, 24> frame{};
+		std::memcpy(frame.data(), &arg, sizeof(arg));
+		WASM::callCallableFrame(callable, frame.data());
+		std::int64_t result = 0;
+		std::memcpy(&result, frame.data() + 16, sizeof(result));
+		return result;
+	};
+	const auto callZeroLane = [&instance](const WASM::Callable& callable) -> std::int32_t {
+		if (!instance.frameCallAbi())
+			return WASM::callCallable<std::int32_t>(callable);
+		alignas(16) std::array<std::uint8_t, 8> frame{};
+		WASM::callCallableFrame(callable, frame.data());
+		std::int32_t result = 0;
+		std::memcpy(&result, frame.data(), sizeof(result));
+		return result;
+	};
 	REQUIRE(identity.has_value());
 	REQUIRE(viaLocal.has_value());
 	REQUIRE(throughBlock.has_value());
@@ -6900,31 +6960,31 @@ TEST_CASE("simd: a v128 parameter and result round-trip through the JIT")
 	const V128 in{0x04030201u, 0x08070605u, 0x0C0B0A09u, 0x100F0E0Du};
 
 	// `(param v128) (result v128)` — all four lanes must survive the boundary.
-	const V128 id = WASM::callCallable<V128>(*identity, in);
+	const V128 id = callVector(*identity, in);
 	REQUIRE(id.a == in.a);
 	REQUIRE(id.b == in.b);
 	REQUIRE(id.c == in.c);
 	REQUIRE(id.d == in.d);
 
 	// The same through a `v128` local, and through a block boundary.
-	const V128 local = WASM::callCallable<V128>(*viaLocal, in);
+	const V128 local = callVector(*viaLocal, in);
 	REQUIRE(local.a == in.a);
 	REQUIRE(local.d == in.d);
-	const V128 blocked = WASM::callCallable<V128>(*throughBlock, in);
+	const V128 blocked = callVector(*throughBlock, in);
 	REQUIRE(blocked.a == in.a);
 	REQUIRE(blocked.d == in.d);
 
 	// Lane projections see the same bytes.
-	REQUIRE(WASM::callCallable<int32_t>(*lane0, in) == 0x04030201);
-	REQUIRE(WASM::callCallable<int32_t>(*lane3, in) == 0x100F0E0D);
-	REQUIRE(WASM::callCallable<int32_t>(*u8Lane0, in) == 0x01);
-	REQUIRE(WASM::callCallable<int32_t>(*u8Lane15, in) == 0x10);
-	REQUIRE(WASM::callCallable<int64_t>(*i64Lane1, in) == 0x100F0E0D0C0B0A09ll);
+	REQUIRE(callLane(*lane0, in) == 0x04030201);
+	REQUIRE(callLane(*lane3, in) == 0x100F0E0D);
+	REQUIRE(callLane(*u8Lane0, in) == 0x01);
+	REQUIRE(callLane(*u8Lane15, in) == 0x10);
+	REQUIRE(callLane64(*i64Lane1, in) == 0x100F0E0D0C0B0A09ll);
 
 	// A `v128` local read before its first `local.set` must be zero, not garbage
 	// (this is zeroValueForType's 16-byte path).
-	REQUIRE(WASM::callCallable<int32_t>(*zeroLane0) == 0);
-	REQUIRE(WASM::callCallable<int32_t>(*zeroLane3) == 0);
+	REQUIRE(callZeroLane(*zeroLane0) == 0);
+	REQUIRE(callZeroLane(*zeroLane3) == 0);
 
 	// Four `v128` parameters force the convention past the register file, so the
 	// fourth argument is stack-passed: this is the half of the ABI the
@@ -6933,7 +6993,7 @@ TEST_CASE("simd: a v128 parameter and result round-trip through the JIT")
 	const V128 v2{5u, 6u, 7u, 8u};
 	const V128 v3{9u, 10u, 11u, 12u};
 	const V128 v4{0xA1B2C3D4u, 0x11223344u, 0x55667788u, 0x99AABBCCu};
-	const V128 deepest = WASM::callCallable<V128>(*four, v1, v2, v3, v4);
+	const V128 deepest = callVector4(*four, v1, v2, v3, v4);
 	REQUIRE(deepest.a == v4.a);
 	REQUIRE(deepest.b == v4.b);
 	REQUIRE(deepest.c == v4.c);
@@ -8247,18 +8307,49 @@ TEST_CASE("simd: three and four v128 parameters cross the boundary")
 	const V128 c{0x00000021u, 0x00000022u, 0x00000023u, 0x00000024u};
 	const V128 d{0x00000031u, 0x00000032u, 0x00000033u, 0x00000034u};
 
+	// SLJIT switches the whole module to the staging-frame ABI when a signature
+	// needs more than four slots; the four-parameter exports do. The helpers keep
+	// the register-form coverage and add the frame form the backend actually uses.
+	const auto call3 = [&instance](const WASM::Callable& callable,
+			const V128& x, const V128& y, const V128& z) -> V128 {
+		if (!instance.frameCallAbi())
+			return WASM::callCallable<V128>(callable, x, y, z);
+		alignas(16) std::array<std::uint8_t, 64> frame{};
+		std::memcpy(frame.data(), &x, sizeof(x));
+		std::memcpy(frame.data() + 16, &y, sizeof(y));
+		std::memcpy(frame.data() + 32, &z, sizeof(z));
+		WASM::callCallableFrame(callable, frame.data());
+		V128 result{};
+		std::memcpy(&result, frame.data() + 48, sizeof(result));
+		return result;
+	};
+	const auto call4 = [&instance](const WASM::Callable& callable,
+			const V128& x, const V128& y, const V128& z, const V128& w) -> V128 {
+		if (!instance.frameCallAbi())
+			return WASM::callCallable<V128>(callable, x, y, z, w);
+		alignas(16) std::array<std::uint8_t, 80> frame{};
+		std::memcpy(frame.data(), &x, sizeof(x));
+		std::memcpy(frame.data() + 16, &y, sizeof(y));
+		std::memcpy(frame.data() + 32, &z, sizeof(z));
+		std::memcpy(frame.data() + 48, &w, sizeof(w));
+		WASM::callCallableFrame(callable, frame.data());
+		V128 result{};
+		std::memcpy(&result, frame.data() + 64, sizeof(result));
+		return result;
+	};
+
 	// The register-passed ones.
-	const V128 second = WASM::callCallable<V128>(fn("second"), a, b, c);
+	const V128 second = call3(fn("second"), a, b, c);
 	REQUIRE(second.a == b.a);
 	REQUIRE(second.d == b.d);
 
 	// The first stack-passed one: this is the case that was never exercised.
-	const V128 third = WASM::callCallable<V128>(fn("third"), a, b, c);
+	const V128 third = call3(fn("third"), a, b, c);
 	REQUIRE(third.a == c.a);
 	REQUIRE(third.d == c.d);
 
 	// All three used, so the result depends on the stack slot too.
-	const V128 sum = WASM::callCallable<V128>(fn("sum3"), a, b, c);
+	const V128 sum = call3(fn("sum3"), a, b, c);
 	REQUIRE(sum.a == (a.a + b.a + c.a));
 	REQUIRE(sum.d == (a.d + b.d + c.d));
 
@@ -8282,14 +8373,14 @@ TEST_CASE("simd: three and four v128 parameters cross the boundary")
 		return out;
 	};
 	const V128 expectSwizzle = swizzleOf(a, c);
-	const V128 swizzled = WASM::callCallable<V128>(fn("swizzle_third"), a, b, c);
+	const V128 swizzled = call3(fn("swizzle_third"), a, b, c);
 	REQUIRE(swizzled.a == expectSwizzle.a);
 	REQUIRE(swizzled.b == expectSwizzle.b);
 	REQUIRE(swizzled.c == expectSwizzle.c);
 	REQUIRE(swizzled.d == expectSwizzle.d);
 
 	// Four parameters: two in registers, two on the stack.
-	const V128 fourth = WASM::callCallable<V128>(fn("fourth"), a, b, c, d);
+	const V128 fourth = call4(fn("fourth"), a, b, c, d);
 	REQUIRE(fourth.a == d.a);
 	REQUIRE(fourth.d == d.d);
 }
