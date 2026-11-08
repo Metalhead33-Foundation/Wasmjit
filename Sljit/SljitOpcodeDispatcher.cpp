@@ -12,6 +12,7 @@
 #include "../WasmBase/WasmStore.hpp"
 #include "../WasmBase/WasmStringOps.hpp"
 #include "../WasmBase/WasmTrap.hpp"
+#include "../WasmBase/WasmTracing.hpp"
 #include "../WasmBase/WasmVMContext.hpp"
 #include "../WasmBase/wasm_simd_scalar.hpp"
 
@@ -406,9 +407,9 @@ extern "C" void sljitReportTrap(uint32_t kind) noexcept
 	WASM::reportTrap(static_cast<WASM::TrapKind>(kind));
 }
 
-extern "C" void sljitReportUnreachable() noexcept
+extern "C" void sljitReportUnreachable(const char* detail) noexcept
 {
-	WASM::reportTrap(WASM::TrapKind::Unreachable);
+	WASM::reportTrap(WASM::TrapKind::Unreachable, detail);
 }
 
 extern "C" uint32_t sljitI32Popcnt(uint32_t value) noexcept
@@ -2312,7 +2313,15 @@ void OpcodeDispatcher::dispatchUnreachable()
 {
 	if (!reachable_)
 		return;
-	emitHelper(SLJIT_ARGS0V(), &sljitReportUnreachable);
+	if (measureOnly_) {
+		markUnreachable();
+		return;
+	}
+	const char* detail = internals_.internTrapMessage("unreachable in function "
+			+ module_.describeIndex(WASM::NameKind::Function, functionIndex_));
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0, SLJIT_IMM,
+			reinterpret_cast<sljit_sw>(detail)));
+	emitHelper(SLJIT_ARGS1V(P), &sljitReportUnreachable);
 	emitTrapBranch();
 	markUnreachable();
 }
@@ -9052,6 +9061,39 @@ void OpcodeDispatcher::dispatchStringEncodeWtf8Array(WASM::TypeIdx type)
 void OpcodeDispatcher::dispatchStringEncodeWtf16Array(WASM::TypeIdx type)
 {
 	emitStringEncodeArray(type, 3);
+}
+
+void OpcodeDispatcher::dispatchMemoryDiscard(WASM::MemIdx memory)
+{
+	if (!reachable_)
+		return;
+	const bool is64 = requireMemoryIndex(memory).indexType
+			== WASM::MemoryIndexType::I64;
+	const int width = is64 ? 8 : 4;
+	requireStack(2);
+	const std::size_t base = stackWidths_.size() - 2;
+	if (measureOnly_) {
+		pop(); pop();
+		return;
+	}
+	loadContext(SLJIT_R0);
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R1, 0, SLJIT_IMM,
+			static_cast<sljit_sw>(memory)));
+	// `loadSlot` with width 4 uses a zero-extending load, so a 32-bit
+	// destination/length arrives as the unsigned 64-bit helper operand.
+	loadSlot(SLJIT_R2, base, width);
+	loadSlot(SLJIT_R3, base + 1, width);
+	emitHelper(SLJIT_ARGS4V(P, 32, W, W), &WASM::wasm_memory_discard);
+	emitPendingTrapCheck();
+	pop(); pop();
+}
+
+void OpcodeDispatcher::dispatchI32Itt(std::uint32_t immediate)
+{
+	// Compile-time-only marker: report the immediate once, from the emitting
+	// pass, and emit no instruction (docs/proposals/INSTRUMENT_TRACING.md IT-3).
+	if (!measureOnly_)
+		WASM::traceImmediate(immediate);
 }
 
 } // namespace Sljit

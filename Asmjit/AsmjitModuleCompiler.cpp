@@ -10,6 +10,7 @@
 #include "../WasmBase/WasmStore.hpp"
 #include "../WasmBase/WasmStringOps.hpp"
 #include "../WasmBase/WasmTrap.hpp"
+#include "../WasmBase/WasmTracing.hpp"
 #include "../WasmBase/WasmVMContext.hpp"
 #include "../WasmBase/wasm_simd_scalar.hpp"
 #include "../WasmBase/WasmType.hpp"
@@ -810,9 +811,9 @@ void asmjitReportNullFunctionReference() noexcept
 	WASM::reportTrap(WASM::TrapKind::NullFunctionReference);
 }
 
-void asmjitReportUnreachable() noexcept
+void asmjitReportUnreachable(const char* detail) noexcept
 {
-	WASM::reportTrap(WASM::TrapKind::Unreachable);
+	WASM::reportTrap(WASM::TrapKind::Unreachable, detail);
 }
 
 uint32_t asmjitMemorySize(WASM::VMContext* vm, uint32_t memoryIndex) noexcept
@@ -7141,11 +7142,15 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 	void dispatchUnreachable() override
 	{
 		armTerminated = true;
+		const char* detail = internals.internTrapMessage("unreachable in function "
+				+ module.describeIndex(WASM::NameKind::Function, functionIndex));
 		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
 		signature.set_ret(asmjit::TypeId::kVoid);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
 		asmjit::InvokeNode* invoke = nullptr;
 		checkError(compiler.invoke(asmjit::Out(invoke), reinterpret_cast<uint64_t>(&asmjitReportUnreachable), signature),
 				"AsmJit unreachable trap helper emission failed");
+		invoke->set_arg(0, asmjit::Imm(reinterpret_cast<uint64_t>(detail)));
 		const size_t stackHeight = controls.empty() ? 0 : controls.back().stackHeight;
 		const size_t placeholderCount = controls.empty() ? resultCount : controls.back().resultCount;
 		values.resize(stackHeight);
@@ -7252,6 +7257,52 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 				reinterpret_cast<uint64_t>(internals.stringLiterals[idx])),
 				"AsmJit string.const emission failed");
 		values.push_back(result);
+	}
+
+	void dispatchI32Itt(uint32_t immediate) override
+	{
+		// Compile-time-only marker: report the immediate and emit no instruction.
+		WASM::traceImmediate(immediate);
+	}
+
+	void dispatchMemoryDiscard(WASM::MemIdx memory) override
+	{
+		if (inDeadCode())
+			return;
+		if (values.size() < 2)
+			throw std::runtime_error("AsmJit memory.discard operand stack underflow");
+		auto length = values.back(); values.pop_back();
+		auto destination = values.back(); values.pop_back();
+		const bool is64 = validateMemoryIndex(memory).indexType
+				== WASM::MemoryIndexType::I64;
+		auto widen = [&](const asmjit::x86::Gp& value) {
+			if (value.size() == 8)
+				return value;
+			auto wide = compiler.new_gp64("memoryDiscardOperand");
+			checkError(compiler.mov(wide.r32(), value.r32()),
+					"AsmJit memory.discard widening failed");
+			return wide;
+		};
+		auto destination64 = widen(destination);
+		auto length64 = widen(length);
+		auto memoryIndex = compiler.new_gp32("memoryDiscardIndex");
+		checkError(compiler.mov(memoryIndex, static_cast<uint32_t>(memory)),
+				"AsmJit memory.discard index materialisation failed");
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kVoid);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		signature.add_arg(asmjit::TypeId::kUInt64);
+		signature.add_arg(asmjit::TypeId::kUInt64);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke),
+				reinterpret_cast<uint64_t>(&WASM::wasm_memory_discard), signature),
+				"AsmJit memory.discard helper call failed");
+		invoke->set_arg(0, vmContext);
+		invoke->set_arg(1, memoryIndex);
+		invoke->set_arg(2, destination64);
+		invoke->set_arg(3, length64);
+		emitPendingTrapReturn();
 	}
 
 	void dispatchStringMeasureUtf8() override

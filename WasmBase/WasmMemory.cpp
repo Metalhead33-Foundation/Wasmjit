@@ -1,4 +1,7 @@
 #include "WasmMemory.hpp"
+#include "WasmVMContext.hpp"
+#include "WasmTrap.hpp"
+#include <cstring>
 #include <stdexcept>
 #include <limits>
 #include <algorithm>
@@ -25,6 +28,43 @@ uint64_t wasm_memory_size(const LinearMemory* memory)
 	if (memory->isShared)
 		return __atomic_load_n(&memory->memorySize, __ATOMIC_ACQUIRE);
 	return memory->memorySize;
+}
+
+void wasm_memory_discard(VMContext* context, uint32_t memoryIndex,
+		uint64_t destination, uint64_t length)
+{
+	if (context == nullptr || context->memories == nullptr
+			|| memoryIndex >= context->memoryCount) {
+		reportTrap(TrapKind::Internal, "memory.discard memory index is out of range");
+		return;
+	}
+	const LinearMemory* memory = context->memories[memoryIndex];
+	if (memory == nullptr) {
+		reportTrap(TrapKind::Internal, "memory.discard linear memory is null");
+		return;
+	}
+	const uint64_t size = wasm_memory_size(memory);
+	// The range check precedes any page touch: a zero-length range at the end
+	// of memory is valid, but any byte outside it traps (MEMORY_CONTROL.md MC-2).
+	if (destination > size || length > size - destination) {
+		reportTrap(TrapKind::OutOfBoundsMemoryAccess);
+		return;
+	}
+	if (length == 0)
+		return;
+
+	constexpr uint64_t page = 0x10000;
+	const uint64_t start = destination & ~(page - 1);
+	const uint64_t end = destination + length;
+	const uint64_t rounded = end + (page - 1);
+	const uint64_t roundedEnd = std::min(rounded < end ? size : (rounded & ~(page - 1)),
+			size);
+	if (roundedEnd <= start)
+		return;
+	const auto* owner = static_cast<const StoreOwnedMemory*>(memory->hostData);
+	if (owner != nullptr && owner->discardHint(start, roundedEnd - start))
+		return;
+	std::memset(memory->memoryBase + start, 0, static_cast<size_t>(roundedEnd - start));
 }
 
 StoreOwnedMemory::StoreOwnedMemory(uint64_t initialPages, uint64_t maxPages, bool isShared,

@@ -2360,3 +2360,51 @@ Default 22,448 assertions in 821 cases, green
 * **Pack only at the ABI boundary, and document the word order.** The array bridge
   needs five logical fields but SLJIT has four argument registers; the packed
   range and layout are part of the helper contract now.
+
+
+## Small opcodes — `i32.itt`, `memory.discard`, trap labels
+
+### Intended
+
+Close the three smallest remaining common feature failures.
+
+### Fix
+
+* **`i32.itt`** is a compile-time-only marker. Both dispatchers now call
+  `traceImmediate`; SLJIT reports it only from the emitting pass so the measure
+  pass does not double the callback.
+* **`memory.discard`** moved into `WasmMemory` as `wasm_memory_discard`. It checks
+  the range before touching a page, zero-fills page-rounded ranges and uses the
+  provider's discard hint when available. Both backends widen i32 operands to the
+  helper's 64-bit ABI.
+* **Trap labels**: `unreachable` now reports the interned
+  `"unreachable in function N ($name)"` detail, matching LibJIT. AsmJIT passes the
+  pointer as an argument; SLJIT embeds it. SLJIT's emit-only guard also avoids
+  emitting a pointer immediate during the measuring pass.
+
+### Evidence
+
+```
+SLJIT  i32.itt                    6/6
+AsmJIT i32.itt                    6/6
+SLJIT  memory.discard            24/24
+AsmJIT memory.discard            24/24
+SLJIT  trap messages name ...     7/7
+AsmJIT trap messages name ...     7/7
+```
+
+Full serial runs:
+
+```
+SLJIT   821 cases: 789 passed / 32 failed; no signal
+AsmJIT  821 cases: 784 passed / 37 failed; no signal
+Default 22,448 assertions in 821 cases, green
+```
+
+### Lessons
+
+* **A measure pass has no code buffer.** An immediate emission added for the
+  emitting pass must be guarded, even in a dispatcher that previously emitted no
+  code.
+* **Diagnostic text is part of the backend contract.** The trap name must be
+  composed and interned the same way the reference backend does it.
