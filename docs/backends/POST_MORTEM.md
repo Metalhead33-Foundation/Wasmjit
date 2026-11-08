@@ -1604,3 +1604,54 @@ it now fails deterministically rather than timing out.
   occupies an 8-byte frame slot; embedders compact explicitly.
 * **Trap kinds are part of the API contract.** `undefined element` and
   `uninitialized element` are distinct cases, not one generic OOB trap.
+
+## SLJIT — frame-mode large signatures and measurement widths
+
+### Intended
+
+Make `spec: call` and `spec: stack` instantiate. Both failed at the first
+function with a large frame signature.
+
+### Root cause
+
+* In frame mode, the prologue still counted every float parameter and requested
+  that many scratch FR registers. `call.wast`'s
+  `return-from-long-argument-list-helper` has a 100-parameter signature with
+  dozens of floats; the target has far fewer FR scratch registers, so
+  `sljit_emit_enter` aborted the process.
+* The frame-form call staging area was fixed at 16 slots (256 bytes), smaller
+  than that signature's argument block.
+* The measuring pass of `emitEqz` (and `emitCompare`) returned before changing
+  the operand-stack width to the i32 result width. A following `if` then saw the
+  old i64 width and rejected the condition as "not an i32".
+
+### Fix
+
+* Frame mode requests only the three fixed scratch FR registers; parameter
+  floats live in the caller's frame and need no FR register.
+* Added `kStagingCallSlots = 128` (2 KiB) for frame-form calls, shared by the
+  frame size and the call-path guard. The exact byte count is still checked
+  before emitting.
+* `emitEqz` and `emitCompare` set the stack width to 4 before the measuring-pass
+  return. This is the same measure/emit divergence class that produced earlier
+  frame bugs; the result kind is a compile-time property and belongs in both
+  passes.
+
+### Evidence
+
+```
+SLJIT spec: call    73 passed / 0 failed
+SLJIT spec: stack    7 passed / 0 failed
+SLJIT full serial   821 cases: 729 passed / 92 failed
+AsmJIT full serial  821 cases: 721 passed / 100 failed
+```
+
+### Lessons
+
+* **Frame mode changes the register budget, not just the call shape.** Do not
+  reserve one register per value that already lives in memory.
+* **A fixed scratch area is a hidden signature limit.** Size it from the
+  largest signature the engine accepts, and keep the exact check at the call
+  site.
+* **The measuring pass must model result types even when it emits nothing.**
+  Width is part of the compile-time stack, not an emission side effect.

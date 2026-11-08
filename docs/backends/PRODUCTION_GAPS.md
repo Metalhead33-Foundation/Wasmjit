@@ -1069,7 +1069,7 @@ uses a rejected artifact and confirms the runtime remains usable.
 | Backend | Verdict | Measured evidence |
 |---|---|---|
 | LibJIT | **Production-ready within its declared envelope** | default suite 22,442 assertions / 821 cases, green; x86-64 Linux only |
-| SLJIT | **Not production-ready** | `WASMJIT_BACKEND=sljit`: 821 cases, 724 passed, 97 failed; no crash |
+| SLJIT | **Not production-ready** | `WASMJIT_BACKEND=sljit`: 821 cases, 729 passed, 92 failed; no crash |
 | AsmJIT | **Not production-ready** | `WASMJIT_BACKEND=asmjit`: 821 cases, 721 passed, 100 failed; no crash |
 
 The blockers are not just “unimplemented opcodes”:

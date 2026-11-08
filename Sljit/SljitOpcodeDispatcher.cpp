@@ -41,6 +41,13 @@ struct UnsupportedBody {
 //! (a `v128` is the whole cell, a scalar its first word).
 constexpr std::size_t kSlotBytes = 16;
 
+//! Staging slots reserved for a frame-form callee's argument and result block.
+//! The previous 16-slot (256-byte) area rejected `call.wast`'s 100-parameter
+//! fixture. 128 slots cover 2 KiB, enough for the largest Wasm signature the
+//! engine currently accepts; the call path still checks the exact byte count.
+constexpr std::size_t kStagingCallSlots = 128;
+constexpr std::size_t kStagingCallBytes = kStagingCallSlots * kSlotBytes;
+
 //! Reserved frame slots that follow the locals and precede the operand stack.
 //! Reserved frame cells: context, target, scratch, then the two-word selector
 //! block `i8x16.shuffle` passes to its adapter.
@@ -1331,10 +1338,11 @@ bool OpcodeDispatcher::beginFunction()
 		return false;
 	}
 
-	// 16 slots (256 bytes) of staging scratch follow the operand stack. Frame-form
-	// calls pack a callee's arguments and results there; register-form calls use
-	// the first two slots as the out-buffer for a v128 result.
-	const std::size_t frameSlots = localSlots_ + kReservedSlots + maxStackDepth_ + 16u;
+	// Staging scratch follows the operand stack. Frame-form calls pack a
+	// callee's arguments and results there; register-form calls use the first
+	// two slots as the out-buffer for a v128 result.
+	const std::size_t frameSlots = localSlots_ + kReservedSlots + maxStackDepth_
+			+ kStagingCallSlots;
 	if (frameSlots > SLJIT_MAX_LOCAL_SIZE / kSlotBytes) {
 		unsupportedReason_ = "the function frame exceeds SLJIT's local-area limit";
 		return false;
@@ -1406,9 +1414,15 @@ bool OpcodeDispatcher::beginFunction()
 	// separately by SLJIT; three cover FR0/FR1 for the emitted operations and
 	// any call's float arguments.
 	std::uint32_t floatParameters = 0;
-	for (WASM::ValueTypeCode kind : paramKinds_)
-		if (isFloatKind(kind))
-			++floatParameters;
+	if (!frameAbi_) {
+		// Frame parameters live in the caller's frame; only the three scratch
+		// FR registers are needed. Counting them here made a 100-parameter
+		// fixture request more FR registers than the target has and aborted
+		// inside `sljit_emit_enter`.
+		for (WASM::ValueTypeCode kind : paramKinds_)
+			if (isFloatKind(kind))
+				++floatParameters;
+	}
 	const std::uint32_t floatScratch = std::max<std::uint32_t>(3, floatParameters);
 	// Keep SLJIT's declared-argument count for `savedCount`; the extra saved
 	// register this reserves for a float+pointer signature is harmless and is
@@ -2757,7 +2771,7 @@ void OpcodeDispatcher::emitResolvedCall(const WASM::FuncType& type, int callable
 		const int resultWidth = type.results.empty() ? 0 : widthOf(type.results.front().val);
 		const std::uint32_t resultBytes = resultWidth == 0 ? 0u
 				: WASM::frameValueBytes(WASM::valueKindOf(type.results.front().val.opcode));
-		if (argumentBytes + resultBytes > 256u) {
+		if (argumentBytes + resultBytes > kStagingCallBytes) {
 			onUnhandledOpcode("a frame-form call whose frame exceeds the staging scratch");
 			return;
 		}
@@ -3550,8 +3564,10 @@ void OpcodeDispatcher::emitCompare(sljit_s32 condition, int width)
 		return;
 	requireStack(2);
 	pop();
-	if (measureOnly_)
+	if (measureOnly_) {
+		stackWidths_.back() = 4;
 		return;
+	}
 	const sljit_s32 type = width == 4 ? (condition | SLJIT_32) : condition;
 	loadSlot(SLJIT_R0, stackWidths_.size() - 1, width);
 	loadSlot(SLJIT_R1, stackWidths_.size(), width);
@@ -3574,8 +3590,12 @@ void OpcodeDispatcher::emitEqz(int width)
 	if (!reachable_)
 		return;
 	requireStack(1);
-	if (measureOnly_)
+	if (measureOnly_) {
+		// The result is always an i32; the measuring pass must model that or a
+		// following `if` sees the operand's old width.
+		stackWidths_.back() = 4;
 		return;
+	}
 	const sljit_s32 type = width == 4 ? (SLJIT_EQUAL | SLJIT_32) : SLJIT_EQUAL;
 	loadSlot(SLJIT_R0, stackWidths_.size() - 1, width);
 	emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R2, 0, SLJIT_IMM, 1));
