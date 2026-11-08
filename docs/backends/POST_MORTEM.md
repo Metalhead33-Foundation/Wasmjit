@@ -2259,3 +2259,51 @@ non-spec suites.
   ASLR-sensitive wild pointer.
 * **Slot width is per-value, not per-operator family.** `array.set` cannot load
   every value as 4 bytes any more than `array.get` can store every result as 8.
+
+
+## Common — table64 results and the wide-arithmetic family
+
+### Intended
+
+Close two shared feature gaps: `memory64` table size/grow and
+`i64.add128` / `i64.sub128` / `i64.mul_wide_s` / `i64.mul_wide_u`.
+
+### Root causes
+
+* **Table size/grow always used the 32-bit shape.** Both backends loaded the
+  delta as 4 bytes, returned a 32-bit value and (for `table.size`) truncated the
+  helper's result. On a table64, `table.grow` failure (`UINT64_MAX`) therefore
+  reached the caller as `1`, and a large size could be truncated.
+  The index width is now derived from the table's `0x04` limits flag; the
+  helpers return `uint64_t`, and only an i32 table narrows the result slot.
+* **The wide-arithmetic opcodes had no lowering.** Add/sub are emitted inline
+  with carry/borrow (`adc`/`sbb` on AsmJIT; a post-add/post-sub carry test on
+  SLJIT). `mul_wide_*` uses portable 32-bit-limb multiplication, as NUM-1
+  requires, rather than `__int128`.
+* **The unit test used the register ABI for a frame-ABI module.** Both backends
+  select the staging frame for these multi-result signatures; `call2` now checks
+  `frameCallAbi()` and marshals through `callCallableFrame`.
+
+### Evidence
+
+```
+SLJIT  memory64 size/grow  15/15
+AsmJIT memory64 size/grow  15/15
+SLJIT  wide arithmetic     27/27
+AsmJIT wide arithmetic     27/27
+```
+
+Full serial runs:
+
+```
+SLJIT   821 cases: 780 passed / 41 failed; no signal
+AsmJIT  821 cases: 776 passed / 45 failed; no signal
+```
+
+### Lessons
+
+* **A 64-bit table needs 64-bit operands and results everywhere.** Reading the
+  delta as 4 bytes was enough to turn `-1` into `1`.
+* **Keep both operands alive across a two-call operation.** SLJIT's first
+  `mul_wide` draft overwrote the left operand with the low result, so the high
+  helper multiplied the low half by the right operand.

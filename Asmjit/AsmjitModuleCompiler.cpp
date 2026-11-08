@@ -1157,7 +1157,7 @@ void asmjitTableCopy(WASM::VMContext* vm, uint32_t destinationTable, uint32_t so
             static_cast<size_t>(length) * sizeof(WASM::Callable*));
 }
 
-uint32_t asmjitTableSize(WASM::VMContext* vm, uint32_t tableIndex) noexcept
+uint64_t asmjitTableSize(WASM::VMContext* vm, uint32_t tableIndex) noexcept
 {
     if (vm == nullptr || vm->tables == nullptr || tableIndex >= vm->tableCount) {
         WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit table.size index is invalid");
@@ -1168,7 +1168,42 @@ uint32_t asmjitTableSize(WASM::VMContext* vm, uint32_t tableIndex) noexcept
         WASM::reportTrap(WASM::TrapKind::Internal, "AsmJit table.size table is null");
         return 0;
     }
-    return static_cast<uint32_t>(table->size);
+    return table->size;
+}
+
+//! 64x64 -> 128 multiplication in portable 32-bit limbs (NUM-1).
+void asmjitMulWideU64(uint64_t a, uint64_t b, uint64_t& lo, uint64_t& hi)
+{
+    const uint64_t a0 = a & 0xFFFFFFFFu;
+    const uint64_t a1 = a >> 32;
+    const uint64_t b0 = b & 0xFFFFFFFFu;
+    const uint64_t b1 = b >> 32;
+    const uint64_t p00 = a0 * b0;
+    const uint64_t p01 = a0 * b1;
+    const uint64_t p10 = a1 * b0;
+    const uint64_t p11 = a1 * b1;
+    const uint64_t mid = (p00 >> 32) + (p01 & 0xFFFFFFFFu) + (p10 & 0xFFFFFFFFu);
+    lo = (mid << 32) | (p00 & 0xFFFFFFFFu);
+    hi = p11 + (p01 >> 32) + (p10 >> 32) + (mid >> 32);
+}
+
+void asmjitMulWideS64(int64_t a, int64_t b, uint64_t& lo, uint64_t& hi)
+{
+    asmjitMulWideU64(static_cast<uint64_t>(a), static_cast<uint64_t>(b), lo, hi);
+    if (a < 0)
+        hi -= static_cast<uint64_t>(b);
+    if (b < 0)
+        hi -= static_cast<uint64_t>(a);
+}
+
+extern "C" void asmjitI64MulWideU(uint64_t* out, uint64_t a, uint64_t b) noexcept
+{
+    asmjitMulWideU64(a, b, out[0], out[1]);
+}
+
+extern "C" void asmjitI64MulWideS(uint64_t* out, int64_t a, int64_t b) noexcept
+{
+    asmjitMulWideS64(a, b, out[0], out[1]);
 }
 
 asmjit::FuncSignature stackCheckSignature()
@@ -4519,6 +4554,9 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
             throw std::runtime_error("AsmJit table.grow operand stack underflow");
         auto delta = values.back(); values.pop_back();
         auto init = values.back(); values.pop_back();
+        const bool table64 = tableIndex < module.importTables.size()
+                ? (module.importTables[tableIndex].table.limits.flags & 0x04) != 0
+                : (module.tables[tableIndex - module.importTables.size()].limits.flags & 0x04) != 0;
         asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
         signature.set_ret(asmjit::TypeId::kUInt64);
         signature.add_arg(asmjit::TypeId::kUIntPtr);
@@ -4528,11 +4566,14 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
         auto index = compiler.new_gp32("tableGrowIndex");
         checkError(compiler.mov(index, static_cast<uint32_t>(tableIndex)),
                 "AsmJit table.grow index materialisation failed");
-        // The core takes a 64-bit delta. A 32-bit i32 delta is zero-extended by
-        // writing the 32-bit view of a fresh 64-bit register.
-        auto delta64 = compiler.new_gp64("tableGrowDelta");
-        checkError(compiler.mov(delta64.r32(), delta.r32()),
-                "AsmJit table.grow delta widening failed");
+        // The core takes a 64-bit delta. For a 32-bit table, zero-extend the
+        // i32 operand; a table64 operand is already 64-bit.
+        asmjit::x86::Gp delta64 = delta;
+        if (delta.size() != 8) {
+            delta64 = compiler.new_gp64("tableGrowDelta");
+            checkError(compiler.mov(delta64.r32(), delta.r32()),
+                    "AsmJit table.grow delta widening failed");
+        }
         asmjit::InvokeNode* invoke = nullptr;
         checkError(compiler.invoke(asmjit::Out(invoke),
                 reinterpret_cast<uint64_t>(&WASM::wasm_table_grow), signature),
@@ -4543,7 +4584,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
         invoke->set_arg(3, init);
         auto result = compiler.new_gp64("tableGrowResult");
         invoke->set_ret(0, result);
-        values.push_back(result.r32());
+        values.push_back(table64 ? result : result.r32());
         emitPendingTrapReturn();
     }
 
@@ -4551,8 +4592,11 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
     {
         if (static_cast<size_t>(tableIndex) >= module.importTables.size() + module.tables.size())
             throw std::runtime_error("AsmJit table.size table index is out of range");
+        const bool table64 = tableIndex < module.importTables.size()
+                ? (module.importTables[tableIndex].table.limits.flags & 0x04) != 0
+                : (module.tables[tableIndex - module.importTables.size()].limits.flags & 0x04) != 0;
         asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
-        signature.set_ret(asmjit::TypeId::kUInt32);
+        signature.set_ret(table64 ? asmjit::TypeId::kUInt64 : asmjit::TypeId::kUInt32);
         signature.add_arg(asmjit::TypeId::kUIntPtr);
         signature.add_arg(asmjit::TypeId::kUInt32);
         asmjit::InvokeNode* invoke = nullptr;
@@ -4562,7 +4606,8 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
                 "AsmJit table.size helper call emission failed");
         invoke->set_arg(0, vmContext);
         invoke->set_arg(1, index);
-        auto size = compiler.new_gp32("tableSizeResult");
+        auto size = table64 ? compiler.new_gp64("tableSizeResult")
+                : compiler.new_gp32("tableSizeResult");
         invoke->set_ret(0, size);
         values.push_back(size);
         emitPendingTrapReturn();
@@ -7198,6 +7243,91 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 	void dispatchI64Add() override { emitIntegerBinary(BinaryOp::Add); }
 	void dispatchI64Sub() override { emitIntegerBinary(BinaryOp::Sub); }
 	void dispatchI64Mul() override { emitIntegerBinary(BinaryOp::Mul); }
+
+	void dispatchI64Add128() override
+	{
+		if (inDeadCode())
+			return;
+		if (values.size() < 4)
+			throw std::runtime_error("AsmJit i64.add128 operand stack underflow");
+		auto bHi = values.back(); values.pop_back();
+		auto bLo = values.back(); values.pop_back();
+		auto aHi = values.back(); values.pop_back();
+		auto aLo = values.back(); values.pop_back();
+		auto lo = compiler.new_gp64("add128Low");
+		checkError(compiler.mov(lo, aLo), "AsmJit i64.add128 low copy failed");
+		checkError(compiler.add(lo, bLo), "AsmJit i64.add128 low add failed");
+		auto hi = compiler.new_gp64("add128High");
+		checkError(compiler.mov(hi, aHi), "AsmJit i64.add128 high copy failed");
+		// `mov` does not touch flags: the carry from the low add is still live.
+		checkError(compiler.adc(hi, bHi), "AsmJit i64.add128 high adc failed");
+		values.push_back(lo);
+		values.push_back(hi);
+	}
+
+	void dispatchI64Sub128() override
+	{
+		if (inDeadCode())
+			return;
+		if (values.size() < 4)
+			throw std::runtime_error("AsmJit i64.sub128 operand stack underflow");
+		auto bHi = values.back(); values.pop_back();
+		auto bLo = values.back(); values.pop_back();
+		auto aHi = values.back(); values.pop_back();
+		auto aLo = values.back(); values.pop_back();
+		auto lo = compiler.new_gp64("sub128Low");
+		checkError(compiler.mov(lo, aLo), "AsmJit i64.sub128 low copy failed");
+		checkError(compiler.sub(lo, bLo), "AsmJit i64.sub128 low subtract failed");
+		auto hi = compiler.new_gp64("sub128High");
+		checkError(compiler.mov(hi, aHi), "AsmJit i64.sub128 high copy failed");
+		checkError(compiler.sbb(hi, bHi), "AsmJit i64.sub128 high sbb failed");
+		values.push_back(lo);
+		values.push_back(hi);
+	}
+
+	void dispatchI64MulWideS() override { emitI64MulWide(true); }
+	void dispatchI64MulWideU() override { emitI64MulWide(false); }
+
+	void emitI64MulWide(bool isSigned)
+	{
+		if (inDeadCode())
+			return;
+		if (values.size() < 2)
+			throw std::runtime_error("AsmJit i64.mul_wide operand stack underflow");
+		auto b = values.back(); values.pop_back();
+		auto a = values.back(); values.pop_back();
+		auto storage = compiler.new_stack(16, 8, "mulWideResult");
+		auto out = compiler.new_gp_ptr("mulWideResultPointer");
+		checkError(compiler.lea(out, storage),
+				"AsmJit i64.mul_wide result address failed");
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kVoid);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUInt64);
+		signature.add_arg(asmjit::TypeId::kUInt64);
+		asmjit::InvokeNode* invoke = nullptr;
+		const uint64_t helper = isSigned
+				? reinterpret_cast<uint64_t>(&asmjitI64MulWideS)
+				: reinterpret_cast<uint64_t>(&asmjitI64MulWideU);
+		checkError(compiler.invoke(asmjit::Out(invoke), helper, signature),
+				"AsmJit i64.mul_wide helper call failed");
+		invoke->set_arg(0, out);
+		invoke->set_arg(1, a);
+		invoke->set_arg(2, b);
+
+		auto lowSlot = storage;
+		lowSlot.set_size(8);
+		auto highSlot = storage;
+		highSlot.set_size(8);
+		highSlot.set_offset(storage.offset() + 8);
+		auto lo = compiler.new_gp64("mulWideLow");
+		checkError(compiler.mov(lo, lowSlot), "AsmJit i64.mul_wide low load failed");
+		auto hi = compiler.new_gp64("mulWideHigh");
+		checkError(compiler.mov(hi, highSlot), "AsmJit i64.mul_wide high load failed");
+		values.push_back(lo);
+		values.push_back(hi);
+	}
+
 	void dispatchI64And() override { emitIntegerBinary(BinaryOp::And); }
 	void dispatchI64Or() override { emitIntegerBinary(BinaryOp::Or); }
 	void dispatchI64Xor() override { emitIntegerBinary(BinaryOp::Xor); }

@@ -9136,9 +9136,22 @@ TEST_CASE("wide arithmetic: add128, sub128 and mul_wide match reference values")
 	auto mulS = exported("mul_wide_s");
 	auto mulU = exported("mul_wide_u");
 
-	const auto call2 = [](const WASM::Callable& callable, auto... args) {
+	const bool frameAbi = instance.frameCallAbi();
+	const auto call2 = [&](const WASM::Callable& callable, auto... args) {
 		alignas(16) uint64_t out[2] = {};
-		WASM::callCallableWithResults(callable, out, args...);
+		if (!frameAbi) {
+			WASM::callCallableWithResults(callable, out, args...);
+			return std::array<uint64_t, 2>{out[0], out[1]};
+		}
+		// Staging-frame ABI: all parameters and results are i64, so each
+		// occupies one 8-byte slot in declaration order.
+		constexpr std::size_t count = sizeof...(args);
+		const std::array<uint64_t, count> values{static_cast<uint64_t>(args)...};
+		alignas(16) std::array<std::uint8_t, 64> frame{};
+		for (std::size_t i = 0; i < count; ++i)
+			std::memcpy(frame.data() + i * 8, &values[i], sizeof(values[i]));
+		WASM::callCallableFrame(callable, frame.data());
+		std::memcpy(out, frame.data() + count * 8, sizeof(out));
 		return std::array<uint64_t, 2>{out[0], out[1]};
 	};
 

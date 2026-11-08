@@ -182,6 +182,10 @@ protected:
 	void dispatchI64Add() override; //!< `i64.add`.
 	void dispatchI64Sub() override; //!< `i64.sub`.
 	void dispatchI64Mul() override; //!< `i64.mul`.
+	void dispatchI64Add128() override; //!< `i64.add128`.
+	void dispatchI64Sub128() override; //!< `i64.sub128`.
+	void dispatchI64MulWideS() override; //!< `i64.mul_wide_s`.
+	void dispatchI64MulWideU() override; //!< `i64.mul_wide_u`.
 	void dispatchI64DivS() override; //!< `i64.div_s`.
 	void dispatchI64DivU() override; //!< `i64.div_u`.
 	void dispatchI64RemS() override; //!< `i64.rem_s`.

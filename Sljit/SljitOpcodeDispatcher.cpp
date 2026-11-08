@@ -1188,7 +1188,7 @@ extern "C" void sljitTableCopy(WASM::VMContext* vm, uint64_t tablePair,
 			static_cast<std::size_t>(length) * sizeof(WASM::Callable*));
 }
 
-extern "C" uint32_t sljitTableSize(WASM::VMContext* vm, uint32_t tableIndex) noexcept
+extern "C" uint64_t sljitTableSize(WASM::VMContext* vm, uint32_t tableIndex) noexcept
 {
 	if (vm == nullptr || vm->tables == nullptr || tableIndex >= vm->tableCount) {
 		WASM::reportTrap(WASM::TrapKind::Internal, "SLJIT table.size index is invalid");
@@ -1199,7 +1199,7 @@ extern "C" uint32_t sljitTableSize(WASM::VMContext* vm, uint32_t tableIndex) noe
 		WASM::reportTrap(WASM::TrapKind::Internal, "SLJIT table.size table is null");
 		return 0;
 	}
-	return static_cast<uint32_t>(table->size);
+	return table->size;
 }
 
 //! `call_indirect`'s runtime type check, mirroring the AsmJit backend's rule.
@@ -6584,6 +6584,186 @@ void OpcodeDispatcher::dispatchI32WrapI64()
 	stackWidths_.back() = 4;
 }
 
+namespace {
+// 64x64 -> 128 multiplication in portable 32-bit limbs (NUM-1): no
+// `__int128`, no host-width assumption beyond uint64_t.
+void mulWideU64(uint64_t a, uint64_t b, uint64_t& lo, uint64_t& hi)
+{
+	const uint64_t a0 = a & 0xFFFFFFFFu;
+	const uint64_t a1 = a >> 32;
+	const uint64_t b0 = b & 0xFFFFFFFFu;
+	const uint64_t b1 = b >> 32;
+	const uint64_t p00 = a0 * b0;
+	const uint64_t p01 = a0 * b1;
+	const uint64_t p10 = a1 * b0;
+	const uint64_t p11 = a1 * b1;
+	const uint64_t mid = (p00 >> 32) + (p01 & 0xFFFFFFFFu) + (p10 & 0xFFFFFFFFu);
+	lo = (mid << 32) | (p00 & 0xFFFFFFFFu);
+	hi = p11 + (p01 >> 32) + (p10 >> 32) + (mid >> 32);
+}
+
+void mulWideS64(int64_t a, int64_t b, uint64_t& lo, uint64_t& hi)
+{
+	mulWideU64(static_cast<uint64_t>(a), static_cast<uint64_t>(b), lo, hi);
+	if (a < 0)
+		hi -= static_cast<uint64_t>(b);
+	if (b < 0)
+		hi -= static_cast<uint64_t>(a);
+}
+} // namespace
+
+extern "C" uint64_t sljitI64MulWideULow(uint64_t a, uint64_t b) noexcept
+{
+	uint64_t lo = 0, hi = 0;
+	mulWideU64(a, b, lo, hi);
+	return lo;
+}
+
+extern "C" uint64_t sljitI64MulWideUHigh(uint64_t a, uint64_t b) noexcept
+{
+	uint64_t lo = 0, hi = 0;
+	mulWideU64(a, b, lo, hi);
+	return hi;
+}
+
+extern "C" uint64_t sljitI64MulWideSLow(int64_t a, int64_t b) noexcept
+{
+	uint64_t lo = 0, hi = 0;
+	mulWideS64(a, b, lo, hi);
+	return lo;
+}
+
+extern "C" uint64_t sljitI64MulWideSHigh(int64_t a, int64_t b) noexcept
+{
+	uint64_t lo = 0, hi = 0;
+	mulWideS64(a, b, lo, hi);
+	return hi;
+}
+
+void OpcodeDispatcher::dispatchI64Add128()
+{
+	if (!reachable_)
+		return;
+	requireStack(4);
+	const std::size_t base = stackWidths_.size() - 4;
+	if (measureOnly_) {
+		pop(); pop(); pop(); pop();
+		push(8); push(8);
+		return;
+	}
+	loadSlot(SLJIT_R0, base, 8);     // lhs low
+	loadSlot(SLJIT_R1, base + 1, 8); // lhs high
+	loadSlot(SLJIT_R2, base + 2, 8); // rhs low
+	loadSlot(SLJIT_R3, base + 3, 8); // rhs high
+	emit(sljit_emit_op2(compiler_, SLJIT_ADD, SLJIT_R0, 0, SLJIT_R0, 0, SLJIT_R2, 0));
+	emit(sljit_emit_op2(compiler_, SLJIT_ADD, SLJIT_R1, 0, SLJIT_R1, 0, SLJIT_R3, 0));
+	sljit_jump* noCarry = sljit_emit_cmp(compiler_, SLJIT_GREATER_EQUAL,
+			SLJIT_R0, 0, SLJIT_R2, 0);
+	if (noCarry == nullptr)
+		ok_ = false;
+	emit(sljit_emit_op2(compiler_, SLJIT_ADD, SLJIT_R1, 0, SLJIT_R1, 0, SLJIT_IMM, 1));
+	sljit_label* carryDone = sljit_emit_label(compiler_);
+	if (carryDone == nullptr)
+		ok_ = false;
+	else if (noCarry != nullptr)
+		sljit_set_label(noCarry, carryDone);
+	storeSlot(SLJIT_R0, base, 8);
+	storeSlot(SLJIT_R1, base + 1, 8);
+	pop(); pop(); pop(); pop();
+	push(8); push(8);
+}
+
+void OpcodeDispatcher::dispatchI64Sub128()
+{
+	if (!reachable_)
+		return;
+	requireStack(4);
+	const std::size_t base = stackWidths_.size() - 4;
+	if (measureOnly_) {
+		pop(); pop(); pop(); pop();
+		push(8); push(8);
+		return;
+	}
+	loadSlot(SLJIT_R0, base, 8);     // lhs low
+	loadSlot(SLJIT_R1, base + 1, 8); // lhs high
+	loadSlot(SLJIT_R2, base + 2, 8); // rhs low
+	loadSlot(SLJIT_R3, base + 3, 8); // rhs high
+	emit(sljit_emit_op2(compiler_, SLJIT_SUB, SLJIT_R1, 0, SLJIT_R1, 0, SLJIT_R3, 0));
+	emit(sljit_emit_op2(compiler_, SLJIT_SUB, SLJIT_R0, 0, SLJIT_R0, 0, SLJIT_R2, 0));
+	// Borrow iff the result wrapped above the original low word.
+	loadSlot(SLJIT_R3, base, 8);
+	sljit_jump* noBorrow = sljit_emit_cmp(compiler_, SLJIT_LESS_EQUAL,
+			SLJIT_R0, 0, SLJIT_R3, 0);
+	if (noBorrow == nullptr)
+		ok_ = false;
+	emit(sljit_emit_op2(compiler_, SLJIT_SUB, SLJIT_R1, 0, SLJIT_R1, 0, SLJIT_IMM, 1));
+	sljit_label* borrowDone = sljit_emit_label(compiler_);
+	if (borrowDone == nullptr)
+		ok_ = false;
+	else if (noBorrow != nullptr)
+		sljit_set_label(noBorrow, borrowDone);
+	storeSlot(SLJIT_R0, base, 8);
+	storeSlot(SLJIT_R1, base + 1, 8);
+	pop(); pop(); pop(); pop();
+	push(8); push(8);
+}
+
+void OpcodeDispatcher::dispatchI64MulWideS()
+{
+	if (!reachable_)
+		return;
+	requireStack(2);
+	const std::size_t base = stackWidths_.size() - 2;
+	if (measureOnly_) {
+		pop(); pop();
+		push(8); push(8);
+		return;
+	}
+	loadSlot(SLJIT_R0, base, 8);
+	loadSlot(SLJIT_R1, base + 1, 8);
+	emitHelper(SLJIT_ARGS2(W, W, W), &sljitI64MulWideSLow);
+	// Park the low half: writing it to `base` now would destroy the left
+	// operand before the high-half helper reads it.
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+			scratchSlotOffset(), SLJIT_R0, 0));
+	loadSlot(SLJIT_R0, base, 8);
+	loadSlot(SLJIT_R1, base + 1, 8);
+	emitHelper(SLJIT_ARGS2(W, W, W), &sljitI64MulWideSHigh);
+	storeSlot(SLJIT_R0, base + 1, 8);
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0,
+			SLJIT_MEM1(SLJIT_SP), scratchSlotOffset()));
+	storeSlot(SLJIT_R0, base, 8);
+	pop(); pop();
+	push(8); push(8);
+}
+
+void OpcodeDispatcher::dispatchI64MulWideU()
+{
+	if (!reachable_)
+		return;
+	requireStack(2);
+	const std::size_t base = stackWidths_.size() - 2;
+	if (measureOnly_) {
+		pop(); pop();
+		push(8); push(8);
+		return;
+	}
+	loadSlot(SLJIT_R0, base, 8);
+	loadSlot(SLJIT_R1, base + 1, 8);
+	emitHelper(SLJIT_ARGS2(W, W, W), &sljitI64MulWideULow);
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+			scratchSlotOffset(), SLJIT_R0, 0));
+	loadSlot(SLJIT_R0, base, 8);
+	loadSlot(SLJIT_R1, base + 1, 8);
+	emitHelper(SLJIT_ARGS2(W, W, W), &sljitI64MulWideUHigh);
+	storeSlot(SLJIT_R0, base + 1, 8);
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0,
+			SLJIT_MEM1(SLJIT_SP), scratchSlotOffset()));
+	storeSlot(SLJIT_R0, base, 8);
+	pop(); pop();
+	push(8); push(8);
+}
+
 void OpcodeDispatcher::dispatchI64Add() { emitIntegerBinary(SLJIT_ADD, 8); }
 void OpcodeDispatcher::dispatchI64Sub() { emitIntegerBinary(SLJIT_SUB, 8); }
 void OpcodeDispatcher::dispatchI64Mul() { emitIntegerBinary(SLJIT_MUL, 8); }
@@ -8495,6 +8675,10 @@ void OpcodeDispatcher::dispatchTableGrow(WASM::TableIdx arg)
 	if (!reachable_)
 		return;
 	requireTableIndex(arg);
+	const bool table64 = arg < module_.importTables.size()
+			? (module_.importTables[arg].table.limits.flags & 0x04) != 0
+			: (module_.tables[arg - module_.importTables.size()].limits.flags & 0x04) != 0;
+	const int indexWidth = table64 ? 8 : 4;
 	requireStack(2);
 	const std::size_t deltaDepth = stackWidths_.size() - 1;
 	const std::size_t initDepth = deltaDepth - 1;
@@ -8504,13 +8688,13 @@ void OpcodeDispatcher::dispatchTableGrow(WASM::TableIdx arg)
 		loadContext(SLJIT_R0);
 		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R1, 0, SLJIT_IMM,
 				static_cast<sljit_sw>(arg)));
-		loadSlot(SLJIT_R2, deltaDepth, 4);
+		loadSlot(SLJIT_R2, deltaDepth, indexWidth);
 		loadSlot(SLJIT_R3, initDepth, 8);
 		emitHelper(SLJIT_ARGS4(W, P, 32, W, P), &WASM::wasm_table_grow);
-		storeSlot(SLJIT_R0, initDepth, 4);
+		storeSlot(SLJIT_R0, initDepth, indexWidth);
 		emitPendingTrapCheck();
 	}
-	push(4);
+	push(indexWidth);
 }
 
 void OpcodeDispatcher::dispatchTableSize(WASM::TableIdx arg)
@@ -8518,15 +8702,19 @@ void OpcodeDispatcher::dispatchTableSize(WASM::TableIdx arg)
 	if (!reachable_)
 		return;
 	requireTableIndex(arg);
+	const bool table64 = arg < module_.importTables.size()
+			? (module_.importTables[arg].table.limits.flags & 0x04) != 0
+			: (module_.tables[arg - module_.importTables.size()].limits.flags & 0x04) != 0;
+	const int indexWidth = table64 ? 8 : 4;
 	if (!measureOnly_) {
 		loadContext(SLJIT_R0);
 		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R1, 0, SLJIT_IMM,
 				static_cast<sljit_sw>(arg)));
-		emitHelper(SLJIT_ARGS2(32, P, 32), &sljitTableSize);
-		storeSlot(SLJIT_R0, stackWidths_.size(), 4);
+		emitHelper(SLJIT_ARGS2(W, P, 32), &sljitTableSize);
+		storeSlot(SLJIT_R0, stackWidths_.size(), indexWidth);
 		emitPendingTrapCheck();
 	}
-	push(4);
+	push(indexWidth);
 }
 
 } // namespace Sljit
