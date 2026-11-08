@@ -1534,10 +1534,7 @@ protected:
 			auto skip = compiler.new_label();
 			checkError(compiler.test(condition, condition), "AsmJit conditional function branch test failed");
 			checkError(compiler.jz(skip), "AsmJit conditional function branch skip failed");
-			if (resultCount == 0)
-				checkError(compiler.ret(), "AsmJit conditional function branch return failed");
-			else
-				emitFunctionReturn(values.back());
+			emitFunctionReturnValues();
 			checkError(compiler.bind(skip), "AsmJit conditional function branch label binding failed");
 			return;
 		}
@@ -1575,10 +1572,8 @@ protected:
 		if (depth == controls.size()) {
 			if (values.size() != resultCount)
 				throw std::runtime_error("AsmJit function branch has the wrong result arity");
-			if (resultCount == 0)
-				checkError(compiler.ret(), "AsmJit function branch return failed");
-			else
-				emitFunctionReturn(values.back());
+			emitFunctionReturnValues();
+			armTerminated = true;
 			return;
 		}
 		ControlFrame& target = controls[controls.size() - 1 - depth];
@@ -6568,9 +6563,10 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 	void dispatchF64Store(WASM::MemArg arg) override { emitMemoryStore(arg, 8); }
 
 
-	void dispatchReturn() override
+	//! Emits the return for the current value stack in either ABI. Shared by
+	//! `return`, a `br` to the function label and a conditional function branch.
+	void emitFunctionReturnValues()
 	{
-		armTerminated = true;
 		if (resultCount == 0) {
 			checkError(compiler.ret(), "AsmJit return emission failed");
 			return;
@@ -6590,17 +6586,17 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 					for (int word = 0; word < 2; ++word) {
 						auto bits = compiler.new_gp64("frameResultWord");
 						checkError(compiler.mov(bits,
-								asmjit::x86::qword_ptr(values[first + i], word * 8)),
+									asmjit::x86::qword_ptr(values[first + i], word * 8)),
 								"AsmJit frame multi-result vector load failed");
 						checkError(compiler.mov(
-								asmjit::x86::qword_ptr(framePointer, offset + word * 8), bits),
+									asmjit::x86::qword_ptr(framePointer, offset + word * 8), bits),
 								"AsmJit frame multi-result vector store failed");
 					}
 					offset += 16;
 				} else {
 					const int width = kindWidth(kind) == 8 ? 8 : 4;
 					checkError(compiler.mov(
-							asmjit::x86::Mem(framePointer, offset, width), values[first + i]),
+								asmjit::x86::Mem(framePointer, offset, width), values[first + i]),
 							"AsmJit frame multi-result store failed");
 					offset += 8;
 				}
@@ -6614,6 +6610,12 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 					"AsmJit float return emission failed");
 		else
 			checkError(compiler.ret(values.back()), "AsmJit return emission failed");
+	}
+
+	void dispatchReturn() override
+	{
+		armTerminated = true;
+		emitFunctionReturnValues();
 	}
 
 private:

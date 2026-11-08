@@ -958,3 +958,67 @@ at SIMD shuffle.
 
 The full SLJIT run still stops later, in `component script marshals structured
 values`; that is the next item, not a SIMD issue.
+
+## AsmJIT — branch to the function label in frame mode
+
+### Intended
+
+Make `spec: func` instantiate under `WASMJIT_BACKEND=asmjit`. It failed before
+any command could run:
+
+```
+instantiation of 'func.0.wasm' failed:
+AsmJit compiler finalisation failed: 25
+```
+
+### Diagnosis
+
+`func.0` contains a 17-parameter / 16-result `large-sig`, so `moduleNeedsFrame`
+selects the staging-frame ABI for the whole module. Function 75 is:
+
+```wat
+(func (result i32)
+  i32.const 79
+  br 0)
+```
+
+Its `br 0` targets the function label. `dispatchBr` and `dispatchBrIf` treated
+that target as a register-form return: they called `emitFunctionReturn`, which
+emits `ret(value)`. In frame mode the generated signature is
+`void(ctx, frame)`, so the register assignment for a non-void return was
+invalid. AsmJIT reports this at `finalize()` as error 25
+(`InvalidAssignment`), long after the body was emitted.
+
+The diagnosis used a temporary `ErrorHandler` plus a per-function compile limit
+to bisect the 97-function module; the handler and probes were removed after the
+fix.
+
+### Fix
+
+Extract the return sequence into `emitFunctionReturnValues()`, which already
+knows both ABI shapes (`dispatchReturn` used it for the frame path). `dispatchBr`
+and the conditional function branch in `dispatchBrIf` now call it. A branch to
+the function label therefore writes the result block and emits `ret` in frame
+mode, and keeps the register return in register mode. `dispatchBrTable` already
+went through `dispatchReturn`.
+
+### Evidence
+
+```
+WASMJIT_BACKEND=asmjit ./Test/WasmJit 'spec: func'
+[spec] func: passed=100 failed=0 skipped=75
+All tests passed (2 assertions in 1 test case)
+```
+
+### Lessons
+
+* **A branch to the outermost label is a return, and must use the same ABI as
+  `return`.** The three control paths had drifted: only `dispatchReturn`
+  honoured the frame form.
+* **Frame mode is a module-wide property.** One large signature changes the
+  meaning of every function's `ret`, including tiny functions with no frame
+  parameters of their own.
+* **Bisect with a compile limit, not a body skip, when the fault may be in
+  prologue/signature handling.** The temporary `ASMJIT_LIMIT_FUNCTION` probe
+  found function 75; a body-only skip would have hidden it behind the same
+  empty-function path.
