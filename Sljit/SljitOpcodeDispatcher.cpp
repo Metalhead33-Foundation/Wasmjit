@@ -350,6 +350,51 @@ extern "C" void* sljitArrayNewData(WASM::VMContext* vm, uint32_t typeIndex,
 	}
 }
 
+extern "C" void* sljitArrayNewArray(WASM::VMContext* vm, void* source,
+		uint64_t packedTypes, uint64_t packedRange) noexcept
+{
+	try {
+		return reinterpret_cast<WASM::ModuleInstance*>(vm)->arrayNewArray(
+				static_cast<uint32_t>(packedTypes & 0xFFFFFFFFu),
+				static_cast<uint32_t>(packedTypes >> 32), source,
+				static_cast<uint32_t>(packedRange & 0xFFFFFFFFu),
+				static_cast<uint32_t>(packedRange >> 32));
+	} catch (...) {
+		WASM::reportTrap(WASM::TrapKind::Internal);
+		return nullptr;
+	}
+}
+
+extern "C" void* sljitArrayNewMemory(WASM::VMContext* vm, uint64_t packedTypes,
+		uint64_t packedRange) noexcept
+{
+	try {
+		return reinterpret_cast<WASM::ModuleInstance*>(vm)->arrayNewMemory(
+				static_cast<uint32_t>(packedTypes & 0xFFFFFFFFu),
+				static_cast<uint32_t>(packedTypes >> 32),
+				static_cast<uint32_t>(packedRange & 0xFFFFFFFFu),
+				static_cast<uint32_t>(packedRange >> 32));
+	} catch (...) {
+		WASM::reportTrap(WASM::TrapKind::Internal);
+		return nullptr;
+	}
+}
+
+extern "C" void* sljitArrayNewTable(WASM::VMContext* vm, uint64_t packedTypes,
+		uint64_t packedRange) noexcept
+{
+	try {
+		return reinterpret_cast<WASM::ModuleInstance*>(vm)->arrayNewTable(
+				static_cast<uint32_t>(packedTypes & 0xFFFFFFFFu),
+				static_cast<uint32_t>(packedTypes >> 32),
+				static_cast<uint32_t>(packedRange & 0xFFFFFFFFu),
+				static_cast<uint32_t>(packedRange >> 32));
+	} catch (...) {
+		WASM::reportTrap(WASM::TrapKind::Internal);
+		return nullptr;
+	}
+}
+
 extern "C" void* sljitArrayNewElem(WASM::VMContext* vm, uint32_t typeIndex,
 		uint32_t elemIdx, uint64_t packedSrcAndLength) noexcept
 {
@@ -5830,6 +5875,93 @@ void OpcodeDispatcher::dispatchArrayNewData(WASM::TypeIdx arg1, uint32_t arg2)
 	pop();
 	push(8);
 	storeSlot(SLJIT_R0, stackWidths_.size() - 1, 8);
+}
+
+void OpcodeDispatcher::dispatchArrayNewArray(WASM::TypeIdx dst, WASM::TypeIdx src)
+{
+	if (!reachable_)
+		return;
+	requireStack(3);
+	const std::size_t base = stackWidths_.size() - 3;
+	const std::uint64_t packedTypes = static_cast<std::uint64_t>(dst)
+			| (static_cast<std::uint64_t>(src) << 32);
+	if (measureOnly_) {
+		for (int i = 0; i < 3; ++i)
+			pop();
+		push(8);
+		return;
+	}
+	loadSlot(SLJIT_R3, base + 2, 4);
+	emit(sljit_emit_op2(compiler_, SLJIT_SHL, SLJIT_R3, 0, SLJIT_R3, 0,
+			SLJIT_IMM, 32));
+	loadSlot(SLJIT_R0, base + 1, 4);
+	emit(sljit_emit_op2(compiler_, SLJIT_OR, SLJIT_R3, 0, SLJIT_R3, 0, SLJIT_R0, 0));
+	loadSlot(SLJIT_R1, base, 8);
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R2, 0, SLJIT_IMM,
+			static_cast<sljit_sw>(packedTypes)));
+	loadContext(SLJIT_R0);
+	emitHelper(SLJIT_ARGS4(P, P, P, W, W), &sljitArrayNewArray);
+	storeSlot(SLJIT_R0, base, 8);
+	emitPendingTrapCheck();
+	for (int i = 0; i < 3; ++i)
+		pop();
+	push(8);
+}
+
+void OpcodeDispatcher::dispatchArrayNewMemory(WASM::TypeIdx dst, WASM::MemIdx src)
+{
+	if (!reachable_)
+		return;
+	requireStack(2);
+	const std::size_t base = stackWidths_.size() - 2;
+	const std::uint64_t packedTypes = static_cast<std::uint64_t>(dst)
+			| (static_cast<std::uint64_t>(src) << 32);
+	if (measureOnly_) {
+		pop(); pop();
+		push(8);
+		return;
+	}
+	loadContext(SLJIT_R0);
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R1, 0, SLJIT_IMM,
+			static_cast<sljit_sw>(packedTypes)));
+	loadSlot(SLJIT_R2, base + 1, 4);
+	emit(sljit_emit_op2(compiler_, SLJIT_SHL, SLJIT_R2, 0, SLJIT_R2, 0,
+			SLJIT_IMM, 32));
+	loadSlot(SLJIT_R3, base, 4);
+	emit(sljit_emit_op2(compiler_, SLJIT_OR, SLJIT_R2, 0, SLJIT_R2, 0, SLJIT_R3, 0));
+	emitHelper(SLJIT_ARGS3(P, P, W, W), &sljitArrayNewMemory);
+	storeSlot(SLJIT_R0, base, 8);
+	emitPendingTrapCheck();
+	pop(); pop();
+	push(8);
+}
+
+void OpcodeDispatcher::dispatchArrayNewTable(WASM::TypeIdx dst, WASM::TableIdx src)
+{
+	if (!reachable_)
+		return;
+	requireStack(2);
+	const std::size_t base = stackWidths_.size() - 2;
+	const std::uint64_t packedTypes = static_cast<std::uint64_t>(dst)
+			| (static_cast<std::uint64_t>(src) << 32);
+	if (measureOnly_) {
+		pop(); pop();
+		push(8);
+		return;
+	}
+	loadContext(SLJIT_R0);
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R1, 0, SLJIT_IMM,
+			static_cast<sljit_sw>(packedTypes)));
+	loadSlot(SLJIT_R2, base + 1, 4);
+	emit(sljit_emit_op2(compiler_, SLJIT_SHL, SLJIT_R2, 0, SLJIT_R2, 0,
+			SLJIT_IMM, 32));
+	loadSlot(SLJIT_R3, base, 4);
+	emit(sljit_emit_op2(compiler_, SLJIT_OR, SLJIT_R2, 0, SLJIT_R2, 0, SLJIT_R3, 0));
+	emitHelper(SLJIT_ARGS3(P, P, W, W), &sljitArrayNewTable);
+	storeSlot(SLJIT_R0, base, 8);
+	emitPendingTrapCheck();
+	pop(); pop();
+	push(8);
 }
 
 void OpcodeDispatcher::dispatchArrayNewElem(WASM::TypeIdx arg1, uint32_t arg2)

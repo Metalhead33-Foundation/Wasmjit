@@ -2362,7 +2362,40 @@ Default 22,448 assertions in 821 cases, green
   range and layout are part of the helper contract now.
 
 
-## Continuation handlers, `resume_throw` and `switch`
+## More array constructors
+
+### Fix
+
+* Lowered `array.new_array`, `array.new_memory` and `array.new_table` on both
+  backends through the existing `ModuleInstance` runtime methods.
+* The helper ABI packs destination/source type indices into one 64-bit word and
+  the `(start, length)` range into another. The runtime performs the GC range
+  check before allocating.
+
+### Evidence
+
+```
+SLJIT   more array constructors   24/24
+AsmJIT  more array constructors   24/24
+```
+
+Full serial runs:
+
+```
+SLJIT   821 cases: 812 passed / 9 failed
+AsmJIT  821 cases: 807 passed / 14 failed
+Default 22,448 assertions in 821 cases, green
+```
+
+### Lessons
+
+* **The range-word order is part of the helper contract.** A reversed pack
+  produced the right element count by accident and the wrong slice contents.
+* **SLJIT scratch registers are scarce.** Building two packed words without a
+  fifth register is possible by reusing the context register before the final
+  `loadContext`.
+
+
 
 ### Intended
 

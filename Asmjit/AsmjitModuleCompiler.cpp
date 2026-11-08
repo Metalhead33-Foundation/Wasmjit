@@ -644,6 +644,51 @@ void* asmjitArrayNewData(WASM::VMContext* vm, uint32_t typeIndex, uint32_t dataI
 	}
 }
 
+void* asmjitArrayNewArray(WASM::VMContext* vm, void* source,
+		uint64_t packedTypes, uint64_t packedRange) noexcept
+{
+	try {
+		return reinterpret_cast<WASM::ModuleInstance*>(vm)->arrayNewArray(
+				static_cast<uint32_t>(packedTypes & 0xFFFFFFFFu),
+				static_cast<uint32_t>(packedTypes >> 32), source,
+				static_cast<uint32_t>(packedRange & 0xFFFFFFFFu),
+				static_cast<uint32_t>(packedRange >> 32));
+	} catch (...) {
+		WASM::reportTrap(WASM::TrapKind::Internal);
+		return nullptr;
+	}
+}
+
+void* asmjitArrayNewMemory(WASM::VMContext* vm, uint64_t packedTypes,
+		uint64_t packedRange) noexcept
+{
+	try {
+		return reinterpret_cast<WASM::ModuleInstance*>(vm)->arrayNewMemory(
+				static_cast<uint32_t>(packedTypes & 0xFFFFFFFFu),
+				static_cast<uint32_t>(packedTypes >> 32),
+				static_cast<uint32_t>(packedRange & 0xFFFFFFFFu),
+				static_cast<uint32_t>(packedRange >> 32));
+	} catch (...) {
+		WASM::reportTrap(WASM::TrapKind::Internal);
+		return nullptr;
+	}
+}
+
+void* asmjitArrayNewTable(WASM::VMContext* vm, uint64_t packedTypes,
+		uint64_t packedRange) noexcept
+{
+	try {
+		return reinterpret_cast<WASM::ModuleInstance*>(vm)->arrayNewTable(
+				static_cast<uint32_t>(packedTypes & 0xFFFFFFFFu),
+				static_cast<uint32_t>(packedTypes >> 32),
+				static_cast<uint32_t>(packedRange & 0xFFFFFFFFu),
+				static_cast<uint32_t>(packedRange >> 32));
+	} catch (...) {
+		WASM::reportTrap(WASM::TrapKind::Internal);
+		return nullptr;
+	}
+}
+
 void* asmjitArrayNewElem(WASM::VMContext* vm, uint32_t typeIndex, uint32_t elemIdx,
 		uint64_t packedSrcAndLength) noexcept
 {
@@ -6044,6 +6089,75 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		invoke->set_ret(0, object);
 		emitPendingTrapReturn();
 		values.push_back(object);
+	}
+
+	void dispatchArrayNewArray(WASM::TypeIdx dst, WASM::TypeIdx src) override
+	{
+		if (values.size() < 3)
+			throw std::runtime_error("AsmJit array.new_array operand stack underflow");
+		auto length = values.back(); values.pop_back();
+		auto start = values.back(); values.pop_back();
+		auto source = values.back(); values.pop_back();
+		auto packedTypes = packImmPair(src, dst, "arrayNewArrayTypes");
+		auto packedRange = packRegPair(length, start, "arrayNewArrayRange");
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUInt64);
+		signature.add_arg(asmjit::TypeId::kUInt64);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke),
+				reinterpret_cast<uint64_t>(&asmjitArrayNewArray), signature),
+				"AsmJit array.new_array helper call failed");
+		invoke->set_arg(0, vmContext);
+		invoke->set_arg(1, source);
+		invoke->set_arg(2, packedTypes);
+		invoke->set_arg(3, packedRange);
+		auto result = compiler.new_gp_ptr("arrayNewArrayResult");
+		invoke->set_ret(0, result);
+		values.push_back(result);
+		emitPendingTrapReturn();
+	}
+
+	void emitArrayNewFromIndex(const char* opcode, uint32_t dst, uint32_t src,
+			uint64_t helper)
+	{
+		if (values.size() < 2)
+			throw std::runtime_error(std::string("AsmJit ") + opcode
+					+ " operand stack underflow");
+		auto length = values.back(); values.pop_back();
+		auto start = values.back(); values.pop_back();
+		auto packedTypes = packImmPair(src, dst, "arrayNewIndexTypes");
+		auto packedRange = packRegPair(length, start, "arrayNewIndexRange");
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUInt64);
+		signature.add_arg(asmjit::TypeId::kUInt64);
+		asmjit::InvokeNode* invoke = nullptr;
+		const std::string failure = std::string("AsmJit ") + opcode + " helper call failed";
+		checkError(compiler.invoke(asmjit::Out(invoke), helper, signature),
+				failure.c_str());
+		invoke->set_arg(0, vmContext);
+		invoke->set_arg(1, packedTypes);
+		invoke->set_arg(2, packedRange);
+		auto result = compiler.new_gp_ptr("arrayNewIndexResult");
+		invoke->set_ret(0, result);
+		values.push_back(result);
+		emitPendingTrapReturn();
+	}
+
+	void dispatchArrayNewMemory(WASM::TypeIdx dst, WASM::MemIdx src) override
+	{
+		emitArrayNewFromIndex("array.new_memory", dst, src,
+				reinterpret_cast<uint64_t>(&asmjitArrayNewMemory));
+	}
+
+	void dispatchArrayNewTable(WASM::TypeIdx dst, WASM::TableIdx src) override
+	{
+		emitArrayNewFromIndex("array.new_table", dst, src,
+				reinterpret_cast<uint64_t>(&asmjitArrayNewTable));
 	}
 
 	void dispatchArrayNewElem(WASM::TypeIdx arg1, uint32_t arg2) override
