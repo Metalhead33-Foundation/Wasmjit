@@ -17,6 +17,7 @@
 #include "LibJit/LibJitContext.hpp"
 #include "LibJit/LibjitModuleCompiler.hpp"
 #include "Sljit/SljitBackend.hpp"
+#include "WasmBase/WasmBackendAbi.hpp"
 #include "WasmBase/WasmDiagnostics.hpp"
 #include "WasmBase/WasmGcHeader.hpp"
 
@@ -131,9 +132,52 @@ public:
 			void* result, std::size_t capacity, bool& trapped, WASM::TrapKind& trapKind,
 			std::string& trapMessage) override
 	{
-		(void)instance; trapped = false;
-		if (callable.fnPtr == nullptr || args.size() != type.params.size()
-				|| args.size() > 5 || type.results.size() > 1)
+		trapped = false;
+		if (callable.fnPtr == nullptr)
+			return false;
+		if (instance.frameCallAbi()) {
+			std::vector<WASM::ValueKind> paramKinds;
+			std::vector<WASM::ValueKind> resultKinds;
+			for (const auto& p : type.params)
+				paramKinds.push_back(WASM::valueKindOf(p.val.opcode));
+			for (const auto& r : type.results)
+				resultKinds.push_back(WASM::valueKindOf(r.val.opcode));
+			if (args.size() != type.params.size())
+				return false;
+			const std::uint32_t bytes = WASM::frameBytes(paramKinds, resultKinds);
+			std::vector<std::max_align_t> storage(
+					(bytes + sizeof(std::max_align_t) - 1) / sizeof(std::max_align_t) + 1);
+			auto* frame = reinterpret_cast<std::uint8_t*>(storage.data());
+			std::memset(frame, 0, bytes);
+			for (std::size_t i = 0; i < args.size(); ++i)
+				std::memcpy(frame + WASM::frameArgumentOffset(paramKinds,
+						static_cast<std::uint32_t>(i)), args[i],
+						WASM::valueKindSize(paramKinds[i]));
+			const AggregateLayout layout = aggregateLayout(type.results);
+			if (!type.results.empty() && (result == nullptr || capacity < layout.size))
+				return false;
+			using FrameEntry = void (*)(void*, void*);
+			{
+				WASM::CallDepthScope depth;
+				reinterpret_cast<FrameEntry>(callable.fnPtr)(vmContext, frame);
+			}
+			for (std::size_t i = 0; i < type.results.size(); ++i)
+				std::memcpy(static_cast<std::uint8_t*>(result) + layout.fields[i].offset,
+						frame + WASM::frameResultOffset(paramKinds, resultKinds,
+								static_cast<std::uint32_t>(i)),
+						WASM::valueKindSize(resultKinds[i]));
+			const WASM::TrapInfo info = WASM::takePendingTrap();
+			if (info.trapped) {
+				trapped = true;
+				trapKind = info.kind;
+				trapMessage = info.message != nullptr ? info.message : "";
+				WASM::emitTrapDiagnostic(info.kind, info.message, info.functionIndex,
+						info.instructionOffset, info.functionName);
+			}
+			return true;
+		}
+		if (args.size() != type.params.size() || args.size() > 5
+				|| type.results.size() > 1)
 			return false;
 		for (const void* argument : args)
 			if (argument == nullptr)

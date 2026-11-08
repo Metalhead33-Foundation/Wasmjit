@@ -1648,13 +1648,11 @@ protected:
 			throw std::runtime_error("AsmJit br_table operand stack does not match its target labels");
 		auto emitTarget = [&](WASM::LabelIdx depth) {
 			if (depth == controls.size()) {
-				if (resultCount == 0) {
-					checkError(compiler.ret(), "AsmJit br_table function return failed");
-				} else if (resultCount == 1) {
-					emitFunctionReturn(values.back());
-				} else {
-					throw std::runtime_error("AsmJit br_table to a multi-result function label is not implemented");
-				}
+				// Every case still needs the same operand stack after this target.
+				// `dispatchReturn` consumes it, so restore the copy for the next case.
+				const auto saved = values;
+				dispatchReturn();
+				values = saved;
 				return;
 			}
 			ControlFrame& target = controls[controls.size() - 1 - depth];
@@ -1686,6 +1684,7 @@ protected:
 		}
 		emitTarget(defaultDepth);
 		armTerminated = true;
+		values.clear();
 	}
 
 	void dispatchReturnCall(WASM::FuncIdx index) override
@@ -4026,6 +4025,55 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 
 
 
+
+    void dispatchTableFill(WASM::TableIdx tableIndex) override
+    {
+        if (tableIndex >= module.importTables.size() + module.tables.size())
+            throw std::runtime_error("AsmJit table.fill references an unknown table");
+        if (values.size() < 3)
+            throw std::runtime_error("AsmJit table.fill operand stack underflow");
+        auto length = values.back(); values.pop_back();
+        auto element = values.back(); values.pop_back();
+        auto start = values.back(); values.pop_back();
+        auto widen = [&](const asmjit::x86::Gp& value) {
+            if (value.size() == 8)
+                return value;
+            auto wide = compiler.new_gp64("tableFillWord");
+            checkError(compiler.movzx(wide, value.r32()), "AsmJit table.fill widening failed");
+            return wide;
+        };
+        auto packed = compiler.new_stack(48, 16, "tableFillArguments");
+        auto packedPtr = compiler.new_gp_ptr("tableFillArgumentsPointer");
+        checkError(compiler.lea(packedPtr, packed), "AsmJit table.fill argument address failed");
+        const auto packedAt = [&](int offset) {
+            auto slot = packed;
+            slot.set_offset(offset);
+            slot.set_size(8);
+            return slot;
+        };
+        checkError(compiler.mov(packedAt(0), widen(start)),
+                "AsmJit table.fill start store failed");
+        checkError(compiler.mov(packedAt(16), element),
+                "AsmJit table.fill element store failed");
+        checkError(compiler.mov(packedAt(32), widen(length)),
+                "AsmJit table.fill length store failed");
+        asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+        signature.set_ret(asmjit::TypeId::kVoid);
+        signature.add_arg(asmjit::TypeId::kUIntPtr);
+        signature.add_arg(asmjit::TypeId::kUInt32);
+        signature.add_arg(asmjit::TypeId::kUIntPtr);
+        asmjit::InvokeNode* invoke = nullptr;
+        checkError(compiler.invoke(asmjit::Out(invoke),
+                reinterpret_cast<uint64_t>(&WASM::wasm_table_fill_args), signature),
+                "AsmJit table.fill helper call emission failed");
+        auto tableReg = compiler.new_gp32("tableFillIndex");
+        checkError(compiler.mov(tableReg, static_cast<uint32_t>(tableIndex)),
+                "AsmJit table.fill table index failed");
+        invoke->set_arg(0, vmContext);
+        invoke->set_arg(1, tableReg);
+        invoke->set_arg(2, packedPtr);
+        emitPendingTrapReturn();
+    }
 
     void dispatchTableCopy(WASM::TableIdx destinationTable, WASM::TableIdx sourceTable) override
     {
@@ -7863,7 +7911,11 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance,
 			IntegerFunctionEmitter emitter(compiler, *function, type, module.functionBodies[i],
 					module, internals, functions, signatures,
 					static_cast<uint32_t>(module.importFunctions.size() + i));
-			emitter.compile(module.functionBodies[i], type);
+			try {
+				emitter.compile(module.functionBodies[i], type);
+			} catch (const std::exception& error) {
+				throw std::runtime_error("AsmJit function " + std::to_string(i) + ": " + error.what());
+			}
 			checkError(compiler.end_func(), "AsmJit function finalisation failed");
 		}
 

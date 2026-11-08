@@ -2999,3 +2999,27 @@ TEST_CASE("SLJIT compiles v128 block results",
 	CHECK(instance.exportedFunction("already_compiled").has_value());
 	CHECK(instance.exportedFunction("unsupported").has_value());
 }
+
+TEST_CASE("SLJIT br_table handles a multi-result block and function target",
+"[sljit][brtable][multi]")
+{
+auto runtime = WASM::Runtime::create("sljit");
+REQUIRE(runtime != nullptr);
+auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "sljit_brtable_multi_probe.wasm");
+WASM::RegistryImportResolver imports;
+auto& instance = runtime->instantiate(*module, imports);
+REQUIRE(instance.frameCallAbi());
+const auto run = instance.exportedFunction("run");
+REQUIRE(run.has_value());
+alignas(16) std::uint8_t frame[32] = {};
+std::int32_t argument = 0;
+std::memcpy(frame, &argument, sizeof(argument));
+WASM::callCallableFrame(*run, frame);
+std::int32_t first = 0;
+std::int32_t second = 0;
+std::memcpy(&first, frame + 8, sizeof(first));
+std::memcpy(&second, frame + 16, sizeof(second));
+CHECK(first == 101);
+CHECK(second == 52);
+}

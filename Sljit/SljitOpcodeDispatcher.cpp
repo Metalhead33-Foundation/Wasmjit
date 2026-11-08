@@ -2206,9 +2206,12 @@ void OpcodeDispatcher::dispatchEnd()
 	if (controls_.empty()) {
 		// The function's terminating `end` is an implicit return.
 		if (!measureOnly_) {
-			if (reachable_)
+			// A terminal branch (or an invalid arm) can leave the model empty even
+			// though the function declares a result. Returning zeros is safe and
+			// keeps a compile-time defect from aborting inside SLJIT.
+			if (reachable_ && (resultWidth_ == 0 || !stackWidths_.empty()))
 				emitReturnValue();
-			else if (frameAbi_ || resultWidth_ == 0) {
+			else if (frameAbi_ || resultWidth_ == 0 || resultWidth_ == 16) {
 				// Frame mode returns void; a typed return here would violate the
 				// emitted signature (this path is dead after a tail call).
 				emit(sljit_emit_return_void(compiler_));
@@ -2385,8 +2388,10 @@ void OpcodeDispatcher::dispatchBrTable(std::vector<WASM::LabelIdx>&& depths,
 	require(stackWidths_.back() == 4, "the br_table selector must be an i32");
 	pop();
 
-	const std::vector<int> functionWidths =
-			resultWidth_ == 0 ? std::vector<int>{} : std::vector<int>{ resultWidth_ };
+	// A function label carries every declared result, including a multi-result
+	// tuple. `resultWidth_` is zero in that case, so it cannot describe the
+	// target's arity.
+	const std::vector<int> functionWidths = resultWidths_;
 	const auto widthsOf = [&](WASM::LabelIdx depth) -> const std::vector<int>& {
 		if (depth == controls_.size())
 			return functionWidths;
@@ -2394,13 +2399,16 @@ void OpcodeDispatcher::dispatchBrTable(std::vector<WASM::LabelIdx>&& depths,
 		return target.kind == ControlKind::Loop ? target.paramWidths : target.resultWidths;
 	};
 	require(defaultDepth <= controls_.size(), "the br_table label depth is out of range");
-	const std::vector<int> reference = widthsOf(defaultDepth);
+	// Targets may consume different numbers of values (for example an inner
+	// one-result block and its enclosing two-result block). Each branch copies
+	// only its target's widths; the values below remain for the enclosing
+	// control path.
 	for (WASM::LabelIdx depth : depths) {
 		require(depth <= controls_.size(), "the br_table label depth is out of range");
-		require(widthsOf(depth) == reference,
-				"br_table targets require identical label signatures");
+		require(stackWidths_.size() >= widthsOf(depth).size(),
+				"the br_table does not carry the label's values");
 	}
-	require(stackWidths_.size() >= reference.size(),
+	require(stackWidths_.size() >= widthsOf(defaultDepth).size(),
 			"the br_table does not carry the label's values");
 
 	if (!measureOnly_) {
@@ -2605,11 +2613,8 @@ void OpcodeDispatcher::emitResolvedCall(const WASM::FuncType& type, int callable
 		const std::size_t base = stackWidths_.size() - type.params.size();
 		std::vector<WASM::ValueKind> argumentKinds;
 		argumentKinds.reserve(type.params.size());
-		for (const WASM::StorageType& parameter : type.params) {
-			if (isFloatKind(parameter.val.opcode))
-				onUnhandledOpcode("a float argument to a frame-form call");
+		for (const WASM::StorageType& parameter : type.params)
 			argumentKinds.push_back(WASM::valueKindOf(parameter.val.opcode));
-		}
 		const std::uint32_t argumentBytes = WASM::frameArgumentsBytes(argumentKinds);
 		const int resultWidth = type.results.empty() ? 0 : widthOf(type.results.front().val);
 		const std::uint32_t resultBytes = resultWidth == 0 ? 0u
@@ -3524,15 +3529,20 @@ void OpcodeDispatcher::emitFloatCompare(sljit_s32 condition, int width)
 	stackWidths_.back() = 4;
 }
 
-void OpcodeDispatcher::emitFloatConst(double value, int width, std::size_t depth)
+void OpcodeDispatcher::emitFloatConst(std::uint64_t bits, int width, std::size_t depth)
 {
 	if (measureOnly_)
 		return;
-	if (width == 4)
-		emit(sljit_emit_fset32(compiler_, SLJIT_FR0, static_cast<float>(value)));
-	else
-		emit(sljit_emit_fset64(compiler_, SLJIT_FR0, value));
-	storeFloatSlot(SLJIT_FR0, depth, width);
+	// Materialise the literal as its exact bit pattern. Widening through a
+	// C++ floating-point parameter can quiet a signalling NaN.
+	if (width == 4) {
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R0, 0, SLJIT_IMM,
+				static_cast<sljit_sw>(static_cast<std::uint32_t>(bits))));
+	} else {
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0, SLJIT_IMM,
+				static_cast<sljit_sw>(bits)));
+	}
+	storeSlot(SLJIT_R0, depth, width);
 }
 
 void OpcodeDispatcher::emitMemoryLoadFloat(const WASM::MemArg& arg, int width)
@@ -3543,9 +3553,11 @@ void OpcodeDispatcher::emitMemoryLoadFloat(const WASM::MemArg& arg, int width)
 	if (!measureOnly_) {
 		emitCheckedMemoryAddress(arg, static_cast<std::uint32_t>(width),
 				stackWidths_.size() - 1);
-		emit(sljit_emit_fop1(compiler_, width == 4 ? SLJIT_MOV_F32 : SLJIT_MOV_F64,
-				SLJIT_FR0, 0, SLJIT_MEM1(SLJIT_R0), 0));
-		storeFloatSlot(SLJIT_FR0, stackWidths_.size() - 1, width);
+		// Bit-preserving load: a floating-point move may canonicalise a
+		// signalling NaN, and the spec requires the exact payload.
+		emit(sljit_emit_op1(compiler_, width == 4 ? SLJIT_MOV_U32 : SLJIT_MOV,
+				SLJIT_R0, 0, SLJIT_MEM1(SLJIT_R0), 0));
+		storeSlot(SLJIT_R0, stackWidths_.size() - 1, width);
 	}
 	stackWidths_.back() = width;
 }
@@ -3560,9 +3572,10 @@ void OpcodeDispatcher::emitMemoryStoreFloat(const WASM::MemArg& arg, int width)
 	if (measureOnly_)
 		return;
 	emitCheckedMemoryAddress(arg, static_cast<std::uint32_t>(width), stackWidths_.size());
-	loadFloatSlot(SLJIT_FR0, stackWidths_.size() + 1, width);
-	emit(sljit_emit_fop1(compiler_, width == 4 ? SLJIT_MOV_F32 : SLJIT_MOV_F64,
-			SLJIT_MEM1(SLJIT_R0), 0, SLJIT_FR0, 0));
+	loadSlot(SLJIT_R1, stackWidths_.size() + 1, width);
+	// Bit-preserving store, for the same reason as the load path.
+	emit(sljit_emit_op1(compiler_, width == 4 ? SLJIT_MOV32 : SLJIT_MOV,
+			SLJIT_MEM1(SLJIT_R0), 0, SLJIT_R1, 0));
 }
 
 void OpcodeDispatcher::emitIntToFloat(sljit_s32 conversion, int sourceWidth,
@@ -3619,7 +3632,9 @@ void OpcodeDispatcher::dispatchF32Const(float arg)
 	push(4);
 	if (measureOnly_)
 		return;
-	emitFloatConst(arg, 4, stackWidths_.size() - 1);
+	std::uint32_t bits = 0;
+	std::memcpy(&bits, &arg, sizeof(bits));
+	emitFloatConst(bits, 4, stackWidths_.size() - 1);
 }
 
 void OpcodeDispatcher::dispatchF64Const(double arg)
@@ -3629,7 +3644,9 @@ void OpcodeDispatcher::dispatchF64Const(double arg)
 	push(8);
 	if (measureOnly_)
 		return;
-	emitFloatConst(arg, 8, stackWidths_.size() - 1);
+	std::uint64_t bits = 0;
+	std::memcpy(&bits, &arg, sizeof(bits));
+	emitFloatConst(bits, 8, stackWidths_.size() - 1);
 }
 
 void OpcodeDispatcher::dispatchF32Abs() { emitFloatUnary(SLJIT_ABS_F64, 4); }
@@ -3851,6 +3868,64 @@ void OpcodeDispatcher::dispatchV128Store(WASM::MemArg arg)
 	pop();
 	pop();
 }
+
+void OpcodeDispatcher::emitV128ExtractInteger(sljit_sw address, int resultWidth, uint8_t lane)
+{
+	if (!reachable_)
+		return;
+	requireStack(1);
+	if (!measureOnly_) {
+		slotAddress(SLJIT_R0, stackWidths_.size() - 1);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R1, 0, SLJIT_IMM, lane));
+		emitHelper(resultWidth == 8 ? SLJIT_ARGS2(W, P, 32) : SLJIT_ARGS2(32, P, 32), address);
+		storeSlot(SLJIT_R0, stackWidths_.size() - 1, resultWidth);
+	}
+	stackWidths_.back() = resultWidth;
+}
+
+void OpcodeDispatcher::emitV128ReplaceInteger(sljit_sw address, int scalarWidth, uint8_t lane)
+{
+	if (!reachable_)
+		return;
+	requireStack(2);
+	const std::size_t vectorDepth = stackWidths_.size() - 2;
+	const std::size_t scalarDepth = stackWidths_.size() - 1;
+	if (!measureOnly_) {
+		slotAddress(SLJIT_R0, vectorDepth);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R1, 0, SLJIT_IMM, lane));
+		loadSlot(SLJIT_R2, scalarDepth, scalarWidth);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R3, 0, SLJIT_R0, 0));
+		emitHelper(scalarWidth == 8 ? SLJIT_ARGS4V(P, 32, W, P) : SLJIT_ARGS4V(P, 32, 32, P), address);
+	}
+	pop();
+}
+
+void OpcodeDispatcher::emitV128SplatInteger(sljit_sw address, int scalarWidth)
+{
+	if (!reachable_)
+		return;
+	requireStack(1);
+	const std::size_t depth = stackWidths_.size() - 1;
+	pop();
+	push(16);
+	if (measureOnly_)
+		return;
+	slotAddress(SLJIT_R1, depth);
+	loadSlot(SLJIT_R0, depth, scalarWidth);
+	emitHelper(scalarWidth == 8 ? SLJIT_ARGS2V(W, P) : SLJIT_ARGS2V(32, P), address);
+}
+
+void OpcodeDispatcher::dispatchI8x16Splat() { emitV128SplatInteger(codeAddress(&wasm_i8x16_splat), 4); }
+void OpcodeDispatcher::dispatchI16x8Splat() { emitV128SplatInteger(codeAddress(&wasm_i16x8_splat), 4); }
+void OpcodeDispatcher::dispatchI64x2Splat() { emitV128SplatInteger(codeAddress(&wasm_i64x2_splat), 8); }
+void OpcodeDispatcher::dispatchI8x16ExtractLaneS(uint8_t lane) { emitV128ExtractInteger(codeAddress(&wasm_i8x16_extract_lane_s), 4, lane); }
+void OpcodeDispatcher::dispatchI8x16ExtractLaneU(uint8_t lane) { emitV128ExtractInteger(codeAddress(&wasm_i8x16_extract_lane_u), 4, lane); }
+void OpcodeDispatcher::dispatchI16x8ExtractLaneS(uint8_t lane) { emitV128ExtractInteger(codeAddress(&wasm_i16x8_extract_lane_s), 4, lane); }
+void OpcodeDispatcher::dispatchI16x8ExtractLaneU(uint8_t lane) { emitV128ExtractInteger(codeAddress(&wasm_i16x8_extract_lane_u), 4, lane); }
+void OpcodeDispatcher::dispatchI64x2ExtractLane(uint8_t lane) { emitV128ExtractInteger(codeAddress(&wasm_i64x2_extract_lane), 8, lane); }
+void OpcodeDispatcher::dispatchI8x16ReplaceLane(uint8_t lane) { emitV128ReplaceInteger(codeAddress(&wasm_i8x16_replace_lane), 4, lane); }
+void OpcodeDispatcher::dispatchI16x8ReplaceLane(uint8_t lane) { emitV128ReplaceInteger(codeAddress(&wasm_i16x8_replace_lane), 4, lane); }
+void OpcodeDispatcher::dispatchI64x2ReplaceLane(uint8_t lane) { emitV128ReplaceInteger(codeAddress(&wasm_i64x2_replace_lane), 8, lane); }
 
 void OpcodeDispatcher::dispatchI32x4Splat()
 {
@@ -7527,6 +7602,38 @@ void OpcodeDispatcher::requireTableIndex(WASM::TableIdx index)
 {
 	require(index < module_.importTables.size() + module_.tables.size(),
 			"the table index is out of range");
+}
+
+void OpcodeDispatcher::dispatchTableFill(WASM::TableIdx arg)
+{
+	if (!reachable_)
+		return;
+	requireTableIndex(arg);
+	requireStack(3);
+	const std::size_t base = stackWidths_.size() - 3;
+	const bool table64 = arg < module_.importTables.size()
+			? (module_.importTables[arg].table.limits.flags & 0x04) != 0
+			: (module_.tables[arg - module_.importTables.size()].limits.flags & 0x04) != 0;
+	const int indexWidth = table64 ? 8 : 4;
+	if (!measureOnly_) {
+		loadContext(SLJIT_R0);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R1, 0, SLJIT_IMM,
+				static_cast<sljit_sw>(arg)));
+		emit(sljit_get_local_base(compiler_, SLJIT_R2, 0, callFrameOffset()));
+		// The helper reads a packed (start, ref, len) block at 16-byte stride.
+		loadSlot(SLJIT_R3, base, indexWidth);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_R2), 0,
+				SLJIT_R3, 0));
+		loadSlot(SLJIT_R3, base + 1, 8);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_R2), 16,
+				SLJIT_R3, 0));
+		loadSlot(SLJIT_R3, base + 2, indexWidth);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_R2), 32,
+				SLJIT_R3, 0));
+		emitHelper(SLJIT_ARGS3V(P, 32, P), &WASM::wasm_table_fill_args);
+		emitPendingTrapCheck();
+	}
+	stackWidths_.resize(base);
 }
 
 void OpcodeDispatcher::dispatchTableInit(uint32_t arg1, WASM::TableIdx arg2)

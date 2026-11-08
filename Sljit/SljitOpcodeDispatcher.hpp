@@ -279,8 +279,19 @@ protected:
 	void dispatchV128Const(std::span<uint8_t> arg) override; //!< `v128.const`.
 	void dispatchV128Load(WASM::MemArg arg) override; //!< `v128.load`.
 	void dispatchV128Store(WASM::MemArg arg) override; //!< `v128.store`.
+	void dispatchI8x16Splat() override; //!< `i8x16.splat`.
+	void dispatchI16x8Splat() override; //!< `i16x8.splat`.
+	void dispatchI64x2Splat() override; //!< `i64x2.splat`.
 	void dispatchI32x4Splat() override; //!< `i32x4.splat`.
+	void dispatchI8x16ExtractLaneS(uint8_t arg) override; //!< `i8x16.extract_lane_s`.
+	void dispatchI8x16ExtractLaneU(uint8_t arg) override; //!< `i8x16.extract_lane_u`.
+	void dispatchI16x8ExtractLaneS(uint8_t arg) override; //!< `i16x8.extract_lane_s`.
+	void dispatchI16x8ExtractLaneU(uint8_t arg) override; //!< `i16x8.extract_lane_u`.
+	void dispatchI64x2ExtractLane(uint8_t arg) override; //!< `i64x2.extract_lane`.
 	void dispatchI32x4ExtractLane(uint8_t arg) override; //!< `i32x4.extract_lane`.
+	void dispatchI8x16ReplaceLane(uint8_t arg) override; //!< `i8x16.replace_lane`.
+	void dispatchI16x8ReplaceLane(uint8_t arg) override; //!< `i16x8.replace_lane`.
+	void dispatchI64x2ReplaceLane(uint8_t arg) override; //!< `i64x2.replace_lane`.
 	void dispatchI32x4ReplaceLane(uint8_t arg) override; //!< `i32x4.replace_lane`.
 	void dispatchV128Not() override; //!< `v128.not`.
 	void dispatchV128And() override; //!< `v128.and`.
@@ -551,6 +562,7 @@ protected:
 	void dispatchMemoryInit(uint32_t arg1, WASM::MemIdx arg2) override; //!< `memory.init`.
 	void dispatchDataDrop(uint32_t arg) override; //!< `data.drop`.
 	void dispatchTableInit(uint32_t arg1, WASM::TableIdx arg2) override; //!< `table.init`.
+	void dispatchTableFill(WASM::TableIdx arg) override; //!< `table.fill`.
 	void dispatchElemDrop(uint32_t arg) override; //!< `elem.drop`.
 	void dispatchTableCopy(WASM::TableIdx arg1, WASM::TableIdx arg2) override; //!< `table.copy`.
 	void dispatchTableSize(WASM::TableIdx arg) override; //!< `table.size`.
@@ -1001,7 +1013,7 @@ private:
 	 * \param width 4 for f32, 8 for f64.
 	 * \param depth Zero-based operand-stack depth.
 	 */
-	void emitFloatConst(double value, int width, std::size_t depth);
+	void emitFloatConst(std::uint64_t bits, int width, std::size_t depth);
 	/*!
 	 * \brief Emits one checked float memory load.
 	 * \param arg Memory immediate.
@@ -1127,6 +1139,9 @@ private:
 	 * \param width Scalar width in bytes (4 or 8).
 	 */
 	void emitV128SplatFloat(sljit_sw address, int width);
+	void emitV128ExtractInteger(sljit_sw address, int resultWidth, uint8_t lane);
+	void emitV128ReplaceInteger(sljit_sw address, int scalarWidth, uint8_t lane);
+	void emitV128SplatInteger(sljit_sw address, int scalarWidth);
 	/*!
 	 * \brief Calls a float extract helper and leaves the lane as a scalar.
 	 * \param address Helper entry point.

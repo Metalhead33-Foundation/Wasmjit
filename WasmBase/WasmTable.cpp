@@ -169,4 +169,36 @@ extern "C" void* wasm_atomic_table_cmpxchg(VMContext* context, uint32_t tableInd
 			ordering);
 }
 
+extern "C" void wasm_table_fill_args(VMContext* context, uint32_t tableIndex,
+const uint64_t* arguments) noexcept
+{
+	if (arguments == nullptr) {
+		WASM::reportTrap(WASM::TrapKind::Internal, "table.fill arguments are null");
+		return;
+	}
+	// The backends use one 16-byte frame slot per word, matching the shared
+	// table operand layout: start, element, length.
+	const uint64_t start = arguments[0];
+	void* element = reinterpret_cast<void*>(arguments[2]);
+	const uint64_t length = arguments[4];
+	if (context == nullptr || context->tables == nullptr
+			|| tableIndex >= context->tableCount) {
+		WASM::reportTrap(WASM::TrapKind::Internal, "table.fill index is invalid");
+		return;
+	}
+	WASM::TableInstance* table = context->tables[tableIndex];
+	if (table == nullptr) {
+		WASM::reportTrap(WASM::TrapKind::Internal, "table.fill table is null");
+		return;
+	}
+	if (start > table->size || length > table->size - start) {
+		WASM::reportTrap(WASM::TrapKind::OutOfBoundsTableAccess);
+		return;
+	}
+	for (uint64_t i = 0; i < length; ++i)
+		wasm_atomic_ref_store(context,
+reinterpret_cast<void**>(&table->base[start + i]), element,
+				static_cast<uint32_t>(std::memory_order_seq_cst));
+}
+
 } // namespace WASM

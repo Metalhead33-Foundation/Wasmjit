@@ -7228,21 +7228,31 @@ TEST_CASE("simd: shuffle and swizzle run through the JIT")
 		REQUIRE(fn.has_value());
 		return *fn;
 	};
+	const auto callI32 = [&](const char* name) -> std::int32_t {
+		auto fn = i32Export(name);
+		if (!instance.frameCallAbi())
+			return WASM::callCallable<std::int32_t>(fn);
+		alignas(16) std::uint8_t frame[16] = {};
+		WASM::callCallableFrame(fn, frame);
+		std::int32_t value = 0;
+		std::memcpy(&value, frame, sizeof(value));
+		return value;
+	};
 
 	// `a` is bytes 1..16, `b` is 129..144: a lane's value says where it came from.
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("shuffle_u8_0")) == 1);     // a[0]
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("shuffle_u8_1")) == 129);   // b[0]
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("shuffle_u8_15")) == 136);  // b[7]
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("shuffle_rev_u8_0")) == 144);   // b[15]
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("shuffle_rev_u8_15")) == 129);  // b[0]
+	REQUIRE(callI32("shuffle_u8_0") == 1);     // a[0]
+	REQUIRE(callI32("shuffle_u8_1") == 129);   // b[0]
+	REQUIRE(callI32("shuffle_u8_15") == 136);  // b[7]
+	REQUIRE(callI32("shuffle_rev_u8_0") == 144);   // b[15]
+	REQUIRE(callI32("shuffle_rev_u8_15") == 129);  // b[0]
 
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("swizzle_u8_0")) == 1);   // a[0]
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("swizzle_u8_1")) == 2);   // a[1]
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("swizzle_u8_2")) == 0);   // index 16
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("swizzle_u8_3")) == 0);   // index 127
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("swizzle_u8_4")) == 0);   // index 128
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("swizzle_u8_5")) == 0);   // index 255
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("swizzle_u8_6")) == 3);   // a[2]
+	REQUIRE(callI32("swizzle_u8_0") == 1);   // a[0]
+	REQUIRE(callI32("swizzle_u8_1") == 2);   // a[1]
+	REQUIRE(callI32("swizzle_u8_2") == 0);   // index 16
+	REQUIRE(callI32("swizzle_u8_3") == 0);   // index 127
+	REQUIRE(callI32("swizzle_u8_4") == 0);   // index 128
+	REQUIRE(callI32("swizzle_u8_5") == 0);   // index 255
+	REQUIRE(callI32("swizzle_u8_6") == 3);   // a[2]
 }
 
 TEST_CASE("simd relaxed: the hand-written ops run through the JIT")

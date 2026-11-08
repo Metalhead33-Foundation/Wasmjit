@@ -157,11 +157,60 @@ bool Session::invoke(const WASM::ModuleInstance& instance,
 		WASM::TrapKind& trapKind,
 		std::string& trapMessage)
 {
-	(void)instance;
 	if (callable.fnPtr == nullptr)
 		return false;
-	// The emitter accepts three Wasm parameters plus the context, one result,
-	// and no `v128`; `invoke` refuses exactly the same shapes.
+	trapped = false;
+	if (instance.frameCallAbi()) {
+		// Frame form: PACK every argument at the canonical slot and unpack the
+		// result tuple through the aggregate layout the spec harness reads.
+		std::vector<WASM::ValueKind> paramKinds;
+		std::vector<WASM::ValueKind> resultKinds;
+		for (const WASM::StorageType& p : functionType.params)
+			paramKinds.push_back(WASM::valueKindOf(p.val.opcode));
+		for (const WASM::StorageType& p : functionType.results)
+			resultKinds.push_back(WASM::valueKindOf(p.val.opcode));
+		if (arguments.size() != functionType.params.size())
+			return false;
+		const std::uint32_t bytes = WASM::frameBytes(paramKinds, resultKinds);
+		std::vector<std::max_align_t> storage(
+				(bytes + sizeof(std::max_align_t) - 1) / sizeof(std::max_align_t) + 1);
+		auto* frame = reinterpret_cast<std::uint8_t*>(storage.data());
+		std::memset(frame, 0, bytes);
+		for (std::size_t i = 0; i < arguments.size(); ++i) {
+			const std::size_t size = WASM::valueKindSize(paramKinds[i]);
+			std::memcpy(frame + WASM::frameArgumentOffset(paramKinds,
+					static_cast<std::uint32_t>(i)), arguments[i], size);
+		}
+		// The result tuple is written through the frame's result block; the
+		// spec runner supplies an aggregate-layout buffer for it.
+		const WASM::BackendAggregateLayout layout = aggregateLayout(functionType.results);
+		if (!functionType.results.empty()
+				&& (result == nullptr || resultCapacity < layout.size))
+			return false;
+		using FrameEntry = void (*)(void*, void*);
+		{
+			WASM::CallDepthScope depth;
+			reinterpret_cast<FrameEntry>(callable.fnPtr)(context, frame);
+		}
+		for (std::size_t i = 0; i < functionType.results.size(); ++i) {
+			const std::size_t size = WASM::valueKindSize(resultKinds[i]);
+			std::memcpy(static_cast<std::uint8_t*>(result) + layout.fields[i].offset,
+					frame + WASM::frameResultOffset(paramKinds, resultKinds,
+							static_cast<std::uint32_t>(i)), size);
+		}
+		const WASM::TrapInfo frameInfo = WASM::takePendingTrap();
+		if (frameInfo.trapped) {
+			trapped = true;
+			trapKind = frameInfo.kind;
+			trapMessage = frameInfo.message != nullptr ? frameInfo.message : "";
+			WASM::emitTrapDiagnostic(frameInfo.kind, frameInfo.message,
+					frameInfo.functionIndex, frameInfo.instructionOffset,
+					frameInfo.functionName);
+		}
+		return true;
+	}
+	// The register form accepts three Wasm parameters plus the context, one
+	// result, and no `v128`; `invoke` refuses exactly the same shapes.
 	if (functionType.params.size() > 3 || functionType.results.size() > 1)
 		return false;
 	if (arguments.size() != functionType.params.size())

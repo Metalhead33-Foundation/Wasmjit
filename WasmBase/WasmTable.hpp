@@ -65,6 +65,8 @@ public:
 extern "C" void* wasm_table_get(VMContext* context, uint32_t tableIndex, uint64_t elementIndex) noexcept;
 /** \brief Bounds-checked table element write with the reference barrier. \param context Current module VM context. \param tableIndex Table index. \param elementIndex Element index. \param value New element pointer. */
 extern "C" void wasm_table_set(VMContext* context, uint32_t tableIndex, uint64_t elementIndex, void* value) noexcept;
+/** \brief Fills a table range from a packed (start, element, length) block. \param context Current module VM context. \param tableIndex Table index. \param arguments Three little-endian 64-bit words: start, element pointer, length. */
+extern "C" void wasm_table_fill_args(VMContext* context, uint32_t tableIndex, const uint64_t* arguments) noexcept;
 /** \brief Atomic table element read for generated code. \param context Current module VM context. \param tableIndex Table index. \param elementIndex Element index. \param ordering Atomic memory ordering. \return The element pointer, or null after reporting an out-of-bounds trap. */
 extern "C" void* wasm_atomic_table_get(VMContext* context, uint32_t tableIndex, uint64_t elementIndex, uint32_t ordering) noexcept;
 /** \brief Atomic table element write with the reference barrier. \param context Current module VM context. \param tableIndex Table index. \param elementIndex Element index. \param value New element pointer. \param ordering Atomic memory ordering. */
