@@ -2362,7 +2362,39 @@ Default 22,448 assertions in 821 cases, green
   range and layout are part of the helper contract now.
 
 
-## Rounding-mode variants
+## Bounded recursion on SLJIT
+
+### Fix
+
+The SLJIT frame always reserved 128 staging slots and the continuation frame,
+so a trivial recursive function needed several kilobytes per Wasm frame and
+10,000 frames crossed the 512 KiB reserve. Measurement now records whether the
+body uses a frame-form call or a continuation operation; the staging area (128
+slots) and continuation frame are reserved only then. Two register-form call
+out slots are always reserved for a v128 result, and operations that build a
+descriptor in the call area (`array.init_*`, `table.fill`, `table.init`) mark
+the staging area as needed during measurement.
+
+### Evidence
+
+```
+SLJIT  unbounded recursion + 10k bounded descent   6/6
+SLJIT  stack-switching                             90/90
+SLJIT  multi-table                                 21/21
+SLJIT  full serial                                 821 cases: 814 passed / 7 failed
+Default full                                        22,451 assertions in 821 cases, green
+```
+
+### Lessons
+
+* **The call area has two consumers with different lifetimes**: staging for a
+  frame-form call and a two-slot out-buffer for a register-form v128 result.
+  Removing staging must keep the latter.
+* **A descriptor write is a frame-size dependency even though it is not a
+  call.** `table.fill`/`table.init`/`array.init_*` write past the operand stack,
+  so they must mark staging during measurement, not only during emission.
+
+
 
 ### Fix
 

@@ -1550,6 +1550,10 @@ public:
 	//! `StringStore` reference and must release it on `drop`.
 	std::vector<std::uint8_t> stackRefKinds_;
 	std::size_t maxStackDepth_ = 0; //!< High-water mark of the operand stack.
+	//! Set during measurement when the body uses a frame-form call.
+	mutable bool needsStagingCall_ = false;
+	//! Set during measurement when the body uses a continuation operation.
+	mutable bool needsContinuationFrame_ = false;
 	//! Operand depth the prologue reserved on the emitting pass. A push past it
 	//! is a compiler bug and is refused before SLJIT can assert.
 	std::size_t frameStackCapacity_ = 0;

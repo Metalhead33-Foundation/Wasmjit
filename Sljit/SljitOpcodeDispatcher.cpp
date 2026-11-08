@@ -48,6 +48,9 @@ constexpr std::size_t kSlotBytes = 16;
 //! fixture. 128 slots cover 2 KiB, enough for the largest Wasm signature the
 //! engine currently accepts; the call path still checks the exact byte count.
 constexpr std::size_t kStagingCallSlots = 128;
+//! Register-form calls place a v128 result in the first two slots of the call
+//! area, even when no frame-form staging area is reserved.
+constexpr std::size_t kRegisterCallOutSlots = 2;
 constexpr std::size_t kStagingCallBytes = kStagingCallSlots * kSlotBytes;
 //! Fixed scratch frame for one continuation operation. The core defines the
 //! layout; the backend only copies operand slots in and result slots out.
@@ -1522,7 +1525,9 @@ bool OpcodeDispatcher::beginFunction()
 	// callee's arguments and results there; register-form calls use the first
 	// two slots as the out-buffer for a v128 result.
 	const std::size_t frameSlots = localSlots_ + kReservedSlots + maxStackDepth_
-			+ kStagingCallSlots + kContinuationFrameSlots;
+			+ kRegisterCallOutSlots
+			+ (needsStagingCall_ ? kStagingCallSlots : 0)
+			+ (needsContinuationFrame_ ? kContinuationFrameSlots : 0);
 	if (frameSlots > SLJIT_MAX_LOCAL_SIZE / kSlotBytes) {
 		unsupportedReason_ = "the function frame exceeds SLJIT's local-area limit";
 		return false;
@@ -1925,9 +1930,11 @@ sljit_sw OpcodeDispatcher::frameSlotOffset() const
 
 void OpcodeDispatcher::continuationFrameAddress(int reg)
 {
+	needsContinuationFrame_ = true;
+	const std::size_t staging = needsStagingCall_ ? kStagingCallSlots
+			: kRegisterCallOutSlots;
 	const sljit_sw offset = static_cast<sljit_sw>(
-			(localSlots_ + kReservedSlots + maxStackDepth_ + kStagingCallSlots)
-			* kSlotBytes);
+			(localSlots_ + kReservedSlots + maxStackDepth_ + staging) * kSlotBytes);
 	emit(sljit_get_local_base(compiler_, reg, 0, offset));
 }
 
@@ -3207,6 +3214,8 @@ void OpcodeDispatcher::emitCall(WASM::FuncIdx index, bool isTail)
 			? module_.importFunctions[index].typeIdx
 			: module_.internalFunctionTypeIndices[index - importedCount];
 	const WASM::FuncType calledType = module_.funcTypeAt(typeIndex);
+	if (frameAbi_)
+		needsStagingCall_ = true;
 	if (0 == static_cast<int>(frameAbi_))
 		require(calledType.params.size() <= kMaxWasmParameters,
 			"the SLJIT backend cannot call a function with more than three parameters");
@@ -3256,6 +3265,8 @@ void OpcodeDispatcher::emitCallIndirect(WASM::TypeIdx typeIndex, WASM::TableIdx 
 			: (module_.tables[tableIndex - module_.importTables.size()].limits.flags & 0x04) != 0;
 	const int selectorWidth = table64 ? 8 : 4;
 	const WASM::FuncType calledType = module_.funcTypeAt(typeIndex);
+	if (frameAbi_)
+		needsStagingCall_ = true;
 	if (0 == static_cast<int>(frameAbi_))
 		require(calledType.params.size() <= kMaxWasmParameters,
 			"the SLJIT backend cannot call a function with more than three parameters");
@@ -6000,6 +6011,7 @@ void OpcodeDispatcher::dispatchArrayNewElem(WASM::TypeIdx arg1, uint32_t arg2)
 
 void OpcodeDispatcher::dispatchArrayInitData(WASM::TypeIdx arg1, uint32_t arg2)
 {
+	needsStagingCall_ = true;
 	if (!reachable_)
 		return;
 	requireStack(4);
@@ -6038,6 +6050,7 @@ void OpcodeDispatcher::dispatchArrayInitData(WASM::TypeIdx arg1, uint32_t arg2)
 
 void OpcodeDispatcher::dispatchArrayInitElem(WASM::TypeIdx arg1, uint32_t arg2)
 {
+	needsStagingCall_ = true;
 	if (!reachable_)
 		return;
 	requireStack(4);
@@ -8831,6 +8844,7 @@ void OpcodeDispatcher::requireTableIndex(WASM::TableIdx index)
 
 void OpcodeDispatcher::dispatchTableFill(WASM::TableIdx arg)
 {
+	needsStagingCall_ = true;
 	if (!reachable_)
 		return;
 	requireTableIndex(arg);
@@ -8863,6 +8877,7 @@ void OpcodeDispatcher::dispatchTableFill(WASM::TableIdx arg)
 
 void OpcodeDispatcher::dispatchTableInit(uint32_t arg1, WASM::TableIdx arg2)
 {
+	needsStagingCall_ = true;
 	if (!reachable_)
 		return;
 	requireTableIndex(arg2);
@@ -9647,6 +9662,7 @@ void OpcodeDispatcher::dispatchStringViewIterSlice()
 
 void OpcodeDispatcher::dispatchContNew(WASM::TypeIdx type)
 {
+	needsContinuationFrame_ = true;
 	if (!reachable_)
 		return;
 	requireStack(1);
@@ -9669,6 +9685,7 @@ void OpcodeDispatcher::dispatchContNew(WASM::TypeIdx type)
 
 void OpcodeDispatcher::dispatchContBind(WASM::TypeIdx from, WASM::TypeIdx to)
 {
+	needsContinuationFrame_ = true;
 	if (!reachable_)
 		return;
 	const WASM::FuncType fromType = continuationSignature(from);
@@ -9715,6 +9732,7 @@ void OpcodeDispatcher::dispatchContBind(WASM::TypeIdx from, WASM::TypeIdx to)
 
 void OpcodeDispatcher::dispatchSuspend(WASM::TagIdx tag)
 {
+	needsContinuationFrame_ = true;
 	if (!reachable_)
 		return;
 	const WASM::FuncType payload = tagPayloadType(tag);
@@ -9783,6 +9801,7 @@ void OpcodeDispatcher::dispatchSuspend(WASM::TagIdx tag)
 
 void OpcodeDispatcher::dispatchSwitch(WASM::TypeIdx type, WASM::TagIdx tag)
 {
+	needsContinuationFrame_ = true;
 	if (!reachable_)
 		return;
 	const WASM::FuncType target = continuationSignature(type);
@@ -9872,6 +9891,7 @@ void OpcodeDispatcher::dispatchSwitch(WASM::TypeIdx type, WASM::TagIdx tag)
 void OpcodeDispatcher::dispatchResumeThrow(WASM::TypeIdx type, WASM::TagIdx tag,
 		std::vector<WASM::ContHandlerClause>&& handlers)
 {
+	needsContinuationFrame_ = true;
 	if (!reachable_)
 		return;
 	require(tag < tagIds_.size(), "resume_throw names an out-of-range tag");
@@ -9931,6 +9951,7 @@ void OpcodeDispatcher::dispatchResumeThrow(WASM::TypeIdx type, WASM::TagIdx tag,
 void OpcodeDispatcher::dispatchResumeThrowRef(WASM::TypeIdx type,
 		std::vector<WASM::ContHandlerClause>&& handlers)
 {
+	needsContinuationFrame_ = true;
 	if (!reachable_)
 		return;
 	requireStack(2);
@@ -9963,6 +9984,7 @@ void OpcodeDispatcher::dispatchResumeThrowRef(WASM::TypeIdx type,
 void OpcodeDispatcher::dispatchResume(WASM::TypeIdx type,
 		std::vector<WASM::ContHandlerClause>&& handlers)
 {
+	needsContinuationFrame_ = true;
 	if (!reachable_)
 		return;
 	const WASM::FuncType function = continuationSignature(type);

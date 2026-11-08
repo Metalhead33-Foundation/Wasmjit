@@ -32,7 +32,7 @@ All commands were run from `build/Desktop-Release` with
 | Default (`libjit`) suite | **22,448 assertions in 821 cases, green** |
 | `[sljit]` targeted tests | **2,682 assertions in 70 cases, green** |
 | `[asmjit]` targeted tests | **1,778 assertions in 61 cases, green** |
-| `WASMJIT_BACKEND=sljit ./Test/WasmJit` | **821 cases: 813 passed / 8 failed; no signal** |
+| `WASMJIT_BACKEND=sljit ./Test/WasmJit` | **821 cases: 814 passed / 7 failed; no signal** |
 | `WASMJIT_BACKEND=asmjit ./Test/WasmJit` | **821 cases: 809 passed / 12 failed; no signal** |
 
 Both non-LibJIT runs now complete the whole case set without a process signal.
@@ -127,7 +127,7 @@ implemented slices, not a general conformance or safety claim.
 
 AsmJIT is explicitly experimental, and the generic run confirms why:
 
-- the run reaches all 821 cases: 813 pass and 8 fail, with no process
+- the run reaches all 821 cases: 814 pass and 7 fail, with no process
   abort or segfault;
 - **every spec script is green**, including `throw`, `throw_ref`, `try_table`,
   `atomic`, `memory_trap`, `memory_grow64` and `table.fill`;
