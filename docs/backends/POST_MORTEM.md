@@ -2059,4 +2059,50 @@ A catch target is a branch label, and the function label is one of them. It
 needs the same arity check and a return path rather than a structured-frame
 jump.
 
-  understood.
+## Linking — an imported callable runs in the exporting instance
+
+### Intended
+
+Close `linking` and `linking1` on both backends, which failed identically.
+
+### Root cause
+
+The imported callable was resolved correctly: `importStorage[i].context` pointed
+at the exporting instance, and the backends' Wasm-to-Wasm call path already
+selected it. The runner then defeated that work: `ScriptRunner::invoke` and
+`Diagnose` always passed the *invoking module's* `instance.context()` to
+`backend.invoke`.
+
+For an ordinary export those are the same context. For a re-export of an
+imported function they are not: `Nm`'s exported `Mm.load` is `Mm`'s code, so it
+must read `Mm`'s memories and tables. Passing `Nm`'s context made it read
+`Nm`'s memory instead — exactly the observed `0xf2` instead of `2`.
+
+### Fix
+
+* `ScriptRunner::invoke` and `Diagnose::invokeExport` use
+  `callable.context != nullptr ? callable.context : instance.context()`.
+* No core or backend change was needed: the import context had been carried
+  correctly all along.
+
+### Evidence
+
+```
+SLJIT  linking  112/0   linking0 5/0   linking1 14/0   linking2 11/0   linking3 13/0
+AsmJIT linking  112/0   linking0 5/0   linking1 14/0   linking2 11/0   linking3 13/0
+```
+
+Full serial runs:
+
+```
+SLJIT   821 cases: 776 passed / 45 failed; no signal
+AsmJIT  821 cases: 767 passed / 54 failed; no signal
+```
+
+### Lessons
+
+* **A `Callable`'s context is part of the callable.** An invocation entry point
+  must not substitute the caller's context; only a native import, whose context
+  is null, falls back to the caller.
+* **When two backends fail one script identically, look above the backend
+  seam.** The linking failures were a runner bug, not two code-generator bugs.

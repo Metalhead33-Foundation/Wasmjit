@@ -2047,7 +2047,12 @@ arguments.push_back(slots[i].raw);
 	bool trappedNow = false;
 	WASM::TrapKind trapKind = WASM::TrapKind::Internal;
 	std::string trapMessage;
-	if (!backend.invoke(instance, callable, funcType, instance.context(), arguments,
+	// A Callable carries the context it must run against. A re-export of an
+	// imported function therefore executes in the *exporting* instance, not
+	// in the module that happened to re-export it (linking.wast).
+	WASM::VMContext* invocationContext =
+			callable.context != nullptr ? callable.context : instance.context();
+	if (!backend.invoke(instance, callable, funcType, invocationContext, arguments,
 			result, resultCapacity, trappedNow, trapKind, trapMessage))
 		return false;
 

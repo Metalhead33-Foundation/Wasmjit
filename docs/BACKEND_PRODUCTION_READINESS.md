@@ -32,8 +32,8 @@ All commands were run from `build/Desktop-Release` with
 | Default (`libjit`) suite | **22,445 assertions in 821 cases, green** |
 | `[sljit]` targeted tests | **2,682 assertions in 70 cases, green** |
 | `[asmjit]` targeted tests | **1,778 assertions in 61 cases, green** |
-| `WASMJIT_BACKEND=sljit ./Test/WasmJit` | **821 cases: 774 passed / 47 failed; no signal** |
-| `WASMJIT_BACKEND=asmjit ./Test/WasmJit` | **821 cases: 765 passed / 56 failed; no signal** |
+| `WASMJIT_BACKEND=sljit ./Test/WasmJit` | **821 cases: 776 passed / 45 failed; no signal** |
+| `WASMJIT_BACKEND=asmjit ./Test/WasmJit` | **821 cases: 767 passed / 54 failed; no signal** |
 
 Both non-LibJIT runs now complete the whole case set without a process signal.
 Their failures are functional and conformance gaps, not an early abort; the
@@ -90,7 +90,7 @@ families. The latest batches closed imported global/memory indexing, control-flo
 reachability, the tail-call family, relaxed SIMD, bitmask, i31, `ref_eq`, the GC
 array/struct family, and all reference casts/branches (except SLJIT's
 typed-GC-reference `array.new_elem`). Remaining failures are that typed-GC array
-form and linking scripts listed in `PRODUCTION_GAPS.md` §29.
+form; the linking scripts are green.
 
 ### 4.2 Missing lowerings
 
@@ -127,7 +127,7 @@ implemented slices, not a general conformance or safety claim.
 
 AsmJIT is explicitly experimental, and the generic run confirms why:
 
-- the run reaches all 821 cases: 765 pass and 56 fail, with no process
+- the run reaches all 821 cases: 767 pass and 54 fail, with no process
   abort or segfault;
 - `spec: func` is now green (`100 passed / 0 failed`), including the frame-form
   function-label branches;

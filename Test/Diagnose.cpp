@@ -268,7 +268,9 @@ int invokeExport(const WASM::Module& module, WASM::ModuleInstance& instance,
 	bool trapped = false;
 	WASM::TrapKind trapKind = WASM::TrapKind::Internal;
 	std::string trapMessage;
-	if (!backend.invoke(instance, *callable, type, instance.context(), arguments,
+	WASM::VMContext* invocationContext =
+			callable->context != nullptr ? callable->context : instance.context();
+	if (!backend.invoke(instance, *callable, type, invocationContext, arguments,
 			resultStorage.data(), resultStorage.size(), trapped, trapKind, trapMessage)) {
 		std::fprintf(stderr, "diagnose: backend could not invoke '%s'\n",
 				options.invoke.c_str());
