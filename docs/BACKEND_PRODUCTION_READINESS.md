@@ -30,15 +30,14 @@ All commands were run from `build/Desktop-Release` with
 | Run | Result |
 |---|---|
 | Default (`libjit`) suite | **22,442 assertions in 821 cases, green** |
-| `[sljit]` targeted tests | **2,677 assertions in 69 cases, green** |
+| `[sljit]` targeted tests | **2,682 assertions in 70 cases, green** |
 | `[asmjit]` targeted tests | **1,778 assertions in 61 cases, green** |
-| `WASMJIT_BACKEND=sljit ./Test/WasmJit` | **10 / 12 cases passed, 2 failed**, then **segfaulted** (run stops early) |
-| `WASMJIT_BACKEND=asmjit ./Test/WasmJit` | **16 / 21 cases passed, 5 failed**, then **segfaulted** |
+| `WASMJIT_BACKEND=sljit ./Test/WasmJit` | **821 cases: 720 passed / 101 failed; no signal** |
+| `WASMJIT_BACKEND=asmjit ./Test/WasmJit` | **821 cases: 679 passed / 142 failed; no signal** |
 
-The two non-LibJIT runs stopped early, so their failure counts are **lower
-bounds**, not complete totals. “41 failures and an abort” is already enough to
-disqualify a backend from production; the unmeasured remainder is additional
-risk, not a reason to discount the measured part.
+Both non-LibJIT runs now complete the whole case set without a process signal.
+Their failures are functional and conformance gaps, not an early abort; the
+counts are complete totals for the stated seed.
 
 ## 3. LibJIT — production-ready, within a declared scope
 
@@ -125,7 +124,7 @@ implemented slices, not a general conformance or safety claim.
 
 AsmJIT is explicitly experimental, and the generic run confirms why:
 
-- the run reaches all 821 cases: 677 pass and 144 fail, with no process
+- the run reaches all 821 cases: 679 pass and 142 fail, with no process
   abort or segfault;
 - `spec: func` is now green (`100 passed / 0 failed`), including the frame-form
   function-label branches;

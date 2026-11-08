@@ -1365,7 +1365,7 @@ Full runs after the batch (serial, same seed):
 
 ```
 SLJIT   821 cases: 720 passed / 101 failed
-AsmJIT  821 cases: 677 passed / 144 failed
+AsmJIT  821 cases: 679 passed / 142 failed
 ```
 
 ### Lessons
@@ -1436,11 +1436,14 @@ WASMJIT_BACKEND=asmjit ./Test/WasmJit 'spec: table_size'  -> 37 passed / 0 faile
 WASMJIT_BACKEND=asmjit ./Test/WasmJit 'spec: table_set'   -> 14 passed / 0 failed
 WASMJIT_BACKEND=asmjit ./Test/WasmJit 'simd: v128 globals run through the JIT'
 All tests passed (13 assertions in 1 test case)
+
+WASMJIT_BACKEND=asmjit ./Test/WasmJit 'spec: table_get' -> 4 passed / 0 failed
 ```
 
-AsmJIT `spec: table_get` still has one reference-result assertion failing
-(`is_null-funcref`), so it is not yet green; the core table read path is shared
-with SLJIT, which passes the whole script.
+The last `table_get` failure was the harness, not the table read path: the
+script's `init` function has one `externref` parameter, which the AsmJIT test
+session still rejected. Adding the `(ref)->void` shape made the real table
+initialisation run and the whole script pass.
 
 ### Lessons
 

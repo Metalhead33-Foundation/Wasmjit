@@ -222,6 +222,10 @@ public:
 					&& !isRef(type.params[0])) {
 				reinterpret_cast<void (*)(void*, std::int32_t)>(callable.fnPtr)(
 						vmContext, i32Arg(0));
+			} else if (type.results.empty() && type.params.size() == 1
+					&& isRef(type.params[0])) {
+				reinterpret_cast<void (*)(void*, void*)>(callable.fnPtr)(
+						vmContext, refArg(0));
 			} else if (type.results.empty() && type.params.size() == 2
 					&& paramIs(0, WASM::ValueTypeCode::I32) && isRef(type.params[1])) {
 				reinterpret_cast<void (*)(void*, std::int32_t, void*)>(callable.fnPtr)(
