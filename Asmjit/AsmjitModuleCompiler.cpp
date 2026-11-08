@@ -75,6 +75,10 @@ bool isReferenceKind(WASM::ValueTypeCode kind) noexcept
 	case WASM::ValueTypeCode::NullRef:
 	case WASM::ValueTypeCode::Ref:
 	case WASM::ValueTypeCode::RefNull:
+	case WASM::ValueTypeCode::StringRef:
+	case WASM::ValueTypeCode::StringViewWtf8:
+	case WASM::ValueTypeCode::StringViewWtf16:
+	case WASM::ValueTypeCode::StringViewIter:
 		return true;
 	default:
 		return false;
@@ -7516,6 +7520,354 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 	void dispatchStringEncodeWtf16Array(WASM::TypeIdx type) override
 	{
 		emitStringEncodeArray(type, 3);
+	}
+
+	void emitStringViewCreate(uint64_t helper)
+	{
+		if (inDeadCode())
+			return;
+		if (values.empty())
+			throw std::runtime_error("AsmJit string view operand stack underflow");
+		auto string = values.back(); values.pop_back();
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke), helper, signature),
+				"AsmJit string view helper call failed");
+		invoke->set_arg(0, vmContext);
+		invoke->set_arg(1, string);
+		auto result = compiler.new_gp_ptr("stringViewResult");
+		invoke->set_ret(0, result);
+		values.push_back(result);
+		emitPendingTrapReturn();
+	}
+
+	void emitStringViewRange(uint64_t helper)
+	{
+		if (inDeadCode())
+			return;
+		if (values.size() < 3)
+			throw std::runtime_error("AsmJit stringview slice operand stack underflow");
+		auto end = values.back(); values.pop_back();
+		auto start = values.back(); values.pop_back();
+		auto view = values.back(); values.pop_back();
+		auto range = packRegPair(end, start, "stringViewRange");
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUInt64);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke), helper, signature),
+				"AsmJit stringview slice helper call failed");
+		invoke->set_arg(0, vmContext);
+		invoke->set_arg(1, view);
+		invoke->set_arg(2, range);
+		auto result = compiler.new_gp_ptr("stringViewSlice");
+		invoke->set_ret(0, result);
+		values.push_back(result);
+		emitPendingTrapReturn();
+	}
+
+	void emitStringViewWtf8Encode(uint64_t helper, WASM::MemIdx memory)
+	{
+		if (inDeadCode())
+			return;
+		validateMemoryIndex(memory);
+		if (values.size() < 4)
+			throw std::runtime_error("AsmJit stringview encode operand stack underflow");
+		auto bytes = values.back(); values.pop_back();
+		auto position = values.back(); values.pop_back();
+		auto pointer = values.back(); values.pop_back();
+		auto view = values.back(); values.pop_back();
+		auto packedMemory = compiler.new_gp64("stringViewMemory");
+		auto memoryIndex = compiler.new_gp64("stringViewMemoryIndex");
+		checkError(compiler.mov(packedMemory.r32(), pointer.r32()),
+				"AsmJit stringview pointer materialisation failed");
+		checkError(compiler.shl(packedMemory, 8),
+				"AsmJit stringview pointer shift failed");
+		checkError(compiler.mov(memoryIndex.r32(), static_cast<uint32_t>(memory)),
+				"AsmJit stringview memory index materialisation failed");
+		checkError(compiler.or_(packedMemory, memoryIndex),
+				"AsmJit stringview memory pack failed");
+		auto packedPosition = packRegPair(bytes, position, "stringViewPosition");
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kUInt64);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUInt64);
+		signature.add_arg(asmjit::TypeId::kUInt64);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke), helper, signature),
+				"AsmJit stringview encode helper call failed");
+		invoke->set_arg(0, vmContext);
+		invoke->set_arg(1, view);
+		invoke->set_arg(2, packedMemory);
+		invoke->set_arg(3, packedPosition);
+		auto result = compiler.new_gp64("stringViewEncoded");
+		invoke->set_ret(0, result);
+		auto nextPosition = compiler.new_gp32("stringViewNext");
+		auto high = compiler.new_gp64("stringViewNextHigh");
+		checkError(compiler.mov(high, result),
+				"AsmJit stringview result copy failed");
+		checkError(compiler.shr(high, 32),
+				"AsmJit stringview next-position shift failed");
+		checkError(compiler.mov(nextPosition.r32(), high.r32()),
+				"AsmJit stringview next-position materialisation failed");
+		auto written = compiler.new_gp32("stringViewWritten");
+		checkError(compiler.mov(written.r32(), result.r32()),
+				"AsmJit stringview written-width materialisation failed");
+		values.push_back(nextPosition);
+		values.push_back(written);
+		emitPendingTrapReturn();
+	}
+
+	void emitStringViewWtf16Encode(WASM::MemIdx memory)
+	{
+		if (inDeadCode())
+			return;
+		validateMemoryIndex(memory);
+		if (values.size() < 4)
+			throw std::runtime_error("AsmJit stringview_wtf16.encode operand stack underflow");
+		auto units = values.back(); values.pop_back();
+		auto position = values.back(); values.pop_back();
+		auto pointer = values.back(); values.pop_back();
+		auto view = values.back(); values.pop_back();
+		auto packedMemory = compiler.new_gp64("stringViewMemory");
+		auto memoryIndex = compiler.new_gp64("stringViewMemoryIndex");
+		checkError(compiler.mov(packedMemory.r32(), pointer.r32()),
+				"AsmJit stringview32 pointer materialisation failed");
+		checkError(compiler.shl(packedMemory, 8),
+				"AsmJit stringview32 pointer shift failed");
+		checkError(compiler.mov(memoryIndex.r32(), static_cast<uint32_t>(memory)),
+				"AsmJit stringview32 memory index materialisation failed");
+		checkError(compiler.or_(packedMemory, memoryIndex),
+				"AsmJit stringview32 memory pack failed");
+		auto packedPosition = packRegPair(units, position, "stringViewPosition");
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kInt32);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUInt64);
+		signature.add_arg(asmjit::TypeId::kUInt64);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke),
+				reinterpret_cast<uint64_t>(&wasm_string_view_wtf16_encode), signature),
+				"AsmJit stringview_wtf16.encode helper call failed");
+		invoke->set_arg(0, vmContext);
+		invoke->set_arg(1, view);
+		invoke->set_arg(2, packedMemory);
+		invoke->set_arg(3, packedPosition);
+		auto result = compiler.new_gp32("stringViewEncodedUnits");
+		invoke->set_ret(0, result);
+		values.push_back(result);
+		emitPendingTrapReturn();
+	}
+
+	void dispatchStringAsWtf8() override
+	{
+		emitStringViewCreate(reinterpret_cast<uint64_t>(&wasm_string_as_wtf8));
+	}
+	void dispatchStringAsWtf16() override
+	{
+		emitStringViewCreate(reinterpret_cast<uint64_t>(&wasm_string_as_wtf16));
+	}
+	void dispatchStringAsIter() override
+	{
+		emitStringViewCreate(reinterpret_cast<uint64_t>(&wasm_string_as_iter));
+	}
+
+	void dispatchStringViewWtf8Advance() override
+	{
+		if (inDeadCode())
+			return;
+		if (values.size() < 3)
+			throw std::runtime_error("AsmJit stringview_wtf8.advance operand stack underflow");
+		auto bytes = values.back(); values.pop_back();
+		auto position = values.back(); values.pop_back();
+		auto view = values.back(); values.pop_back();
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kInt32);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kInt32);
+		signature.add_arg(asmjit::TypeId::kInt32);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke),
+				reinterpret_cast<uint64_t>(&wasm_string_view_wtf8_advance), signature),
+				"AsmJit stringview_wtf8.advance helper call failed");
+		invoke->set_arg(0, view);
+		invoke->set_arg(1, position);
+		invoke->set_arg(2, bytes);
+		auto result = compiler.new_gp32("stringViewPosition");
+		invoke->set_ret(0, result);
+		values.push_back(result);
+		emitPendingTrapReturn();
+	}
+
+	void dispatchStringViewWtf8EncodeUtf8(WASM::MemIdx memory) override
+	{
+		emitStringViewWtf8Encode(
+				reinterpret_cast<uint64_t>(&wasm_string_view_wtf8_encode_utf8), memory);
+	}
+	void dispatchStringViewWtf8EncodeLossyUtf8(WASM::MemIdx memory) override
+	{
+		emitStringViewWtf8Encode(
+				reinterpret_cast<uint64_t>(&wasm_string_view_wtf8_encode_lossy_utf8),
+				memory);
+	}
+	void dispatchStringViewWtf8EncodeWtf8(WASM::MemIdx memory) override
+	{
+		emitStringViewWtf8Encode(
+				reinterpret_cast<uint64_t>(&wasm_string_view_wtf8_encode_wtf8), memory);
+	}
+	void dispatchStringViewWtf8Slice() override
+	{
+		emitStringViewRange(
+				reinterpret_cast<uint64_t>(&wasm_string_view_wtf8_slice));
+	}
+
+	void dispatchStringViewWtf16Length() override
+	{
+		if (inDeadCode())
+			return;
+		if (values.empty())
+			throw std::runtime_error("AsmJit stringview_wtf16.length operand stack underflow");
+		auto view = values.back(); values.pop_back();
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kInt32);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke),
+				reinterpret_cast<uint64_t>(&wasm_string_view_wtf16_length), signature),
+				"AsmJit stringview_wtf16.length helper call failed");
+		invoke->set_arg(0, view);
+		auto result = compiler.new_gp32("stringViewLength");
+		invoke->set_ret(0, result);
+		values.push_back(result);
+		emitPendingTrapReturn();
+	}
+
+	void dispatchStringViewWtf16GetCodeUnit() override
+	{
+		if (inDeadCode())
+			return;
+		if (values.size() < 2)
+			throw std::runtime_error("AsmJit stringview_wtf16.get_codeunit operand stack underflow");
+		auto position = values.back(); values.pop_back();
+		auto view = values.back(); values.pop_back();
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kInt32);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kInt32);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke),
+				reinterpret_cast<uint64_t>(&wasm_string_view_wtf16_get_codeunit),
+				signature),
+				"AsmJit stringview_wtf16.get_codeunit helper call failed");
+		invoke->set_arg(0, view);
+		invoke->set_arg(1, position);
+		auto result = compiler.new_gp32("stringViewCodeUnit");
+		invoke->set_ret(0, result);
+		values.push_back(result);
+		emitPendingTrapReturn();
+	}
+
+	void dispatchStringViewWtf16Encode(WASM::MemIdx memory) override
+	{
+		emitStringViewWtf16Encode(memory);
+	}
+	void dispatchStringViewWtf16Slice() override
+	{
+		emitStringViewRange(
+				reinterpret_cast<uint64_t>(&wasm_string_view_wtf16_slice));
+	}
+
+	void dispatchStringViewIterNext() override
+	{
+		if (inDeadCode())
+			return;
+		if (values.empty())
+			throw std::runtime_error("AsmJit stringview_iter.next operand stack underflow");
+		auto iterator = values.back(); values.pop_back();
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kInt32);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke),
+				reinterpret_cast<uint64_t>(&wasm_string_view_iter_next), signature),
+				"AsmJit stringview_iter.next helper call failed");
+		invoke->set_arg(0, iterator);
+		auto result = compiler.new_gp32("stringIterCodePoint");
+		invoke->set_ret(0, result);
+		values.push_back(result);
+		emitPendingTrapReturn();
+	}
+
+	void emitStringIterMove(uint64_t helper, const char* opcode)
+	{
+		if (inDeadCode())
+			return;
+		if (values.size() < 2)
+			throw std::runtime_error(std::string("AsmJit ") + opcode
+					+ " operand stack underflow");
+		auto count = values.back(); values.pop_back();
+		auto iterator = values.back(); values.pop_back();
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kInt32);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kInt32);
+		asmjit::InvokeNode* invoke = nullptr;
+		const std::string failure = std::string("AsmJit ") + opcode
+				+ " helper call failed";
+		checkError(compiler.invoke(asmjit::Out(invoke), helper, signature),
+				failure.c_str());
+		invoke->set_arg(0, iterator);
+		invoke->set_arg(1, count);
+		auto result = compiler.new_gp32("stringIterMoved");
+		invoke->set_ret(0, result);
+		values.push_back(result);
+		emitPendingTrapReturn();
+	}
+
+	void dispatchStringViewIterAdvance() override
+	{
+		emitStringIterMove(
+				reinterpret_cast<uint64_t>(&wasm_string_view_iter_advance),
+				"stringview_iter.advance");
+	}
+	void dispatchStringViewIterRewind() override
+	{
+		emitStringIterMove(
+				reinterpret_cast<uint64_t>(&wasm_string_view_iter_rewind),
+				"stringview_iter.rewind");
+	}
+
+	void dispatchStringViewIterSlice() override
+	{
+		if (inDeadCode())
+			return;
+		if (values.size() < 2)
+			throw std::runtime_error("AsmJit stringview_iter.slice operand stack underflow");
+		auto count = values.back(); values.pop_back();
+		auto iterator = values.back(); values.pop_back();
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kInt32);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke),
+				reinterpret_cast<uint64_t>(&wasm_string_view_iter_slice), signature),
+				"AsmJit stringview_iter.slice helper call failed");
+		invoke->set_arg(0, vmContext);
+		invoke->set_arg(1, iterator);
+		invoke->set_arg(2, count);
+		auto result = compiler.new_gp_ptr("stringIterSlice");
+		invoke->set_ret(0, result);
+		values.push_back(result);
+		emitPendingTrapReturn();
 	}
 
 	void emitStringNewArray(WASM::TypeIdx type, int mode)

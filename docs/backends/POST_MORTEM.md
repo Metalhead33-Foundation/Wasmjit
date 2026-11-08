@@ -2362,7 +2362,53 @@ Default 22,448 assertions in 821 cases, green
   range and layout are part of the helper contract now.
 
 
-## Small opcodes — `i32.itt`, `memory.discard`, trap labels
+## Stringview and iterator lowering
+
+### Intended
+
+Close the whole STR-4 stringview facility on both new backends.
+
+### Fix
+
+* Moved the LibJIT-local view semantics into `WasmStringOps`: view/iterator
+  creation, WTF-8 advance/encode/slice, WTF-16 length/get/encode/slice, and the
+  iterator next/advance/rewind/slice operations.
+* The helper ABI is packed for SLJIT's four argument registers:
+  `packedMemory = memoryIndex | pointer << 8` and
+  `positionAndBytes = position | count << 32`; the WTF-8 encoder returns
+  `nextPosition << 32 | written`.
+* Both backends lower the seventeen dispatch hooks, and stringview/iterator
+  value types now count as one-word reference locals in both width models.
+* The stringview test now honours `frameCallAbi()`, as the existing multi-value
+  ABI test already did: a multi-result module compiled by SLJIT/AsmJIT uses
+  8-byte result slots, while the public tuple is packed.
+
+### Evidence
+
+```
+SLJIT   stringview*  37 assertions / 2 cases, green
+AsmJIT  stringview*  37 assertions / 2 cases, green
+Default stringview*  37 assertions / 2 cases, green
+```
+
+Full serial runs:
+
+```
+SLJIT   821 cases: 793 passed / 28 failed; no signal
+AsmJIT  821 cases: 788 passed / 33 failed; no signal
+Default 22,448 assertions in 821 cases, green
+```
+
+### Lessons
+
+* **Reference types are one-word locals in every backend**, even when their
+  operations are specialised; leaving them out of the width model turns a
+  perfectly valid function into a compile failure.
+* **A multi-result test must branch on the module ABI.** SLJIT and AsmJIT choose
+  the staging frame for a multi-result module; LibJIT's register out-buffer has a
+  different result layout.
+
+
 
 ### Intended
 

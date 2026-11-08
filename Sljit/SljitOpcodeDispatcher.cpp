@@ -78,6 +78,10 @@ bool isReferenceKind(WASM::ValueTypeCode kind) noexcept
 	case WASM::ValueTypeCode::NullRef:
 	case WASM::ValueTypeCode::Ref:
 	case WASM::ValueTypeCode::RefNull:
+	case WASM::ValueTypeCode::StringRef:
+	case WASM::ValueTypeCode::StringViewWtf8:
+	case WASM::ValueTypeCode::StringViewWtf16:
+	case WASM::ValueTypeCode::StringViewIter:
 		return true;
 	default:
 		return false;
@@ -9061,6 +9065,335 @@ void OpcodeDispatcher::dispatchStringEncodeWtf8Array(WASM::TypeIdx type)
 void OpcodeDispatcher::dispatchStringEncodeWtf16Array(WASM::TypeIdx type)
 {
 	emitStringEncodeArray(type, 3);
+}
+
+void OpcodeDispatcher::emitStringViewCreate(const void* helper)
+{
+	if (!reachable_)
+		return;
+	requireStack(1);
+	const std::size_t base = stackWidths_.size() - 1;
+	if (measureOnly_) {
+		pop();
+		push(8);
+		return;
+	}
+	loadContext(SLJIT_R0);
+	loadSlot(SLJIT_R1, base, 8);
+	emitHelper(SLJIT_ARGS2(P, P, P), helper);
+	storeSlot(SLJIT_R0, base, 8);
+	emitPendingTrapCheck();
+	pop();
+	push(8);
+}
+
+void OpcodeDispatcher::emitStringViewWtf8Encode(const void* helper,
+		WASM::MemIdx memory)
+{
+	if (!reachable_)
+		return;
+	requireMemoryIndex(memory);
+	requireStack(4);
+	const std::size_t base = stackWidths_.size() - 4;
+	if (measureOnly_) {
+		for (int i = 0; i < 4; ++i)
+			pop();
+		push(4);
+		push(4);
+		return;
+	}
+	// packedPosBytes = pos (low 32) | bytes (high 32).
+	loadSlot(SLJIT_R3, base + 2, 4);
+	loadSlot(SLJIT_R2, base + 3, 4);
+	emit(sljit_emit_op2(compiler_, SLJIT_SHL, SLJIT_R2, 0, SLJIT_R2, 0,
+			SLJIT_IMM, 32));
+	emit(sljit_emit_op2(compiler_, SLJIT_OR, SLJIT_R3, 0, SLJIT_R3, 0, SLJIT_R2, 0));
+	// packedMemory = memory index (low 8) | pointer << 8.
+	loadSlot(SLJIT_R2, base + 1, 4);
+	emit(sljit_emit_op2(compiler_, SLJIT_SHL, SLJIT_R2, 0, SLJIT_R2, 0,
+			SLJIT_IMM, 8));
+	emit(sljit_emit_op2(compiler_, SLJIT_OR, SLJIT_R2, 0, SLJIT_R2, 0,
+			SLJIT_IMM, static_cast<sljit_sw>(memory)));
+	loadContext(SLJIT_R0);
+	loadSlot(SLJIT_R1, base, 8);
+	emitHelper(SLJIT_ARGS4(W, P, P, W, W), helper);
+	// The helper returns next in the high word and written in the low word;
+	// the operand stack wants next first, then written.
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R1, 0, SLJIT_R0, 0));
+	emit(sljit_emit_op2(compiler_, SLJIT_LSHR, SLJIT_R2, 0, SLJIT_R0, 0,
+			SLJIT_IMM, 32));
+	for (int i = 0; i < 4; ++i)
+		pop();
+	push(4);
+	push(4);
+	// The result pair starts where the last two operands ended, not at the
+	// four-operand base.
+	const std::size_t out = stackWidths_.size() - 2;
+	storeSlot(SLJIT_R2, out, 4);
+	storeSlot(SLJIT_R1, out + 1, 4);
+	emitPendingTrapCheck();
+}
+
+void OpcodeDispatcher::emitStringViewRange(const void* helper)
+{
+	if (!reachable_)
+		return;
+	requireStack(3);
+	const std::size_t base = stackWidths_.size() - 3;
+	if (measureOnly_) {
+		for (int i = 0; i < 3; ++i)
+			pop();
+		push(8);
+		return;
+	}
+	loadSlot(SLJIT_R2, base + 1, 4);
+	loadSlot(SLJIT_R3, base + 2, 4);
+	emit(sljit_emit_op2(compiler_, SLJIT_SHL, SLJIT_R3, 0, SLJIT_R3, 0,
+			SLJIT_IMM, 32));
+	emit(sljit_emit_op2(compiler_, SLJIT_OR, SLJIT_R2, 0, SLJIT_R2, 0, SLJIT_R3, 0));
+	loadContext(SLJIT_R0);
+	loadSlot(SLJIT_R1, base, 8);
+	emitHelper(SLJIT_ARGS3(P, P, P, W), helper);
+	storeSlot(SLJIT_R0, base, 8);
+	emitPendingTrapCheck();
+	for (int i = 0; i < 3; ++i)
+		pop();
+	push(8);
+}
+
+void OpcodeDispatcher::emitStringViewWtf16Encode(WASM::MemIdx memory)
+{
+	if (!reachable_)
+		return;
+	requireMemoryIndex(memory);
+	requireStack(4);
+	const std::size_t base = stackWidths_.size() - 4;
+	if (measureOnly_) {
+		for (int i = 0; i < 4; ++i)
+			pop();
+		push(4);
+		return;
+	}
+	// packedPosUnits = pos (low 32) | units (high 32).
+	loadSlot(SLJIT_R3, base + 2, 4);
+	loadSlot(SLJIT_R2, base + 3, 4);
+	emit(sljit_emit_op2(compiler_, SLJIT_SHL, SLJIT_R2, 0, SLJIT_R2, 0,
+			SLJIT_IMM, 32));
+	emit(sljit_emit_op2(compiler_, SLJIT_OR, SLJIT_R3, 0, SLJIT_R3, 0, SLJIT_R2, 0));
+	loadSlot(SLJIT_R2, base + 1, 4);
+	emit(sljit_emit_op2(compiler_, SLJIT_SHL, SLJIT_R2, 0, SLJIT_R2, 0,
+			SLJIT_IMM, 8));
+	emit(sljit_emit_op2(compiler_, SLJIT_OR, SLJIT_R2, 0, SLJIT_R2, 0,
+			SLJIT_IMM, static_cast<sljit_sw>(memory)));
+	loadContext(SLJIT_R0);
+	loadSlot(SLJIT_R1, base, 8);
+	emitHelper(SLJIT_ARGS4(32, P, P, W, W), &wasm_string_view_wtf16_encode);
+	storeSlot(SLJIT_R0, base, 4);
+	emitPendingTrapCheck();
+	for (int i = 0; i < 4; ++i)
+		pop();
+	push(4);
+}
+
+void OpcodeDispatcher::dispatchStringAsWtf8()
+{
+	emitStringViewCreate(reinterpret_cast<const void*>(&wasm_string_as_wtf8));
+}
+
+void OpcodeDispatcher::dispatchStringAsWtf16()
+{
+	emitStringViewCreate(reinterpret_cast<const void*>(&wasm_string_as_wtf16));
+}
+
+void OpcodeDispatcher::dispatchStringAsIter()
+{
+	emitStringViewCreate(reinterpret_cast<const void*>(&wasm_string_as_iter));
+}
+
+void OpcodeDispatcher::dispatchStringViewWtf8Advance()
+{
+	if (!reachable_)
+		return;
+	requireStack(3);
+	const std::size_t base = stackWidths_.size() - 3;
+	if (measureOnly_) {
+		for (int i = 0; i < 3; ++i)
+			pop();
+		push(4);
+		return;
+	}
+	loadSlot(SLJIT_R0, base, 8);
+	loadSlot(SLJIT_R1, base + 1, 4);
+	loadSlot(SLJIT_R2, base + 2, 4);
+	emitHelper(SLJIT_ARGS3(32, P, 32, 32), &wasm_string_view_wtf8_advance);
+	storeSlot(SLJIT_R0, base, 4);
+	emitPendingTrapCheck();
+	for (int i = 0; i < 3; ++i)
+		pop();
+	push(4);
+}
+
+void OpcodeDispatcher::dispatchStringViewWtf8EncodeUtf8(WASM::MemIdx memory)
+{
+	emitStringViewWtf8Encode(
+			reinterpret_cast<const void*>(&wasm_string_view_wtf8_encode_utf8), memory);
+}
+
+void OpcodeDispatcher::dispatchStringViewWtf8EncodeLossyUtf8(WASM::MemIdx memory)
+{
+	emitStringViewWtf8Encode(
+			reinterpret_cast<const void*>(&wasm_string_view_wtf8_encode_lossy_utf8),
+			memory);
+}
+
+void OpcodeDispatcher::dispatchStringViewWtf8EncodeWtf8(WASM::MemIdx memory)
+{
+	emitStringViewWtf8Encode(
+			reinterpret_cast<const void*>(&wasm_string_view_wtf8_encode_wtf8), memory);
+}
+
+void OpcodeDispatcher::dispatchStringViewWtf8Slice()
+{
+	emitStringViewRange(
+			reinterpret_cast<const void*>(&wasm_string_view_wtf8_slice));
+}
+
+void OpcodeDispatcher::dispatchStringViewWtf16Length()
+{
+	if (!reachable_)
+		return;
+	requireStack(1);
+	const std::size_t base = stackWidths_.size() - 1;
+	if (measureOnly_) {
+		pop();
+		push(4);
+		return;
+	}
+	loadSlot(SLJIT_R0, base, 8);
+	emitHelper(SLJIT_ARGS1(32, P), &wasm_string_view_wtf16_length);
+	storeSlot(SLJIT_R0, base, 4);
+	emitPendingTrapCheck();
+	pop();
+	push(4);
+}
+
+void OpcodeDispatcher::dispatchStringViewWtf16GetCodeUnit()
+{
+	if (!reachable_)
+		return;
+	requireStack(2);
+	const std::size_t base = stackWidths_.size() - 2;
+	if (measureOnly_) {
+		pop();
+		pop();
+		push(4);
+		return;
+	}
+	loadSlot(SLJIT_R0, base, 8);
+	loadSlot(SLJIT_R1, base + 1, 4);
+	emitHelper(SLJIT_ARGS2(32, P, 32), &wasm_string_view_wtf16_get_codeunit);
+	storeSlot(SLJIT_R0, base, 4);
+	emitPendingTrapCheck();
+	pop();
+	pop();
+	push(4);
+}
+
+void OpcodeDispatcher::dispatchStringViewWtf16Encode(WASM::MemIdx memory)
+{
+	emitStringViewWtf16Encode(memory);
+}
+
+void OpcodeDispatcher::dispatchStringViewWtf16Slice()
+{
+	emitStringViewRange(
+			reinterpret_cast<const void*>(&wasm_string_view_wtf16_slice));
+}
+
+void OpcodeDispatcher::dispatchStringViewIterNext()
+{
+	if (!reachable_)
+		return;
+	requireStack(1);
+	const std::size_t base = stackWidths_.size() - 1;
+	if (measureOnly_) {
+		pop();
+		push(4);
+		return;
+	}
+	loadSlot(SLJIT_R0, base, 8);
+	emitHelper(SLJIT_ARGS1(32, P), &wasm_string_view_iter_next);
+	storeSlot(SLJIT_R0, base, 4);
+	emitPendingTrapCheck();
+	pop();
+	push(4);
+}
+
+void OpcodeDispatcher::dispatchStringViewIterAdvance()
+{
+	if (!reachable_)
+		return;
+	requireStack(2);
+	const std::size_t base = stackWidths_.size() - 2;
+	if (measureOnly_) {
+		pop();
+		pop();
+		push(4);
+		return;
+	}
+	loadSlot(SLJIT_R0, base, 8);
+	loadSlot(SLJIT_R1, base + 1, 4);
+	emitHelper(SLJIT_ARGS2(32, P, 32), &wasm_string_view_iter_advance);
+	storeSlot(SLJIT_R0, base, 4);
+	emitPendingTrapCheck();
+	pop();
+	pop();
+	push(4);
+}
+
+void OpcodeDispatcher::dispatchStringViewIterRewind()
+{
+	if (!reachable_)
+		return;
+	requireStack(2);
+	const std::size_t base = stackWidths_.size() - 2;
+	if (measureOnly_) {
+		pop();
+		pop();
+		push(4);
+		return;
+	}
+	loadSlot(SLJIT_R0, base, 8);
+	loadSlot(SLJIT_R1, base + 1, 4);
+	emitHelper(SLJIT_ARGS2(32, P, 32), &wasm_string_view_iter_rewind);
+	storeSlot(SLJIT_R0, base, 4);
+	emitPendingTrapCheck();
+	pop();
+	pop();
+	push(4);
+}
+
+void OpcodeDispatcher::dispatchStringViewIterSlice()
+{
+	if (!reachable_)
+		return;
+	requireStack(2);
+	const std::size_t base = stackWidths_.size() - 2;
+	if (measureOnly_) {
+		pop();
+		pop();
+		push(8);
+		return;
+	}
+	loadContext(SLJIT_R0);
+	loadSlot(SLJIT_R1, base, 8);
+	loadSlot(SLJIT_R2, base + 1, 4);
+	emitHelper(SLJIT_ARGS3(P, P, P, 32), &wasm_string_view_iter_slice);
+	storeSlot(SLJIT_R0, base, 8);
+	emitPendingTrapCheck();
+	pop();
+	pop();
+	push(8);
 }
 
 void OpcodeDispatcher::dispatchMemoryDiscard(WASM::MemIdx memory)

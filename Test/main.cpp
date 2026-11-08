@@ -5130,7 +5130,15 @@ TEST_CASE("stringview encode returns the next position and bytes written")
 	auto w8 = instance->exportedFunction("w8");
 	REQUIRE(w8.has_value());
 	alignas(16) unsigned char tuple[16] = {};
-	WASM::callCallableWithResults(*w8, tuple);
+	if (instance->frameCallAbi()) {
+		alignas(16) unsigned char frame[32] = {};
+		WASM::callCallableFrame(*w8, frame);
+		// Frame results use one 8-byte slot each; the public tuple is packed.
+		std::memcpy(tuple, frame, sizeof(int32_t));
+		std::memcpy(tuple + sizeof(int32_t), frame + 8, sizeof(int32_t));
+	} else {
+		WASM::callCallableWithResults(*w8, tuple);
+	}
 	int32_t nextPosition = 0;
 	int32_t written = 0;
 	std::memcpy(&nextPosition, tuple, sizeof(nextPosition));
@@ -5143,7 +5151,15 @@ TEST_CASE("stringview encode returns the next position and bytes written")
 
 	auto w16 = instance->exportedFunction("w16");
 	REQUIRE(w16.has_value());
-	REQUIRE(WASM::callCallable<int32_t>(*w16) == 1);
+	int32_t written16 = 0;
+	if (instance->frameCallAbi()) {
+		alignas(16) unsigned char frame[16] = {};
+		WASM::callCallableFrame(*w16, frame);
+		std::memcpy(&written16, frame, sizeof(written16));
+	} else {
+		written16 = WASM::callCallable<int32_t>(*w16);
+	}
+	REQUIRE(written16 == 1);
 	REQUIRE(static_cast<uint8_t>(memory->memoryBase[32]) == 0xac);
 	REQUIRE(static_cast<uint8_t>(memory->memoryBase[33]) == 0x20);
 }

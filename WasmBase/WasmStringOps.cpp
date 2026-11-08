@@ -7,6 +7,7 @@
 #include "WasmStore.hpp"
 #include "WasmTrap.hpp"
 
+#include <algorithm>
 #include <cstring>
 #include <utility>
 #include <vector>
@@ -351,6 +352,329 @@ extern "C" int32_t wasm_string_encode_wtf16(WASM::VMContext* context,
 		return 0;
 	}
 }
+
+namespace {
+
+const WASM::StringViewObject* viewObjectOrTrap(void* handle)
+{
+	if (handle == nullptr) {
+		WASM::reportTrap(WASM::TrapKind::NullReference, "null string view");
+		return nullptr;
+	}
+	return static_cast<const WASM::StringViewObject*>(handle);
+}
+
+WASM::StringIteratorObject* iteratorObjectOrTrap(void* handle)
+{
+	if (handle == nullptr) {
+		WASM::reportTrap(WASM::TrapKind::NullReference, "null string iterator");
+		return nullptr;
+	}
+	return static_cast<WASM::StringIteratorObject*>(handle);
+}
+
+uint32_t packedMemoryIndex(uint64_t packedMemory)
+{
+	return static_cast<uint32_t>(packedMemory & 0xFFu);
+}
+
+uint32_t packedMemoryPointer(uint64_t packedMemory)
+{
+	return static_cast<uint32_t>((packedMemory >> 8) & 0xFFFFFFFFu);
+}
+
+int32_t lowSigned(uint64_t packed)
+{
+	return static_cast<int32_t>(static_cast<uint32_t>(packed));
+}
+
+int32_t highSigned(uint64_t packed)
+{
+	return static_cast<int32_t>(static_cast<uint32_t>(packed >> 32));
+}
+
+void* makeStringView(WASM::VMContext* context, void* handle, bool iterator)
+{
+	if (context == nullptr || context->module == nullptr) {
+		WASM::reportTrap(WASM::TrapKind::Internal, "string view has no module context");
+		return nullptr;
+	}
+	const WASM::StringObject* string = stringObjectOrTrap(handle);
+	if (string == nullptr)
+		return nullptr;
+	WASM::StringStore& strings = context->module->store().strings();
+	return iterator ? static_cast<void*>(strings.createIterator(string))
+			: static_cast<void*>(strings.createView(string));
+}
+
+uint64_t encodeWtf8View(WASM::VMContext* context, void* viewHandle,
+		uint64_t packedMemory, uint64_t positionAndBytes,
+		WASM::Wtf8Encoding encoding, const char* trapDetail)
+{
+	const WASM::StringViewObject* view = viewObjectOrTrap(viewHandle);
+	if (view == nullptr)
+		return 0;
+	std::vector<uint8_t> encoded;
+	uint32_t next = 0;
+	if (!WASM::wtf8Encode(view->string->codePoints, lowSigned(positionAndBytes),
+			highSigned(positionAndBytes), encoding, next, encoded)) {
+		WASM::reportTrap(WASM::TrapKind::InvalidString, trapDetail);
+		return 0;
+	}
+	writeEncodedString(context, packedMemoryIndex(packedMemory),
+			packedMemoryPointer(packedMemory), encoded);
+	return (static_cast<uint64_t>(next) << 32)
+			| static_cast<uint32_t>(encoded.size());
+}
+
+} // namespace
+
+extern "C" void* wasm_string_as_wtf8(WASM::VMContext* context, void* handle) noexcept
+{
+	try {
+		return makeStringView(context, handle, false);
+	} catch (...) {
+		WASM::reportTrap(WASM::TrapKind::Internal);
+		return nullptr;
+	}
+}
+
+extern "C" void* wasm_string_as_wtf16(WASM::VMContext* context, void* handle) noexcept
+{
+	try {
+		return makeStringView(context, handle, false);
+	} catch (...) {
+		WASM::reportTrap(WASM::TrapKind::Internal);
+		return nullptr;
+	}
+}
+
+extern "C" void* wasm_string_as_iter(WASM::VMContext* context, void* handle) noexcept
+{
+	try {
+		return makeStringView(context, handle, true);
+	} catch (...) {
+		WASM::reportTrap(WASM::TrapKind::Internal);
+		return nullptr;
+	}
+}
+
+extern "C" int32_t wasm_string_view_wtf8_advance(void* viewHandle,
+		int32_t position, int32_t bytes) noexcept
+{
+	try {
+		const WASM::StringViewObject* view = viewObjectOrTrap(viewHandle);
+		if (view == nullptr)
+			return 0;
+		uint32_t next = 0;
+		if (!WASM::wtf8Advance(view->string->codePoints, position, bytes, next)) {
+			WASM::reportTrap(WASM::TrapKind::InvalidString,
+					"stringview_wtf8.advance: position exceeds 2^31-1");
+			return 0;
+		}
+		return static_cast<int32_t>(next);
+	} catch (...) {
+		WASM::reportTrap(WASM::TrapKind::Internal);
+		return 0;
+	}
+}
+extern "C" uint64_t wasm_string_view_wtf8_encode_utf8(WASM::VMContext* context,
+		void* view, uint64_t packedMemory, uint64_t positionAndBytes) noexcept
+{
+	try {
+		return encodeWtf8View(context, view, packedMemory, positionAndBytes,
+				WASM::Wtf8Encoding::Utf8,
+				"stringview_wtf8.encode: isolated surrogate or position overflow");
+	} catch (...) {
+		WASM::reportTrap(WASM::TrapKind::Internal);
+		return 0;
+	}
+}
+
+extern "C" uint64_t wasm_string_view_wtf8_encode_lossy_utf8(WASM::VMContext* context,
+		void* view, uint64_t packedMemory, uint64_t positionAndBytes) noexcept
+{
+	try {
+		return encodeWtf8View(context, view, packedMemory, positionAndBytes,
+				WASM::Wtf8Encoding::LossyUtf8,
+				"stringview_wtf8.encode: position overflow");
+	} catch (...) {
+		WASM::reportTrap(WASM::TrapKind::Internal);
+		return 0;
+	}
+}
+
+extern "C" uint64_t wasm_string_view_wtf8_encode_wtf8(WASM::VMContext* context,
+		void* view, uint64_t packedMemory, uint64_t positionAndBytes) noexcept
+{
+	try {
+		return encodeWtf8View(context, view, packedMemory, positionAndBytes,
+				WASM::Wtf8Encoding::Wtf8,
+				"stringview_wtf8.encode: position overflow");
+	} catch (...) {
+		WASM::reportTrap(WASM::TrapKind::Internal);
+		return 0;
+	}
+}
+
+extern "C" void* wasm_string_view_wtf8_slice(WASM::VMContext* context,
+		void* viewHandle, uint64_t packedRange) noexcept
+{
+	try {
+		const WASM::StringViewObject* view = viewObjectOrTrap(viewHandle);
+		if (view == nullptr)
+			return nullptr;
+		return makeString(context, WASM::sliceWtf8(view->string->codePoints,
+				lowSigned(packedRange), highSigned(packedRange)));
+	} catch (...) {
+		WASM::reportTrap(WASM::TrapKind::Internal);
+		return nullptr;
+	}
+}
+
+
+
+extern "C" int32_t wasm_string_view_wtf16_length(void* viewHandle) noexcept
+{
+	try {
+		const WASM::StringViewObject* view = viewObjectOrTrap(viewHandle);
+		if (view == nullptr)
+			return 0;
+		uint32_t length = 0;
+		return WASM::measureWtf16(view->string->codePoints, length)
+				? static_cast<int32_t>(length) : -1;
+	} catch (...) {
+		WASM::reportTrap(WASM::TrapKind::Internal);
+		return 0;
+	}
+}
+
+extern "C" int32_t wasm_string_view_wtf16_get_codeunit(void* viewHandle,
+		int32_t position) noexcept
+{
+	try {
+		const WASM::StringViewObject* view = viewObjectOrTrap(viewHandle);
+		if (view == nullptr)
+			return 0;
+		uint32_t unit = 0;
+		if (!WASM::wtf16CodeUnitAt(view->string->codePoints, position, unit)) {
+			WASM::reportTrap(WASM::TrapKind::InvalidString,
+					"stringview_wtf16.get_codeunit: position out of range");
+			return 0;
+		}
+		return static_cast<int32_t>(unit);
+	} catch (...) {
+		WASM::reportTrap(WASM::TrapKind::Internal);
+		return 0;
+	}
+}
+
+extern "C" int32_t wasm_string_view_wtf16_encode(WASM::VMContext* context,
+		void* viewHandle, uint64_t packedMemory, uint64_t positionAndUnits) noexcept
+{
+	try {
+		const WASM::StringViewObject* view = viewObjectOrTrap(viewHandle);
+		if (view == nullptr)
+			return 0;
+		const uint32_t pointer = packedMemoryPointer(packedMemory);
+		if ((pointer & 1u) != 0) {
+			WASM::reportTrap(WASM::TrapKind::InvalidString,
+					"stringview_wtf16.encode: pointer is not two-byte aligned");
+			return 0;
+		}
+		std::vector<uint8_t> encoded;
+		const uint32_t written = WASM::wtf16Encode(view->string->codePoints,
+				lowSigned(positionAndUnits), highSigned(positionAndUnits), encoded);
+		writeEncodedString(context, packedMemoryIndex(packedMemory), pointer, encoded);
+		return static_cast<int32_t>(written);
+	} catch (...) {
+		WASM::reportTrap(WASM::TrapKind::Internal);
+		return 0;
+	}
+}
+
+extern "C" void* wasm_string_view_wtf16_slice(WASM::VMContext* context,
+		void* viewHandle, uint64_t packedRange) noexcept
+{
+	try {
+		const WASM::StringViewObject* view = viewObjectOrTrap(viewHandle);
+		if (view == nullptr)
+			return nullptr;
+		return makeString(context, WASM::sliceWtf16(view->string->codePoints,
+				lowSigned(packedRange), highSigned(packedRange)));
+	} catch (...) {
+		WASM::reportTrap(WASM::TrapKind::Internal);
+		return nullptr;
+	}
+}
+
+
+extern "C" int32_t wasm_string_view_iter_next(void* iteratorHandle) noexcept
+{
+	try {
+		WASM::StringIteratorObject* iterator = iteratorObjectOrTrap(iteratorHandle);
+		if (iterator == nullptr)
+			return -1;
+		if (iterator->position >= iterator->string->codePoints.size())
+			return -1;
+		return static_cast<int32_t>(iterator->string->codePoints[iterator->position++]);
+	} catch (...) {
+		WASM::reportTrap(WASM::TrapKind::Internal);
+		return -1;
+	}
+}
+
+extern "C" int32_t wasm_string_view_iter_advance(void* iteratorHandle,
+		int32_t count) noexcept
+{
+	try {
+		WASM::StringIteratorObject* iterator = iteratorObjectOrTrap(iteratorHandle);
+		if (iterator == nullptr)
+			return 0;
+		const uint32_t size = static_cast<uint32_t>(iterator->string->codePoints.size());
+		const uint32_t remaining = size - iterator->position;
+		const uint32_t take = count < 0 ? remaining
+				: std::min(static_cast<uint32_t>(count), remaining);
+		iterator->position += take;
+		return static_cast<int32_t>(take);
+	} catch (...) {
+		WASM::reportTrap(WASM::TrapKind::Internal);
+		return 0;
+	}
+}
+
+extern "C" int32_t wasm_string_view_iter_rewind(void* iteratorHandle,
+		int32_t count) noexcept
+{
+	try {
+		WASM::StringIteratorObject* iterator = iteratorObjectOrTrap(iteratorHandle);
+		if (iterator == nullptr)
+			return 0;
+		const uint32_t take = count < 0 ? iterator->position
+				: std::min(static_cast<uint32_t>(count), iterator->position);
+		iterator->position -= take;
+		return static_cast<int32_t>(take);
+	} catch (...) {
+		WASM::reportTrap(WASM::TrapKind::Internal);
+		return 0;
+	}
+}
+
+extern "C" void* wasm_string_view_iter_slice(WASM::VMContext* context,
+		void* iteratorHandle, int32_t count) noexcept
+{
+	try {
+		WASM::StringIteratorObject* iterator = iteratorObjectOrTrap(iteratorHandle);
+		if (iterator == nullptr)
+			return nullptr;
+		return makeString(context, WASM::sliceCodePoints(iterator->string->codePoints,
+				static_cast<int32_t>(iterator->position), count));
+	} catch (...) {
+		WASM::reportTrap(WASM::TrapKind::Internal);
+		return nullptr;
+	}
+}
+
 
 namespace {
 

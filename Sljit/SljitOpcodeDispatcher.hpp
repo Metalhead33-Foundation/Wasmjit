@@ -1467,6 +1467,30 @@ private:
 	void dispatchStringEncodeLossyUtf8Array(WASM::TypeIdx type) override; //!< `string.encode_lossy_utf8_array`.
 	void dispatchStringEncodeWtf8Array(WASM::TypeIdx type) override; //!< `string.encode_wtf8_array`.
 	void dispatchStringEncodeWtf16Array(WASM::TypeIdx type) override; //!< `string.encode_wtf16_array`.
+	void dispatchStringAsWtf8() override; //!< `string.as_wtf8`.
+	void dispatchStringViewWtf8Advance() override; //!< `stringview_wtf8.advance`.
+	void dispatchStringViewWtf8EncodeUtf8(WASM::MemIdx memory) override; //!< `stringview_wtf8.encode_utf8`.
+	void dispatchStringViewWtf8EncodeLossyUtf8(WASM::MemIdx memory) override; //!< `stringview_wtf8.encode_lossy_utf8`.
+	void dispatchStringViewWtf8EncodeWtf8(WASM::MemIdx memory) override; //!< `stringview_wtf8.encode_wtf8`.
+	void dispatchStringViewWtf8Slice() override; //!< `stringview_wtf8.slice`.
+	void dispatchStringAsWtf16() override; //!< `string.as_wtf16`.
+	void dispatchStringViewWtf16Length() override; //!< `stringview_wtf16.length`.
+	void dispatchStringViewWtf16GetCodeUnit() override; //!< `stringview_wtf16.get_codeunit`.
+	void dispatchStringViewWtf16Encode(WASM::MemIdx memory) override; //!< `stringview_wtf16.encode`.
+	void dispatchStringViewWtf16Slice() override; //!< `stringview_wtf16.slice`.
+	void dispatchStringAsIter() override; //!< `string.as_iter`.
+	void dispatchStringViewIterNext() override; //!< `stringview_iter.next`.
+	void dispatchStringViewIterAdvance() override; //!< `stringview_iter.advance`.
+	void dispatchStringViewIterRewind() override; //!< `stringview_iter.rewind`.
+	void dispatchStringViewIterSlice() override; //!< `stringview_iter.slice`.
+
+private:
+	void emitStringViewCreate(const void* helper); //!< Shared view/iterator creation lowering.
+	void emitStringViewWtf8Encode(const void* helper, WASM::MemIdx memory); //!< Shared WTF-8 view encoder lowering.
+	void emitStringViewRange(const void* helper); //!< Shared context/view/range slice lowering.
+	void emitStringViewWtf16Encode(WASM::MemIdx memory); //!< WTF-16 view encoder lowering.
+
+public:
 
 	void emitStringNew(WASM::MemIdx memory, const void* helper);
 	void emitStringEncode(WASM::MemIdx memory, const void* helper);
