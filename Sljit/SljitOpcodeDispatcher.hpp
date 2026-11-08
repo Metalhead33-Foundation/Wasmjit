@@ -496,6 +496,11 @@ protected:
 	void dispatchAnyConvertExtern() override; //!< `any.convert_extern`.
 	void dispatchExternConvertAny() override; //!< `extern.convert_any`.
 	void dispatchBrOnNull(WASM::LabelIdx arg) override; //!< `br_on_null`.
+	void dispatchBrOnNonNull(WASM::LabelIdx arg) override; //!< `br_on_non_null`.
+	void dispatchBrOnCast(uint8_t arg1, WASM::LabelIdx arg2, WASM::HeapType arg3,
+			WASM::HeapType arg4) override; //!< `br_on_cast`.
+	void dispatchBrOnCastFail(uint8_t arg1, WASM::LabelIdx arg2, WASM::HeapType arg3,
+			WASM::HeapType arg4) override; //!< `br_on_cast_fail`.
 	void dispatchStructNew(WASM::TypeIdx arg) override; //!< `struct.new`.
 	void dispatchStructNewDefault(WASM::TypeIdx arg) override; //!< `struct.new_default`.
 	void dispatchStructGet(WASM::TypeIdx arg1, uint32_t arg2) override; //!< `struct.get`.
@@ -922,11 +927,13 @@ private:
 	 */
 	void loadContext(int reg);
 	/*!
-	 * \brief Moves the top `widths.size()` operand slots down to `base`.
+	 * \brief Moves `widths.size()` operand slots ending at `endDepth` down to `base`.
 	 * \param widths Widths of the values to move, in stack order.
 	 * \param base Destination depth.
+	 * \param endDepth Depth just past the source range.
 	 */
-	void transferToBase(const std::vector<int>& widths, std::size_t base);
+	void transferToBase(const std::vector<int>& widths, std::size_t base,
+			std::size_t endDepth);
 	//! Emits the return of the function's single result (peeking at the stack top).
 	void emitReturnValue();
 
@@ -1271,6 +1278,17 @@ private:
 	 * \param nullable Whether null passes through instead of trapping.
 	 */
 	void emitRefCast(const WASM::HeapType& arg, bool nullable);
+	//! Emits a `ref.test` predicate through the core heap-type matcher.
+	//! \param arg Heap type to test.
+	//! \param nullable True for the nullable form.
+	void emitRefTest(const WASM::HeapType& arg, bool nullable);
+	//! Emits the shared `br_on_cast`/`br_on_cast_fail` predicate and branch.
+	//! \param castop Instruction flags (bit 1 = nullable target).
+	//! \param depth Target label depth.
+	//! \param target Target heap type.
+	//! \param onFailure True for `br_on_cast_fail`.
+	void emitBrOnCast(uint8_t castop, WASM::LabelIdx depth,
+			const WASM::HeapType& target, bool onFailure);
 	/*!
 	 * \brief Emits a sign- or zero-extending read of a packed struct field.
 	 * \param arg1 Struct type index.

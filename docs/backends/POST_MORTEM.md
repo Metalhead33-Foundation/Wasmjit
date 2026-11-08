@@ -1900,4 +1900,70 @@ AsmJIT  821 cases: 758 passed / 63 failed; no signal
   `i16` need shifts 0 and 1, not 3.
 * **A refusal is better than a wild pointer.** The typed-GC-ref `array.new_elem`
   shape stays explicitly unimplemented on SLJIT until its ownership/layout is
+
+## Both backends — GC reference casts and branch-on-cast
+
+### Intended
+
+Close `ref_cast`, `br_on_null`, `br_on_non_null`, `br_on_cast` and
+`br_on_cast_fail`, plus AsmJIT `ref_as_non_null`.
+
+### Root cause
+
+* `br_on_null` rejected any target with label values; it must transfer the
+  values **below** the reference and drop the reference.
+* `br_on_non_null` was unhandled, and its fallthrough consumes the reference
+  (the branch carries it only on the non-null path).
+* `br_on_cast` / `br_on_cast_fail` were unhandled.
+* `ref.cast`/`ref.test` read the object header directly, which is invalid for a
+  tagged i31 immediate and for the `none` bottom type.
+* A first i31 patch in `ref.cast` caused an ASLR-sensitive wild dereference and
+  was backed out; the final implementation avoids header reads entirely.
+* Non-nullable `ref.cast` on null is a **cast failure**, not a null-structure or
+  null-i31 trap; `ref.as_non_null` is the operation that reports
+  `NullReference`.
+
+### Fix
+
+* Use the backend-neutral `ModuleInstance::refMatchesHeapType` predicate for
+  `ref.test` and `ref.cast` on both backends. It handles i31, none, extern and
+  object references without a header dereference.
+* Added `sljitRefMatchesHeapType` / `asmjitRefMatchesHeapType` wrappers taking a
+  packed `(isTypeIndex, heapType)` value and the nullable flag.
+* Generalised SLJIT’s `transferToBase` with an end-depth so `br_on_null` can
+  transfer the range below the reference.
+* Implemented `br_on_non_null`, `br_on_cast` and `br_on_cast_fail`, including
+  function-label branches (conditional function return) and loop targets.
+* SLJIT now reports `CastFailure` for a non-nullable `ref.cast` of null;
+  AsmJIT `ref.as_non_null` reports `NullReference`.
+
+### Evidence
+
+```
+Both ref_cast              45/0
+Both br_on_null             9/0
+Both br_on_non_null        11/0
+Both br_on_cast            31/0
+Both br_on_cast_fail       31/0
+Both ref_as_non_null        6/0
+```
+
+Full serial runs:
+
+```
+SLJIT   821 cases: 771 passed / 50 failed; no signal
+AsmJIT  821 cases: 764 passed / 57 failed; no signal
+```
+
+### Lessons
+
+* **Do not classify a tagged immediate by reading a header.** A single predicate
+  in the core (`refMatchesHeapType`) is both simpler and safe for i31/none.
+* **`br_on_null` and `br_on_non_null` have opposite fallthrough stack effects.**
+  One leaves the reference, the other consumes it.
+* **A branch to a function label is still a branch.** It needs the same
+  conditional predicate and fallthrough label as a block target.
+* **Null handling is per-instruction, not per-type.** `ref.cast` on null is a
+  cast failure; `ref.as_non_null` on null is `null reference`.
+
   understood.

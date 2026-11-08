@@ -671,6 +671,25 @@ uint32_t asmjitTypeIdMatchesKind(WASM::VMContext* vm, uint32_t typeId, uint32_t 
 	return reinterpret_cast<WASM::ModuleInstance*>(vm)->typeIdMatchesAbstractKind(typeId, kind) ? 1u : 0u;
 }
 
+int32_t asmjitRefMatchesHeapType(WASM::VMContext* vm, void* ref,
+		uint64_t packedHeapAndType, uint32_t nullable) noexcept
+{
+	WASM::HeapType heap;
+	const uint32_t isTypeIndex = static_cast<uint32_t>(packedHeapAndType >> 32);
+	const uint32_t value = static_cast<uint32_t>(packedHeapAndType & 0xFFFFFFFFu);
+	heap.isTypeIndex = isTypeIndex != 0;
+	if (heap.isTypeIndex)
+		heap.typeIndex = value;
+	else
+		heap.abstract = static_cast<WASM::AbstractHeapType>(static_cast<int32_t>(value));
+	try {
+		return reinterpret_cast<WASM::ModuleInstance*>(vm)->refMatchesHeapType(
+				ref, heap, nullable != 0) ? 1 : 0;
+	} catch (...) {
+		return 0;
+	}
+}
+
 void* asmjitExternBox(WASM::VMContext* vm, void* ref) noexcept
 {
 	try {
@@ -5351,6 +5370,8 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 
 	void dispatchBrOnNull(WASM::LabelIdx depth) override
 	{
+		if (inDeadCode())
+			return;
 		if (values.empty())
 			throw std::runtime_error("AsmJit br_on_null operand underflow");
 		if (depth > controls.size())
@@ -5367,15 +5388,134 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 			return;
 		}
 		ControlFrame& target = controls[controls.size() - 1 - depth];
-		const size_t branchValues = target.kind == ControlKind::Loop ? 0 : target.resultCount;
-		if (branchValues != 0)
-			throw std::runtime_error("AsmJit br_on_null requires a label without results");
-		if (values.size() != target.stackHeight + 1)
-			throw std::runtime_error("AsmJit br_on_null operand stack does not match the target label");
-		const asmjit::Label label = target.kind == ControlKind::Loop ? target.begin : target.end;
+		const bool loopTarget = target.kind == ControlKind::Loop;
+		const size_t branchValues = loopTarget ? target.paramCount : target.resultCount;
+		const size_t refDepth = values.size() - 1;
+		if (branchValues > refDepth || refDepth - branchValues < target.stackHeight)
+			throw std::runtime_error("AsmJit br_on_null operand stack does not match its target label");
+		const asmjit::Label label = loopTarget ? target.begin : target.end;
+		auto skip = compiler.new_label();
 		checkError(compiler.test(reference, reference), "AsmJit br_on_null test failed");
-		checkError(compiler.jz(label), "AsmJit br_on_null branch failed");
+		checkError(compiler.jnz(skip), "AsmJit br_on_null skip failed");
+		// The null branch carries the values below the reference, not the ref.
+		const size_t first = refDepth - branchValues;
+		const std::vector<asmjit::x86::Gp>& destinations = loopTarget ? target.params : target.results;
+		const std::vector<WASM::ValueTypeCode>& codes = loopTarget
+				? target.paramTypes : target.resultTypes;
+		for (size_t i = 0; i < branchValues; ++i)
+			transferValue(destinations[i], values[first + i], codes[i],
+					"AsmJit br_on_null result transfer failed");
+		checkError(compiler.jmp(label), "AsmJit br_on_null branch failed");
+		if (!loopTarget)
+			target.endTargeted = true;
+		checkError(compiler.bind(skip), "AsmJit br_on_null skip binding failed");
 	}
+
+	void dispatchBrOnNonNull(WASM::LabelIdx depth) override
+	{
+		if (inDeadCode())
+			return;
+		if (values.empty())
+			throw std::runtime_error("AsmJit br_on_non_null operand underflow");
+		if (depth > controls.size())
+			throw std::runtime_error("AsmJit br_on_non_null label depth is out of range");
+		auto reference = values.back();
+		if (depth == controls.size())
+			throw std::runtime_error("AsmJit br_on_non_null to the function label is not lowered yet");
+		ControlFrame& target = controls[controls.size() - 1 - depth];
+		const bool loopTarget = target.kind == ControlKind::Loop;
+		const size_t branchValues = loopTarget ? target.paramCount : target.resultCount;
+		if (branchValues > values.size() || values.size() - branchValues < target.stackHeight)
+			throw std::runtime_error("AsmJit br_on_non_null operand stack does not match its target label");
+		const asmjit::Label label = loopTarget ? target.begin : target.end;
+		auto skip = compiler.new_label();
+		checkError(compiler.test(reference, reference), "AsmJit br_on_non_null test failed");
+		checkError(compiler.jz(skip), "AsmJit br_on_non_null skip failed");
+		const size_t first = values.size() - branchValues;
+		const std::vector<asmjit::x86::Gp>& destinations = loopTarget ? target.params : target.results;
+		const std::vector<WASM::ValueTypeCode>& codes = loopTarget
+				? target.paramTypes : target.resultTypes;
+		for (size_t i = 0; i < branchValues; ++i)
+			transferValue(destinations[i], values[first + i], codes[i],
+					"AsmJit br_on_non_null result transfer failed");
+		checkError(compiler.jmp(label), "AsmJit br_on_non_null branch failed");
+		if (!loopTarget)
+			target.endTargeted = true;
+		checkError(compiler.bind(skip), "AsmJit br_on_non_null skip binding failed");
+		// Fallthrough consumes the reference.
+		values.pop_back();
+	}
+
+	void emitBrOnCast(uint8_t castop, WASM::LabelIdx depth, const WASM::HeapType& target,
+			bool onFailure)
+	{
+		if (inDeadCode())
+			return;
+		if (values.empty())
+			throw std::runtime_error("AsmJit br_on_cast operand underflow");
+		if (depth > controls.size())
+			throw std::runtime_error("AsmJit br_on_cast label depth is out of range");
+		auto reference = values.back();
+		const uint32_t heapValue = target.isTypeIndex ? target.typeIndex
+				: static_cast<uint32_t>(static_cast<int32_t>(target.abstract));
+		auto packed = packImmPair(target.isTypeIndex ? 1u : 0u, heapValue, "brOnCastHeap");
+		asmjit::FuncSignature predicate(asmjit::CallConvId::kCDecl);
+		predicate.set_ret(asmjit::TypeId::kInt32);
+		predicate.add_arg(asmjit::TypeId::kUIntPtr);
+		predicate.add_arg(asmjit::TypeId::kUIntPtr);
+		predicate.add_arg(asmjit::TypeId::kUInt64);
+		predicate.add_arg(asmjit::TypeId::kUInt32);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke),
+				reinterpret_cast<uint64_t>(&asmjitRefMatchesHeapType), predicate),
+				"AsmJit br_on_cast predicate call failed");
+		invoke->set_arg(0, vmContext);
+		invoke->set_arg(1, reference);
+		invoke->set_arg(2, packed);
+		invoke->set_arg(3, asmjit::Imm((castop & 0x02) != 0 ? 1 : 0));
+		auto matches = compiler.new_gp32("brOnCastMatch");
+		invoke->set_ret(0, matches);
+		if (depth == controls.size()) {
+			// Function label: the branch returns the top result values.
+			if (values.size() < resultCount)
+				throw std::runtime_error("AsmJit br_on_cast function branch has too few results");
+			auto fallthrough = compiler.new_label();
+			checkError(compiler.test(matches, matches), "AsmJit br_on_cast test failed");
+			checkError(onFailure ? compiler.jnz(fallthrough) : compiler.jz(fallthrough),
+					"AsmJit br_on_cast function fallthrough failed");
+			emitFunctionReturnValues();
+			checkError(compiler.bind(fallthrough), "AsmJit br_on_cast function label binding failed");
+			return;
+		}
+		ControlFrame& frame = controls[controls.size() - 1 - depth];
+		const bool loopTarget = frame.kind == ControlKind::Loop;
+		const size_t branchValues = loopTarget ? frame.paramCount : frame.resultCount;
+		if (branchValues > values.size() || values.size() - branchValues < frame.stackHeight)
+			throw std::runtime_error("AsmJit br_on_cast operand stack does not match its target label");
+		auto fallthrough = compiler.new_label();
+		checkError(compiler.test(matches, matches), "AsmJit br_on_cast test failed");
+		checkError(onFailure ? compiler.jnz(fallthrough) : compiler.jz(fallthrough),
+				"AsmJit br_on_cast fallthrough branch failed");
+		const size_t first = values.size() - branchValues;
+		const std::vector<asmjit::x86::Gp>& destinations = loopTarget ? frame.params : frame.results;
+		const std::vector<WASM::ValueTypeCode>& codes = loopTarget
+				? frame.paramTypes : frame.resultTypes;
+		for (size_t i = 0; i < branchValues; ++i)
+			transferValue(destinations[i], values[first + i], codes[i],
+					"AsmJit br_on_cast result transfer failed");
+		checkError(compiler.jmp(loopTarget ? frame.begin : frame.end),
+				"AsmJit br_on_cast branch failed");
+		if (!loopTarget)
+			frame.endTargeted = true;
+		checkError(compiler.bind(fallthrough), "AsmJit br_on_cast fallthrough binding failed");
+	}
+
+	void dispatchBrOnCast(uint8_t castop, WASM::LabelIdx depth,
+			WASM::HeapType, WASM::HeapType target) override
+	{ emitBrOnCast(castop, depth, target, false); }
+	void dispatchBrOnCastFail(uint8_t castop, WASM::LabelIdx depth,
+			WASM::HeapType, WASM::HeapType target) override
+	{ emitBrOnCast(castop, depth, target, true); }
 
 	void dispatchStructNewDefault(WASM::TypeIdx arg) override
 	{
@@ -6634,22 +6774,18 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 
 	void emitRefCast(const WASM::HeapType& arg, bool nullable)
 	{
-		if (!arg.isTypeIndex
-			&& arg.abstract != WASM::AbstractHeapType::Any
-			&& arg.abstract != WASM::AbstractHeapType::Eq
-			&& arg.abstract != WASM::AbstractHeapType::Struct
-			&& arg.abstract != WASM::AbstractHeapType::Array)
-			throw std::runtime_error("AsmJit ref.cast on this abstract heap type is not lowered yet");
 		if (values.empty())
 			throw std::runtime_error("AsmJit ref.cast operand stack underflow");
-		// A cast returns the reference, so it stays on the value stack.
 		auto reference = values.back();
-		const bool kindQuery = !arg.isTypeIndex;
-		const uint32_t expected = kindQuery
-				? static_cast<uint32_t>(static_cast<int32_t>(arg.abstract))
-				: module.typeId(WASM::LocalTypeIdx{arg.typeIndex}).value;
-		const auto predicate = kindQuery ? &asmjitTypeIdMatchesKind
-				: &asmjitTypeIsSubtype;
+		const uint32_t value = arg.isTypeIndex ? arg.typeIndex
+				: static_cast<uint32_t>(static_cast<int32_t>(arg.abstract));
+		auto packed = packImmPair(arg.isTypeIndex ? 1u : 0u, value, "refCastHeap");
+		asmjit::FuncSignature predicate(asmjit::CallConvId::kCDecl);
+		predicate.set_ret(asmjit::TypeId::kInt32);
+		predicate.add_arg(asmjit::TypeId::kUIntPtr);
+		predicate.add_arg(asmjit::TypeId::kUIntPtr);
+		predicate.add_arg(asmjit::TypeId::kUInt64);
+		predicate.add_arg(asmjit::TypeId::kUInt32);
 		asmjit::FuncSignature voidSignature(asmjit::CallConvId::kCDecl);
 		voidSignature.set_ret(asmjit::TypeId::kVoid);
 		asmjit::Label afterCast = compiler.new_label();
@@ -6662,33 +6798,25 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 			checkError(compiler.jnz(notNull), "AsmJit ref.cast null branch failed");
 			asmjit::InvokeNode* nullCall = nullptr;
 			checkError(compiler.invoke(asmjit::Out(nullCall),
-					reinterpret_cast<uint64_t>(&asmjitReportNullStructure), voidSignature),
+					reinterpret_cast<uint64_t>(&asmjitReportCastFailure), voidSignature),
 					"AsmJit ref.cast null trap emission failed");
 			emitPendingTrapReturn();
 			checkError(compiler.bind(notNull), "AsmJit ref.cast null label binding failed");
 		}
-		auto typeId = compiler.new_gp32("castTypeId");
-		checkError(compiler.mov(typeId, asmjit::x86::dword_ptr(reference,
-				static_cast<int32_t>(WASM::GcHeader::kTypeIdOffset))),
-				"AsmJit ref.cast type-id load failed");
-	asmjit::FuncSignature subtypeSignature(asmjit::CallConvId::kCDecl);
-	subtypeSignature.set_ret(asmjit::TypeId::kUInt32);
-	subtypeSignature.add_arg(asmjit::TypeId::kUIntPtr);
-	subtypeSignature.add_arg(asmjit::TypeId::kUInt32);
-	subtypeSignature.add_arg(asmjit::TypeId::kUInt32);
-	asmjit::InvokeNode* subtypeCall = nullptr;
-	checkError(compiler.invoke(asmjit::Out(subtypeCall),
-		reinterpret_cast<uint64_t>(predicate), subtypeSignature),
-		"AsmJit subtype predicate call failed");
-	subtypeCall->set_arg(0, vmContext);
-	subtypeCall->set_arg(1, typeId);
-	subtypeCall->set_arg(2, asmjit::Imm(static_cast<uint64_t>(expected)));
-	auto subtypeMatch = compiler.new_gp32("subtypeMatch");
-	subtypeCall->set_ret(0, subtypeMatch);
-	checkError(compiler.test(subtypeMatch, subtypeMatch), "AsmJit ref.cast match test failed");
-	checkError(compiler.jnz(afterCast), "AsmJit ref.cast match branch failed");
 		asmjit::InvokeNode* castCall = nullptr;
 		checkError(compiler.invoke(asmjit::Out(castCall),
+				reinterpret_cast<uint64_t>(&asmjitRefMatchesHeapType), predicate),
+				"AsmJit ref.cast predicate call failed");
+		castCall->set_arg(0, vmContext);
+		castCall->set_arg(1, reference);
+		castCall->set_arg(2, packed);
+		castCall->set_arg(3, asmjit::Imm(0));
+		auto matches = compiler.new_gp32("refCastMatch");
+		castCall->set_ret(0, matches);
+		checkError(compiler.test(matches, matches), "AsmJit ref.cast match test failed");
+		checkError(compiler.jnz(afterCast), "AsmJit ref.cast match branch failed");
+		asmjit::InvokeNode* failCall = nullptr;
+		checkError(compiler.invoke(asmjit::Out(failCall),
 				reinterpret_cast<uint64_t>(&asmjitReportCastFailure), voidSignature),
 				"AsmJit ref.cast failure trap emission failed");
 		emitPendingTrapReturn();
@@ -6698,99 +6826,36 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 	void dispatchRefCast(const WASM::HeapType& arg) override { emitRefCast(arg, false); }
 	void dispatchRefCastNull(const WASM::HeapType& arg) override { emitRefCast(arg, true); }
 
-	void dispatchRefTest(const WASM::HeapType& arg) override
+	void emitRefTest(const WASM::HeapType& arg, bool nullable)
 	{
-		if (!arg.isTypeIndex
-			&& arg.abstract != WASM::AbstractHeapType::Any
-			&& arg.abstract != WASM::AbstractHeapType::Eq
-			&& arg.abstract != WASM::AbstractHeapType::Struct
-			&& arg.abstract != WASM::AbstractHeapType::Array)
-			throw std::runtime_error("AsmJit ref.test on this abstract heap type is not lowered yet");
 		if (values.empty())
 			throw std::runtime_error("AsmJit ref.test operand stack underflow");
 		auto reference = values.back();
 		values.pop_back();
-		const bool kindQuery = !arg.isTypeIndex;
-		const uint32_t expected = kindQuery
-				? static_cast<uint32_t>(static_cast<int32_t>(arg.abstract))
-				: module.typeId(WASM::LocalTypeIdx{arg.typeIndex}).value;
-		const auto predicate = kindQuery ? &asmjitTypeIdMatchesKind
-				: &asmjitTypeIsSubtype;
+		const uint32_t value = arg.isTypeIndex ? arg.typeIndex
+				: static_cast<uint32_t>(static_cast<int32_t>(arg.abstract));
+		auto packed = packImmPair(arg.isTypeIndex ? 1u : 0u, value, "refTestHeap");
+		asmjit::FuncSignature predicate(asmjit::CallConvId::kCDecl);
+		predicate.set_ret(asmjit::TypeId::kInt32);
+		predicate.add_arg(asmjit::TypeId::kUIntPtr);
+		predicate.add_arg(asmjit::TypeId::kUIntPtr);
+		predicate.add_arg(asmjit::TypeId::kUInt64);
+		predicate.add_arg(asmjit::TypeId::kUInt32);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke),
+				reinterpret_cast<uint64_t>(&asmjitRefMatchesHeapType), predicate),
+				"AsmJit ref.test predicate call failed");
+		invoke->set_arg(0, vmContext);
+		invoke->set_arg(1, reference);
+		invoke->set_arg(2, packed);
+		invoke->set_arg(3, asmjit::Imm(nullable ? 1 : 0));
 		auto result = compiler.new_gp32("refTest");
-		checkError(compiler.mov(result, static_cast<uint32_t>(0)), "AsmJit ref.test zeroing failed");
-		asmjit::Label done = compiler.new_label();
-		checkError(compiler.test(reference, reference), "AsmJit ref.test null test failed");
-		checkError(compiler.jz(done), "AsmJit ref.test null branch failed");
-		auto typeId = compiler.new_gp32("refTestTypeId");
-		checkError(compiler.mov(typeId, asmjit::x86::dword_ptr(reference,
-				static_cast<int32_t>(WASM::GcHeader::kTypeIdOffset))),
-				"AsmJit ref.test type-id load failed");
-		asmjit::FuncSignature subtypeSignature(asmjit::CallConvId::kCDecl);
-		subtypeSignature.set_ret(asmjit::TypeId::kUInt32);
-		subtypeSignature.add_arg(asmjit::TypeId::kUIntPtr);
-		subtypeSignature.add_arg(asmjit::TypeId::kUInt32);
-		subtypeSignature.add_arg(asmjit::TypeId::kUInt32);
-		asmjit::InvokeNode* subtypeCall = nullptr;
-		checkError(compiler.invoke(asmjit::Out(subtypeCall),
-			reinterpret_cast<uint64_t>(predicate), subtypeSignature),
-			"AsmJit subtype predicate call failed");
-		subtypeCall->set_arg(0, vmContext);
-		subtypeCall->set_arg(1, typeId);
-		subtypeCall->set_arg(2, asmjit::Imm(static_cast<uint64_t>(expected)));
-		auto subtypeMatch = compiler.new_gp32("subtypeMatch");
-		subtypeCall->set_ret(0, subtypeMatch);
-		checkError(compiler.mov(result, subtypeMatch), "AsmJit ref.test result copy failed");
-		checkError(compiler.bind(done), "AsmJit ref.test label binding failed");
+		invoke->set_ret(0, result);
 		values.push_back(result);
 	}
 
-	void dispatchRefTestNull(const WASM::HeapType& arg) override
-	{
-		if (!arg.isTypeIndex
-			&& arg.abstract != WASM::AbstractHeapType::Any
-			&& arg.abstract != WASM::AbstractHeapType::Eq
-			&& arg.abstract != WASM::AbstractHeapType::Struct
-			&& arg.abstract != WASM::AbstractHeapType::Array)
-			throw std::runtime_error("AsmJit ref.test on this abstract heap type is not lowered yet");
-		if (values.empty())
-			throw std::runtime_error("AsmJit ref.test operand stack underflow");
-		auto reference = values.back();
-		values.pop_back();
-		const bool kindQuery = !arg.isTypeIndex;
-		const uint32_t expected = kindQuery
-				? static_cast<uint32_t>(static_cast<int32_t>(arg.abstract))
-				: module.typeId(WASM::LocalTypeIdx{arg.typeIndex}).value;
-		const auto predicate = kindQuery ? &asmjitTypeIdMatchesKind
-				: &asmjitTypeIsSubtype;
-		// Null passes the nullable test; otherwise the type id decides.
-		auto result = compiler.new_gp32("refTest");
-		checkError(compiler.mov(result, static_cast<uint32_t>(1)), "AsmJit ref.test initialisation failed");
-		asmjit::Label done = compiler.new_label();
-		checkError(compiler.test(reference, reference), "AsmJit ref.test null test failed");
-		checkError(compiler.jz(done), "AsmJit ref.test null branch failed");
-		checkError(compiler.mov(result, static_cast<uint32_t>(0)), "AsmJit ref.test reset failed");
-		auto typeId = compiler.new_gp32("refTestTypeId");
-		checkError(compiler.mov(typeId, asmjit::x86::dword_ptr(reference,
-				static_cast<int32_t>(WASM::GcHeader::kTypeIdOffset))),
-				"AsmJit ref.test type-id load failed");
-		asmjit::FuncSignature subtypeSignature(asmjit::CallConvId::kCDecl);
-		subtypeSignature.set_ret(asmjit::TypeId::kUInt32);
-		subtypeSignature.add_arg(asmjit::TypeId::kUIntPtr);
-		subtypeSignature.add_arg(asmjit::TypeId::kUInt32);
-		subtypeSignature.add_arg(asmjit::TypeId::kUInt32);
-		asmjit::InvokeNode* subtypeCall = nullptr;
-		checkError(compiler.invoke(asmjit::Out(subtypeCall),
-			reinterpret_cast<uint64_t>(predicate), subtypeSignature),
-			"AsmJit subtype predicate call failed");
-		subtypeCall->set_arg(0, vmContext);
-		subtypeCall->set_arg(1, typeId);
-		subtypeCall->set_arg(2, asmjit::Imm(static_cast<uint64_t>(expected)));
-		auto subtypeMatch = compiler.new_gp32("subtypeMatch");
-		subtypeCall->set_ret(0, subtypeMatch);
-		checkError(compiler.mov(result, subtypeMatch), "AsmJit ref.test result copy failed");
-		checkError(compiler.bind(done), "AsmJit ref.test label binding failed");
-		values.push_back(result);
-	}
+	void dispatchRefTest(const WASM::HeapType& arg) override { emitRefTest(arg, false); }
+	void dispatchRefTestNull(const WASM::HeapType& arg) override { emitRefTest(arg, true); }
 
 	void dispatchRefAsNonNull() override
 	{
@@ -6804,7 +6869,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		signature.set_ret(asmjit::TypeId::kVoid);
 		asmjit::InvokeNode* invoke = nullptr;
 		checkError(compiler.invoke(asmjit::Out(invoke),
-				reinterpret_cast<uint64_t>(&asmjitReportNullStructure), signature),
+				reinterpret_cast<uint64_t>(&asmjitReportNullReference), signature),
 				"AsmJit ref.as_non_null trap helper emission failed");
 		emitPendingTrapReturn();
 		checkError(compiler.bind(notNull), "AsmJit ref.as_non_null label binding failed");
