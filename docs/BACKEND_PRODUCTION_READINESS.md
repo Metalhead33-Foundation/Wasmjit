@@ -80,22 +80,25 @@ refusals and behaviour that is unacceptable in production:
 
 ### 4.1 General conformance failures
 
-The `WASMJIT_BACKEND=sljit` run now completes all 821 cases: 702 pass and 119
+The `WASMJIT_BACKEND=sljit` run now completes all 821 cases: 711 pass and 110
 fail, with no process abort or segfault. The first batch closed `func`,
 `float_memory64`, `table_fill`, the integer lane families, `br_table` arity and
 the legacy-EH rethrow path; `br_table` and the i64 bit-count family are now
-green. The remaining failures include the five-argument
-`simd_load32_lane` shape (`the SLJIT backend cannot pass 5 argument slots`),
-`simd: v128 globals`, and deterministic-NaN
-canonicalisation.
+green. The second batch closed every `simd_load*_lane` signature (including the
+five-C-argument shape by counting the hidden `v128` result buffer in the frame
+mode decision) and scalar deterministic-NaN canonicalisation. Remaining
+failures include `simd: v128 globals` and the other SIMD/string/relaxed
+families listed in `PRODUCTION_GAPS.md` §29.
 
 ### 4.2 Missing lowerings
 
-`table.fill` and the integer lane families are implemented. Still missing or
-restricted: relaxed dot product (`dispatchI16x8RelaxedDotI8x16I7x16S`), some
-shuffle/transport shapes, and any signature that needs more than four SLJIT
-argument slots (the register form refuses it; the module-wide frame form is the
-intended escape hatch).
+`table.fill`, the integer lane families and the SIMD load-lane family are
+implemented. Still missing or restricted: relaxed dot product
+(`dispatchI16x8RelaxedDotI8x16I7x16S`), `simd: v128 globals`, string
+references, and some transport shapes. A signature above the register-form
+argument ceiling is handled by the module-wide frame form; the decision now
+includes the hidden `v128` result out-buffer, which is what made the
+`simd_load32_lane` family frame-form.
 
 ### 4.3 Miscompiles and structural limits
 
@@ -108,10 +111,12 @@ crashes; the targeted SIMD and tail-call regressions are green.
 ### 4.4 Process safety
 
 The run no longer aborts, but the host-safety bar is not met yet: the remaining
-failures include unimplemented opcodes (`dispatchI64Ctz`, AsmJIT bit-count
-cases), profile conformance (deterministic NaN canonicalisation) and allocation
-failures in `imports`. A backend that can still produce wrong results is not
-production-safe regardless of how many targeted features pass.
+failures include unimplemented opcodes, SIMD/GC/SIMD-transport scripts and
+executable-memory allocation failures in `imports`. Scalar deterministic-NaN
+canonicalisation is implemented and its profile test is green; the deterministic
+profile is still not claimed for SIMD payloads. A backend that can still
+produce wrong results is not production-safe regardless of how many targeted
+features pass.
 
 **Verdict:** not production-ready. The targeted matrix is useful evidence of
 implemented slices, not a general conformance or safety claim.
@@ -120,17 +125,22 @@ implemented slices, not a general conformance or safety claim.
 
 AsmJIT is explicitly experimental, and the generic run confirms why:
 
-- the run reaches all 821 cases: 649 pass and 172 fail, with no process
+- the run reaches all 821 cases: 654 pass and 167 fail, with no process
   abort or segfault;
 - `spec: func` is now green (`100 passed / 0 failed`), including the frame-form
   function-label branches;
-- `table.fill` and the integer lane families are implemented, but several SIMD
-  scripts still report missing lane/transport opcodes (`dispatchI8x16ExtractLaneU`,
+- `table.fill`, the integer lane families, i64 bit counts and scalar
+deterministic-NaN canonicalisation are implemented; several SIMD scripts still
+  report missing lane/transport opcodes (`dispatchI8x16ExtractLaneU`,
   `dispatchI64x2ExtractLane` and others);
+- `spec: br_table` now compiles every body but AsmJIT rejects the finalised
+  program with error 53, so that script remains red;
 - the `imports` script reports executable-memory allocation failures and trap
   classification mismatches;
-- `start.7.wasm` fails with `AsmJit executable-memory allocation failed: 10`;
-- tail-call tests **segfault**.
+- `start.7.wasm` and `memory64-imports.12/13` fail with `AsmJit
+  executable-memory allocation failed: 10`;
+- the targeted tail-call tests are green, so the old blanket “tail-call tests
+  segfault” statement is no longer accurate.
 
 The backend's own README describes it as an experimental scalar subset and not
 a drop-in replacement for LibJIT; that remains accurate.

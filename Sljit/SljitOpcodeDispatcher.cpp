@@ -5,6 +5,7 @@
 #include "SljitModuleCompiler.hpp"
 
 #include "../WasmBase/WasmBackendAbi.hpp"
+#include "../WasmBase/WasmDeterminism.hpp"
 #include "../WasmBase/WasmTailTrampoline.hpp"
 #include "../WasmBase/WasmExn.hpp"
 #include "../WasmBase/wasm_atomic.hpp"
@@ -43,11 +44,10 @@ constexpr std::size_t kSlotBytes = 16;
 //! Reserved frame slots that follow the locals and precede the operand stack.
 //! Reserved frame cells: context, target, scratch, then the two-word selector
 //! block `i8x16.shuffle` passes to its adapter.
-//! SLJIT's own ceiling on a function's argument list: four entries, of which the
-//! first is the `VMContext*`. `function_check_arguments` in `sljitLir.c:924`
-//! rejects the fifth with a hard `return 0`, and letting it do so aborts the
-//! process rather than failing the compile.
-constexpr sljit_s32 kArgumentSlotCeiling = 4;
+//! SLJIT's own ceiling on a function's argument list is
+//! `kRegisterArgumentCeiling`; `function_check_arguments` in `sljitLir.c:924`
+//! rejects the next entry with a hard `return 0`, and letting it do so aborts
+//! the process rather than failing the compile.
 
 constexpr std::size_t kReservedSlots = 10; //!< context, target, scratch, four parked argument registers, the result buffer, the frame, and the exception being routed.
 
@@ -426,8 +426,25 @@ extern "C" double sljitF64Max(double a, double b) noexcept
 }
 
 extern "C" float sljitF32Sqrt(float x) noexcept { return std::sqrt(x); }
-extern "C" float sljitF32Ceil(float x) noexcept { return std::ceil(x); }
-extern "C" float sljitF32Floor(float x) noexcept { return std::floor(x); }
+
+//! `ceil` and `floor` must quiet a signalling NaN. The host libm is allowed to
+//! preserve it (glibc does), but the spec's result class is an *arithmetic*
+//! NaN, which requires the quiet bit (docs/proposals/PROFILES.md PR-3; the
+//! `f32`/`f64` scripts assert `nan:arithmetic`). Explicitly returning a quiet
+//! NaN also makes the result independent of the host's rounding mode.
+extern "C" float sljitF32Ceil(float x) noexcept
+{
+	if (std::isnan(x))
+		return std::numeric_limits<float>::quiet_NaN();
+	return std::ceil(x);
+}
+
+extern "C" float sljitF32Floor(float x) noexcept
+{
+	if (std::isnan(x))
+		return std::numeric_limits<float>::quiet_NaN();
+	return std::floor(x);
+}
 
 extern "C" float sljitF32Trunc(float x) noexcept
 {
@@ -444,8 +461,20 @@ extern "C" float sljitF32Nearest(float x) noexcept
 }
 
 extern "C" double sljitF64Sqrt(double x) noexcept { return std::sqrt(x); }
-extern "C" double sljitF64Ceil(double x) noexcept { return std::ceil(x); }
-extern "C" double sljitF64Floor(double x) noexcept { return std::floor(x); }
+
+extern "C" double sljitF64Ceil(double x) noexcept
+{
+	if (std::isnan(x))
+		return std::numeric_limits<double>::quiet_NaN();
+	return std::ceil(x);
+}
+
+extern "C" double sljitF64Floor(double x) noexcept
+{
+	if (std::isnan(x))
+		return std::numeric_limits<double>::quiet_NaN();
+	return std::floor(x);
+}
 
 extern "C" double sljitF64Trunc(double x) noexcept
 {
@@ -459,6 +488,27 @@ extern "C" double sljitF64Nearest(double x) noexcept
 	if (std::isnan(x))
 		return std::numeric_limits<double>::quiet_NaN();
 	return std::nearbyint(x);
+}
+
+//! Canonicalise an f32 NaN by its bit pattern. Taking and returning the bits
+//! keeps every non-NaN value exact (including -0) and avoids a float move that
+//! could quiet the very signalling NaN being classified.
+extern "C" std::uint32_t sljitCanonicalF32Bits(std::uint32_t bits) noexcept
+{
+	const std::uint32_t magnitude = bits & 0x7fffffffu;
+	if ((magnitude & 0x7f800000u) == 0x7f800000u && (magnitude & 0x007fffffu) != 0)
+		return WASM::kCanonicalF32Bits;
+	return bits;
+}
+
+//! The f64 counterpart of `sljitCanonicalF32Bits`.
+extern "C" std::uint64_t sljitCanonicalF64Bits(std::uint64_t bits) noexcept
+{
+	const std::uint64_t magnitude = bits & 0x7fffffffffffffffull;
+	if ((magnitude & 0x7ff0000000000000ull) == 0x7ff0000000000000ull
+			&& (magnitude & 0x000fffffffffffffull) != 0)
+		return WASM::kCanonicalF64Bits;
+	return bits;
 }
 
 //! The spec splits an unusable truncation into NaN and range failures.
@@ -1114,7 +1164,8 @@ sljit_s32 callArgTypes(const WASM::FuncType& type, WASM::ValueTypeCode resultKin
 
 OpcodeDispatcher::OpcodeDispatcher(const WASM::Module& module, const WASM::FuncType& funcType,
 		const WASM::FunctionBody& body, std::uint32_t functionIndex, bool frameCallAbi,
-		const std::vector<WASM::TagId>& tagIds, WASM::ModuleInstanceInternals& internals)
+		const std::vector<WASM::TagId>& tagIds, WASM::ModuleInstanceInternals& internals,
+		WASM::ProfileConfig profileConfig)
 	: module_(module)
 	, funcType_(funcType)
 	, body_(body)
@@ -1122,6 +1173,7 @@ OpcodeDispatcher::OpcodeDispatcher(const WASM::Module& module, const WASM::FuncT
 	, functionIndex_(functionIndex)
 	, internals_(internals)
 	, frameAbi_(frameCallAbi)
+	, deterministicFloats_(profileConfig.deterministic())
 {
 	const std::string* name = module.findName(WASM::NameKind::Function, functionIndex);
 	if (name != nullptr)
@@ -1355,11 +1407,11 @@ bool OpcodeDispatcher::beginFunction()
 	// count would trip SLJIT's own assertion and abort the whole process, which
 	// would take down every other module in the run
 	// (docs/ABI_REFACTOR_STUDY.md §35, §36).
-	if (!frameAbi_ && savedCount > kArgumentSlotCeiling) {
+	if (!frameAbi_ && savedCount > static_cast<sljit_s32>(kRegisterArgumentCeiling)) {
 		unsupportedReason_ = "the SLJIT backend cannot pass "
 			+ std::to_string(static_cast<unsigned>(savedCount))
 			+ " argument slots: the target has only "
-			+ std::to_string(kArgumentSlotCeiling)
+			+ std::to_string(kRegisterArgumentCeiling)
 			+ ", so this signature needs fewer vector parameters";
 		return false;
 	}
@@ -1712,10 +1764,18 @@ void OpcodeDispatcher::emitReturnValue()
 		// order, 8 bytes per scalar slot and 16 per vector, then the function returns
 		// void. This must precede the `resultWidth_ == 0` test, which is 0 for a
 		// multi-result signature.
+		const std::size_t resultCount = resultKinds_.size();
+		// Canonicalise first: the helper call clobbers R2, so it must not sit
+		// between loading the frame pointer and storing into it.
+		for (std::size_t i = 0; i < resultCount; ++i) {
+			if (resultKinds_[i] == WASM::ValueTypeCode::F32
+					|| resultKinds_[i] == WASM::ValueTypeCode::F64)
+				canonicalizeSlot(stackWidths_.size() - resultCount + i,
+						resultWidths_[i]);
+		}
 		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R2, 0, SLJIT_MEM1(SLJIT_SP),
 				frameSlotOffset()));
 		std::uint32_t offset = frameResultOffset_;
-		const std::size_t resultCount = resultKinds_.size();
 		for (std::size_t i = 0; i < resultCount; ++i) {
 			const std::size_t index = stackWidths_.size() - resultCount + i;
 			const int width = resultWidths_[i];
@@ -1744,6 +1804,9 @@ void OpcodeDispatcher::emitReturnValue()
 		return;
 	}
 	requireStack(1);
+	if (resultKind_ == WASM::ValueTypeCode::F32
+			|| resultKind_ == WASM::ValueTypeCode::F64)
+		canonicalizeSlot(stackWidths_.size() - 1, resultWidth_);
 	if (frameAbi_) {
 		// Frame form: the single result is written into the caller's frame at the
 		// result block, then the function returns void.
@@ -3663,6 +3726,11 @@ void OpcodeDispatcher::emitMemoryStoreFloat(const WASM::MemArg& arg, int width)
 	pop();
 	if (measureOnly_)
 		return;
+	// Memory is an observability point: canonicalise a deterministic NaN before
+	// the bit-preserving store (docs/proposals/PROFILES.md PR-3). Do this before
+	// `emitCheckedMemoryAddress`: that helper leaves the address in R0, and
+	// `canonicalizeSlot` calls a C helper, which clobbers every scratch register.
+	canonicalizeSlot(stackWidths_.size() + 1, width);
 	emitCheckedMemoryAddress(arg, static_cast<std::uint32_t>(width), stackWidths_.size());
 	loadSlot(SLJIT_R1, stackWidths_.size() + 1, width);
 	// Bit-preserving store, for the same reason as the load path.
@@ -3704,16 +3772,30 @@ void OpcodeDispatcher::emitFloatToInt(sljit_sw address, int sourceWidth,
 	stackWidths_.back() = resultWidth;
 }
 
-void OpcodeDispatcher::emitReinterpret(int width)
+void OpcodeDispatcher::emitReinterpret(int width, bool canonicalizeFloat)
 {
 	if (!reachable_)
 		return;
 	requireStack(1);
 	if (measureOnly_)
 		return;
+	if (canonicalizeFloat)
+		canonicalizeSlot(stackWidths_.size() - 1, width);
 	loadSlot(SLJIT_R0, stackWidths_.size() - 1, width);
 	storeSlot(SLJIT_R0, stackWidths_.size() - 1, width);
 	stackWidths_.back() = width;
+}
+
+void OpcodeDispatcher::canonicalizeSlot(std::size_t depth, int width)
+{
+	if (!deterministicFloats_ || measureOnly_)
+		return;
+	loadSlot(SLJIT_R0, depth, width);
+	if (width == 4)
+		emitHelper(SLJIT_ARGS1(32, 32), &sljitCanonicalF32Bits);
+	else
+		emitHelper(SLJIT_ARGS1(W, W), &sljitCanonicalF64Bits);
+	storeSlot(SLJIT_R0, depth, width);
 }
 
 
@@ -3891,10 +3973,10 @@ void OpcodeDispatcher::dispatchI64TruncSatF64S()
 void OpcodeDispatcher::dispatchI64TruncSatF64U()
 { emitFloatToInt(codeAddress(&sljitI64TruncSatF64U), 8, 8); }
 
-void OpcodeDispatcher::dispatchI32ReinterpretF32() { emitReinterpret(4); }
-void OpcodeDispatcher::dispatchI64ReinterpretF64() { emitReinterpret(8); }
-void OpcodeDispatcher::dispatchF32ReinterpretI32() { emitReinterpret(4); }
-void OpcodeDispatcher::dispatchF64ReinterpretI64() { emitReinterpret(8); }
+void OpcodeDispatcher::dispatchI32ReinterpretF32() { emitReinterpret(4, true); }
+void OpcodeDispatcher::dispatchI64ReinterpretF64() { emitReinterpret(8, true); }
+void OpcodeDispatcher::dispatchF32ReinterpretI32() { emitReinterpret(4, false); }
+void OpcodeDispatcher::dispatchF64ReinterpretI64() { emitReinterpret(8, false); }
 
 void OpcodeDispatcher::dispatchF32Load(WASM::MemArg arg) { emitMemoryLoadFloat(arg, 4); }
 void OpcodeDispatcher::dispatchF64Load(WASM::MemArg arg) { emitMemoryLoadFloat(arg, 8); }
@@ -6061,6 +6143,12 @@ void OpcodeDispatcher::dispatchGlobalSet(WASM::GlobalIdx arg)
 	if (measureOnly_)
 		return;
 	const int width = widthOf(type.contentType);
+	// An exported global is host-observable (docs/proposals/PROFILES.md PR-3).
+	// Canonicalise before walking the `VMContext` in R0, because the helper call
+	// clobbers every scratch register.
+	if (type.contentType.opcode == WASM::ValueTypeCode::F32
+			|| type.contentType.opcode == WASM::ValueTypeCode::F64)
+		canonicalizeSlot(stackWidths_.size(), width);
 	loadContext(SLJIT_R0);
 	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0, SLJIT_MEM1(SLJIT_R0),
 			static_cast<sljit_sw>(offsetof(WASM::VMContext, globals))));

@@ -11,6 +11,30 @@
 #include <string>
 #include <utility>
 
+namespace {
+
+//! Whether a signature cannot be expressed by the SLJIT register form.
+//!
+//! The count is of C argument entries, not Wasm parameters: `VMContext*` is
+//! always present, a `v128` parameter is two words, and a `v128` result adds a
+//! hidden trailing out-buffer pointer. The latter is easy to miss because the
+//! Wasm signature does not spell it, but the prologue and every caller both
+//! declare it (docs/backends/STAGING_CALL_ABI.md).
+bool signatureNeedsFrame(const WASM::FuncType& type)
+{
+	std::uint32_t entries = 1; // VMContext*
+	for (const WASM::StorageType& parameter : type.params)
+		entries += WASM::argSlotCount(WASM::valueKindOf(parameter.val.opcode));
+	if (type.results.size() > 1)
+		return true; // results travel in the caller's result block
+	if (!type.results.empty()
+			&& type.results.front().val.opcode == WASM::ValueTypeCode::V128)
+		++entries; // hidden result out-buffer
+	return entries > Sljit::kRegisterArgumentCeiling;
+}
+
+} // namespace
+
 namespace Sljit {
 
 WASM::Callable* ModuleCompiler::resolveCallable(WASM::VMContext* vm,
@@ -91,22 +115,18 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM
 {
 	unsupportedFunctions_.clear();
 
-	// A module compiles entirely in one form: if any signature needs more argument
-	// slots than SLJIT's register form allows, the whole module uses the staging
-	// frame (docs/backends/STAGING_CALL_ABI.md). SLJIT's own ceiling is four
-	// argument entries -- `function_check_arguments`, sljitLir.c:924 -- because a
-	// declared argument must own a saved register.
+	// A module compiles entirely in one form: if any *defined* function's
+	// signature needs more C argument entries than SLJIT's register form allows,
+	// the whole module uses the staging frame
+	// (docs/backends/STAGING_CALL_ABI.md). Imported signatures deliberately do
+	// not choose the module ABI: a host import is a native C function with its
+	// own register-form entry, and a frame-mode caller must not invoke it as if
+	// it took a staging frame. The import call path is chosen when the import is
+	// resolved, not by this module-wide flag.
 	bool frameMode = false;
-	for (const uint32_t typeIdx : module.internalFunctionTypeIndices) {
-		const WASM::FuncType type = module.funcTypeAt(typeIdx);
-		std::uint32_t slots = 1;
-		for (const auto& parameter : type.params)
-			slots += WASM::argSlotCount(WASM::valueKindOf(parameter.val.opcode));
-		// A multi-result signature is also frame-form: the results travel in the
-		// caller's result block, not the single C return register.
-		if (slots > 4 || type.results.size() > 1)
+	for (const std::uint32_t typeIdx : module.internalFunctionTypeIndices)
+		if (signatureNeedsFrame(module.funcTypeAt(typeIdx)))
 			frameMode = true;
-	}
 	instance.setFrameCallAbi(frameMode);
 
 	for (std::size_t i = 0; i < module.functionBodies.size(); ++i) {
@@ -118,7 +138,7 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM
 				static_cast<uint32_t>(module.importFunctions.size() + i);
 
 		OpcodeDispatcher dispatcher(module, funcType, module.functionBodies[i], functionIndex,
-				frameMode, internals.tagIds, internals);
+				frameMode, internals.tagIds, internals, profile());
 		void* entry = nullptr;
 		if (!dispatcher.compile(entry)) {
 			// No partial modules: an instantiable module must have every function

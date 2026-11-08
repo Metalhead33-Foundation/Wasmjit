@@ -1069,21 +1069,24 @@ uses a rejected artifact and confirms the runtime remains usable.
 | Backend | Verdict | Measured evidence |
 |---|---|---|
 | LibJIT | **Production-ready within its declared envelope** | default suite 22,442 assertions / 821 cases, green; x86-64 Linux only |
-| SLJIT | **Not production-ready** | `WASMJIT_BACKEND=sljit`: 821 cases, 702 passed, 119 failed; no crash |
-| AsmJIT | **Not production-ready** | `WASMJIT_BACKEND=asmjit`: 821 cases, 649 passed, 172 failed; no crash |
+| SLJIT | **Not production-ready** | `WASMJIT_BACKEND=sljit`: 821 cases, 711 passed, 110 failed; no crash |
+| AsmJIT | **Not production-ready** | `WASMJIT_BACKEND=asmjit`: 821 cases, 654 passed, 167 failed; no crash |
 
 The blockers are not just “unimplemented opcodes”:
 
 * **SLJIT:** `func`, `float_memory64`, `table.fill`, the integer lane families,
-  `br_table` arity, the i64 bit-count family, calls in dead code and the
-  legacy-EH rethrow path are fixed. Remaining failures include the five-slot
-  `simd_load32_lane` signature, `simd: v128 globals`, and deterministic-NaN
-  canonicalisation. The legacy-EH rewrite itself is frontend desugaring, not a
-  backend feature.
+  `br_table` arity, the i64 bit-count family, calls in dead code, the
+  `simd_load*_lane` family and scalar deterministic-NaN canonicalisation are
+  fixed. The lane fix was a mode-selection bug: the C argument count must
+  include the hidden `v128` result out-buffer. Remaining failures include
+  `simd: v128 globals`, stringref/relaxed-SIMD and other transport families.
+  The legacy-EH rewrite itself is frontend desugaring, not a backend feature.
 * **AsmJIT:** `spec: func` is green, including frame-form function-label
-  branches and the multi-result tail-call fixture. Remaining failures include
-  i64 bit-count lowering, several SIMD lane/transport opcodes, deterministic-NaN
-  canonicalisation and `imports` allocation/trap cases.
+  branches and the multi-result tail-call fixture. i64 bit counts and scalar
+  deterministic-NaN canonicalisation are implemented. `spec: br_table` now
+  compiles every function and fails at AsmJIT finalisation (error 53), not in a
+  lowering. Remaining failures include that finalisation, several SIMD
+  lane/transport opcodes and `imports` allocation/trap cases.
 
 Promotion requires the full backend-selected suite to finish green (no abort,
 no segfault), the strict negative sweep to pass, the sanitizer run to be recorded,

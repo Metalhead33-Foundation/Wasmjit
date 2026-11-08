@@ -3,6 +3,7 @@
 #include "../WasmBase/WasmOpcodeDispatcher.hpp"
 #include "../WasmBase/WasmSafety.hpp"
 #include "../WasmBase/WasmBackendAbi.hpp"
+#include "../WasmBase/WasmDeterminism.hpp"
 #include "../WasmBase/WasmExn.hpp"
 #include "../WasmBase/wasm_atomic.hpp"
 #include "../WasmBase/WasmStack.hpp"
@@ -191,8 +192,23 @@ extern "C" double asmjitF64Max(double a, double b) noexcept
 }
 
 extern "C" float asmjitF32Sqrt(float x) noexcept { return std::sqrt(x); }
-extern "C" float asmjitF32Ceil(float x) noexcept { return std::ceil(x); }
-extern "C" float asmjitF32Floor(float x) noexcept { return std::floor(x); }
+//! `ceil` and `floor` must return an *arithmetic* NaN for a signalling input:
+//! the host libm may preserve the sNaN bit pattern, but the spec requires the
+//! quiet bit. Returning a quiet NaN explicitly also pins the result across
+//! hosts and rounding modes (docs/proposals/PROFILES.md PR-3).
+extern "C" float asmjitF32Ceil(float x) noexcept
+{
+	if (std::isnan(x))
+		return std::numeric_limits<float>::quiet_NaN();
+	return std::ceil(x);
+}
+
+extern "C" float asmjitF32Floor(float x) noexcept
+{
+	if (std::isnan(x))
+		return std::numeric_limits<float>::quiet_NaN();
+	return std::floor(x);
+}
 
 extern "C" float asmjitF32Trunc(float x) noexcept
 {
@@ -209,8 +225,19 @@ extern "C" float asmjitF32Nearest(float x) noexcept
 }
 
 extern "C" double asmjitF64Sqrt(double x) noexcept { return std::sqrt(x); }
-extern "C" double asmjitF64Ceil(double x) noexcept { return std::ceil(x); }
-extern "C" double asmjitF64Floor(double x) noexcept { return std::floor(x); }
+extern "C" double asmjitF64Ceil(double x) noexcept
+{
+	if (std::isnan(x))
+		return std::numeric_limits<double>::quiet_NaN();
+	return std::ceil(x);
+}
+
+extern "C" double asmjitF64Floor(double x) noexcept
+{
+	if (std::isnan(x))
+		return std::numeric_limits<double>::quiet_NaN();
+	return std::floor(x);
+}
 
 extern "C" double asmjitF64Trunc(double x) noexcept
 {
@@ -224,6 +251,26 @@ extern "C" double asmjitF64Nearest(double x) noexcept
 	if (std::isnan(x))
 		return std::numeric_limits<double>::quiet_NaN();
 	return std::nearbyint(x);
+}
+
+//! Canonicalise an f32 NaN by bit pattern, preserving every non-NaN value
+//! exactly (docs/proposals/PROFILES.md PR-3).
+extern "C" uint32_t asmjitCanonicalF32Bits(uint32_t bits) noexcept
+{
+	const uint32_t magnitude = bits & 0x7fffffffu;
+	if ((magnitude & 0x7f800000u) == 0x7f800000u && (magnitude & 0x007fffffu) != 0)
+		return WASM::kCanonicalF32Bits;
+	return bits;
+}
+
+//! The f64 counterpart of `asmjitCanonicalF32Bits`.
+extern "C" uint64_t asmjitCanonicalF64Bits(uint64_t bits) noexcept
+{
+	const uint64_t magnitude = bits & 0x7fffffffffffffffull;
+	if ((magnitude & 0x7ff0000000000000ull) == 0x7ff0000000000000ull
+			&& (magnitude & 0x000fffffffffffffull) != 0)
+		return WASM::kCanonicalF64Bits;
+	return bits;
 }
 
 //! The spec splits an unusable truncation into NaN and range failures.
@@ -453,6 +500,11 @@ uint32_t asmjitI32Popcnt(uint32_t value) noexcept
 	value += value >> 8;
 	value += value >> 16;
 	return value & 0x3Fu;
+}
+
+uint64_t asmjitI64Popcnt(uint64_t value) noexcept
+{
+	return static_cast<uint64_t>(__builtin_popcountll(value));
 }
 
 int32_t asmjitI32DivS(int32_t lhs, int32_t rhs) noexcept
@@ -1001,9 +1053,10 @@ public:
 			const WASM::Module& module, WASM::ModuleInstanceInternals& internals,
 			const std::vector<asmjit::FuncNode*>& functions,
 			const std::vector<std::unique_ptr<asmjit::FuncSignature>>& signatures,
-			uint32_t functionIndex)
+			uint32_t functionIndex, bool deterministicFloats)
 		: compiler(compiler), module(module), internals(internals),
-		  functions(functions), signatures(signatures), functionIndex(functionIndex)
+		  functions(functions), signatures(signatures), functionIndex(functionIndex),
+		  deterministicFloats(deterministicFloats)
 	{
 		WASM::PreparedFunctionStack stack;
 		stack.prepare(type, body);
@@ -1180,8 +1233,12 @@ public:
 		readCode(stream);
 
 		if (resultCount == 0) {
-			if (!values.empty())
+			if (!armTerminated && !values.empty())
 				throw std::runtime_error("AsmJit function ended with an unexpected operand stack value");
+			// A function whose body ended in dead code carries whatever
+			// placeholders the dead structured blocks synthesized; there is no
+			// live path to observe them. Drop them and emit the void return.
+			values.clear();
 			checkError(compiler.ret(), "AsmJit void function return emission failed");
 		} else {
 			const std::size_t expectedResults = frameMode ? resultCount : 1u;
@@ -1213,8 +1270,10 @@ public:
 						offset += 16;
 						continue;
 					}
+					const asmjit::x86::Gp stored = isFloatKind(code)
+							? canonicalizeFloatBits(value, kindWidth(code)) : value;
 					checkError(compiler.mov(
-							asmjit::x86::Mem(destination, offset, value.size()), value),
+							asmjit::x86::Mem(destination, offset, stored.size()), stored),
 							"AsmJit frame result store failed");
 					offset += 8;
 				}
@@ -1222,8 +1281,9 @@ public:
 			} else if (frameMode) {
 				emitFrameReturnValue(values.back());
 			} else if (isFloatKind(resultType)) {
-				checkError(compiler.ret(
-						materializeFloat(values.back(), kindWidth(resultType))),
+				const int width = kindWidth(resultType);
+				checkError(compiler.ret(materializeFloat(
+						canonicalizeFloatBits(values.back(), width), width)),
 						"AsmJit float function return emission failed");
 			} else if (bufferedVectorResult) {
 				// The value is the address of the vector 16-byte buffer; copy it into the
@@ -1277,6 +1337,8 @@ protected:
 
 	void dispatchLocalSet(WASM::LocalIdx index) override
 	{
+		if (inDeadCode() && values.empty())
+			return;
 		const size_t i = static_cast<size_t>(index);
 		if (i >= locals.size() || values.empty())
 			throw std::runtime_error("AsmJit local.set stack/index underflow");
@@ -1291,6 +1353,8 @@ protected:
 
 	void dispatchLocalTee(WASM::LocalIdx index) override
 	{
+		if (inDeadCode() && values.empty())
+			return;
 		const size_t i = static_cast<size_t>(index);
 		if (i >= locals.size() || values.empty())
 			throw std::runtime_error("AsmJit local.tee stack/index underflow");
@@ -1324,6 +1388,10 @@ protected:
 
 	void dispatchDrop() override
 	{
+		// Polymorphic dead code after a terminator has no operand stack to
+		// consume; validation has already checked the shape of the live path.
+		if (inDeadCode() && values.empty())
+			return;
 		if (values.empty())
 			throw std::runtime_error("AsmJit drop operand stack underflow");
 		values.pop_back();
@@ -1464,6 +1532,15 @@ protected:
 
 	void dispatchIf(const WASM::BlockType& type) override
 	{
+		if (inDeadCode() && values.empty()) {
+			// Truly dead `if`: still open the structured frame so `else`/`end`
+			// pair up, but there is no condition to test and no branch to emit.
+			// If values *are* present, this is a catch-entry path whose linear
+			// predecessor terminated; it is still live and must be lowered.
+			pushControlFrame(ControlKind::If, type);
+			controls.back().alternate = compiler.new_label();
+			return;
+		}
 		if (values.empty())
 			throw std::runtime_error("AsmJit if condition stack underflow");
 		auto condition = values.back();
@@ -1522,6 +1599,8 @@ protected:
 
 	void dispatchBrIf(WASM::LabelIdx depth) override
 	{
+		if (inDeadCode() && values.empty())
+			return;
 		if (values.empty())
 			throw std::runtime_error("AsmJit br_if condition stack underflow");
 		if (depth > controls.size())
@@ -1529,8 +1608,10 @@ protected:
 		const auto condition = values.back();
 		values.pop_back();
 		if (depth == controls.size()) {
-			if (values.size() != resultCount)
+			if (values.size() != resultCount) {
+				if (inDeadCode()) return;
 				throw std::runtime_error("AsmJit conditional function branch has the wrong result arity");
+			}
 			auto skip = compiler.new_label();
 			checkError(compiler.test(condition, condition), "AsmJit conditional function branch test failed");
 			checkError(compiler.jz(skip), "AsmJit conditional function branch skip failed");
@@ -1541,8 +1622,10 @@ protected:
 		ControlFrame& target = controls[controls.size() - 1 - depth];
 		const bool loopTarget = target.kind == ControlKind::Loop;
 		const size_t branchValues = loopTarget ? target.paramCount : target.resultCount;
-		if (values.size() != target.stackHeight + branchValues)
+		if (values.size() != target.stackHeight + branchValues) {
+			if (inDeadCode()) return;
 			throw std::runtime_error("AsmJit br_if operand stack does not match target label signature");
+		}
 		const asmjit::Label label = loopTarget ? target.begin : target.end;
 		if (branchValues != 0) {
 			auto skip = compiler.new_label();
@@ -1567,11 +1650,15 @@ protected:
 
 	void dispatchBr(WASM::LabelIdx depth) override
 	{
+		if (inDeadCode() && values.empty())
+			return;
 		if (depth > controls.size())
 			throw std::runtime_error("AsmJit br label depth is out of range");
 		if (depth == controls.size()) {
-			if (values.size() != resultCount)
+			if (values.size() != resultCount) {
+				if (inDeadCode()) return;
 				throw std::runtime_error("AsmJit function branch has the wrong result arity");
+			}
 			emitFunctionReturnValues();
 			armTerminated = true;
 			return;
@@ -1579,8 +1666,10 @@ protected:
 		ControlFrame& target = controls[controls.size() - 1 - depth];
 		const bool loopTarget = target.kind == ControlKind::Loop;
 		const size_t branchValues = loopTarget ? target.paramCount : target.resultCount;
-		if (values.size() != target.stackHeight + branchValues)
+		if (values.size() != target.stackHeight + branchValues) {
+			if (inDeadCode()) return;
 			throw std::runtime_error("AsmJit br operand stack does not match target label signature");
+		}
 		if (branchValues != 0) {
 			const size_t first = values.size() - branchValues;
 			const std::vector<asmjit::x86::Gp>& destinations = loopTarget ? target.params : target.results;
@@ -1598,56 +1687,59 @@ protected:
 	}
 	void dispatchBrTable(std::vector<WASM::LabelIdx>&& depths, WASM::LabelIdx defaultDepth) override
 	{
+		if (inDeadCode() && values.empty())
+			return;
 		if (values.empty())
 			throw std::runtime_error("AsmJit br_table selector stack underflow");
 		const auto selector = values.back();
 		values.pop_back();
-		size_t expectedStackHeight = 0;
 		size_t expectedBranchValues = 0;
-		std::vector<WASM::ValueTypeCode> expectedBranchTypes;
 		bool first = true;
-		auto targetTypes = [&](WASM::LabelIdx depth) -> std::vector<WASM::ValueTypeCode> {
-			if (depth == controls.size())
-				return resultTypes;
-			const ControlFrame& target = controls[controls.size() - 1 - depth];
-			if (target.kind == ControlKind::Loop)
-				return target.paramTypes;
-			return target.resultTypes;
-		};
 		auto validateTarget = [&](WASM::LabelIdx depth) {
 			if (depth > controls.size())
 				throw std::runtime_error("AsmJit br_table label depth is out of range");
-			size_t stackHeight = 0;
 			size_t branchValues = resultCount;
 			if (depth < controls.size()) {
 				const ControlFrame& target = controls[controls.size() - 1 - depth];
-				stackHeight = target.stackHeight;
 				branchValues = target.kind == ControlKind::Loop
 						? target.paramCount : target.resultCount;
 			}
-			const std::vector<WASM::ValueTypeCode> types = targetTypes(depth);
 			if (first) {
-				expectedStackHeight = stackHeight;
 				expectedBranchValues = branchValues;
-				expectedBranchTypes = types;
 				first = false;
-			} else if (stackHeight != expectedStackHeight || branchValues != expectedBranchValues
-					|| types != expectedBranchTypes) {
-				throw std::runtime_error("AsmJit br_table targets require identical stack heights and label signatures");
+			} else if (branchValues != expectedBranchValues) {
+				// The labels must agree on arity, but not on identity: their
+				// nesting can differ, and a reference target may accept a
+				// subtype (`(ref null $t)` into `funcref`). Each target's own
+				// types drive its transfer below, exactly as the validator
+				// checked them. The branch discards everything above the
+				// *taken* target's height, so equal stack heights are not
+				// required either.
+				throw std::runtime_error("AsmJit br_table targets require identical arity");
 			}
 		};
 		for (WASM::LabelIdx depth : depths)
 			validateTarget(depth);
 		validateTarget(defaultDepth);
-		if (values.size() != expectedStackHeight + expectedBranchValues)
+		// A branch consumes its label's arity values and discards everything
+		// above the target's stack height; extra live values below the branch
+		// operands are therefore legal. Only an underflow is a mismatch.
+		if (values.size() < expectedBranchValues) {
+			if (inDeadCode()) return;
 			throw std::runtime_error("AsmJit br_table operand stack does not match its target labels");
+		}
 		auto emitTarget = [&](WASM::LabelIdx depth) {
 			if (depth == controls.size()) {
 				// Every case still needs the same operand stack after this target.
-				// `dispatchReturn` consumes it, so restore the copy for the next case.
+				// `dispatchReturn` consumes it and marks the arm terminated, so
+				// restore both for the next case; otherwise its dead-code guard
+				// would suppress every return after the first.
 				const auto saved = values;
+				const bool savedTerminated = armTerminated;
+				armTerminated = false;
 				dispatchReturn();
 				values = saved;
+				armTerminated = savedTerminated;
 				return;
 			}
 			ControlFrame& target = controls[controls.size() - 1 - depth];
@@ -1684,6 +1776,8 @@ protected:
 
 	void dispatchReturnCall(WASM::FuncIdx index) override
 	{
+		if (inDeadCode() && values.empty())
+			return;
 		armTerminated = true;
 		const size_t importedCount = module.importFunctions.size();
 		const size_t totalCount = importedCount + module.internalFunctionTypeIndices.size();
@@ -1772,6 +1866,8 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 
 	void dispatchReturnCallIndirect(WASM::TypeIdx typeIndex, WASM::TableIdx tableIndex) override
 	{
+		if (inDeadCode() && values.empty())
+			return;
 		armTerminated = true;
 		const WASM::FuncType calledType = module.funcTypeAt(typeIndex);
 		if (values.size() != calledType.params.size() + 1)
@@ -2094,7 +2190,11 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 
 	void dispatchCallRef(WASM::TypeIdx typeIndex) override
 	{
+		if (inDeadCode() && values.empty())
+			return;
 		const WASM::FuncType calledType = module.funcTypeAt(typeIndex);
+		if (inDeadCode() && values.size() < calledType.params.size() + 1)
+			return;
 		if (!frameMode && calledType.results.size() > 1)
 			throw std::runtime_error("AsmJit register-form call_ref supports at most one result");
 		if (!frameMode) {
@@ -2118,6 +2218,8 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 
 	void dispatchReturnCallRef(WASM::TypeIdx typeIndex) override
 	{
+		if (inDeadCode() && values.empty())
+			return;
 		armTerminated = true;
 		const WASM::FuncType calledType = module.funcTypeAt(typeIndex);
 		if (values.size() != calledType.params.size() + 1)
@@ -2153,13 +2255,19 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 
 	void dispatchCallIndirect(WASM::TypeIdx typeIndex, WASM::TableIdx tableIndex) override
 	{
+		if (inDeadCode() && values.empty())
+			return;
 		const WASM::FuncType calledType = module.funcTypeAt(typeIndex);
+		if (inDeadCode() && values.size() < calledType.params.size() + 1)
+			return;
 		const ResolvedIndirect resolved = resolveIndirectTarget(typeIndex, tableIndex);
 		emitIndirectInvocation(resolved, calledType, typeIndex);
 	}
 
 	void dispatchCall(WASM::FuncIdx index) override
 	{
+		if (inDeadCode() && values.empty())
+			return;
 		const size_t importedCount = module.importFunctions.size();
 		const size_t totalCount = importedCount + module.internalFunctionTypeIndices.size();
 		if (index >= totalCount)
@@ -2184,6 +2292,8 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 		if (typeIndex >= signatures.size() || !signatures[typeIndex])
 			throw std::runtime_error("AsmJit call references an unavailable function signature");
 		const WASM::FuncType calledType = module.funcTypeAt(typeIndex);
+		if (inDeadCode() && values.size() < calledType.params.size())
+			return;
 		if (calledType.results.size() > 1)
 			throw std::runtime_error("AsmJit calls currently support at most one result");
 		if (!frameMode) {
@@ -2433,7 +2543,11 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 	void emitFrameReturnValue(const asmjit::x86::Gp& value)
 	{
 		// Staging-frame ABI: the result goes into the caller's result block and the
-		// signature returns void.
+		// signature returns void. A scalar float becomes host-observable here, so
+		// the deterministic profile canonicalises it first
+		// (docs/proposals/PROFILES.md PR-3).
+		const asmjit::x86::Gp stored = isFloatKind(resultType)
+				? canonicalizeFloatBits(value, kindWidth(resultType)) : value;
 		asmjit::x86::Gp destination = compiler.new_gp_ptr("frameResultAddress");
 		checkError(compiler.lea(destination,
 				asmjit::x86::Mem(framePointer, frameResultOffset)),
@@ -2441,7 +2555,7 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 		if (resultType == WASM::ValueTypeCode::V128) {
 			for (int word = 0; word < 2; ++word) {
 				auto bits = compiler.new_gp64("frameResultWord");
-				checkError(compiler.mov(bits, asmjit::x86::qword_ptr(value, word * 8)),
+				checkError(compiler.mov(bits, asmjit::x86::qword_ptr(stored, word * 8)),
 						"AsmJit frame vector result load failed");
 				checkError(compiler.mov(
 						asmjit::x86::qword_ptr(destination, word * 8), bits),
@@ -2449,7 +2563,7 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 			}
 		} else {
 			checkError(compiler.mov(
-					asmjit::x86::Mem(destination, 0, value.size()), value),
+					asmjit::x86::Mem(destination, 0, stored.size()), stored),
 					"AsmJit frame result store failed");
 		}
 		checkError(compiler.ret(), "AsmJit frame result return failed");
@@ -6316,9 +6430,21 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 	void dispatchI64Extend16S() override { emitI64SignExtend(16); }
 	void dispatchI64Extend32S() override { emitI64SignExtend(32); }
 
-	void dispatchI32Clz() override { emitBitCount(BitCountOp::LeadingZeros); }
-	void dispatchI32Ctz() override { emitBitCount(BitCountOp::TrailingZeros); }
-	void dispatchI32Popcnt() override { emitUnaryCall(&asmjitI32Popcnt, "i32.popcnt"); }
+	void dispatchI32Clz() override
+	{
+		if (inDeadCode()) return; // polymorphic dead code after br/return
+		emitBitCount(BitCountOp::LeadingZeros);
+	}
+	void dispatchI32Ctz() override
+	{
+		if (inDeadCode()) return;
+		emitBitCount(BitCountOp::TrailingZeros);
+	}
+	void dispatchI32Popcnt() override
+	{
+		if (inDeadCode()) return;
+		emitUnaryCall(&asmjitI32Popcnt, "i32.popcnt");
+	}
 	void dispatchI32DivS() override { emitCheckedBinaryCall(&asmjitI32DivS, "i32.div_s"); }
 	void dispatchI32DivU() override { emitCheckedBinaryCall(&asmjitI32DivU, "i32.div_u"); }
 	void dispatchI32RemS() override { emitCheckedBinaryCall(&asmjitI32RemS, "i32.rem_s"); }
@@ -6333,6 +6459,8 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 
 	void dispatchI64Eqz() override
 	{
+		if (inDeadCode())
+			return;
 		if (values.empty())
 			throw std::runtime_error("AsmJit i64.eqz operand stack underflow");
 		auto value = values.back();
@@ -6367,6 +6495,21 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 	void dispatchI64ShrU() override { emitIntegerShift(ShiftOp::LogicalRight); }
 	void dispatchI64Rotl() override { emitIntegerShift(ShiftOp::RotateLeft); }
 	void dispatchI64Rotr() override { emitIntegerShift(ShiftOp::RotateRight); }
+	void dispatchI64Clz() override
+	{
+		if (inDeadCode()) return;
+		emitBitCount64(BitCountOp::LeadingZeros);
+	}
+	void dispatchI64Ctz() override
+	{
+		if (inDeadCode()) return;
+		emitBitCount64(BitCountOp::TrailingZeros);
+	}
+	void dispatchI64Popcnt() override
+	{
+		if (inDeadCode()) return;
+		emitUnaryCall64(&asmjitI64Popcnt, "i64.popcnt");
+	}
 	void dispatchI64DivS() override { emitCheckedI64Call(&asmjitI64DivS, "i64.div_s"); }
 	void dispatchI64DivU() override { emitCheckedI64Call(&asmjitI64DivU, "i64.div_u"); }
 	void dispatchI64RemS() override { emitCheckedI64Call(&asmjitI64RemS, "i64.rem_s"); }
@@ -6374,6 +6517,8 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 
 	void dispatchI32Eqz() override
 	{
+		if (inDeadCode())
+			return;
 		if (values.empty())
 			throw std::runtime_error("AsmJit i32.eqz operand stack underflow");
 		auto value = values.back();
@@ -6549,9 +6694,11 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 	{ emitFloatToInt(reinterpret_cast<uint64_t>(&asmjitI64TruncSatF64U), 8, 8); }
 
 	// A reinterpretation keeps the same width and the same bit pattern; the Gp
-	// already carries it, so there is nothing to emit.
-	void dispatchI32ReinterpretF32() override {}
-	void dispatchI64ReinterpretF64() override {}
+	// already carries it. A float-to-integer form is an observability point, so
+	// the deterministic profile canonicalises the top value first
+	// (docs/proposals/PROFILES.md PR-3).
+	void dispatchI32ReinterpretF32() override { canonicalizeTopFloat(4); }
+	void dispatchI64ReinterpretF64() override { canonicalizeTopFloat(8); }
 	void dispatchF32ReinterpretI32() override {}
 	void dispatchF64ReinterpretI64() override {}
 
@@ -6559,8 +6706,8 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 	{ emitMemoryLoad(arg, 4, LoadKind::F32); }
 	void dispatchF64Load(WASM::MemArg arg) override
 	{ emitMemoryLoad(arg, 8, LoadKind::F64); }
-	void dispatchF32Store(WASM::MemArg arg) override { emitMemoryStore(arg, 4); }
-	void dispatchF64Store(WASM::MemArg arg) override { emitMemoryStore(arg, 8); }
+	void dispatchF32Store(WASM::MemArg arg) override { emitMemoryStore(arg, 4, true); }
+	void dispatchF64Store(WASM::MemArg arg) override { emitMemoryStore(arg, 8, true); }
 
 
 	//! Emits the return for the current value stack in either ABI. Shared by
@@ -6582,11 +6729,12 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 			uint32_t offset = frameResultOffset;
 			for (std::size_t i = 0; i < resultCount; ++i) {
 				const WASM::ValueTypeCode kind = resultTypes[i];
+				const asmjit::x86::Gp value = values[first + i];
 				if (kind == WASM::ValueTypeCode::V128) {
 					for (int word = 0; word < 2; ++word) {
 						auto bits = compiler.new_gp64("frameResultWord");
 						checkError(compiler.mov(bits,
-									asmjit::x86::qword_ptr(values[first + i], word * 8)),
+									asmjit::x86::qword_ptr(value, word * 8)),
 								"AsmJit frame multi-result vector load failed");
 						checkError(compiler.mov(
 									asmjit::x86::qword_ptr(framePointer, offset + word * 8), bits),
@@ -6594,9 +6742,11 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 					}
 					offset += 16;
 				} else {
-					const int width = kindWidth(kind) == 8 ? 8 : 4;
+					const asmjit::x86::Gp stored = isFloatKind(kind)
+							? canonicalizeFloatBits(value, kindWidth(kind)) : value;
+					const int width = stored.size();
 					checkError(compiler.mov(
-								asmjit::x86::Mem(framePointer, offset, width), values[first + i]),
+								asmjit::x86::Mem(framePointer, offset, width), stored),
 							"AsmJit frame multi-result store failed");
 					offset += 8;
 				}
@@ -6604,16 +6754,20 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 			checkError(compiler.ret(), "AsmJit frame multi-result return failed");
 			return;
 		}
-		if (isFloatKind(resultType))
-			checkError(compiler.ret(
-					materializeFloat(values.back(), kindWidth(resultType))),
+		if (isFloatKind(resultType)) {
+			const int width = kindWidth(resultType);
+			checkError(compiler.ret(materializeFloat(
+					canonicalizeFloatBits(values.back(), width), width)),
 					"AsmJit float return emission failed");
-		else
+		} else {
 			checkError(compiler.ret(values.back()), "AsmJit return emission failed");
+		}
 	}
 
 	void dispatchReturn() override
 	{
+		if (inDeadCode() && values.empty())
+			return;
 		armTerminated = true;
 		emitFunctionReturnValues();
 	}
@@ -6690,14 +6844,52 @@ private:
 		return bits;
 	}
 
+	//! Canonicalises an observable scalar float bit pattern when the
+	//! deterministic profile is active (docs/proposals/PROFILES.md PR-3).
+	//! The operation is on the bits, not an Xmm value: a float move may quiet a
+	//! signalling NaN before it can be classified, and every non-NaN value must
+	//! stay bit-exact.
+	asmjit::x86::Gp canonicalizeFloatBits(const asmjit::x86::Gp& bits, int width)
+	{
+		if (!deterministicFloats)
+			return bits;
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(width == 4 ? asmjit::TypeId::kUInt32 : asmjit::TypeId::kUInt64);
+		signature.add_arg(width == 4 ? asmjit::TypeId::kUInt32 : asmjit::TypeId::kUInt64);
+		const uint64_t helper = width == 4
+				? reinterpret_cast<uint64_t>(&asmjitCanonicalF32Bits)
+				: reinterpret_cast<uint64_t>(&asmjitCanonicalF64Bits);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke), helper, signature),
+				"AsmJit deterministic NaN helper call emission failed");
+		invoke->set_arg(0, bits);
+		asmjit::x86::Gp result = width == 4
+				? compiler.new_gp32("canonicalNaN") : compiler.new_gp64("canonicalNaN");
+		invoke->set_ret(0, result);
+		return result;
+	}
+
+	//! Replaces the top scalar float on the value stack with its deterministic
+	//! representation. Used by float-to-integer `reinterpret`, whose payload
+	//! becomes host-observable.
+	void canonicalizeTopFloat(int width)
+	{
+		if (values.empty())
+			throw std::runtime_error("AsmJit reinterpret operand stack underflow");
+		values.back() = canonicalizeFloatBits(values.back(), width);
+	}
+
 	//! Returns one value from the function, materialising a float result.
 	void emitFunctionReturn(const asmjit::x86::Gp& value)
 	{
-		if (isFloatKind(resultType))
-			checkError(compiler.ret(materializeFloat(value, kindWidth(resultType))),
+		if (isFloatKind(resultType)) {
+			const int width = kindWidth(resultType);
+			checkError(compiler.ret(materializeFloat(
+					canonicalizeFloatBits(value, width), width)),
 					"AsmJit float function-branch return failed");
-		else
+		} else {
 			checkError(compiler.ret(value), "AsmJit function-branch return failed");
+		}
 	}
 
 	// ── v128 as a 16-byte stack buffer ──────────────────────────────────────
@@ -6805,6 +6997,8 @@ private:
 	}
 	void emitFloatBinary(asmjit::x86::Inst::Id op32, asmjit::x86::Inst::Id op64, int width)
 	{
+		if (inDeadCode() && values.size() < 2)
+			return;
 		if (values.size() < 2)
 			throw std::runtime_error("AsmJit float binary operand stack underflow");
 		const auto second = values.back(); values.pop_back();
@@ -6819,6 +7013,8 @@ private:
 	//! Calls a one-argument float helper over the top slot.
 	void emitFloatHelper1(uint64_t function, int width)
 	{
+		if (inDeadCode() && values.size() < 1)
+			return;
 		if (values.empty())
 			throw std::runtime_error("AsmJit float helper operand stack underflow");
 		const auto bits = values.back(); values.pop_back();
@@ -6841,6 +7037,8 @@ private:
 	//! Calls a two-argument float helper over the top two slots.
 	void emitFloatHelper2(uint64_t function, int width)
 	{
+		if (inDeadCode() && values.size() < 2)
+			return;
 		if (values.size() < 2)
 			throw std::runtime_error("AsmJit float helper operand stack underflow");
 		const auto second = values.back(); values.pop_back();
@@ -6864,6 +7062,8 @@ private:
 	//! Emits a float comparison of the top two slots, producing an i32 0/1.
 	void emitFloatCompare(FloatCompareOp operation, int width)
 	{
+		if (inDeadCode() && values.size() < 2)
+			return;
 		if (values.size() < 2)
 			throw std::runtime_error("AsmJit float compare operand stack underflow");
 		const auto second = values.back(); values.pop_back();
@@ -6926,6 +7126,8 @@ private:
 	//! Absolute value as a bit operation (clear the sign bit).
 	void emitFloatAbs()
 	{
+		if (inDeadCode() && values.size() < 1)
+			return;
 		if (values.empty())
 			throw std::runtime_error("AsmJit f32.abs operand stack underflow");
 		const auto bits = values.back(); values.pop_back();
@@ -6937,6 +7139,8 @@ private:
 	//! Negation as a bit operation (toggle the sign bit).
 	void emitFloatNeg(int width)
 	{
+		if (inDeadCode())
+			return;
 		if (values.empty())
 			throw std::runtime_error("AsmJit f32.neg operand stack underflow");
 		const auto bits = values.back(); values.pop_back();
@@ -6974,6 +7178,8 @@ private:
 	//! Calls a checked float-to-integer helper over the top slot.
 	void emitFloatToInt(uint64_t function, int floatWidth, int intWidth)
 	{
+		if (inDeadCode() && values.size() < 1)
+			return;
 		if (values.empty())
 			throw std::runtime_error("AsmJit float-to-int operand stack underflow");
 		const auto bits = values.back(); values.pop_back();
@@ -6996,6 +7202,8 @@ private:
 	//! Calls an integer-to-float helper over the top slot.
 	void emitIntToFloat(uint64_t function, int intWidth, int floatWidth)
 	{
+		if (inDeadCode() && values.size() < 1)
+			return;
 		if (values.empty())
 			throw std::runtime_error("AsmJit int-to-float operand stack underflow");
 		const auto source = values.back(); values.pop_back();
@@ -7036,6 +7244,8 @@ private:
 
 	void emitSelect()
     {
+        if (inDeadCode() && values.size() < 3)
+            return;
         if (values.size() < 3)
             throw std::runtime_error("AsmJit select operand stack underflow");
         const auto condition = values.back();
@@ -7252,6 +7462,8 @@ private:
 	}
 	void emitBinary(BinaryOp operation)
 	{
+		if (inDeadCode() && values.size() < 2)
+			return;
 		if (values.size() < 2)
 			throw std::runtime_error("AsmJit i32 binary operation stack underflow");
 		asmjit::x86::Gp rhs = values.back();
@@ -7326,20 +7538,26 @@ private:
 
 	void emitGlobalSet(WASM::GlobalIdx index)
 	{
+		if (inDeadCode() && values.empty())
+			return;
 		const WASM::GlobalType& type = validateGlobalIndex(index);
 		if (!type.isMutable)
 			throw std::runtime_error("AsmJit global.set references an immutable global");
 		if (values.empty())
 			throw std::runtime_error("AsmJit global.set operand stack underflow");
 		auto value = values.back(); values.pop_back();
+		// An exported global is host-observable
+		// (docs/proposals/PROFILES.md PR-3).
+		const asmjit::x86::Gp stored = isFloatKind(type.contentType.opcode)
+				? canonicalizeFloatBits(value, kindWidth(type.contentType.opcode)) : value;
 		auto cell = emitGlobalCell(index);
 		if (kindWidth(type.contentType.opcode) == 8) {
 			checkError(compiler.mov(asmjit::x86::qword_ptr(cell,
-					static_cast<int32_t>(offsetof(WASM::Value, i64))), value),
+					static_cast<int32_t>(offsetof(WASM::Value, i64))), stored),
 					"AsmJit 64-bit global.set store failed");
 		} else {
 			checkError(compiler.mov(asmjit::x86::dword_ptr(cell,
-					static_cast<int32_t>(offsetof(WASM::Value, i32))), value),
+					static_cast<int32_t>(offsetof(WASM::Value, i32))), stored),
 					"AsmJit 32-bit global.set store failed");
 		}
 	}
@@ -7354,6 +7572,8 @@ private:
 
 	void emitMemorySize(WASM::MemIdx index)
 	{
+		if (inDeadCode())
+			return;
 		const bool is64 = validateMemoryIndex(index).indexType
 				== WASM::MemoryIndexType::I64;
 		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
@@ -7383,6 +7603,8 @@ private:
 
 	void emitMemoryGrow(WASM::MemIdx index)
 	{
+		if (inDeadCode())
+			return;
 		const bool is64 = validateMemoryIndex(index).indexType
 				== WASM::MemoryIndexType::I64;
 		if (values.empty())
@@ -7478,6 +7700,8 @@ private:
 
 	void emitMemoryLoad(const WASM::MemArg& arg, uint32_t width, LoadKind kind)
 	{
+		if (inDeadCode() && values.empty())
+			return;
 		if (values.empty())
 			throw std::runtime_error("AsmJit memory.load operand stack underflow");
 		auto wasmAddress = values.back();
@@ -7521,22 +7745,30 @@ private:
 		values.push_back(result);
 	}
 
-	void emitMemoryStore(const WASM::MemArg& arg, uint32_t width)
+	void emitMemoryStore(const WASM::MemArg& arg, uint32_t width,
+			bool canonicalizeFloat = false)
 	{
+		if (inDeadCode() && values.size() < 2)
+			return;
 		if (values.size() < 2)
 			throw std::runtime_error("AsmJit memory.store operand stack underflow");
 		auto value = values.back(); values.pop_back();
 		auto wasmAddress = values.back(); values.pop_back();
+		// Memory is an observability point for a scalar float
+		// (docs/proposals/PROFILES.md PR-3). Canonicalise before computing the
+		// address so the helper call cannot disturb the address register.
+		const asmjit::x86::Gp stored = canonicalizeFloat
+				? canonicalizeFloatBits(value, static_cast<int>(width)) : value;
 		auto pointer = emitMemoryAddress(arg, width, wasmAddress);
 		switch (width) {
 		case 1:
-			checkError(compiler.mov(asmjit::x86::byte_ptr(pointer), value.r8()), "AsmJit store8 emission failed"); break;
+			checkError(compiler.mov(asmjit::x86::byte_ptr(pointer), stored.r8()), "AsmJit store8 emission failed"); break;
 		case 2:
-			checkError(compiler.mov(asmjit::x86::word_ptr(pointer), value.r16()), "AsmJit store16 emission failed"); break;
+			checkError(compiler.mov(asmjit::x86::word_ptr(pointer), stored.r16()), "AsmJit store16 emission failed"); break;
 		case 4:
-			checkError(compiler.mov(asmjit::x86::dword_ptr(pointer), value.r32()), "AsmJit store32 emission failed"); break;
+			checkError(compiler.mov(asmjit::x86::dword_ptr(pointer), stored.r32()), "AsmJit store32 emission failed"); break;
 		case 8:
-			checkError(compiler.mov(asmjit::x86::qword_ptr(pointer), value), "AsmJit i64.store emission failed"); break;
+			checkError(compiler.mov(asmjit::x86::qword_ptr(pointer), stored), "AsmJit i64.store emission failed"); break;
 		default:
 			throw std::runtime_error("AsmJit internal error: unsupported memory-store width");
 		}
@@ -7565,8 +7797,55 @@ private:
 		values.push_back(result);
 	}
 
+	//! The 64-bit counterpart of `emitBitCount`. `bsr`/`bsf` write a 64-bit
+	//! destination, and the zero result is 64, not 32.
+	void emitBitCount64(BitCountOp operation)
+	{
+		if (values.empty())
+			throw std::runtime_error("AsmJit i64 bit-count operand stack underflow");
+		auto source = values.back(); values.pop_back();
+		auto result = compiler.new_gp64("bitCount64");
+		auto nonZero = compiler.new_label();
+		auto done = compiler.new_label();
+		checkError(compiler.test(source, source), "AsmJit i64 bit-count zero test failed");
+		checkError(compiler.jnz(nonZero), "AsmJit i64 bit-count nonzero branch failed");
+		checkError(compiler.mov(result, 64), "AsmJit i64 bit-count zero result failed");
+		checkError(compiler.jmp(done), "AsmJit i64 bit-count completion jump failed");
+		checkError(compiler.bind(nonZero), "AsmJit i64 bit-count nonzero label failed");
+		if (operation == BitCountOp::LeadingZeros) {
+			checkError(compiler.bsr(result, source), "AsmJit i64.clz scan failed");
+			checkError(compiler.xor_(result, 63), "AsmJit i64.clz adjustment failed");
+		} else {
+			checkError(compiler.bsf(result, source), "AsmJit i64.ctz scan failed");
+		}
+		checkError(compiler.bind(done), "AsmJit i64 bit-count result label failed");
+		values.push_back(result);
+	}
+
+	//! Calls a one-argument 64-bit integer helper over the top slot.
+	void emitUnaryCall64(uint64_t (*function)(uint64_t), const char* operation)
+	{
+		if (inDeadCode() && values.size() < 1)
+			return;
+		if (values.empty())
+			throw std::runtime_error(std::string("AsmJit ") + operation + " operand stack underflow");
+		auto argument = values.back(); values.pop_back();
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kUInt64);
+		signature.add_arg(asmjit::TypeId::kUInt64);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke), reinterpret_cast<uint64_t>(function), signature),
+				"AsmJit 64-bit unary helper call emission failed");
+		invoke->set_arg(0, argument);
+		auto result = compiler.new_gp64("unaryArithmeticResult64");
+		invoke->set_ret(0, result);
+		values.push_back(result);
+	}
+
 	void emitUnaryCall(uint32_t (*function)(uint32_t), const char* operation)
 	{
+		if (inDeadCode() && values.size() < 1)
+			return;
 		if (values.empty())
 			throw std::runtime_error(std::string("AsmJit ") + operation + " operand stack underflow");
 		auto argument = values.back(); values.pop_back();
@@ -7622,6 +7901,8 @@ private:
 
 	void emitI32WrapI64()
 	{
+		if (inDeadCode() && values.size() < 1)
+			return;
 		if (values.empty() || values.back().size() != 8)
 			throw std::runtime_error("AsmJit i32.wrap_i64 requires an i64 operand");
 		const auto source = values.back();
@@ -7633,6 +7914,8 @@ private:
 
 	void emitI64ExtendI32(bool isSigned)
 	{
+		if (inDeadCode() && values.size() < 1)
+			return;
 		if (values.empty() || values.back().size() != 4)
 			throw std::runtime_error("AsmJit i64.extend_i32 requires an i32 operand");
 		const auto source = values.back();
@@ -7647,6 +7930,8 @@ private:
 
 	void emitI64SignExtend(uint32_t width)
 	{
+		if (inDeadCode() && values.size() < 1)
+			return;
 		if (values.empty() || values.back().size() != 8)
 			throw std::runtime_error("AsmJit i64 sign-extension requires an i64 operand");
 		const auto source = values.back();
@@ -7665,6 +7950,8 @@ private:
 
 	void emitCompare(asmjit::x86::CondCode condition)
 	{
+		if (inDeadCode() && values.size() < 2)
+			return;
 		if (values.size() < 2)
 			throw std::runtime_error("AsmJit integer comparison operand stack underflow");
 		auto rhs = values.back(); values.pop_back();
@@ -7678,6 +7965,8 @@ private:
 
 	void emitIntegerBinary(BinaryOp operation)
 	{
+		if (inDeadCode() && values.size() < 2)
+			return;
 		if (values.size() < 2)
 			throw std::runtime_error("AsmJit i64 binary operation stack underflow");
 		auto rhs = values.back(); values.pop_back();
@@ -7695,6 +7984,8 @@ private:
 
 	void emitIntegerShift(ShiftOp operation)
 	{
+		if (inDeadCode() && values.size() < 2)
+			return;
 		if (values.size() < 2)
 			throw std::runtime_error("AsmJit i64 shift operand stack underflow");
 		auto count = values.back(); values.pop_back();
@@ -7737,6 +8028,8 @@ private:
 
 	void emitShift(ShiftOp operation)
 	{
+		if (inDeadCode() && values.size() < 2)
+			return;
 		if (values.size() < 2)
 			throw std::runtime_error("AsmJit i32 shift operand stack underflow");
 		auto count = values.back(); values.pop_back();
@@ -7779,12 +8072,29 @@ private:
 	asmjit::x86::Gp framePointer;
 	//! Whether this function is compiled in the staging-frame form.
 	const bool frameMode = TypeTranslator::moduleNeedsFrame(module, WASM::frameCallAbiOptIn());
+	//! True when the active profile excludes the `N` marker: a scalar float that
+	//! becomes observable is replaced by the canonical NaN
+	//! (docs/proposals/PROFILES.md PR-3).
+	const bool deterministicFloats = false;
 	std::vector<asmjit::x86::Gp> locals;
 	//! Slot width of every local (4/8, or 16 for a v128 buffer).
 	std::vector<int> localWidths;
 	std::vector<asmjit::x86::Gp> values;
 	//! True while the current arm can fall through; a branch or return clears it.
 	bool armTerminated = false;
+
+	//! True when the linear walk is in polymorphic dead code and it is safe to
+	//! skip value-consuming instructions.
+	//!
+	//! Exception modules opt out: `try_table` catch edges enter code whose
+	//! linear predecessor terminated, but the edge itself is live. AsmJIT's
+	//! `armTerminated` flag does not yet distinguish that case, so suppressing
+	//! lowerings there would drop the catch arm. The price is the old
+	//! dead-code-underflow failures in EH modules, not silent wrong code.
+	bool inDeadCode() const noexcept
+	{
+		return armTerminated && module.tags.empty();
+	}
 	std::vector<ControlFrame> controls;
 	uint32_t resultCount = 0;
 	WASM::ValueTypeCode resultType = WASM::ValueTypeCode::Void;
@@ -7912,7 +8222,8 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance,
 			const WASM::FuncType type = module.funcTypeAt(typeIndex);
 			IntegerFunctionEmitter emitter(compiler, *function, type, module.functionBodies[i],
 					module, internals, functions, signatures,
-					static_cast<uint32_t>(module.importFunctions.size() + i));
+					static_cast<uint32_t>(module.importFunctions.size() + i),
+					profile().deterministic());
 			try {
 				emitter.compile(module.functionBodies[i], type);
 			} catch (const std::exception& error) {

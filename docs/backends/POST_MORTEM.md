@@ -1153,3 +1153,215 @@ All tests passed (2 assertions in 1 test case)
   helpers; a missing 64-bit sibling only shows up when a fixture reaches it.
 * **Reachability is an instruction property, not a call-only exception.** Every
   lowering that asserts a live operand stack must first respect dead code.
+
+## SLJIT — five-slot SIMD load-lane signatures
+
+### Intended
+
+Make `spec: simd_load32_lane` instantiate. It failed at function 0 with:
+
+```
+the SLJIT backend cannot pass 5 argument slots:
+the target has only 4, so this signature needs fewer vector parameters
+```
+
+### Root cause
+
+The module-wide frame decision counted only declared Wasm parameter words. The
+function `(i32, v128) -> v128` has three parameter words, so it stayed in the
+register form. The register form also passes a hidden trailing out-buffer
+pointer for a `v128` result, making five C argument entries, one above
+`kRegisterArgumentCeiling`.
+
+The same audit found two smaller problems in the decision:
+
+* it was duplicated between the dispatcher and the module compiler, with the
+  emitter's ceiling spelled as a local constant;
+* an earlier attempt to include imported signatures switched whole host-import
+  modules to the frame form, which crashed an AssemblyScript native-interop
+  test. A host import is a register-form native C function; it must not choose
+  the caller's module ABI.
+
+### Fix
+
+* Moved the ceiling to `kRegisterArgumentCeiling` in
+  `SljitOpcodeDispatcher.hpp` and made the emitter use it.
+* Added `signatureNeedsFrame()` to the module compiler. It counts
+  `VMContext*`, every parameter word, and the hidden `v128` result buffer, and
+  treats a multi-result signature as frame-form.
+* Kept the decision scoped to defined functions. The comment now states why
+  imported signatures are excluded, so the next attempt does not rediscover the
+  crash.
+
+### Evidence
+
+```
+WASMJIT_BACKEND=sljit ./Test/WasmJit 'spec: simd_load32_lane'
+[spec] simd_load32_lane: passed=21 failed=0 skipped=3
+
+simd_load8_lane  49/0     simd_load16_lane 33/0
+simd_load64_lane 13/0
+```
+
+### Lessons
+
+* **Count the ABI the code generator emits, not the Wasm signature.** A hidden
+  result buffer is a real argument entry.
+* **A module-wide ABI decision must name whose ABI it chooses.** Defined
+  functions and host imports do not share one.
+* **The same constant must live in one place.** The dispatcher and the mode
+  decision drifting apart is how the off-by-one returned.
+
+## Both backends — deterministic NaN canonicalisation
+
+### Intended
+
+Make `the deterministic profile canonicalises observable NaNs` green on SLJIT
+and AsmJIT. The test covers `i32.reinterpret_f32`, `i64.reinterpret_f64`,
+`f32.store`, `f64.store`, `global.set`, a single float return and a two-result
+float return.
+
+### Root cause
+
+The deterministic profile's `N` marker was plumbed into LibJIT only. SLJIT and
+AsmJIT never canonicalised at any observability point.
+
+Implementing it exposed a second, independent defect: the `ceil`/`floor`
+helpers forwarded a signalling NaN to libm. glibc preserves the signalling
+pattern, while the spec's result class is an *arithmetic* NaN, so `spec: f32`
+and `spec: f64` reported `nan:arithmetic` failures even though every other
+float operation was green.
+
+### Fix
+
+* Added bit-pattern canonicalisation to both backends
+  (`sljitCanonicalF32Bits`/`sljitCanonicalF64Bits`,
+  `asmjitCanonicalF32Bits`/`asmjitCanonicalF64Bits`). The bits are classified
+  directly, so non-NaN values including `-0` stay exact and a signalling NaN is
+  not quieted by the classification itself.
+* Passed the profile into each per-function emitter. Canonicalisation is a
+  no-op unless `ProfileConfig::deterministic()` is set.
+* Applied it at the host-observable boundaries: float-to-integer `reinterpret`,
+  `f32.store`/`f64.store`, `global.set`, single and multi-result returns, and
+  AsmJIT's function-label branches.
+* Made `ceil`/`floor` return `quiet_NaN()` for NaN input in both backends.
+* Fixed SLJIT helper-call clobbering. The first implementation computed the
+  memory address or the frame pointer in `R0`/`R2`, then called the
+  canonicalisation helper, which clobbers every scratch register, and stored
+  through the now-clobbered pointer. The fix is ordering: canonicalise before
+  computing the address, and canonicalise all multi-results before loading the
+  frame pointer. This was a real SIGSEGV, caught by the profile test.
+* Used a bit-level helper per backend instead of funnelling the value through an
+  `FR`/Xmm register; a float move may quiet or re-sign a signalling NaN before
+  it can be classified.
+
+### Evidence
+
+```
+WASMJIT_BACKEND=sljit  ./Test/WasmJit 'the deterministic profile canonicalises observable NaNs'
+All tests passed (23 assertions in 1 test case)
+
+WASMJIT_BACKEND=asmjit ./Test/WasmJit 'the deterministic profile canonicalises observable NaNs'
+All tests passed (23 assertions in 1 test case)
+
+WASMJIT_BACKEND=sljit ./Test/WasmJit 'spec: f32'   -> 2501 passed / 0 failed
+WASMJIT_BACKEND=sljit ./Test/WasmJit 'spec: f64'   -> 2501 passed / 0 failed
+```
+
+### Lessons
+
+* **A helper call is a scratch-register barrier.** Any pointer or frame address
+  that must survive it belongs in a frame slot or must be recomputed after it.
+  This is the second time the campaign hit this class in SLJIT.
+* **Do the policy transform before the address calculation.** The reverse order
+  looks natural and is wrong.
+* **“The hardware returns a NaN” is not enough for the spec.** The result class
+  is a property of the opcode, not of libm.
+* **One profile test found two defects.** It caught the missing policy and the
+  pointer-clobber crash; keep it backend-selected.
+
+## AsmJIT — i64 bit counts and dead-code tolerance
+
+### Intended
+
+Add the missing i64 `clz`/`ctz`/`popcnt` lowerings, then advance
+`spec: br_table`.
+
+### Root cause
+
+* AsmJIT had `i32` bit counts only; `dispatchI64Clz`/`Ctz`/`Popcnt` fell through
+  to the base refusal.
+* `br_table.0` contains calls, drops, selects, stores, conversions and
+  arithmetic in polymorphic dead code after a terminator. AsmJIT's emitter
+  treated `armTerminated` as advisory in only a few places, so the next
+  value-consuming opcode threw an operand-stack underflow instead of emitting
+  nothing.
+* `br_table` required every target to have an identical stack height and an
+  identical type vector. Wasm only requires the same arity: targets can sit at
+  different nesting depths, and a `funcref` target can accept a
+  `(ref null $t)` value.
+* `br_if` to a block result with the branch value missing is dead code, not an
+  arity error.
+
+### Fix
+
+* Added `emitBitCount64` and `emitUnaryCall64`, plus the three i64 overrides.
+* Added dead-code guards to value-consuming lowerings. They are arity-aware
+  (`values.size() < required`) rather than unconditional, so a catch-entry path
+  that is linearly “terminated” but has values still lowers.
+* `br_table` validation now checks arity only; each target's own result types
+  drive its transfer. The operand-stack check is an underflow check, not an
+  equality check.
+* `br_if`/`br`/`br_table` mismatches return instead of throwing when the arm is
+  dead.
+* Introduced `inDeadCode()` = `armTerminated && module.tags.empty()`. AsmJIT
+  does not yet model exception catch edges as reachability, so EH modules opt
+  out of dead-code skipping. Without this, the first version silently dropped
+  catch arms and regressed eight legacy-EH tests. The residual EH dead-code
+  failures are pre-existing and loud, not wrong results.
+* `dispatchIf` treats an `if` with no values as dead, but lowers an `if` with a
+  condition even when `armTerminated` is set, because that is a catch entry.
+* A `br_table` case targeting the function label restores both the value stack
+  and `armTerminated` after `dispatchReturn`; otherwise the first case's return
+  suppressed every later case's return (this produced `51` instead of `50` in
+  `func.wast`).
+* Void functions that end in dead code clear the synthesized placeholder stack
+  before emitting the void return.
+
+### Evidence
+
+```
+WASMJIT_BACKEND=asmjit ./Test/WasmJit 'spec: func'
+[spec] func: passed=100 failed=0 skipped=75
+
+WASMJIT_BACKEND=asmjit ./Test/WasmJit 'the opt-in rewrite runs the superseded exception form'
+All tests passed (13 assertions in 1 test case)
+
+WASMJIT_BACKEND=asmjit ./Test/WasmJit 'a delegate that skips an intervening catch reaches its target'
+All tests passed (10 assertions in 1 test case)
+```
+
+`spec: br_table` now compiles every function and reaches
+`AsmJit compiler finalisation failed: 53`. This is the remaining boundary: the
+emitter accepts the bodies, but AsmJIT's register allocator/finaliser rejects
+the program. It is no longer a lowering underflow.
+
+Full runs after the batch:
+
+```
+SLJIT   821 cases: 711 passed / 110 failed
+AsmJIT  821 cases: 654 passed / 167 failed
+```
+
+### Lessons
+
+* **`armTerminated` is not a complete reachability model.** It is the linear
+  arm state; catch edges are a second entry. A guard that assumes otherwise
+  silently deletes live code.
+* **Match the spec's arity rule, not an accidental equality.** `br_table`
+  targets share arity, not identity.
+* **Restore every piece of emitter state a helper mutates.** `dispatchReturn`
+  changes both the value stack and the arm flag.
+* **When a backend finaliser rejects a program, stop calling it a lowering
+  gap.** The next investigation starts at register allocation and label
+  constraints, not at the opcode dispatcher.

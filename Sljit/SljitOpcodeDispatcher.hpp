@@ -27,6 +27,16 @@ namespace Sljit {
 //! call, and `VMContext*` is always the first of them.
 inline constexpr std::uint32_t kMaxWasmParameters = 3;
 
+//! Largest C argument-entry count the SLJIT register form can declare.
+//!
+//! `sljit_emit_enter` allocates one saved register per declared entry
+//! (`function_check_arguments`, sljitLir.c), and the target provides four here.
+//! The count includes `VMContext*`, every parameter word (a `v128` is two) and
+//! the hidden out-buffer pointer a `v128` result needs. A signature above this
+//! ceiling must use the frame form; the module compiler makes that decision
+//! module-wide (docs/backends/STAGING_CALL_ABI.md).
+inline constexpr std::uint32_t kRegisterArgumentCeiling = 4;
+
 /*!
  * \brief Compiles one WebAssembly function body into SLJIT machine code.
  *
@@ -66,11 +76,13 @@ public:
 	 * \param frameCallAbi True to emit the staging-frame ABI (`void fn(VMContext*, void* frame)`) instead of the register form; set module-wide by the compiler (docs/backends/STAGING_CALL_ABI.md).
 	 * \param tagIds The instance's tag index space, imports first, so a `throw tagidx` folds to its canonical id (docs/proposals/EXCEPTIONS.md EX-2).
 	 * \param internals Instance callables, used to embed a direct tail-call target.
+	 * \param profileConfig The active profile; its `N` marker enables deterministic NaN canonicalisation at observable boundaries (docs/proposals/PROFILES.md PR-3).
 	 */
 	OpcodeDispatcher(const WASM::Module& module, const WASM::FuncType& funcType,
 			const WASM::FunctionBody& body, std::uint32_t functionIndex,
 			bool frameCallAbi, const std::vector<WASM::TagId>& tagIds,
-			WASM::ModuleInstanceInternals& internals);
+			WASM::ModuleInstanceInternals& internals,
+			WASM::ProfileConfig profileConfig);
 
 	/*!
 	 * \brief Emits the function and hands back its executable entry point.
@@ -849,6 +861,10 @@ private:
 	std::vector<WASM::ValueKind> frameKinds_;
 	//! Byte offset of the result block inside the frame, after the argument block.
 	sljit_sw frameResultOffset_ = 0;
+	//! True when the active profile excludes the `N` marker: a scalar float that
+	//! becomes observable must be replaced by the canonical NaN
+	//! (docs/proposals/PROFILES.md PR-3).
+	bool deterministicFloats_ = false;
 	sljit_sw payloadSlotOffset(std::size_t index = 0) const;
 	//! Offset of the two-word shuffle selector block.
 	sljit_sw selectorBlockOffset() const;
@@ -981,6 +997,19 @@ private:
 	 */
 	void storeFloatSlot(int freg, std::size_t depth, int width);
 	/*!
+	 * \brief Replaces a NaN in one operand-stack slot with the canonical pattern.
+	 *
+	 * A no-op unless the deterministic profile is active. The slot is treated as
+	 * raw IEEE-754 bits, never loaded through an `FR` register: a floating-point
+	 * move may itself quiet or re-sign a signalling NaN, which would make the
+	 * canonicalisation depend on the host instruction set
+	 * (docs/proposals/PROFILES.md PR-3).
+	 *
+	 * \param depth Zero-based operand-stack depth.
+	 * \param width 4 for f32, 8 for f64.
+	 */
+	void canonicalizeSlot(std::size_t depth, int width);
+	/*!
 	 * \brief Emits a one-operand float operation over the top slot.
 	 * \param wordOp Word-width SLJIT FOP1 operation; the 32-bit form is derived.
 	 * \param width 4 for f32, 8 for f64.
@@ -1047,8 +1076,10 @@ private:
 	 * \brief Emits a bit-reinterpretation of the top slot.
 	 * \param width Slot width in bytes (4 or 8); both reinterpreting types
 	 *        always have the same width.
+	 * \param canonicalizeFloat True for a float-to-integer reinterpret, whose
+	 *        payload becomes host-observable under the deterministic profile.
 	 */
-	void emitReinterpret(int width);
+	void emitReinterpret(int width, bool canonicalizeFloat);
 
 	/*!
 	 * \brief Resolves a block type into parameter and result widths.
