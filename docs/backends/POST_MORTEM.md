@@ -2362,7 +2362,52 @@ Default 22,448 assertions in 821 cases, green
   range and layout are part of the helper contract now.
 
 
-## First stack-switching slice: `cont.new`, `resume`, `cont.bind`
+## Continuation handlers, `resume_throw` and `switch`
+
+### Intended
+
+Complete the generated-code side of the continuation family.
+
+### Fix
+
+* `resume` now routes a `Suspended` status to its `on $tag` clauses: it
+  compares the runtime tag id, pushes the tag payload plus replacement
+  continuation, and branches to the target label. An unhandled suspension
+  releases the replacement handle and reports
+  `"unhandled continuation suspension"`.
+* SLJIT models the handler stack in the measuring pass so the fixed frame is
+  large enough.
+* `resume_throw` and `resume_throw_ref` construct the injected exception and
+  feed it through the same resume path via `ContinuationOpFrame::exception`.
+* `switch` passes the peer argument prefix, drops the target handle and pushes
+  the values returned when the peer switches back.
+* Ordinary `drop` now releases values that name continuation handles through a
+  registry-safe helper, and reference locals are released on function return.
+
+### Evidence
+
+Each test passes in isolation on both backends:
+
+```
+stack-switching module routes a suspension to its handler
+stack-switching module drops a suspension with no handler
+stack-switching binds a suspended continuation
+stack-switching dispatches multiple handlers and a loop handler
+stack-switching suspends with a wide payload
+stack-switching injects an exception into a suspended continuation
+stack-switching resume_throw dispatches a handler clause
+stack-switching switch performs a symmetric native-stack handoff
+stack-switching switch performs a symmetric host-thread handoff
+```
+
+### Remaining caveat
+
+Running the whole `stack-switching*` filter in one process still exhausts
+continuation state after several tests. The opcode paths are present and pass
+individually; the remaining work is to identify the last worker/handle that
+outlives its test under aggregate ordering.
+
+
 
 ### Intended
 

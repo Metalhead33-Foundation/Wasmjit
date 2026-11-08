@@ -915,6 +915,8 @@ private:
 	//! becomes observable must be replaced by the canonical NaN
 	//! (docs/proposals/PROFILES.md PR-3).
 	bool deterministicFloats_ = false;
+	//! True while `dispatchResume` is being driven by `resume_throw*`.
+	bool resumeThrowActive_ = false;
 	sljit_sw payloadSlotOffset(std::size_t index = 0) const;
 	//! Offset of the two-word shuffle selector block.
 	sljit_sw selectorBlockOffset() const;
@@ -1005,7 +1007,11 @@ private:
 	 */
 	sljit_sw exceptionPtrSlotOffset() const;
 	//! Emits an unconditional branch to the trap epilogue.
-	void emitTrap(WASM::TrapKind kind); //!< Reports one trap kind and leaves the block.
+	void emitTrap(WASM::TrapKind kind);
+	/** \brief Emits an internal trap carrying a detail string. \param detail Interned detail text. */
+	void emitTrapDetail(const char* detail);
+	/** \brief Releases continuation handles held by reference locals before a return. */
+	void emitDropReferenceLocals();
 	void emitTrapBranch();
 	/*!
 	 * \brief Emits a two-operand integer operation over the top two slots.
@@ -1494,7 +1500,10 @@ private:
 	void dispatchContNew(WASM::TypeIdx type) override; //!< `cont.new`.
 	void dispatchContBind(WASM::TypeIdx from, WASM::TypeIdx to) override; //!< `cont.bind`.
 	void dispatchSuspend(WASM::TagIdx tag) override; //!< `suspend`.
+	void dispatchSwitch(WASM::TypeIdx type, WASM::TagIdx tag) override; //!< `switch`.
 	void dispatchResume(WASM::TypeIdx type, std::vector<WASM::ContHandlerClause>&& handlers) override; //!< `resume`.
+	void dispatchResumeThrow(WASM::TypeIdx type, WASM::TagIdx tag, std::vector<WASM::ContHandlerClause>&& handlers) override; //!< `resume_throw`.
+	void dispatchResumeThrowRef(WASM::TypeIdx type, std::vector<WASM::ContHandlerClause>&& handlers) override; //!< `resume_throw_ref`.
 
 private:
 	void emitStringViewCreate(const void* helper); //!< Shared view/iterator creation lowering.

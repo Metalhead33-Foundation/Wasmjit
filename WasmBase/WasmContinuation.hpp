@@ -144,6 +144,13 @@ void* wasm_cont_bind_ops(VMContext* context, void* continuation,
 void wasm_cont_suspend_ops(VMContext* context, std::uint32_t tagId,
 		ContinuationOpFrame* frame) noexcept;
 
+/** \brief Symmetrically switches to a peer continuation. \param context Creation VM context. \param continuation Target continuation. \param argCount Number of peer arguments. \param frame Argument/result slots. */
+void wasm_cont_switch_ops(VMContext* context, void* continuation,
+		std::uint32_t argCount, ContinuationOpFrame* frame) noexcept;
+
+/** \brief Releases a value if it names a continuation handle. \param ref Candidate continuation reference. */
+void wasm_cont_drop_known(void* ref) noexcept;
+
 //! Backend-supplied generic target invocation. `target` is a `Callable*` and
 //! `context` is the creation context; the callback calls the target's C ABI
 //! using the kind arrays. It is implemented by the executing backend so

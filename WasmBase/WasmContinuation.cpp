@@ -1947,10 +1947,16 @@ void wasm_cont_resume_ops(VMContext* context, void* continuation,
 		const TypeIdx funcType = continuationFunctionType(*context->module, contType);
 		const FuncType signature = context->module->funcTypeAt(funcType);
 		frame->result = ContinuationResumeResult{};
-		wasm_cont_resume_ex(continuation, frame->args,
-				static_cast<std::uint32_t>(signature.params.size()),
-				frame->results, ContinuationOpFrame::kCapacity,
-				frame->tags, ContinuationOpFrame::kCapacity, &frame->result);
+		if (frame->exception != nullptr) {
+			wasm_cont_resume_throw_ex(continuation, frame->exception,
+					frame->results, ContinuationOpFrame::kCapacity,
+					frame->tags, ContinuationOpFrame::kCapacity, &frame->result);
+		} else {
+			wasm_cont_resume_ex(continuation, frame->args,
+					static_cast<std::uint32_t>(signature.params.size()),
+					frame->results, ContinuationOpFrame::kCapacity,
+					frame->tags, ContinuationOpFrame::kCapacity, &frame->result);
+		}
 	} catch (...) {
 		reportTrap(TrapKind::Internal);
 	}
@@ -2010,6 +2016,29 @@ void wasm_cont_suspend_ops(VMContext* context, std::uint32_t tagId,
 				resultKinds.empty() ? nullptr : resultKinds.data());
 		frame->result.status = resumed;
 		frame->result.resultCount = count;
+	} catch (...) {
+		reportTrap(TrapKind::Internal);
+	}
+}
+
+
+void wasm_cont_drop_known(void* ref) noexcept
+{
+	if (ref != nullptr)
+		continuationRefRelease(ref);
+}
+
+void wasm_cont_switch_ops(VMContext* context, void* continuation,
+		std::uint32_t argCount, ContinuationOpFrame* frame) noexcept
+{
+	try {
+		if (context == nullptr || frame == nullptr) {
+			reportTrap(TrapKind::Internal, "switch has no module context");
+			return;
+		}
+		frame->result = ContinuationResumeResult{};
+		wasm_cont_switch(continuation, frame->args, argCount,
+				frame->results, ContinuationOpFrame::kCapacity, &frame->result);
 	} catch (...) {
 		reportTrap(TrapKind::Internal);
 	}

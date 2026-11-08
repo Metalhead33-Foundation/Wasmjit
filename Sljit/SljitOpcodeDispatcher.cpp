@@ -421,6 +421,11 @@ extern "C" void sljitReportUnreachable(const char* detail) noexcept
 	WASM::reportTrap(WASM::TrapKind::Unreachable, detail);
 }
 
+extern "C" void sljitReportInternalDetail(const char* detail) noexcept
+{
+	WASM::reportTrap(WASM::TrapKind::Internal, detail);
+}
+
 extern "C" uint32_t sljitI32Popcnt(uint32_t value) noexcept
 {
 	value -= (value >> 1) & 0x55555555u;
@@ -1959,8 +1964,22 @@ void OpcodeDispatcher::transferToBase(const std::vector<int>& widths, std::size_
 	}
 }
 
+void OpcodeDispatcher::emitDropReferenceLocals()
+{
+	if (measureOnly_)
+		return;
+	for (std::size_t i = 0; i < localKinds_.size(); ++i) {
+		if (!isReferenceKind(localKinds_[i]) || localWidths_[i] != 8)
+			continue;
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0, SLJIT_MEM1(SLJIT_SP),
+				localSlotOffset(i)));
+		emitHelper(SLJIT_ARGS1V(P), &WASM::wasm_cont_drop_known);
+	}
+}
+
 void OpcodeDispatcher::emitReturnValue()
 {
+	emitDropReferenceLocals();
 	if (frameAbi_ && resultKinds_.size() > 1) {
 		// Multi-result in frame form (docs/backends/EXPORT_SIGNATURE.md section 40):
 		// every result is written into the caller's result block, in declaration
@@ -3667,11 +3686,16 @@ void OpcodeDispatcher::dispatchDrop()
 		return;
 	requireStack(1);
 	const bool stringRef = topIsStringRef();
+	const int width = stackWidths_.back();
 	if (!measureOnly_ && stringRef) {
 		const std::size_t top = stackWidths_.size() - 1;
 		loadContext(SLJIT_R0);
 		loadSlot(SLJIT_R1, top, 8);
 		emitHelper(SLJIT_ARGS2V(P, P), &::wasm_string_release);
+	} else if (!measureOnly_ && width == 8) {
+		const std::size_t top = stackWidths_.size() - 1;
+		loadSlot(SLJIT_R0, top, 8);
+		emitHelper(SLJIT_ARGS1V(P), &WASM::wasm_cont_drop_known);
 	}
 	pop();
 }
@@ -9573,15 +9597,15 @@ void OpcodeDispatcher::dispatchSuspend(WASM::TagIdx tag)
 			push(widthOf(result.val));
 		return;
 	}
-	continuationFrameAddress(SLJIT_R3);
+	continuationFrameAddress(SLJIT_R2);
 	for (std::size_t i = 0; i < paramCount; ++i) {
 		loadSlot(SLJIT_R1, base + i, 8);
-		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_R3),
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_R2),
 				static_cast<sljit_sw>(i * WASM::kContinuationValueStride), SLJIT_R1, 0));
 		if (widthOf(payload.params[i].val) == 16) {
 			emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R1, 0,
 					SLJIT_MEM1(SLJIT_SP), stackSlotOffset(base + i) + 8));
-			emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_R3),
+			emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_R2),
 					static_cast<sljit_sw>(i * WASM::kContinuationValueStride + 8),
 					SLJIT_R1, 0));
 		}
@@ -9597,20 +9621,7 @@ void OpcodeDispatcher::dispatchSuspend(WASM::TagIdx tag)
 			pop();
 		return;
 	}
-	continuationFrameAddress(SLJIT_R3);
-	emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R0, 0, SLJIT_MEM1(SLJIT_R3),
-			static_cast<sljit_sw>(offsetof(WASM::ContinuationOpFrame, result)
-					+ offsetof(WASM::ContinuationResumeResult, status))));
-	sljit_jump* resumed = sljit_emit_cmp(compiler_, SLJIT_NOT_EQUAL, SLJIT_R0, 0,
-			SLJIT_IMM, 0);
-	if (resumed == nullptr)
-		ok_ = false;
-	emitTrap(WASM::TrapKind::Internal);
-	sljit_label* after = sljit_emit_label(compiler_);
-	if (after == nullptr)
-		ok_ = false;
-	else if (resumed != nullptr)
-		sljit_set_label(resumed, after);
+	continuationFrameAddress(SLJIT_R2);
 	for (std::size_t i = 0; i < paramCount; ++i)
 		pop();
 	const std::size_t out = stackWidths_.size();
@@ -9620,16 +9631,195 @@ void OpcodeDispatcher::dispatchSuspend(WASM::TagIdx tag)
 		const sljit_sw offset = static_cast<sljit_sw>(
 				offsetof(WASM::ContinuationOpFrame, results)
 				+ i * WASM::kContinuationValueStride);
-		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R1, 0, SLJIT_MEM1(SLJIT_R3),
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R1, 0, SLJIT_MEM1(SLJIT_R2),
 				offset));
 		storeSlot(SLJIT_R1, out + i, widthOf(payload.results[i].val));
 		if (widthOf(payload.results[i].val) == 16) {
+			emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R1, 0, SLJIT_MEM1(SLJIT_R2),
+					offset + 8));
+			emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+					stackSlotOffset(out + i) + 8, SLJIT_R1, 0));
+		}
+	}
+}
+
+void OpcodeDispatcher::dispatchSwitch(WASM::TypeIdx type, WASM::TagIdx tag)
+{
+	if (!reachable_)
+		return;
+	const WASM::FuncType target = continuationSignature(type);
+	(void)tag;
+	if (target.params.empty())
+		throw std::runtime_error("switch: target continuation has no peer parameter");
+	const WASM::StorageType& peer = target.params.back();
+	if ((peer.val.opcode != WASM::ValueTypeCode::Ref
+			&& peer.val.opcode != WASM::ValueTypeCode::RefNull)
+			|| peer.val.heapType < 0)
+		throw std::runtime_error("switch: target's last parameter is not a continuation");
+	const WASM::TypeIdx currentType = static_cast<WASM::TypeIdx>(peer.val.heapType);
+	const WASM::FuncType current = continuationSignature(currentType);
+	const std::size_t argCount = target.params.size() - 1;
+	requireStack(argCount + 1);
+	const std::size_t base = stackWidths_.size() - argCount - 1;
+	if (measureOnly_) {
+		for (std::size_t i = 0; i < argCount + 1; ++i)
+			pop();
+		for (const WASM::StorageType& result : current.params)
+			push(widthOf(result.val));
+		return;
+	}
+	continuationFrameAddress(SLJIT_R3);
+	for (std::size_t i = 0; i < argCount; ++i) {
+		loadSlot(SLJIT_R1, base + i, 8);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_R3),
+				static_cast<sljit_sw>(i * WASM::kContinuationValueStride), SLJIT_R1, 0));
+		if (widthOf(target.params[i].val) == 16) {
+			emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R1, 0,
+					SLJIT_MEM1(SLJIT_SP), stackSlotOffset(base + i) + 8));
+			emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_R3),
+					static_cast<sljit_sw>(i * WASM::kContinuationValueStride + 8),
+					SLJIT_R1, 0));
+		}
+	}
+	loadContext(SLJIT_R0);
+	loadSlot(SLJIT_R1, base + argCount, 8);
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R2, 0, SLJIT_IMM,
+			static_cast<sljit_sw>(argCount)));
+	emitHelper(SLJIT_ARGS4V(P, P, 32, P), &WASM::wasm_cont_switch_ops);
+	loadContext(SLJIT_R0);
+	loadSlot(SLJIT_R1, base + argCount, 8);
+	emitHelper(SLJIT_ARGS2V(P, P), &WASM::wasm_ref_drop);
+	emitPendingTrapCheck();
+	emitPendingExceptionCheck();
+	if (!reachable_) {
+		for (std::size_t i = 0; i < argCount + 1; ++i)
+			pop();
+		return;
+	}
+	continuationFrameAddress(SLJIT_R3);
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R0, 0, SLJIT_MEM1(SLJIT_R3),
+			static_cast<sljit_sw>(offsetof(WASM::ContinuationOpFrame, result)
+					+ offsetof(WASM::ContinuationResumeResult, status))));
+	sljit_jump* completed = sljit_emit_cmp(compiler_, SLJIT_EQUAL, SLJIT_R0, 0,
+			SLJIT_IMM, static_cast<sljit_sw>(WASM::ContinuationStatus::Completed));
+	if (completed == nullptr)
+		ok_ = false;
+	emitTrap(WASM::TrapKind::Internal);
+	sljit_label* done = sljit_emit_label(compiler_);
+	if (done == nullptr)
+		ok_ = false;
+	else if (completed != nullptr)
+		sljit_set_label(completed, done);
+	for (std::size_t i = 0; i < argCount + 1; ++i)
+		pop();
+	const std::size_t out = stackWidths_.size();
+	for (const WASM::StorageType& result : current.params)
+		push(widthOf(result.val));
+	for (std::size_t i = 0; i < current.params.size(); ++i) {
+		const sljit_sw offset = static_cast<sljit_sw>(
+				offsetof(WASM::ContinuationOpFrame, results)
+				+ i * WASM::kContinuationValueStride);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R1, 0, SLJIT_MEM1(SLJIT_R3),
+				offset));
+		storeSlot(SLJIT_R1, out + i, widthOf(current.params[i].val));
+		if (widthOf(current.params[i].val) == 16) {
 			emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R1, 0, SLJIT_MEM1(SLJIT_R3),
 					offset + 8));
 			emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
 					stackSlotOffset(out + i) + 8, SLJIT_R1, 0));
 		}
 	}
+}
+
+void OpcodeDispatcher::dispatchResumeThrow(WASM::TypeIdx type, WASM::TagIdx tag,
+		std::vector<WASM::ContHandlerClause>&& handlers)
+{
+	if (!reachable_)
+		return;
+	require(tag < tagIds_.size(), "resume_throw names an out-of-range tag");
+	const WASM::FuncType payload = tagPayloadType(tag);
+	const std::size_t payloadCount = payload.params.size();
+	requireStack(payloadCount + 1);
+	const std::size_t base = stackWidths_.size() - payloadCount - 1;
+	if (!measureOnly_) {
+		const ExceptionPayloadLayout layout = exceptionPayloadLayout(payload);
+		loadContext(SLJIT_R0);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R1, 0, SLJIT_IMM,
+				static_cast<sljit_sw>(tagIds_[tag])));
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R2, 0, SLJIT_IMM,
+				static_cast<sljit_sw>(layout.size)));
+		emitHelper(SLJIT_ARGS3(P, P, 32, 32), &sljitExnCreate);
+		emitPendingTrapCheck();
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+				exceptionPtrSlotOffset(), SLJIT_R0, 0));
+		for (std::size_t i = 0; i < payloadCount; ++i) {
+			const sljit_sw offset = static_cast<sljit_sw>(layout.fields[i].offset);
+			const int width = widthOf(payload.params[i].val);
+			emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R1, 0,
+					SLJIT_MEM1(SLJIT_SP), exceptionPtrSlotOffset()));
+			if (width == 16) {
+				emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0,
+						SLJIT_MEM1(SLJIT_SP), stackSlotOffset(base + i)));
+				emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_R1),
+						offset, SLJIT_R0, 0));
+				emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0,
+						SLJIT_MEM1(SLJIT_SP), stackSlotOffset(base + i) + 8));
+				emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_R1),
+						offset + 8, SLJIT_R0, 0));
+			} else if (isFloatKind(payload.params[i].val.opcode)) {
+				loadFloatSlot(SLJIT_FR0, base + i, width);
+				emit(sljit_emit_fop1(compiler_,
+						width == 4 ? SLJIT_MOV_F32 : SLJIT_MOV_F64,
+						SLJIT_MEM1(SLJIT_R1), offset, SLJIT_FR0, 0));
+			} else {
+				loadSlot(SLJIT_R0, base + i, width);
+				emit(sljit_emit_op1(compiler_, width == 4 ? SLJIT_MOV32 : SLJIT_MOV,
+						SLJIT_MEM1(SLJIT_R1), offset, SLJIT_R0, 0));
+			}
+		}
+		// Move the continuation operand down over the payload slots.
+		loadSlot(SLJIT_R1, base + payloadCount, 8);
+		storeSlot(SLJIT_R1, base, 8);
+		stackWidths_.resize(base + 1);
+	} else {
+		for (std::size_t i = 0; i < payloadCount; ++i)
+			pop();
+	}
+	resumeThrowActive_ = true;
+	dispatchResume(type, std::move(handlers));
+	resumeThrowActive_ = false;
+}
+
+void OpcodeDispatcher::dispatchResumeThrowRef(WASM::TypeIdx type,
+		std::vector<WASM::ContHandlerClause>&& handlers)
+{
+	if (!reachable_)
+		return;
+	requireStack(2);
+	const std::size_t base = stackWidths_.size() - 2;
+	if (!measureOnly_) {
+		loadSlot(SLJIT_R1, base, 8);
+		sljit_jump* notNull = sljit_emit_cmp(compiler_, SLJIT_NOT_EQUAL,
+				SLJIT_R1, 0, SLJIT_IMM, 0);
+		if (notNull == nullptr)
+			ok_ = false;
+		emitTrap(WASM::TrapKind::NullReference);
+		sljit_label* after = sljit_emit_label(compiler_);
+		if (after == nullptr)
+			ok_ = false;
+		else if (notNull != nullptr)
+			sljit_set_label(notNull, after);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+				exceptionPtrSlotOffset(), SLJIT_R1, 0));
+		loadSlot(SLJIT_R1, base + 1, 8);
+		storeSlot(SLJIT_R1, base, 8);
+		stackWidths_.resize(base + 1);
+	} else {
+		pop();
+	}
+	resumeThrowActive_ = true;
+	dispatchResume(type, std::move(handlers));
+	resumeThrowActive_ = false;
 }
 
 void OpcodeDispatcher::dispatchResume(WASM::TypeIdx type,
@@ -9645,6 +9835,21 @@ void OpcodeDispatcher::dispatchResume(WASM::TypeIdx type,
 	if (measureOnly_) {
 		for (std::size_t i = 0; i < paramCount + 1; ++i)
 			pop();
+		for (const WASM::ContHandlerClause& handler : handlers) {
+			if (handler.isSwitch)
+				continue;
+			stackWidths_.resize(base);
+			const WASM::FuncType tagType = tagPayloadType(handler.tag);
+			for (const WASM::StorageType& parameter : tagType.params)
+				push(widthOf(parameter.val));
+			push(8);
+			if (handler.label < controls_.size()) {
+				ControlFrame& target = controls_[controls_.size() - 1 - handler.label];
+				if (target.kind != ControlKind::Loop)
+					target.endTargeted = true;
+			}
+		}
+		stackWidths_.resize(base);
 		for (const WASM::StorageType& result : function.results)
 			push(widthOf(result.val));
 		return;
@@ -9662,11 +9867,24 @@ void OpcodeDispatcher::dispatchResume(WASM::TypeIdx type,
 					SLJIT_R1, 0));
 		}
 	}
+	if (resumeThrowActive_) {
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R1, 0,
+				SLJIT_MEM1(SLJIT_SP), exceptionPtrSlotOffset()));
+	} else {
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R1, 0, SLJIT_IMM, 0));
+	}
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_R3),
+			static_cast<sljit_sw>(offsetof(WASM::ContinuationOpFrame, exception)),
+			SLJIT_R1, 0));
 	loadContext(SLJIT_R0);
 	loadSlot(SLJIT_R1, base + paramCount, 8);
 	emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R2, 0, SLJIT_IMM,
 			static_cast<sljit_sw>(type)));
 	emitHelper(SLJIT_ARGS4V(P, P, 32, P), &WASM::wasm_cont_resume_ops);
+	// The resume consumes the original handle.
+	loadContext(SLJIT_R0);
+	loadSlot(SLJIT_R1, base + paramCount, 8);
+	emitHelper(SLJIT_ARGS2V(P, P), &WASM::wasm_ref_drop);
 	emitPendingTrapCheck();
 	emitPendingExceptionCheck();
 	if (!reachable_) {
@@ -9676,26 +9894,26 @@ void OpcodeDispatcher::dispatchResume(WASM::TypeIdx type,
 	}
 	// The pending checks and trap helper clobber R0-R3, so recover the frame
 	// address before reading the status.
+	const std::size_t outBase = stackWidths_.size() - (paramCount + 1);
 	continuationFrameAddress(SLJIT_R3);
-	// Only a completed resume is handled yet. A suspension needs the handler
-	// clause lowering, so report it as an unhandled suspension for now.
 	emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R0, 0, SLJIT_MEM1(SLJIT_R3),
 			static_cast<sljit_sw>(offsetof(WASM::ContinuationOpFrame, result)
 					+ offsetof(WASM::ContinuationResumeResult, status))));
-	sljit_jump* completed = sljit_emit_cmp(compiler_, SLJIT_EQUAL, SLJIT_R0, 0,
+	sljit_jump* toCompleted = sljit_emit_cmp(compiler_, SLJIT_EQUAL, SLJIT_R0, 0,
 			SLJIT_IMM, static_cast<sljit_sw>(WASM::ContinuationStatus::Completed));
-	if (completed == nullptr)
+	if (toCompleted == nullptr)
+		ok_ = false;
+	sljit_jump* toSuspended = sljit_emit_cmp(compiler_, SLJIT_EQUAL, SLJIT_R0, 0,
+			SLJIT_IMM, static_cast<sljit_sw>(WASM::ContinuationStatus::Suspended));
+	if (toSuspended == nullptr)
 		ok_ = false;
 	emitTrap(WASM::TrapKind::Internal);
-	sljit_label* done = sljit_emit_label(compiler_);
-	if (done == nullptr)
+	sljit_label* completed = sljit_emit_label(compiler_);
+	if (completed == nullptr)
 		ok_ = false;
-	else if (completed != nullptr)
-		sljit_set_label(completed, done);
-
-	for (std::size_t i = 0; i < paramCount + 1; ++i)
-		pop();
-	const std::size_t out = stackWidths_.size();
+	else if (toCompleted != nullptr)
+		sljit_set_label(toCompleted, completed);
+	stackWidths_.resize(outBase);
 	for (std::size_t i = 0; i < resultCount; ++i)
 		push(widthOf(function.results[i].val));
 	for (std::size_t i = 0; i < resultCount; ++i) {
@@ -9704,14 +9922,103 @@ void OpcodeDispatcher::dispatchResume(WASM::TypeIdx type,
 				+ i * WASM::kContinuationValueStride);
 		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R1, 0, SLJIT_MEM1(SLJIT_R3),
 				offset));
-		storeSlot(SLJIT_R1, out + i, widthOf(function.results[i].val));
+		storeSlot(SLJIT_R1, outBase + i, widthOf(function.results[i].val));
 		if (widthOf(function.results[i].val) == 16) {
 			emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R1, 0, SLJIT_MEM1(SLJIT_R3),
 					offset + 8));
 			emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
-					stackSlotOffset(out + i) + 8, SLJIT_R1, 0));
+					stackSlotOffset(outBase + i) + 8, SLJIT_R1, 0));
 		}
 	}
+	sljit_jump* toDone = sljit_emit_jump(compiler_, SLJIT_JUMP);
+	if (toDone == nullptr)
+		ok_ = false;
+
+	sljit_label* suspended = sljit_emit_label(compiler_);
+	if (suspended == nullptr)
+		ok_ = false;
+	else if (toSuspended != nullptr)
+		sljit_set_label(toSuspended, suspended);
+
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R1, 0, SLJIT_MEM1(SLJIT_R3),
+			static_cast<sljit_sw>(offsetof(WASM::ContinuationOpFrame, result)
+					+ offsetof(WASM::ContinuationResumeResult, tagId))));
+	std::vector<sljit_jump*> handlerJumps(handlers.size(), nullptr);
+	for (std::size_t i = 0; i < handlers.size(); ++i) {
+		if (handlers[i].isSwitch)
+			continue;
+		handlerJumps[i] = sljit_emit_cmp(compiler_, SLJIT_EQUAL, SLJIT_R1, 0,
+				SLJIT_IMM, static_cast<sljit_sw>(internals_.tagIds[handlers[i].tag]));
+	}
+	// No handler matched: release the replacement continuation, then trap.
+	loadContext(SLJIT_R0);
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R1, 0, SLJIT_MEM1(SLJIT_R3),
+			static_cast<sljit_sw>(offsetof(WASM::ContinuationOpFrame, result)
+					+ offsetof(WASM::ContinuationResumeResult, continuation))));
+	emitHelper(SLJIT_ARGS2V(P, P), &WASM::wasm_ref_drop);
+	emitTrapDetail("unhandled continuation suspension");
+
+	for (std::size_t i = 0; i < handlers.size(); ++i) {
+		if (handlers[i].isSwitch)
+			continue;
+		sljit_label* handlerLabel = sljit_emit_label(compiler_);
+		if (handlerLabel == nullptr) {
+			ok_ = false;
+			continue;
+		}
+		if (handlerJumps[i] != nullptr)
+			sljit_set_label(handlerJumps[i], handlerLabel);
+		reachable_ = true;
+		stackWidths_.resize(outBase);
+		continuationFrameAddress(SLJIT_R3);
+		const WASM::FuncType tagType = tagPayloadType(handlers[i].tag);
+		for (std::size_t j = 0; j < tagType.params.size(); ++j)
+			push(widthOf(tagType.params[j].val));
+		push(8);
+		for (std::size_t j = 0; j < tagType.params.size(); ++j) {
+			const sljit_sw tagOffset = static_cast<sljit_sw>(
+					offsetof(WASM::ContinuationOpFrame, tags)
+					+ j * WASM::kContinuationValueStride);
+			emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R1, 0,
+					SLJIT_MEM1(SLJIT_R3), tagOffset));
+			storeSlot(SLJIT_R1, outBase + j, widthOf(tagType.params[j].val));
+			if (widthOf(tagType.params[j].val) == 16) {
+				emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R1, 0,
+						SLJIT_MEM1(SLJIT_R3), tagOffset + 8));
+				emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+						stackSlotOffset(outBase + j) + 8, SLJIT_R1, 0));
+			}
+		}
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R1, 0, SLJIT_MEM1(SLJIT_R3),
+				static_cast<sljit_sw>(offsetof(WASM::ContinuationOpFrame, result)
+						+ offsetof(WASM::ContinuationResumeResult, continuation))));
+		storeSlot(SLJIT_R1, outBase + tagType.params.size(), 8);
+		if (handlers[i].label >= controls_.size())
+			throw std::runtime_error("resume: handler label is out of range");
+		emitBranchTo(controls_[controls_.size() - 1 - handlers[i].label]);
+		markUnreachable();
+	}
+	sljit_label* done = sljit_emit_label(compiler_);
+	if (done == nullptr)
+		ok_ = false;
+	else if (toDone != nullptr)
+		sljit_set_label(toDone, done);
+
+}
+
+void OpcodeDispatcher::emitTrapDetail(const char* detail)
+{
+	const sljit_s32 parked[4] = {SLJIT_R0, SLJIT_R1, SLJIT_R2, SLJIT_R3};
+	for (std::size_t i = 0; i < 4; ++i)
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+				payloadSlotOffset(i), parked[i], 0));
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0, SLJIT_IMM,
+			reinterpret_cast<sljit_sw>(detail)));
+	emitHelper(SLJIT_ARGS1V(P), &sljitReportInternalDetail);
+	emitTrapBranch();
+	for (std::size_t i = 0; i < 4; ++i)
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, parked[i], 0, SLJIT_MEM1(SLJIT_SP),
+				payloadSlotOffset(i)));
 }
 
 void OpcodeDispatcher::dispatchMemoryDiscard(WASM::MemIdx memory)
