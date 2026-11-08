@@ -32,8 +32,8 @@ All commands were run from `build/Desktop-Release` with
 | Default (`libjit`) suite | **22,445 assertions in 821 cases, green** |
 | `[sljit]` targeted tests | **2,682 assertions in 70 cases, green** |
 | `[asmjit]` targeted tests | **1,778 assertions in 61 cases, green** |
-| `WASMJIT_BACKEND=sljit ./Test/WasmJit` | **821 cases: 751 passed / 70 failed; no signal** |
-| `WASMJIT_BACKEND=asmjit ./Test/WasmJit` | **821 cases: 743 passed / 78 failed; no signal** |
+| `WASMJIT_BACKEND=sljit ./Test/WasmJit` | **821 cases: 763 passed / 58 failed; no signal** |
+| `WASMJIT_BACKEND=asmjit ./Test/WasmJit` | **821 cases: 753 passed / 68 failed; no signal** |
 
 Both non-LibJIT runs now complete the whole case set without a process signal.
 Their failures are functional and conformance gaps, not an early abort; the
@@ -79,16 +79,18 @@ refusals and behaviour that is unacceptable in production:
 
 ### 4.1 General conformance failures
 
-The `WASMJIT_BACKEND=sljit` run now completes all 821 cases: 751 pass and 70
+The `WASMJIT_BACKEND=sljit` run now completes all 821 cases: 763 pass and 58
 fail, with no process abort or segfault. The first batch closed `func`,
 `float_memory64`, `table_fill`, the integer lane families, `br_table` arity and
 the legacy-EH rethrow path. The second batch closed every `simd_load*_lane`
 signature (including the five-C-argument shape by counting the hidden `v128`
 result buffer in the frame mode decision), scalar deterministic-NaN
 canonicalisation, `table.grow`, `v128` globals and the integer SIMD lane
-families. The latest batch closed imported global/memory indexing, control-flow
-reachability and the tail-call family. Remaining failures are the
-SIMD/string/relaxed/GC scripts listed in `PRODUCTION_GAPS.md` §29.
+families. The latest batches closed imported global/memory indexing, control-flow
+reachability, the tail-call family, relaxed SIMD, bitmask, i31 and `ref_eq`.
+Remaining failures are the GC-array/struct, `ref.cast`/`br_on_*`, `try_table`,
+`switch`, `call_indirect64` and linking scripts listed in
+`PRODUCTION_GAPS.md` §29.
 
 ### 4.2 Missing lowerings
 
@@ -125,7 +127,7 @@ implemented slices, not a general conformance or safety claim.
 
 AsmJIT is explicitly experimental, and the generic run confirms why:
 
-- the run reaches all 821 cases: 743 pass and 78 fail, with no process
+- the run reaches all 821 cases: 753 pass and 68 fail, with no process
   abort or segfault;
 - `spec: func` is now green (`100 passed / 0 failed`), including the frame-form
   function-label branches;

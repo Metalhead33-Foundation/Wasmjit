@@ -1761,3 +1761,69 @@ AsmJIT  821 cases: 743 passed / 78 failed; no signal
   that sets only `fnPtr` leaves `context` unspecified; a nonzero residue makes
   a native import look like a cross-module Wasm import. Value-initialise the
   descriptor (`Callable host{}`) or set every ABI field.
+
+
+## Both backends — relaxed SIMD, bitmask, i31 and extern conversions
+
+### Intended
+
+Close the relaxed-SIMD set, `simd_boolean`, `ref_eq` and the i31 construction
+needed by the GC reference scripts.
+
+### Root cause
+
+* Every relaxed opcode (`relaxed_swizzle`, `relaxed_trunc`, `relaxed_madd`/
+  `nmadd`, `relaxed_laneselect`, `relaxed_min`/`max`, `relaxed_q15mulr_s`, the
+  two relaxed dots) was still the base dispatcher's `onUnhandledOpcode`.
+* `i8x16/i16x8/i32x4/i64x2.bitmask` were missing, although the shared reduction
+  helpers already existed.
+* `ref.i31` and `i31.get_s/u` were missing. The runtime represents an i31 as a
+  tagged immediate (`(zero-extended value << 1) | 1`), so no GC header exists to
+  read.
+* `any.convert_extern` / `extern.convert_any` were missing. The core already
+  implements the bridge as `ModuleInstance::externBox` / `externUnbox`.
+
+### Fix
+
+* Relaxed SIMD lowers through the existing unary, binary and (new) ternary v128
+  helper paths on both backends. The ternary helper has the same
+  `(a, b, c, out)` shape as `v128.bitselect`; SLJIT now shares that path instead
+  of repeating it.
+* Bitmask ops use the existing `wasm_<lane>_bitmask` reduction helpers.
+* `ref.i31` shifts the zero-extended operand left by one and sets the tag.
+  `i31.get_s` uses a 32-bit arithmetic shift and `i31.get_u` a 32-bit logical
+  shift, with a null check that reports `NullI31Reference`.
+* The extern bridge calls `externBox`/`externUnbox` through non-throwing C
+  wrappers, so an allocation failure reports a trap instead of escaping.
+* A first attempt to fold i31 into `ref.cast`/`ref.test` was backed out: it
+  misclassified a non-i31 table value under ASLR and dereferenced it. The i31
+  construction stays; `ref.cast` i31/None remains a named gap.
+
+### Evidence
+
+```
+Both   spec: i32x4_relaxed_trunc 1/0      spec: i8x16_relaxed_swizzle 6/0
+Both   spec: relaxed_dot_product 11/0     spec: relaxed_madd_nmadd 19/0
+Both   spec: relaxed_min_max 25/0         spec: relaxed_laneselect 12/0
+Both   spec: i16x8_relaxed_q15mulr_s 3/0  spec: simd_boolean 261/0
+Both   spec: ref_eq 83/0
+```
+
+Full serial runs:
+
+```
+SLJIT   821 cases: 763 passed / 58 failed; no signal
+AsmJIT  821 cases: 753 passed / 68 failed; no signal
+```
+
+### Lessons
+
+* **A shared helper is the whole lowering.** Relaxed SIMD is a large opcode set
+  but a small implementation when the strict/relaxed rule already lives in the
+  backend-neutral helpers.
+* **Tagged immediates must be checked before header loads.** i31 is the case
+  that turns a cast into a wild pointer dereference; the safe fix is to branch
+  on the tag first, and back out a partial cast extension until that is done.
+* **A trap helper must not throw.** The extern bridge allocates, so its C
+  wrapper catches and converts to a trap; otherwise a host allocation failure
+  would terminate the process.

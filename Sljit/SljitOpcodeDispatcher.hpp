@@ -468,8 +468,33 @@ protected:
 	void dispatchV128Store64Lane(WASM::MemArg arg1, uint8_t arg2) override; //!< `v128.store64_lane`.
 	void dispatchI8x16Shuffle(std::span<uint8_t> arg) override; //!< `i8x16.shuffle`.
 	void dispatchI8x16Swizzle() override; //!< `i8x16.swizzle`.
+	void dispatchI8x16RelaxedSwizzle() override; //!< `i8x16.relaxed_swizzle`.
+	void dispatchI32x4RelaxedTruncF32x4S() override; //!< `i32x4.relaxed_trunc_f32x4_s`.
+	void dispatchI32x4RelaxedTruncF32x4U() override; //!< `i32x4.relaxed_trunc_f32x4_u`.
+	void dispatchI32x4RelaxedTruncF64x2SZero() override; //!< `i32x4.relaxed_trunc_f64x2_s_zero`.
+	void dispatchI32x4RelaxedTruncF64x2UZero() override; //!< `i32x4.relaxed_trunc_f64x2_u_zero`.
+	void dispatchF32x4RelaxedMadd() override; //!< `f32x4.relaxed_madd`.
+	void dispatchF32x4RelaxedNmadd() override; //!< `f32x4.relaxed_nmadd`.
+	void dispatchF64x2RelaxedMadd() override; //!< `f64x2.relaxed_madd`.
+	void dispatchF64x2RelaxedNmadd() override; //!< `f64x2.relaxed_nmadd`.
+	void dispatchI8x16RelaxedLaneselect() override; //!< `i8x16.relaxed_laneselect`.
+	void dispatchI16x8RelaxedLaneselect() override; //!< `i16x8.relaxed_laneselect`.
+	void dispatchI32x4RelaxedLaneselect() override; //!< `i32x4.relaxed_laneselect`.
+	void dispatchI64x2RelaxedLaneselect() override; //!< `i64x2.relaxed_laneselect`.
+	void dispatchF32x4RelaxedMin() override; //!< `f32x4.relaxed_min`.
+	void dispatchF32x4RelaxedMax() override; //!< `f32x4.relaxed_max`.
+	void dispatchF64x2RelaxedMin() override; //!< `f64x2.relaxed_min`.
+	void dispatchF64x2RelaxedMax() override; //!< `f64x2.relaxed_max`.
+	void dispatchI16x8RelaxedQ15MulRS() override; //!< `i16x8.relaxed_q15mulr_s`.
+	void dispatchI16x8RelaxedDotI8x16I7x16S() override; //!< `i16x8.relaxed_dot_i8x16_i7x16_s`.
+	void dispatchI32x4RelaxedDotI8x16I7x16AddS() override; //!< `i32x4.relaxed_dot_i8x16_i7x16_add_s`.
 	void dispatchRefNull(const WASM::HeapType& arg) override; //!< `ref.null`.
 	void dispatchRefIsNull() override; //!< `ref.is_null`.
+	void dispatchRefI31() override; //!< `ref.i31`.
+	void dispatchI31GetS() override; //!< `i31.get_s`.
+	void dispatchI31GetU() override; //!< `i31.get_u`.
+	void dispatchAnyConvertExtern() override; //!< `any.convert_extern`.
+	void dispatchExternConvertAny() override; //!< `extern.convert_any`.
 	void dispatchBrOnNull(WASM::LabelIdx arg) override; //!< `br_on_null`.
 	void dispatchStructNew(WASM::TypeIdx arg) override; //!< `struct.new`.
 	void dispatchStructNewDefault(WASM::TypeIdx arg) override; //!< `struct.new_default`.
@@ -550,6 +575,10 @@ protected:
 	void dispatchI16x8AllTrue() override; //!< `i16x8.all_true`.
 	void dispatchI32x4AllTrue() override; //!< `i32x4.all_true`.
 	void dispatchI64x2AllTrue() override; //!< `i64x2.all_true`.
+	void dispatchI8x16Bitmask() override; //!< `i8x16.bitmask`.
+	void dispatchI16x8Bitmask() override; //!< `i16x8.bitmask`.
+	void dispatchI32x4Bitmask() override; //!< `i32x4.bitmask`.
+	void dispatchI64x2Bitmask() override; //!< `i64x2.bitmask`.
 
 	void dispatchI32Load(WASM::MemArg arg) override; //!< `i32.load`.
 	void dispatchI32Load8S(WASM::MemArg arg) override; //!< `i32.load8_s`.
@@ -1158,6 +1187,12 @@ private:
 	 * \param address Helper entry point.
 	 */
 	void emitV128Unary(sljit_sw address);
+	//! Emits `i31.get_s` (arithmetic) or `i31.get_u` (logical) over the top slot.
+	//! \param signExtend True for the signed extraction.
+	void emitI31Get(bool signExtend);
+	//! Emits an extern/any bridge helper over the top reference slot.
+	//! \param address Address of the C bridge helper.
+	void emitExternConversion(sljit_sw address);
 	/*!
 	 * \brief Calls a v128 reduction helper and leaves its i32 result.
 	 * \param address Helper entry point.
@@ -1225,6 +1260,8 @@ private:
 	 * \param address Helper entry point.
 	 */
 	void emitV128Binary(sljit_sw address);
+	//! Emits a ternary v128 helper (`a`, `b`, `c`, `out`) over the top three slots.
+	void emitV128Ternary(sljit_sw address);
 	/*!
 	 * \brief Emits a reference cast: null handling plus the type-id check.
 	 * \param arg Target heap type (must be a concrete type index).

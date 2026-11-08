@@ -598,6 +598,11 @@ WASM::Callable* asmjitResolveIndirectCallable(WASM::VMContext* vm, uint32_t tabl
 	return callable;
 }
 
+void asmjitReportNullI31() noexcept
+{
+	WASM::reportTrap(WASM::TrapKind::NullI31Reference);
+}
+
 void asmjitReportCastFailure() noexcept
 {
 	WASM::reportTrap(WASM::TrapKind::CastFailure);
@@ -638,6 +643,26 @@ uint32_t asmjitTypeIsSubtype(WASM::VMContext* vm, uint32_t actual, uint32_t expe
 uint32_t asmjitTypeIdMatchesKind(WASM::VMContext* vm, uint32_t typeId, uint32_t kind) noexcept
 {
 	return reinterpret_cast<WASM::ModuleInstance*>(vm)->typeIdMatchesAbstractKind(typeId, kind) ? 1u : 0u;
+}
+
+void* asmjitExternBox(WASM::VMContext* vm, void* ref) noexcept
+{
+	try {
+		return reinterpret_cast<WASM::ModuleInstance*>(vm)->externBox(ref);
+	} catch (...) {
+		WASM::reportTrap(WASM::TrapKind::Internal);
+		return nullptr;
+	}
+}
+
+void* asmjitExternUnbox(WASM::VMContext* vm, void* ref) noexcept
+{
+	try {
+		return reinterpret_cast<WASM::ModuleInstance*>(vm)->externUnbox(ref);
+	} catch (...) {
+		WASM::reportTrap(WASM::TrapKind::Internal);
+		return nullptr;
+	}
 }
 
 void asmjitArrayInitFromData(WASM::VMContext* vm, void* array, uint32_t typeIndex,
@@ -4669,6 +4694,33 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		values.push_back(buffer);
 	}
 
+	//! Calls a ternary v128 helper (`a`, `b`, `c`, `out`) and pushes `out`.
+	void emitVectorHelper3(void (*helper)(const void*, const void*, const void*, void*))
+	{
+		if (values.size() < 3)
+			throw std::runtime_error("AsmJit v128 helper operand underflow");
+		auto c = values.back();
+		values.pop_back();
+		auto b = values.back();
+		values.pop_back();
+		auto a = values.back();
+		values.pop_back();
+		auto buffer = newVectorBuffer("v128Result");
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kVoid);
+		for (int i = 0; i < 4; ++i)
+			signature.add_arg(asmjit::TypeId::kUIntPtr);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke),
+				reinterpret_cast<uint64_t>(helper), signature),
+				"AsmJit v128 helper call failed");
+		invoke->set_arg(0, a);
+		invoke->set_arg(1, b);
+		invoke->set_arg(2, c);
+		invoke->set_arg(3, buffer);
+		values.push_back(buffer);
+	}
+
 	//! Calls a v128 reduction helper and pushes its i32 result.
 	void emitVectorReduce(int32_t (*helper)(const void*))
 	{
@@ -5050,6 +5102,47 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 
 	void dispatchI8x16Swizzle() override { emitVectorHelper2(&wasm_i8x16_swizzle); }
 
+	void dispatchI8x16RelaxedSwizzle() override
+	{ emitVectorHelper2(&wasm_i8x16_relaxed_swizzle); }
+	void dispatchI32x4RelaxedTruncF32x4S() override
+	{ emitVectorHelper1(&wasm_i32x4_relaxed_trunc_f32x4_s); }
+	void dispatchI32x4RelaxedTruncF32x4U() override
+	{ emitVectorHelper1(&wasm_i32x4_relaxed_trunc_f32x4_u); }
+	void dispatchI32x4RelaxedTruncF64x2SZero() override
+	{ emitVectorHelper1(&wasm_i32x4_relaxed_trunc_f64x2_s_zero); }
+	void dispatchI32x4RelaxedTruncF64x2UZero() override
+	{ emitVectorHelper1(&wasm_i32x4_relaxed_trunc_f64x2_u_zero); }
+	void dispatchF32x4RelaxedMadd() override
+	{ emitVectorHelper3(&wasm_f32x4_relaxed_madd); }
+	void dispatchF32x4RelaxedNmadd() override
+	{ emitVectorHelper3(&wasm_f32x4_relaxed_nmadd); }
+	void dispatchF64x2RelaxedMadd() override
+	{ emitVectorHelper3(&wasm_f64x2_relaxed_madd); }
+	void dispatchF64x2RelaxedNmadd() override
+	{ emitVectorHelper3(&wasm_f64x2_relaxed_nmadd); }
+	void dispatchI8x16RelaxedLaneselect() override
+	{ emitVectorHelper3(&wasm_i8x16_relaxed_laneselect); }
+	void dispatchI16x8RelaxedLaneselect() override
+	{ emitVectorHelper3(&wasm_i16x8_relaxed_laneselect); }
+	void dispatchI32x4RelaxedLaneselect() override
+	{ emitVectorHelper3(&wasm_i32x4_relaxed_laneselect); }
+	void dispatchI64x2RelaxedLaneselect() override
+	{ emitVectorHelper3(&wasm_i64x2_relaxed_laneselect); }
+	void dispatchF32x4RelaxedMin() override
+	{ emitVectorHelper2(&wasm_f32x4_relaxed_min); }
+	void dispatchF32x4RelaxedMax() override
+	{ emitVectorHelper2(&wasm_f32x4_relaxed_max); }
+	void dispatchF64x2RelaxedMin() override
+	{ emitVectorHelper2(&wasm_f64x2_relaxed_min); }
+	void dispatchF64x2RelaxedMax() override
+	{ emitVectorHelper2(&wasm_f64x2_relaxed_max); }
+	void dispatchI16x8RelaxedQ15MulRS() override
+	{ emitVectorHelper2(&wasm_i16x8_relaxed_q15mulr_s); }
+	void dispatchI16x8RelaxedDotI8x16I7x16S() override
+	{ emitVectorHelper2(&wasm_i16x8_relaxed_dot_i8x16_i7x16_s); }
+	void dispatchI32x4RelaxedDotI8x16I7x16AddS() override
+	{ emitVectorHelper3(&wasm_i32x4_relaxed_dot_i8x16_i7x16_add_s); }
+
 	void dispatchRefNull(const WASM::HeapType&) override
 	{
 		// A reference is one null word: the backend does not model typed nulls.
@@ -5057,6 +5150,76 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		checkError(compiler.xor_(reference, reference), "AsmJit ref.null zeroing failed");
 		values.push_back(reference);
 	}
+
+	void dispatchRefI31() override
+	{
+		if (values.empty())
+			throw std::runtime_error("AsmJit ref.i31 operand underflow");
+		auto source = values.back();
+		values.pop_back();
+		// An i31 is a tagged immediate: (zero-extended value << 1) | 1.
+		auto reference = compiler.new_gp64("i31Ref");
+		checkError(compiler.mov(reference.r32(), source.r32()),
+				"AsmJit ref.i31 widening failed");
+		checkError(compiler.shl(reference, 1), "AsmJit ref.i31 shift failed");
+		checkError(compiler.or_(reference, 1), "AsmJit ref.i31 tag failed");
+		values.push_back(reference);
+	}
+
+	void emitI31Get(bool signExtend)
+	{
+		if (values.empty())
+			throw std::runtime_error("AsmJit i31.get operand underflow");
+		auto reference = values.back();
+		values.pop_back();
+		auto notNull = compiler.new_label();
+		checkError(compiler.test(reference, reference), "AsmJit i31.get null test failed");
+		checkError(compiler.jnz(notNull), "AsmJit i31.get null branch failed");
+		asmjit::FuncSignature reportSignature(asmjit::CallConvId::kCDecl);
+		reportSignature.set_ret(asmjit::TypeId::kVoid);
+		asmjit::InvokeNode* report = nullptr;
+		checkError(compiler.invoke(asmjit::Out(report),
+				reinterpret_cast<uint64_t>(&asmjitReportNullI31), reportSignature),
+				"AsmJit i31.get null trap emission failed");
+		emitZeroReturn();
+		checkError(compiler.bind(notNull), "AsmJit i31.get continuation binding failed");
+		auto result = compiler.new_gp32("i31Value");
+		checkError(compiler.mov(result, reference.r32()), "AsmJit i31.get load failed");
+		checkError(signExtend ? compiler.sar(result, 1) : compiler.shr(result, 1),
+				"AsmJit i31.get untag failed");
+		values.push_back(result);
+	}
+
+	void dispatchI31GetS() override { emitI31Get(true); }
+	void dispatchI31GetU() override { emitI31Get(false); }
+
+	void emitExternConversion(void* (*helper)(WASM::VMContext*, void*),
+			const char* operation)
+	{
+		if (values.empty())
+			throw std::runtime_error(std::string("AsmJit ") + operation
+					+ " operand underflow");
+		auto reference = values.back();
+		values.pop_back();
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke),
+				reinterpret_cast<uint64_t>(helper), signature),
+				"AsmJit extern conversion helper failed");
+		invoke->set_arg(0, vmContext);
+		invoke->set_arg(1, reference);
+		auto result = compiler.new_gp64("externConversion");
+		invoke->set_ret(0, result);
+		values.push_back(result);
+	}
+
+	void dispatchAnyConvertExtern() override
+	{ emitExternConversion(&asmjitExternUnbox, "any.convert_extern"); }
+	void dispatchExternConvertAny() override
+	{ emitExternConversion(&asmjitExternBox, "extern.convert_any"); }
 
 	void dispatchRefIsNull() override
 	{
@@ -6576,6 +6739,10 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 	void dispatchI16x8AllTrue() override { emitVectorReduce(&wasm_i16x8_all_true); }
 	void dispatchI32x4AllTrue() override { emitVectorReduce(&wasm_i32x4_all_true); }
 	void dispatchI64x2AllTrue() override { emitVectorReduce(&wasm_i64x2_all_true); }
+	void dispatchI8x16Bitmask() override { emitVectorReduce(&wasm_i8x16_bitmask); }
+	void dispatchI16x8Bitmask() override { emitVectorReduce(&wasm_i16x8_bitmask); }
+	void dispatchI32x4Bitmask() override { emitVectorReduce(&wasm_i32x4_bitmask); }
+	void dispatchI64x2Bitmask() override { emitVectorReduce(&wasm_i64x2_bitmask); }
 
 	void dispatchI32Load(WASM::MemArg arg) override { emitMemoryLoad(arg, 4, LoadKind::I32); }
 	void dispatchI32Load8S(WASM::MemArg arg) override { emitMemoryLoad(arg, 1, LoadKind::I8Signed); }

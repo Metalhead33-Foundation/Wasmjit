@@ -1069,8 +1069,8 @@ uses a rejected artifact and confirms the runtime remains usable.
 | Backend | Verdict | Measured evidence |
 |---|---|---|
 | LibJIT | **Production-ready within its declared envelope** | default suite 22,445 assertions / 821 cases, green; x86-64 Linux only |
-| SLJIT | **Not production-ready** | `WASMJIT_BACKEND=sljit`: 821 cases, 751 passed, 70 failed; no crash |
-| AsmJIT | **Not production-ready** | `WASMJIT_BACKEND=asmjit`: 821 cases, 743 passed, 78 failed; no crash |
+| SLJIT | **Not production-ready** | `WASMJIT_BACKEND=sljit`: 821 cases, 763 passed, 58 failed; no crash |
+| AsmJIT | **Not production-ready** | `WASMJIT_BACKEND=asmjit`: 821 cases, 753 passed, 68 failed; no crash |
 
 The blockers are not just “unimplemented opcodes”:
 
@@ -1081,8 +1081,9 @@ The blockers are not just “unimplemented opcodes”:
   argument count must include the hidden `v128` result out-buffer. The latest
   batch also closed imported global/memory indexing, `loop`/`if`/branch
   reachability, `call_ref`, `return_call`, `return_call_indirect` and
-  `return_call_ref`. Remaining failures are stringref/relaxed-SIMD, GC arrays
-  and some transport families (`call_indirect64`, `switch`, `simd_boolean`).
+  `return_call_ref`. The latest batch also closed relaxed SIMD, bitmask, i31
+  and `ref_eq`. Remaining failures are GC arrays/structs, `ref.cast`/`br_on_*`,
+  `try_table`, `switch`, `call_indirect64` and linking.
   The legacy-EH rewrite itself is frontend desugaring, not a backend feature.
 * **AsmJIT:** `spec: func`, `spec: block`, `spec: br`, `spec: br_if`,
   `spec: br_table`, `spec: if`, `spec: labels`, `spec: return`,
@@ -1091,9 +1092,11 @@ The blockers are not just “unimplemented opcodes”:
   `spec: return_call`, `spec: return_call_indirect` and `spec: return_call_ref`
   are green. The frame ABI now sizes call staging from the real result block,
   accepts native imports through the register ABI, and no longer lets an import
-  signature choose the module ABI. Remaining failures include relaxed SIMD,
-  GC arrays/refs, `atomic`, `throw`, `unreached-valid`, `memory_trap`,
-  `memory_grow64` and the linking/import allocation cases.
+  signature choose the module ABI. Relaxed SIMD, bitmask, i31, `ref_eq` and the
+  extern/any bridge are implemented. Remaining failures include GC arrays/
+  structs, `ref.cast` i31/None, `br_on_non_null`/`br_on_cast*`, `try_table`,
+  `atomic`, `throw`, `unreached-valid`, `memory_trap`, `memory_grow64` and the
+  linking/import allocation cases.
 
 Promotion requires the full backend-selected suite to finish green (no abort,
 no segfault), the strict negative sweep to pass, the sanitizer run to be recorded,
