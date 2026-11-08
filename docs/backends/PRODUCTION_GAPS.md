@@ -1063,7 +1063,7 @@ uses a rejected artifact and confirms the runtime remains usable.
 
 ## 29. Production-readiness gaps -- SLJIT and AsmJIT (2026-11-07)
 
-**Snapshot (2026-11-08, working tree after `0132ce5`):** the detailed note is
+**Snapshot (2026-11-08, working tree after `32ad263`):** the detailed note is
 [`PRODUCTION_READINESS.md`](../BACKEND_PRODUCTION_READINESS.md). The headline is:
 
 | Backend | Verdict | Measured evidence |
