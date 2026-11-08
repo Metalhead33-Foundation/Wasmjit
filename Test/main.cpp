@@ -13757,10 +13757,27 @@ TEST_CASE("stack-switching carries multi-value and reference payloads")
 	auto ref = instance->exportedFunction("ref");
 	REQUIRE(multi.has_value());
 	REQUIRE(ref.has_value());
-	REQUIRE(WASM::callCallable<std::int32_t>(*multi) == 20);
+	std::int32_t multiResult = 0;
+	if (instance->frameCallAbi()) {
+		alignas(16) unsigned char frame[16] = {};
+		WASM::callCallableFrame(*multi, frame);
+		std::memcpy(&multiResult, frame, sizeof(multiResult));
+	} else {
+		multiResult = WASM::callCallable<std::int32_t>(*multi);
+	}
+	REQUIRE(multiResult == 20);
 
 	int marker = 7;
-	void* returned = WASM::callCallable<void*>(*ref, static_cast<void*>(&marker));
+	void* returned = nullptr;
+	if (instance->frameCallAbi()) {
+		alignas(16) unsigned char frame[32] = {};
+		void* argument = &marker;
+		std::memcpy(frame, &argument, sizeof(argument));
+		WASM::callCallableFrame(*ref, frame);
+		std::memcpy(&returned, frame + 8, sizeof(returned));
+	} else {
+		returned = WASM::callCallable<void*>(*ref, static_cast<void*>(&marker));
+	}
 	REQUIRE(returned == static_cast<void*>(&marker));
 	REQUIRE(!WASM::trapPending());
 }

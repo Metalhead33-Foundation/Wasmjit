@@ -9,6 +9,7 @@
 #include "../WasmBase/WasmStack.hpp"
 #include "../WasmBase/WasmStore.hpp"
 #include "../WasmBase/WasmStringOps.hpp"
+#include "../WasmBase/WasmContinuation.hpp"
 #include "../WasmBase/WasmTrap.hpp"
 #include "../WasmBase/WasmTracing.hpp"
 #include "../WasmBase/WasmVMContext.hpp"
@@ -819,6 +820,11 @@ void asmjitReportNullFunctionReference() noexcept
 void asmjitReportUnreachable(const char* detail) noexcept
 {
 	WASM::reportTrap(WASM::TrapKind::Unreachable, detail);
+}
+
+void asmjitReportInternal(const char* detail) noexcept
+{
+	WASM::reportTrap(WASM::TrapKind::Internal, detail);
 }
 
 uint32_t asmjitMemorySize(WASM::VMContext* vm, uint32_t memoryIndex) noexcept
@@ -7927,6 +7933,289 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		invoke->set_ret(0, result);
 		pushStringValue(result);
 		emitPendingTrapReturn();
+	}
+
+	WASM::FuncType continuationSignature(WASM::TypeIdx type) const
+	{
+		if (type >= module.typeCount())
+			throw std::runtime_error("AsmJit continuation type index is out of range");
+		const WASM::CoreTypeView view = module.typeView(type);
+		if (view.kind() != WASM::CanonTypeKind::Cont)
+			throw std::runtime_error("AsmJit continuation instruction does not name a cont type");
+		const WASM::CanonHeapType func = view.contFunc();
+		if (func.kind != WASM::CanonHeapType::Kind::Global)
+			throw std::runtime_error("AsmJit continuation function type is not module-local");
+		for (uint32_t i = 0; i < module.typeCount(); ++i)
+			if (module.typeIds[i] == func.id)
+				return module.funcTypeAt(i);
+		throw std::runtime_error("AsmJit continuation function type is not in this module");
+	}
+
+	void dispatchContNew(WASM::TypeIdx type) override
+	{
+		if (inDeadCode())
+			return;
+		if (values.empty())
+			throw std::runtime_error("AsmJit cont.new operand stack underflow");
+		auto callable = values.back(); values.pop_back();
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke),
+				reinterpret_cast<uint64_t>(&WASM::wasm_cont_new_ops), signature),
+				"AsmJit cont.new helper call failed");
+		invoke->set_arg(0, vmContext);
+		invoke->set_arg(1, callable);
+		invoke->set_arg(2, asmjit::Imm(static_cast<uint32_t>(type)));
+		auto result = compiler.new_gp_ptr("continuation");
+		invoke->set_ret(0, result);
+		values.push_back(result);
+		emitPendingTrapReturn();
+	}
+
+	void emitContinuationFrameArguments(const asmjit::x86::Mem& frame,
+			const std::vector<asmjit::x86::Gp>& operands,
+			const WASM::FuncType& function)
+	{
+		auto at = [&](int32_t offset) {
+			auto memory = frame;
+			memory.set_offset(frame.offset() + offset);
+			return memory;
+		};
+		for (std::size_t i = 0; i < operands.size(); ++i) {
+			const int width = kindWidth(function.params[i].val.opcode);
+			const int32_t offset = static_cast<int32_t>(i * WASM::kContinuationValueStride);
+			if (width == 16) {
+				auto high = compiler.new_gp64("continuationVectorHigh");
+				checkError(compiler.mov(high,
+						asmjit::x86::qword_ptr(operands[i], 8)),
+						"AsmJit continuation vector high copy failed");
+				auto low = compiler.new_gp64("continuationVectorLow");
+				checkError(compiler.mov(low, asmjit::x86::qword_ptr(operands[i])),
+						"AsmJit continuation vector low copy failed");
+				checkError(compiler.mov(at(offset), low),
+						"AsmJit continuation vector low store failed");
+				checkError(compiler.mov(at(offset + 8), high),
+						"AsmJit continuation vector high store failed");
+			} else if (width == 8) {
+				checkError(compiler.mov(at(offset), operands[i]),
+						"AsmJit continuation argument copy failed");
+			} else {
+				checkError(compiler.mov(at(offset), operands[i]),
+						"AsmJit continuation argument copy failed");
+			}
+		}
+	}
+
+	void dispatchResume(WASM::TypeIdx type,
+			std::vector<WASM::ContHandlerClause>&& handlers) override
+	{
+		if (inDeadCode())
+			return;
+		const WASM::FuncType function = continuationSignature(type);
+		if (values.size() < function.params.size() + 1)
+			throw std::runtime_error("AsmJit resume operand stack underflow");
+		auto continuation = values.back(); values.pop_back();
+		std::vector<asmjit::x86::Gp> operands(function.params.size());
+		for (std::size_t i = function.params.size(); i-- > 0;) {
+			operands[i] = values.back();
+			values.pop_back();
+		}
+		asmjit::x86::Mem frame = compiler.new_stack(sizeof(WASM::ContinuationOpFrame), 16,
+				"continuationFrame");
+		auto at = [&](int32_t offset) {
+			auto memory = frame;
+			memory.set_offset(frame.offset() + offset);
+			return memory;
+		};
+		emitContinuationFrameArguments(frame, operands, function);
+		auto frameAddress = compiler.new_gp_ptr("continuationFrameAddress");
+		checkError(compiler.lea(frameAddress, frame),
+				"AsmJit continuation frame address failed");
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kVoid);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke),
+				reinterpret_cast<uint64_t>(&WASM::wasm_cont_resume_ops), signature),
+				"AsmJit resume helper call failed");
+		invoke->set_arg(0, vmContext);
+		invoke->set_arg(1, continuation);
+		invoke->set_arg(2, asmjit::Imm(static_cast<uint32_t>(type)));
+		invoke->set_arg(3, frameAddress);
+		emitPendingTrapReturn();
+		auto status = compiler.new_gp32("continuationStatus");
+		checkError(compiler.mov(status, at(
+				static_cast<int32_t>(offsetof(WASM::ContinuationOpFrame, result)
+						+ offsetof(WASM::ContinuationResumeResult, status)))),
+				"AsmJit continuation status load failed");
+		asmjit::Label completed = compiler.new_label();
+		checkError(compiler.cmp(status,
+				static_cast<int32_t>(WASM::ContinuationStatus::Completed)),
+				"AsmJit continuation status comparison failed");
+		checkError(compiler.je(completed), "AsmJit continuation completed branch failed");
+		const char* detail = handlers.empty() ? "unhandled continuation suspension"
+				: "continuation handlers are not lowered yet";
+		asmjit::FuncSignature reportSignature(asmjit::CallConvId::kCDecl);
+		reportSignature.set_ret(asmjit::TypeId::kVoid);
+		reportSignature.add_arg(asmjit::TypeId::kUIntPtr);
+		asmjit::InvokeNode* report = nullptr;
+		checkError(compiler.invoke(asmjit::Out(report),
+				reinterpret_cast<uint64_t>(&asmjitReportInternal), reportSignature),
+				"AsmJit continuation suspension trap failed");
+		report->set_arg(0, asmjit::Imm(reinterpret_cast<uint64_t>(detail)));
+		emitPendingTrapReturn();
+		checkError(compiler.bind(completed), "AsmJit continuation completed label failed");
+		for (std::size_t i = 0; i < function.results.size(); ++i) {
+			auto result = newIntegerRegister(compiler, function.results[i].val,
+					"continuationResult");
+			const int32_t offset = static_cast<int32_t>(
+					offsetof(WASM::ContinuationOpFrame, results)
+					+ i * WASM::kContinuationValueStride);
+			if (kindWidth(function.results[i].val.opcode) == 16) {
+				for (int word = 0; word < 2; ++word) {
+					auto bits = compiler.new_gp64("continuationResultWord");
+					checkError(compiler.mov(bits, at(offset + word * 8)),
+							"AsmJit continuation result load failed");
+					checkError(compiler.mov(asmjit::x86::qword_ptr(result, word * 8), bits),
+							"AsmJit continuation result store failed");
+				}
+			} else {
+				checkError(compiler.mov(result, at(offset)),
+						"AsmJit continuation scalar result load failed");
+			}
+			values.push_back(result);
+		}
+	}
+
+	void dispatchContBind(WASM::TypeIdx from, WASM::TypeIdx to) override
+	{
+		if (inDeadCode())
+			return;
+		const WASM::FuncType fromType = continuationSignature(from);
+		const WASM::FuncType toType = continuationSignature(to);
+		if (fromType.params.size() < toType.params.size())
+			throw std::runtime_error("AsmJit cont.bind target continuation has more parameters");
+		const std::size_t bound = fromType.params.size() - toType.params.size();
+		if (values.size() < bound + 1)
+			throw std::runtime_error("AsmJit cont.bind operand stack underflow");
+		auto continuation = values.back(); values.pop_back();
+		std::vector<asmjit::x86::Gp> operands(bound);
+		for (std::size_t i = bound; i-- > 0;) {
+			operands[i] = values.back();
+			values.pop_back();
+		}
+		asmjit::x86::Mem frame = compiler.new_stack(sizeof(WASM::ContinuationOpFrame), 16,
+				"continuationFrame");
+		WASM::FuncType boundFunction = fromType;
+		boundFunction.results.clear();
+		boundFunction.params.resize(bound);
+		emitContinuationFrameArguments(frame, operands, boundFunction);
+		auto frameAddress = compiler.new_gp_ptr("continuationFrameAddress");
+		checkError(compiler.lea(frameAddress, frame),
+				"AsmJit cont.bind frame address failed");
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUInt64);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke),
+				reinterpret_cast<uint64_t>(&WASM::wasm_cont_bind_ops), signature),
+				"AsmJit cont.bind helper call failed");
+		invoke->set_arg(0, vmContext);
+		invoke->set_arg(1, continuation);
+		invoke->set_arg(2, asmjit::Imm(static_cast<uint64_t>(from)
+				| (static_cast<uint64_t>(to) << 32)));
+		invoke->set_arg(3, frameAddress);
+		auto result = compiler.new_gp_ptr("boundContinuation");
+		invoke->set_ret(0, result);
+		values.push_back(result);
+		emitPendingTrapReturn();
+	}
+
+	void dispatchSuspend(WASM::TagIdx tag) override
+	{
+		if (inDeadCode())
+			return;
+		const WASM::FuncType payload = tagPayloadType(tag);
+		if (values.size() < payload.params.size())
+			throw std::runtime_error("AsmJit suspend operand stack underflow");
+		std::vector<asmjit::x86::Gp> operands(payload.params.size());
+		for (std::size_t i = payload.params.size(); i-- > 0;) {
+			operands[i] = values.back();
+			values.pop_back();
+		}
+		asmjit::x86::Mem frame = compiler.new_stack(sizeof(WASM::ContinuationOpFrame), 16,
+				"continuationFrame");
+		auto at = [&](int32_t offset) {
+			auto memory = frame;
+			memory.set_offset(frame.offset() + offset);
+			return memory;
+		};
+		emitContinuationFrameArguments(frame, operands, payload);
+		auto frameAddress = compiler.new_gp_ptr("continuationFrameAddress");
+		checkError(compiler.lea(frameAddress, frame),
+				"AsmJit suspend frame address failed");
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kVoid);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke),
+				reinterpret_cast<uint64_t>(&WASM::wasm_cont_suspend_ops), signature),
+				"AsmJit suspend helper call failed");
+		invoke->set_arg(0, vmContext);
+		invoke->set_arg(1, asmjit::Imm(static_cast<uint32_t>(internals.tagIds[tag])));
+		invoke->set_arg(2, frameAddress);
+		emitPendingTrapReturn();
+		auto resumed = compiler.new_gp32("continuationResumed");
+		checkError(compiler.mov(resumed, at(static_cast<int32_t>(
+				offsetof(WASM::ContinuationOpFrame, result)
+				+ offsetof(WASM::ContinuationResumeResult, status)))),
+				"AsmJit suspend status load failed");
+		asmjit::Label resumedLabel = compiler.new_label();
+		checkError(compiler.test(resumed, resumed), "AsmJit suspend status test failed");
+		checkError(compiler.jnz(resumedLabel), "AsmJit suspend resumed branch failed");
+		asmjit::FuncSignature reportSignature(asmjit::CallConvId::kCDecl);
+		reportSignature.set_ret(asmjit::TypeId::kVoid);
+		reportSignature.add_arg(asmjit::TypeId::kUIntPtr);
+		asmjit::InvokeNode* report = nullptr;
+		checkError(compiler.invoke(asmjit::Out(report),
+				reinterpret_cast<uint64_t>(&asmjitReportInternal), reportSignature),
+				"AsmJit suspend cancellation trap failed");
+		report->set_arg(0, asmjit::Imm(reinterpret_cast<uint64_t>(
+				"suspended continuation was cancelled")));
+		emitPendingTrapReturn();
+		checkError(compiler.bind(resumedLabel), "AsmJit suspend resumed label failed");
+		for (std::size_t i = 0; i < payload.results.size(); ++i) {
+			auto result = newIntegerRegister(compiler, payload.results[i].val,
+					"continuationSuspendResult");
+			const int32_t offset = static_cast<int32_t>(
+					offsetof(WASM::ContinuationOpFrame, results)
+					+ i * WASM::kContinuationValueStride);
+			if (kindWidth(payload.results[i].val.opcode) == 16) {
+				for (int word = 0; word < 2; ++word) {
+					auto bits = compiler.new_gp64("continuationSuspendWord");
+					checkError(compiler.mov(bits, at(offset + word * 8)),
+							"AsmJit suspend result load failed");
+					checkError(compiler.mov(asmjit::x86::qword_ptr(result, word * 8), bits),
+							"AsmJit suspend result store failed");
+				}
+			} else {
+				checkError(compiler.mov(result, at(offset)),
+						"AsmJit suspend scalar result load failed");
+			}
+			values.push_back(result);
+		}
 	}
 
 	void emitStringNewArray(WASM::TypeIdx type, int mode)

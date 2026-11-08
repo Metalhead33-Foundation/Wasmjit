@@ -1063,14 +1063,14 @@ uses a rejected artifact and confirms the runtime remains usable.
 
 ## 29. Production-readiness gaps -- SLJIT and AsmJIT (2026-11-07)
 
-**Snapshot (2026-11-08, working tree after the reference-barrier batch):** the detailed note is
+**Snapshot (2026-11-08, working tree after the first continuation slice):** the detailed note is
 [`PRODUCTION_READINESS.md`](../BACKEND_PRODUCTION_READINESS.md). The headline is:
 
 | Backend | Verdict | Measured evidence |
 |---|---|---|
 | LibJIT | **Production-ready within its declared envelope** | default suite 22,448 assertions / 821 cases, green; x86-64 Linux only |
-| SLJIT | **Not production-ready** | `WASMJIT_BACKEND=sljit`: 821 cases, 796 passed, 25 failed; no crash |
-| AsmJIT | **Not production-ready** | `WASMJIT_BACKEND=asmjit`: 821 cases, 791 passed, 30 failed; no crash |
+| SLJIT | **Not production-ready** | `WASMJIT_BACKEND=sljit`: 821 cases, 802 passed, 19 failed; no crash |
+| AsmJIT | **Not production-ready** | `WASMJIT_BACKEND=asmjit`: 821 cases, 797 passed, 24 failed; no crash |
 
 The blockers are not just “unimplemented opcodes”:
 

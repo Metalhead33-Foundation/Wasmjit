@@ -7,6 +7,10 @@
 #include "WasmTrap.hpp"
 #include "WasmValue.hpp"
 #include "WasmModuleInstance.hpp"
+#include "WasmBackendAbi.hpp"
+#include "WasmType.hpp"
+
+#include <ffi.h>
 
 #include <algorithm>
 #include <atomic>
@@ -16,6 +20,7 @@
 #include <cstring>
 #include <memory>
 #include <mutex>
+#include <stdexcept>
 #include <pthread.h>
 #include <string>
 #include <thread>
@@ -1727,6 +1732,289 @@ std::size_t HostContinuationScheduler::run() noexcept
 		++count;
 	return count;
 }
+
+namespace {
+
+WASM::TypeIdx continuationFunctionType(const WASM::Module& module, std::uint32_t contType)
+{
+	if (contType >= module.typeCount())
+		throw std::runtime_error("continuation type index is out of range");
+	const WASM::CoreTypeView view = module.typeView(contType);
+	if (view.kind() != WASM::CanonTypeKind::Cont)
+		throw std::runtime_error("continuation instruction does not name a cont type");
+	const WASM::CanonHeapType func = view.contFunc();
+	if (func.kind != WASM::CanonHeapType::Kind::Global)
+		throw std::runtime_error("continuation function type is not module-local");
+	for (std::uint32_t i = 0; i < module.typeCount(); ++i)
+		if (module.typeIds[i] == func.id)
+			return i;
+	throw std::runtime_error("continuation function type is not in this module");
+}
+
+WASM::FuncType tagFunctionType(const WASM::Module& module, std::uint32_t tagIndex)
+{
+	const std::size_t imported = module.importTags.size();
+	std::uint32_t typeIndex = 0;
+	if (tagIndex < imported) {
+		typeIndex = module.importTags[tagIndex].typeIdx;
+	} else {
+		const std::size_t local = tagIndex - imported;
+		if (local >= module.tags.size())
+			throw std::runtime_error("continuation instruction names an out-of-range tag");
+		typeIndex = module.tags[local].typeIdx;
+	}
+	if (typeIndex >= module.typeCount()
+			|| module.typeView(typeIndex).kind() != WASM::CanonTypeKind::Func)
+		throw std::runtime_error("continuation tag does not name a function type");
+	return module.funcTypeAt(typeIndex);
+}
+
+std::uint8_t continuationKindOf(WASM::ValueTypeCode code)
+{
+	switch (code) {
+	case WASM::ValueTypeCode::I32:
+	case WASM::ValueTypeCode::I8:
+	case WASM::ValueTypeCode::I16:
+		return static_cast<std::uint8_t>(WASM::ContinuationValueKind::I32);
+	case WASM::ValueTypeCode::I64:
+		return static_cast<std::uint8_t>(WASM::ContinuationValueKind::I64);
+	case WASM::ValueTypeCode::F32:
+		return static_cast<std::uint8_t>(WASM::ContinuationValueKind::F32);
+	case WASM::ValueTypeCode::F64:
+		return static_cast<std::uint8_t>(WASM::ContinuationValueKind::F64);
+	case WASM::ValueTypeCode::V128:
+		return static_cast<std::uint8_t>(WASM::ContinuationValueKind::V128);
+	default:
+		return static_cast<std::uint8_t>(WASM::ContinuationValueKind::Ref);
+	}
+}
+
+std::size_t continuationKindBytes(std::uint8_t kind)
+{
+	switch (static_cast<WASM::ContinuationValueKind>(kind)) {
+	case WASM::ContinuationValueKind::I32:
+	case WASM::ContinuationValueKind::F32:
+		return 4;
+	case WASM::ContinuationValueKind::V128:
+		return 16;
+	default:
+		return 8;
+	}
+}
+
+ffi_type* ffiTypeOfKind(std::uint8_t kind)
+{
+	switch (static_cast<WASM::ContinuationValueKind>(kind)) {
+	case WASM::ContinuationValueKind::I32: return &ffi_type_sint32;
+	case WASM::ContinuationValueKind::I64: return &ffi_type_sint64;
+	case WASM::ContinuationValueKind::F32: return &ffi_type_float;
+	case WASM::ContinuationValueKind::F64: return &ffi_type_double;
+	case WASM::ContinuationValueKind::Ref: return &ffi_type_pointer;
+	default: return nullptr;
+	}
+}
+
+void copyFrameValue(std::uint8_t* destination, const WASM::ContinuationValue& value,
+		std::uint8_t kind)
+{
+	const std::size_t bytes = continuationKindBytes(kind);
+	std::memcpy(destination, &value, bytes);
+}
+
+void readFrameValue(WASM::ContinuationValue& value, const std::uint8_t* source,
+		std::uint8_t kind)
+{
+	const std::size_t bytes = continuationKindBytes(kind);
+	std::memcpy(&value, source, bytes);
+}
+
+WASM::ValueKind valueKindOfContinuation(std::uint8_t kind)
+{
+	switch (static_cast<WASM::ContinuationValueKind>(kind)) {
+	case WASM::ContinuationValueKind::I32: return WASM::ValueKind::I32;
+	case WASM::ContinuationValueKind::I64: return WASM::ValueKind::I64;
+	case WASM::ContinuationValueKind::F32: return WASM::ValueKind::F32;
+	case WASM::ContinuationValueKind::F64: return WASM::ValueKind::F64;
+	case WASM::ContinuationValueKind::V128: return WASM::ValueKind::V128;
+	default: return WASM::ValueKind::Ref;
+	}
+}
+
+void invokeFfiContinuation(void* target, void* context,
+		const WASM::ContinuationValue* args, std::uint32_t argCount,
+		WASM::ContinuationValue* results, std::uint32_t resultCount,
+		const std::uint8_t* paramKinds, const std::uint8_t* resultKinds)
+{
+	auto* callable = static_cast<WASM::Callable*>(target);
+	if (callable == nullptr || callable->fnPtr == nullptr)
+		throw std::runtime_error("continuation invoker has no target");
+	void* calleeContext = callable->context != nullptr ? callable->context : context;
+	auto* instance = static_cast<WASM::ModuleInstance*>(context);
+	const bool frameAbi = instance != nullptr && instance->frameCallAbi();
+	if (frameAbi) {
+		std::vector<WASM::ValueKind> params;
+		params.reserve(argCount);
+		for (std::uint32_t i = 0; i < argCount; ++i)
+			params.push_back(valueKindOfContinuation(paramKinds[i]));
+		std::vector<WASM::ValueKind> returns;
+		returns.reserve(resultCount);
+		for (std::uint32_t i = 0; i < resultCount; ++i)
+			returns.push_back(valueKindOfContinuation(resultKinds[i]));
+		std::vector<std::uint8_t> frame(WASM::frameBytes(params, returns), 0);
+		for (std::uint32_t i = 0; i < argCount; ++i)
+			copyFrameValue(frame.data() + WASM::frameArgumentOffset(params, i), args[i],
+					paramKinds[i]);
+		using FrameEntry = void (*)(void*, void*);
+		reinterpret_cast<FrameEntry>(callable->fnPtr)(calleeContext, frame.data());
+		for (std::uint32_t i = 0; i < resultCount; ++i)
+			readFrameValue(results[i],
+					frame.data() + WASM::frameResultOffset(params, returns, i),
+					resultKinds[i]);
+		return;
+	}
+
+	std::vector<ffi_type*> argumentTypes;
+	std::vector<void*> argumentValues;
+	argumentTypes.reserve(argCount + 1);
+	argumentValues.reserve(argCount + 1);
+	void* contextSlot = calleeContext;
+	argumentTypes.push_back(&ffi_type_pointer);
+	argumentValues.push_back(&contextSlot);
+	std::vector<void*> pinned(argCount);
+	for (std::uint32_t i = 0; i < argCount; ++i) {
+		ffi_type* type = ffiTypeOfKind(paramKinds[i]);
+		if (type == nullptr)
+			throw std::runtime_error("continuation invoker cannot marshal a v128 register argument");
+		pinned[i] = const_cast<WASM::ContinuationValue*>(&args[i]);
+		argumentTypes.push_back(type);
+		argumentValues.push_back(pinned[i]);
+	}
+	ffi_type* resultType = resultCount == 0 ? &ffi_type_void
+			: ffiTypeOfKind(resultKinds[0]);
+	if (resultType == nullptr)
+		throw std::runtime_error("continuation invoker cannot marshal this result");
+	if (resultCount > 1)
+		throw std::runtime_error("continuation invoker needs the frame ABI for multiple results");
+	ffi_cif cif;
+	if (ffi_prep_cif(&cif, FFI_DEFAULT_ABI, static_cast<unsigned>(argumentTypes.size()),
+			resultType, argumentTypes.data()) != FFI_OK)
+		throw std::runtime_error("continuation invoker could not prepare libffi");
+	std::uint64_t returnSlot = 0;
+	ffi_call(&cif, FFI_FN(callable->fnPtr), &returnSlot, argumentValues.data());
+	if (resultCount != 0)
+		std::memcpy(&results[0], &returnSlot, continuationKindBytes(resultKinds[0]));
+}
+
+} // namespace
+
+void* wasm_cont_new_ops(VMContext* context, void* callable,
+		std::uint32_t contType) noexcept
+{
+	try {
+		if (context == nullptr || context->module == nullptr) {
+			reportTrap(TrapKind::Internal, "cont.new has no module context");
+			return nullptr;
+		}
+		const TypeIdx funcType = continuationFunctionType(*context->module, contType);
+		const FuncType signature = context->module->funcTypeAt(funcType);
+		std::vector<std::uint8_t> paramKinds;
+		paramKinds.reserve(signature.params.size());
+		for (const StorageType& parameter : signature.params)
+			paramKinds.push_back(continuationKindOf(parameter.val.opcode));
+		std::vector<std::uint8_t> resultKinds;
+		resultKinds.reserve(signature.results.size());
+		for (const StorageType& result : signature.results)
+			resultKinds.push_back(continuationKindOf(result.val.opcode));
+		return wasm_cont_new_ex(callable, context, invokeFfiContinuation,
+				static_cast<std::uint32_t>(signature.params.size()),
+				static_cast<std::uint32_t>(signature.results.size()),
+				paramKinds.empty() ? nullptr : paramKinds.data(),
+				resultKinds.empty() ? nullptr : resultKinds.data());
+	} catch (...) {
+		reportTrap(TrapKind::Internal);
+		return nullptr;
+	}
+}
+
+void wasm_cont_resume_ops(VMContext* context, void* continuation,
+		std::uint32_t contType, ContinuationOpFrame* frame) noexcept
+{
+	try {
+		if (context == nullptr || context->module == nullptr || frame == nullptr) {
+			reportTrap(TrapKind::Internal, "resume has no module context");
+			return;
+		}
+		const TypeIdx funcType = continuationFunctionType(*context->module, contType);
+		const FuncType signature = context->module->funcTypeAt(funcType);
+		frame->result = ContinuationResumeResult{};
+		wasm_cont_resume_ex(continuation, frame->args,
+				static_cast<std::uint32_t>(signature.params.size()),
+				frame->results, ContinuationOpFrame::kCapacity,
+				frame->tags, ContinuationOpFrame::kCapacity, &frame->result);
+	} catch (...) {
+		reportTrap(TrapKind::Internal);
+	}
+}
+
+void* wasm_cont_bind_ops(VMContext* context, void* continuation,
+		uint64_t packedTypes, ContinuationOpFrame* frame) noexcept
+{
+	try {
+		if (context == nullptr || context->module == nullptr || frame == nullptr) {
+			reportTrap(TrapKind::Internal, "cont.bind has no module context");
+			return nullptr;
+		}
+		const TypeIdx fromType = static_cast<TypeIdx>(packedTypes & 0xFFFFFFFFu);
+		const TypeIdx toType = static_cast<TypeIdx>(packedTypes >> 32);
+		const FuncType from = context->module->funcTypeAt(
+				continuationFunctionType(*context->module, fromType));
+		const FuncType to = context->module->funcTypeAt(
+				continuationFunctionType(*context->module, toType));
+		if (from.params.size() < to.params.size()) {
+			reportTrap(TrapKind::Internal,
+					"cont.bind target continuation has more parameters");
+			return nullptr;
+		}
+		const std::uint32_t bound = static_cast<std::uint32_t>(
+				from.params.size() - to.params.size());
+		return wasm_cont_bind_ex(continuation, frame->args, bound);
+	} catch (...) {
+		reportTrap(TrapKind::Internal);
+		return nullptr;
+	}
+}
+
+
+void wasm_cont_suspend_ops(VMContext* context, std::uint32_t tagId,
+		ContinuationOpFrame* frame) noexcept
+{
+	try {
+		if (context == nullptr || context->module == nullptr || frame == nullptr) {
+			reportTrap(TrapKind::Internal, "suspend has no module context");
+			return;
+		}
+		const FuncType tag = tagFunctionType(*context->module, tagId);
+		std::vector<std::uint8_t> argKinds;
+		argKinds.reserve(tag.params.size());
+		for (const StorageType& parameter : tag.params)
+			argKinds.push_back(continuationKindOf(parameter.val.opcode));
+		std::vector<std::uint8_t> resultKinds;
+		resultKinds.reserve(tag.results.size());
+		for (const StorageType& result : tag.results)
+			resultKinds.push_back(continuationKindOf(result.val.opcode));
+		std::uint32_t count = 0;
+		const std::int32_t resumed = wasm_cont_suspend_ex(static_cast<std::int32_t>(tagId),
+				frame->args, static_cast<std::uint32_t>(tag.params.size()),
+				argKinds.empty() ? nullptr : argKinds.data(),
+				frame->results, ContinuationOpFrame::kCapacity, &count,
+				resultKinds.empty() ? nullptr : resultKinds.data());
+		frame->result.status = resumed;
+		frame->result.resultCount = count;
+	} catch (...) {
+		reportTrap(TrapKind::Internal);
+	}
+}
+
 
 extern "C" {
 

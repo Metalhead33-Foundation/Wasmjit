@@ -837,6 +837,10 @@ private:
 	void markTopStringRef();
 	/** \brief Tests the ownership bit of the current operand-stack top. \return true when `drop` must release it. */
 	bool topIsStringRef() const;
+	/** \brief Address of the fixed continuation scratch frame. \param reg Register receiving the address. */
+	void continuationFrameAddress(int reg);
+	/** \brief Resolves a continuation type index to its function type. \param type Continuation type index. \return The target function type. */
+	WASM::FuncType continuationSignature(WASM::TypeIdx type) const;
 	/*!
 	 * \brief Pops one operand-stack slot.
 	 * \return The width of the popped slot.
@@ -1487,6 +1491,10 @@ private:
 	void dispatchStringViewIterAdvance() override; //!< `stringview_iter.advance`.
 	void dispatchStringViewIterRewind() override; //!< `stringview_iter.rewind`.
 	void dispatchStringViewIterSlice() override; //!< `stringview_iter.slice`.
+	void dispatchContNew(WASM::TypeIdx type) override; //!< `cont.new`.
+	void dispatchContBind(WASM::TypeIdx from, WASM::TypeIdx to) override; //!< `cont.bind`.
+	void dispatchSuspend(WASM::TagIdx tag) override; //!< `suspend`.
+	void dispatchResume(WASM::TypeIdx type, std::vector<WASM::ContHandlerClause>&& handlers) override; //!< `resume`.
 
 private:
 	void emitStringViewCreate(const void* helper); //!< Shared view/iterator creation lowering.

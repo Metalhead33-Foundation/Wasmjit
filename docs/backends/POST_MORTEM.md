@@ -2362,7 +2362,63 @@ Default 22,448 assertions in 821 cases, green
   range and layout are part of the helper contract now.
 
 
-## Reference barriers at globals and locals
+## First stack-switching slice: `cont.new`, `resume`, `cont.bind`
+
+### Intended
+
+Give both new backends a real continuation entry path instead of the generic
+“opcode not lowered” failure.
+
+### Fix
+
+* Added `ContinuationOpFrame`, the fixed backend scratch frame shared with the
+  existing `ContinuationValue` ABI.
+* Added a libffi-backed `ContinuationInvokeFn` in the core. It understands both
+  the register ABI and the staging-frame ABI, so a continuation target compiled
+  by either backend can be invoked from the provider worker.
+* Added `wasm_cont_new_ops`, `wasm_cont_resume_ops`, `wasm_cont_bind_ops` and
+  `wasm_cont_suspend_ops`; the first three are lowered on both backends.
+* SLJIT reserves one fixed `ContinuationOpFrame` in its measured frame.
+  AsmJIT allocates one with `new_stack` per operation.
+* The wide/multi-value test now honours `frameCallAbi()` and passes reference
+  arguments/results in the canonical frame slots.
+
+### Evidence
+
+Green on both backends:
+
+```
+stack-switching module runs cont.new and resume
+stack-switching module passes an argument through resume
+stack-switching carries multi-value and reference payloads
+stack-switching binds a continuation argument prefix
+```
+
+Full serial runs:
+
+```
+SLJIT   821 cases: 802 passed / 19 failed; no signal
+AsmJIT  821 cases: 797 passed / 24 failed; no signal
+Default 22,448 assertions in 821 cases, green
+```
+
+### Remaining in the family
+
+Suspension is lowered, but `resume` still treats a `Suspended` status as an
+unhandled trap. The next piece is the handler-clause control flow: branch to the
+`on $tag` label with the tag payload plus the replacement continuation, release
+an unhandled suspension, and implement `resume_throw` / `switch`.
+
+### Lessons
+
+* **The invoker must know the target's module ABI.** A continuation worker is a
+  different stack but the same `Callable`; calling it with the wrong ABI corrupts
+  the worker immediately.
+* **`ContinuationValueKind` and `ValueKind` are different enums.** They happen to
+  have overlapping spellings but different numeric values; converting by cast
+  silently shifted every kind.
+
+
 
 ### Intended
 

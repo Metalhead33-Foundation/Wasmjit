@@ -60,8 +60,8 @@ namespace WASM {
 //! The host-facing `HostContinuation` below is the JSPI/embedder seam. It is not
 //! an agent or scheduler API; true multi-agent execution remains deferred.
 
-//! The result of `wasm_cont_resume`. The layout is part of the generated-code
-//! ABI: the backend loads the fields by offset (docs/ABI.md).
+struct VMContext;
+
 enum class ContinuationStatus : std::int32_t {
 	Completed = 0, //!< the resumed context returned; `value` is its result
 	Suspended = 1, //!< it suspended; `tagId`, `value` and `continuation` are valid
@@ -112,6 +112,37 @@ struct alignas(16) ContinuationValue {
 	//! The raw slot contents; interpretation is the backend thunk's job.
 	std::uint64_t words[2] = {0, 0};
 };
+
+//! Fixed-size scratch frame shared by the backend lowerings.
+//!
+//! A backend copies its operand slots into `args`, calls one of the `_ops`
+//! helpers and reads `results`/`tags`/`result` back. Keeping the layout in the
+//! core means every backend agrees about slot widths and status fields.
+/** \brief Backend-visible continuation operand/result frame. */
+struct ContinuationOpFrame {
+	static constexpr std::uint32_t kCapacity = 16; //!< Slots per buffer.
+	ContinuationValue args[kCapacity]; //!< Incoming arguments/tag payload.
+	ContinuationValue results[kCapacity]; //!< Completed result slots.
+	ContinuationValue tags[kCapacity]; //!< Suspension tag payload slots.
+	void* exception = nullptr; //!< Exception to inject for `resume_throw`.
+	ContinuationResumeResult result; //!< Status and counts from the runtime.
+};
+
+/** \brief Creates a typed continuation using the shared libffi thunk. \param context Creation VM context. \param callable Target callable. \param contType Continuation type index. \return New continuation reference, or nullptr after a trap. */
+void* wasm_cont_new_ops(VMContext* context, void* callable,
+		std::uint32_t contType) noexcept;
+
+/** \brief Resumes a continuation with the shared wide context. \param context Creation VM context. \param continuation Continuation reference. \param contType Continuation type index. \param frame Argument/result frame. */
+void wasm_cont_resume_ops(VMContext* context, void* continuation,
+		std::uint32_t contType, ContinuationOpFrame* frame) noexcept;
+
+/** \brief Binds a typed parameter prefix to a continuation. \param context Creation VM context. \param continuation Continuation reference. \param packedTypes Low 32 bits source cont type, high 32 bits target cont type. \param frame Bound argument slots. \return Replacement continuation reference, or nullptr after a trap. */
+void* wasm_cont_bind_ops(VMContext* context, void* continuation,
+		uint64_t packedTypes, ContinuationOpFrame* frame) noexcept;
+
+/** \brief Suspends the current continuation with a typed tag payload. \param context Creation VM context. \param tagId Runtime tag id. \param frame Tag payload and resumed-result slots. */
+void wasm_cont_suspend_ops(VMContext* context, std::uint32_t tagId,
+		ContinuationOpFrame* frame) noexcept;
 
 //! Backend-supplied generic target invocation. `target` is a `Callable*` and
 //! `context` is the creation context; the callback calls the target's C ABI
