@@ -504,6 +504,9 @@ protected:
 	void dispatchStructGetU(WASM::TypeIdx arg1, uint32_t arg2) override; //!< `struct.get_u`.
 	void dispatchArrayNew(WASM::TypeIdx arg) override; //!< `array.new`.
 	void dispatchArrayNewData(WASM::TypeIdx arg1, uint32_t arg2) override; //!< `array.new_data`.
+	void dispatchArrayNewElem(WASM::TypeIdx arg1, uint32_t arg2) override; //!< `array.new_elem`.
+	void dispatchArrayInitData(WASM::TypeIdx arg1, uint32_t arg2) override; //!< `array.init_data`.
+	void dispatchArrayInitElem(WASM::TypeIdx arg1, uint32_t arg2) override; //!< `array.init_elem`.
 	void dispatchArrayFill(WASM::TypeIdx arg) override; //!< `array.fill`.
 	void dispatchArrayCopy(WASM::TypeIdx arg1, WASM::TypeIdx arg2) override; //!< `array.copy`.
 	void dispatchArrayNewDefault(WASM::TypeIdx arg) override; //!< `array.new_default`.

@@ -1827,3 +1827,77 @@ AsmJIT  821 cases: 753 passed / 68 failed; no signal
 * **A trap helper must not throw.** The extern bridge allocates, so its C
   wrapper catches and converts to a trap; otherwise a host allocation failure
   would terminate the process.
+
+## Both backends — GC array construction/init and packed structs
+
+### Intended
+
+Close the GC array scripts and `struct` on both backends.
+
+### Root cause
+
+* `array.new_elem`, `array.init_elem` and `array.init_data` were unhandled.
+  The core only had whole-array copy helpers; no range-checked sub-range form
+  existed for `array.init_*`.
+* Expression-form element segments were rejected outside `funcref` arrays. The
+  spec uses `i31ref` (and later typed GC refs) segments whose entries are cached
+  in `elementSegmentRefs` at instantiation.
+* `array.new_data` allocated before checking the source segment, so an absurd
+  length reported out-of-memory instead of out-of-bounds memory access (GC-5).
+* AsmJIT `array.set` scaled `i8`/`i16` elements by 8 bytes, so packed writes
+  landed past the element.
+* AsmJIT `struct.set` rejected packed fields; SLJIT `struct.set` and default
+  zero-fill rejected them, and SLJIT `struct.set` reported `NullReference`
+  instead of `NullStructureReference`.
+
+### Fix
+
+* Added `ModuleInstance::arrayInitDataRange` / `arrayInitElemRange` with
+  destination-array and source-segment checks, and routed both backends through
+  their C wrappers.
+* Added `ModuleInstance::arrayNewData` / `arrayNewElem`: validate the source
+  range first, then allocate, then copy. This also fixes GC-5 trap ordering.
+* Element copies now use the cached evaluated segment references and retain GC
+  references (`refClone`); index-form `funcref` segments keep their direct
+  callable mapping.
+* Added a ternary helper and full array dispatch on AsmJIT; SLJIT uses a
+  five-word descriptor in its call staging area because its helper ABI accepts
+  at most four C arguments.
+* Fixed AsmJIT `array.set` scaling and packed `struct.set`; added SLJIT packed
+  struct zero-fill/set and corrected its null-structure trap kind.
+* SLJIT deliberately refuses `array.new_elem` with typed GC-reference elements;
+  that shape produced an ASLR-sensitive wild pointer. i31/funcref segments are
+  supported, and the refusal is a clean compile-time diagnostic.
+
+### Evidence
+
+```
+AsmJIT array                 31/0    AsmJIT array_new_elem 8/0
+Both   array_init_elem       33/0    Both array_init_data 44/0
+SLJIT  array                 36/12 (module with typed GC refs refused)
+SLJIT  array_new_elem        22/2  (same typed-GC-ref refusal)
+SLJIT  struct                25/0    AsmJIT struct 18/0
+```
+
+Full serial runs:
+
+```
+SLJIT   821 cases: 766 passed / 55 failed; no signal
+AsmJIT  821 cases: 758 passed / 63 failed; no signal
+```
+
+### Lessons
+
+* **Range semantics belong in the core.** Packing five arguments through a
+  four-argument ABI is possible, but the checked operation itself should be one
+  helper, not an allocation plus a copy the caller must order correctly.
+* **Trap precedence is observable.** “Check the source before allocating” is a
+  spec rule, not an optimisation.
+* **Expression-form element segments are references, not indices.** Reuse the
+  cached evaluated reference and retain it; re-evaluating or treating it as a
+  function index is wrong.
+* **Packed element scaling is log2(bytes), not a two-case guess.** `i8` and
+  `i16` need shifts 0 and 1, not 3.
+* **A refusal is better than a wild pointer.** The typed-GC-ref `array.new_elem`
+  shape stays explicitly unimplemented on SLJIT until its ownership/layout is
+  understood.

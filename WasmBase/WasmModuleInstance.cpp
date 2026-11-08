@@ -1548,8 +1548,8 @@ if (elemIdx >= module->elementSegments.size()) {
 	}
 	const CoreTypeView view = module->typeView(localTypeIdx);
 	const CanonFieldType& element = view.arrayElement();
-	if (element.storage.value.opcode != ValueTypeCode::FuncRef) {
-		reportTrap(TrapKind::Internal, "array.new_elem only lowers funcref elements");
+	if (!isReferenceType(element.storage.value.opcode)) {
+		reportTrap(TrapKind::Internal, "array.new_elem requires a reference element type");
 		return;
 	}
 	const uint32_t length = *reinterpret_cast<const uint32_t*>(
@@ -1570,21 +1570,23 @@ if (elemIdx >= module->elementSegments.size()) {
 	if (length == 0)
 		return;
 
-	// Only index-based segments are lowered; an `initExprs` segment needs const
-	// expression evaluation, which no backend in this tree does yet.
-	if (seg.initIndices.empty()) {
-		reportTrap(TrapKind::Internal, "array.new_elem does not lower init-expression segments");
-		return;
-	}
-
 	const uint32_t importedFuncCount = static_cast<uint32_t>(module->importFunctions.size());
 	std::uint8_t* data = static_cast<std::uint8_t*>(array) + gcArrayDataOffset(element.storage);
 	for (uint32_t i = 0; i < length; ++i) {
-		const uint32_t funcIdx = seg.initIndices[srcOffset + i];
-		void* reference = funcIdx < importedFuncCount
-				? static_cast<void*>(&internals.importStorage[funcIdx])
-				: static_cast<void*>(&internals.internalCallables[funcIdx - importedFuncCount]);
-		std::memcpy(data + static_cast<std::size_t>(i) * sizeof(void*), &reference, sizeof(void*));
+		void* reference = nullptr;
+		if (seg.initIndices.empty()) {
+			// Expression-form entries were evaluated once at instantiation and
+			// cached; copy that same reference (GC.md G4).
+			reference = internals.elementSegmentRefs[elemIdx][srcOffset + i].ref;
+			reference = refClone(reference);
+		} else {
+			const uint32_t funcIdx = seg.initIndices[srcOffset + i];
+			reference = funcIdx < importedFuncCount
+					? static_cast<void*>(&internals.importStorage[funcIdx])
+					: static_cast<void*>(&internals.internalCallables[funcIdx - importedFuncCount]);
+		}
+		std::memcpy(data + static_cast<std::size_t>(i) * sizeof(void*),
+				&reference, sizeof(void*));
 	}
 }
 
@@ -1614,6 +1616,97 @@ void ModuleInstance::arrayInitFromData(void* array, uint32_t localTypeIdx, uint3
 		return;
 	std::memcpy(static_cast<std::uint8_t*>(array) + gcArrayDataOffset(element.storage),
 			seg.data.data() + srcOffset, static_cast<std::size_t>(byteLength));
+}
+
+void ModuleInstance::arrayInitDataRange(void* array, uint32_t localTypeIdx,
+		uint32_t dataIdx, uint32_t dstIndex, uint32_t srcOffset, uint32_t len)
+{
+	if (array == nullptr) {
+		reportTrap(TrapKind::NullArrayReference);
+		return;
+	}
+	if (dataIdx >= module->dataSegments.size()) {
+		reportTrap(TrapKind::Internal, "data segment index out of range");
+		return;
+	}
+	const CoreTypeView view = module->typeView(localTypeIdx);
+	const CanonFieldType& element = view.arrayElement();
+	const uint32_t storageBytes = static_cast<uint32_t>(gcStorageBytes(element.storage));
+	const uint32_t length = *reinterpret_cast<const uint32_t*>(
+			static_cast<const std::uint8_t*>(array) + GcHeader::kArrayLengthOffset);
+	// Destination first: a bad destination is an array-bounds failure even if
+	// the source segment is also short.
+	if (dstIndex > length || len > length - dstIndex) {
+		reportTrap(TrapKind::OutOfBoundsArrayAccess);
+		return;
+	}
+	const uint64_t byteLength = static_cast<uint64_t>(len) * storageBytes;
+	const DataSegment& seg = module->dataSegments[dataIdx];
+	const uint64_t segmentSize =
+			internals.dataSegmentDropped[dataIdx].load(std::memory_order_acquire)
+			? 0 : seg.data.size();
+	if (static_cast<uint64_t>(srcOffset) + byteLength > segmentSize) {
+		reportTrap(TrapKind::OutOfBoundsMemoryAccess, "out of bounds array.init_data source");
+		return;
+	}
+	if (byteLength == 0)
+		return;
+	std::memcpy(static_cast<std::uint8_t*>(array) + gcArrayDataOffset(element.storage)
+					+ static_cast<std::size_t>(dstIndex) * storageBytes,
+			seg.data.data() + srcOffset, static_cast<std::size_t>(byteLength));
+}
+
+void ModuleInstance::arrayInitElemRange(void* array, uint32_t localTypeIdx,
+		uint32_t elemIdx, uint32_t dstIndex, uint32_t srcIndex, uint32_t len)
+{
+	if (array == nullptr) {
+		reportTrap(TrapKind::NullArrayReference);
+		return;
+	}
+	if (elemIdx >= module->elementSegments.size()) {
+		reportTrap(TrapKind::Internal, "element segment index out of range");
+		return;
+	}
+	const CoreTypeView view = module->typeView(localTypeIdx);
+	const CanonFieldType& element = view.arrayElement();
+	if (!isReferenceType(element.storage.value.opcode)) {
+		reportTrap(TrapKind::Internal, "array.init_elem requires a reference element type");
+		return;
+	}
+	const uint32_t length = *reinterpret_cast<const uint32_t*>(
+			static_cast<const std::uint8_t*>(array) + GcHeader::kArrayLengthOffset);
+	if (dstIndex > length || len > length - dstIndex) {
+		reportTrap(TrapKind::OutOfBoundsArrayAccess);
+		return;
+	}
+	const ElementSegment& seg = module->elementSegments[elemIdx];
+	const std::size_t entryCount = internals.elementSegmentDropped[elemIdx]
+			.load(std::memory_order_acquire)
+			? 0
+			: (seg.initIndices.empty() ? seg.initExprs.size() : seg.initIndices.size());
+	if (static_cast<uint64_t>(srcIndex) + len > entryCount) {
+		reportTrap(TrapKind::OutOfBoundsTableAccess,
+				"out of bounds array.init_elem source");
+		return;
+	}
+	if (len == 0)
+		return;
+	const uint32_t importedFuncCount = static_cast<uint32_t>(module->importFunctions.size());
+	std::uint8_t* data = static_cast<std::uint8_t*>(array) + gcArrayDataOffset(element.storage);
+	for (uint32_t i = 0; i < len; ++i) {
+		void* reference = nullptr;
+		if (seg.initIndices.empty()) {
+			reference = internals.elementSegmentRefs[elemIdx][srcIndex + i].ref;
+			reference = refClone(reference);
+		} else {
+			const uint32_t funcIdx = seg.initIndices[srcIndex + i];
+			reference = funcIdx < importedFuncCount
+					? static_cast<void*>(&internals.importStorage[funcIdx])
+					: static_cast<void*>(&internals.internalCallables[funcIdx - importedFuncCount]);
+		}
+		std::memcpy(data + static_cast<std::size_t>(dstIndex + i) * sizeof(void*),
+				&reference, sizeof(void*));
+	}
 }
 
 void ModuleInstance::memoryInit(uint32_t memIdx, uint32_t dataIdx, uint32_t dstOffset, uint32_t srcOffset, uint32_t len)
@@ -1949,6 +2042,43 @@ constexpr ValueTypeCode storageCode(const CanonStorageType& storage)
 }
 
 } // namespace
+
+void* ModuleInstance::arrayNewData(uint32_t dstTypeIdx, uint32_t dataIdx,
+		uint32_t srcOffset, uint32_t length)
+{
+	const CoreTypeView view = module->typeView(dstTypeIdx);
+	if (view.kind() != CanonTypeKind::Array) {
+		reportTrap(TrapKind::Internal, "array.new_data requires an array type");
+		return nullptr;
+	}
+	const CanonFieldType& element = view.arrayElement();
+	// GC-5: the segment range is a source check and must win over an allocation
+	// failure, so it runs before anything is allocated.
+	checkDataSegmentRange(dataIdx, srcOffset, length,
+			static_cast<uint32_t>(gcStorageBytes(element.storage)));
+	void* array = allocateArrayObject(dstTypeIdx, length);
+	if (array == nullptr)
+		return nullptr;
+	arrayInitFromData(array, dstTypeIdx, dataIdx, srcOffset);
+	return array;
+}
+
+void* ModuleInstance::arrayNewElem(uint32_t dstTypeIdx, uint32_t elemIdx,
+		uint32_t srcOffset, uint32_t length)
+{
+	const CoreTypeView view = module->typeView(dstTypeIdx);
+	if (view.kind() != CanonTypeKind::Array) {
+		reportTrap(TrapKind::Internal, "array.new_elem requires an array type");
+		return nullptr;
+	}
+	checkElementSegmentRange(elemIdx, srcOffset, length);
+	void* array = allocateArrayObject(dstTypeIdx, length);
+	if (array == nullptr)
+		return nullptr;
+	arrayInitFromElem(array, dstTypeIdx, elemIdx,
+			static_cast<uint64_t>(srcOffset));
+	return array;
+}
 
 void* ModuleInstance::arrayNewArray(uint32_t dstTypeIdx, uint32_t srcTypeIdx,
 		void* src, uint32_t start, uint32_t length)

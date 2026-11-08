@@ -353,6 +353,24 @@ public:
 	//! `array.new_data`-style construction from a memory range.
 	void* arrayNewMemory(uint32_t dstTypeIdx, uint32_t memIdx,
 			uint32_t start, uint32_t length);
+	//! Constructs an array from a data segment, validating the segment range
+	//! before allocating.
+	//! \param dstTypeIdx Module-local array type index.
+	//! \param dataIdx Data segment index.
+	//! \param srcOffset Byte offset inside the segment.
+	//! \param length Element count.
+	//! \return The new array, or nullptr after reporting a trap.
+	void* arrayNewData(uint32_t dstTypeIdx, uint32_t dataIdx,
+			uint32_t srcOffset, uint32_t length);
+	//! Constructs an array from an element segment, validating the source range
+	//! before allocating.
+	//! \param dstTypeIdx Module-local array type index.
+	//! \param elemIdx Element segment index.
+	//! \param srcOffset First source element.
+	//! \param length Element count.
+	//! \return The new array, or nullptr after reporting a trap.
+	void* arrayNewElem(uint32_t dstTypeIdx, uint32_t elemIdx,
+			uint32_t srcOffset, uint32_t length);
 	//! `array.new_elem`-style construction from a table range.
 	void* arrayNewTable(uint32_t dstTypeIdx, uint32_t tableIdx,
 			uint32_t start, uint32_t length);
@@ -385,6 +403,24 @@ public:
 	//! retain per element, and this path does not do ownership yet.
 	void arrayInitFromElem(void* array, uint32_t localTypeIdx, uint32_t elemIdx,
 			uint64_t packedOffsetAndIndex);
+	//! Copies a byte range of a data segment into a sub-range of an array.
+	//! \param array Destination array.
+	//! \param localTypeIdx The array's module-local type index.
+	//! \param dataIdx Data segment index.
+	//! \param dstIndex First destination element.
+	//! \param srcOffset Byte offset inside the data segment.
+	//! \param len Number of elements to copy.
+	void arrayInitDataRange(void* array, uint32_t localTypeIdx, uint32_t dataIdx,
+			uint32_t dstIndex, uint32_t srcOffset, uint32_t len);
+	//! Copies a range of an element segment into a sub-range of an array.
+	//! \param array Destination array.
+	//! \param localTypeIdx The array's module-local type index.
+	//! \param elemIdx Element segment index.
+	//! \param dstIndex First destination element.
+	//! \param srcIndex First source element.
+	//! \param len Number of elements to copy.
+	void arrayInitElemRange(void* array, uint32_t localTypeIdx, uint32_t elemIdx,
+			uint32_t dstIndex, uint32_t srcIndex, uint32_t len);
 	//! Tests whether one runtime type id is a subtype of another.
 	//! \param actualTypeId Type id stored in the object header.
 	//! \param expectedTypeId Type id of the target type.

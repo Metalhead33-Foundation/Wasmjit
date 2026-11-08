@@ -623,6 +623,32 @@ void asmjitReportArrayOob() noexcept
 	WASM::reportTrap(WASM::TrapKind::OutOfBoundsArrayAccess);
 }
 
+void* asmjitArrayNewData(WASM::VMContext* vm, uint32_t typeIndex, uint32_t dataIdx,
+		uint64_t packedSrcAndLength) noexcept
+{
+	try {
+		return reinterpret_cast<WASM::ModuleInstance*>(vm)->arrayNewData(typeIndex,
+				dataIdx, static_cast<uint32_t>(packedSrcAndLength >> 32),
+				static_cast<uint32_t>(packedSrcAndLength & 0xFFFFFFFFu));
+	} catch (...) {
+		WASM::reportTrap(WASM::TrapKind::Internal);
+		return nullptr;
+	}
+}
+
+void* asmjitArrayNewElem(WASM::VMContext* vm, uint32_t typeIndex, uint32_t elemIdx,
+		uint64_t packedSrcAndLength) noexcept
+{
+	try {
+		return reinterpret_cast<WASM::ModuleInstance*>(vm)->arrayNewElem(typeIndex,
+				elemIdx, static_cast<uint32_t>(packedSrcAndLength >> 32),
+				static_cast<uint32_t>(packedSrcAndLength & 0xFFFFFFFFu));
+	} catch (...) {
+		WASM::reportTrap(WASM::TrapKind::Internal);
+		return nullptr;
+	}
+}
+
 void* asmjitArrayNew(WASM::VMContext* vm, uint32_t typeIndex, uint32_t length) noexcept
 {
 	// An exception must never escape a helper: `std::terminate` would kill the
@@ -679,6 +705,68 @@ void asmjitArrayInitFromData(WASM::VMContext* vm, void* array, uint32_t typeInde
 	}
 }
 
+
+void asmjitArrayInitFromElem(WASM::VMContext* vm, void* array, uint32_t typeIndex,
+		uint64_t packedOffsetAndIndex) noexcept
+{
+	try {
+		reinterpret_cast<WASM::ModuleInstance*>(vm)->arrayInitFromElem(array, typeIndex,
+				static_cast<uint32_t>(packedOffsetAndIndex >> 32),
+				packedOffsetAndIndex & 0xFFFFFFFFu);
+	} catch (...) {
+		WASM::reportTrap(WASM::TrapKind::Internal);
+	}
+}
+
+void asmjitCheckElementRange(WASM::VMContext* vm, uint32_t elemIdx,
+		uint32_t srcIndex, uint32_t len) noexcept
+{
+	try {
+		reinterpret_cast<WASM::ModuleInstance*>(vm)->checkElementSegmentRange(
+				elemIdx, srcIndex, len);
+	} catch (...) {
+		WASM::reportTrap(WASM::TrapKind::Internal);
+	}
+}
+
+void asmjitCheckDataRange(WASM::VMContext* vm, uint32_t dataIdx,
+		uint32_t srcOffset, uint32_t len, uint32_t elemSize) noexcept
+{
+	try {
+		reinterpret_cast<WASM::ModuleInstance*>(vm)->checkDataSegmentRange(
+				dataIdx, srcOffset, len, elemSize);
+	} catch (...) {
+		WASM::reportTrap(WASM::TrapKind::Internal);
+	}
+}
+
+void asmjitArrayInitDataRange(WASM::VMContext* vm, void* array,
+		uint64_t packedTypeAndData, uint64_t packedDstAndSrc, uint32_t len) noexcept
+{
+	try {
+		reinterpret_cast<WASM::ModuleInstance*>(vm)->arrayInitDataRange(array,
+				static_cast<uint32_t>(packedTypeAndData >> 32),
+				static_cast<uint32_t>(packedTypeAndData & 0xFFFFFFFFu),
+				static_cast<uint32_t>(packedDstAndSrc >> 32),
+				static_cast<uint32_t>(packedDstAndSrc & 0xFFFFFFFFu), len);
+	} catch (...) {
+		WASM::reportTrap(WASM::TrapKind::Internal);
+	}
+}
+
+void asmjitArrayInitElemRange(WASM::VMContext* vm, void* array,
+		uint64_t packedTypeAndElem, uint64_t packedDstAndSrc, uint32_t len) noexcept
+{
+	try {
+		reinterpret_cast<WASM::ModuleInstance*>(vm)->arrayInitElemRange(array,
+				static_cast<uint32_t>(packedTypeAndElem >> 32),
+				static_cast<uint32_t>(packedTypeAndElem & 0xFFFFFFFFu),
+				static_cast<uint32_t>(packedDstAndSrc >> 32),
+				static_cast<uint32_t>(packedDstAndSrc & 0xFFFFFFFFu), len);
+	} catch (...) {
+		WASM::reportTrap(WASM::TrapKind::Internal);
+	}
+}
 
 void* asmjitStructNew(WASM::VMContext* vm, uint32_t size, uint32_t typeIndex) noexcept
 {
@@ -4648,6 +4736,31 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		values.push_back(result);
 	}
 
+	//! Packs a constant high word and a register low word into one 64-bit value.
+	asmjit::x86::Gp packImmPair(uint32_t high, uint32_t low, const char* name)
+	{
+		auto packed = compiler.new_gp64(name);
+		checkError(compiler.mov(packed, asmjit::Imm(
+				(static_cast<uint64_t>(high) << 32) | low)),
+				"AsmJit packed constant widening failed");
+		return packed;
+	}
+
+	//! Packs two 32-bit registers into one 64-bit value, high word from `high`.
+	asmjit::x86::Gp packRegPair(const asmjit::x86::Gp& high,
+			const asmjit::x86::Gp& low, const char* name)
+	{
+		auto packed = compiler.new_gp64(name);
+		checkError(compiler.mov(packed.r32(), low.r32()),
+				"AsmJit packed low-word widening failed");
+		auto highWide = compiler.new_gp64("packedHigh");
+		checkError(compiler.mov(highWide.r32(), high.r32()),
+				"AsmJit packed high-word widening failed");
+		checkError(compiler.shl(highWide, 32), "AsmJit packed high-word shift failed");
+		checkError(compiler.or_(packed, highWide), "AsmJit packed high-word merge failed");
+		return packed;
+	}
+
 	//! Calls a unary v128 helper (`a`, `out`) and pushes `out`.
 	void emitVectorHelper1(void (*helper)(const void*, void*))
 	{
@@ -5479,7 +5592,8 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		checkError(compiler.mov(address, object), "AsmJit array.set base copy failed");
 		auto byteOffset = compiler.new_gp64("arraySetOffset");
 		checkError(compiler.mov(byteOffset.r32(), index), "AsmJit array.set index widening failed");
-		checkError(compiler.shl(byteOffset, width == 4 ? 2 : 3),
+		const int scale = width == 1 ? 0 : (width == 2 ? 1 : (width == 4 ? 2 : 3));
+		checkError(compiler.shl(byteOffset, scale),
 				"AsmJit array.set index scaling failed");
 		checkError(compiler.add(address, byteOffset), "AsmJit array.set address add failed");
 		checkError(compiler.add(address,
@@ -5564,59 +5678,115 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 
 	void dispatchArrayNewData(WASM::TypeIdx arg1, uint32_t arg2) override
 	{
-		const WASM::CoreTypeView view = module.typeView(arg1);
-		if (view.kind() != WASM::CanonTypeKind::Array)
-			throw std::runtime_error("AsmJit array.new_data requires an array type");
-		const WASM::CanonFieldType& element = view.arrayElement();
-		if (element.storage.value.opcode == WASM::ValueTypeCode::V128)
-			throw std::runtime_error("AsmJit array.new_data does not lower v128 array elements yet");
 		if (values.size() < 2)
 			throw std::runtime_error("AsmJit array.new_data operand stack underflow");
-		auto length = values.back();
-		values.pop_back();
-		auto offset = values.back();
-		values.pop_back();
-		asmjit::FuncSignature allocSignature(asmjit::CallConvId::kCDecl);
-		allocSignature.set_ret(asmjit::TypeId::kUIntPtr);
-		allocSignature.add_arg(asmjit::TypeId::kUIntPtr);
-		allocSignature.add_arg(asmjit::TypeId::kUInt32);
-		allocSignature.add_arg(asmjit::TypeId::kUInt32);
-		asmjit::InvokeNode* allocCall = nullptr;
-		checkError(compiler.invoke(asmjit::Out(allocCall),
-				reinterpret_cast<uint64_t>(&asmjitArrayNew), allocSignature),
+		auto length = values.back(); values.pop_back();
+		auto offset = values.back(); values.pop_back();
+		auto packed = packRegPair(offset, length, "arrayNewDataSrcLen");
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		signature.add_arg(asmjit::TypeId::kUInt64);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke),
+				reinterpret_cast<uint64_t>(&asmjitArrayNewData), signature),
 				"AsmJit array.new_data allocation call failed");
-		allocCall->set_arg(0, vmContext);
-		allocCall->set_arg(1, asmjit::Imm(static_cast<uint64_t>(arg1)));
-		allocCall->set_arg(2, length);
+		invoke->set_arg(0, vmContext);
+		invoke->set_arg(1, asmjit::Imm(static_cast<uint64_t>(arg1)));
+		invoke->set_arg(2, asmjit::Imm(static_cast<uint64_t>(arg2)));
+		invoke->set_arg(3, packed);
 		auto object = compiler.new_gp_ptr("arrayObject");
-		allocCall->set_ret(0, object);
-		emitPendingTrapReturn();
-		// `dataIndex << 32 | byteOffset`, packed because the helper carries four
-		// arguments at most (docs/backends/ASMJIT_SLJIT_P3_GC1.md section 24).
-		auto packed = compiler.new_gp64("arrayDataPacked");
-		checkError(compiler.mov(packed.r32(), offset), "AsmJit array.new_data offset widening failed");
-		auto indexWide = compiler.new_gp64("arrayDataIndex");
-		checkError(compiler.mov(indexWide, asmjit::Imm(static_cast<uint64_t>(arg2) << 32)),
-				"AsmJit array.new_data index widening failed");
-		checkError(compiler.or_(packed, indexWide), "AsmJit array.new_data packing failed");
-		asmjit::FuncSignature fillSignature(asmjit::CallConvId::kCDecl);
-		fillSignature.set_ret(asmjit::TypeId::kVoid);
-		fillSignature.add_arg(asmjit::TypeId::kUIntPtr);
-		fillSignature.add_arg(asmjit::TypeId::kUIntPtr);
-		fillSignature.add_arg(asmjit::TypeId::kUInt32);
-		fillSignature.add_arg(asmjit::TypeId::kUInt64);
-		asmjit::InvokeNode* fillCall = nullptr;
-		checkError(compiler.invoke(asmjit::Out(fillCall),
-				reinterpret_cast<uint64_t>(&asmjitArrayInitFromData), fillSignature),
-				"AsmJit array.new_data segment copy call failed");
-		fillCall->set_arg(0, vmContext);
-		fillCall->set_arg(1, object);
-		fillCall->set_arg(2, asmjit::Imm(static_cast<uint64_t>(arg1)));
-		fillCall->set_arg(3, packed);
+		invoke->set_ret(0, object);
 		emitPendingTrapReturn();
 		values.push_back(object);
 	}
 
+	void dispatchArrayNewElem(WASM::TypeIdx arg1, uint32_t arg2) override
+	{
+		if (values.size() < 2)
+			throw std::runtime_error("AsmJit array.new_elem operand stack underflow");
+		auto length = values.back(); values.pop_back();
+		auto offset = values.back(); values.pop_back();
+		auto packed = packRegPair(offset, length, "arrayNewElemSrcLen");
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		signature.add_arg(asmjit::TypeId::kUInt64);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke),
+				reinterpret_cast<uint64_t>(&asmjitArrayNewElem), signature),
+				"AsmJit array.new_elem allocation call failed");
+		invoke->set_arg(0, vmContext);
+		invoke->set_arg(1, asmjit::Imm(static_cast<uint64_t>(arg1)));
+		invoke->set_arg(2, asmjit::Imm(static_cast<uint64_t>(arg2)));
+		invoke->set_arg(3, packed);
+		auto object = compiler.new_gp_ptr("arrayObject");
+		invoke->set_ret(0, object);
+		emitPendingTrapReturn();
+		values.push_back(object);
+	}
+
+	void dispatchArrayInitData(WASM::TypeIdx arg1, uint32_t arg2) override
+	{
+		if (values.size() < 4)
+			throw std::runtime_error("AsmJit array.init_data operand stack underflow");
+		auto length = values.back(); values.pop_back();
+		auto source = values.back(); values.pop_back();
+		auto destination = values.back(); values.pop_back();
+		auto reference = values.back(); values.pop_back();
+		auto packedType = packImmPair(arg1, arg2, "arrayInitTypeData");
+		auto packedDst = packRegPair(destination, source, "arrayInitDataRange");
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kVoid);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUInt64);
+		signature.add_arg(asmjit::TypeId::kUInt64);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke),
+				reinterpret_cast<uint64_t>(&asmjitArrayInitDataRange), signature),
+				"AsmJit array.init_data helper call failed");
+		invoke->set_arg(0, vmContext);
+		invoke->set_arg(1, reference);
+		invoke->set_arg(2, packedType);
+		invoke->set_arg(3, packedDst);
+		invoke->set_arg(4, length);
+		emitPendingTrapReturn();
+	}
+
+	void dispatchArrayInitElem(WASM::TypeIdx arg1, uint32_t arg2) override
+	{
+		if (values.size() < 4)
+			throw std::runtime_error("AsmJit array.init_elem operand stack underflow");
+		auto length = values.back(); values.pop_back();
+		auto source = values.back(); values.pop_back();
+		auto destination = values.back(); values.pop_back();
+		auto reference = values.back(); values.pop_back();
+		auto packedType = packImmPair(arg1, arg2, "arrayInitTypeElem");
+		auto packedDst = packRegPair(destination, source, "arrayInitElemRange");
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kVoid);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUInt64);
+		signature.add_arg(asmjit::TypeId::kUInt64);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke),
+				reinterpret_cast<uint64_t>(&asmjitArrayInitElemRange), signature),
+				"AsmJit array.init_elem helper call failed");
+		invoke->set_arg(0, vmContext);
+		invoke->set_arg(1, reference);
+		invoke->set_arg(2, packedType);
+		invoke->set_arg(3, packedDst);
+		invoke->set_arg(4, length);
+		emitPendingTrapReturn();
+	}
 
 	void dispatchArrayNewDefault(WASM::TypeIdx arg) override
 	{
@@ -6134,10 +6304,11 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		const std::span<const WASM::CanonFieldType> fields = view.structFields();
 		if (arg2 >= fields.size())
 			throw std::runtime_error("AsmJit struct.set field index is out of range");
-		if (fields[arg2].storage.isPacked)
-			throw std::runtime_error("AsmJit struct.set does not lower packed fields yet");
-		const int width = kindWidth(fields[arg2].storage.value.opcode);
-		if (width != 4 && width != 8)
+		const bool packed = fields[arg2].storage.isPacked;
+		const bool packedI8 = packed && fields[arg2].storage.packed == WASM::ValueTypeCode::I8;
+		const int width = packed ? (packedI8 ? 1 : 2)
+				: kindWidth(fields[arg2].storage.value.opcode);
+		if (width != 1 && width != 2 && width != 4 && width != 8)
 			throw std::runtime_error("AsmJit struct.set does not lower this field type yet");
 		if (values.size() < 2)
 			throw std::runtime_error("AsmJit struct.set operand stack underflow");
@@ -6157,7 +6328,14 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 				"AsmJit struct.set null trap emission failed");
 		emitPendingTrapReturn();
 		checkError(compiler.bind(notNull), "AsmJit struct.set label binding failed");
-		if (width == 4)
+		if (packed) {
+			if (packedI8)
+				checkError(compiler.mov(asmjit::x86::byte_ptr(object, offset), value.r8()),
+						"AsmJit struct.set packed store failed");
+			else
+				checkError(compiler.mov(asmjit::x86::word_ptr(object, offset), value.r16()),
+						"AsmJit struct.set packed store failed");
+		} else if (width == 4)
 			checkError(compiler.mov(asmjit::x86::dword_ptr(object, offset), value),
 					"AsmJit struct.set field store failed");
 		else
