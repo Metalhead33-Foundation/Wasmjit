@@ -1302,6 +1302,13 @@ Add the missing i64 `clz`/`ctz`/`popcnt` lowerings, then advance
   `(ref null $t)` value.
 * `br_if` to a block result with the branch value missing is dead code, not an
   arity error.
+* `dispatchBrTable` cleared the compile-time value stack after emitting its
+  cases. A nested target block's `end` then resized the cleared vector and
+  produced default-constructed (invalid) registers for the instruction that
+  followed the branch.
+* `table.get` widened an i32 index with `movzx r64, r32`. That is not an x86
+  encoding; the program was rejected only at finalisation with error 53
+  (`OperandSizeMismatch`).
 
 ### Fix
 
@@ -1327,6 +1334,15 @@ Add the missing i64 `clz`/`ctz`/`popcnt` lowerings, then advance
   `func.wast`).
 * Void functions that end in dead code clear the synthesized placeholder stack
   before emitting the void return.
+* Stopped clearing `values` after `br_table`; a target block's `end` now trims
+  it back to that block's own stack height, preserving the base operands.
+* Replaced the table index `movzx` with `mov dst.r32(), src.r32()` (the x86-64
+  way to zero-extend an i32 into a 64-bit register) in `table.get`, `table.set`
+  and the table atomic forms.
+* Used AsmJIT's `kValidateIntermediate` diagnostic option temporarily to make
+  the invalid instruction fail at its emit site instead of at `finalize()`.
+  With that evidence, the two fixes above took the script to green; the option
+  is not left enabled in production.
 
 ### Evidence
 
@@ -1341,16 +1357,15 @@ WASMJIT_BACKEND=asmjit ./Test/WasmJit 'a delegate that skips an intervening catc
 All tests passed (10 assertions in 1 test case)
 ```
 
-`spec: br_table` now compiles every function and reaches
-`AsmJit compiler finalisation failed: 53`. This is the remaining boundary: the
-emitter accepts the bodies, but AsmJIT's register allocator/finaliser rejects
-the program. It is no longer a lowering underflow.
+`spec: br_table` is green: **139 passed / 0 failed / 47 skipped**. The
+`values.clear()` fix and the index-widening fix are both required; either one
+alone leaves a different failure.
 
-Full runs after the batch:
+Full runs after the batch (serial, same seed):
 
 ```
-SLJIT   821 cases: 711 passed / 110 failed
-AsmJIT  821 cases: 654 passed / 167 failed
+SLJIT   821 cases: 720 passed / 101 failed
+AsmJIT  821 cases: 677 passed / 144 failed
 ```
 
 ### Lessons
@@ -1362,6 +1377,79 @@ AsmJIT  821 cases: 654 passed / 167 failed
   targets share arity, not identity.
 * **Restore every piece of emitter state a helper mutates.** `dispatchReturn`
   changes both the value stack and the arm flag.
-* **When a backend finaliser rejects a program, stop calling it a lowering
-  gap.** The next investigation starts at register allocation and label
-  constraints, not at the opcode dispatcher.
+* **A late finaliser error can still be an emitter typo.** Error 53 was an
+  invalid `movzx`, not register allocation. Enable intermediate validation
+  while diagnosing, then remove it.
+* **A vector-sized compile-time stack needs vector-sized cleanup.** Clearing it
+  after a multi-target branch loses the base operands every nested block end
+  expects.
+
+## Shared — table.grow, v128 globals and integer SIMD lanes
+
+### Intended
+
+Close the `table_size`/`table_grow` gap and the `v128` global/lane gaps that
+were blocking several SIMD scripts and the `simd_globals` fixture.
+
+### Root cause
+
+* `table.grow` had no core helper and neither backend overrode
+  `dispatchTableGrow`. `StoreOwnedTable::grow` exists, but calling it directly
+  bypasses the Store's allocation budget and maximum-size policy.
+* AsmJIT's test session accepted only i32 parameters, so table probes with a
+  reference argument were skipped; `table.grow` looked broken when the
+  invocation had never happened.
+* SLJIT's global get/set copied only one word from a global cell; AsmJIT
+  rejected `v128` globals in `validateGlobalIndex`.
+* AsmJIT had only `i32x4` extract/replace lane; the other integer lane widths
+  fell through to the base refusal.
+
+### Fix
+
+* Added `wasm_table_grow` to `WasmTable.{hpp,cpp}`. It validates the table,
+  recovers the `ModuleInstance` from the `VMContext` (the two are the same
+  address by contract), calls `ModuleInstance::growTable` so the Store owns the
+  allocation policy, fills the new slots through the reference barrier, and
+  returns the previous size or all-ones on failure. A failed grow is not a
+  trap.
+* Wired `dispatchTableGrow` into SLJIT and AsmJIT. The delta is zero-extended
+  from i32 with a 32-bit `mov` into the low half of a fresh 64-bit register.
+* Extended the AsmJIT test session with the fixed table shapes it actually
+  needs: `(i32)->ref`, `(i32,ref)->void`, `(i32)->i32`, `(i32,ref)->i32`. This
+  is deliberate test-harness coverage, not a general libffi path.
+* Implemented `v128` global get/set as two 8-byte copies in both backends.
+  SLJIT uses the 16-byte operand slot directly; AsmJIT materialises a 16-byte
+  stack buffer, matching its existing v128 representation.
+* Added AsmJIT `i8x16`/`i16x8`/`i64x2` extract and replace lane helpers, plus
+  the float lane paths already present. The shared core helpers do the lane
+  arithmetic; the backend only marshals the 16-byte buffer.
+* Updated the `simd_globals` test to marshal a `v128` parameter through the
+  frame ABI when the instance selects it. A module with a `v128` parameter is
+  frame-form in AsmJIT; the generic `callCallable` helper is register-form.
+
+### Evidence
+
+```
+WASMJIT_BACKEND=sljit  ./Test/WasmJit 'spec: table_grow'  -> 51 passed / 0 failed
+WASMJIT_BACKEND=asmjit ./Test/WasmJit 'spec: table_grow'  -> 39 passed / 0 failed
+WASMJIT_BACKEND=asmjit ./Test/WasmJit 'spec: table_size'  -> 37 passed / 0 failed
+WASMJIT_BACKEND=asmjit ./Test/WasmJit 'spec: table_set'   -> 14 passed / 0 failed
+WASMJIT_BACKEND=asmjit ./Test/WasmJit 'simd: v128 globals run through the JIT'
+All tests passed (13 assertions in 1 test case)
+```
+
+AsmJIT `spec: table_get` still has one reference-result assertion failing
+(`is_null-funcref`), so it is not yet green; the core table read path is shared
+with SLJIT, which passes the whole script.
+
+### Lessons
+
+* **Use the Store path for anything that allocates guest memory.** A direct
+  `StoreOwnedTable::grow` skips the budget and leaves the instance's view
+  inconsistent.
+* **A skipped test is not a passing test.** The AsmJIT size-after-grow failures
+  were the harness refusing to invoke a reference parameter.
+* **A 32→64 zero extension is a 32-bit `mov`, not `movzx`.** The same mistake
+  appeared in table index widening and was the hidden finalisation failure.
+* **Keep the backend representation at the boundary.** v128 globals are two
+  words in a cell; each backend maps them to its own buffer/slot form.

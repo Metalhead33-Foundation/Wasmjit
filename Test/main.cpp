@@ -7775,7 +7775,20 @@ TEST_CASE("simd: v128 globals run through the JIT")
 	// Order matters from here on: the global carries state between calls.
 	REQUIRE(WASM::callCallable<int32_t>(i32Export("set_and_read")) == 10);
 	V128 ones{1, 1, 1, 1};
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("accumulate"), ones) == 8);
+	// A `v128` parameter makes AsmJIT compile the whole module frame-form.
+	// The generic `callCallable` helper speaks the register ABI, so marshal
+	// the frame explicitly when the instance asks for it.
+	const auto accumulate = i32Export("accumulate");
+	if (!instance.frameCallAbi()) {
+		REQUIRE(WASM::callCallable<int32_t>(accumulate, ones) == 8);
+	} else {
+		alignas(16) std::array<std::uint8_t, 24> frame{};
+		std::memcpy(frame.data(), &ones, sizeof(ones));
+		WASM::callCallableFrame(accumulate, frame.data());
+		std::int32_t result = 0;
+		std::memcpy(&result, frame.data() + 16, sizeof(result));
+		REQUIRE(result == 8);
+	}
 }
 
 TEST_CASE("simd benchmark: ns per v128 op (SIMD-L8)", "[.simdbench]")

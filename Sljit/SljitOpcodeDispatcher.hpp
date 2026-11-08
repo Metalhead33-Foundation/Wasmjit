@@ -578,6 +578,7 @@ protected:
 	void dispatchDataDrop(uint32_t arg) override; //!< `data.drop`.
 	void dispatchTableInit(uint32_t arg1, WASM::TableIdx arg2) override; //!< `table.init`.
 	void dispatchTableFill(WASM::TableIdx arg) override; //!< `table.fill`.
+	void dispatchTableGrow(WASM::TableIdx arg) override; //!< `table.grow`.
 	void dispatchElemDrop(uint32_t arg) override; //!< `elem.drop`.
 	void dispatchTableCopy(WASM::TableIdx arg1, WASM::TableIdx arg2) override; //!< `table.copy`.
 	void dispatchTableSize(WASM::TableIdx arg) override; //!< `table.size`.

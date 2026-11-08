@@ -80,25 +80,25 @@ refusals and behaviour that is unacceptable in production:
 
 ### 4.1 General conformance failures
 
-The `WASMJIT_BACKEND=sljit` run now completes all 821 cases: 711 pass and 110
+The `WASMJIT_BACKEND=sljit` run now completes all 821 cases: 720 pass and 101
 fail, with no process abort or segfault. The first batch closed `func`,
 `float_memory64`, `table_fill`, the integer lane families, `br_table` arity and
-the legacy-EH rethrow path; `br_table` and the i64 bit-count family are now
-green. The second batch closed every `simd_load*_lane` signature (including the
-five-C-argument shape by counting the hidden `v128` result buffer in the frame
-mode decision) and scalar deterministic-NaN canonicalisation. Remaining
-failures include `simd: v128 globals` and the other SIMD/string/relaxed
-families listed in `PRODUCTION_GAPS.md` §29.
+the legacy-EH rethrow path. The second batch closed every `simd_load*_lane`
+signature (including the five-C-argument shape by counting the hidden `v128`
+result buffer in the frame mode decision), scalar deterministic-NaN
+canonicalisation, `table.grow`, `v128` globals and the integer SIMD lane
+families. Remaining failures are the SIMD/string/relaxed/GC scripts listed in
+`PRODUCTION_GAPS.md` §29.
 
 ### 4.2 Missing lowerings
 
-`table.fill`, the integer lane families and the SIMD load-lane family are
-implemented. Still missing or restricted: relaxed dot product
-(`dispatchI16x8RelaxedDotI8x16I7x16S`), `simd: v128 globals`, string
-references, and some transport shapes. A signature above the register-form
-argument ceiling is handled by the module-wide frame form; the decision now
-includes the hidden `v128` result out-buffer, which is what made the
-`simd_load32_lane` family frame-form.
+`table.fill`, `table.grow`, the integer lane families, `v128` globals and the
+SIMD load-lane family are implemented. Still missing or restricted: relaxed
+dot product (`dispatchI16x8RelaxedDotI8x16I7x16S`), string references, and
+some transport shapes. A signature above the register-form argument ceiling is
+handled by the module-wide frame form; the decision now includes the hidden
+`v128` result out-buffer, which is what made the `simd_load32_lane` family
+frame-form.
 
 ### 4.3 Miscompiles and structural limits
 
@@ -125,7 +125,7 @@ implemented slices, not a general conformance or safety claim.
 
 AsmJIT is explicitly experimental, and the generic run confirms why:
 
-- the run reaches all 821 cases: 654 pass and 167 fail, with no process
+- the run reaches all 821 cases: 677 pass and 144 fail, with no process
   abort or segfault;
 - `spec: func` is now green (`100 passed / 0 failed`), including the frame-form
   function-label branches;

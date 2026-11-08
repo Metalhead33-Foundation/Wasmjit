@@ -182,16 +182,71 @@ public:
 		for (const void* argument : args)
 			if (argument == nullptr)
 				return false;
-		for (const auto& p : type.params)
-			if (p.isPacked || p.val.opcode != WASM::ValueTypeCode::I32)
+		const bool allI32 = [&] {
+			for (const auto& p : type.params)
+				if (p.isPacked || p.val.opcode != WASM::ValueTypeCode::I32)
+					return false;
+			return true;
+		}();
+		if (allI32) {
+			if (!type.results.empty() && type.results.front().val.opcode != WASM::ValueTypeCode::I32) return false;
+			if (!type.results.empty() && (result == nullptr || capacity < sizeof(std::int32_t)))
 				return false;
-		if (!type.results.empty() && type.results.front().val.opcode != WASM::ValueTypeCode::I32) return false;
-		if (!type.results.empty() && (result == nullptr || capacity < sizeof(std::int32_t)))
-			return false;
-		{
 			WASM::CallDepthScope depth;
 			if (type.results.empty()) callI32VoidFunction(callable.fnPtr, vmContext, args);
 			else { const std::int32_t value = callI32Function<std::int32_t>(callable.fnPtr, vmContext, args); std::memcpy(result, &value, sizeof(value)); }
+		} else {
+			// Table probes pass references through the register ABI. The
+			// ScriptRunner marshals each argument slot as either an i32 or a
+			// pointer-sized reference, so the small fixed shapes below cover
+			// table.get/set/grow without turning the test harness into a
+			// general libffi caller.
+			const auto isRef = [](const WASM::StorageType& p) {
+				return !p.isPacked && WASM::isReferenceType(p.val.opcode);
+			};
+			const auto paramIs = [&](std::size_t i, WASM::ValueTypeCode code) {
+				return i < type.params.size() && !type.params[i].isPacked
+						&& type.params[i].val.opcode == code;
+			};
+			const auto i32Arg = [&](std::size_t i) {
+				return *static_cast<const std::int32_t*>(args[i]);
+			};
+			const auto refArg = [&](std::size_t i) {
+				return *static_cast<void* const*>(args[i]);
+			};
+			const bool resultI32 = type.results.size() == 1
+					&& type.results.front().val.opcode == WASM::ValueTypeCode::I32;
+			const bool resultRef = type.results.size() == 1 && isRef(type.results.front());
+			WASM::CallDepthScope depth;
+			if (type.results.empty() && type.params.size() == 1 && paramIs(0, WASM::ValueTypeCode::I32)
+					&& !isRef(type.params[0])) {
+				reinterpret_cast<void (*)(void*, std::int32_t)>(callable.fnPtr)(
+						vmContext, i32Arg(0));
+			} else if (type.results.empty() && type.params.size() == 2
+					&& paramIs(0, WASM::ValueTypeCode::I32) && isRef(type.params[1])) {
+				reinterpret_cast<void (*)(void*, std::int32_t, void*)>(callable.fnPtr)(
+						vmContext, i32Arg(0), refArg(1));
+			} else if (resultI32 && type.params.size() == 1 && paramIs(0, WASM::ValueTypeCode::I32)
+					&& !isRef(type.params[0])) {
+				const std::int32_t value = reinterpret_cast<std::int32_t (*)(void*, std::int32_t)>(
+						callable.fnPtr)(vmContext, i32Arg(0));
+				std::memcpy(result, &value, sizeof(value));
+			} else if (resultI32 && type.params.size() == 2
+					&& paramIs(0, WASM::ValueTypeCode::I32) && isRef(type.params[1])) {
+				const std::int32_t value =
+						reinterpret_cast<std::int32_t (*)(void*, std::int32_t, void*)>(
+								callable.fnPtr)(vmContext, i32Arg(0), refArg(1));
+				std::memcpy(result, &value, sizeof(value));
+			} else if (resultRef && type.params.size() == 1
+					&& paramIs(0, WASM::ValueTypeCode::I32)) {
+				if (result == nullptr || capacity < sizeof(void*))
+					return false;
+				void* value = reinterpret_cast<void* (*)(void*, std::int32_t)>(
+						callable.fnPtr)(vmContext, i32Arg(0));
+				std::memcpy(result, &value, sizeof(value));
+			} else {
+				return false;
+			}
 		}
 		const WASM::TrapInfo info = WASM::takePendingTrap();
 		if (info.trapped) {

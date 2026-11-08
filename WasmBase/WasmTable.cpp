@@ -1,4 +1,5 @@
 #include "WasmTable.hpp"
+#include "WasmModuleInstance.hpp"
 #include "WasmVMContext.hpp"
 #include "WasmTrap.hpp"
 #include "wasm_atomic.hpp"
@@ -199,6 +200,36 @@ const uint64_t* arguments) noexcept
 		wasm_atomic_ref_store(context,
 reinterpret_cast<void**>(&table->base[start + i]), element,
 				static_cast<uint32_t>(std::memory_order_seq_cst));
+}
+
+extern "C" uint64_t wasm_table_grow(VMContext* context, uint32_t tableIndex,
+		uint64_t delta, void* init) noexcept
+{
+	if (context == nullptr || context->tables == nullptr
+			|| tableIndex >= context->tableCount) {
+		WASM::reportTrap(WASM::TrapKind::Internal, "table.grow index is invalid");
+		return UINT64_MAX;
+	}
+	WASM::TableInstance* table = context->tables[tableIndex];
+	if (table == nullptr) {
+		WASM::reportTrap(WASM::TrapKind::Internal, "table.grow table is null");
+		return UINT64_MAX;
+	}
+	const uint64_t previous = table->size;
+	// Go through the instance: `ModuleInstance::growTable` delegates to the
+	// Store, which owns the allocation budget and maximum-size policy. Calling
+	// `StoreOwnedTable::grow` directly bypassed both and left the instance's
+	// table view unchanged in one generated-code run.
+	auto* instance = reinterpret_cast<WASM::ModuleInstance*>(context);
+	if (instance == nullptr || !instance->growTable(tableIndex, delta))
+		return UINT64_MAX;
+	if (init != nullptr) {
+		for (uint64_t i = 0; i < delta; ++i)
+			wasm_atomic_ref_store(context,
+					reinterpret_cast<void**>(&table->base[previous + i]), init,
+					static_cast<uint32_t>(std::memory_order_seq_cst));
+	}
+	return previous;
 }
 
 } // namespace WASM

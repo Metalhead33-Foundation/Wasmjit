@@ -6125,11 +6125,24 @@ void OpcodeDispatcher::dispatchGlobalGet(WASM::GlobalIdx arg)
 			static_cast<sljit_sw>(offsetof(WASM::VMContext, globals))));
 	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0, SLJIT_MEM1(SLJIT_R0),
 			static_cast<sljit_sw>(arg * sizeof(WASM::Value*))));
+	const std::size_t depth = stackWidths_.size() - 1;
+	if (width == 16) {
+		// A global cell stores the vector in its 16-byte `v128` member. Copy both
+		// words into the operand slot, which is also 16 bytes wide.
+		for (int word = 0; word < 2; ++word) {
+			emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R1, 0,
+					SLJIT_MEM1(SLJIT_R0),
+					static_cast<sljit_sw>(offsetof(WASM::Value, v128) + word * 8)));
+			emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+					stackSlotOffset(depth) + word * 8, SLJIT_R1, 0));
+		}
+		return;
+	}
 	emit(sljit_emit_op1(compiler_, width == 4 ? SLJIT_MOV_U32 : SLJIT_MOV,
 			SLJIT_R1, 0, SLJIT_MEM1(SLJIT_R0),
 			static_cast<sljit_sw>(width == 4 ? offsetof(WASM::Value, i32)
 					: offsetof(WASM::Value, i64))));
-	storeSlot(SLJIT_R1, stackWidths_.size() - 1, width);
+	storeSlot(SLJIT_R1, depth, width);
 }
 
 void OpcodeDispatcher::dispatchGlobalSet(WASM::GlobalIdx arg)
@@ -6154,7 +6167,18 @@ void OpcodeDispatcher::dispatchGlobalSet(WASM::GlobalIdx arg)
 			static_cast<sljit_sw>(offsetof(WASM::VMContext, globals))));
 	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0, SLJIT_MEM1(SLJIT_R0),
 			static_cast<sljit_sw>(arg * sizeof(WASM::Value*))));
-	loadSlot(SLJIT_R1, stackWidths_.size(), width);
+	const std::size_t depth = stackWidths_.size();
+	if (width == 16) {
+		for (int word = 0; word < 2; ++word) {
+			emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R1, 0,
+					SLJIT_MEM1(SLJIT_SP), stackSlotOffset(depth) + word * 8));
+			emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_R0),
+					static_cast<sljit_sw>(offsetof(WASM::Value, v128) + word * 8),
+					SLJIT_R1, 0));
+		}
+		return;
+	}
+	loadSlot(SLJIT_R1, depth, width);
 	emit(sljit_emit_op1(compiler_, width == 4 ? SLJIT_MOV32 : SLJIT_MOV,
 			SLJIT_MEM1(SLJIT_R0),
 			static_cast<sljit_sw>(width == 4 ? offsetof(WASM::Value, i32)
@@ -7897,6 +7921,29 @@ void OpcodeDispatcher::dispatchTableCopy(WASM::TableIdx arg1, WASM::TableIdx arg
 		emitPendingTrapCheck();
 	}
 	stackWidths_.resize(stackWidths_.size() - 3);
+}
+
+void OpcodeDispatcher::dispatchTableGrow(WASM::TableIdx arg)
+{
+	if (!reachable_)
+		return;
+	requireTableIndex(arg);
+	requireStack(2);
+	const std::size_t deltaDepth = stackWidths_.size() - 1;
+	const std::size_t initDepth = deltaDepth - 1;
+	pop();
+	pop();
+	if (!measureOnly_) {
+		loadContext(SLJIT_R0);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R1, 0, SLJIT_IMM,
+				static_cast<sljit_sw>(arg)));
+		loadSlot(SLJIT_R2, deltaDepth, 4);
+		loadSlot(SLJIT_R3, initDepth, 8);
+		emitHelper(SLJIT_ARGS4(W, P, 32, W, P), &WASM::wasm_table_grow);
+		storeSlot(SLJIT_R0, initDepth, 4);
+		emitPendingTrapCheck();
+	}
+	push(4);
 }
 
 void OpcodeDispatcher::dispatchTableSize(WASM::TableIdx arg)
