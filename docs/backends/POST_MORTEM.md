@@ -1022,3 +1022,29 @@ All tests passed (2 assertions in 1 test case)
   prologue/signature handling.** The temporary `ASMJIT_LIMIT_FUNCTION` probe
   found function 75; a body-only skip would have hidden it behind the same
   empty-function path.
+
+### Follow-up — tail-call test marshalling
+
+The same frame-mode module property affected `tail calls compute correct
+results`: the multi-result `pair_via_tail` signature makes AsmJIT compile the
+whole `tail_call` module in frame form. The test still called the exports with
+`WASM::callCallable`, so `fac_acc` received its first `i64` argument as the
+frame pointer and crashed in the first call.
+
+The test now checks `instance.frameCallAbi()` and builds the canonical frame for
+every call, with register-form calls retained for LibJIT. One detail mattered:
+frame results occupy an 8-byte slot even for `i32`, while the public tuple is
+packed; `pair_via_tail` must compact the second slot from byte 16 to byte 4.
+The frame bytes observed were `07 00 00 00 00 00 00 00 09 00 00 00 00 00 00 00`
+at the result block, which is the backend doing the right thing.
+
+Evidence:
+
+```
+WASMJIT_BACKEND=asmjit ./Test/WasmJit 'tail calls compute correct results'
+All tests passed (21 assertions in 1 test case)
+```
+
+**Lesson:** an ABI marshalling test has two layouts to respect — the native call
+shape and the public tuple layout. A raw `memcpy` from a frame result block is
+not the latter when scalars are slot-padded.

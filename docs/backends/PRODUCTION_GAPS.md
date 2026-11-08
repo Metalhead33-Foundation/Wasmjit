@@ -1069,19 +1069,20 @@ uses a rejected artifact and confirms the runtime remains usable.
 | Backend | Verdict | Measured evidence |
 |---|---|---|
 | LibJIT | **Production-ready within its declared envelope** | default suite 22,442 assertions / 821 cases, green; x86-64 Linux only |
-| SLJIT | **Not production-ready** | `WASMJIT_BACKEND=sljit`: 10 / 12 cases passed, 2 failed, then segfault (run stops early) |
-| AsmJIT | **Not production-ready** | `WASMJIT_BACKEND=asmjit`: 16 / 21 cases passed, 5 failed, then segfault |
+| SLJIT | **Not production-ready** | `WASMJIT_BACKEND=sljit`: 331 cases, 287 passed, 44 failed, then SIGSEGV in the component structured-value case |
+| AsmJIT | **Not production-ready** | `WASMJIT_BACKEND=asmjit`: 331 cases, 266 passed, 65 failed, then SIGSEGV in the component structured-value case |
 
 The blockers are not just “unimplemented opcodes”:
 
-* **SLJIT:** core spec scripts fail (`func`, `i64`, `f32`, `if`, `br_if`, `stack`,
-  `local_init`, `table_fill`, several SIMD scripts, `float_memory64`, multi-memory,
-  legacy EH, stringref); `table.fill` and SIMD lane extraction are missing;
-  `float_memory64` returns the wrong bits; `br_table` requires identical target
-  signatures; tail-call tests fail; the run aborts the process.
-* **AsmJIT:** only 15 generic cases pass before a segfault; `func.0` ends with the
-  wrong number of results; `table.fill` and SIMD lane extraction are missing;
-  start-function allocation fails; tail-call tests segfault.
+* **SLJIT:** `func`, `float_memory64`, `table.fill`, the integer lane families,
+  `br_table` arity and the legacy-EH rethrow path are fixed; the run still stops
+  at the component structured-value case. `simd_load32_lane` still needs a
+  five-slot signature, and relaxed dot/stringref/transport paths remain. The
+  legacy-EH rewrite itself is frontend desugaring, not a backend feature.
+* **AsmJIT:** `spec: func` is green, including frame-form function-label
+  branches and the multi-result tail-call fixture; the run now reaches the same
+  component structured-value crash. Several SIMD lane/transport opcodes and
+  `imports` allocation/trap cases remain open.
 
 Promotion requires the full backend-selected suite to finish green (no abort,
 no segfault), the strict negative sweep to pass, the sanitizer run to be recorded,

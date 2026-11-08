@@ -564,27 +564,89 @@ TEST_CASE("tail calls compute correct results")
 	REQUIRE(incRef.has_value());
 	REQUIRE(constViaRef.has_value());
 
+	// The multi-result `pair_via_tail` signature makes AsmJIT choose the
+	// staging-frame ABI for the whole module. Marshal through that form when the
+	// instance reports it; the register calls above remain the LibJIT path.
+	const bool frameAbi = loaded.instance->frameCallAbi();
+	const auto callI32_0 = [&](const WASM::Callable& callable) -> std::int32_t {
+		if (!frameAbi)
+			return WASM::callCallable<std::int32_t>(callable);
+		alignas(16) std::array<std::uint8_t, 8> frame{};
+		WASM::callCallableFrame(callable, frame.data());
+		std::int32_t result = 0;
+		std::memcpy(&result, frame.data(), sizeof(result));
+		return result;
+	};
+	const auto callI32_1 = [&](const WASM::Callable& callable, std::int32_t arg) -> std::int32_t {
+		if (!frameAbi)
+			return WASM::callCallable<std::int32_t>(callable, arg);
+		alignas(16) std::array<std::uint8_t, 16> frame{};
+		std::memcpy(frame.data(), &arg, sizeof(arg));
+		WASM::callCallableFrame(callable, frame.data());
+		std::int32_t result = 0;
+		std::memcpy(&result, frame.data() + 8, sizeof(result));
+		return result;
+	};
+	const auto callI64_1 = [&](const WASM::Callable& callable, std::int64_t arg) -> std::int64_t {
+		if (!frameAbi)
+			return WASM::callCallable<std::int64_t>(callable, arg);
+		alignas(16) std::array<std::uint8_t, 24> frame{};
+		std::memcpy(frame.data(), &arg, sizeof(arg));
+		WASM::callCallableFrame(callable, frame.data());
+		std::int64_t result = 0;
+		std::memcpy(&result, frame.data() + 8, sizeof(result));
+		return result;
+	};
+	const auto callI64_2 = [&](const WASM::Callable& callable, std::int64_t first,
+			std::int64_t second) -> std::int64_t {
+		if (!frameAbi)
+			return WASM::callCallable<std::int64_t>(callable, first, second);
+		alignas(16) std::array<std::uint8_t, 32> frame{};
+		std::memcpy(frame.data(), &first, sizeof(first));
+		std::memcpy(frame.data() + 8, &second, sizeof(second));
+		WASM::callCallableFrame(callable, frame.data());
+		std::int64_t result = 0;
+		std::memcpy(&result, frame.data() + 16, sizeof(result));
+		return result;
+	};
+	const auto callPair = [&](const WASM::Callable& callable, std::int32_t arg,
+			std::array<std::uint8_t, 16>& results) {
+		if (!frameAbi) {
+			WASM::callCallableWithResults(callable, results.data(), arg);
+			return;
+		}
+		alignas(16) std::array<std::uint8_t, 24> frame{};
+		std::memcpy(frame.data(), &arg, sizeof(arg));
+		WASM::callCallableFrame(callable, frame.data());
+		// The frame uses an 8-byte slot per scalar; the caller-facing tuple is
+		// packed, so compact each i32 result into the result array.
+		for (std::size_t i = 0; i < 2; ++i)
+			std::memcpy(results.data() + i * 4, frame.data() + 8 + i * 8, 4);
+	};
+
 	// Direct `return_call`: factorial via an accumulator. Values match
 	// return_call.wast; depths stay shallow (no stack-space guarantee yet).
-	REQUIRE(WASM::callCallable<int64_t>(*facAcc, int64_t(0), int64_t(1)) == 1);
-	REQUIRE(WASM::callCallable<int64_t>(*facAcc, int64_t(1), int64_t(1)) == 1);
-	REQUIRE(WASM::callCallable<int64_t>(*facAcc, int64_t(5), int64_t(1)) == 120);
-	REQUIRE(WASM::callCallable<int64_t>(*facAcc, int64_t(25), int64_t(1)) == INT64_C(7034535277573963776));
-	REQUIRE(WASM::callCallable<int64_t>(*facAccI32, int32_t(5), int32_t(1)) == 120);
+	REQUIRE(callI64_2(*facAcc, int64_t(0), int64_t(1)) == 1);
+	REQUIRE(callI64_2(*facAcc, int64_t(1), int64_t(1)) == 1);
+	REQUIRE(callI64_2(*facAcc, int64_t(5), int64_t(1)) == 120);
+	REQUIRE(callI64_2(*facAcc, int64_t(25), int64_t(1)) == INT64_C(7034535277573963776));
+	REQUIRE((frameAbi
+			? callI64_2(*facAccI32, 5, 1) == 120
+			: WASM::callCallable<int64_t>(*facAccI32, int32_t(5), int32_t(1)) == 120));
 
 	// Space guarantee for direct self-recursion: `return_call $count` is lowered
 	// to a native tail call, so 10^7 frames run in constant stack. Without that
 	// lowering this call would exhaust the host stack and crash.
-	REQUIRE(WASM::callCallable<int32_t>(*count, int32_t(10000000)) == 0);
+	REQUIRE(callI32_1(*count, 10000000) == 0);
 
 	// `return_call_indirect` and `return_call_ref` through a funcref.
-	REQUIRE(WASM::callCallable<int32_t>(*incIndirect, int32_t(41)) == 42);
-	REQUIRE(WASM::callCallable<int32_t>(*incRef, int32_t(41)) == 42);
+	REQUIRE(callI32_1(*incIndirect, 41) == 42);
+	REQUIRE(callI32_1(*incRef, 41) == 42);
 
 	// `return_call_ref` through a funcref held in a global (the shape used by
 	// return_call_ref.wast): the global's `ref.func` must be resolved to a real
 	// Callable pointer after compilation.
-	REQUIRE(WASM::callCallable<int32_t>(*constViaRef) == 42);
+	REQUIRE(callI32_0(*constViaRef) == 42);
 
 	// TC-3: a mutual tail-call chain whose *parameter lists differ*
 	// ((i64,i64) <-> (i32,i64)). 5·10⁶ links in constant stack; a call+return
@@ -592,18 +654,18 @@ TEST_CASE("tail calls compute correct results")
 	// increments the accumulator, so the result counts the steps.
 	auto mixedSig = loaded.instance->exportedFunction("mixed_sig");
 	REQUIRE(mixedSig.has_value());
-	REQUIRE(WASM::callCallable<int64_t>(*mixedSig, int64_t(5000000)) == 5000000);
+	REQUIRE(callI64_1(*mixedSig, 5000000) == 5000000);
 
 	// TC-3: a multi-result tail chain. The trampoline carries the caller's
 	// result buffer through the thunk, so a tuple callee works unchanged.
 	auto pairViaTail = loaded.instance->exportedFunction("pair_via_tail");
 	REQUIRE(pairViaTail.has_value());
-	alignas(16) unsigned char tuple[16] = {};
-	WASM::callCallableWithResults(*pairViaTail, tuple, int32_t(9));
+	alignas(16) std::array<std::uint8_t, 16> tuple{};
+	callPair(*pairViaTail, 9, tuple);
 	int32_t pairFirst = 0;
 	int32_t pairSecond = 0;
-	std::memcpy(&pairFirst, tuple, sizeof(pairFirst));
-	std::memcpy(&pairSecond, tuple + sizeof(pairFirst), sizeof(pairSecond));
+	std::memcpy(&pairFirst, tuple.data(), sizeof(pairFirst));
+	std::memcpy(&pairSecond, tuple.data() + sizeof(pairFirst), sizeof(pairSecond));
 	REQUIRE(pairFirst == 7);
 	REQUIRE(pairSecond == 9);
 }

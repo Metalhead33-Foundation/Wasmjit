@@ -80,36 +80,34 @@ refusals and behaviour that is unacceptable in production:
 
 ### 4.1 General conformance failures
 
-The `WASMJIT_BACKEND=sljit` run fails core spec scripts including `func`, `i64`,
-`f32`, `if`, `br_if`, `stack`, `local_init`, `table_fill`, `simd_load_zero`,
-`simd_splat`, `relaxed_dot_product` and `float_memory64`, plus multi-memory,
-legacy-exception and stringref tests.
+The `WASMJIT_BACKEND=sljit` run now completes 331 cases before the component
+structured-value case crashes: 287 pass, 44 fail. The first batch closed
+`func`, `float_memory64`, `table_fill`, the integer lane families, `br_table`
+arity and the legacy-EH rethrow path. The largest remaining block is the
+five-argument `simd_load32_lane` shape (`the SLJIT backend cannot pass 5
+argument slots`) plus the unmeasured failures after the component crash.
 
 ### 4.2 Missing lowerings
 
-Examples from the run:
-
-- `table.fill` — `the SLJIT backend does not lower dispatchTableFill`;
-- SIMD lane extraction — `dispatchI8x16ExtractLaneU`;
-- relaxed dot product — `dispatchI16x8RelaxedDotI8x16I7x16S`;
-- several shuffle/swizzle and SIMD transport paths.
+`table.fill` and the integer lane families are implemented. Still missing or
+restricted: relaxed dot product (`dispatchI16x8RelaxedDotI8x16I7x16S`), some
+shuffle/transport shapes, and any signature that needs more than four SLJIT
+argument slots (the register form refuses it; the module-wide frame form is the
+intended escape hatch).
 
 ### 4.3 Miscompiles and structural limits
 
-- `float_memory64`: `i32.load`/`f32.load` return the wrong bit patterns
-  (`2145386496` / a NaN where `2141192192` is expected). This is a **wrong
-  result**, not a refusal.
-- `func.0.wasm`: `br_table targets require identical label signatures`. A
-  conforming `br_table` with differing target signatures is legal; this is a
-  lowering restriction, not a Wasm restriction.
-- Tail-call tests fail with `the if condition must be an i32`, so the tail path
-  is not reliable on this fixture set.
+`float_memory64` now preserves bit patterns, `br_table` accepts differing
+target arities and multi-result function labels, and the 16-byte `v128` result
+path passes both the shuffle fixture and the three/four-parameter ABI fixture.
+The remaining process-level defect is the component structured-value crash;
+the targeted SIMD and tail-call regressions are green.
 
 ### 4.4 Process safety
 
-The run aborts (`IOT`, core dumped) before completing. A backend that can abort
-the host process on module-derived input is not production-safe regardless of
-how many targeted features pass.
+The run still aborts with `SIGSEGV` in `component script marshals structured
+values`. A backend that can abort the host process on module-derived input is
+not production-safe regardless of how many targeted features pass.
 
 **Verdict:** not production-ready. The targeted matrix is useful evidence of
 implemented slices, not a general conformance or safety claim.
@@ -118,11 +116,15 @@ implemented slices, not a general conformance or safety claim.
 
 AsmJIT is explicitly experimental, and the generic run confirms why:
 
-- only 15 of the attempted 21 generic cases pass before the run **segfaults**;
-- `func.0.wasm` fails with `AsmJit function ended with the wrong number of
-  results` — a result-count/ABI defect, not a clean refusal;
-- `table.fill` is missing (`dispatchTableFill`);
-- SIMD lane extraction is missing (`dispatchI8x16ExtractLaneU`);
+- the run reaches 331 cases: 266 pass and 65 fail before the component
+  structured-value case segfaults;
+- `spec: func` is now green (`100 passed / 0 failed`), including the frame-form
+  function-label branches;
+- `table.fill` and the integer lane families are implemented, but several SIMD
+  scripts still report missing lane/transport opcodes (`dispatchI8x16ExtractLaneU`,
+  `dispatchI64x2ExtractLane` and others);
+- the `imports` script reports executable-memory allocation failures and trap
+  classification mismatches;
 - `start.7.wasm` fails with `AsmJit executable-memory allocation failed: 10`;
 - tail-call tests **segfault**.
 
