@@ -32,8 +32,8 @@ All commands were run from `build/Desktop-Release` with
 | Default (`libjit`) suite | **22,445 assertions in 821 cases, green** |
 | `[sljit]` targeted tests | **2,682 assertions in 70 cases, green** |
 | `[asmjit]` targeted tests | **1,778 assertions in 61 cases, green** |
-| `WASMJIT_BACKEND=sljit ./Test/WasmJit` | **821 cases: 773 passed / 48 failed; no signal** |
-| `WASMJIT_BACKEND=asmjit ./Test/WasmJit` | **821 cases: 769 passed / 52 failed; no signal** |
+| `WASMJIT_BACKEND=sljit ./Test/WasmJit` | **821 cases: 776 passed / 45 failed; no signal** |
+| `WASMJIT_BACKEND=asmjit ./Test/WasmJit` | **821 cases: 774 passed / 47 failed; no signal** |
 
 Both non-LibJIT runs now complete the whole case set without a process signal.
 Their failures are functional and conformance gaps, not an early abort; the
@@ -127,20 +127,14 @@ implemented slices, not a general conformance or safety claim.
 
 AsmJIT is explicitly experimental, and the generic run confirms why:
 
-- the run reaches all 821 cases: 769 pass and 52 fail, with no process
+- the run reaches all 821 cases: 774 pass and 47 fail, with no process
   abort or segfault;
-- `spec: func` is now green (`100 passed / 0 failed`), including the frame-form
+- **every spec script is green**, including `throw`, `throw_ref`, `try_table`,
+  `atomic`, `memory_trap`, `memory_grow64` and `table.fill`;
+- `spec: func` is green (`100 passed / 0 failed`), including the frame-form
   function-label branches;
-- `table.fill`, the integer lane families, i64 bit counts and scalar
-deterministic-NaN canonicalisation are implemented; several SIMD scripts still
-  report missing lane/transport opcodes (`dispatchI8x16ExtractLaneU`,
-  `dispatchI64x2ExtractLane` and others);
-- `spec: br_table` now compiles every body but AsmJIT rejects the finalised
-  program with error 53, so that script remains red;
-- the `imports` script reports executable-memory allocation failures and trap
-  classification mismatches;
-- `start.7.wasm` and `memory64-imports.12/13` fail with `AsmJit
-  executable-memory allocation failed: 10`;
+- the remaining failures are non-spec suites: string references, stack
+  switching, a few SIMD unit fixtures and binding-adapter compile/run cases;
 - the targeted tail-call tests are green, so the old blanket “tail-call tests
   segfault” statement is no longer accurate.
 

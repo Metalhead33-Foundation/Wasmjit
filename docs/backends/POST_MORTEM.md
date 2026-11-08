@@ -2140,13 +2140,12 @@ AsmJIT table_fill     36/0
 Full serial runs:
 
 ```
-SLJIT   821 cases: 773 passed / 48 failed; no signal
-AsmJIT  821 cases: 769 passed / 52 failed; no signal
+SLJIT   821 cases: 776 passed / 45 failed; no signal
+AsmJIT  821 cases: 774 passed / 47 failed; no signal
 ```
 
-AsmJIT's remaining spec failures are `throw` (dead polymorphic second throw) and
-`try_table`'s nested `catch-complex` form. SLJIT's are the typed-GC-reference
-`array.new_elem` and `array` cases.
+All AsmJIT spec scripts are green after the EH fixes below; SLJIT's remaining
+spec failures are the typed-GC-reference `array.new_elem` and `array` cases.
 
 ### Lessons
 
@@ -2156,3 +2155,55 @@ AsmJIT's remaining spec failures are `throw` (dead polymorphic second throw) and
 * **Materialise every call argument before its invoke node.** This is the same
   rule that made memory addressing reliable; `table.fill` had one late
   definition left.
+
+
+## AsmJIT — terminator-aware `throw` and catch edges that reach a label
+
+### Intended
+
+Close AsmJIT's last exception scripts: `throw`, `throw_ref` and `try_table`.
+
+### Root causes
+
+* **A second `throw` is polymorphic.** `inDeadCode()` intentionally reports
+  false whenever a module has tags, so the dead second `throw` in
+  `throw-polymorphic` still tried to pop a payload. The arm's own terminator
+  state is the correct guard. `dispatchThrow` now returns through
+  `emitUnreachablePlaceholders()` when `armTerminated` is set, and marks the arm
+  terminated after emitting the first throw.
+* **A catch edge can be the only path to a block end.** `emitCatchBranch` jumped
+  to `target.end` without setting `target.endTargeted`. When the try body always
+  throws, the continuation after that block was emitted as dead code, leaving
+  `catch-complex-1` with an uninitialised result.
+* **A catch may target the function label.** AsmJIT required every catch label
+  to be strictly outer than the `try_table`. `labelIdx == frameIndex` is the
+  function label; it is now validated against the function result count and
+  lowered by `emitCatchReturn`, which clears the pending exception, loads the
+  payload (plus `exnref` for `catch_ref`) and returns.
+
+### Evidence
+
+```
+AsmJIT throw       10/0
+AsmJIT throw_ref   13/0
+AsmJIT try_table   56/0
+```
+
+Full serial runs:
+
+```
+SLJIT   821 cases: 776 passed / 45 failed; no signal
+AsmJIT  821 cases: 774 passed / 47 failed; no signal
+```
+
+Every AsmJIT spec script is now green.
+
+### Lessons
+
+* **Dead-code predicates are not interchangeable.** `inDeadCode()` is EH-aware
+  and deliberately false in a tagged module; a throw's own arm state is not the
+  same question.
+* **A catch is a branch, including its reachability effects.** Jumping to a
+  label without marking it targeted hides the code at that label.
+* **The function label is a valid catch target.** It needs the same arity check
+  and a return lowering, exactly as SLJIT's `emitCatchReturn` already did.

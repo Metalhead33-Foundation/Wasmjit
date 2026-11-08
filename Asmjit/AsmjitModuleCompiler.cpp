@@ -1559,9 +1559,11 @@ protected:
 		frame.catchClauses = std::move(catches);
 		const std::size_t frameIndex = controls.size() - 1;
 		for (const WASM::CatchClause& clause : frame.catchClauses) {
-			if (clause.labelIdx >= frameIndex)
+			if (clause.labelIdx > frameIndex)
 				throw std::runtime_error("AsmJit try_table catch label is out of range");
-			ControlFrame& target = controls[frameIndex - 1 - clause.labelIdx];
+			const bool functionLabel = clause.labelIdx == frameIndex;
+			ControlFrame* target = functionLabel
+					? nullptr : &controls[frameIndex - 1 - clause.labelIdx];
 			const bool catchAll = clause.kind == WASM::CatchKind::CatchAll
 					|| clause.kind == WASM::CatchKind::CatchAllRef;
 			const bool carryExn = clause.kind == WASM::CatchKind::CatchRef
@@ -1569,8 +1571,10 @@ protected:
 			const std::size_t payloadCount = catchAll
 					? 0u : tagPayloadType(clause.tagIdx).params.size();
 			const std::size_t carried = payloadCount + (carryExn ? 1u : 0u);
-			const std::size_t targetValues = target.kind == ControlKind::Loop
-					? target.paramCount : target.resultCount;
+			const std::size_t targetValues = functionLabel
+					? resultCount
+					: (target->kind == ControlKind::Loop
+						? target->paramCount : target->resultCount);
 			if (targetValues != carried)
 				throw std::runtime_error("AsmJit try_table catch arity does not match its target label");
 		}
@@ -1578,6 +1582,13 @@ protected:
 
 	void dispatchThrow(WASM::TagIdx arg) override
 	{
+		// A throw is a terminator. A following `throw` is polymorphic code and
+		// may legally have no operand to pop; `inDeadCode()` is false when the
+		// module has tags, so test the arm state directly.
+		if (armTerminated) {
+			emitUnreachablePlaceholders();
+			return;
+		}
 		if (arg >= internals.tagIds.size())
 			throw std::runtime_error("AsmJit throw names an out-of-range tag");
 		const WASM::TagId tagId = internals.tagIds[arg];
@@ -1639,6 +1650,10 @@ protected:
 		set->set_arg(0, exn);
 		emitExceptionPropagation();
 		emitUnreachablePlaceholders();
+		// The instruction after a throw is polymorphic. In a module with tags
+		// `inDeadCode()` cannot key off `armTerminated` alone (catch edges must
+		// stay reachable), but the arm itself is terminated.
+		armTerminated = true;
 	}
 
 	void dispatchThrowRef() override
@@ -2849,15 +2864,20 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 			if (!frame.tryTable)
 				continue;
 			for (const WASM::CatchClause& clause : frame.catchClauses) {
-				if (clause.labelIdx >= frameIndex)
+				if (clause.labelIdx > frameIndex)
 					throw std::runtime_error("AsmJit try_table catch label is out of range");
-				ControlFrame& target = controls[frameIndex - 1 - clause.labelIdx];
+				const bool functionLabel = clause.labelIdx == frameIndex;
+				ControlFrame* target = functionLabel
+						? nullptr : &controls[frameIndex - 1 - clause.labelIdx];
 				const bool catchAll = clause.kind == WASM::CatchKind::CatchAll
 						|| clause.kind == WASM::CatchKind::CatchAllRef;
 				const bool carryExn = clause.kind == WASM::CatchKind::CatchRef
 						|| clause.kind == WASM::CatchKind::CatchAllRef;
 				if (catchAll) {
-					emitCatchBranch(target, WASM::FuncType{}, carryExn);
+					if (functionLabel)
+						emitCatchReturn(WASM::FuncType{}, carryExn);
+					else
+						emitCatchBranch(*target, WASM::FuncType{}, carryExn);
 					return;
 				}
 				const WASM::FuncType payload = tagPayloadType(clause.tagIdx);
@@ -2866,7 +2886,10 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 				checkError(compiler.cmp(tag, static_cast<uint32_t>(tagId)),
 						"AsmJit exception tag comparison failed");
 				checkError(compiler.jne(next), "AsmJit exception tag branch failed");
-				emitCatchBranch(target, payload, carryExn);
+				if (functionLabel)
+					emitCatchReturn(payload, carryExn);
+				else
+					emitCatchBranch(*target, payload, carryExn);
 				checkError(compiler.bind(next), "AsmJit exception next-clause binding failed");
 			}
 		}
@@ -2874,6 +2897,53 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 		// No handler in this function: the pending slot is already set, so return
 		// zeroes and let the caller re-propagate it.
 		emitZeroReturn();
+	}
+
+	void emitCatchReturn(const WASM::FuncType& payload, bool carryExn)
+	{
+		const std::size_t payloadCount = payload.params.size();
+		const std::size_t carried = payloadCount + (carryExn ? 1u : 0u);
+		if (carried != resultCount)
+			throw std::runtime_error("AsmJit catch arity does not match the function label");
+
+		// A caught exception is consumed. The return path mirrors the ordinary
+		// function-label branch: clear the pending slot first, then materialise
+		// the payload as the function results.
+		asmjit::FuncSignature clearSignature(asmjit::CallConvId::kCDecl);
+		clearSignature.set_ret(asmjit::TypeId::kVoid);
+		asmjit::InvokeNode* clear = nullptr;
+		checkError(compiler.invoke(asmjit::Out(clear),
+				reinterpret_cast<uint64_t>(&::wasm_exn_clear_pending), clearSignature),
+				"AsmJit failed to emit pending-exception clear");
+		auto exn = compiler.new_gp_ptr("caughtFunctionException");
+		checkError(compiler.mov(exn, exceptionPtrSlot),
+				"AsmJit caught-function exception slot load failed");
+		const ExceptionPayloadLayout layout = payloadCount != 0
+				? exceptionPayloadLayout(payload) : ExceptionPayloadLayout{};
+
+		std::vector<asmjit::x86::Gp> caught;
+		caught.reserve(carried);
+		for (std::size_t i = 0; i < payloadCount; ++i) {
+			const int width = kindWidth(payload.params[i].val.opcode);
+			if (width != 4 && width != 8)
+				throw std::runtime_error(
+						"AsmJit cannot route this catch payload to a function result");
+			asmjit::x86::Gp value = width == 8
+					? compiler.new_gp64("caughtFunctionPayload")
+					: compiler.new_gp32("caughtFunctionPayload");
+			checkError(compiler.mov(value,
+					asmjit::x86::Mem(exn, static_cast<int32_t>(layout.fields[i].offset),
+							value.size())),
+					"AsmJit caught-function payload load failed");
+			caught.push_back(value);
+		}
+		if (carryExn)
+			caught.push_back(exn);
+
+		const std::vector<asmjit::x86::Gp> savedValues = values;
+		values = std::move(caught);
+		emitFunctionReturnValues();
+		values = savedValues;
 	}
 
 	void emitCatchBranch(ControlFrame& target, const WASM::FuncType& payload, bool carryExn)
@@ -2941,6 +3011,11 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 				checkError(compiler.mov(target.results[payloadCount], exn),
 						"AsmJit caught-exnref transfer failed");
 		}
+		// A catch is a branch to its target label. In particular, a block whose
+		// body always throws has its *end* reached only through this edge; without
+		// this flag the block's continuation is emitted as dead code.
+		if (!loopTarget)
+			target.endTargeted = true;
 		checkError(compiler.jmp(loopTarget ? target.begin : target.end),
 				"AsmJit catch-target jump failed");
 	}
