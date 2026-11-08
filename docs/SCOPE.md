@@ -126,7 +126,7 @@ These are in the tree but are not part of the current maturity claim.
 
 | Surface | State |
 |---|---|
-| `Asmjit/` | Experimental i32/i64 subset; not installed, not selectable through the runtime registry |
+| `Asmjit/` | Experimental backend; selectable as `asmjit`, but not installed as a product backend and not production-ready (generic suite fails/segfaults) |
 | `Sljit/` | Provisional straight-line `i32`/`i64` subset; every other opcode leaves the function uncallable |
 | `WasmStub/` | A non-compiling pretty-printer, not an execution backend |
 | Language support | No language is supported; `LF-1`/`LF-2` are studies and `LF-3` has not started |

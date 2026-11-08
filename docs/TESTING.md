@@ -10,10 +10,11 @@
 
 The generic manual and spec tests use `TestBackend::Session` and
 `WASM::ModuleInstantiator`, not a backend header. `TestBackend::create()` selects
-the implementation through `WASMJIT_BACKEND` (empty or `libjit` currently); an
-unknown value fails with a clear error instead of silently falling back. The
-backend-specific lowering tests live in `LibJitBackendTests.cpp`, so a future
-backend can add its own tests without touching the shared fixtures.
+the implementation through `WASMJIT_BACKEND` (`libjit`, `asmjit` or `sljit`;
+default `libjit`); an unknown value fails with a clear error instead of silently
+falling back. The backend-specific lowering tests live in
+`LibJitBackendTests.cpp`, `Asmjit*Tests.cpp` and `SljitBackendTests.cpp`, so a
+backend can add tests without touching the shared fixtures.
 
 ## Prerequisites
 
@@ -67,8 +68,9 @@ The harness selects the backend through `WASMJIT_BACKEND` (default `libjit`):
 WASMJIT_BACKEND=libjit ./WasmJit
 ```
 
-Only LibJIT is built today; an unknown name is reported as a harness error
-rather than silently using a different backend.
+All three backends are built and selectable by name; an unknown name is reported
+as a harness error rather than silently using a different backend. Only LibJIT's
+default suite is green; see the backend promotion gate below.
 
 ### Diagnostics output
 
@@ -548,6 +550,22 @@ for a merge to `master` — so that "green" means the same thing to every review
 | Execution-budget run | `./WasmJit '*per-agent step budget*'` (part of `[config]`) | a finite fuel budget stops a runaway loop with `TrapKind::OutOfFuel` and leaves `fuelRemaining()` at zero | **64-unit budget**, `[config]` green, 2026-11-03 |
 | ThreadSanitizer concurrency run | configure a third shadow build (below), then `./WasmJit '[multiagent]'` | no data race on the multi-agent path (waiter table, entry counter, GC queue/counters, shared-global atomics) | `[multiagent]` **51 assertions / 6 cases** and `[concurrency]` **80 / 13**, **no TSan report**, 2026-11-03 |
 | ABI check | `./Test/abi-check.sh build/<config>` | no exported symbol disappeared since the baseline (the additive-only rule of `API_ABI_STABILITY.md` G2); `--update` records an intentional addition | **3,093 dynamic / 1,992 strong symbols, 0 removed**, 2026-11-03 |
+
+### Backend promotion gate
+
+Targeted `[libjit]`/`[sljit]`/`[asmjit]` tags are not sufficient to call a
+backend production-ready. The promotion gate is the **generic suite selected
+for that backend**:
+
+| Backend | Command | Status at the 2026-11-07 snapshot |
+|---|---|---|
+| LibJIT | `WASMJIT_BACKEND=libjit ./WasmJit` | **green** — 22,437 assertions / 820 cases |
+| SLJIT | `WASMJIT_BACKEND=sljit ./WasmJit` | **not green** — 177 / 218 cases passed, 41 failed, then abort |
+| AsmJIT | `WASMJIT_BACKEND=asmjit ./WasmJit` | **not green** — 15 / 21 cases passed, 6 failed, then segfault |
+
+The exact blockers and promotion criteria are owned by
+[`BACKEND_PRODUCTION_READINESS.md`](BACKEND_PRODUCTION_READINESS.md). A backend
+with a red promotion row must not be advertised as production-ready.
 
 `Test/spec_known_failures.txt` is the only place a spec failure may be
 subtracted from the gate. It is not an exemption: the named line must still

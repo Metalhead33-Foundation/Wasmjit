@@ -2,21 +2,25 @@
 
 **Written:** 2026-11-07, `backendsMh33`, after the defect round, the capability
 close-out and the validator/ multi-value follow-up.
-**Read first:** [`PRODUCTION_GAPS.md`](PRODUCTION_GAPS.md) section 27 (the current
-ledger; 23-26 are history) and [`CAPABILITY_PROBES.md`](CAPABILITY_PROBES.md)
-section 18 (the latest re-run).
+**Read first:** [`PRODUCTION_READINESS.md`](../BACKEND_PRODUCTION_READINESS.md) (the
+production verdict), [`PRODUCTION_GAPS.md`](PRODUCTION_GAPS.md) section 27 (the
+curated capability ledger) and section 29 (the production gaps), and
+[`CAPABILITY_PROBES.md`](CAPABILITY_PROBES.md) section 19 (the latest re-run).
 
 ## 1. Where the tree is
 
-**Snapshot (2026-11-07, this working tree):** `--rng-seed 12345` -> **22435
+**Snapshot (2026-11-07, this working tree):** `--rng-seed 12345` -> **22437
 assertions, 820 cases, green**. Gates: `[headerdoc]`, `[docs]`, `doxygen` 0
 warnings, `abi-check` OK.
 
 The frame ABI work is done on all three backends. Exceptions (including
 `catch_ref` and multi-value payloads), the memory-atomics family, the numeric
 shared-everything atomics and frame-form tail calls are implemented on SLJIT and
-AsmJIT. No backend capability gap remains; the LibJIT frame form stays opt-in and its
-frame tails are call+return rather than constant-stack.
+AsmJIT. The curated capability ledger has no open opcode/ABI row. **That is not a
+production verdict:** the generic full-suite runs for SLJIT and AsmJIT fail and
+crash, so only LibJIT is production-ready today. See
+[`PRODUCTION_READINESS.md`](../BACKEND_PRODUCTION_READINESS.md). The LibJIT frame form stays
+opt-in and its frame tails are call+return rather than constant-stack.
 
 ## 2. The sweep defects
 
@@ -66,7 +70,8 @@ field as 4 bytes. The load and the slot width now follow the field type.
 
 | Gap | Backends | Reason |
 |---|---|---|
-| *(none)* | -- | The LibJIT frame form remains opt-in; that is policy, not a missing capability. |
+| Full generic-suite green | SLJIT, AsmJIT | SLJIT: 41 failures then abort; AsmJIT: 6 failures then segfault. Detailed verdict: [`PRODUCTION_READINESS.md`](../BACKEND_PRODUCTION_READINESS.md). |
+| *(none in the curated capability ledger)* | -- | The LibJIT frame form remains opt-in; that is policy, not a missing capability. |
 
 `v128` atomic slots are **not** on this list: the atomic proposal does not allow
 them, and the validator now rejects them (`V128ATOMIC`).

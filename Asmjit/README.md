@@ -4,8 +4,12 @@
 
 This directory contains an experimental, deliberately limited WebAssembly
 backend. It implements the four `ModuleInstantiator` hooks and executes a
-scalar `i32`/`i64`/`f32`/`f64` subset. It is not feature-complete and must not be treated as a
-drop-in replacement for GNU LibJIT.
+targeted native slice. It is **experimental and not production-ready**: the
+targeted `[asmjit]` tests pass, but the generic backend-selected suite fails and
+then segfaults. See
+[`docs/BACKEND_PRODUCTION_READINESS.md`](../docs/BACKEND_PRODUCTION_READINESS.md)
+for the measured evidence. It must not be treated as a drop-in replacement for
+GNU LibJIT.
 
 ## What exists
 
@@ -41,15 +45,15 @@ direct calls. Each generated function emits the required
   branches to the implicit function label, and explicit/implicit returns; direct calls
   (native imports, forward calls and mutual recursion), typed `call_indirect`,
   with scalar signatures including native and cross-instance Wasm imports;
-  i32-only direct/indirect tail-call opcodes (currently lowered to call+return;
-  true tail-call stack semantics and machine-level elimination remain outstanding);
+  direct/indirect/reference tail-call opcodes (targeted constant-stack coverage is
+  in `[asmjit]`; the generic suite still segfaults on the tail-call test);
   and memory32/memory64 i32/i64/f32/f64 loads/stores, including signed/unsigned narrow extensions,
   `memory.size`/`memory.grow` at both index widths, checked memory32 `memory.copy` (with overlap-safe `memmove` semantics), `memory.fill`, `memory.init`, `data.drop`, `table.init`, `elem.drop`, `table.size`, and checked overlap-safe `table.copy`.
   Memory accesses use a checked helper that observes the shared-memory size
   accessor and reports out-of-bounds traps through the pending-trap protocol.
   Function nodes are declared in one CodeHolder before any bodies are emitted,
   so direct-call labels resolve across the entire module. Result-bearing blocks
-  currently support only one scalar result and no block parameters; `br_table`
+  now support scalar and `v128` results and block parameters; `br_table` still
   requires identical target stack heights/signatures. The `unreachable`
   instruction reports a trap and supplies a limited single-result placeholder,
   but general unreachable-stack polymorphism remains unsupported. Cross-instance scalar Wasm imports are covered by tests. Scalar globals are lowered; the first four `v128` slices (const/load/store, locals, `i32x4` lane access, the bitwise family, `any_true`, integer lane arithmetic, the comparison families, `all_true`, the shifts, saturating arithmetic, `min`/`max`, `avgr_u`, `abs`/`popcnt`, widening, `extmul`, `extadd_pairwise`, `dot`, both narrowing families, the `f32x4`/`f64x2` arithmetic/comparison/unary/conversion families, float lane access and the transport families (extending/splat/zero loads, lane loads and stores, `i8x16.swizzle`, `i8x16.shuffle`), through the shared helper ABI, and `ref.null`/`ref.is_null`/`ref.eq`/`ref.as_non_null`/`ref.func` (internal and imported) /`br_on_null`) are lowered, while `v128` signatures and block types (deferred by decision — see `docs/backends/V128_SIGNATURE_DECISION.md`), `ref.func`, `f16`, bulk memory on a memory64 and

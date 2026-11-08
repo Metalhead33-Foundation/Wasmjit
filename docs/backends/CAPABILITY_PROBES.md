@@ -2,8 +2,9 @@
 
 **Status:** living note, 2026-11-07 (`backendsMh33`). Companion to
 [`PRODUCTION_GAPS.md`](PRODUCTION_GAPS.md), which holds the **matrix**; this note holds
-the **instruments** that fill it. Section 16 records the corrected probes; 17 the capability close-out; 18 the
-V-1/multi-value/shared-atomic follow-up.
+the **instruments** that fill it. Section 16 records the corrected probes; 17 the
+capability close-out; 18 the V-1/multi-value/shared-atomic follow-up; 19 the
+production-readiness run and the corrections to earlier outcome cells.
 
 A probe is a fixture plus one test that runs it on every backend and records one of
 exactly three outcomes. The rule that governs all of them:
@@ -15,7 +16,7 @@ exactly three outcomes. The rule that governs all of them:
 
 | # | Probe | Fixture | Assertion | Outcome |
 |---|---|---|---|---|
-| 1 | exceptions | `exceptions_probe.wat` -- a tag plus `throw` | the two refusals are `REQUIRE_THROWS`; LibJIT's wrong answer is **pinned** | SLJIT ⛔ · AsmJIT ⛔ · **LibJIT ❌** |
+| 1 | exceptions | `exceptions_probe.wat` -- a tag plus `throw` | the uncaught `throw` returns normally with a pending exception; a local catch returns its payload | all three ✅ (see section 19) |
 | 2 | `externref` | `externref_probe.wat` -- identity | if it instantiates, the reference must round-trip **identically** | all three ✅ |
 | 3 | `funcref` | `funcref_probe.wat` -- `ref.func` plus a declarative elem | both exports exist when the module instantiates | all three ✅ |
 | 4 | tail calls, register form | `tailcall_probe.wat` -- `(i32)->i32` via `return_call` | the call returns the argument it was given | all three ✅ |
@@ -152,7 +153,7 @@ section 6). Two different questions, two different answers, both recorded.
 `throw`, and the only ⛔ rows are honest refusals with reasons.
 
 Suite 21916 assertions in 784 cases under `--rng-seed 12345`, green. (Revision
-2026-11-07: suite 22435 assertions in 820 cases, same seed.)
+2026-11-07: suite 22437 assertions in 820 cases, same seed.)
 
 ## 6. Probes 9 and 10: GC arrays work everywhere; memory64 + bulk memory (now does)
 
@@ -593,3 +594,33 @@ shared-everything-threads` where the proposal needs it.
 * shared **reference/table** atomics: no valid upstream fixture yet; the backend
   refusals are explicit.
 * AsmJIT structured block **parameters** remain refused.
+
+## 19. Production-readiness run (2026-11-07)
+
+**Snapshot (2026-11-07, working tree on `195e1ea`):** the targeted probe tags are
+green, but the generic backend-selected suite is not. The production verdict and
+promotion criteria are owned by
+[`PRODUCTION_READINESS.md`](../BACKEND_PRODUCTION_READINESS.md).
+
+| Run | Result |
+|---|---|
+| default (`libjit`) | **22,437 assertions / 820 cases**, green |
+| `WASMJIT_BACKEND=sljit` | **177 / 218 cases passed, 41 failed**, then abort (`IOT`) |
+| `WASMJIT_BACKEND=asmjit` | **15 / 21 cases passed, 6 failed**, then segfault |
+
+### Corrections to the older probe rows
+
+The following rows above are historical and no longer current:
+
+* AsmJIT no longer refuses `catch_ref` or multi-value catch payloads; `EXCMULTI`
+  is green on all three (`catchref=33 catch2i32=33`).
+* Shared reference/table atomics and global reference atomics are implemented on
+  all three (`SHAREDREF`, `TABLEATOMIC`, `GLOBALREF`).
+* AsmJIT structured block parameters are supported, including `v128` parameters
+  (`BLOCKV128`).
+* Frame-form tail calls, `call_ref` and frame-indirect tails are covered by the
+  `TAILFRAME`/`TAILREFFRAME`/`TAILINDIRECTFRAME` probes; the remaining LibJIT
+  caveat is that its opt-in frame tails are call+return, not constant-stack.
+
+A targeted probe green is necessary but not sufficient for production; the
+generic run above is the missing gate.

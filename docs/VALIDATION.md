@@ -46,10 +46,11 @@ alignment/offset and (for stores) mutability, and `array.new_array` /
 `array.new_memory` / `array.new_table` validate the element relation and the
 source array/memory/table index (`GC_EXTENSIONS.md` GX-1/GX-2). The older
 one-element `array.*`/`struct.*` forms remain tainted. A `try_table` **with
-catches** is tainted after its catch labels are checked,
-because a catch injects its payload into an outer label, which the linear stack
-does not model. A validator must never reject a module it could not check — the
-cost is coverage, measured below, not correctness.
+catches** is not tainted: each catch payload is checked against its outer label
+at the instruction, and the body keeps normal stack typing. The old taint hid
+modules that left extra values at a block end (V-1); `invalid_catch_stack.wat`
+is the regression fixture. A validator must never reject a module it could not
+check — the cost is coverage, measured below, not correctness.
 
 `ValidationOptions::relaxedDeadCode` (`WasmValidation.hpp`) opts into the
 Relaxed Dead-Code Validation algorithm for one load

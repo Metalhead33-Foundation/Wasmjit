@@ -3,7 +3,8 @@
 **Status:** living note, 2026-11-07 (`backendsMh33`). Companions:
 [`EXPORT_SIGNATURE.md`](EXPORT_SIGNATURE.md) (the ABI itself),
 [`STAGING_CALL_ABI.md`](STAGING_CALL_ABI.md) (its history). **Section 27 is the current
-defect/gap ledger**; 23-26 are history.
+curated capability ledger; section 29 is the production-readiness gap ledger**;
+23-26 are history.
 
 This note exists because a survey of refusal strings (EXPORT_SIGNATURE §44) described
 "limits" that are **not limits**: the frame form exists precisely to remove them.
@@ -924,14 +925,18 @@ check, and runtime clause dispatch for `try_table`. The atomics use the shared
 `wasm_atomic_*` helper ABI (bounds-checked address in generated code, alignment and
 memory order in the helper), so no target-specific atomic instruction is required.
 Frame-form tail calls are call + frame return: the values are correct and the
-staging-frame ABI is honoured end to end.
+staging-frame ABI is honoured end to end. (Later passes added driver-backed frame
+tails on SLJIT/AsmJIT; LibJIT's opted-in frame tails remain call+return.)
 
-### Still refused (honest, temporary)
+### Still refused (historical, superseded by section 27)
 
 | Gap | SLJIT | AsmJIT | LibJIT | Reason |
 |---|---|---|---|---|
 | `catch_ref` / `catch_all_ref`; a catch payload wider than one value | n/a (supported) | ⛔ | n/a (supported) | a structured block on AsmJIT carries at most one result |
 | shared-everything atomics on reference/table slots | ⛔ | ⛔ | ✅ | numeric global/struct/array slots are done; shared refs need shared composites and tables need table.get/set |
+
+Both rows were closed in section 27; the table is kept as history. Production
+readiness is a different question, recorded in section 29.
 
 ### Findings
 
@@ -960,7 +965,7 @@ in both passes.
 
 ## 27. V-1 fixed, multi-value catches and numeric shared atomics closed (2026-11-07)
 
-**Snapshot (2026-11-07, `backendsMh33`):** suite **22435 assertions in 820
+**Snapshot (2026-11-07, `backendsMh33`):** suite **22437 assertions in 820
 cases** under `--rng-seed 12345`, green; `[headerdoc]`, `[docs]`, `doxygen`
 (0 warnings) and `abi-check` all pass. This section supersedes section 26.
 
@@ -1027,7 +1032,7 @@ proposal; the validator rejects them instead of leaving a backend refusal.
 
 | Gap | Backends | Reason |
 |---|---|---|
-| *(none)* | -- | No backend capability gap remains; the LibJIT frame form stays opt-in by policy. |
+| *(none in this curated capability ledger)* | -- | No implemented-feature row remains. **Production readiness is a separate question**; see section 29. |
 
 `v128` atomic slots are not in this table: the proposal does not allow them and
 the validator rejects them (`V128ATOMIC`).
@@ -1053,5 +1058,36 @@ Once opted in, the frame contract is complete:
 multi-result 7/9, 100-link frame tail 1, multi-result `call_ref` 11. The safety probe
 uses a rejected artifact and confirms the runtime remains usable.
 
-**Suite:** 22435 assertions in 820 cases, `--rng-seed 12345`, green; `[headerdoc]`,
+**Suite:** 22437 assertions in 820 cases, `--rng-seed 12345`, green; `[headerdoc]`,
 `[docs]`, `doxygen` and `abi-check` clean.
+
+## 29. Production-readiness gaps -- SLJIT and AsmJIT (2026-11-07)
+
+**Snapshot (2026-11-07, working tree on `195e1ea`):** the detailed note is
+[`PRODUCTION_READINESS.md`](../BACKEND_PRODUCTION_READINESS.md). The headline is:
+
+| Backend | Verdict | Measured evidence |
+|---|---|---|
+| LibJIT | **Production-ready within its declared envelope** | default suite 22,437 assertions / 820 cases, green; x86-64 Linux only |
+| SLJIT | **Not production-ready** | `WASMJIT_BACKEND=sljit`: 177 / 218 cases passed, 41 failed, then abort |
+| AsmJIT | **Not production-ready** | `WASMJIT_BACKEND=asmjit`: 15 / 21 cases passed, 6 failed, then segfault |
+
+The blockers are not just “unimplemented opcodes”:
+
+* **SLJIT:** core spec scripts fail (`func`, `i64`, `f32`, `if`, `br_if`, `stack`,
+  `local_init`, `table_fill`, several SIMD scripts, `float_memory64`, multi-memory,
+  legacy EH, stringref); `table.fill` and SIMD lane extraction are missing;
+  `float_memory64` returns the wrong bits; `br_table` requires identical target
+  signatures; tail-call tests fail; the run aborts the process.
+* **AsmJIT:** only 15 generic cases pass before a segfault; `func.0` ends with the
+  wrong number of results; `table.fill` and SIMD lane extraction are missing;
+  start-function allocation fails; tail-call tests segfault.
+
+Promotion requires the full backend-selected suite to finish green (no abort,
+no segfault), the strict negative sweep to pass, the sanitizer run to be recorded,
+and the status documents to agree. Until then LibJIT is the only production
+backend.
+
+**Reproduce:** `WASMJIT_BACKEND=sljit ./Test/WasmJit --rng-seed 12345` and
+`WASMJIT_BACKEND=asmjit ./Test/WasmJit --rng-seed 12345` from
+`build/Desktop-Release`.

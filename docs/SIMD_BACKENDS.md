@@ -2,9 +2,12 @@
 
 *Research Note: LibJIT, SLJIT, AsmJit, and the Native-Helper Middle Path*
 
-Status: research note (revision 3). It records that the current implementation
-path is LibJIT only while AsmJit and SLJIT remain deferred-but-planned; the
-decision that follows from this survey lives in [`SIMD_LIBJIT.md`](SIMD_LIBJIT.md).
+Status: research note (revision 3), with a **2026-11-07 update**: AsmJIT and
+SLJIT now carry targeted SIMD slices, so the “deferred-but-planned” framing below
+is historical. Neither backend is production-ready; their generic-suite blockers
+are owned by [`BACKEND_PRODUCTION_READINESS.md`](BACKEND_PRODUCTION_READINESS.md).
+The decision that follows from this survey lives in
+[`SIMD_LIBJIT.md`](SIMD_LIBJIT.md).
 Audience: anyone about to start a milestone from
 [`proposals/SIMD.md`](proposals/SIMD.md) §7, or anyone touching the backend
 abstraction (`Project.pro`, the `*OpcodeDispatcher` families, the type

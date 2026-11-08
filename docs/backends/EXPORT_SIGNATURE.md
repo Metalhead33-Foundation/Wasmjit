@@ -1624,6 +1624,12 @@ says, not what anyone remembers:
 
 ### What the table means for "production-ready parity"
 
+**Update (2026-11-07):** this table is historical. The frame ABI work is complete,
+and the later capability passes closed the reference/GC, exception, SIMD and tail
+rows that were open when it was written. Production readiness is still a separate
+question: the generic backend-selected suite for SLJIT/AsmJIT fails and crashes.
+See [`PRODUCTION_READINESS.md`](../BACKEND_PRODUCTION_READINESS.md), which owns the verdict.
+
 The frame ABI work is complete; **what remains is not ABI shape but feature coverage**,
 and it is uneven in a specific way:
 

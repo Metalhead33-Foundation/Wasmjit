@@ -367,11 +367,12 @@ layering violation with extra steps.
 
 ## 11. The SLJIT backend — a worked example, and its honest limits
 
-`Sljit/` is the second executing backend. As of **snapshot 2026-11-05** it
-covers the same scalar integer and floating-point slice as `Asmjit/` — P0–P3
-(scalar) in the plan's terms — so the two can act as each other's oracle; it
-still claims no parity with LibJIT, whose references/GC, exceptions and
-continuations are the next target.
+`Sljit/` is the second executing backend. As of **snapshot 2026-11-07** it has
+targeted coverage well beyond the P0–P3 scalar slice (including exceptions,
+atomics, references and SIMD slices), but the **generic backend-selected suite
+does not pass** — 41 failures followed by an abort. It is provisional and not
+production-ready; see
+[`BACKEND_PRODUCTION_READINESS.md`](BACKEND_PRODUCTION_READINESS.md) §4.
 
 | File | Role |
 |---|---|
@@ -415,10 +416,8 @@ miscompiled, nothing is interpreted, and no half-emitted code is ever installed.
 
 | Limitation | Why | What replaces it |
 |---|---|---|
-| three parameters, one result | SLJIT's `sljit_emit_enter`/`sljit_emit_icall` take at most four integer arguments, and `VMContext*` is one of them | LibJIT for wider signatures |
-| no `v128`/SIMD | the vector helper layer is the next slice; a half-lowered vector is worse than a refused one | LibJIT |
-| no references/GC/exceptions | the GC layout and ownership model are whole projects of their own | LibJIT (`emitReferenceParameterRetains`) |
-| references are refused, not half-owned | neither this backend nor Asmjit lowers `ref.*`/`struct.*`/`array.*`; a reference it moves without counting is worse than one it refuses. When either adds them, §6 “Reference ownership” is the rule to implement, not an optional refinement | LibJIT |
+| full generic conformance | `WASMJIT_BACKEND=sljit` has 41 failures and then aborts; missing `table.fill`/SIMD lane paths, wrong `float_memory64` bits, `br_table` signature restriction, tail-call failures | [`BACKEND_PRODUCTION_READINESS.md`](BACKEND_PRODUCTION_READINESS.md); LibJIT for production |
+| not production-ready | targeted slices are green but do not prove general conformance or process safety | promotion gate in the readiness note |
 | one executable mapping per function | the W^X allocator maps each block separately | acceptable for a second backend; the default pooled allocator trades W^X for density |
 | one indirect call per direct call | a body is emitted in its own SLJIT compiler, so `ModuleCompiler::resolveCallable` resolves the target at run time | an inlining slice once the post-mortem measures the cost |
 
@@ -525,9 +524,12 @@ every semantic question unless a row below explicitly says otherwise.
   operations. Both register under their own name, both implement
   `releaseInstance`, and both pass `[backendabi]`, `[asmjit]`/`[sljit]` and the
   shared `[sljit][module][parity]` fixtures over the same `.wat` modules.
-- Neither lowers `v128`/SIMD, references/GC, exceptions, continuations, atomics
-  or `f16`, and bulk memory on a memory64 is refused; those stay refused at the
-  call boundary. SLJIT additionally caps generated functions at three
+- **Update (2026-11-07):** the targeted slices expanded well beyond this starting
+  point, but the generic full-suite runs still fail and crash; the production
+  plan is therefore still open. Neither backend is production-ready yet. The
+  measured blockers are in [`BACKEND_PRODUCTION_READINESS.md`](BACKEND_PRODUCTION_READINESS.md).
+- The original starting point refused `v128`/SIMD, references/GC, exceptions,
+  continuations, atomics or `f16`, and bulk memory on a memory64. SLJIT additionally caps generated functions at three
   parameters and one result (SLJIT's four-argument call ABI).
 - Neither is a replacement for LibJIT.
 

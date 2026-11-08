@@ -17,6 +17,11 @@ verdicts, and the gap ledger that says which documented shortfalls are compatibl
 with the milestone and which would sink it. It contains **no code**, changes no
 behaviour, and adds no test.
 
+**Scope of the production claim:** G1 is about LibJIT. SLJIT and AsmJIT are
+implemented and have targeted coverage, but they are **not production-ready**;
+their measured blockers are in
+[`BACKEND_PRODUCTION_READINESS.md`](BACKEND_PRODUCTION_READINESS.md).
+
 ## 1. Document map
 
 | Section | Question it answers |
@@ -298,7 +303,7 @@ shape and the note tree — **1,013** on 2026-11-01). The documented negative-mo
 |---|---|---|
 | GNU LibJIT (`LibJit/`) | The only executing backend: context, type translation, module compiler, opcode dispatcher, runtime; SIMD through the shared helper layer | G1's subject. |
 | `WasmStub/` | Non-compiling pretty-printer over the shared `OpcodeDispatcher` | Proves the *decoder* is backend-neutral; proves nothing about the *instantiator* seam. |
-| AsmJit (`Asmjit/`) | **Experimental executing backend since 2026-10-30** (`9a7b539`): `AsmjitContext`, `AsmjitTypeTranslator` and `AsmjitModuleCompiler` are real sources, and it runs an i32/i64 integer subset (arithmetic, bit counts, conversions, structured control flow, globals, typed direct/indirect calls, checked memory32 access). It is still **not installed and not selectable through the runtime registry**; `[asmjit]` covers it. At the time of the milestone (`AAS11`, 2026-10-29) it was a documented, empty scaffold | Planned work, not distance to G3: it grew without touching `WasmBase/`. |
+| AsmJit (`Asmjit/`) | **Experimental executing backend since 2026-10-30** (`9a7b539`): `AsmjitContext`, `AsmjitTypeTranslator` and `AsmjitModuleCompiler` are real sources, and it runs an i32/i64 integer subset (arithmetic, bit counts, conversions, structured control flow, globals, typed direct/indirect calls, checked memory32 access). It is **not installed as a product backend and is not production-ready**, but it **is selectable through the runtime registry** (`Runtime::create("asmjit")`); `[asmjit]` covers it. At the time of the milestone (`AAS11`, 2026-10-29) it was a documented, empty scaffold | Planned work, not distance to G3: it grew without touching `WasmBase/`. |
 | SLJIT (`Sljit/`) | **Provisional executable backend since 2026-10-30**: the directory links the shared core, registers `sljit`, and runs a straight-line `i32`/`i64` subset, refusing everything else with a null `Callable::fnPtr` ([`WRITING_A_BACKEND.md`](WRITING_A_BACKEND.md) §9). At the time of the milestone (`AAS11`, 2026-10-29) it was a documented, empty scaffold | The seam now has a second real implementation inside the tree — directory-local, `WasmBase/` unchanged. |
 
 ### 6.4 The seam, as it exists
@@ -446,7 +451,7 @@ recording that TM-6…TM-11 completed them.
 |---|---|---|---|
 | AAS8 | **The backend façade is test-local.** `TestBackend::Session` is the interface a backend author would actually implement, and it lives in `Test/`. The product exposes only `ModuleInstantiator` plus conventions, so a second backend either writes product code inside the harness or re-derives the façade. **Closed 2026-10-29:** `WASM::BackendSession` (with `BackendAggregateLayout`, `BackendFieldLayout`, `BackendLaneWiseOp`) is a product type in [`WasmBackendSession.hpp`](../WasmBase/WasmBackendSession.hpp), classified in the backend tier, installed, and compiled standalone by its own TU; `TestBackend` now aliases it. The *selector* stays with the backend (`Test/TestBackend.cpp`), so the core still names no code generator. | `WasmBackendSession.hpp`; `Test/TestBackend.hpp` | A |
 | AAS9 | **There is no backend work order.** [`LAYERING.md`](LAYERING.md) §4 says what a backend *may not* violate; it does not enumerate what a backend *must provide*: `ContinuationInvokeFn`, the `currentTailCallState()` access path, `Callable::typeId` maintenance, aggregate layout for multi-result returns, the `v128` host ABI, the trap-slot protocol, the profile gate, the helper entry points it is expected to call. **Closed 2026-10-29:** [`WRITING_A_BACKEND.md`](WRITING_A_BACKEND.md) is that checklist — the two seams, the four hooks with what each must and must not do, the eight ABI obligations, memory/GC ownership, the call-versus-bring helper split, packaging, and a definition of done naming the test tags that evidence it. | `WRITING_A_BACKEND.md`; `LAYERING.md` §4 | A |
-| AAS10 | **The seam has never had a second implementation.** `Asmjit/` and `Sljit/` contain only a `.pro` that includes `WasmBase.pri`; `LibJIT::ModuleCompiler` is the only subclass of `ModuleInstantiator`, and `libjit` the only `WASMJIT_BACKEND`. Nothing in the build would notice if a hook grew a LibJIT-shaped assumption. **Closed 2026-10-29:** the seam has three implementations — the executing backend, the core's `NullInstantiator`, and `Test/ExampleBackend`, a loadable plugin built in its own directory — and `Runtime::create(name)` selects any of them (the plugin through `dlopen`). | `Asmjit/Asmjit.pro`, `Sljit/Sljit.pro`; `WasmBase/WasmNullInstantiator.*`; `Test/ExampleBackend/`; [`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md) §10 | A |
+| AAS10 *(historical; closure below)* | **The seam has never had a second implementation.** `Asmjit/` and `Sljit/` contain only a `.pro` that includes `WasmBase.pri`; `LibJIT::ModuleCompiler` is the only subclass of `ModuleInstantiator`, and `libjit` the only `WASMJIT_BACKEND`. Nothing in the build would notice if a hook grew a LibJIT-shaped assumption. **Closed 2026-10-29:** the seam has three implementations — the executing backend, the core's `NullInstantiator`, and `Test/ExampleBackend`, a loadable plugin built in its own directory — and `Runtime::create(name)` selects any of them (the plugin through `dlopen`). | `Asmjit/Asmjit.pro`, `Sljit/Sljit.pro`; `WasmBase/WasmNullInstantiator.*`; `Test/ExampleBackend/`; [`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md) §10 | A |
 | AAS11 | **The scaffolds do not enforce the seam.** Their `.pro` files define no sources and no compile-time assertion; a stray `libSljit.so.*` sits in `Sljit/` (git-ignored, so history is clean) and will confuse the first person who looks. **Closed 2026-10-29 (documented, deliberately kept):** the stray `libSljit.so*` files are gone; both directories stay reserved **because those backends are planned**, and each now carries a `README.md` that says what it is (a placeholder that emits nothing and installs nothing), what it is not, and how to start through [`WRITING_A_BACKEND.md`](WRITING_A_BACKEND.md). `Project.pro` comments the two subprojects as planned so the next reader does not mistake them for dead scaffolding. | `Sljit/`, `Asmjit/`, `Project.pro` | A |
 | AAS7 | **The layering waiver.** Five `WasmBase/` sites cite `docs/UNMODELLED_VALUE_TYPES.md`, whose name contains "JIT". A citation is not a dependency, but it is the only reason the §6 check is not empty. **Closed 2026-10-29:** the note is renamed and the five sites re-pointed; §6 returns empty and the `[layering]` test enforces it. | `LAYERING.md` §8 | A |
 
@@ -721,3 +726,18 @@ Re-measured on 2026-11-03 for the FP16/M8 slice (`4d52031`), from
 - [`PROPOSALS.md`](PROPOSALS.md) — the shape every note above follows, and the ID
   conventions this note borrows (`AAS<n>`, `AASD<n>`, `AAS-<n>`).
 - `AGENTS.md` — the one-line rules a contributor reads first.
+
+## 13. Backend production status (2026-11-07)
+
+This milestone is **met for LibJIT**, the production backend. It is not a
+three-backend production claim. The measured status is:
+
+| Backend | Status |
+|---|---|
+| LibJIT | Production-ready within the declared x86-64 Linux / single-agent envelope |
+| SLJIT | Provisional; not production-ready — generic backend suite fails then aborts |
+| AsmJIT | Experimental; not production-ready — generic backend suite fails then segfaults |
+
+The evidence and promotion criteria are owned by
+[`BACKEND_PRODUCTION_READINESS.md`](BACKEND_PRODUCTION_READINESS.md); this note
+does not duplicate them.

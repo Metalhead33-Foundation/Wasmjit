@@ -2,10 +2,12 @@
 
 *The SLJIT backend*
 
-Status: **Snapshot (2026-11-05):** the backend executes the shared scalar
-integer and floating-point slice and is at feature parity with `Asmjit/`; the
-next target is the LibJIT backend's `v128`/SIMD, reference/GC and exception
-slices. It is not a replacement for `LibJit/`.
+Status: **Snapshot (2026-11-07):** the targeted `[sljit]` suite is green, but the
+**generic backend-selected suite does not pass** — 41 failures followed by a
+process abort. The backend is **provisional and not production-ready**. See
+[`docs/BACKEND_PRODUCTION_READINESS.md`](../docs/BACKEND_PRODUCTION_READINESS.md)
+for the measured evidence and open blockers. The design notes below are history;
+they are not a support matrix.
 
 ## What executes today
 
@@ -62,19 +64,20 @@ A unit test exercises the same `asmjit_i32_basic`/`asmjit_i64_basic` fixtures
 that the AsmJit suite uses (`[sljit][module][parity]`), so the shared slice is
 checked against one fixture set rather than two drifting ones.
 
-## What it still refuses
+## What the generic run currently exposes
 
-`v128` in signatures or block types (deferred — see
-[`docs/backends/V128_SIGNATURE_DECISION.md`](../docs/backends/V128_SIGNATURE_DECISION.md)),
-and relaxed SIMD,
-references/GC, exceptions, continuations, atomics, `f16` load/store, bulk
-memory on a memory64, functions with more than three parameters, and functions
-with more than one result. Each refusal leaves that
-function's
-`Callable::fnPtr` **null**; the core then reports "no compiled body" at the
-call boundary. Nothing is miscompiled, nothing is interpreted, and no
-partially emitted code is installed. The per-function reasons are available
-from `Sljit::ModuleCompiler::unsupportedFunctions()`.
+The promotion blockers are in [`docs/BACKEND_PRODUCTION_READINESS.md`](../docs/BACKEND_PRODUCTION_READINESS.md)
+§4. In summary: core spec scripts fail (`func`, `i64`, `f32`, `if`, `br_if`,
+`stack`, `local_init`, `table_fill`, several SIMD scripts, `float_memory64`,
+multi-memory, legacy EH, stringref); `table.fill` and SIMD lane extraction are
+missing; `float_memory64` returns the wrong bits; `br_table` requires identical
+target signatures; tail-call tests fail; the run aborts.
+
+A refused function leaves that function's `Callable::fnPtr` **null**; the core
+reports "no compiled body" at the call boundary. Refusal is the intended
+failure mode, but it does not excuse the wrong-result, abort or missing-lowering
+rows above. The per-function reasons are available from
+`Sljit::ModuleCompiler::unsupportedFunctions()`.
 
 ## How the slice is emitted
 

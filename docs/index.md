@@ -31,6 +31,7 @@ row here. A note missing from this table builds as a *sibling* and fails the
 | learn how that refactor went after it merged | \subpage doc_abi_refactor_post_mortem | what shipped per backend, what went well, the seven failures with root causes, the numbers at merge, and the four follow-ups in recommended order |
 | embed the engine, or change its install/version story | \subpage doc_embedding_surface | `WASM::Runtime`, the three header tiers, soname/visibility, the install layout |
 | change an embedder-facing surface or the backend seam | \subpage doc_api_abi_stability | the milestone and its four gates, the frozen surfaces, the break classes, the merge readiness |
+| decide whether a backend is production-ready | \subpage doc_backend_production_readiness | the per-backend verdict, the measured full-suite runs, the SLJIT/AsmJIT blockers, and the promotion gate |
 | add or change SIMD support | \subpage doc_simd_backends | what each backend can do for vectors, and the helper-based lowering every backend starts from |
 | change the LibJIT SIMD path | \subpage doc_simd_libjit | the LibJIT decision, the measured cost, the milestone plan |
 | build, run or fix the test suite | \subpage doc_testing | the suite, the spec-suite conversion, the curated list, the refresh recipe |
