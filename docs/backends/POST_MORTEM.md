@@ -2362,7 +2362,29 @@ Default 22,448 assertions in 821 cases, green
   range and layout are part of the helper contract now.
 
 
-## More array constructors
+## Relaxed dead-code block parameters
+
+### Fix
+
+AsmJIT's `pushControlFrame` rejected a block whose declared parameters had no
+live producers. Relaxed dead-code validation permits exactly that after a
+terminator: the block is polymorphic and never executes. In an already
+terminated arm the frame now uses placeholder registers instead of failing.
+
+### Evidence
+
+```
+AsmJIT  relaxed dead-code validation   19/19
+AsmJIT  full serial                    821 cases: 808 passed / 13 failed
+```
+
+### Lesson
+
+* **Dead code still needs a well-formed compile-time frame.** The frame's
+  operands may be placeholders; rejecting the underflow defeats the relaxed
+  policy while accepting it in a live arm would still be a bug.
+
+
 
 ### Fix
 

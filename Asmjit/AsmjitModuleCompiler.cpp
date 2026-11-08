@@ -9704,11 +9704,23 @@ private:
 		frame.entryReachable = !armTerminated;
 		frame.paramTypes = blockParamTypes(type);
 		frame.paramCount = frame.paramTypes.size();
-		if (values.size() < frame.paramCount)
-			throw std::runtime_error("AsmJit block parameters underflow the operand stack");
-		frame.stackHeight = values.size() - frame.paramCount;
-		for (std::size_t i = 0; i < frame.paramCount; ++i)
-			frame.params.push_back(values[frame.stackHeight + i]);
+		if (values.size() < frame.paramCount) {
+			// Polymorphic dead code may name block parameters that no live
+			// producer supplied. The block can never execute, so give the frame
+			// placeholder values instead of rejecting the body.
+			if (!armTerminated)
+				throw std::runtime_error("AsmJit block parameters underflow the operand stack");
+			frame.stackHeight = 0;
+			for (WASM::ValueTypeCode code : frame.paramTypes) {
+				frame.params.push_back(kindWidth(code) == 8
+						? compiler.new_gp64("deadBlockParam")
+						: compiler.new_gp32("deadBlockParam"));
+			}
+		} else {
+			frame.stackHeight = values.size() - frame.paramCount;
+			for (std::size_t i = 0; i < frame.paramCount; ++i)
+				frame.params.push_back(values[frame.stackHeight + i]);
+		}
 		frame.resultTypes = blockResultTypes(type);
 		frame.resultCount = frame.resultTypes.size();
 		for (WASM::ValueTypeCode code : frame.resultTypes) {
