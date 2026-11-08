@@ -1442,6 +1442,35 @@ private:
 	 */
 	void requireTableIndex(WASM::TableIdx index);
 
+	void dispatchStringConst(std::uint32_t idx) override; //!< `string.const`.
+	void dispatchStringMeasureUtf8() override; //!< `string.measure_utf8`.
+	void dispatchStringMeasureWtf8() override; //!< `string.measure_wtf8`.
+	void dispatchStringMeasureWtf16() override; //!< `string.measure_wtf16`.
+	void dispatchStringConcat() override; //!< `string.concat`.
+	void dispatchStringEq() override; //!< `string.eq`.
+	void dispatchStringIsUsvSequence() override; //!< `string.is_usv_sequence`.
+	void dispatchStringNewUtf8(WASM::MemIdx memory) override; //!< `string.new_utf8`.
+	void dispatchStringNewLossyUtf8(WASM::MemIdx memory) override; //!< `string.new_lossy_utf8`.
+	void dispatchStringNewWtf8(WASM::MemIdx memory) override; //!< `string.new_wtf8`.
+	void dispatchStringNewWtf16(WASM::MemIdx memory) override; //!< `string.new_wtf16`.
+	void dispatchStringEncodeUtf8(WASM::MemIdx memory) override; //!< `string.encode_utf8`.
+	void dispatchStringEncodeLossyUtf8(WASM::MemIdx memory) override; //!< `string.encode_lossy_utf8`.
+	void dispatchStringEncodeWtf8(WASM::MemIdx memory) override; //!< `string.encode_wtf8`.
+	void dispatchStringEncodeWtf16(WASM::MemIdx memory) override; //!< `string.encode_wtf16`.
+	void dispatchStringNewUtf8Array(WASM::TypeIdx type) override; //!< `string.new_utf8_array`.
+	void dispatchStringNewLossyUtf8Array(WASM::TypeIdx type) override; //!< `string.new_lossy_utf8_array`.
+	void dispatchStringNewWtf8Array(WASM::TypeIdx type) override; //!< `string.new_wtf8_array`.
+	void dispatchStringNewWtf16Array(WASM::TypeIdx type) override; //!< `string.new_wtf16_array`.
+	void dispatchStringEncodeUtf8Array(WASM::TypeIdx type) override; //!< `string.encode_utf8_array`.
+	void dispatchStringEncodeLossyUtf8Array(WASM::TypeIdx type) override; //!< `string.encode_lossy_utf8_array`.
+	void dispatchStringEncodeWtf8Array(WASM::TypeIdx type) override; //!< `string.encode_wtf8_array`.
+	void dispatchStringEncodeWtf16Array(WASM::TypeIdx type) override; //!< `string.encode_wtf16_array`.
+
+	void emitStringNew(WASM::MemIdx memory, const void* helper);
+	void emitStringEncode(WASM::MemIdx memory, const void* helper);
+	void emitStringNewArray(WASM::TypeIdx type, int mode);
+	void emitStringEncodeArray(WASM::TypeIdx type, int mode);
+
 	const WASM::Module& module_; //!< Module owning the body; borrowed.
 	const WASM::FuncType& funcType_; //!< Declared signature of the function.
 	const WASM::FunctionBody& body_; //!< Body being lowered.

@@ -8,6 +8,7 @@
 #include "../WasmBase/wasm_atomic.hpp"
 #include "../WasmBase/WasmStack.hpp"
 #include "../WasmBase/WasmStore.hpp"
+#include "../WasmBase/WasmStringOps.hpp"
 #include "../WasmBase/WasmTrap.hpp"
 #include "../WasmBase/WasmVMContext.hpp"
 #include "../WasmBase/wasm_simd_scalar.hpp"
@@ -7239,6 +7240,318 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 	void dispatchI64LeU() override { emitCompare(asmjit::x86::CondCode::kBE); }
 	void dispatchI64GeS() override { emitCompare(asmjit::x86::CondCode::kGE); }
 	void dispatchI64GeU() override { emitCompare(asmjit::x86::CondCode::kAE); }
+
+	void dispatchStringConst(uint32_t idx) override
+	{
+		if (inDeadCode())
+			return;
+		if (idx >= internals.stringLiterals.size())
+			throw std::runtime_error("AsmJit string.const index is out of range");
+		auto result = compiler.new_gp_ptr("stringConstant");
+		checkError(compiler.mov(result,
+				reinterpret_cast<uint64_t>(internals.stringLiterals[idx])),
+				"AsmJit string.const emission failed");
+		values.push_back(result);
+	}
+
+	void dispatchStringMeasureUtf8() override
+	{
+		emitStringMeasure(reinterpret_cast<uint64_t>(&wasm_string_measure_utf8));
+	}
+	void dispatchStringMeasureWtf8() override
+	{
+		emitStringMeasure(reinterpret_cast<uint64_t>(&wasm_string_measure_wtf8));
+	}
+	void dispatchStringMeasureWtf16() override
+	{
+		emitStringMeasure(reinterpret_cast<uint64_t>(&wasm_string_measure_wtf16));
+	}
+	void dispatchStringIsUsvSequence() override
+	{
+		emitStringMeasure(reinterpret_cast<uint64_t>(&wasm_string_is_usv_sequence));
+	}
+
+	void dispatchStringEq() override
+	{
+		if (inDeadCode())
+			return;
+		if (values.size() < 2)
+			throw std::runtime_error("AsmJit string.eq operand stack underflow");
+		auto right = values.back(); values.pop_back();
+		auto left = values.back(); values.pop_back();
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kInt32);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke),
+				reinterpret_cast<uint64_t>(&wasm_string_eq), signature),
+				"AsmJit string.eq helper call failed");
+		invoke->set_arg(0, left);
+		invoke->set_arg(1, right);
+		auto result = compiler.new_gp32("stringEqResult");
+		invoke->set_ret(0, result);
+		values.push_back(result);
+		emitPendingTrapReturn();
+	}
+
+	void dispatchStringConcat() override
+	{
+		if (inDeadCode())
+			return;
+		if (values.size() < 2)
+			throw std::runtime_error("AsmJit string.concat operand stack underflow");
+		auto right = values.back(); values.pop_back();
+		auto left = values.back(); values.pop_back();
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke),
+				reinterpret_cast<uint64_t>(&wasm_string_concat), signature),
+				"AsmJit string.concat helper call failed");
+		invoke->set_arg(0, vmContext);
+		invoke->set_arg(1, left);
+		invoke->set_arg(2, right);
+		auto result = compiler.new_gp_ptr("stringConcatResult");
+		invoke->set_ret(0, result);
+		values.push_back(result);
+		emitPendingTrapReturn();
+	}
+
+	void emitStringMeasure(uint64_t helper)
+	{
+		if (inDeadCode())
+			return;
+		if (values.empty())
+			throw std::runtime_error("AsmJit string measure operand stack underflow");
+		auto string = values.back(); values.pop_back();
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kInt32);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke), helper, signature),
+				"AsmJit string measure helper call failed");
+		invoke->set_arg(0, string);
+		auto result = compiler.new_gp32("stringMeasureResult");
+		invoke->set_ret(0, result);
+		values.push_back(result);
+		emitPendingTrapReturn();
+	}
+
+	void dispatchStringNewUtf8(WASM::MemIdx memory) override
+	{
+		emitStringNew(memory, reinterpret_cast<uint64_t>(&wasm_string_new_utf8));
+	}
+	void dispatchStringNewLossyUtf8(WASM::MemIdx memory) override
+	{
+		emitStringNew(memory, reinterpret_cast<uint64_t>(&wasm_string_new_lossy_utf8));
+	}
+	void dispatchStringNewWtf8(WASM::MemIdx memory) override
+	{
+		emitStringNew(memory, reinterpret_cast<uint64_t>(&wasm_string_new_wtf8));
+	}
+	void dispatchStringNewWtf16(WASM::MemIdx memory) override
+	{
+		emitStringNew(memory, reinterpret_cast<uint64_t>(&wasm_string_new_wtf16));
+	}
+	void dispatchStringEncodeUtf8(WASM::MemIdx memory) override
+	{
+		emitStringEncode(memory, reinterpret_cast<uint64_t>(&wasm_string_encode_utf8));
+	}
+	void dispatchStringEncodeLossyUtf8(WASM::MemIdx memory) override
+	{
+		emitStringEncode(memory, reinterpret_cast<uint64_t>(&wasm_string_encode_lossy_utf8));
+	}
+	void dispatchStringEncodeWtf8(WASM::MemIdx memory) override
+	{
+		emitStringEncode(memory, reinterpret_cast<uint64_t>(&wasm_string_encode_wtf8));
+	}
+	void dispatchStringEncodeWtf16(WASM::MemIdx memory) override
+	{
+		emitStringEncode(memory, reinterpret_cast<uint64_t>(&wasm_string_encode_wtf16));
+	}
+
+	void emitStringNew(WASM::MemIdx memory, uint64_t helper)
+	{
+		if (inDeadCode())
+			return;
+		if (values.size() < 2)
+			throw std::runtime_error("AsmJit string.new operand stack underflow");
+		auto length = values.back(); values.pop_back();
+		auto pointer = values.back(); values.pop_back();
+		auto memoryIndex = compiler.new_gp32("stringMemoryIndex");
+		checkError(compiler.mov(memoryIndex, static_cast<uint32_t>(memory)),
+				"AsmJit string.new memory index materialisation failed");
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke), helper, signature),
+				"AsmJit string.new helper call failed");
+		invoke->set_arg(0, vmContext);
+		invoke->set_arg(1, memoryIndex);
+		invoke->set_arg(2, pointer);
+		invoke->set_arg(3, length);
+		auto result = compiler.new_gp_ptr("stringNewResult");
+		invoke->set_ret(0, result);
+		values.push_back(result);
+		emitPendingTrapReturn();
+	}
+
+	void emitStringEncode(WASM::MemIdx memory, uint64_t helper)
+	{
+		if (inDeadCode())
+			return;
+		if (values.size() < 2)
+			throw std::runtime_error("AsmJit string.encode operand stack underflow");
+		auto pointer = values.back(); values.pop_back();
+		auto string = values.back(); values.pop_back();
+		auto memoryIndex = compiler.new_gp32("stringMemoryIndex");
+		checkError(compiler.mov(memoryIndex, static_cast<uint32_t>(memory)),
+				"AsmJit string.encode memory index materialisation failed");
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kInt32);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke), helper, signature),
+				"AsmJit string.encode helper call failed");
+		invoke->set_arg(0, vmContext);
+		invoke->set_arg(1, memoryIndex);
+		invoke->set_arg(2, string);
+		invoke->set_arg(3, pointer);
+		auto result = compiler.new_gp32("stringEncodeResult");
+		invoke->set_ret(0, result);
+		values.push_back(result);
+		emitPendingTrapReturn();
+	}
+
+	void dispatchStringNewUtf8Array(WASM::TypeIdx type) override
+	{
+		emitStringNewArray(type, 0);
+	}
+	void dispatchStringNewLossyUtf8Array(WASM::TypeIdx type) override
+	{
+		emitStringNewArray(type, 1);
+	}
+	void dispatchStringNewWtf8Array(WASM::TypeIdx type) override
+	{
+		emitStringNewArray(type, 2);
+	}
+	void dispatchStringNewWtf16Array(WASM::TypeIdx type) override
+	{
+		emitStringNewArray(type, 3);
+	}
+	void dispatchStringEncodeUtf8Array(WASM::TypeIdx type) override
+	{
+		emitStringEncodeArray(type, 0);
+	}
+	void dispatchStringEncodeLossyUtf8Array(WASM::TypeIdx type) override
+	{
+		emitStringEncodeArray(type, 1);
+	}
+	void dispatchStringEncodeWtf8Array(WASM::TypeIdx type) override
+	{
+		emitStringEncodeArray(type, 2);
+	}
+	void dispatchStringEncodeWtf16Array(WASM::TypeIdx type) override
+	{
+		emitStringEncodeArray(type, 3);
+	}
+
+	void emitStringNewArray(WASM::TypeIdx type, int mode)
+	{
+		if (inDeadCode())
+			return;
+		const WASM::CoreTypeView view = module.typeView(type);
+		if (view.kind() != WASM::CanonTypeKind::Array)
+			throw std::runtime_error("AsmJit string array constructor requires an array type");
+		const WASM::CanonStorageType& storage = view.arrayElement().storage;
+		const uint32_t elementBytes = static_cast<uint32_t>(WASM::gcStorageBytes(storage));
+		if (mode == 3 ? elementBytes != 2 : elementBytes != 1)
+			throw std::runtime_error("AsmJit string array element size mismatch");
+		const uint64_t layout = static_cast<uint64_t>(WASM::gcArrayDataOffset(storage))
+				| (static_cast<uint64_t>(elementBytes) << 32)
+				| (static_cast<uint64_t>(mode) << 40);
+		if (values.size() < 3)
+			throw std::runtime_error("AsmJit string array constructor operand stack underflow");
+		auto end = values.back(); values.pop_back();
+		auto start = values.back(); values.pop_back();
+		auto array = values.back(); values.pop_back();
+		auto range = compiler.new_gp64("stringArrayRange");
+		auto end64 = compiler.new_gp64("stringArrayEnd");
+		checkError(compiler.mov(range.r32(), start.r32()),
+				"AsmJit string array start materialisation failed");
+		checkError(compiler.mov(end64.r32(), end.r32()),
+				"AsmJit string array end materialisation failed");
+		checkError(compiler.shl(end64, 32), "AsmJit string array range shift failed");
+		checkError(compiler.or_(range, end64), "AsmJit string array range pack failed");
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUInt64);
+		signature.add_arg(asmjit::TypeId::kUInt64);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke),
+				reinterpret_cast<uint64_t>(&wasm_string_new_array_packed), signature),
+				"AsmJit string array constructor helper call failed");
+		invoke->set_arg(0, vmContext);
+		invoke->set_arg(1, array);
+		invoke->set_arg(2, range);
+		invoke->set_arg(3, asmjit::Imm(layout));
+		auto result = compiler.new_gp_ptr("stringNewArrayResult");
+		invoke->set_ret(0, result);
+		values.push_back(result);
+		emitPendingTrapReturn();
+	}
+
+	void emitStringEncodeArray(WASM::TypeIdx type, int mode)
+	{
+		if (inDeadCode())
+			return;
+		const WASM::CoreTypeView view = module.typeView(type);
+		if (view.kind() != WASM::CanonTypeKind::Array)
+			throw std::runtime_error("AsmJit string array encoder requires an array type");
+		const WASM::CanonStorageType& storage = view.arrayElement().storage;
+		const uint32_t elementBytes = static_cast<uint32_t>(WASM::gcStorageBytes(storage));
+		if (mode == 3 ? elementBytes != 2 : elementBytes != 1)
+			throw std::runtime_error("AsmJit string array element size mismatch");
+		const uint64_t layout = static_cast<uint64_t>(WASM::gcArrayDataOffset(storage))
+				| (static_cast<uint64_t>(elementBytes) << 32)
+				| (static_cast<uint64_t>(mode) << 40);
+		if (values.size() < 3)
+			throw std::runtime_error("AsmJit string array encoder operand stack underflow");
+		auto start = values.back(); values.pop_back();
+		auto array = values.back(); values.pop_back();
+		auto string = values.back(); values.pop_back();
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kInt32);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		signature.add_arg(asmjit::TypeId::kUInt64);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke),
+				reinterpret_cast<uint64_t>(&wasm_string_encode_array_packed), signature),
+				"AsmJit string array encoder helper call failed");
+		invoke->set_arg(0, string);
+		invoke->set_arg(1, array);
+		invoke->set_arg(2, start);
+		invoke->set_arg(3, asmjit::Imm(layout));
+		auto result = compiler.new_gp32("stringEncodeArrayResult");
+		invoke->set_ret(0, result);
+		values.push_back(result);
+		emitPendingTrapReturn();
+	}
 
 	void dispatchI64Add() override { emitIntegerBinary(BinaryOp::Add); }
 	void dispatchI64Sub() override { emitIntegerBinary(BinaryOp::Sub); }

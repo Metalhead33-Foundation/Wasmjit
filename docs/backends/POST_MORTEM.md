@@ -2307,3 +2307,56 @@ AsmJIT  821 cases: 776 passed / 45 failed; no signal
 * **Keep both operands alive across a two-call operation.** SLJIT's first
   `mul_wide` draft overwrote the left operand with the low result, so the high
   helper multiplied the low half by the right operand.
+
+
+## Stringrefs — shared string helpers and the backend transport
+
+### Intended
+
+Make stringref instructions a backend-neutral core capability rather than a
+LibJIT-only slice: constants, measures, equality, concat, linear-memory and
+GC-array constructors/encoders.
+
+### Root cause and fix
+
+The string semantics existed only as static helpers inside the LibJIT
+dispatcher, so every other backend refused the opcodes. They now live in
+`WasmStringOps`, exported by the core:
+
+* `string.const` embeds the instance's materialised literal pointer.
+* measures, `eq`, `concat`, `is_usv_sequence` are shared helpers.
+* `string.new_*` / `string.encode_*` take an explicit memory index, so a backend
+  never resolves or pins a `LinearMemory*` itself.
+* GC-array constructors/encoders use a packed range/layout form, keeping the
+  helper ABI at four arguments on SLJIT. The layout carries data offset,
+  element size and codec mode; the range carries `start` low, `end` high.
+
+SLJIT and AsmJIT now dispatch that family; the eight array variants and the
+memory constructors/encoders are green.
+
+### Evidence
+
+```
+SLJIT  string.const, measure, eq, concat   green
+AsmJIT string.const, measure, eq, concat   green
+SLJIT  string.new_utf8 strict/lossy        9/9
+AsmJIT string.new_utf8 strict/lossy        9/9
+SLJIT  string array constructors/encoders  21/21
+AsmJIT string array constructors/encoders  21/21
+```
+
+Full serial runs:
+
+```
+SLJIT   821 cases: 784 passed / 37 failed; no signal
+AsmJIT  821 cases: 780 passed / 41 failed; no signal
+Default 22,448 assertions in 821 cases, green
+```
+
+### Lessons
+
+* **String semantics are core, not backend.** A backend should transport handles
+  and call one shared implementation; duplicating codecs per backend would drift.
+* **Pack only at the ABI boundary, and document the word order.** The array bridge
+  needs five logical fields but SLJIT has four argument registers; the packed
+  range and layout are part of the helper contract now.

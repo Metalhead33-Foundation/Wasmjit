@@ -10,6 +10,7 @@
 #include "../WasmBase/WasmMemory.hpp"
 #include "../WasmBase/WasmStack.hpp"
 #include "../WasmBase/WasmStore.hpp"
+#include "../WasmBase/WasmStringOps.hpp"
 #include "../WasmBase/WasmTrap.hpp"
 #include "../WasmBase/WasmVMContext.hpp"
 #include "../WasmBase/wasm_simd_scalar.hpp"
@@ -8715,6 +8716,342 @@ void OpcodeDispatcher::dispatchTableSize(WASM::TableIdx arg)
 		emitPendingTrapCheck();
 	}
 	push(indexWidth);
+}
+
+void OpcodeDispatcher::dispatchStringConst(std::uint32_t idx)
+{
+	if (!reachable_)
+		return;
+	require(idx < internals_.stringLiterals.size(),
+			"string.const index is out of range");
+	if (measureOnly_) {
+		push(8);
+		return;
+	}
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0, SLJIT_IMM,
+			reinterpret_cast<sljit_sw>(internals_.stringLiterals[idx])));
+	storeSlot(SLJIT_R0, stackWidths_.size(), 8);
+	push(8);
+}
+
+void OpcodeDispatcher::dispatchStringMeasureUtf8()
+{
+	if (!reachable_)
+		return;
+	requireStack(1);
+	const std::size_t depth = stackWidths_.size() - 1;
+	if (measureOnly_) {
+		pop();
+		push(4);
+		return;
+	}
+	loadSlot(SLJIT_R0, depth, 8);
+	emitHelper(SLJIT_ARGS1(32, P), &wasm_string_measure_utf8);
+	storeSlot(SLJIT_R0, depth, 4);
+	emitPendingTrapCheck();
+	pop();
+	push(4);
+}
+
+void OpcodeDispatcher::dispatchStringMeasureWtf8()
+{
+	if (!reachable_)
+		return;
+	requireStack(1);
+	const std::size_t depth = stackWidths_.size() - 1;
+	if (measureOnly_) {
+		pop();
+		push(4);
+		return;
+	}
+	loadSlot(SLJIT_R0, depth, 8);
+	emitHelper(SLJIT_ARGS1(32, P), &wasm_string_measure_wtf8);
+	storeSlot(SLJIT_R0, depth, 4);
+	emitPendingTrapCheck();
+	pop();
+	push(4);
+}
+
+void OpcodeDispatcher::dispatchStringMeasureWtf16()
+{
+	if (!reachable_)
+		return;
+	requireStack(1);
+	const std::size_t depth = stackWidths_.size() - 1;
+	if (measureOnly_) {
+		pop();
+		push(4);
+		return;
+	}
+	loadSlot(SLJIT_R0, depth, 8);
+	emitHelper(SLJIT_ARGS1(32, P), &wasm_string_measure_wtf16);
+	storeSlot(SLJIT_R0, depth, 4);
+	emitPendingTrapCheck();
+	pop();
+	push(4);
+}
+
+void OpcodeDispatcher::dispatchStringConcat()
+{
+	if (!reachable_)
+		return;
+	requireStack(2);
+	const std::size_t base = stackWidths_.size() - 2;
+	if (measureOnly_) {
+		pop(); pop();
+		push(8);
+		return;
+	}
+	loadContext(SLJIT_R0);
+	loadSlot(SLJIT_R1, base, 8);
+	loadSlot(SLJIT_R2, base + 1, 8);
+	emitHelper(SLJIT_ARGS3(P, P, P, P), &wasm_string_concat);
+	storeSlot(SLJIT_R0, base, 8);
+	emitPendingTrapCheck();
+	pop(); pop();
+	push(8);
+}
+
+void OpcodeDispatcher::dispatchStringEq()
+{
+	if (!reachable_)
+		return;
+	requireStack(2);
+	const std::size_t base = stackWidths_.size() - 2;
+	if (measureOnly_) {
+		pop(); pop();
+		push(4);
+		return;
+	}
+	loadSlot(SLJIT_R0, base, 8);
+	loadSlot(SLJIT_R1, base + 1, 8);
+	emitHelper(SLJIT_ARGS2(32, P, P), &wasm_string_eq);
+	storeSlot(SLJIT_R0, base, 4);
+	emitPendingTrapCheck();
+	pop(); pop();
+	push(4);
+}
+
+void OpcodeDispatcher::dispatchStringIsUsvSequence()
+{
+	if (!reachable_)
+		return;
+	requireStack(1);
+	const std::size_t depth = stackWidths_.size() - 1;
+	if (measureOnly_) {
+		pop();
+		push(4);
+		return;
+	}
+	loadSlot(SLJIT_R0, depth, 8);
+	emitHelper(SLJIT_ARGS1(32, P), &wasm_string_is_usv_sequence);
+	storeSlot(SLJIT_R0, depth, 4);
+	emitPendingTrapCheck();
+	pop();
+	push(4);
+}
+
+void OpcodeDispatcher::emitStringNew(WASM::MemIdx memory, const void* helper)
+{
+	if (!reachable_)
+		return;
+	requireMemoryIndex(memory);
+	requireStack(2);
+	const std::size_t base = stackWidths_.size() - 2;
+	if (measureOnly_) {
+		pop(); pop();
+		push(8);
+		return;
+	}
+	loadContext(SLJIT_R0);
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R1, 0, SLJIT_IMM,
+			static_cast<sljit_sw>(memory)));
+	loadSlot(SLJIT_R2, base, 4);
+	loadSlot(SLJIT_R3, base + 1, 4);
+	emitHelper(SLJIT_ARGS4(P, P, 32, 32, 32), helper);
+	storeSlot(SLJIT_R0, base, 8);
+	emitPendingTrapCheck();
+	pop(); pop();
+	push(8);
+}
+
+void OpcodeDispatcher::emitStringEncode(WASM::MemIdx memory, const void* helper)
+{
+	if (!reachable_)
+		return;
+	requireMemoryIndex(memory);
+	requireStack(2);
+	const std::size_t base = stackWidths_.size() - 2;
+	if (measureOnly_) {
+		pop(); pop();
+		push(4);
+		return;
+	}
+	loadContext(SLJIT_R0);
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R1, 0, SLJIT_IMM,
+			static_cast<sljit_sw>(memory)));
+	loadSlot(SLJIT_R2, base, 8);
+	loadSlot(SLJIT_R3, base + 1, 4);
+	emitHelper(SLJIT_ARGS4(32, P, 32, P, 32), helper);
+	storeSlot(SLJIT_R0, base, 4);
+	emitPendingTrapCheck();
+	pop(); pop();
+	push(4);
+}
+
+void OpcodeDispatcher::dispatchStringNewUtf8(WASM::MemIdx memory)
+{
+	emitStringNew(memory, reinterpret_cast<const void*>(&wasm_string_new_utf8));
+}
+
+void OpcodeDispatcher::dispatchStringNewLossyUtf8(WASM::MemIdx memory)
+{
+	emitStringNew(memory, reinterpret_cast<const void*>(&wasm_string_new_lossy_utf8));
+}
+
+void OpcodeDispatcher::dispatchStringNewWtf8(WASM::MemIdx memory)
+{
+	emitStringNew(memory, reinterpret_cast<const void*>(&wasm_string_new_wtf8));
+}
+
+void OpcodeDispatcher::dispatchStringNewWtf16(WASM::MemIdx memory)
+{
+	emitStringNew(memory, reinterpret_cast<const void*>(&wasm_string_new_wtf16));
+}
+
+void OpcodeDispatcher::dispatchStringEncodeUtf8(WASM::MemIdx memory)
+{
+	emitStringEncode(memory, reinterpret_cast<const void*>(&wasm_string_encode_utf8));
+}
+
+void OpcodeDispatcher::dispatchStringEncodeLossyUtf8(WASM::MemIdx memory)
+{
+	emitStringEncode(memory, reinterpret_cast<const void*>(&wasm_string_encode_lossy_utf8));
+}
+
+void OpcodeDispatcher::dispatchStringEncodeWtf8(WASM::MemIdx memory)
+{
+	emitStringEncode(memory, reinterpret_cast<const void*>(&wasm_string_encode_wtf8));
+}
+
+void OpcodeDispatcher::dispatchStringEncodeWtf16(WASM::MemIdx memory)
+{
+	emitStringEncode(memory, reinterpret_cast<const void*>(&wasm_string_encode_wtf16));
+}
+
+void OpcodeDispatcher::emitStringNewArray(WASM::TypeIdx type, int mode)
+{
+	if (!reachable_)
+		return;
+	const WASM::CoreTypeView view = module_.typeView(type);
+	require(view.kind() == WASM::CanonTypeKind::Array,
+			"string array constructor requires an array type");
+	const WASM::CanonStorageType& storage = view.arrayElement().storage;
+	const std::uint32_t elementBytes = static_cast<std::uint32_t>(
+			WASM::gcStorageBytes(storage));
+	require(mode == 3 ? elementBytes == 2 : elementBytes == 1,
+			"string array element size mismatch");
+	const std::uint64_t layout =
+			static_cast<std::uint64_t>(WASM::gcArrayDataOffset(storage))
+			| (static_cast<std::uint64_t>(elementBytes) << 32)
+			| (static_cast<std::uint64_t>(mode) << 40);
+	requireStack(3);
+	const std::size_t base = stackWidths_.size() - 3;
+	if (measureOnly_) {
+		pop(); pop(); pop();
+		push(8);
+		return;
+	}
+	loadSlot(SLJIT_R2, base + 1, 4); // start (low word)
+	loadSlot(SLJIT_R3, base + 2, 4); // end (high word)
+	emit(sljit_emit_op2(compiler_, SLJIT_SHL, SLJIT_R3, 0, SLJIT_R3, 0,
+			SLJIT_IMM, 32));
+	emit(sljit_emit_op2(compiler_, SLJIT_OR, SLJIT_R2, 0, SLJIT_R2, 0,
+			SLJIT_R3, 0));
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R3, 0, SLJIT_IMM,
+			static_cast<sljit_sw>(layout)));
+	loadContext(SLJIT_R0);
+	loadSlot(SLJIT_R1, base, 8);
+	emitHelper(SLJIT_ARGS4(P, P, P, W, W), &wasm_string_new_array_packed);
+	storeSlot(SLJIT_R0, base, 8);
+	emitPendingTrapCheck();
+	pop(); pop(); pop();
+	push(8);
+}
+
+void OpcodeDispatcher::emitStringEncodeArray(WASM::TypeIdx type, int mode)
+{
+	if (!reachable_)
+		return;
+	const WASM::CoreTypeView view = module_.typeView(type);
+	require(view.kind() == WASM::CanonTypeKind::Array,
+			"string array encoder requires an array type");
+	const WASM::CanonStorageType& storage = view.arrayElement().storage;
+	const std::uint32_t elementBytes = static_cast<std::uint32_t>(
+			WASM::gcStorageBytes(storage));
+	require(mode == 3 ? elementBytes == 2 : elementBytes == 1,
+			"string array element size mismatch");
+	const std::uint64_t layout =
+			static_cast<std::uint64_t>(WASM::gcArrayDataOffset(storage))
+			| (static_cast<std::uint64_t>(elementBytes) << 32)
+			| (static_cast<std::uint64_t>(mode) << 40);
+	requireStack(3);
+	const std::size_t base = stackWidths_.size() - 3;
+	if (measureOnly_) {
+		pop(); pop(); pop();
+		push(4);
+		return;
+	}
+	loadSlot(SLJIT_R2, base + 2, 4); // start
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R3, 0, SLJIT_IMM,
+			static_cast<sljit_sw>(layout)));
+	loadSlot(SLJIT_R0, base, 8);     // string
+	loadSlot(SLJIT_R1, base + 1, 8); // array
+	emitHelper(SLJIT_ARGS4(32, P, P, 32, W), &wasm_string_encode_array_packed);
+	storeSlot(SLJIT_R0, base, 4);
+	emitPendingTrapCheck();
+	pop(); pop(); pop();
+	push(4);
+}
+
+void OpcodeDispatcher::dispatchStringNewUtf8Array(WASM::TypeIdx type)
+{
+	emitStringNewArray(type, 0);
+}
+
+void OpcodeDispatcher::dispatchStringNewLossyUtf8Array(WASM::TypeIdx type)
+{
+	emitStringNewArray(type, 1);
+}
+
+void OpcodeDispatcher::dispatchStringNewWtf8Array(WASM::TypeIdx type)
+{
+	emitStringNewArray(type, 2);
+}
+
+void OpcodeDispatcher::dispatchStringNewWtf16Array(WASM::TypeIdx type)
+{
+	emitStringNewArray(type, 3);
+}
+
+void OpcodeDispatcher::dispatchStringEncodeUtf8Array(WASM::TypeIdx type)
+{
+	emitStringEncodeArray(type, 0);
+}
+
+void OpcodeDispatcher::dispatchStringEncodeLossyUtf8Array(WASM::TypeIdx type)
+{
+	emitStringEncodeArray(type, 1);
+}
+
+void OpcodeDispatcher::dispatchStringEncodeWtf8Array(WASM::TypeIdx type)
+{
+	emitStringEncodeArray(type, 2);
+}
+
+void OpcodeDispatcher::dispatchStringEncodeWtf16Array(WASM::TypeIdx type)
+{
+	emitStringEncodeArray(type, 3);
 }
 
 } // namespace Sljit

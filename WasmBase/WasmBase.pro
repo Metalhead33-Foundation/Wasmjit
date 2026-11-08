@@ -67,6 +67,7 @@ SOURCES += \
         WasmStack.cpp \
         WasmStore.cpp \
         WasmString.cpp \
+        WasmStringOps.cpp \
         WasmTable.cpp \
         WasmTrap.cpp \
         WasmTailTrampoline.cpp \
@@ -124,6 +125,7 @@ HEADERS += \
     WasmStack.hpp \
     WasmStore.hpp \
     WasmString.hpp \
+    WasmStringOps.hpp \
     WasmTable.hpp \
     WasmTailTrampoline.hpp \
     WasmTrap.hpp \
