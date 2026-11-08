@@ -2,7 +2,7 @@
 
 *What “production-ready” means for LibJIT, SLJIT and AsmJIT, measured*
 
-Status: **snapshot (2026-11-08, working tree after `5cb6f3d`)**. This note owns the
+Status: **snapshot (2026-11-08, working tree after `0132ce5`)**. This note owns the
 per-backend production verdict. The curated capability ledger
 ([`PRODUCTION_GAPS.md`](backends/PRODUCTION_GAPS.md) §27) owns individual implemented
 features; the two answer different questions.
