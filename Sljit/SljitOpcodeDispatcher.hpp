@@ -182,6 +182,9 @@ protected:
 	void dispatchI64ShrU() override; //!< `i64.shr_u`.
 	void dispatchI64Rotl() override; //!< `i64.rotl`.
 	void dispatchI64Rotr() override; //!< `i64.rotr`.
+	void dispatchI64Clz() override; //!< `i64.clz`.
+	void dispatchI64Ctz() override; //!< `i64.ctz`.
+	void dispatchI64Popcnt() override; //!< `i64.popcnt`.
 	void dispatchI64Eqz() override; //!< `i64.eqz`.
 	void dispatchI64Eq() override; //!< `i64.eq`.
 	void dispatchI64Ne() override; //!< `i64.ne`.

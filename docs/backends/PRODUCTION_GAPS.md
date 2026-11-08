@@ -1069,16 +1069,17 @@ uses a rejected artifact and confirms the runtime remains usable.
 | Backend | Verdict | Measured evidence |
 |---|---|---|
 | LibJIT | **Production-ready within its declared envelope** | default suite 22,442 assertions / 821 cases, green; x86-64 Linux only |
-| SLJIT | **Not production-ready** | `WASMJIT_BACKEND=sljit`: 821 cases, 690 passed, 131 failed; no crash |
+| SLJIT | **Not production-ready** | `WASMJIT_BACKEND=sljit`: 821 cases, 702 passed, 119 failed; no crash |
 | AsmJIT | **Not production-ready** | `WASMJIT_BACKEND=asmjit`: 821 cases, 649 passed, 172 failed; no crash |
 
 The blockers are not just “unimplemented opcodes”:
 
 * **SLJIT:** `func`, `float_memory64`, `table.fill`, the integer lane families,
-  `br_table` arity and the legacy-EH rethrow path are fixed. Remaining failures
-  include `br_table.0`'s `i64.ctz`, the five-slot `simd_load32_lane`
-  signature, `simd: v128 globals`, and deterministic-NaN canonicalisation. The
-  legacy-EH rewrite itself is frontend desugaring, not a backend feature.
+  `br_table` arity, the i64 bit-count family, calls in dead code and the
+  legacy-EH rethrow path are fixed. Remaining failures include the five-slot
+  `simd_load32_lane` signature, `simd: v128 globals`, and deterministic-NaN
+  canonicalisation. The legacy-EH rewrite itself is frontend desugaring, not a
+  backend feature.
 * **AsmJIT:** `spec: func` is green, including frame-form function-label
   branches and the multi-result tail-call fixture. Remaining failures include
   i64 bit-count lowering, several SIMD lane/transport opcodes, deterministic-NaN

@@ -2791,6 +2791,8 @@ void OpcodeDispatcher::emitResolvedCall(const WASM::FuncType& type, int callable
 void OpcodeDispatcher::emitCall(WASM::FuncIdx index, bool isTail)
 {
 	(void)isTail;
+	if (!reachable_)
+		return;
 	require(reachable_, "a call appears in unreachable code");
 	const std::size_t importedCount = module_.importFunctions.size();
 	const std::size_t total = importedCount + module_.internalFunctionTypeIndices.size();
@@ -2837,6 +2839,8 @@ void OpcodeDispatcher::emitCallIndirect(WASM::TypeIdx typeIndex, WASM::TableIdx 
 		bool isTail)
 {
 	(void)isTail;
+	if (!reachable_)
+		return;
 	require(reachable_, "a call_indirect appears in unreachable code");
 	requireTableIndex(tableIndex);
 	require(static_cast<std::uint32_t>(typeIndex) < module_.typeCount(),
@@ -2896,6 +2900,8 @@ void OpcodeDispatcher::dispatchCallIndirect(WASM::TypeIdx arg1, WASM::TableIdx a
 
 void OpcodeDispatcher::dispatchReturnCall(WASM::FuncIdx arg)
 {
+	if (!reachable_)
+		return;
 	// A direct tail call to this function is a loop: the frame is reused and the
 	// host stack does not grow. Mutual and indirect tail calls still take the
 	// semantic call + return lowering until the cross-function trampoline lands.
@@ -3187,6 +3193,8 @@ void OpcodeDispatcher::emitTailCallStateFromReg(int callableReg, const WASM::Fun
 
 void OpcodeDispatcher::dispatchCallRef(WASM::TypeIdx typeIndex)
 {
+	if (!reachable_)
+		return;
 	require(reachable_, "a call_ref appears in unreachable code");
 	require(static_cast<std::uint32_t>(typeIndex) < module_.typeCount(),
 			"the call_ref type index is out of range");
@@ -3215,6 +3223,8 @@ void OpcodeDispatcher::dispatchCallRef(WASM::TypeIdx typeIndex)
 
 void OpcodeDispatcher::dispatchReturnCallRef(WASM::TypeIdx typeIndex)
 {
+	if (!reachable_)
+		return;
 	require(reachable_, "a return_call_ref appears in unreachable code");
 	require(static_cast<std::uint32_t>(typeIndex) < module_.typeCount(),
 			"the return_call_ref type index is out of range");
@@ -3264,6 +3274,8 @@ void OpcodeDispatcher::dispatchReturnCallRef(WASM::TypeIdx typeIndex)
 
 void OpcodeDispatcher::dispatchReturnCallIndirect(WASM::TypeIdx arg1, WASM::TableIdx arg2)
 {
+	if (!reachable_)
+		return;
 	if (tailTrampoline_) {
 		require(static_cast<std::uint32_t>(arg1) < module_.typeCount(),
 				"the return_call_indirect type index is out of range");
@@ -5951,6 +5963,21 @@ void OpcodeDispatcher::dispatchI64DivS() { emitCheckedBinary(codeAddress(&sljitI
 void OpcodeDispatcher::dispatchI64DivU() { emitCheckedBinary(codeAddress(&sljitI64DivU), 8, "i64.div_u"); }
 void OpcodeDispatcher::dispatchI64RemS() { emitCheckedBinary(codeAddress(&sljitI64RemS), 8, "i64.rem_s"); }
 void OpcodeDispatcher::dispatchI64RemU() { emitCheckedBinary(codeAddress(&sljitI64RemU), 8, "i64.rem_u"); }
+
+void OpcodeDispatcher::dispatchI64Clz() { emitIntegerUnary(SLJIT_CLZ, 8, 8); }
+void OpcodeDispatcher::dispatchI64Ctz() { emitIntegerUnary(SLJIT_CTZ, 8, 8); }
+void OpcodeDispatcher::dispatchI64Popcnt()
+{
+	if (!reachable_)
+		return;
+	requireStack(1);
+	if (measureOnly_)
+		return;
+	loadSlot(SLJIT_R0, stackWidths_.size() - 1, 8);
+	emitHelper(SLJIT_ARGS1(W, W), &sljitI64Popcnt);
+	storeSlot(SLJIT_R0, stackWidths_.size() - 1, 8);
+	stackWidths_.back() = 8;
+}
 
 void OpcodeDispatcher::dispatchI64Eqz() { emitEqz(8); }
 void OpcodeDispatcher::dispatchI64Eq() { emitCompare(SLJIT_EQUAL, 8); }

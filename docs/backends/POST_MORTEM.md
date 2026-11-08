@@ -1096,7 +1096,7 @@ All tests passed (10 assertions in 1 test case)
 
 The full SLJIT run then advances through the former string-test crash as well;
 both backend-selected runs now complete all 821 cases without a process signal
-(SLJIT 690/131, AsmJIT 649/172). The remaining failures are functional gaps, not
+(SLJIT 702/119, AsmJIT 649/172). The remaining failures are functional gaps, not
 frame-ABI marshalling.
 
 ### Lessons
@@ -1107,3 +1107,49 @@ frame-ABI marshalling.
   distinguishes that case from a native import whose context is host state.
 * **Test the ABI at the boundary where the component runtime actually crosses
   it.** A passing register-form direct call can hide a frame-form-only module.
+
+## SLJIT — i64 bit counts and calls in dead code
+
+### Intended
+
+Get `spec: br_table` past its first module. The run failed at instantiation:
+
+```
+the SLJIT backend could not compile function 2:
+the SLJIT backend does not lower dispatchI64Ctz
+```
+
+### Root cause
+
+Two independent gaps:
+
+* SLJIT had no `i64.clz` / `i64.ctz` / `i64.popcnt` overrides; only the i32
+  family existed.
+* The `br_table` script's `as-block-first` shape contains a call in polymorphic
+  dead code after a `br`. `emitCall` still asserted `reachable_` instead of
+  no-opping, even though the measuring/emitting walk already treats such code
+  as unreachable.
+
+### Fix
+
+* Added the three i64 bit-count overrides. `i64.popcnt` calls the existing
+  `sljitI64Popcnt` helper through `SLJIT_ARGS1(W, W)`; `clz`/`ctz` use
+  `emitIntegerUnary` with an 8-byte result width.
+* Added the same `if (!reachable_) return;` guard to direct/indirect/reference
+  calls and to all four tail-call dispatchers. Dead calls are part of the
+  polymorphic stack, not a backend error.
+
+### Evidence
+
+```
+WASMJIT_BACKEND=sljit ./Test/WasmJit 'spec: br_table'
+[spec] br_table: passed=162 failed=0 skipped=24
+All tests passed (2 assertions in 1 test case)
+```
+
+### Lessons
+
+* **Complete the width families together.** `i32` and `i64` share the lowering
+  helpers; a missing 64-bit sibling only shows up when a fixture reaches it.
+* **Reachability is an instruction property, not a call-only exception.** Every
+  lowering that asserts a live operand stack must first respect dead code.

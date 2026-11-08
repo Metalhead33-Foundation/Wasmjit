@@ -80,12 +80,13 @@ refusals and behaviour that is unacceptable in production:
 
 ### 4.1 General conformance failures
 
-The `WASMJIT_BACKEND=sljit` run now completes all 821 cases: 690 pass and 131
+The `WASMJIT_BACKEND=sljit` run now completes all 821 cases: 702 pass and 119
 fail, with no process abort or segfault. The first batch closed `func`,
 `float_memory64`, `table_fill`, the integer lane families, `br_table` arity and
-the legacy-EH rethrow path. The remaining failures include the five-argument
+the legacy-EH rethrow path; `br_table` and the i64 bit-count family are now
+green. The remaining failures include the five-argument
 `simd_load32_lane` shape (`the SLJIT backend cannot pass 5 argument slots`),
-`br_table.0`'s `i64.ctz`, `simd: v128 globals`, and deterministic-NaN
+`simd: v128 globals`, and deterministic-NaN
 canonicalisation.
 
 ### 4.2 Missing lowerings
