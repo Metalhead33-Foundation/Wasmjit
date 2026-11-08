@@ -10504,15 +10504,24 @@ private:
 		auto maskedCount = compiler.new_gp32("i64ShiftCount");
 		checkError(compiler.mov(maskedCount, count.r32()), "AsmJit i64 shift-count copy failed");
 		checkError(compiler.and_(maskedCount, 63), "AsmJit i64 shift-count mask failed");
+		// Shift through a stack slot: the count must live in CL, and keeping the
+		// value in memory avoids any collision with a virtual register.
+		asmjit::x86::Mem shiftSlot = compiler.new_stack(8, 8, "i64ShiftSlot");
+		shiftSlot.set_size(8);
+		checkError(compiler.mov(shiftSlot, value),
+				"AsmJit i64 shift-value store failed");
 		checkError(compiler.mov(asmjit::x86::ecx, maskedCount), "AsmJit i64 shift-count setup failed");
 		switch (operation) {
-		case ShiftOp::Left: checkError(compiler.shl(value, asmjit::x86::cl), "AsmJit i64.shl emission failed"); break;
-		case ShiftOp::ArithmeticRight: checkError(compiler.sar(value, asmjit::x86::cl), "AsmJit i64.shr_s emission failed"); break;
-		case ShiftOp::LogicalRight: checkError(compiler.shr(value, asmjit::x86::cl), "AsmJit i64.shr_u emission failed"); break;
-		case ShiftOp::RotateLeft: checkError(compiler.rol(value, asmjit::x86::cl), "AsmJit i64.rotl emission failed"); break;
-		case ShiftOp::RotateRight: checkError(compiler.ror(value, asmjit::x86::cl), "AsmJit i64.rotr emission failed"); break;
+		case ShiftOp::Left: checkError(compiler.shl(shiftSlot, asmjit::x86::cl), "AsmJit i64.shl emission failed"); break;
+		case ShiftOp::ArithmeticRight: checkError(compiler.sar(shiftSlot, asmjit::x86::cl), "AsmJit i64.shr_s emission failed"); break;
+		case ShiftOp::LogicalRight: checkError(compiler.shr(shiftSlot, asmjit::x86::cl), "AsmJit i64.shr_u emission failed"); break;
+		case ShiftOp::RotateLeft: checkError(compiler.rol(shiftSlot, asmjit::x86::cl), "AsmJit i64.rotl emission failed"); break;
+		case ShiftOp::RotateRight: checkError(compiler.ror(shiftSlot, asmjit::x86::cl), "AsmJit i64.rotr emission failed"); break;
 		}
-		values.push_back(value);
+		auto shifted = compiler.new_gp64("i64ShiftValue");
+		checkError(compiler.mov(shifted, shiftSlot),
+				"AsmJit i64 shift-result load failed");
+		values.push_back(shifted);
 	}
 
 	template <typename Function>
@@ -10551,20 +10560,29 @@ private:
 		auto maskedCount = compiler.new_gp32("shiftCount");
 		checkError(compiler.mov(maskedCount, count), "AsmJit shift-count copy failed");
 		checkError(compiler.and_(maskedCount, 31), "AsmJit shift-count mask failed");
+		// Shift through a stack slot: the count must live in CL, and keeping the
+		// value in memory avoids any collision with a virtual register.
+		asmjit::x86::Mem shiftSlot = compiler.new_stack(4, 4, "shiftSlot");
+		shiftSlot.set_size(4);
+		checkError(compiler.mov(shiftSlot, value),
+				"AsmJit shift-value store failed");
 		checkError(compiler.mov(asmjit::x86::ecx, maskedCount), "AsmJit shift-count setup failed");
 		switch (operation) {
 		case ShiftOp::Left:
-			checkError(compiler.shl(value, asmjit::x86::cl), "AsmJit i32.shl emission failed"); break;
+			checkError(compiler.shl(shiftSlot, asmjit::x86::cl), "AsmJit i32.shl emission failed"); break;
 		case ShiftOp::ArithmeticRight:
-			checkError(compiler.sar(value, asmjit::x86::cl), "AsmJit i32.shr_s emission failed"); break;
+			checkError(compiler.sar(shiftSlot, asmjit::x86::cl), "AsmJit i32.shr_s emission failed"); break;
 		case ShiftOp::LogicalRight:
-			checkError(compiler.shr(value, asmjit::x86::cl), "AsmJit i32.shr_u emission failed"); break;
+			checkError(compiler.shr(shiftSlot, asmjit::x86::cl), "AsmJit i32.shr_u emission failed"); break;
 		case ShiftOp::RotateLeft:
-			checkError(compiler.rol(value, asmjit::x86::cl), "AsmJit i32.rotl emission failed"); break;
+			checkError(compiler.rol(shiftSlot, asmjit::x86::cl), "AsmJit i32.rotl emission failed"); break;
 		case ShiftOp::RotateRight:
-			checkError(compiler.ror(value, asmjit::x86::cl), "AsmJit i32.rotr emission failed"); break;
+			checkError(compiler.ror(shiftSlot, asmjit::x86::cl), "AsmJit i32.rotr emission failed"); break;
 		}
-		values.push_back(value);
+		auto shifted = compiler.new_gp32("shiftValue");
+		checkError(compiler.mov(shifted, shiftSlot),
+				"AsmJit shift-result load failed");
+		values.push_back(shifted);
 	}
 
 	asmjit::x86::Compiler& compiler;

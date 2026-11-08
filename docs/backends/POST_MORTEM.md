@@ -2362,7 +2362,39 @@ Default 22,448 assertions in 821 cases, green
   range and layout are part of the helper contract now.
 
 
-## Bounded recursion on SLJIT
+## AsmJIT shift operands and `memory_buffer`
+
+### Fix
+
+`emitShift` and `emitIntegerShift` wrote the masked count into ECX while the
+value being shifted could itself be allocated to ECX by the register allocator.
+The shift then used the count as its operand (`0 << 2` became `2 << 2`), so a
+store and a later load from the same Wasm index disagreed. Both now shift
+through a sized stack slot (`Mem::set_size(4/8)`), which cannot collide with a
+virtual register; the result is loaded back immediately. The note also
+documents why `new_stack` alone is insufficient: without an explicit size the
+shift is rejected as `kAmbiguousOperandSize` during finalisation.
+
+### Evidence
+
+```
+AsmJIT  memory_buffer stores and loads   7/7
+AsmJIT  *shift*                          156/156
+AsmJIT  full serial                      821 cases: 813 passed / 8 failed
+SLJIT   full serial                      821 cases: 814 passed / 7 failed
+Default full                             22,451 assertions in 821 cases, green
+```
+
+### Lessons
+
+* **A physical register used implicitly by an instruction is a live-range
+  hazard.** CL is not an ordinary operand; anything the allocator may place in
+  ECX has to be moved out first.
+* **The first symptom is not the failing instruction.** The store appeared to
+  work because it used the same wrong address; only a second function computing
+  the address directly exposed the disagreement.
+
+
 
 ### Fix
 
