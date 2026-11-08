@@ -15,7 +15,7 @@ actually happened, the root cause of every surprise, and what is still open.
 | 5 | exceptions and catch payloads | **done** | local/cross-instance catch, `catch_ref`, multi-value payloads and a catch payload routed to a loop parameter (`CATCHLOOP` 42) |
 | 6 | LibJIT frame form | **done** | frame call 6, import 42, multi-result 7/9, frame tail 1, multi-result `call_ref` 11; the form remains opt-in and default-off |
 
-Suite at the last commit: **22442 assertions in 821 cases** under
+Suite at the last commit: **22445 assertions in 821 cases** under
 `--rng-seed 12345`, green; `[headerdoc]`, `[docs]`, `doxygen` and `abi-check` are clean.
 The curated capability ledger has no open opcode/ABI row. That is not a
 production verdict: the generic runs for SLJIT and AsmJIT fail and crash, so
@@ -1655,3 +1655,109 @@ AsmJIT full serial  821 cases: 721 passed / 100 failed
   site.
 * **The measuring pass must model result types even when it emits nothing.**
   Width is part of the compile-time stack, not an emission side effect.
+
+## Both backends — imported index spaces, reachability, and tail calls
+
+### Intended
+
+Close the shared spec clusters that were still blocked at instantiation:
+`global`, `memory`, `load1`, `store1`, `store2`, `fac`, `loop`, `call_ref`,
+`return_call`, `return_call_indirect`, `return_call_ref`, and the AsmJIT
+frame-mode import refusal.
+
+### Root cause
+
+* **Imported index spaces.** `Module::globals` and `Module::memories` contain
+  only *defined* entries; imports live in `importGlobals` / `importMemories`.
+  Both backends looked an instruction's index up in the defined-only vector, so
+  `global.get 17` or `i32.load` on an imported memory was rejected as out of
+  range even though the runtime's context uses imports-first indexing.
+* **Measuring pass width.** SLJIT's `emitFloatCompare` returned from its
+  measuring pass without changing the result width from the float operands'
+  width to i32, so a following `if` rejected the condition.
+* **Zero-arity branch reachability.** AsmJIT marked a block's `end` reachable
+  only when a `br_if` transferred a value. A `br_if` to an empty block therefore
+  left the block end marked dead and every following instruction was skipped as
+  unreachable; `loop.wast`'s `nesting` lost its divide and decrement.
+* **Frame staging size.** AsmJIT allocated `argBytes + 16` for every frame call,
+  but a callee can write more than two 8-byte result slots. `pick1` wrote three
+  results into a 32-byte block and overwrote the caller's spilled `VMContext`;
+  the resulting crash depended on stack layout, which is why it disappeared
+  under a debugger.
+* **Tail-call fallback stack.** The non-thunk path emitted `emitResolvedCall`
+  followed by `emitReturnValue`, but `emitResolvedCall` does not update the
+  compile-time operand stack. The return saw an empty stack.
+* **Tail-call arity.** A tail call discards everything below its arguments; only
+  underflow is invalid. AsmJIT required exact equality.
+* **Null function references.** SLJIT loaded the trap kind into `R1` while its
+  helper ABI takes the first argument in `R0`, so it reported kind 0
+  (`unreachable`). AsmJIT reported generic `NullReference`.
+* **Imports and the module ABI.** AsmJIT refused every frame-mode module with an
+  import, and let an imported signature force the whole module into frame mode.
+  Neither is necessary: a native import is a typed-register entry, a Wasm import
+  uses its exporting instance's form, and only defined functions choose the
+  module's own ABI.
+
+### Fix
+
+* Both backends resolve global and memory indices imports-first, then
+  definitions; the AsmJIT frame-mode native-import path invokes the typed
+  register ABI while the guest keeps its staging frame.
+* SLJIT `emitFloatCompare` sets the i32 result width in the measuring pass.
+* AsmJIT marks a block end targeted for every non-loop branch form, including
+  zero-arity `br_if`; the loop back-edge shape check is underflow-only, because
+  extra operands are discarded by the branch.
+* `frameCallStorageBytes` sizes every direct, indirect and `call_ref` staging
+  block from the actual parameter plus result types.
+* Both tail-call fallbacks push the callee's result widths before
+  `emitReturnValue`; all three tail-call forms accept extra operands below their
+  arguments.
+* `NullFunctionReference` is used for `call_ref` / `return_call_ref` null
+  references, with the kind in `R0` on SLJIT and a dedicated AsmJIT helper.
+* AsmJIT's module ABI decision ignores import signatures; the updated
+  `asmjit_import_call` test checks that a frame-mode module can call a native
+  import instead of expecting a refusal.
+
+### Evidence
+
+```
+SLJIT  spec: global 77/0     spec: memory 65/0    spec: load1 18/0
+SLJIT  spec: store1 13/0     spec: store2 25/0    spec: fac 8/0
+SLJIT  spec: loop 79/0       spec: call_ref 31/0  spec: return_call 37/0
+SLJIT  spec: return_call_indirect 53/0           spec: return_call_ref 40/0
+AsmJIT spec: global 51/0     spec: memory 40/0    spec: load1 18/0
+AsmJIT spec: store1 5/0      spec: store2 25/0    spec: fac 8/0
+AsmJIT spec: loop 79/0       spec: call_ref 10/0  spec: return_call 37/0
+AsmJIT spec: return_call_indirect 53/0           spec: return_call_ref 12/0
+```
+
+Full serial runs:
+
+```
+SLJIT   821 cases: 751 passed / 70 failed; no signal
+AsmJIT  821 cases: 743 passed / 78 failed; no signal
+```
+
+### Lessons
+
+* **An index space is not a vector.** Imports precede definitions in every
+  runtime index space; a backend that indexes the defined-only vector is wrong
+  even when the runtime context it emits against is correct.
+* **Frame blocks need the whole result block, not a guessed 16 bytes.** Reserve
+  from the callee's actual result slots, or a third result silently corrupts the
+  caller's frame.
+* **Zero-arity branches still make control flow reachable.** Reachability is a
+  property of the target, not of how many values are transferred.
+* **A call helper and a return helper do not share a stack model.** If the call
+  path does not push results, the return path must be given them explicitly.
+* **A tail call is a branch, not an exact-arity call.** Extra operands below the
+  arguments are discarded by both.
+* **An import does not define the importer's ABI.** The call site must bridge
+  the callee's form; only defined functions choose the module-wide form.
+* **Trap-kind ABI bugs are invisible until the trap is asserted.** The same
+  wrong register produced a plausible but wrong kind (`unreachable`), so only
+  the kind-sensitive spec assertion caught it.
+* **`Callable` is an aggregate without initialisers for all fields.** A test
+  that sets only `fnPtr` leaves `context` unspecified; a nonzero residue makes
+  a native import look like a cross-module Wasm import. Value-initialise the
+  descriptor (`Callable host{}`) or set every ABI field.

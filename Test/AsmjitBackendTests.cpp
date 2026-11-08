@@ -385,9 +385,10 @@ CHECK(lanes[3] == 10u);
 
 extern "C" std::int32_t asmjitHostDoubler(void*, std::int32_t value) { return value * 2; }
 
-// P0b gate: a frame-mode module that calls an import must refuse, because the
-// import speaks the typed signature (docs/backends/EXPORT_SIGNATURE.md section 18).
-TEST_CASE("AsmJIT refuses a frame-mode module that calls an import",
+// P0b gate: a frame-mode module that calls a native import must still work. The
+// import is called through the typed register ABI, while the guest function keeps
+// the staging frame for its own signature (docs/backends/EXPORT_SIGNATURE.md §18).
+TEST_CASE("AsmJIT frames around a native import",
 "[staging][asmjit][abi][import]")
 {
 auto runtime = WASM::Runtime::create("asmjit");
@@ -395,7 +396,7 @@ REQUIRE(runtime != nullptr);
 auto module = runtime->loadFile(
 std::filesystem::path(WASM_TEST_DIR) / "asmjit_import_call.wasm");
 
-WASM::Callable host;
+WASM::Callable host{};
 host.fnPtr = reinterpret_cast<void*>(&asmjitHostDoubler);
 host.rawFnPtr = host.fnPtr;
 
@@ -411,14 +412,25 @@ REQUIRE(callable.has_value());
 using Typed = std::int32_t (*)(void*);
 CHECK(reinterpret_cast<Typed>(callable->fnPtr)(nullptr) == 14);
 
-// Frame form: refused, because the import expects the typed signature. The module
-// must be RELOADED: instantiation caches compiled code per module, so the mode is
-// only decided on the first compile of a given module object.
-auto reloaded = runtime->loadFile(
-std::filesystem::path(WASM_TEST_DIR) / "asmjit_import_call.wasm");
+// Frame form: the guest uses the staging frame, but the native import still
+// receives the typed register-form signature. Use a fresh runtime for the frame
+// instance: a Runtime owns both its module store and its compiled-code cache, so
+// reusing the register-form runtime would make the result depend on test order.
 WASM::setFrameCallAbiOptIn(true);
-REQUIRE_THROWS(runtime->instantiate(*reloaded, imports));
+auto frameRuntime = WASM::Runtime::create("asmjit");
+REQUIRE(frameRuntime != nullptr);
+auto frameModule = frameRuntime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "asmjit_import_call.wasm");
+WASM::ModuleInstance& framed = frameRuntime->instantiate(*frameModule, imports);
 WASM::setFrameCallAbiOptIn(false);
+CHECK(framed.frameCallAbi());
+const std::optional<WASM::Callable> framedCaller = framed.exportedFunction("caller");
+REQUIRE(framedCaller.has_value());
+alignas(16) std::uint8_t frame[16] = {};
+WASM::callCallableFrame(*framedCaller, frame);
+std::int32_t framedResult = 0;
+std::memcpy(&framedResult, frame, sizeof(framedResult));
+CHECK(framedResult == 14);
 }
 
 // Multi-result through the frame (docs/backends/EXPORT_SIGNATURE.md section 29):

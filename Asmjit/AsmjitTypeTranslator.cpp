@@ -169,18 +169,17 @@ bool TypeTranslator::moduleNeedsFrame(const WASM::Module& module, bool optIn)
 {
 	if (optIn)
 		return true;
-	// Only the signatures of real functions choose the module's call ABI. A
-	// synthetic multi-result block type lives in the same type section, and
-	// treating it as a call signature silently switched the whole module to the
-	// frame form.
+	// Only the signatures of defined functions choose the module's call ABI.
+	// An import is called through its own entry (a native host function through
+	// the register form, a Wasm export through the exporting instance's form),
+	// so its arity must not switch every function in this module into frame mode.
+	// A synthetic multi-result block type lives in the same type section; treating
+	// it as a call signature caused the same kind of silent module-wide switch.
 	const auto needs = [&](uint32_t typeIdx) {
 		return typeIdx < module.typeCount()
 				&& module.typeView(typeIdx).kind() == WASM::CanonTypeKind::Func
 				&& signatureNeedsFrame(module.funcTypeAt(typeIdx));
 	};
-	for (const auto& import : module.importFunctions)
-		if (needs(import.typeIdx))
-			return true;
 	for (const uint32_t typeIdx : module.internalFunctionTypeIndices)
 		if (needs(typeIdx))
 			return true;

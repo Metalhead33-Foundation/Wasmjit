@@ -1068,9 +1068,9 @@ uses a rejected artifact and confirms the runtime remains usable.
 
 | Backend | Verdict | Measured evidence |
 |---|---|---|
-| LibJIT | **Production-ready within its declared envelope** | default suite 22,442 assertions / 821 cases, green; x86-64 Linux only |
-| SLJIT | **Not production-ready** | `WASMJIT_BACKEND=sljit`: 821 cases, 729 passed, 92 failed; no crash |
-| AsmJIT | **Not production-ready** | `WASMJIT_BACKEND=asmjit`: 821 cases, 721 passed, 100 failed; no crash |
+| LibJIT | **Production-ready within its declared envelope** | default suite 22,445 assertions / 821 cases, green; x86-64 Linux only |
+| SLJIT | **Not production-ready** | `WASMJIT_BACKEND=sljit`: 821 cases, 751 passed, 70 failed; no crash |
+| AsmJIT | **Not production-ready** | `WASMJIT_BACKEND=asmjit`: 821 cases, 743 passed, 78 failed; no crash |
 
 The blockers are not just “unimplemented opcodes”:
 
@@ -1078,18 +1078,22 @@ The blockers are not just “unimplemented opcodes”:
   lane families, `br_table` arity, the i64 bit-count family, calls in dead
   code, the `simd_load*_lane` family, `v128` globals and scalar deterministic
   NaN canonicalisation are fixed. The lane fix was a mode-selection bug: the C
-  argument count must include the hidden `v128` result out-buffer. Remaining
-  failures are stringref/relaxed-SIMD, GC arrays and some transport families.
+  argument count must include the hidden `v128` result out-buffer. The latest
+  batch also closed imported global/memory indexing, `loop`/`if`/branch
+  reachability, `call_ref`, `return_call`, `return_call_indirect` and
+  `return_call_ref`. Remaining failures are stringref/relaxed-SIMD, GC arrays
+  and some transport families (`call_indirect64`, `switch`, `simd_boolean`).
   The legacy-EH rewrite itself is frontend desugaring, not a backend feature.
 * **AsmJIT:** `spec: func`, `spec: block`, `spec: br`, `spec: br_if`,
   `spec: br_table`, `spec: if`, `spec: labels`, `spec: return`,
-  `spec: unreachable` and `spec: switch` are green, including frame-form
-  function-label branches and the multi-result tail-call fixture. `table.grow`,
-  `v128` globals, the integer lane family and integer/float splat are
-  implemented; empty modules no longer attempt to install a zero-sized code
-  holder. Remaining failures include several SIMD transport/relaxed opcodes,
-  stack-switching cases, one newly exposed component tag case and `imports`
-  allocation/trap cases.
+  `spec: unreachable`, `spec: switch`, `spec: loop`, `spec: fac`, `spec: global`,
+  `spec: memory`, `spec: load1`, `spec: store1`, `spec: store2`, `spec: call_ref`,
+  `spec: return_call`, `spec: return_call_indirect` and `spec: return_call_ref`
+  are green. The frame ABI now sizes call staging from the real result block,
+  accepts native imports through the register ABI, and no longer lets an import
+  signature choose the module ABI. Remaining failures include relaxed SIMD,
+  GC arrays/refs, `atomic`, `throw`, `unreached-valid`, `memory_trap`,
+  `memory_grow64` and the linking/import allocation cases.
 
 Promotion requires the full backend-selected suite to finish green (no abort,
 no segfault), the strict negative sweep to pass, the sanitizer run to be recorded,

@@ -1,7 +1,5 @@
 #include "SljitOpcodeDispatcher.hpp"
 
-#include <cstdio>
-
 #include "SljitModuleCompiler.hpp"
 
 #include "../WasmBase/WasmBackendAbi.hpp"
@@ -3228,6 +3226,12 @@ void OpcodeDispatcher::emitTailCallIndirectState(WASM::TypeIdx typeIndex, WASM::
 	else if (fallback != nullptr)
 		sljit_set_label(fallback, fallbackLabel);
 	emitResolvedCall(calledType, SLJIT_R0);
+	// The semantic fallback must model the call's result before returning it:
+	// `emitResolvedCall` performs the call but does not update the compile-time
+	// operand stack. Without these pushes `emitReturnValue` sees an empty stack.
+	stackWidths_.resize(stackWidths_.size() - calledType.params.size());
+	for (const WASM::StorageType& result : calledType.results)
+		push(widthOf(result.val));
 	emitReturnValue();
 
 	stackWidths_.resize(base);
@@ -3240,7 +3244,7 @@ void OpcodeDispatcher::emitNullRefCheck(int callableReg)
 			callableReg, 0, SLJIT_IMM, 0);
 	if (nonNull == nullptr)
 		ok_ = false;
-	emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R1, 0, SLJIT_IMM,
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R0, 0, SLJIT_IMM,
 			static_cast<sljit_sw>(WASM::TrapKind::NullFunctionReference)));
 	emitHelper(SLJIT_ARGS1V(32), &sljitReportTrap);
 	emitTrapBranch();
@@ -3358,9 +3362,17 @@ void OpcodeDispatcher::dispatchReturnCallRef(WASM::TypeIdx typeIndex)
 			else if (fallback != nullptr)
 				sljit_set_label(fallback, fallbackLabel);
 			emitResolvedCall(calledType, SLJIT_R0);
+			// Model the call result before returning it; see the note in
+			// emitTailCallIndirectState.
+			stackWidths_.resize(stackWidths_.size() - calledType.params.size());
+			for (const WASM::StorageType& result : calledType.results)
+				push(widthOf(result.val));
 			emitReturnValue();
 		} else {
 			emitResolvedCall(calledType, SLJIT_R0);
+			stackWidths_.resize(stackWidths_.size() - calledType.params.size());
+			for (const WASM::StorageType& result : calledType.results)
+				push(widthOf(result.val));
 			emitReturnValue();
 		}
 	}
@@ -3703,8 +3715,12 @@ void OpcodeDispatcher::emitFloatCompare(sljit_s32 condition, int width)
 		return;
 	requireStack(2);
 	pop();
-	if (measureOnly_)
+	if (measureOnly_) {
+		// The result is always an i32; the measuring pass must model that or a
+		// following `if` sees the operands' float width.
+		stackWidths_.back() = 4;
 		return;
+	}
 	const sljit_s32 type = width == 4 ? (condition | SLJIT_32) : condition;
 	loadFloatSlot(SLJIT_FR0, stackWidths_.size() - 1, width);
 	loadFloatSlot(SLJIT_FR1, stackWidths_.size(), width);
@@ -6143,8 +6159,14 @@ void OpcodeDispatcher::dispatchI64ExtendI32U()
 
 const WASM::GlobalType& OpcodeDispatcher::requireGlobalIndex(WASM::GlobalIdx index)
 {
-	require(index < module_.globals.size(), "the global index is out of range");
-	const WASM::GlobalType& type = module_.globals[index].type;
+	// The module's global index space is imports first, then definitions; the
+	// `globals` vector alone holds only definitions.
+	if (index < module_.importGlobals.size())
+		return module_.importGlobals[index].global;
+	const std::size_t defined = static_cast<std::size_t>(index)
+			- module_.importGlobals.size();
+	require(defined < module_.globals.size(), "the global index is out of range");
+	const WASM::GlobalType& type = module_.globals[defined].type;
 	require(widthOf(type.contentType) != 0,
 			"the SLJIT backend only models i32, i64, f32 and f64 globals");
 	return type;
@@ -6226,8 +6248,14 @@ void OpcodeDispatcher::dispatchGlobalSet(WASM::GlobalIdx arg)
 
 const WASM::MemoryType& OpcodeDispatcher::requireMemoryIndex(WASM::MemIdx index)
 {
-	require(index < module_.memories.size(), "the memory index is out of range");
-	return module_.memories[index];
+	// The memory index space is imports first, then definitions; the `memories`
+	// vector alone holds only definitions.
+	if (index < module_.importMemories.size())
+		return module_.importMemories[index].memory;
+	const std::size_t defined = static_cast<std::size_t>(index)
+			- module_.importMemories.size();
+	require(defined < module_.memories.size(), "the memory index is out of range");
+	return module_.memories[defined];
 }
 
 void OpcodeDispatcher::emitCheckedMemoryAddress(const WASM::MemArg& arg,

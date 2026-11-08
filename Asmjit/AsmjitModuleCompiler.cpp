@@ -672,6 +672,11 @@ void asmjitReportNullReference() noexcept
 	WASM::reportTrap(WASM::TrapKind::NullReference);
 }
 
+void asmjitReportNullFunctionReference() noexcept
+{
+	WASM::reportTrap(WASM::TrapKind::NullFunctionReference);
+}
+
 void asmjitReportUnreachable() noexcept
 {
 	WASM::reportTrap(WASM::TrapKind::Unreachable);
@@ -1650,13 +1655,11 @@ protected:
 		ControlFrame& target = controls[controls.size() - 1 - depth];
 		const bool loopTarget = target.kind == ControlKind::Loop;
 		const size_t branchValues = loopTarget ? target.paramCount : target.resultCount;
-		// Extra values below a block target's operands are discarded. A loop
-		// back-edge, however, re-enters with only its declared parameters; keep
-		// the strict shape there so the compile-time stack stays in sync with
-		// the next iteration.
-		const bool branchShapeMatches = loopTarget
-				? values.size() == target.stackHeight + branchValues
-				: values.size() >= target.stackHeight + branchValues;
+		// A branch consumes its target's arity values and discards everything
+		// above the target's height. A loop back-edge is no exception: only the
+		// top `paramCount` operands become the next iteration's parameters, and
+		// any extra live values are dropped by the branch.
+		const bool branchShapeMatches = values.size() >= target.stackHeight + branchValues;
 		if (!branchShapeMatches) {
 			if (inDeadCode()) return;
 			throw std::runtime_error("AsmJit br_if operand stack does not match its target label");
@@ -1680,6 +1683,14 @@ protected:
 		} else {
 			checkError(compiler.test(condition, condition), "AsmJit br_if condition test failed");
 			checkError(compiler.jnz(label), "AsmJit br_if branch emission failed");
+			// A zero-arity branch still makes its target's `end` reachable:
+			// control continues after that block even though nothing is
+			// transferred. Without this, a `br_if` to an empty block leaves the
+			// block end marked dead, and every instruction after it is skipped
+			// as unreachable (loop.wast's `nesting` lost its division and
+			// decrement this way).
+			if (!loopTarget)
+				target.endTargeted = true;
 		}
 	}
 
@@ -1701,9 +1712,9 @@ protected:
 		ControlFrame& target = controls[controls.size() - 1 - depth];
 		const bool loopTarget = target.kind == ControlKind::Loop;
 		const size_t branchValues = loopTarget ? target.paramCount : target.resultCount;
-		const bool branchShapeMatches = loopTarget
-				? values.size() == target.stackHeight + branchValues
-				: values.size() >= target.stackHeight + branchValues;
+		// See dispatchBrIf: a branch may leave extra operands below its target's
+		// arguments; only underflow is invalid.
+		const bool branchShapeMatches = values.size() >= target.stackHeight + branchValues;
 		if (!branchShapeMatches) {
 			if (inDeadCode()) return;
 			throw std::runtime_error("AsmJit br operand stack does not match its target label");
@@ -1828,8 +1839,10 @@ protected:
 				? module.importFunctions[index].typeIdx
 				: module.internalFunctionTypeIndices[index - importedCount];
 		const WASM::FuncType calledType = module.funcTypeAt(typeIndex);
-		if (values.size() != calledType.params.size())
-			throw std::runtime_error("AsmJit return_call has unexpected values below its arguments");
+		// A tail call discards everything below its arguments; only underflow is
+		// invalid (same rule as a branch to a function-end label).
+		if (values.size() < calledType.params.size())
+			throw std::runtime_error("AsmJit return_call has too few arguments");
 		if (index == functionIndex) {
 			// Direct self-recursion: overwrite the parameter locals, reset the rest,
 			// and loop to the body start. The frame is reused, so the host stack does
@@ -1911,8 +1924,9 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 			return;
 		armTerminated = true;
 		const WASM::FuncType calledType = module.funcTypeAt(typeIndex);
-		if (values.size() != calledType.params.size() + 1)
-			throw std::runtime_error("AsmJit return_call_indirect has unexpected values below its arguments");
+		// Extra values below the callee arguments are discarded by the tail call.
+		if (values.size() < calledType.params.size() + 1)
+			throw std::runtime_error("AsmJit return_call_indirect has too few arguments");
 		if (frameMode) {
 			if (calledType.results.size() != resultCount)
 				throw std::runtime_error("AsmJit frame tail-call result arity differs from the caller");
@@ -2056,7 +2070,8 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 			uint32_t argBytes = 0;
 			for (const WASM::StorageType& parameter : calledType.params)
 				argBytes += parameter.val.opcode == WASM::ValueTypeCode::V128 ? 16u : 8u;
-			asmjit::x86::Mem frameStorage = compiler.new_stack(argBytes + 16, 16, "indirectFrame");
+			asmjit::x86::Mem frameStorage = compiler.new_stack(
+					frameCallStorageBytes(calledType), 16, "indirectFrame");
 			asmjit::x86::Gp frameAddress = compiler.new_gp_ptr("indirectFrame");
 			checkError(compiler.lea(frameAddress, frameStorage),
 					"AsmJit indirect frame address failed");
@@ -2135,7 +2150,7 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 		reportSignature.set_ret(asmjit::TypeId::kVoid);
 		asmjit::InvokeNode* report = nullptr;
 		checkError(compiler.invoke(asmjit::Out(report),
-				reinterpret_cast<uint64_t>(&asmjitReportNullReference), reportSignature),
+				reinterpret_cast<uint64_t>(&asmjitReportNullFunctionReference), reportSignature),
 				"AsmJit null-reference trap emission failed");
 		emitZeroReturn();
 		checkError(compiler.bind(nonNull), "AsmJit null-reference continuation binding failed");
@@ -2165,7 +2180,8 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 			uint32_t argBytes = 0;
 			for (const WASM::StorageType& parameter : calledType.params)
 				argBytes += parameter.val.opcode == WASM::ValueTypeCode::V128 ? 16u : 8u;
-			asmjit::x86::Mem frameStorage = compiler.new_stack(argBytes + 16, 16, "refCallFrame");
+			asmjit::x86::Mem frameStorage = compiler.new_stack(
+					frameCallStorageBytes(calledType), 16, "refCallFrame");
 			asmjit::x86::Gp frameAddress = compiler.new_gp_ptr("refCallFrame");
 			checkError(compiler.lea(frameAddress, frameStorage),
 					"AsmJit call_ref frame address failed");
@@ -2267,8 +2283,10 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 			return;
 		armTerminated = true;
 		const WASM::FuncType calledType = module.funcTypeAt(typeIndex);
-		if (values.size() != calledType.params.size() + 1)
-			throw std::runtime_error("AsmJit return_call_ref has unexpected values below its reference");
+		// Extra values below the callee arguments/reference are discarded by the
+		// tail call.
+		if (values.size() < calledType.params.size() + 1)
+			throw std::runtime_error("AsmJit return_call_ref has too few arguments");
 		auto callable = values.back();
 		values.pop_back();
 		std::vector<asmjit::x86::Gp> arguments(calledType.params.size());
@@ -2371,13 +2389,40 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 		}
 
 		if (frameMode) {
+			// A native import is a host C function with the typed register ABI,
+			// not a staging-frame callee. Call it through the register form and
+			// leave its result on the value stack for the frame-mode caller.
+			if (!isInternal && importedCallee == nullptr) {
+				for (const WASM::StorageType& parameter : calledType.params)
+					if (parameter.val.opcode == WASM::ValueTypeCode::V128)
+						throw std::runtime_error(
+								"AsmJit frame ABI: a native import cannot take a v128 parameter");
+				if (calledType.results.size() > 1
+						|| (!calledType.results.empty()
+							&& calledType.results.front().val.opcode == WASM::ValueTypeCode::V128))
+					throw std::runtime_error(
+							"AsmJit frame ABI: a native import cannot return a v128 or multiple results");
+				const asmjit::FuncSignature nativeSignature =
+						TypeTranslator::translateFunctionType(calledType, false);
+				auto preparedArguments = prepareCallArguments(calledType, arguments);
+				asmjit::InvokeNode* invoke = nullptr;
+				checkError(compiler.invoke(asmjit::Out(invoke), target, nativeSignature),
+						"AsmJit native-import invocation failed");
+				invoke->set_arg(0, vmContext);
+				setCallArguments(invoke, preparedArguments);
+				emitCallResult(invoke, calledType, "nativeImportResult");
+				emitPendingTrapReturn();
+				emitPendingExceptionCheck();
+				return;
+			}
 			// Staging-frame ABI (step 5d): the arguments are packed into a frame
 			// built BEFORE the invoke node exists, and the results are read back
 			// out of the same block, which starts where the arguments end.
 			uint32_t argBytes = 0;
 			for (const WASM::StorageType& p : calledType.params)
 				argBytes += p.val.opcode == WASM::ValueTypeCode::V128 ? 16u : 8u;
-			asmjit::x86::Mem frameStorage = compiler.new_stack(argBytes + 16, 16, "callFrame");
+			asmjit::x86::Mem frameStorage = compiler.new_stack(
+					frameCallStorageBytes(calledType), 16, "callFrame");
 			asmjit::x86::Gp frameAddress = compiler.new_gp_ptr("callFrame");
 			checkError(compiler.lea(frameAddress, frameStorage),
 					"AsmJit call frame address failed");
@@ -7079,6 +7124,18 @@ private:
 		return address;
 	}
 
+	//! Bytes a staging frame needs for a call: 8 per scalar slot, 16 per v128,
+	//! covering both the parameter block and the result block. A multi-result
+	//! callee writes every result slot, so a fixed `args + 16` reservation is an
+	//! out-of-bounds write that corrupts the caller's own stack slots.
+	static uint32_t frameCallStorageBytes(const WASM::FuncType& functionType)
+	{
+		uint32_t bytes = frameResultOffsetBytes(functionType);
+		for (const auto& result : functionType.results)
+			bytes += result.val.opcode == WASM::ValueTypeCode::V128 ? 16u : 8u;
+		return bytes < 16 ? 16u : bytes;
+	}
+
 	//! Bytes the parameters occupy in a staging frame: 8 per scalar, 16 per v128.
 	static uint32_t frameResultOffsetBytes(const WASM::FuncType& functionType)
 	{
@@ -7670,15 +7727,22 @@ private:
 
 	const WASM::GlobalType& validateGlobalIndex(WASM::GlobalIdx index) const
 	{
-		// Module::globals is already the complete global index space:
-		// imported globals precede defined globals. importGlobals is only the
-		// import-section metadata and must not be counted a second time.
-		if (index >= module.globals.size())
-			throw std::runtime_error("AsmJit global instruction references an unknown global");
-		const WASM::GlobalType& type = module.globals[index].type;
-		if (type.contentType.opcode != WASM::ValueTypeCode::V128)
-			requireScalar(type.contentType, "globals");
-		return type;
+		// The module's global index space is imports first, then definitions.
+		// `importGlobals` and `globals` are separate vectors; neither alone is
+		// the complete space.
+		const WASM::GlobalType* type = nullptr;
+		if (index < module.importGlobals.size()) {
+			type = &module.importGlobals[index].global;
+		} else {
+			const std::size_t defined = static_cast<std::size_t>(index)
+					- module.importGlobals.size();
+			if (defined >= module.globals.size())
+				throw std::runtime_error("AsmJit global instruction references an unknown global");
+			type = &module.globals[defined].type;
+		}
+		if (type->contentType.opcode != WASM::ValueTypeCode::V128)
+			requireScalar(type->contentType, "globals");
+		return *type;
 	}
 
 	asmjit::x86::Gp emitGlobalCell(WASM::GlobalIdx index)
@@ -7765,10 +7829,15 @@ private:
 
 	const WASM::MemoryType& validateMemoryIndex(WASM::MemIdx index) const
 	{
-		// Module::memories is the complete memory index space, imports first.
-		if (index >= module.memories.size())
+		// Module::memories holds only definitions; imported memories precede
+		// them in the runtime's memory index space.
+		if (index < module.importMemories.size())
+			return module.importMemories[index].memory;
+		const std::size_t defined = static_cast<std::size_t>(index)
+				- module.importMemories.size();
+		if (defined >= module.memories.size())
 			throw std::runtime_error("AsmJit memory instruction references an unknown memory");
-		return module.memories[index];
+		return module.memories[defined];
 	}
 
 	void emitMemorySize(WASM::MemIdx index)
@@ -8334,14 +8403,10 @@ void ModuleCompiler::translateTypes(WASM::ModuleInstance& instance, const WASM::
 	// is decided before translation, because the signature itself changes shape.
 	// Opt-in, never inferred -- see WasmBase/WasmBackendAbi.hpp.
 	const bool frameMode = TypeTranslator::moduleNeedsFrame(module, WASM::frameCallAbiOptIn());
-	// An import expects the typed C signature -- a native one by definition, and a
-	// wasm-to-wasm one because it is compiled by its own instance in whatever mode
-	// that instance chose. Handing either of them (ctx, frame) would be a silent
-	// ABI mismatch, so a frame-mode module with imports is refused at module level
-	// (docs/backends/EXPORT_SIGNATURE.md sections 12 and 17).
-	if (frameMode && !module.importFunctions.empty())
-		throw std::runtime_error(
-				"AsmJIT frame ABI: calls into imports are not implemented");
+	// A frame-mode module may still import functions: a tail call to an import
+	// goes through the shared tail-call trampoline, which owns the ABI bridge.
+	// A direct call to a native import uses the register path in dispatchCall;
+	// the frame form is only used between functions compiled with this ABI.
 	instance.setFrameCallAbi(frameMode);
 	signatures.resize(module.typeIds.size());
 	internals.translatedTypes.assign(module.typeIds.size(), nullptr);
