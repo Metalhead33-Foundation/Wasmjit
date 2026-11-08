@@ -1069,7 +1069,7 @@ uses a rejected artifact and confirms the runtime remains usable.
 | Backend | Verdict | Measured evidence |
 |---|---|---|
 | LibJIT | **Production-ready within its declared envelope** | default suite 22,445 assertions / 821 cases, green; x86-64 Linux only |
-| SLJIT | **Not production-ready** | `WASMJIT_BACKEND=sljit`: 821 cases, 773 passed, 48 failed; no crash |
+| SLJIT | **Not production-ready** | `WASMJIT_BACKEND=sljit`: 821 cases, 774 passed, 47 failed; no crash |
 | AsmJIT | **Not production-ready** | `WASMJIT_BACKEND=asmjit`: 821 cases, 765 passed, 56 failed; no crash |
 
 The blockers are not just “unimplemented opcodes”:
@@ -1083,8 +1083,7 @@ The blockers are not just “unimplemented opcodes”:
   reachability, `call_ref`, `return_call`, `return_call_indirect` and
   `return_call_ref`. The latest batches also closed relaxed SIMD, bitmask, i31,
   `ref_eq`, GC arrays/structs, and all reference casts/branches. Remaining
-  failures are SLJIT's typed-GC-reference `array.new_elem`, `try_table` and
-  linking.
+  failures are SLJIT's typed-GC-reference `array.new_elem` and linking.
   The legacy-EH rewrite itself is frontend desugaring, not a backend feature.
 * **AsmJIT:** `spec: func`, `spec: block`, `spec: br`, `spec: br_if`,
   `spec: br_table`, `spec: if`, `spec: labels`, `spec: return`,

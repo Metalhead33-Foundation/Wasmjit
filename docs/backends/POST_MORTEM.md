@@ -2021,4 +2021,42 @@ AsmJIT  821 cases: 765 passed / 56 failed; no signal
   inside a try_table must leave the linear catch arms reachable; marking the
   arm globally terminated hides them.
 
+
+## SLJIT — try_table catches that target the function label
+
+### Intended
+
+Close the last SLJIT `try_table` case.
+
+### Root cause
+
+The dispatcher required every catch label to name an enclosing structured
+frame. A `catch`/`catch_ref` may also target the function label, where the
+payload becomes the function's return values.
+
+### Fix
+
+* Validation now accepts `clause.labelIdx == tryFrameIndex` as the function
+  label and checks its arity against the function result widths.
+* Added `emitCatchReturn`: it clears the pending exception, materialises the
+  payload (and trailing exnref for `catch_ref`) at the base of the operand
+  stack, and emits the function return.
+* The measuring pass reserves the function-result slots for that catch arm.
+
+### Evidence
+
+```
+SLJIT try_table 56/0
+SLJIT full      821 cases: 774 passed / 47 failed; no signal
+```
+
+SLJIT’s remaining spec failures are the typed-GC-reference `array.new_elem`
+shape and `linking`/`linking1`.
+
+### Lesson
+
+A catch target is a branch label, and the function label is one of them. It
+needs the same arity check and a return path rather than a structured-frame
+jump.
+
   understood.

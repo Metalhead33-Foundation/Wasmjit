@@ -979,6 +979,10 @@ private:
 	 * \param carryExn True for `catch_ref`/`catch_all_ref`, which also carry the `exnref`.
 	 */
 	void emitCatchBranch(ControlFrame& target, const WASM::FuncType& payload, bool carryExn);
+	//! Emits a catch that targets the function label by returning its payload.
+	//! \param payload Tag payload type.
+	//! \param carryExn True for `catch_ref`/`catch_all_ref` (trailing exnref).
+	void emitCatchReturn(const WASM::FuncType& payload, bool carryExn);
 	//! Returns the zero of each declared result without annotating a trap. Used
 	//! when an uncaught exception leaves the function: the caller sees the
 	//! pending slot before any value.

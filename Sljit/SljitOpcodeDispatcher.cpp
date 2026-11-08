@@ -2119,15 +2119,19 @@ void OpcodeDispatcher::emitExceptionPropagation()
 		if (!frame.tryTable)
 			continue;
 		for (const WASM::CatchClause& clause : frame.catchClauses) {
-			require(clause.labelIdx < frameIndex,
-					"the try_table catch label targets the function label");
-			ControlFrame& target = controls_[frameIndex - 1 - clause.labelIdx];
+			require(clause.labelIdx <= frameIndex,
+					"the try_table catch label depth is out of range");
+			const bool functionLabel = clause.labelIdx == frameIndex;
 			const bool catchAll = clause.kind == WASM::CatchKind::CatchAll
 					|| clause.kind == WASM::CatchKind::CatchAllRef;
 			const bool carryExn = clause.kind == WASM::CatchKind::CatchRef
 					|| clause.kind == WASM::CatchKind::CatchAllRef;
 			if (catchAll) {
-				emitCatchBranch(target, WASM::FuncType{}, carryExn);
+				if (functionLabel)
+					emitCatchReturn(WASM::FuncType{}, carryExn);
+				else
+					emitCatchBranch(controls_[frameIndex - 1 - clause.labelIdx],
+							WASM::FuncType{}, carryExn);
 				return;
 			}
 			const WASM::FuncType payload = tagPayloadType(clause.tagIdx);
@@ -2136,7 +2140,10 @@ void OpcodeDispatcher::emitExceptionPropagation()
 					SLJIT_R0, 0, SLJIT_IMM, static_cast<sljit_sw>(tagId));
 			if (mismatch == nullptr)
 				ok_ = false;
-			emitCatchBranch(target, payload, carryExn);
+			if (functionLabel)
+				emitCatchReturn(payload, carryExn);
+			else
+				emitCatchBranch(controls_[frameIndex - 1 - clause.labelIdx], payload, carryExn);
 			sljit_label* next = sljit_emit_label(compiler_);
 			if (next == nullptr)
 				ok_ = false;
@@ -2212,6 +2219,53 @@ void OpcodeDispatcher::emitCatchBranch(ControlFrame& target, const WASM::FuncTyp
 		target.endJumps.push_back(jump);
 		target.endTargeted = true;
 	}
+}
+
+void OpcodeDispatcher::emitCatchReturn(const WASM::FuncType& payload, bool carryExn)
+{
+	const std::size_t payloadCount = payload.params.size();
+	require(resultWidths_.size() == payloadCount + (carryExn ? 1u : 0u),
+			"the try_table catch arity does not match the function label");
+	emitHelper(SLJIT_ARGS0V(), &sljitExnClearPending);
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R1, 0,
+			SLJIT_MEM1(SLJIT_SP), exceptionPtrSlotOffset()));
+	const ExceptionPayloadLayout layout = exceptionPayloadLayout(payload);
+	for (std::size_t i = 0; i < payloadCount; ++i) {
+		const sljit_sw offset = static_cast<sljit_sw>(layout.fields[i].offset);
+		const WASM::ValueTypeCode kind = payload.params[i].val.opcode;
+		const int width = widthOf(payload.params[i].val);
+		if (width == 16) {
+			emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0,
+					SLJIT_MEM1(SLJIT_R1), offset));
+			emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+					stackSlotOffset(i), SLJIT_R0, 0));
+			emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0,
+					SLJIT_MEM1(SLJIT_R1), offset + 8));
+			emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+					stackSlotOffset(i) + 8, SLJIT_R0, 0));
+		} else if (isFloatKind(kind)) {
+			emit(sljit_emit_fop1(compiler_,
+					width == 4 ? SLJIT_MOV_F32 : SLJIT_MOV_F64,
+					SLJIT_FR0, 0, SLJIT_MEM1(SLJIT_R1), offset));
+			storeFloatSlot(SLJIT_FR0, i, width);
+		} else {
+			emit(sljit_emit_op1(compiler_, width == 4 ? SLJIT_MOV_U32 : SLJIT_MOV,
+					SLJIT_R0, 0, SLJIT_MEM1(SLJIT_R1), offset));
+			storeSlot(SLJIT_R0, i, width);
+		}
+	}
+	if (carryExn) {
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0,
+				SLJIT_MEM1(SLJIT_SP), exceptionPtrSlotOffset()));
+		storeSlot(SLJIT_R0, payloadCount, 8);
+	}
+	// `emitReturnValue` reads the result slots from the compile-time stack; give
+	// it the function's result widths for this one emission, then restore the
+	// caller's stack model so later catch clauses still see their arm.
+	const std::vector<int> savedWidths = stackWidths_;
+	stackWidths_ = resultWidths_;
+	emitReturnValue();
+	stackWidths_ = savedWidths;
 }
 
 void OpcodeDispatcher::emitTrap(WASM::TrapKind kind)
@@ -2400,17 +2454,21 @@ void OpcodeDispatcher::dispatchTryTable(const WASM::BlockType& type,
 	// block whose end the body never reaches normally, so the operand-stack
 	// high-water mark alone does not necessarily cover those slots.
 	for (const WASM::CatchClause& clause : tryFrame.catchClauses) {
-		require(clause.labelIdx < frameIndex,
-				"the try_table catch label targets the function label");
-		ControlFrame& target = controls_[frameIndex - 1 - clause.labelIdx];
+		require(clause.labelIdx <= frameIndex,
+				"the try_table catch label depth is out of range");
+		const bool functionLabel = clause.labelIdx == frameIndex;
+		ControlFrame* target = functionLabel ? nullptr
+				: &controls_[frameIndex - 1 - clause.labelIdx];
 		const bool catchAll = clause.kind == WASM::CatchKind::CatchAll
 				|| clause.kind == WASM::CatchKind::CatchAllRef;
 		const bool carryExn = clause.kind == WASM::CatchKind::CatchRef
 				|| clause.kind == WASM::CatchKind::CatchAllRef;
 		const std::size_t payloadCount = catchAll
 				? 0u : tagPayloadType(clause.tagIdx).params.size();
-		const std::size_t targetWidths = target.kind == ControlKind::Loop
-				? target.paramWidths.size() : target.resultWidths.size();
+		const std::size_t targetWidths = functionLabel
+				? resultWidths_.size()
+				: (target->kind == ControlKind::Loop
+					? target->paramWidths.size() : target->resultWidths.size());
 		require(targetWidths == payloadCount + (carryExn ? 1u : 0u),
 				"the try_table catch arity does not match its target label");
 		if (measureOnly_) {
@@ -2419,9 +2477,14 @@ void OpcodeDispatcher::dispatchTryTable(const WASM::BlockType& type,
 			// Mark the target exactly as `emitCatchBranch` does in the emitting
 			// pass, otherwise the arm's operand stack is measured as dead code
 			// and the frame is sized one slot too small.
-			if (target.kind != ControlKind::Loop)
-				target.endTargeted = true;
-			const std::size_t bound = target.baseDepth + targetWidths;
+			if (functionLabel) {
+				if (targetWidths > maxStackDepth_)
+					maxStackDepth_ = targetWidths;
+				continue;
+			}
+			if (target->kind != ControlKind::Loop)
+				target->endTargeted = true;
+			const std::size_t bound = target->baseDepth + targetWidths;
 			if (bound > maxStackDepth_)
 				maxStackDepth_ = bound;
 		}
