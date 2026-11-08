@@ -562,7 +562,10 @@ WASM::Callable* asmjitResolveIndirectCallable(WASM::VMContext* vm, uint32_t tabl
 		return nullptr;
 	}
 	if (elementIndex >= table->size) {
-		WASM::reportTrap(WASM::TrapKind::OutOfBoundsTableAccess);
+		// `call_indirect` reports an out-of-range index as an undefined element;
+		// a null slot is an uninitialized element. `table.get`/`table.set` use
+		// the ordinary OOB table-access trap.
+		WASM::reportTrap(WASM::TrapKind::UndefinedElement);
 		return nullptr;
 	}
 	if (table->base == nullptr) {
@@ -1540,11 +1543,12 @@ protected:
 
 	void dispatchIf(const WASM::BlockType& type) override
 	{
-		if (inDeadCode()) {
+		if (inDeadCode() && values.empty()) {
 			// Truly dead `if`: still open the structured frame so `else`/`end`
 			// pair up, but there is no condition to test and no branch to emit.
-			// If values *are* present, this is a catch-entry path whose linear
-			// predecessor terminated; it is still live and must be lowered.
+			// If values *are* present, lower the condition normally: in an EH
+			// module this is a catch entry, and in ordinary dead code the
+			// placeholder condition must still be consumed.
 			pushControlFrame(ControlKind::If, type);
 			controls.back().alternate = compiler.new_label();
 			return;
@@ -1585,11 +1589,27 @@ protected:
 		controls.pop_back();
 		bool endReachable = true;
 		if (frame.kind == ControlKind::If && !frame.hasElse) {
-			if (frame.resultCount != 0)
-				throw std::runtime_error("AsmJit if-without-else cannot produce a result");
-			if (!armTerminated && values.size() != frame.stackHeight)
+			// An if-without-else may produce results only when its parameters
+			// already have the result shape. The true arm can compute a
+			// different value than the parameters; the implicit false arm
+			// forwards the parameters.
+			if (frame.resultCount != 0) {
+				if (frame.resultCount != frame.paramCount)
+					throw std::runtime_error("AsmJit if-without-else has mismatched parameters and results");
+			}
+			if (!armTerminated
+					&& values.size() != frame.stackHeight + frame.paramCount)
 				throw std::runtime_error("AsmJit if arm leaves an unexpected operand stack shape");
+			if (!armTerminated) {
+				// The true arm produced its result; store it before jumping over
+				// the implicit-else forwarding block.
+				storeBlockResult(frame, "implicit if");
+				checkError(compiler.jmp(frame.end), "AsmJit implicit-else end jump failed");
+			}
 			checkError(compiler.bind(frame.alternate), "AsmJit implicit else label binding failed");
+			for (std::size_t i = 0; i < frame.resultCount; ++i)
+				transferValue(frame.results[i], frame.params[i],
+						frame.resultTypes[i], "AsmJit implicit-else result transfer failed");
 		} else {
 			const bool armLive = !armTerminated;
 			endReachable = armLive || frame.endTargeted;
@@ -1616,9 +1636,9 @@ protected:
 		const auto condition = values.back();
 		values.pop_back();
 		if (depth == controls.size()) {
-			if (values.size() != resultCount) {
+			if (values.size() < resultCount) {
 				if (inDeadCode()) return;
-				throw std::runtime_error("AsmJit conditional function branch has the wrong result arity");
+				throw std::runtime_error("AsmJit conditional function branch has too few results");
 			}
 			auto skip = compiler.new_label();
 			checkError(compiler.test(condition, condition), "AsmJit conditional function branch test failed");
@@ -1630,9 +1650,16 @@ protected:
 		ControlFrame& target = controls[controls.size() - 1 - depth];
 		const bool loopTarget = target.kind == ControlKind::Loop;
 		const size_t branchValues = loopTarget ? target.paramCount : target.resultCount;
-		if (values.size() != target.stackHeight + branchValues) {
+		// Extra values below a block target's operands are discarded. A loop
+		// back-edge, however, re-enters with only its declared parameters; keep
+		// the strict shape there so the compile-time stack stays in sync with
+		// the next iteration.
+		const bool branchShapeMatches = loopTarget
+				? values.size() == target.stackHeight + branchValues
+				: values.size() >= target.stackHeight + branchValues;
+		if (!branchShapeMatches) {
 			if (inDeadCode()) return;
-			throw std::runtime_error("AsmJit br_if operand stack does not match target label signature");
+			throw std::runtime_error("AsmJit br_if operand stack does not match its target label");
 		}
 		const asmjit::Label label = loopTarget ? target.begin : target.end;
 		if (branchValues != 0) {
@@ -1663,9 +1690,9 @@ protected:
 		if (depth > controls.size())
 			throw std::runtime_error("AsmJit br label depth is out of range");
 		if (depth == controls.size()) {
-			if (values.size() != resultCount) {
+			if (values.size() < resultCount) {
 				if (inDeadCode()) return;
-				throw std::runtime_error("AsmJit function branch has the wrong result arity");
+				throw std::runtime_error("AsmJit function branch has too few results");
 			}
 			emitFunctionReturnValues();
 			armTerminated = true;
@@ -1674,9 +1701,12 @@ protected:
 		ControlFrame& target = controls[controls.size() - 1 - depth];
 		const bool loopTarget = target.kind == ControlKind::Loop;
 		const size_t branchValues = loopTarget ? target.paramCount : target.resultCount;
-		if (values.size() != target.stackHeight + branchValues) {
+		const bool branchShapeMatches = loopTarget
+				? values.size() == target.stackHeight + branchValues
+				: values.size() >= target.stackHeight + branchValues;
+		if (!branchShapeMatches) {
 			if (inDeadCode()) return;
-			throw std::runtime_error("AsmJit br operand stack does not match target label signature");
+			throw std::runtime_error("AsmJit br operand stack does not match its target label");
 		}
 		if (branchValues != 0) {
 			const size_t first = values.size() - branchValues;
@@ -1958,8 +1988,8 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 		if (typeIndex >= signatures.size() || !signatures[typeIndex])
 			throw std::runtime_error("AsmJit call_indirect references an unavailable function type");
 		const WASM::FuncType calledType = module.funcTypeAt(typeIndex);
-		if (calledType.results.size() > 1)
-			throw std::runtime_error("AsmJit call_indirect currently supports at most one result");
+		if (!frameMode && calledType.results.size() > 1)
+			throw std::runtime_error("AsmJit register-form call_indirect supports at most one result");
 		// Frame mode handles a v128 parameter/result through the frame block; the
 		// register form has no aggregate spelling for it.
 		for (const auto& parameter : calledType.params)
@@ -2309,8 +2339,8 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 		const WASM::FuncType calledType = module.funcTypeAt(typeIndex);
 		if (inDeadCode())
 			return;
-		if (calledType.results.size() > 1)
-			throw std::runtime_error("AsmJit calls currently support at most one result");
+		if (!frameMode && calledType.results.size() > 1)
+			throw std::runtime_error("AsmJit register-form calls support at most one result");
 		if (!frameMode) {
 			for (const auto& parameter : calledType.params)
 				requireScalar(parameter.val, "call parameters");

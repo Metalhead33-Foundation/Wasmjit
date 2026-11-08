@@ -1091,7 +1091,10 @@ extern "C" WASM::Callable* sljitResolveIndirectCallable(WASM::VMContext* vm,
 		return nullptr;
 	}
 	if (elementIndex >= table->size) {
-		WASM::reportTrap(WASM::TrapKind::OutOfBoundsTableAccess);
+		// `call_indirect` reports an out-of-range index as an undefined element;
+		// a null slot is an uninitialized element. `table.get`/`table.set` use
+		// the ordinary OOB table-access trap.
+		WASM::reportTrap(WASM::TrapKind::UndefinedElement);
 		return nullptr;
 	}
 	if (table->base == nullptr) {
@@ -2364,8 +2367,12 @@ void OpcodeDispatcher::dispatchEnd()
 
 	bool endReachable = false;
 	if (frame.kind == ControlKind::If && !frame.hasElse) {
-		require(frame.resultWidths.empty(),
-				"an if without else cannot produce a result");
+		// The false path skips the then arm, so the parameters are still in
+		// the slots where the result block expects its values. An implicit
+		// else can therefore produce results exactly when the parameter and
+		// result widths agree.
+		require(frame.resultWidths == frame.paramWidths,
+				"an if without else must have its parameters as results");
 		endReachable = frame.entryReachable || frame.endTargeted;
 		if (!measureOnly_ && frame.alternateJump != nullptr) {
 			sljit_label* label = sljit_emit_label(compiler_);
@@ -2879,8 +2886,8 @@ void OpcodeDispatcher::emitCall(WASM::FuncIdx index, bool isTail)
 	if (0 == static_cast<int>(frameAbi_))
 		require(calledType.params.size() <= kMaxWasmParameters,
 			"the SLJIT backend cannot call a function with more than three parameters");
-	require(calledType.results.size() <= 1,
-			"the SLJIT backend cannot call a multi-result function");
+	require(frameAbi_ || calledType.results.size() <= 1,
+			"the SLJIT register form cannot call a multi-result function");
 	for (const WASM::StorageType& parameter : calledType.params)
 		require(widthOf(parameter.val) != 0, "the SLJIT backend only calls i32/i64 signatures");
 	for (const WASM::StorageType& result : calledType.results)
@@ -2906,8 +2913,8 @@ void OpcodeDispatcher::emitCall(WASM::FuncIdx index, bool isTail)
 	}
 
 	stackWidths_.resize(stackWidths_.size() - calledType.params.size());
-	if (!calledType.results.empty())
-		push(widthOf(calledType.results.front().val));
+	for (const WASM::StorageType& result : calledType.results)
+		push(widthOf(result.val));
 }
 
 void OpcodeDispatcher::emitCallIndirect(WASM::TypeIdx typeIndex, WASM::TableIdx tableIndex,
@@ -2924,8 +2931,8 @@ void OpcodeDispatcher::emitCallIndirect(WASM::TypeIdx typeIndex, WASM::TableIdx 
 	if (0 == static_cast<int>(frameAbi_))
 		require(calledType.params.size() <= kMaxWasmParameters,
 			"the SLJIT backend cannot call a function with more than three parameters");
-	require(calledType.results.size() <= 1,
-			"the SLJIT backend cannot call a multi-result function");
+	require(frameAbi_ || calledType.results.size() <= 1,
+			"the SLJIT register form cannot call a multi-result function");
 	for (const WASM::StorageType& parameter : calledType.params)
 		require(widthOf(parameter.val) != 0, "the SLJIT backend only calls i32/i64 signatures");
 	for (const WASM::StorageType& result : calledType.results)
@@ -2959,8 +2966,8 @@ void OpcodeDispatcher::emitCallIndirect(WASM::TypeIdx typeIndex, WASM::TableIdx 
 	}
 
 	stackWidths_.resize(stackWidths_.size() - calledType.params.size());
-	if (!calledType.results.empty())
-		push(widthOf(calledType.results.front().val));
+	for (const WASM::StorageType& result : calledType.results)
+		push(widthOf(result.val));
 }
 
 void OpcodeDispatcher::dispatchCall(WASM::FuncIdx arg)

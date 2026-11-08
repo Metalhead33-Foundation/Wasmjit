@@ -1526,3 +1526,81 @@ now that those modules instantiate; it is a functional failure, not a signal.
   describe it.
 * **One missing splat blocks an entire proposal script.** Complete the width
   family, as with the bit-count family earlier.
+
+## Shared — block/if branches and multi-result frames
+
+### Intended
+
+Close the remaining AsmJIT branch family (`br`, `br_if`, `loop`, `labels`, `if`)
+and make the multi-value JIT-to-JIT fixture exercise the frame ABI without
+crashing.
+
+### Root cause
+
+* `br` and `br_if` used the same exact `values.size() == target stack height +
+  arity` check that `br_table` had. Wasm permits extra values below the branch
+  operands; only an underflow is invalid. This rejected valid `br`/`br_if`
+  modules.
+* An `if` without `else` was rejected whenever it had results. Wasm allows it
+  when the parameters have the result shape; the false path forwards them. The
+  true path can still compute a different value, so the two paths need separate
+  result handling.
+* Multi-result calls were still refused in frame mode on both backends even
+  though the frame form carries a result block, and the compile-time stack only
+  pushed the first result.
+* `call_indirect` classified an out-of-range index as an ordinary OOB table
+  access. The spec distinguishes `undefined element` (index out of range) from
+  `uninitialized element` (null slot).
+* The multi-value host test used the register `callCallable` helpers on a module
+  that had switched to the frame ABI, and read frame result slots as packed
+  tuple fields.
+
+### Fix
+
+* `br`/`br_if`: accept extra values for block targets; keep the strict shape for
+  **loop** back-edges, where the next iteration re-enters with only its declared
+  parameters. The strict loop check is deliberate: relaxing it produced an
+  AsmJIT infinite loop in `loop.0`.
+* `if` without `else`: lower the true arm, store its result, jump over the
+  alternate, bind the alternate with parameter-to-result forwarding, then bind
+  the end. An empty true arm forwards the parameters through the same path.
+* Frame multi-result calls: allow more than one result when `frameMode`, and
+  push all declared result widths onto the compile-time stack.
+* `call_indirect`: out-of-range index -> `UndefinedElement`; null slot ->
+  `UninitializedElement`.
+* Test: marshal the multi-value module through `callCallableFrame` when the
+  instance selects the frame ABI, and compact 8-byte frame result slots into the
+  public packed tuple (`i32` at offsets 0/4).
+
+### Evidence
+
+```
+AsmJIT  spec: br          77/0
+AsmJIT  spec: br_if       84/0
+AsmJIT  spec: labels      26/0
+AsmJIT  spec: if         125/0
+SLJIT   spec: if         125/0
+Both    multi-value: JIT-to-JIT calls marshal every result  16 assertions green
+```
+
+Full serial runs:
+
+```
+SLJIT   821 cases: 724 passed / 97 failed
+AsmJIT  821 cases: 721 passed / 100 failed
+```
+
+AsmJIT `spec: loop` still fails (a remaining loop-target stack-shape issue), but
+it now fails deterministically rather than timing out.
+
+### Lessons
+
+* **Branch arity is not branch stack height.** The spec allows discarded values
+  for block targets but a loop back-edge must model exactly the next iteration's
+  parameters.
+* **An implicit else is a real control path.** It must forward parameters, while
+  the true arm may store a different result.
+* **Frame result slots are not the public tuple layout.** A 4-byte `i32` result
+  occupies an 8-byte frame slot; embedders compact explicitly.
+* **Trap kinds are part of the API contract.** `undefined element` and
+  `uninitialized element` are distinct cases, not one generic OOB trap.

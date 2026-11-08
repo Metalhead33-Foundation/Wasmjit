@@ -32,8 +32,8 @@ All commands were run from `build/Desktop-Release` with
 | Default (`libjit`) suite | **22,442 assertions in 821 cases, green** |
 | `[sljit]` targeted tests | **2,682 assertions in 70 cases, green** |
 | `[asmjit]` targeted tests | **1,778 assertions in 61 cases, green** |
-| `WASMJIT_BACKEND=sljit ./Test/WasmJit` | **821 cases: 720 passed / 101 failed; no signal** |
-| `WASMJIT_BACKEND=asmjit ./Test/WasmJit` | **821 cases: 712 passed / 109 failed; no signal** |
+| `WASMJIT_BACKEND=sljit ./Test/WasmJit` | **821 cases: 724 passed / 97 failed; no signal** |
+| `WASMJIT_BACKEND=asmjit ./Test/WasmJit` | **821 cases: 721 passed / 100 failed; no signal** |
 
 Both non-LibJIT runs now complete the whole case set without a process signal.
 Their failures are functional and conformance gaps, not an early abort; the
@@ -79,7 +79,7 @@ refusals and behaviour that is unacceptable in production:
 
 ### 4.1 General conformance failures
 
-The `WASMJIT_BACKEND=sljit` run now completes all 821 cases: 720 pass and 101
+The `WASMJIT_BACKEND=sljit` run now completes all 821 cases: 724 pass and 97
 fail, with no process abort or segfault. The first batch closed `func`,
 `float_memory64`, `table_fill`, the integer lane families, `br_table` arity and
 the legacy-EH rethrow path. The second batch closed every `simd_load*_lane`
@@ -124,7 +124,7 @@ implemented slices, not a general conformance or safety claim.
 
 AsmJIT is explicitly experimental, and the generic run confirms why:
 
-- the run reaches all 821 cases: 712 pass and 109 fail, with no process
+- the run reaches all 821 cases: 721 pass and 100 fail, with no process
   abort or segfault;
 - `spec: func` is now green (`100 passed / 0 failed`), including the frame-form
   function-label branches;

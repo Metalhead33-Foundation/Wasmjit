@@ -8746,21 +8746,69 @@ TEST_CASE("multi-value: JIT-to-JIT calls marshal every result")
 		return *fn;
 	};
 
+	// Any multi-result signature puts the module in the staging-frame ABI. The
+	// generic `callCallable` helpers speak the register ABI, so marshal the
+	// frame explicitly when the instance selects it.
+	const bool frameAbi = instance.frameCallAbi();
+	const auto callI32x2 = [&](const WASM::Callable& callable,
+			int32_t a, int32_t b) -> int32_t {
+		if (!frameAbi)
+			return WASM::callCallable<int32_t>(callable, a, b);
+		alignas(16) std::array<std::uint8_t, 24> frame{};
+		std::memcpy(frame.data(), &a, sizeof(a));
+		std::memcpy(frame.data() + 8, &b, sizeof(b));
+		WASM::callCallableFrame(callable, frame.data());
+		int32_t result = 0;
+		std::memcpy(&result, frame.data() + 16, sizeof(result));
+		return result;
+	};
+	const auto callI32 = [&](const WASM::Callable& callable, int32_t a) -> int32_t {
+		if (!frameAbi)
+			return WASM::callCallable<int32_t>(callable, a);
+		alignas(16) std::array<std::uint8_t, 16> frame{};
+		std::memcpy(frame.data(), &a, sizeof(a));
+		WASM::callCallableFrame(callable, frame.data());
+		int32_t result = 0;
+		std::memcpy(&result, frame.data() + 8, sizeof(result));
+		return result;
+	};
+	const auto callI32_0 = [&](const WASM::Callable& callable) -> int32_t {
+		if (!frameAbi)
+			return WASM::callCallable<int32_t>(callable);
+		alignas(16) std::array<std::uint8_t, 8> frame{};
+		WASM::callCallableFrame(callable, frame.data());
+		int32_t result = 0;
+		std::memcpy(&result, frame.data(), sizeof(result));
+		return result;
+	};
+	const auto callI64x2 = [&](const WASM::Callable& callable,
+			int64_t a, int32_t b) -> int64_t {
+		if (!frameAbi)
+			return WASM::callCallable<int64_t>(callable, a, b);
+		alignas(16) std::array<std::uint8_t, 24> frame{};
+		std::memcpy(frame.data(), &a, sizeof(a));
+		std::memcpy(frame.data() + 8, &b, sizeof(b));
+		WASM::callCallableFrame(callable, frame.data());
+		int64_t result = 0;
+		std::memcpy(&result, frame.data() + 16, sizeof(result));
+		return result;
+	};
+
 	// call.wast's `as-mixed-operands`: swap(3,4) = (4,3); (3 + 5) * 4 = 32.
-	REQUIRE(WASM::callCallable<int32_t>(exported("mixed"), int32_t(3), int32_t(4)) == 32);
+	REQUIRE(callI32x2(exported("mixed"), 3, 4) == 32);
 
 	// Nested multi-result calls: swap(swap(3,4)) = (3,4); 3 + 4 = 7.
-	REQUIRE(WASM::callCallable<int32_t>(exported("nested")) == 7);
+	REQUIRE(callI32_0(exported("nested")) == 7);
 
 	// A mixed i64/i32 tuple: the i32 result is on top and is dropped.
-	REQUIRE(WASM::callCallable<int64_t>(exported("mixed64"), int64_t(1234), int32_t(1)) == 1234);
+	REQUIRE(callI64x2(exported("mixed64"), 1234, 1) == 1234);
 
 	// if.wast's `params-id-break`: the implicit else and `br 0` both yield (1,2).
-	REQUIRE(WASM::callCallable<int32_t>(exported("params_id_break"), int32_t(0)) == 3);
-	REQUIRE(WASM::callCallable<int32_t>(exported("params_id_break"), int32_t(1)) == 3);
+	REQUIRE(callI32(exported("params_id_break"), 0) == 3);
+	REQUIRE(callI32(exported("params_id_break"), 1) == 3);
 
 	// call_indirect to a multi-result callee: swap(3,4) = (4,3); 4 + 3 = 7.
-	REQUIRE(WASM::callCallable<int32_t>(exported("indirect"), int32_t(3), int32_t(4)) == 7);
+	REQUIRE(callI32x2(exported("indirect"), 3, 4) == 7);
 
 	// The host-side ABI: a multi-result export is `void f(VMContext*, params...,
 	// void* results)` (docs/ABI.md). `callCallableWithResults` is the typed
@@ -8768,7 +8816,20 @@ TEST_CASE("multi-value: JIT-to-JIT calls marshal every result")
 	auto swapExport = instance.exportedFunction("swap_export");
 	REQUIRE(swapExport.has_value());
 	alignas(16) unsigned char tuple[16] = {};
-	WASM::callCallableWithResults(*swapExport, tuple, int32_t(3), int32_t(4));
+	if (frameAbi) {
+		alignas(16) std::array<std::uint8_t, 32> frame{};
+		const int32_t a = 3;
+		const int32_t b = 4;
+		std::memcpy(frame.data(), &a, sizeof(a));
+		std::memcpy(frame.data() + 8, &b, sizeof(b));
+		WASM::callCallableFrame(*swapExport, frame.data());
+		// Frame results occupy one 8-byte slot each; the public multi-result
+		// tuple is packed, so copy the declared 4-byte fields individually.
+		std::memcpy(tuple, frame.data() + 16, 4);
+		std::memcpy(tuple + 4, frame.data() + 24, 4);
+	} else {
+		WASM::callCallableWithResults(*swapExport, tuple, int32_t(3), int32_t(4));
+	}
 	int32_t first = 0;
 	int32_t second = 0;
 	std::memcpy(&first, tuple, sizeof(first));

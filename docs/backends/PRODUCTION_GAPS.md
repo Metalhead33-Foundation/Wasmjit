@@ -1069,8 +1069,8 @@ uses a rejected artifact and confirms the runtime remains usable.
 | Backend | Verdict | Measured evidence |
 |---|---|---|
 | LibJIT | **Production-ready within its declared envelope** | default suite 22,442 assertions / 821 cases, green; x86-64 Linux only |
-| SLJIT | **Not production-ready** | `WASMJIT_BACKEND=sljit`: 821 cases, 720 passed, 101 failed; no crash |
-| AsmJIT | **Not production-ready** | `WASMJIT_BACKEND=asmjit`: 821 cases, 712 passed, 109 failed; no crash |
+| SLJIT | **Not production-ready** | `WASMJIT_BACKEND=sljit`: 821 cases, 724 passed, 97 failed; no crash |
+| AsmJIT | **Not production-ready** | `WASMJIT_BACKEND=asmjit`: 821 cases, 721 passed, 100 failed; no crash |
 
 The blockers are not just “unimplemented opcodes”:
 
@@ -1081,7 +1081,8 @@ The blockers are not just “unimplemented opcodes”:
   argument count must include the hidden `v128` result out-buffer. Remaining
   failures are stringref/relaxed-SIMD, GC arrays and some transport families.
   The legacy-EH rewrite itself is frontend desugaring, not a backend feature.
-* **AsmJIT:** `spec: func`, `spec: block`, `spec: br_table`, `spec: return`,
+* **AsmJIT:** `spec: func`, `spec: block`, `spec: br`, `spec: br_if`,
+  `spec: br_table`, `spec: if`, `spec: labels`, `spec: return`,
   `spec: unreachable` and `spec: switch` are green, including frame-form
   function-label branches and the multi-result tail-call fixture. `table.grow`,
   `v128` globals, the integer lane family and integer/float splat are
