@@ -4393,13 +4393,13 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
         signature.add_arg(asmjit::TypeId::kUIntPtr);
         signature.add_arg(asmjit::TypeId::kUInt32);
         signature.add_arg(asmjit::TypeId::kUIntPtr);
+        auto tableReg = compiler.new_gp32("tableFillIndex");
+        checkError(compiler.mov(tableReg, static_cast<uint32_t>(tableIndex)),
+                "AsmJit table.fill table index failed");
         asmjit::InvokeNode* invoke = nullptr;
         checkError(compiler.invoke(asmjit::Out(invoke),
                 reinterpret_cast<uint64_t>(&WASM::wasm_table_fill_args), signature),
                 "AsmJit table.fill helper call emission failed");
-        auto tableReg = compiler.new_gp32("tableFillIndex");
-        checkError(compiler.mov(tableReg, static_cast<uint32_t>(tableIndex)),
-                "AsmJit table.fill table index failed");
         invoke->set_arg(0, vmContext);
         invoke->set_arg(1, tableReg);
         invoke->set_arg(2, packedPtr);

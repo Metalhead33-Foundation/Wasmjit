@@ -5,6 +5,10 @@ CONFIG -= qt
 # (header-only; the same dependency WasmBase declares).
 CONFIG += link_pkgconfig
 PKGCONFIG += nlohmann_json
+# The test harness invokes register-form exports through libffi, as the SLJIT
+# backend session already does, so the backend's ABI is measured rather than a
+# hand-written list of C signatures.
+PKGCONFIG += libffi
 
 TARGET = WasmJit
 

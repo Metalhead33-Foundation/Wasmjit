@@ -1063,14 +1063,14 @@ uses a rejected artifact and confirms the runtime remains usable.
 
 ## 29. Production-readiness gaps -- SLJIT and AsmJIT (2026-11-07)
 
-**Snapshot (2026-11-08, working tree after the linking-context fix):** the detailed note is
+**Snapshot (2026-11-08, working tree after the libffi harness change):** the detailed note is
 [`PRODUCTION_READINESS.md`](../BACKEND_PRODUCTION_READINESS.md). The headline is:
 
 | Backend | Verdict | Measured evidence |
 |---|---|---|
 | LibJIT | **Production-ready within its declared envelope** | default suite 22,445 assertions / 821 cases, green; x86-64 Linux only |
-| SLJIT | **Not production-ready** | `WASMJIT_BACKEND=sljit`: 821 cases, 776 passed, 45 failed; no crash |
-| AsmJIT | **Not production-ready** | `WASMJIT_BACKEND=asmjit`: 821 cases, 767 passed, 54 failed; no crash |
+| SLJIT | **Not production-ready** | `WASMJIT_BACKEND=sljit`: 821 cases, 773 passed, 48 failed; no crash |
+| AsmJIT | **Not production-ready** | `WASMJIT_BACKEND=asmjit`: 821 cases, 769 passed, 52 failed; no crash |
 
 The blockers are not just “unimplemented opcodes”:
 
@@ -1094,9 +1094,9 @@ The blockers are not just “unimplemented opcodes”:
   accepts native imports through the register ABI, and no longer lets an import
   signature choose the module ABI. Relaxed SIMD, bitmask, i31, `ref_eq`, the
   extern/any bridge, GC arrays/structs and all reference casts/branches are
-  implemented. Remaining failures include `try_table`'s nested `catch-complex`
-  form, `atomic`, `throw`, `memory_trap` and `memory_grow64`. The linking
-  scripts are green.
+  implemented. `atomic`, `memory_trap`, `memory_grow64`, `table.fill` and the
+  linking scripts are green; the remaining spec failures are `throw` and
+  `try_table`'s nested `catch-complex` form.
 
 Promotion requires the full backend-selected suite to finish green (no abort,
 no segfault), the strict negative sweep to pass, the sanitizer run to be recorded,

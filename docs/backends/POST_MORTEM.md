@@ -2106,3 +2106,53 @@ AsmJIT  821 cases: 767 passed / 54 failed; no signal
   is null, falls back to the caller.
 * **When two backends fail one script identically, look above the backend
   seam.** The linking failures were a runner bug, not two code-generator bugs.
+
+
+## AsmJIT — measuring the register ABI, and `table.fill`'s call-site order
+
+### Intended
+
+Stop the AsmJIT spec run from mistaking a test-harness limitation for a backend
+capability. `AsmJITSession::invoke` enumerated C signatures by hand (all-i32, or
+a few reference shapes), so every other signature was reported as “could not
+marshal the arguments” and skipped.
+
+### Root cause and fix
+
+* `TestBackend` now calls the register form through libffi, as the SLJIT session
+  already did. The whole scalar/ref signature space the backend emits is
+  measurable; only `v128` remains outside this path.
+* That exposed a real AsmJIT bug in `table.fill`: the table-index virtual
+  register was created and defined **after** the invoke node. An argument
+  defined after the call site is not live at the call, so the helper received a
+  stale register (`5` instead of `0`) and filled the wrong table. The register is
+  now materialised before the invoke node, matching `emitMemoryAddress`'s rule.
+
+### Evidence
+
+```
+AsmJIT atomic        249/0
+AsmJIT memory_trap   182/0
+AsmJIT memory_grow64  49/0
+AsmJIT table_fill     36/0
+```
+
+Full serial runs:
+
+```
+SLJIT   821 cases: 773 passed / 48 failed; no signal
+AsmJIT  821 cases: 769 passed / 52 failed; no signal
+```
+
+AsmJIT's remaining spec failures are `throw` (dead polymorphic second throw) and
+`try_table`'s nested `catch-complex` form. SLJIT's are the typed-GC-reference
+`array.new_elem` and `array` cases.
+
+### Lessons
+
+* **A skip is not a pass.** The hand-written signature table hid `atomic`,
+  `memory_trap`, `memory_grow64` and `table.fill` behind “could not marshal”.
+  Using libffi made the measurement about the backend again.
+* **Materialise every call argument before its invoke node.** This is the same
+  rule that made memory addressing reliable; `table.fill` had one late
+  definition left.
