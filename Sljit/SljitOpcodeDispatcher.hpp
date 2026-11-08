@@ -1366,6 +1366,9 @@ private:
 
 	std::vector<int> stackWidths_; //!< Widths of the live operand stack, bottom first.
 	std::size_t maxStackDepth_ = 0; //!< High-water mark of the operand stack.
+	//! Operand depth the prologue reserved on the emitting pass. A push past it
+	//! is a compiler bug and is refused before SLJIT can assert.
+	std::size_t frameStackCapacity_ = 0;
 	std::vector<ControlFrame> controls_; //!< Active structured-control frames.
 	std::vector<sljit_jump*> trapJumps_; //!< Branches to the trap epilogue.
 	//! Body-entry label, the target of a direct self tail call.

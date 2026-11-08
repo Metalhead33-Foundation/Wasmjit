@@ -1189,6 +1189,12 @@ bool OpcodeDispatcher::compile(void*& entry)
 	if (!run(true))
 		return false;
 
+	// The prologue fixes the local area at the depth this pass measured. Keep the
+	// number as a hard capacity: a later pass that disagrees is a compiler bug,
+	// and emitting past the frame would abort the host inside SLJIT's argument
+	// checker instead of failing this one function.
+	frameStackCapacity_ = maxStackDepth_;
+
 	// Pass 2 emits. Any failure releases the compiler: no partially emitted
 	// function is ever installed.
 	if (!run(false)) {
@@ -1516,6 +1522,15 @@ void OpcodeDispatcher::emit(sljit_s32 status)
 
 void OpcodeDispatcher::push(int width)
 {
+	// In the emitting pass the frame is already fixed. Reaching past the measured
+	// high-water mark means the two passes disagree; refusing here keeps SLJIT's
+	// own argument assertion from aborting the host (docs/SAFETY.md).
+	if (!measureOnly_ && stackWidths_.size() >= frameStackCapacity_) {
+		unsupportedReason_ = "the SLJIT operand stack exceeds the measured frame in function "
+			+ std::to_string(functionIndex_);
+		ok_ = false;
+		throw UnsupportedBody{};
+	}
 	stackWidths_.push_back(width);
 	if (stackWidths_.size() > maxStackDepth_)
 		maxStackDepth_ = stackWidths_.size();
@@ -2166,6 +2181,13 @@ void OpcodeDispatcher::dispatchTryTable(const WASM::BlockType& type,
 		require(targetWidths == payloadCount + (carryExn ? 1u : 0u),
 				"the try_table catch arity does not match its target label");
 		if (measureOnly_) {
+			// A catch is a branch to the target label, even though the handler
+			// arm may be linearly unreachable when the try body always leaves.
+			// Mark the target exactly as `emitCatchBranch` does in the emitting
+			// pass, otherwise the arm's operand stack is measured as dead code
+			// and the frame is sized one slot too small.
+			if (target.kind != ControlKind::Loop)
+				target.endTargeted = true;
 			const std::size_t bound = target.baseDepth + targetWidths;
 			if (bound > maxStackDepth_)
 				maxStackDepth_ = bound;

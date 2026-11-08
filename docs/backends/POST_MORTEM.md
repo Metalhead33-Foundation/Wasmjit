@@ -811,3 +811,72 @@ dropped flag had been set.
   (the existing `slotAddress`) when a helper needs a stack address.
 * **A bulk-memory test must use a passive segment for `memory.init`.** Active
   segments are dropped at instantiation, exactly as the spec says.
+
+## Remaining-gap pass — SLJIT legacy-EH rethrow frame sizing
+
+### Intended
+
+Make the `[legacy-eh]` group finish under `WASMJIT_BACKEND=sljit`. The legacy
+exception rewrite is frontend desugaring (`docs/proposals/LEGACY_EXCEPTIONS.md`
+`LE-3`/`LE-4`); the remaining failure was in the SLJIT lowering of the rewritten
+final-form `try_table`.
+
+### Symptom
+
+The first eight cases passed, then the rethrow case aborted the process:
+
+```
+Assertion failed at extern/sljit/sljit_src/sljitLir.c:1708
+#4 sljit_emit_op1
+#5 Sljit::OpcodeDispatcher::dispatchI32Const(int)
+```
+
+That assertion is `FUNCTION_CHECK_SRC` rejecting a `SLJIT_MEM1(SLJIT_SP)`
+offset greater than or equal to `compiler->logical_local_size`. The function
+frame was one operand slot too small.
+
+### Root cause
+
+`try_table` catches are **edges**, not inline arms. `emitCatchBranch` writes the
+payload into the target block's base and jumps to that block's end label, and
+sets `target.endTargeted = true`. The measuring pass skips
+`emitExceptionPropagation` entirely (it emits no code), so it never performed
+that bookkeeping. `dispatchEnd` therefore treated the catch target as
+unreachable, did not push its result widths, and the catch arm that follows was
+measured as dead code.
+
+In the emitting pass the same target *was* marked by `emitCatchBranch`; the arm
+became reachable and its `i32.const` pushed one slot past the measured frame.
+The depth-measuring and emitting passes had silently diverged, which is exactly
+what the two-pass design is supposed to prevent.
+
+### Fix
+
+* `dispatchTryTable` now marks every non-loop catch target `endTargeted` in the
+  measuring pass, mirroring `emitCatchBranch` in the emitting pass. The target's
+  payload slots and the reachable catch arm are then included in the
+  high-water mark.
+* `push` now refuses a push past the measured frame in the emitting pass, and
+  records the function index in `unsupportedReason_`. A future pass divergence
+  becomes a clean per-function compile refusal instead of an SLJIT assertion
+  that aborts the host (`docs/SAFETY.md`).
+
+### Evidence
+
+```
+WASMJIT_BACKEND=sljit ./Test/WasmJit '[legacy-eh]' --rng-seed 12345
+All tests passed (110 assertions in 12 test cases)
+```
+
+This covers same-function rethrow, cross-function rethrow, a void catch-all
+rethrow and the cleanup/exit path.
+
+### Lessons
+
+* **A measuring pass must model every edge the emitting pass creates.** A catch
+  clause has control-flow consequences even though it has no inline body.
+* **“Unreachable” in the linear walk is not “unreachable” in the program.** A
+  handler target can be reachable only through an exception edge.
+* **Convert backend assertions into refusals at the first frame boundary.** The
+  new `push` guard is a last line of defence; the measured capacity remains the
+  primary contract.
