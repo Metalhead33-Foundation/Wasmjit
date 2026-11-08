@@ -2033,7 +2033,11 @@ OpcodeDispatcher::BlockSignature OpcodeDispatcher::blockSignature(const WASM::Bl
 			signature.results.push_back(16);
 			break;
 		default:
-			require(false, "the SLJIT backend only models i32, i64, f32 and f64 block types");
+			if (isReferenceKind(type.valType)) {
+				signature.results.push_back(8);
+				break;
+			}
+			require(false, "the SLJIT backend only models numeric, vector and reference block types");
 		}
 		return signature;
 	}
@@ -2307,6 +2311,8 @@ void OpcodeDispatcher::emitBranchTo(ControlFrame& target)
 
 void OpcodeDispatcher::dispatchBr(WASM::LabelIdx depth)
 {
+	if (!reachable_)
+		return;
 	require(reachable_, "a br appears in unreachable code");
 	require(depth <= controls_.size(), "the br label depth is out of range");
 	if (depth == controls_.size()) {
@@ -2321,6 +2327,8 @@ void OpcodeDispatcher::dispatchBr(WASM::LabelIdx depth)
 
 void OpcodeDispatcher::dispatchBrIf(WASM::LabelIdx depth)
 {
+	if (!reachable_)
+		return;
 	require(reachable_, "a br_if appears in unreachable code");
 	require(depth <= controls_.size(), "the br_if label depth is out of range");
 	requireStack(1);
@@ -2383,6 +2391,8 @@ void OpcodeDispatcher::dispatchBrIf(WASM::LabelIdx depth)
 void OpcodeDispatcher::dispatchBrTable(std::vector<WASM::LabelIdx>&& depths,
 		WASM::LabelIdx defaultDepth)
 {
+	if (!reachable_)
+		return;
 	require(reachable_, "a br_table appears in unreachable code");
 	requireStack(1);
 	require(stackWidths_.back() == 4, "the br_table selector must be an i32");
@@ -2490,6 +2500,8 @@ void OpcodeDispatcher::dispatchBrTable(std::vector<WASM::LabelIdx>&& depths,
 
 void OpcodeDispatcher::dispatchReturn()
 {
+	if (!reachable_)
+		return;
 	require(reachable_, "a return appears in unreachable code");
 	if (!measureOnly_)
 		emitReturnValue();
@@ -4443,6 +4455,8 @@ void OpcodeDispatcher::dispatchRefIsNull()
 
 void OpcodeDispatcher::dispatchBrOnNull(WASM::LabelIdx depth)
 {
+	if (!reachable_)
+		return;
 	require(reachable_, "a br_on_null appears in unreachable code");
 	require(depth <= controls_.size(), "the br_on_null label depth is out of range");
 	requireStack(1);
