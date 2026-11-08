@@ -140,8 +140,8 @@ void wasm_cont_resume_ops(VMContext* context, void* continuation,
 void* wasm_cont_bind_ops(VMContext* context, void* continuation,
 		uint64_t packedTypes, ContinuationOpFrame* frame) noexcept;
 
-/** \brief Suspends the current continuation with a typed tag payload. \param context Creation VM context. \param tagId Runtime tag id. \param frame Tag payload and resumed-result slots. */
-void wasm_cont_suspend_ops(VMContext* context, std::uint32_t tagId,
+/** \brief Suspends the current continuation with a typed tag payload. \param context Creation VM context. \param packedTags Low 32 bits module-local tag index, high 32 bits runtime tag id. \param frame Tag payload and resumed-result slots. */
+void wasm_cont_suspend_ops(VMContext* context, std::uint64_t packedTags,
 		ContinuationOpFrame* frame) noexcept;
 
 /** \brief Symmetrically switches to a peer continuation. \param context Creation VM context. \param continuation Target continuation. \param argCount Number of peer arguments. \param frame Argument/result slots. */

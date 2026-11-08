@@ -9612,8 +9612,13 @@ void OpcodeDispatcher::dispatchSuspend(WASM::TagIdx tag)
 	}
 	loadContext(SLJIT_R0);
 	emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R1, 0, SLJIT_IMM,
+			static_cast<sljit_sw>(tag)));
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R3, 0, SLJIT_IMM,
 			static_cast<sljit_sw>(internals_.tagIds[tag])));
-	emitHelper(SLJIT_ARGS3V(P, 32, P), &WASM::wasm_cont_suspend_ops);
+	emit(sljit_emit_op2(compiler_, SLJIT_SHL, SLJIT_R3, 0, SLJIT_R3, 0,
+			SLJIT_IMM, 32));
+	emit(sljit_emit_op2(compiler_, SLJIT_OR, SLJIT_R1, 0, SLJIT_R1, 0, SLJIT_R3, 0));
+	emitHelper(SLJIT_ARGS3V(P, W, P), &WASM::wasm_cont_suspend_ops);
 	emitPendingTrapCheck();
 	emitPendingExceptionCheck();
 	if (!reachable_) {

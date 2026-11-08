@@ -8367,14 +8367,15 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
 		signature.set_ret(asmjit::TypeId::kVoid);
 		signature.add_arg(asmjit::TypeId::kUIntPtr);
-		signature.add_arg(asmjit::TypeId::kUInt32);
+		signature.add_arg(asmjit::TypeId::kUInt64);
 		signature.add_arg(asmjit::TypeId::kUIntPtr);
 		asmjit::InvokeNode* invoke = nullptr;
 		checkError(compiler.invoke(asmjit::Out(invoke),
 				reinterpret_cast<uint64_t>(&WASM::wasm_cont_suspend_ops), signature),
 				"AsmJit suspend helper call failed");
 		invoke->set_arg(0, vmContext);
-		invoke->set_arg(1, asmjit::Imm(static_cast<uint32_t>(internals.tagIds[tag])));
+		invoke->set_arg(1, asmjit::Imm(static_cast<uint64_t>(tag)
+				| (static_cast<uint64_t>(internals.tagIds[tag]) << 32)));
 		invoke->set_arg(2, frameAddress);
 		emitPendingTrapReturn();
 		emitPendingExceptionCheck();

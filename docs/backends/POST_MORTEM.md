@@ -2400,12 +2400,26 @@ stack-switching switch performs a symmetric native-stack handoff
 stack-switching switch performs a symmetric host-thread handoff
 ```
 
-### Remaining caveat
+### Aggregate verification
 
-Running the whole `stack-switching*` filter in one process still exhausts
-continuation state after several tests. The opcode paths are present and pass
-individually; the remaining work is to identify the last worker/handle that
-outlives its test under aggregate ordering.
+The whole `stack-switching*` filter is green on both backends: **90 assertions in
+15 test cases**.
+
+### Final bug: runtime tag id vs module-local tag index
+
+The first aggregate run failed only when a module with another tag had been
+instantiated first. `wasm_cont_suspend_ops` was receiving the runtime `TagId`
+and also using it to index the module-local tag section for the payload type.
+Those are different namespaces. The helper now takes both in one packed word:
+low 32 bits module-local index, high 32 bits runtime id.
+
+### Lessons
+
+* **A tag has two identities.** The module-local index drives decoding and type
+  lookup; the runtime `TagId` drives matching. Never use one for the other.
+* Individual test success does not prove namespace correctness; a preceding
+  module that allocates another tag exposes the confusion.
+
 
 
 

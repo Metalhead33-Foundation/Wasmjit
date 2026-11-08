@@ -1991,7 +1991,7 @@ void* wasm_cont_bind_ops(VMContext* context, void* continuation,
 }
 
 
-void wasm_cont_suspend_ops(VMContext* context, std::uint32_t tagId,
+void wasm_cont_suspend_ops(VMContext* context, std::uint64_t packedTags,
 		ContinuationOpFrame* frame) noexcept
 {
 	try {
@@ -1999,7 +1999,9 @@ void wasm_cont_suspend_ops(VMContext* context, std::uint32_t tagId,
 			reportTrap(TrapKind::Internal, "suspend has no module context");
 			return;
 		}
-		const FuncType tag = tagFunctionType(*context->module, tagId);
+		const std::uint32_t tagIndex = static_cast<std::uint32_t>(packedTags);
+		const std::uint32_t runtimeTag = static_cast<std::uint32_t>(packedTags >> 32);
+		const FuncType tag = tagFunctionType(*context->module, tagIndex);
 		std::vector<std::uint8_t> argKinds;
 		argKinds.reserve(tag.params.size());
 		for (const StorageType& parameter : tag.params)
@@ -2009,7 +2011,7 @@ void wasm_cont_suspend_ops(VMContext* context, std::uint32_t tagId,
 		for (const StorageType& result : tag.results)
 			resultKinds.push_back(continuationKindOf(result.val.opcode));
 		std::uint32_t count = 0;
-		const std::int32_t resumed = wasm_cont_suspend_ex(static_cast<std::int32_t>(tagId),
+		const std::int32_t resumed = wasm_cont_suspend_ex(static_cast<std::int32_t>(runtimeTag),
 				frame->args, static_cast<std::uint32_t>(tag.params.size()),
 				argKinds.empty() ? nullptr : argKinds.data(),
 				frame->results, ContinuationOpFrame::kCapacity, &count,
