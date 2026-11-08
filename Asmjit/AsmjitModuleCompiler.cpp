@@ -9,6 +9,7 @@
 #include "../WasmBase/WasmStack.hpp"
 #include "../WasmBase/WasmStore.hpp"
 #include "../WasmBase/WasmStringOps.hpp"
+#include "../WasmBase/WasmRoundingOps.hpp"
 #include "../WasmBase/WasmContinuation.hpp"
 #include "../WasmBase/WasmTrap.hpp"
 #include "../WasmBase/WasmTracing.hpp"
@@ -7456,6 +7457,125 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 	{
 		// Compile-time-only marker: report the immediate and emit no instruction.
 		WASM::traceImmediate(immediate);
+	}
+
+	void dispatchRoundingVariant(uint32_t sub) override
+	{
+		if (inDeadCode())
+			return;
+		const uint32_t relative = (sub - 0x80u) % 0x14u;
+		const auto unary = [&](uint64_t helper, int width) {
+			if (values.empty())
+				throw std::runtime_error("AsmJit rounding operand underflow");
+			const auto bits = values.back(); values.pop_back();
+			const auto argument = materializeFloat(bits, width);
+			asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+			signature.set_ret(width == 4 ? asmjit::TypeId::kFloat32
+					: asmjit::TypeId::kFloat64);
+			signature.add_arg(asmjit::TypeId::kUInt32);
+			signature.add_arg(width == 4 ? asmjit::TypeId::kFloat32
+					: asmjit::TypeId::kFloat64);
+			asmjit::InvokeNode* invoke = nullptr;
+			checkError(compiler.invoke(asmjit::Out(invoke), helper, signature),
+					"AsmJit rounding unary helper failed");
+			invoke->set_arg(0, asmjit::Imm(sub));
+			invoke->set_arg(1, argument);
+			auto result = compiler.new_xmm("roundingResult");
+			invoke->set_ret(0, result);
+			values.push_back(bitsOfFloat(result, width));
+		};
+		const auto binary = [&](uint64_t helper, int width) {
+			if (values.size() < 2)
+				throw std::runtime_error("AsmJit rounding operand underflow");
+			const auto second = values.back(); values.pop_back();
+			const auto first = values.back(); values.pop_back();
+			const auto a = materializeFloat(first, width);
+			const auto b = materializeFloat(second, width);
+			asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+			signature.set_ret(width == 4 ? asmjit::TypeId::kFloat32
+					: asmjit::TypeId::kFloat64);
+			signature.add_arg(asmjit::TypeId::kUInt32);
+			signature.add_arg(width == 4 ? asmjit::TypeId::kFloat32
+					: asmjit::TypeId::kFloat64);
+			signature.add_arg(width == 4 ? asmjit::TypeId::kFloat32
+					: asmjit::TypeId::kFloat64);
+			asmjit::InvokeNode* invoke = nullptr;
+			checkError(compiler.invoke(asmjit::Out(invoke), helper, signature),
+					"AsmJit rounding binary helper failed");
+			invoke->set_arg(0, asmjit::Imm(sub));
+			invoke->set_arg(1, a);
+			invoke->set_arg(2, b);
+			auto result = compiler.new_xmm("roundingResult");
+			invoke->set_ret(0, result);
+			values.push_back(bitsOfFloat(result, width));
+		};
+		const auto convertInt = [&](uint64_t helper, int intWidth, int floatWidth) {
+			if (values.empty())
+				throw std::runtime_error("AsmJit rounding conversion underflow");
+			const auto source = values.back(); values.pop_back();
+			asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+			signature.set_ret(floatWidth == 4 ? asmjit::TypeId::kFloat32
+					: asmjit::TypeId::kFloat64);
+			signature.add_arg(asmjit::TypeId::kUInt32);
+			signature.add_arg(intWidth == 4 ? asmjit::TypeId::kInt32
+					: asmjit::TypeId::kInt64);
+			asmjit::InvokeNode* invoke = nullptr;
+			checkError(compiler.invoke(asmjit::Out(invoke), helper, signature),
+					"AsmJit rounding conversion helper failed");
+			invoke->set_arg(0, asmjit::Imm(sub));
+			invoke->set_arg(1, source);
+			auto result = compiler.new_xmm("roundingResult");
+			invoke->set_ret(0, result);
+			values.push_back(bitsOfFloat(result, floatWidth));
+		};
+		const auto convertFloat = [&](uint64_t helper, int sourceWidth, int resultWidth) {
+			if (values.empty())
+				throw std::runtime_error("AsmJit rounding conversion underflow");
+			const auto bits = values.back(); values.pop_back();
+			const auto argument = materializeFloat(bits, sourceWidth);
+			asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+			signature.set_ret(resultWidth == 4 ? asmjit::TypeId::kFloat32
+					: asmjit::TypeId::kFloat64);
+			signature.add_arg(asmjit::TypeId::kUInt32);
+			signature.add_arg(sourceWidth == 4 ? asmjit::TypeId::kFloat32
+					: asmjit::TypeId::kFloat64);
+			asmjit::InvokeNode* invoke = nullptr;
+			checkError(compiler.invoke(asmjit::Out(invoke), helper, signature),
+					"AsmJit rounding float conversion failed");
+			invoke->set_arg(0, asmjit::Imm(sub));
+			invoke->set_arg(1, argument);
+			auto result = compiler.new_xmm("roundingResult");
+			invoke->set_ret(0, result);
+			values.push_back(bitsOfFloat(result, resultWidth));
+		};
+
+		if (relative < 5) {
+			if (relative == 0)
+				unary(reinterpret_cast<uint64_t>(&wasm_rounding_f32_unary), 4);
+			else
+				binary(reinterpret_cast<uint64_t>(&wasm_rounding_f32_binary), 4);
+		} else if (relative < 10) {
+			if (relative == 5)
+				unary(reinterpret_cast<uint64_t>(&wasm_rounding_f64_unary), 8);
+			else
+				binary(reinterpret_cast<uint64_t>(&wasm_rounding_f64_binary), 8);
+		} else if (relative < 15) {
+			switch (relative) {
+			case 10: convertInt(reinterpret_cast<uint64_t>(&wasm_rounding_i32_s_to_f32), 4, 4); break;
+			case 11: convertInt(reinterpret_cast<uint64_t>(&wasm_rounding_i32_u_to_f32), 4, 4); break;
+			case 12: convertInt(reinterpret_cast<uint64_t>(&wasm_rounding_i64_s_to_f32), 8, 4); break;
+			case 13: convertInt(reinterpret_cast<uint64_t>(&wasm_rounding_i64_u_to_f32), 8, 4); break;
+			default: convertFloat(reinterpret_cast<uint64_t>(&wasm_rounding_f64_to_f32), 8, 4); break;
+			}
+		} else {
+			switch (relative) {
+			case 15: convertInt(reinterpret_cast<uint64_t>(&wasm_rounding_i32_s_to_f64), 4, 8); break;
+			case 16: convertInt(reinterpret_cast<uint64_t>(&wasm_rounding_i32_u_to_f64), 4, 8); break;
+			case 17: convertInt(reinterpret_cast<uint64_t>(&wasm_rounding_i64_s_to_f64), 8, 8); break;
+			case 18: convertInt(reinterpret_cast<uint64_t>(&wasm_rounding_i64_u_to_f64), 8, 8); break;
+			default: convertFloat(reinterpret_cast<uint64_t>(&wasm_rounding_f32_to_f64), 4, 8); break;
+			}
+		}
 	}
 
 	void dispatchMemoryDiscard(WASM::MemIdx memory) override

@@ -1467,6 +1467,7 @@ private:
 	void dispatchStringEq() override; //!< `string.eq`.
 	void dispatchStringIsUsvSequence() override; //!< `string.is_usv_sequence`.
 	void dispatchI32Itt(std::uint32_t immediate) override; //!< `i32.itt` compile-time marker.
+	void dispatchRoundingVariant(std::uint32_t sub) override; //!< Rounding-mode variants.
 	void dispatchMemoryDiscard(WASM::MemIdx memory) override; //!< `memory.discard`.
 	void dispatchStringNewUtf8(WASM::MemIdx memory) override; //!< `string.new_utf8`.
 	void dispatchStringNewLossyUtf8(WASM::MemIdx memory) override; //!< `string.new_lossy_utf8`.

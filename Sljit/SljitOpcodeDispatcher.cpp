@@ -12,6 +12,7 @@
 #include "../WasmBase/WasmStack.hpp"
 #include "../WasmBase/WasmStore.hpp"
 #include "../WasmBase/WasmStringOps.hpp"
+#include "../WasmBase/WasmRoundingOps.hpp"
 #include "../WasmBase/WasmTrap.hpp"
 #include "../WasmBase/WasmTracing.hpp"
 #include "../WasmBase/WasmVMContext.hpp"
@@ -10156,6 +10157,102 @@ void OpcodeDispatcher::emitTrapDetail(const char* detail)
 	for (std::size_t i = 0; i < 4; ++i)
 		emit(sljit_emit_op1(compiler_, SLJIT_MOV, parked[i], 0, SLJIT_MEM1(SLJIT_SP),
 				payloadSlotOffset(i)));
+}
+
+void OpcodeDispatcher::dispatchRoundingVariant(std::uint32_t sub)
+{
+	if (!reachable_)
+		return;
+	const std::uint32_t relative = (sub - 0x80u) % 0x14u;
+	const bool unary = relative == 0 || relative == 5;
+	std::size_t operandCount = 1;
+	int resultWidth = 4;
+	if (relative < 5) {
+		operandCount = relative == 0 ? 1 : 2;
+		resultWidth = 4;
+	} else if (relative < 10) {
+		operandCount = relative == 5 ? 1 : 2;
+		resultWidth = 8;
+	} else if (relative < 15) {
+		operandCount = 1;
+		resultWidth = 4;
+	} else {
+		operandCount = 1;
+		resultWidth = 8;
+	}
+	(void)unary;
+	requireStack(operandCount);
+	const std::size_t base = stackWidths_.size() - operandCount;
+	if (measureOnly_) {
+		for (std::size_t i = 0; i < operandCount; ++i)
+			pop();
+		push(resultWidth);
+		return;
+	}
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R0, 0, SLJIT_IMM,
+			static_cast<sljit_sw>(sub)));
+	if (relative < 5) {
+		if (relative == 0) {
+			loadFloatSlot(SLJIT_FR0, base, 4);
+			emitHelper(SLJIT_ARGS2(F32, 32, F32), &wasm_rounding_f32_unary);
+		} else {
+			loadFloatSlot(SLJIT_FR0, base, 4);
+			loadFloatSlot(SLJIT_FR1, base + 1, 4);
+			emitHelper(SLJIT_ARGS3(F32, 32, F32, F32), &wasm_rounding_f32_binary);
+		}
+		storeFloatSlot(SLJIT_FR0, base, 4);
+	} else if (relative < 10) {
+		if (relative == 5) {
+			loadFloatSlot(SLJIT_FR0, base, 8);
+			emitHelper(SLJIT_ARGS2(F64, 32, F64), &wasm_rounding_f64_unary);
+		} else {
+			loadFloatSlot(SLJIT_FR0, base, 8);
+			loadFloatSlot(SLJIT_FR1, base + 1, 8);
+			emitHelper(SLJIT_ARGS3(F64, 32, F64, F64), &wasm_rounding_f64_binary);
+		}
+		storeFloatSlot(SLJIT_FR0, base, 8);
+	} else if (relative < 15) {
+		switch (relative) {
+		case 10:
+			loadSlot(SLJIT_R1, base, 4);
+			emitHelper(SLJIT_ARGS2(F32, 32, 32), &wasm_rounding_i32_s_to_f32); break;
+		case 11:
+			loadSlot(SLJIT_R1, base, 4);
+			emitHelper(SLJIT_ARGS2(F32, 32, 32), &wasm_rounding_i32_u_to_f32); break;
+		case 12:
+			loadSlot(SLJIT_R1, base, 8);
+			emitHelper(SLJIT_ARGS2(F32, 32, W), &wasm_rounding_i64_s_to_f32); break;
+		case 13:
+			loadSlot(SLJIT_R1, base, 8);
+			emitHelper(SLJIT_ARGS2(F32, 32, W), &wasm_rounding_i64_u_to_f32); break;
+		default:
+			loadFloatSlot(SLJIT_FR0, base, 8);
+			emitHelper(SLJIT_ARGS2(F32, 32, F64), &wasm_rounding_f64_to_f32); break;
+		}
+		storeFloatSlot(SLJIT_FR0, base, 4);
+	} else {
+		switch (relative) {
+		case 15:
+			loadSlot(SLJIT_R1, base, 4);
+			emitHelper(SLJIT_ARGS2(F64, 32, 32), &wasm_rounding_i32_s_to_f64); break;
+		case 16:
+			loadSlot(SLJIT_R1, base, 4);
+			emitHelper(SLJIT_ARGS2(F64, 32, 32), &wasm_rounding_i32_u_to_f64); break;
+		case 17:
+			loadSlot(SLJIT_R1, base, 8);
+			emitHelper(SLJIT_ARGS2(F64, 32, W), &wasm_rounding_i64_s_to_f64); break;
+		case 18:
+			loadSlot(SLJIT_R1, base, 8);
+			emitHelper(SLJIT_ARGS2(F64, 32, W), &wasm_rounding_i64_u_to_f64); break;
+		default:
+			loadFloatSlot(SLJIT_FR0, base, 4);
+			emitHelper(SLJIT_ARGS2(F64, 32, F32), &wasm_rounding_f32_to_f64); break;
+		}
+		storeFloatSlot(SLJIT_FR0, base, 8);
+	}
+	for (std::size_t i = 0; i < operandCount; ++i)
+		pop();
+	push(resultWidth);
 }
 
 void OpcodeDispatcher::dispatchMemoryDiscard(WASM::MemIdx memory)

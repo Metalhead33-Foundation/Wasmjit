@@ -2362,7 +2362,40 @@ Default 22,448 assertions in 821 cases, green
   range and layout are part of the helper contract now.
 
 
-## Relaxed dead-code block parameters
+## Rounding-mode variants
+
+### Fix
+
+* Moved the exact (`long double`) rounding semantics into the shared
+  `WasmRoundingOps` C helpers: f32/f64 unary and binary arithmetic, and the
+  ten int/float conversions, each taking the raw sub-opcode.
+* Both backends lower the single `dispatchRoundingVariant` hook by selecting
+  the helper and operand/result widths from `(sub - 0x80) % 20`.
+* Added the new public header to the backend tier and its compile-only TU.
+
+### Evidence
+
+```
+SLJIT   rounding variants   13/13
+AsmJIT  rounding variants   13/13
+Default 22,451 assertions in 821 cases, green
+```
+
+Full serial runs:
+
+```
+SLJIT   821 cases: 813 passed / 8 failed
+AsmJIT  821 cases: 809 passed / 12 failed
+```
+
+### Lessons
+
+* **Round from the exact intermediate, not the host FP mode.** Casting before
+  applying the requested direction double-rounds values such as 16777217.
+* **A new public header has two obligations**: a tier entry and a
+  compile-only TU. The `[tiers]` count must be bumped with it.
+
+
 
 ### Fix
 

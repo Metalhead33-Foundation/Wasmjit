@@ -63,6 +63,7 @@ SOURCES += \
         WasmOpcodeDispatcher.cpp \
         WasmRegistryImportResolver.cpp \
         WasmRuntime.cpp \
+        WasmRoundingOps.cpp \
         WasmSection.cpp \
         WasmStack.cpp \
         WasmStore.cpp \
@@ -120,6 +121,7 @@ HEADERS += \
     WasmProfile.hpp \
     WasmRegistryImportResolver.hpp \
     WasmRuntime.hpp \
+    WasmRoundingOps.hpp \
     WasmSafety.hpp \
     WasmSection.hpp \
     WasmStack.hpp \
