@@ -32,6 +32,16 @@ WASMJIT_VISIBLE_BEGIN
 #include <vector>
 namespace WASM {
 
+/** \brief Performs the reference write barrier for a global cell. \param context Module context. \param globalIndex Global index. \param value New reference value. */
+WASMJIT_API void wasm_global_set_ref(VMContext* context, uint32_t globalIndex,
+		void* value) noexcept;
+
+/** \brief Retains one ownership count of a reference. \param context Module context. \param value Reference value. \return The same reference value. */
+WASMJIT_API void* wasm_ref_clone(VMContext* context, void* value) noexcept;
+
+/** \brief Releases one ownership count of a reference. \param context Module context. \param value Reference value. */
+WASMJIT_API void wasm_ref_drop(VMContext* context, void* value) noexcept;
+
 //! Forward declarations
 class ModuleInstantiator;
 class StoreOwnedTable;

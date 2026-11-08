@@ -2517,6 +2517,53 @@ void ModuleInstance::refStore(void** slot, void* newRef)
 	refDrop(old);       // then release the value we overwrote
 }
 
+void wasm_global_set_ref(VMContext* context, uint32_t globalIndex,
+		void* value) noexcept
+{
+	try {
+		if (context == nullptr || context->globals == nullptr) {
+			reportTrap(TrapKind::Internal, "global.set has no global cells");
+			return;
+		}
+		Value* cell = context->globals[globalIndex];
+		if (cell == nullptr) {
+			reportTrap(TrapKind::Internal, "global.set cell is null");
+			return;
+		}
+		// The VMContext is the first member, so the instance address is the
+		// context address (the same convention the reference helpers use).
+		auto* instance = reinterpret_cast<ModuleInstance*>(context);
+		instance->refStore(&cell->ref, value);
+	} catch (...) {
+		reportTrap(TrapKind::Internal);
+	}
+}
+
+void* wasm_ref_clone(VMContext* context, void* value) noexcept
+{
+	try {
+		if (context == nullptr || value == nullptr)
+			return value;
+		auto* instance = reinterpret_cast<ModuleInstance*>(context);
+		return instance->refClone(value);
+	} catch (...) {
+		reportTrap(TrapKind::Internal);
+		return value;
+	}
+}
+
+void wasm_ref_drop(VMContext* context, void* value) noexcept
+{
+	try {
+		if (context == nullptr || value == nullptr)
+			return;
+		auto* instance = reinterpret_cast<ModuleInstance*>(context);
+		instance->refDrop(value);
+	} catch (...) {
+		reportTrap(TrapKind::Internal);
+	}
+}
+
 void ModuleInstance::reclaimGcObject(void* ref)
 {
 	// MF-3: another agent's safepoint may be collecting at the same time; the

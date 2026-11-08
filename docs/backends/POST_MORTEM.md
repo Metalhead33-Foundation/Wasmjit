@@ -2362,7 +2362,51 @@ Default 22,448 assertions in 821 cases, green
   range and layout are part of the helper contract now.
 
 
-## String ownership on `drop`
+## Reference barriers at globals and locals
+
+### Intended
+
+Make externref/host-reference counts survive `global.set`, `global.get` and
+reference `local.get`, including the host bridge callbacks.
+
+### Fix
+
+* Added `wasm_global_set_ref` (a `ModuleInstance::refStore` write barrier),
+  `wasm_ref_clone` and `wasm_ref_drop`.
+* `global.set` on a reference calls the write barrier and then releases the
+  operand stack's count.
+* `global.get` and reference `local.get` clone the loaded reference, so the
+  operand stack owns its own count.
+* AsmJIT now records each local's declared kind for the barrier decision;
+  SLJIT already had `localKinds_`.
+* Both backends implement the reference arm of `global.set` instead of a raw
+  8-byte store.
+
+### Evidence
+
+```
+SLJIT   host bridge reference callbacks   17/17
+AsmJIT  host bridge reference callbacks   17/17
+SLJIT   native imports round-trip refs    19/19
+AsmJIT  native imports round-trip refs    19/19
+```
+
+Full serial runs:
+
+```
+SLJIT   821 cases: 796 passed / 25 failed; no signal
+AsmJIT  821 cases: 791 passed / 30 failed; no signal
+Default 22,448 assertions in 821 cases, green
+```
+
+### Lessons
+
+* **A global reference cell is a barrier slot, not an `i64`.** A raw store
+  silently breaks host counts even when every value is otherwise correct.
+* **Loads from a global/local borrow; the operand stack needs an owned clone.**
+  Without that, a later `drop` or store would release somebody else's count.
+
+
 
 ### Intended
 

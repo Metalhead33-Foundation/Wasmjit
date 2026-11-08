@@ -3709,6 +3709,14 @@ void OpcodeDispatcher::dispatchLocalGet(WASM::LocalIdx arg)
 	emit(sljit_emit_op1(compiler_, localWidths_[arg] == 4 ? SLJIT_MOV_U32 : SLJIT_MOV,
 			SLJIT_R0, 0, SLJIT_MEM1(SLJIT_SP), localSlotOffset(arg)));
 	storeSlot(SLJIT_R0, stackWidths_.size() - 1, localWidths_[arg]);
+	if (isReferenceKind(localKinds_[arg])) {
+		const std::size_t depth = stackWidths_.size() - 1;
+		loadContext(SLJIT_R0);
+		loadSlot(SLJIT_R1, depth, 8);
+		emitHelper(SLJIT_ARGS2(P, P, P), &WASM::wasm_ref_clone);
+		storeSlot(SLJIT_R0, depth, 8);
+		emitPendingTrapCheck();
+	}
 }
 
 void OpcodeDispatcher::dispatchLocalSet(WASM::LocalIdx arg)
@@ -6925,6 +6933,13 @@ void OpcodeDispatcher::dispatchGlobalGet(WASM::GlobalIdx arg)
 			static_cast<sljit_sw>(width == 4 ? offsetof(WASM::Value, i32)
 					: offsetof(WASM::Value, i64))));
 	storeSlot(SLJIT_R1, depth, width);
+	if (isReferenceKind(type.contentType.opcode)) {
+		loadContext(SLJIT_R0);
+		loadSlot(SLJIT_R1, depth, 8);
+		emitHelper(SLJIT_ARGS2(P, P, P), &WASM::wasm_ref_clone);
+		storeSlot(SLJIT_R0, depth, 8);
+		emitPendingTrapCheck();
+	}
 }
 
 void OpcodeDispatcher::dispatchGlobalSet(WASM::GlobalIdx arg)
@@ -6937,6 +6952,21 @@ void OpcodeDispatcher::dispatchGlobalSet(WASM::GlobalIdx arg)
 	pop();
 	if (measureOnly_)
 		return;
+	if (isReferenceKind(type.contentType.opcode)) {
+		const std::size_t depth = stackWidths_.size();
+		loadContext(SLJIT_R0);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R1, 0, SLJIT_IMM,
+				static_cast<sljit_sw>(arg)));
+		loadSlot(SLJIT_R2, depth, 8);
+		emitHelper(SLJIT_ARGS3V(P, 32, P), &WASM::wasm_global_set_ref);
+		emitPendingTrapCheck();
+		// The operand stack owned this reference; the store retained its own.
+		loadContext(SLJIT_R0);
+		loadSlot(SLJIT_R1, depth, 8);
+		emitHelper(SLJIT_ARGS2V(P, P), &WASM::wasm_ref_drop);
+		emitPendingTrapCheck();
+		return;
+	}
 	const int width = widthOf(type.contentType);
 	// An exported global is host-observable (docs/proposals/PROFILES.md PR-3).
 	// Canonicalise before walking the `VMContext` in R0, because the helper call

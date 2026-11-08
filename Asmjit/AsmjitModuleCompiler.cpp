@@ -1392,8 +1392,11 @@ public:
 			}
 		}
 		localWidths.reserve(stack.allLocals.size());
-		for (const auto& local : stack.allLocals)
+		localKinds.reserve(stack.allLocals.size());
+		for (const auto& local : stack.allLocals) {
 			localWidths.push_back(slotWidthOf(local.opcode));
+			localKinds.push_back(local.opcode);
+		}
 		// The body-entry label is the loop target of a direct self tail call; the
 		// prologue above (context, trap slot, locals) has already run for this frame.
 		bodyStart = compiler.new_label();
@@ -1522,6 +1525,8 @@ protected:
 		asmjit::x86::Gp copy = locals[i].size() == 8
 				? compiler.new_gp64("localCopy") : compiler.new_gp32("localCopy");
 		checkError(compiler.mov(copy, locals[i]), "AsmJit local.get emission failed");
+		if (isReferenceKind(localKinds[i]))
+			copy = emitRefClone(copy);
 		values.push_back(copy);
 	}
 
@@ -1580,6 +1585,38 @@ protected:
 	{
 		values.push_back(value);
 		stringValues.insert(value.id());
+	}
+
+	asmjit::x86::Gp emitRefClone(const asmjit::x86::Gp& value)
+	{
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke),
+				reinterpret_cast<uint64_t>(&WASM::wasm_ref_clone), signature),
+				"AsmJit reference clone helper call failed");
+		invoke->set_arg(0, vmContext);
+		invoke->set_arg(1, value);
+		auto result = compiler.new_gp_ptr("referenceClone");
+		invoke->set_ret(0, result);
+		return result;
+	}
+
+	void emitRefDrop(const asmjit::x86::Gp& value)
+	{
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kVoid);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke),
+				reinterpret_cast<uint64_t>(&WASM::wasm_ref_drop), signature),
+				"AsmJit reference drop helper call failed");
+		invoke->set_arg(0, vmContext);
+		invoke->set_arg(1, value);
+		emitPendingTrapReturn();
 	}
 
 	void dispatchDrop() override
@@ -9149,6 +9186,8 @@ private:
 					static_cast<int32_t>(offsetof(WASM::Value, i32)))),
 					"AsmJit 32-bit global.get load failed");
 		}
+		if (isReferenceKind(type.contentType.opcode))
+			value = emitRefClone(value);
 		values.push_back(value);
 	}
 
@@ -9162,6 +9201,24 @@ private:
 		if (values.empty())
 			throw std::runtime_error("AsmJit global.set operand stack underflow");
 		auto value = values.back(); values.pop_back();
+		if (isReferenceKind(type.contentType.opcode)) {
+			asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+			signature.set_ret(asmjit::TypeId::kVoid);
+			signature.add_arg(asmjit::TypeId::kUIntPtr);
+			signature.add_arg(asmjit::TypeId::kUInt32);
+			signature.add_arg(asmjit::TypeId::kUIntPtr);
+			asmjit::InvokeNode* invoke = nullptr;
+			checkError(compiler.invoke(asmjit::Out(invoke),
+					reinterpret_cast<uint64_t>(&WASM::wasm_global_set_ref), signature),
+					"AsmJit global.set reference barrier call failed");
+			invoke->set_arg(0, vmContext);
+			invoke->set_arg(1, asmjit::Imm(static_cast<uint32_t>(index)));
+			invoke->set_arg(2, value);
+			emitPendingTrapReturn();
+			// The operand stack owned this reference; the store retained its own.
+			emitRefDrop(value);
+			return;
+		}
 		// An exported global is host-observable
 		// (docs/proposals/PROFILES.md PR-3).
 		const asmjit::x86::Gp stored = isFloatKind(type.contentType.opcode)
@@ -9710,6 +9767,8 @@ private:
 	//! (docs/proposals/PROFILES.md PR-3).
 	const bool deterministicFloats = false;
 	std::vector<asmjit::x86::Gp> locals;
+	//! Declared type of every local, for reference barriers.
+	std::vector<WASM::ValueTypeCode> localKinds;
 	//! Slot width of every local (4/8, or 16 for a v128 buffer).
 	std::vector<int> localWidths;
 	std::vector<asmjit::x86::Gp> values;
