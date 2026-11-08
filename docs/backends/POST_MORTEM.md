@@ -1966,4 +1966,59 @@ AsmJIT  821 cases: 764 passed / 57 failed; no signal
 * **Null handling is per-instruction, not per-type.** `ref.cast` on null is a
   cast failure; `ref.as_non_null` on null is `null reference`.
 
+
+## SLJIT switch/call_indirect64 and AsmJIT unreachable valid code
+
+### Intended
+
+Close SLJIT `switch` and `call_indirect64`, and make AsmJIT accept valid
+polymorphic dead code (`unreached-valid`).
+
+### Root cause
+
+* SLJIT `i32.wrap_i64` returned from the measuring pass without changing the
+  result width, so a following `br_table` saw an i64 selector.
+* SLJIT `call_indirect` required an i32 selector even on a 64-bit table. The
+  table64 flag was already known but not used for the selector width.
+* AsmJIT ref operations asserted on an empty value stack in unreachable code.
+  Valid polymorphic code may contain such instructions after `unreachable`.
+
+### Fix
+
+* `i32.wrap_i64` sets the i32 width in both passes.
+* Both `call_indirect` and `return_call_indirect` derive the selector width from
+  the table's 64-bit flag.
+* Added `inDeadCode()` guards to AsmJIT `ref.is_null`, `ref.as_non_null`,
+  `ref.eq`, `ref.cast`/`ref.test` and the extern conversion helpers.
+* A throw-terminator experiment was reverted: setting `armTerminated` after
+  `throw` made `throw_ref` catch clauses disappear (linear catch arms were
+  skipped). `throw_ref` stays green; `throw`'s dead polymorphic second throw
+  remains the known gap.
+
+### Evidence
+
+```
+SLJIT switch            27/0
+SLJIT call_indirect64    2/0
+AsmJIT unreached-valid  12/0
+AsmJIT throw_ref        13/0
+```
+
+Full serial runs:
+
+```
+SLJIT   821 cases: 773 passed / 48 failed; no signal
+AsmJIT  821 cases: 765 passed / 56 failed; no signal
+```
+
+### Lessons
+
+* **Measure-pass widths keep recurring.** `i32.wrap_i64` is the same class as
+  `eqz`/`compare`; every width-changing opcode needs both passes.
+* **A table's index width is a property of the table, not the instruction.**
+  `call_indirect` and `return_call_indirect` must read the table64 flag.
+* **EH-aware dead-code tests are not the same as terminator state.** A throw
+  inside a try_table must leave the linear catch arms reachable; marking the
+  arm globally terminated hides them.
+
   understood.

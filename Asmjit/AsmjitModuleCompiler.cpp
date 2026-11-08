@@ -5355,6 +5355,8 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 
 	void dispatchRefIsNull() override
 	{
+		if (inDeadCode())
+			return;
 		if (values.empty())
 			throw std::runtime_error("AsmJit ref.is_null operand underflow");
 		auto reference = values.back();
@@ -6774,6 +6776,8 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 
 	void emitRefCast(const WASM::HeapType& arg, bool nullable)
 	{
+		if (inDeadCode())
+			return;
 		if (values.empty())
 			throw std::runtime_error("AsmJit ref.cast operand stack underflow");
 		auto reference = values.back();
@@ -6828,6 +6832,8 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 
 	void emitRefTest(const WASM::HeapType& arg, bool nullable)
 	{
+		if (inDeadCode())
+			return;
 		if (values.empty())
 			throw std::runtime_error("AsmJit ref.test operand stack underflow");
 		auto reference = values.back();
@@ -6859,6 +6865,8 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 
 	void dispatchRefAsNonNull() override
 	{
+		if (inDeadCode())
+			return;
 		if (values.empty())
 			throw std::runtime_error("AsmJit ref.as_non_null operand underflow");
 		auto reference = values.back();
@@ -6877,6 +6885,8 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 
 	void dispatchRefEq() override
 	{
+		if (inDeadCode())
+			return;
 		if (values.size() < 2)
 			throw std::runtime_error("AsmJit ref.eq operand underflow");
 		auto rhs = values.back();

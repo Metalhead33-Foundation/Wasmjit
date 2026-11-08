@@ -1069,8 +1069,8 @@ uses a rejected artifact and confirms the runtime remains usable.
 | Backend | Verdict | Measured evidence |
 |---|---|---|
 | LibJIT | **Production-ready within its declared envelope** | default suite 22,445 assertions / 821 cases, green; x86-64 Linux only |
-| SLJIT | **Not production-ready** | `WASMJIT_BACKEND=sljit`: 821 cases, 771 passed, 50 failed; no crash |
-| AsmJIT | **Not production-ready** | `WASMJIT_BACKEND=asmjit`: 821 cases, 764 passed, 57 failed; no crash |
+| SLJIT | **Not production-ready** | `WASMJIT_BACKEND=sljit`: 821 cases, 773 passed, 48 failed; no crash |
+| AsmJIT | **Not production-ready** | `WASMJIT_BACKEND=asmjit`: 821 cases, 765 passed, 56 failed; no crash |
 
 The blockers are not just “unimplemented opcodes”:
 
@@ -1083,8 +1083,8 @@ The blockers are not just “unimplemented opcodes”:
   reachability, `call_ref`, `return_call`, `return_call_indirect` and
   `return_call_ref`. The latest batches also closed relaxed SIMD, bitmask, i31,
   `ref_eq`, GC arrays/structs, and all reference casts/branches. Remaining
-  failures are SLJIT's typed-GC-reference `array.new_elem`, `try_table`,
-  `switch`, `call_indirect64` and linking.
+  failures are SLJIT's typed-GC-reference `array.new_elem`, `try_table` and
+  linking.
   The legacy-EH rewrite itself is frontend desugaring, not a backend feature.
 * **AsmJIT:** `spec: func`, `spec: block`, `spec: br`, `spec: br_if`,
   `spec: br_table`, `spec: if`, `spec: labels`, `spec: return`,
@@ -1096,8 +1096,7 @@ The blockers are not just “unimplemented opcodes”:
   signature choose the module ABI. Relaxed SIMD, bitmask, i31, `ref_eq`, the
   extern/any bridge, GC arrays/structs and all reference casts/branches are
   implemented. Remaining failures include `try_table`, `atomic`, `throw`,
-  `unreached-valid`, `memory_trap`, `memory_grow64` and the linking/import
-  allocation cases.
+  `memory_trap`, `memory_grow64` and the linking/import allocation cases.
 
 Promotion requires the full backend-selected suite to finish green (no abort,
 no segfault), the strict negative sweep to pass, the sanitizer run to be recorded,

@@ -3060,6 +3060,10 @@ void OpcodeDispatcher::emitCallIndirect(WASM::TypeIdx typeIndex, WASM::TableIdx 
 	requireTableIndex(tableIndex);
 	require(static_cast<std::uint32_t>(typeIndex) < module_.typeCount(),
 			"the call_indirect type index is out of range");
+	const bool table64 = tableIndex < module_.importTables.size()
+			? (module_.importTables[tableIndex].table.limits.flags & 0x04) != 0
+			: (module_.tables[tableIndex - module_.importTables.size()].limits.flags & 0x04) != 0;
+	const int selectorWidth = table64 ? 8 : 4;
 	const WASM::FuncType calledType = module_.funcTypeAt(typeIndex);
 	if (0 == static_cast<int>(frameAbi_))
 		require(calledType.params.size() <= kMaxWasmParameters,
@@ -3071,7 +3075,7 @@ void OpcodeDispatcher::emitCallIndirect(WASM::TypeIdx typeIndex, WASM::TableIdx 
 	for (const WASM::StorageType& result : calledType.results)
 		require(widthOf(result.val) != 0, "the SLJIT backend only calls i32/i64 signatures");
 	requireStack(calledType.params.size() + 1);
-	require(stackWidths_.back() == 4, "the call_indirect selector must be an i32");
+	require(stackWidths_.back() == selectorWidth, "the call_indirect selector width does not match its table");
 	// The selector sits above the arguments; consume it before the shared call
 	// path computes the argument-slot base.
 	const std::size_t selectorDepth = stackWidths_.size() - 1;
@@ -3081,7 +3085,7 @@ void OpcodeDispatcher::emitCallIndirect(WASM::TypeIdx typeIndex, WASM::TableIdx 
 		loadContext(SLJIT_R0);
 		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R1, 0, SLJIT_IMM,
 				static_cast<sljit_sw>(tableIndex)));
-		loadSlot(SLJIT_R2, selectorDepth, 4);
+		loadSlot(SLJIT_R2, selectorDepth, selectorWidth);
 		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R3, 0, SLJIT_IMM,
 				static_cast<sljit_sw>(module_.typeId(WASM::LocalTypeIdx{ typeIndex }).value)));
 		emitHelper(SLJIT_ARGS4(P, P, 32, 32, 32), &sljitResolveIndirectCallable);
@@ -3273,6 +3277,10 @@ void OpcodeDispatcher::emitTailCallIndirectState(WASM::TypeIdx typeIndex, WASM::
 	requireTableIndex(tableIndex);
 	require(static_cast<std::uint32_t>(typeIndex) < module_.typeCount(),
 			"the return_call_indirect type index is out of range");
+	const bool table64 = tableIndex < module_.importTables.size()
+			? (module_.importTables[tableIndex].table.limits.flags & 0x04) != 0
+			: (module_.tables[tableIndex - module_.importTables.size()].limits.flags & 0x04) != 0;
+	const int selectorWidth = table64 ? 8 : 4;
 	const WASM::FuncType calledType = module_.funcTypeAt(typeIndex);
 	require(frameAbi_ || calledType.results.size() <= 1,
 			"the SLJIT register form cannot tail-call a multi-result function");
@@ -3281,7 +3289,7 @@ void OpcodeDispatcher::emitTailCallIndirectState(WASM::TypeIdx typeIndex, WASM::
 	for (const WASM::StorageType& result : calledType.results)
 		require(widthOf(result.val) != 0, "the SLJIT backend only calls i32/i64 signatures");
 	requireStack(calledType.params.size() + 1);
-	require(stackWidths_.back() == 4, "the return_call_indirect selector must be an i32");
+	require(stackWidths_.back() == selectorWidth, "the return_call_indirect selector width does not match its table");
 	const std::size_t selectorDepth = stackWidths_.size() - 1;
 	const std::size_t base = selectorDepth - calledType.params.size();
 
@@ -3295,7 +3303,7 @@ void OpcodeDispatcher::emitTailCallIndirectState(WASM::TypeIdx typeIndex, WASM::
 	loadContext(SLJIT_R0);
 	emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R1, 0, SLJIT_IMM,
 			static_cast<sljit_sw>(tableIndex)));
-	loadSlot(SLJIT_R2, selectorDepth, 4);
+	loadSlot(SLJIT_R2, selectorDepth, selectorWidth);
 	emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R3, 0, SLJIT_IMM,
 			static_cast<sljit_sw>(module_.typeId(WASM::LocalTypeIdx{ typeIndex }).value)));
 	emitHelper(SLJIT_ARGS4(P, P, 32, 32, 32), &sljitResolveIndirectCallable);
@@ -6517,8 +6525,12 @@ void OpcodeDispatcher::dispatchI32WrapI64()
 	if (!reachable_)
 		return;
 	requireStack(1);
-	if (measureOnly_)
+	if (measureOnly_) {
+		// The result is an i32 even though the operand is i64. A following
+		// br_table rejects anything else as a non-i32 selector.
+		stackWidths_.back() = 4;
 		return;
+	}
 	loadSlot(SLJIT_R0, stackWidths_.size() - 1, 4);
 	storeSlot(SLJIT_R0, stackWidths_.size() - 1, 4);
 	stackWidths_.back() = 4;
