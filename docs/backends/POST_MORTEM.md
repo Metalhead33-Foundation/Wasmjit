@@ -2207,3 +2207,55 @@ Every AsmJIT spec script is now green.
   label without marking it targeted hides the code at that label.
 * **The function label is a valid catch target.** It needs the same arity check
   and a return lowering, exactly as SLJIT's `emitCatchReturn` already did.
+
+
+## SLJIT — typed-GC-reference `array.new_elem`
+
+### Intended
+
+Close SLJIT's last two spec-failure cases, `array` and `array_new_elem`.
+
+### Root cause
+
+`array.new_elem` itself was already correct: the core copies the cached
+expression-form segment references and retains each GC object. The SLJIT refusal
+had masked a separate bug in `array.set`, one instruction later in the failing
+`set_get` fixture.
+
+`dispatchArraySet` loaded the value slot with a hard-coded 4-byte width. For an
+i64 element or a GC reference that truncates the stored 8-byte word to its low
+32 bits. The first `array.new_elem` checks still passed because they only read;
+`$set_get` stored the truncated pointer, then `array.get_u` dereferenced it and
+the child died with SIGSEGV.
+
+### Fix
+
+* Removed the SLJIT refusal for typed-GC-reference elements.
+* `dispatchArraySet` loads the value at its declared width
+  (`packed ? 4 : width`): packed values still arrive in a 4-byte i32 slot, while
+  references and i64 values keep all 8 bytes.
+
+### Evidence
+
+```
+SLJIT array             48/0
+SLJIT array_new_elem    24/0
+SLJIT array_init_elem   33/0
+```
+
+Full serial run:
+
+```
+SLJIT   821 cases: 778 passed / 43 failed; no signal
+```
+
+Every SLJIT spec script is now green. Both backends' remaining failures are
+non-spec suites.
+
+### Lessons
+
+* **A refusal can hide the real defect at the next instruction.** Removing it
+  exposed a width truncation, which was the actual cause of the old
+  ASLR-sensitive wild pointer.
+* **Slot width is per-value, not per-operator family.** `array.set` cannot load
+  every value as 4 bytes any more than `array.get` can store every result as 8.

@@ -5385,7 +5385,7 @@ void OpcodeDispatcher::dispatchArraySet(WASM::TypeIdx arg)
 		// instead of using a memory operand with a displacement.
 		loadSlot(SLJIT_R1, refDepth, 8);
 		loadSlot(SLJIT_R2, indexDepth, 4);
-		loadSlot(SLJIT_R3, valueDepth, 4);
+		loadSlot(SLJIT_R3, valueDepth, packed ? 4 : width);
 		emit(sljit_emit_op2(compiler_, SLJIT_MUL, SLJIT_R2, 0, SLJIT_R2, 0, SLJIT_IMM,
 				static_cast<sljit_sw>(WASM::gcStorageBytes(element.storage))));
 		emit(sljit_emit_op2(compiler_, SLJIT_ADD, SLJIT_R1, 0, SLJIT_R1, 0, SLJIT_R2, 0));
@@ -5737,21 +5737,6 @@ void OpcodeDispatcher::dispatchArrayNewElem(WASM::TypeIdx arg1, uint32_t arg2)
 	const WASM::CoreTypeView view = module_.typeView(arg1);
 	require(view.kind() == WASM::CanonTypeKind::Array,
 			"array.new_elem requires an array type");
-	const WASM::CanonValueType elementType = view.arrayElement().storage.value;
-	const WASM::ValueTypeCode elementCode = elementType.opcode;
-	const bool abstractHeap = elementType.heap.kind == WASM::CanonHeapType::Kind::Abstract;
-	const bool i31Element = elementCode == WASM::ValueTypeCode::I31Ref
-			|| ((elementCode == WASM::ValueTypeCode::Ref
-					|| elementCode == WASM::ValueTypeCode::RefNull)
-				&& abstractHeap
-				&& elementType.heap.abstract == WASM::AbstractHeapType::I31);
-	const bool funcElement = elementCode == WASM::ValueTypeCode::FuncRef
-			|| ((elementCode == WASM::ValueTypeCode::Ref
-					|| elementCode == WASM::ValueTypeCode::RefNull)
-				&& abstractHeap
-				&& elementType.heap.abstract == WASM::AbstractHeapType::Func);
-	require(!WASM::isReferenceType(elementCode) || i31Element || funcElement,
-			"array.new_elem with GC reference elements is not lowered yet");
 	requireStack(2);
 	const std::size_t offsetDepth = stackWidths_.size() - 2;
 	const std::size_t lenDepth = stackWidths_.size() - 1;

@@ -1063,13 +1063,13 @@ uses a rejected artifact and confirms the runtime remains usable.
 
 ## 29. Production-readiness gaps -- SLJIT and AsmJIT (2026-11-07)
 
-**Snapshot (2026-11-08, working tree after the EH fixes):** the detailed note is
+**Snapshot (2026-11-08, working tree after the SLJIT array fix):** the detailed note is
 [`PRODUCTION_READINESS.md`](../BACKEND_PRODUCTION_READINESS.md). The headline is:
 
 | Backend | Verdict | Measured evidence |
 |---|---|---|
 | LibJIT | **Production-ready within its declared envelope** | default suite 22,445 assertions / 821 cases, green; x86-64 Linux only |
-| SLJIT | **Not production-ready** | `WASMJIT_BACKEND=sljit`: 821 cases, 776 passed, 45 failed; no crash |
+| SLJIT | **Not production-ready** | `WASMJIT_BACKEND=sljit`: 821 cases, 778 passed, 43 failed; no crash |
 | AsmJIT | **Not production-ready** | `WASMJIT_BACKEND=asmjit`: 821 cases, 774 passed, 47 failed; no crash |
 
 The blockers are not just “unimplemented opcodes”:
@@ -1082,9 +1082,10 @@ The blockers are not just “unimplemented opcodes”:
   batch also closed imported global/memory indexing, `loop`/`if`/branch
   reachability, `call_ref`, `return_call`, `return_call_indirect` and
   `return_call_ref`. The latest batches also closed relaxed SIMD, bitmask, i31,
-  `ref_eq`, GC arrays/structs, and all reference casts/branches. Remaining
-  failures are SLJIT's typed-GC-reference `array.new_elem`. The legacy-EH
-  rewrite itself is frontend desugaring, not a backend feature.
+  `ref_eq`, GC arrays/structs, and all reference casts/branches. Every SLJIT
+  spec script is green, including typed-GC-reference `array.new_elem`; the
+  remaining failures are non-spec feature suites. The legacy-EH rewrite itself
+  is frontend desugaring, not a backend feature.
 * **AsmJIT:** `spec: func`, `spec: block`, `spec: br`, `spec: br_if`,
   `spec: br_table`, `spec: if`, `spec: labels`, `spec: return`,
   `spec: unreachable`, `spec: switch`, `spec: loop`, `spec: fac`, `spec: global`,
