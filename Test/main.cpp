@@ -2147,8 +2147,21 @@ TEST_CASE("component runtime lifts a canonical string")
 	REQUIRE(function->paramTypes.size() == 1);
 	REQUIRE(function->resultTypes.size() == 1);
 	const WASM::Callable coreEcho = runtime.coreFunction(0);
-	REQUIRE(WASM::callCallable<int32_t>(
-			coreEcho, int32_t(1024), int32_t(5)) == 2048);
+	const bool coreFrameAbi = coreEcho.rawFnPtr != nullptr && coreEcho.context != nullptr
+			&& reinterpret_cast<const WASM::ModuleInstance*>(coreEcho.context)->frameCallAbi();
+	REQUIRE((coreFrameAbi
+			? [&] {
+				alignas(16) std::array<std::uint8_t, 24> frame{};
+				std::int32_t first = 1024;
+				std::int32_t second = 5;
+				std::memcpy(frame.data(), &first, sizeof(first));
+				std::memcpy(frame.data() + 8, &second, sizeof(second));
+				WASM::callCallableFrame(coreEcho, frame.data());
+				std::int32_t result = 0;
+				std::memcpy(&result, frame.data() + 16, sizeof(result));
+				return result;
+			}()
+			: WASM::callCallable<int32_t>(coreEcho, int32_t(1024), int32_t(5))) == 2048);
 	WASM::ComponentValue arg;
 	arg.kind = WASM::ComponentValue::Kind::String;
 	arg.string = "hello";
@@ -2327,8 +2340,22 @@ TEST_CASE("component runtime lowers and lifts a map")
 	auto function = runtime.exportedFunction("echo");
 	REQUIRE(function.has_value());
 	REQUIRE(function->indirectResults);
-	REQUIRE(WASM::callCallable<int32_t>(
-			runtime.coreFunction(0), int32_t(1024), int32_t(1)) == 2048);
+	const WASM::Callable coreEcho = runtime.coreFunction(0);
+	const bool coreFrameAbi = coreEcho.rawFnPtr != nullptr && coreEcho.context != nullptr
+			&& reinterpret_cast<const WASM::ModuleInstance*>(coreEcho.context)->frameCallAbi();
+	REQUIRE((coreFrameAbi
+			? [&] {
+				alignas(16) std::array<std::uint8_t, 24> frame{};
+				std::int32_t first = 1024;
+				std::int32_t second = 1;
+				std::memcpy(frame.data(), &first, sizeof(first));
+				std::memcpy(frame.data() + 8, &second, sizeof(second));
+				WASM::callCallableFrame(coreEcho, frame.data());
+				std::int32_t result = 0;
+				std::memcpy(&result, frame.data() + 16, sizeof(result));
+				return result;
+			}()
+			: WASM::callCallable<int32_t>(coreEcho, int32_t(1024), int32_t(1))) == 2048);
 	WASM::ComponentValue input;
 	input.kind = WASM::ComponentValue::Kind::Map;
 	input.elements.resize(1);
@@ -12816,10 +12843,32 @@ TEST_CASE("the deterministic profile canonicalises observable NaNs")
 	auto fullResult = fullInstance->exportedFunction("nan_result");
 	REQUIRE(fullRoundtrip.has_value());
 	REQUIRE(fullResult.has_value());
-	REQUIRE(WASM::callCallable<int32_t>(*fullRoundtrip, static_cast<int32_t>(kSigNaN32))
-			== static_cast<int32_t>(kSigNaN32));
-	REQUIRE(bits32(WASM::callCallable<float>(*fullResult,
-			static_cast<int32_t>(kSigNaN32))) == kSigNaN32);
+	// `nan_pair` has two results, which switches the whole profile module to the
+	// staging-frame ABI in both alternative backends.
+	const bool fullFrame = fullInstance->frameCallAbi();
+	const auto fullI32 = [&](const WASM::Callable& callable, std::int32_t arg) {
+		if (!fullFrame)
+			return WASM::callCallable<std::int32_t>(callable, arg);
+		alignas(16) std::array<std::uint8_t, 16> frame{};
+		std::memcpy(frame.data(), &arg, sizeof(arg));
+		WASM::callCallableFrame(callable, frame.data());
+		std::int32_t result = 0;
+		std::memcpy(&result, frame.data() + 8, sizeof(result));
+		return result;
+	};
+	const auto fullF32 = [&](const WASM::Callable& callable, std::int32_t arg) {
+		if (!fullFrame)
+			return WASM::callCallable<float>(callable, arg);
+		alignas(16) std::array<std::uint8_t, 16> frame{};
+		std::memcpy(frame.data(), &arg, sizeof(arg));
+		WASM::callCallableFrame(callable, frame.data());
+		float result = 0.0f;
+		std::memcpy(&result, frame.data() + 8, sizeof(result));
+		return result;
+	};
+	REQUIRE(fullI32(*fullRoundtrip, static_cast<std::int32_t>(kSigNaN32))
+			== static_cast<std::int32_t>(kSigNaN32));
+	REQUIRE(bits32(fullF32(*fullResult, static_cast<std::int32_t>(kSigNaN32))) == kSigNaN32);
 
 	// Deterministic+scalar: every observability point yields the canonical NaN.
 	WASM::Module det = loadModuleWithProfile("profile_nan",
@@ -12829,6 +12878,69 @@ TEST_CASE("the deterministic profile canonicalises observable NaNs")
 	auto detInstance = detBackend->instantiator().instantiate(det, detImports, nullptr,
 			WASM::deterministicScalarProfile());
 	REQUIRE(detInstance.get() != nullptr);
+
+	struct FloatPair { float first; float second; };
+	const bool detFrame = detInstance->frameCallAbi();
+	const auto detI32 = [&](const WASM::Callable& callable, std::int32_t arg) {
+		if (!detFrame)
+			return WASM::callCallable<std::int32_t>(callable, arg);
+		alignas(16) std::array<std::uint8_t, 16> frame{};
+		std::memcpy(frame.data(), &arg, sizeof(arg));
+		WASM::callCallableFrame(callable, frame.data());
+		std::int32_t result = 0;
+		std::memcpy(&result, frame.data() + 8, sizeof(result));
+		return result;
+	};
+	const auto detVoidI32 = [&](const WASM::Callable& callable, std::int32_t arg) {
+		if (!detFrame) {
+			WASM::callCallable<void>(callable, arg);
+			return;
+		}
+		alignas(16) std::array<std::uint8_t, 8> frame{};
+		std::memcpy(frame.data(), &arg, sizeof(arg));
+		WASM::callCallableFrame(callable, frame.data());
+	};
+	const auto detF32 = [&](const WASM::Callable& callable, std::int32_t arg) {
+		if (!detFrame)
+			return WASM::callCallable<float>(callable, arg);
+		alignas(16) std::array<std::uint8_t, 16> frame{};
+		std::memcpy(frame.data(), &arg, sizeof(arg));
+		WASM::callCallableFrame(callable, frame.data());
+		float result = 0.0f;
+		std::memcpy(&result, frame.data() + 8, sizeof(result));
+		return result;
+	};
+	const auto detPair = [&](const WASM::Callable& callable, std::int32_t arg,
+			FloatPair& pair) {
+		if (!detFrame) {
+			WASM::callCallableWithResults(callable, &pair, arg);
+			return;
+		}
+		alignas(16) std::array<std::uint8_t, 24> frame{};
+		std::memcpy(frame.data(), &arg, sizeof(arg));
+		WASM::callCallableFrame(callable, frame.data());
+		std::memcpy(&pair.first, frame.data() + 8, sizeof(pair.first));
+		std::memcpy(&pair.second, frame.data() + 16, sizeof(pair.second));
+	};
+	const auto detI64 = [&](const WASM::Callable& callable, std::int64_t arg) {
+		if (!detFrame)
+			return WASM::callCallable<std::int64_t>(callable, arg);
+		alignas(16) std::array<std::uint8_t, 16> frame{};
+		std::memcpy(frame.data(), &arg, sizeof(arg));
+		WASM::callCallableFrame(callable, frame.data());
+		std::int64_t result = 0;
+		std::memcpy(&result, frame.data() + 8, sizeof(result));
+		return result;
+	};
+	const auto detVoidI64 = [&](const WASM::Callable& callable, std::int64_t arg) {
+		if (!detFrame) {
+			WASM::callCallable<void>(callable, arg);
+			return;
+		}
+		alignas(16) std::array<std::uint8_t, 8> frame{};
+		std::memcpy(frame.data(), &arg, sizeof(arg));
+		WASM::callCallableFrame(callable, frame.data());
+	};
 
 	auto roundtrip = detInstance->exportedFunction("reinterpret_roundtrip");
 	auto store = detInstance->exportedFunction("store_nan");
@@ -12846,26 +12958,25 @@ TEST_CASE("the deterministic profile canonicalises observable NaNs")
 	REQUIRE(store64.has_value());
 
 	// reinterpret_f32 / i32.reinterpret_f32.
-	REQUIRE(WASM::callCallable<int32_t>(*roundtrip, static_cast<int32_t>(kSigNaN32))
+	REQUIRE(detI32(*roundtrip, static_cast<int32_t>(kSigNaN32))
 			== static_cast<int32_t>(kCanonical32));
 
 	// f32.store.
-	WASM::callCallable<void>(*store, static_cast<int32_t>(kSigNaN32));
+	detVoidI32(*store, static_cast<int32_t>(kSigNaN32));
 	int32_t stored32 = 0;
 	std::memcpy(&stored32, detInstance->context()->memories[0]->memoryBase,
 			sizeof(stored32));
 	REQUIRE(static_cast<uint32_t>(stored32) == kCanonical32);
 
 	// A returned float, single and multi-value.
-	REQUIRE(bits32(WASM::callCallable<float>(*nanResult,
-			static_cast<int32_t>(kSigNaN32))) == kCanonical32);
-	struct FloatPair { float first; float second; } pair{};
-	WASM::callCallableWithResults(*nanPair, &pair, static_cast<int32_t>(kSigNaN32));
+	REQUIRE(bits32(detF32(*nanResult, static_cast<int32_t>(kSigNaN32))) == kCanonical32);
+	FloatPair pair{};
+	detPair(*nanPair, static_cast<int32_t>(kSigNaN32), pair);
 	REQUIRE(bits32(pair.first) == kCanonical32);
 	REQUIRE(bits32(pair.second) == kCanonical32);
 
 	// global.set: read the published cell directly, without reinterpreting.
-	WASM::callCallable<void>(*setGlobal, static_cast<int32_t>(kSigNaN32));
+	detVoidI32(*setGlobal, static_cast<int32_t>(kSigNaN32));
 	WASM::RegistryImportResolver exports;
 	detInstance->registerExports(exports, "m");
 	REQUIRE(det.globals.size() == 1);
@@ -12874,9 +12985,9 @@ TEST_CASE("the deterministic profile canonicalises observable NaNs")
 	REQUIRE(bits32((*cell)->f32) == kCanonical32);
 
 	// The f64 paths use the f64 canonical NaN.
-	REQUIRE(static_cast<uint64_t>(WASM::callCallable<int64_t>(*roundtrip64,
+	REQUIRE(static_cast<uint64_t>(detI64(*roundtrip64,
 			static_cast<int64_t>(kSigNaN64))) == kCanonical64);
-	WASM::callCallable<void>(*store64, static_cast<int64_t>(kSigNaN64));
+	detVoidI64(*store64, static_cast<int64_t>(kSigNaN64));
 	uint64_t stored64 = 0;
 	std::memcpy(&stored64, detInstance->context()->memories[0]->memoryBase + 8,
 			sizeof(stored64));

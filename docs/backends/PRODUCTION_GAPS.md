@@ -1069,20 +1069,20 @@ uses a rejected artifact and confirms the runtime remains usable.
 | Backend | Verdict | Measured evidence |
 |---|---|---|
 | LibJIT | **Production-ready within its declared envelope** | default suite 22,442 assertions / 821 cases, green; x86-64 Linux only |
-| SLJIT | **Not production-ready** | `WASMJIT_BACKEND=sljit`: 331 cases, 287 passed, 44 failed, then SIGSEGV in the component structured-value case |
-| AsmJIT | **Not production-ready** | `WASMJIT_BACKEND=asmjit`: 331 cases, 266 passed, 65 failed, then SIGSEGV in the component structured-value case |
+| SLJIT | **Not production-ready** | `WASMJIT_BACKEND=sljit`: 821 cases, 690 passed, 131 failed; no crash |
+| AsmJIT | **Not production-ready** | `WASMJIT_BACKEND=asmjit`: 821 cases, 649 passed, 172 failed; no crash |
 
 The blockers are not just “unimplemented opcodes”:
 
 * **SLJIT:** `func`, `float_memory64`, `table.fill`, the integer lane families,
-  `br_table` arity and the legacy-EH rethrow path are fixed; the run still stops
-  at the component structured-value case. `simd_load32_lane` still needs a
-  five-slot signature, and relaxed dot/stringref/transport paths remain. The
+  `br_table` arity and the legacy-EH rethrow path are fixed. Remaining failures
+  include `br_table.0`'s `i64.ctz`, the five-slot `simd_load32_lane`
+  signature, `simd: v128 globals`, and deterministic-NaN canonicalisation. The
   legacy-EH rewrite itself is frontend desugaring, not a backend feature.
 * **AsmJIT:** `spec: func` is green, including frame-form function-label
-  branches and the multi-result tail-call fixture; the run now reaches the same
-  component structured-value crash. Several SIMD lane/transport opcodes and
-  `imports` allocation/trap cases remain open.
+  branches and the multi-result tail-call fixture. Remaining failures include
+  i64 bit-count lowering, several SIMD lane/transport opcodes, deterministic-NaN
+  canonicalisation and `imports` allocation/trap cases.
 
 Promotion requires the full backend-selected suite to finish green (no abort,
 no segfault), the strict negative sweep to pass, the sanitizer run to be recorded,

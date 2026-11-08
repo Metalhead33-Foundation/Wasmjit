@@ -1048,3 +1048,62 @@ All tests passed (21 assertions in 1 test case)
 **Lesson:** an ABI marshalling test has two layouts to respect — the native call
 shape and the public tuple layout. A raw `memcpy` from a frame result block is
 not the latter when scalars are slot-padded.
+
+## Component runtime — frame-form core modules
+
+### Intended
+
+Let the component-script and component-runtime structured-value cases run under
+the SLJIT and AsmJIT backends instead of segfaulting in generated code.
+
+### Root cause
+
+A component core module commonly exports a canonical `realloc` with four
+parameters (`(i32, i32, i32, i32) -> i32`). With the implicit `VMContext*` that
+is five argument slots, so both backends correctly compile the **whole module**
+in the staging-frame form. The component runtime still invoked core functions
+through the register-form `WASM::callCallable` path in two places:
+
+* `invokeCore`, which performs canonical lift/lower calls; and
+* `allocate`, which invokes the module's `realloc`.
+
+The first argument (a pointer-sized value) was therefore interpreted as the
+frame pointer, and the callee dereferenced it.
+
+### Fix
+
+* Added `callableUsesFrameAbi`: a compiled core callable (`rawFnPtr` non-null)
+  carries a `VMContext*` whose address is the `ModuleInstance`, so the runtime
+  can ask that instance for its module-wide ABI. Native imports and closures
+  stay on the register form.
+* `invokeCore` now marshals the canonical frame directly: 8-byte slots for the
+  core parameters, a `void(VMContext*, void*)` call, and 8-byte result slots
+  read back into `WASM::Value`.
+* `allocate` pads the four `realloc` arguments into a frame and reads the pointer
+  result from the following slot.
+* The two component tests that call `runtime.coreFunction(0)` directly now use
+  `callCallableFrame` when the core instance reports frame mode.
+
+### Evidence
+
+```
+WASMJIT_BACKEND=sljit ./Test/WasmJit 'component script marshals structured values'
+All tests passed (2 assertions in 1 test case)
+
+WASMJIT_BACKEND=sljit ./Test/WasmJit 'component runtime lowers and lifts a map'
+All tests passed (10 assertions in 1 test case)
+```
+
+The full SLJIT run then advances through the former string-test crash as well;
+both backend-selected runs now complete all 821 cases without a process signal
+(SLJIT 690/131, AsmJIT 649/172). The remaining failures are functional gaps, not
+frame-ABI marshalling.
+
+### Lessons
+
+* **Module-wide frame mode reaches every consumer, not just direct Wasm calls.**
+  The canonical ABI runtime is a caller too.
+* **A callable's context is the instance for compiled functions.** `rawFnPtr`
+  distinguishes that case from a native import whose context is host state.
+* **Test the ABI at the boundary where the component runtime actually crosses
+  it.** A passing register-form direct call can hide a frame-form-only module.

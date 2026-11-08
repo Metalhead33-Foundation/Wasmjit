@@ -80,12 +80,13 @@ refusals and behaviour that is unacceptable in production:
 
 ### 4.1 General conformance failures
 
-The `WASMJIT_BACKEND=sljit` run now completes 331 cases before the component
-structured-value case crashes: 287 pass, 44 fail. The first batch closed
-`func`, `float_memory64`, `table_fill`, the integer lane families, `br_table`
-arity and the legacy-EH rethrow path. The largest remaining block is the
-five-argument `simd_load32_lane` shape (`the SLJIT backend cannot pass 5
-argument slots`) plus the unmeasured failures after the component crash.
+The `WASMJIT_BACKEND=sljit` run now completes all 821 cases: 690 pass and 131
+fail, with no process abort or segfault. The first batch closed `func`,
+`float_memory64`, `table_fill`, the integer lane families, `br_table` arity and
+the legacy-EH rethrow path. The remaining failures include the five-argument
+`simd_load32_lane` shape (`the SLJIT backend cannot pass 5 argument slots`),
+`br_table.0`'s `i64.ctz`, `simd: v128 globals`, and deterministic-NaN
+canonicalisation.
 
 ### 4.2 Missing lowerings
 
@@ -100,14 +101,16 @@ intended escape hatch).
 `float_memory64` now preserves bit patterns, `br_table` accepts differing
 target arities and multi-result function labels, and the 16-byte `v128` result
 path passes both the shuffle fixture and the three/four-parameter ABI fixture.
-The remaining process-level defect is the component structured-value crash;
-the targeted SIMD and tail-call regressions are green.
+The remaining failures are functional and conformance gaps rather than process
+crashes; the targeted SIMD and tail-call regressions are green.
 
 ### 4.4 Process safety
 
-The run still aborts with `SIGSEGV` in `component script marshals structured
-values`. A backend that can abort the host process on module-derived input is
-not production-safe regardless of how many targeted features pass.
+The run no longer aborts, but the host-safety bar is not met yet: the remaining
+failures include unimplemented opcodes (`dispatchI64Ctz`, AsmJIT bit-count
+cases), profile conformance (deterministic NaN canonicalisation) and allocation
+failures in `imports`. A backend that can still produce wrong results is not
+production-safe regardless of how many targeted features pass.
 
 **Verdict:** not production-ready. The targeted matrix is useful evidence of
 implemented slices, not a general conformance or safety claim.
@@ -116,8 +119,8 @@ implemented slices, not a general conformance or safety claim.
 
 AsmJIT is explicitly experimental, and the generic run confirms why:
 
-- the run reaches 331 cases: 266 pass and 65 fail before the component
-  structured-value case segfaults;
+- the run reaches all 821 cases: 649 pass and 172 fail, with no process
+  abort or segfault;
 - `spec: func` is now green (`100 passed / 0 failed`), including the frame-form
   function-label branches;
 - `table.fill` and the integer lane families are implemented, but several SIMD

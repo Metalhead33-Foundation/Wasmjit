@@ -348,6 +348,24 @@ uint64_t alignUp(uint64_t value, uint64_t alignment)
 	return alignment <= 1 ? value : (value + alignment - 1) / alignment * alignment;
 }
 
+//! True when a compiled core callable was built with the staging-frame ABI.
+//! `ModuleInstance` keeps its `VMContext` first, so the context pointer is also
+//! the instance pointer; `rawFnPtr` distinguishes a compiled module function
+//! from a native import/closure, whose context may be arbitrary host state.
+bool callableUsesFrameAbi(const WASM::Callable& callable) noexcept
+{
+	if (callable.rawFnPtr == nullptr || callable.context == nullptr)
+		return false;
+	return reinterpret_cast<const WASM::ModuleInstance*>(callable.context)->frameCallAbi();
+}
+
+//! Calls a frame-form `(VMContext*, void* frame)` core function.
+void callFrameEntry(const WASM::Callable& callable, void* frame)
+{
+	using FrameFn = void (*)(WASM::VMContext*, void*);
+	reinterpret_cast<FrameFn>(callable.fnPtr)(callable.context, frame);
+}
+
 void ensureRange(const MemView& memory, uint64_t offset, uint64_t size)
 {
 	if (!memory.memory)
@@ -381,11 +399,31 @@ uint64_t allocate(const MemView& memory, uint64_t size, uint64_t alignment)
 	if (!memory.realloc.fnPtr)
 		throw std::runtime_error(
 				"component runtime: canonical ABI realloc is not configured");
-	const uint64_t address = memory.options.pointerSize == 8
-			? WASM::callCallable<uint64_t>(memory.realloc, uint64_t{0}, uint64_t{0},
-					uint64_t(alignment), size)
-			: WASM::callCallable<uint32_t>(memory.realloc, uint32_t{0}, uint32_t{0},
-					uint32_t(alignment), uint32_t(size));
+	uint64_t address = 0;
+	if (callableUsesFrameAbi(memory.realloc)) {
+		// Frame form: `void(VMContext*, frame)`, four 8-byte argument slots and
+		// the result at the byte after them.
+		alignas(16) std::array<std::uint8_t, 64> frame{};
+		const std::uint64_t zero = 0;
+		std::memcpy(frame.data(), &zero, sizeof(zero));
+		std::memcpy(frame.data() + 8, &zero, sizeof(zero));
+		std::memcpy(frame.data() + 16, &alignment, sizeof(alignment));
+		std::memcpy(frame.data() + 24, &size, sizeof(size));
+		callFrameEntry(memory.realloc, frame.data());
+		if (memory.options.pointerSize == 8)
+			std::memcpy(&address, frame.data() + 32, sizeof(address));
+		else {
+			std::uint32_t narrow = 0;
+			std::memcpy(&narrow, frame.data() + 32, sizeof(narrow));
+			address = narrow;
+		}
+	} else {
+		address = memory.options.pointerSize == 8
+				? WASM::callCallable<uint64_t>(memory.realloc, uint64_t{0}, uint64_t{0},
+						uint64_t(alignment), size)
+				: WASM::callCallable<uint32_t>(memory.realloc, uint32_t{0}, uint32_t{0},
+						uint32_t(alignment), uint32_t(size));
+	}
 	// A nested call (this runs inside a canonical-ABI closure, below generated
 	// code) reports a trap through the pending slot instead of throwing. Stop
 	// here: the generated caller checks the slot and returns, and a C++ throw
@@ -4644,6 +4682,39 @@ void ComponentRuntime::invokeCore(const WASM::Callable& callable,
 		case WASM::AbiCoreType::F64: slots[i].f64 = args[i].f64; break;
 		}
 		argumentValues.push_back(&slots[i]);
+	}
+
+	if (callableUsesFrameAbi(callable)) {
+		// The core module was compiled module-wide in the staging-frame form
+		// because at least one of its signatures needs it (for example a
+		// four-parameter realloc). Marshal the same canonical frame here.
+		const std::size_t argumentBytes = function.params.size() * 8;
+		const std::size_t resultBytes = function.results.size() * 8;
+		if (argumentBytes + resultBytes > 512)
+			throw std::runtime_error("component runtime: core frame exceeds the staging buffer");
+		alignas(16) std::array<std::uint8_t, 512> frame{};
+		for (std::size_t i = 0; i < function.params.size(); ++i)
+			std::memcpy(frame.data() + i * 8, &slots[i], sizeof(AbiSlot));
+		callFrameEntry(callable, frame.data());
+		for (std::size_t i = 0; i < function.results.size(); ++i) {
+			results[i].kind = valueKind(function.results[i]);
+			const std::uint8_t* source = frame.data() + argumentBytes + i * 8;
+			switch (function.results[i]) {
+			case WASM::AbiCoreType::I32:
+				std::memcpy(&results[i].i32, source, sizeof(results[i].i32));
+				break;
+			case WASM::AbiCoreType::I64:
+				std::memcpy(&results[i].i64, source, sizeof(results[i].i64));
+				break;
+			case WASM::AbiCoreType::F32:
+				std::memcpy(&results[i].f32, source, sizeof(results[i].f32));
+				break;
+			case WASM::AbiCoreType::F64:
+				std::memcpy(&results[i].f64, source, sizeof(results[i].f64));
+				break;
+			}
+		}
+		return;
 	}
 
 	ffi_cif cif;
