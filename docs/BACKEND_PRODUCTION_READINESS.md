@@ -29,11 +29,11 @@ All commands were run from `build/Desktop-Release` with
 
 | Run | Result |
 |---|---|
-| Default (`libjit`) suite | **22,437 assertions in 820 cases, green** |
+| Default (`libjit`) suite | **22,442 assertions in 821 cases, green** |
 | `[sljit]` targeted tests | **2,677 assertions in 69 cases, green** |
 | `[asmjit]` targeted tests | **1,778 assertions in 61 cases, green** |
-| `WASMJIT_BACKEND=sljit ./Test/WasmJit` | **177 / 218 cases passed, 41 failed**, then **process aborted** (`IOT`, core dumped) |
-| `WASMJIT_BACKEND=asmjit ./Test/WasmJit` | **15 / 21 cases passed, 6 failed**, then **segfaulted** |
+| `WASMJIT_BACKEND=sljit ./Test/WasmJit` | **10 / 12 cases passed, 2 failed**, then **segfaulted** (run stops early) |
+| `WASMJIT_BACKEND=asmjit ./Test/WasmJit` | **16 / 21 cases passed, 5 failed**, then **segfaulted** |
 
 The two non-LibJIT runs stopped early, so their failure counts are **lower
 bounds**, not complete totals. “41 failures and an abort” is already enough to

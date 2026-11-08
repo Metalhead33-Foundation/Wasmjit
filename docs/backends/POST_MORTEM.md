@@ -15,7 +15,7 @@ actually happened, the root cause of every surprise, and what is still open.
 | 5 | exceptions and catch payloads | **done** | local/cross-instance catch, `catch_ref`, multi-value payloads and a catch payload routed to a loop parameter (`CATCHLOOP` 42) |
 | 6 | LibJIT frame form | **done** | frame call 6, import 42, multi-result 7/9, frame tail 1, multi-result `call_ref` 11; the form remains opt-in and default-off |
 
-Suite at the last commit: **22437 assertions in 820 cases** under
+Suite at the last commit: **22442 assertions in 821 cases** under
 `--rng-seed 12345`, green; `[headerdoc]`, `[docs]`, `doxygen` and `abi-check` are clean.
 The curated capability ledger has no open opcode/ABI row. That is not a
 production verdict: the generic runs for SLJIT and AsmJIT fail and crash, so

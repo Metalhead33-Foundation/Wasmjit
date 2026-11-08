@@ -612,4 +612,4 @@ only selected by `WASM::setFrameCallAbiOptIn(true)`.
 but not constant-stack; the register trampoline remains the constant-stack path.
 
 **Evidence:** frame call 6, native import 42, multi-result 7/9, 100-link frame tail 1,
-multi-result `call_ref` 11; suite 22437 assertions in 820 cases, seed 12345.
+multi-result `call_ref` 11; suite 22442 assertions in 821 cases, seed 12345.

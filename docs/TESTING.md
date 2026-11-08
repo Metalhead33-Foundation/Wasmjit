@@ -559,9 +559,9 @@ for that backend**:
 
 | Backend | Command | Status at the 2026-11-07 snapshot |
 |---|---|---|
-| LibJIT | `WASMJIT_BACKEND=libjit ./WasmJit` | **green** — 22,437 assertions / 820 cases |
-| SLJIT | `WASMJIT_BACKEND=sljit ./WasmJit` | **not green** — 177 / 218 cases passed, 41 failed, then abort |
-| AsmJIT | `WASMJIT_BACKEND=asmjit ./WasmJit` | **not green** — 15 / 21 cases passed, 6 failed, then segfault |
+| LibJIT | `WASMJIT_BACKEND=libjit ./WasmJit` | **green** — 22,442 assertions / 821 cases |
+| SLJIT | `WASMJIT_BACKEND=sljit ./WasmJit` | **not green** — 10 / 12 cases passed, 2 failed, then segfault (stops early) |
+| AsmJIT | `WASMJIT_BACKEND=asmjit ./WasmJit` | **not green** — 16 / 21 cases passed, 5 failed, then segfault |
 
 The exact blockers and promotion criteria are owned by
 [`BACKEND_PRODUCTION_READINESS.md`](BACKEND_PRODUCTION_READINESS.md). A backend

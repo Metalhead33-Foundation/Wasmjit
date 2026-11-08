@@ -153,7 +153,7 @@ section 6). Two different questions, two different answers, both recorded.
 `throw`, and the only ⛔ rows are honest refusals with reasons.
 
 Suite 21916 assertions in 784 cases under `--rng-seed 12345`, green. (Revision
-2026-11-07: suite 22437 assertions in 820 cases, same seed.)
+2026-11-07: suite 22442 assertions in 821 cases, same seed.)
 
 ## 6. Probes 9 and 10: GC arrays work everywhere; memory64 + bulk memory (now does)
 
@@ -604,7 +604,7 @@ promotion criteria are owned by
 
 | Run | Result |
 |---|---|
-| default (`libjit`) | **22,437 assertions / 820 cases**, green |
+| default (`libjit`) | **22,442 assertions / 821 cases**, green |
 | `WASMJIT_BACKEND=sljit` | **177 / 218 cases passed, 41 failed**, then abort (`IOT`) |
 | `WASMJIT_BACKEND=asmjit` | **15 / 21 cases passed, 6 failed**, then segfault |
 

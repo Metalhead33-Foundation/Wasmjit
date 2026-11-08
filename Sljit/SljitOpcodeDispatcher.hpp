@@ -1009,7 +1009,7 @@ private:
 	void emitFloatCompare(sljit_s32 condition, int width);
 	/*!
 	 * \brief Writes a float constant into one operand-stack slot.
-	 * \param value The constant.
+	 * \param bits The IEEE bit pattern.
 	 * \param width 4 for f32, 8 for f64.
 	 * \param depth Zero-based operand-stack depth.
 	 */

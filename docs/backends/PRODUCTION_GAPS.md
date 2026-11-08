@@ -965,7 +965,7 @@ in both passes.
 
 ## 27. V-1 fixed, multi-value catches and numeric shared atomics closed (2026-11-07)
 
-**Snapshot (2026-11-07, `backendsMh33`):** suite **22437 assertions in 820
+**Snapshot (2026-11-07, `backendsMh33`):** suite **22442 assertions in 821
 cases** under `--rng-seed 12345`, green; `[headerdoc]`, `[docs]`, `doxygen`
 (0 warnings) and `abi-check` all pass. This section supersedes section 26.
 
@@ -1058,7 +1058,7 @@ Once opted in, the frame contract is complete:
 multi-result 7/9, 100-link frame tail 1, multi-result `call_ref` 11. The safety probe
 uses a rejected artifact and confirms the runtime remains usable.
 
-**Suite:** 22437 assertions in 820 cases, `--rng-seed 12345`, green; `[headerdoc]`,
+**Suite:** 22442 assertions in 821 cases, `--rng-seed 12345`, green; `[headerdoc]`,
 `[docs]`, `doxygen` and `abi-check` clean.
 
 ## 29. Production-readiness gaps -- SLJIT and AsmJIT (2026-11-07)
@@ -1068,9 +1068,9 @@ uses a rejected artifact and confirms the runtime remains usable.
 
 | Backend | Verdict | Measured evidence |
 |---|---|---|
-| LibJIT | **Production-ready within its declared envelope** | default suite 22,437 assertions / 820 cases, green; x86-64 Linux only |
-| SLJIT | **Not production-ready** | `WASMJIT_BACKEND=sljit`: 177 / 218 cases passed, 41 failed, then abort |
-| AsmJIT | **Not production-ready** | `WASMJIT_BACKEND=asmjit`: 15 / 21 cases passed, 6 failed, then segfault |
+| LibJIT | **Production-ready within its declared envelope** | default suite 22,442 assertions / 821 cases, green; x86-64 Linux only |
+| SLJIT | **Not production-ready** | `WASMJIT_BACKEND=sljit`: 10 / 12 cases passed, 2 failed, then segfault (run stops early) |
+| AsmJIT | **Not production-ready** | `WASMJIT_BACKEND=asmjit`: 16 / 21 cases passed, 5 failed, then segfault |
 
 The blockers are not just “unimplemented opcodes”:
 
