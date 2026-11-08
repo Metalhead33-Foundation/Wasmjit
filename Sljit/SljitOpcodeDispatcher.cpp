@@ -1382,12 +1382,21 @@ bool OpcodeDispatcher::beginFunction()
 	// A `v128` result cannot come back in one return register, so the caller
 	// supplies a 16-byte out-buffer as a trailing pointer argument -- the same
 	// path multi-value takes (docs/ABI_REFACTOR_STUDY.md §25). It must be added
-	// *before* `savedCount`, which is derived from `nextSlot`.
+	// *before* `savedCount`, which is derived from the integer argument count.
 	const bool resultViaBuffer = !frameAbi_ && resultWidth_ == 16;
 	if (resultViaBuffer) {
 		argTypes |= SLJIT_ARG_VALUE(SLJIT_ARG_TYPE_P, nextSlot);
 		++nextSlot;
 	}
+
+	// SLJIT's argument *ordinal* includes float parameters, but the saved
+	// registers that carry the integer arguments do not: a `(f32) -> v128`
+	// function has context in S0 and the result buffer in S1, not S2. Keep the
+	// integer entry count separate from `nextSlot`.
+	sljit_s32 integerEntries = 1; // VMContext*
+	for (WASM::ValueKind kind : parameterKinds)
+		if (kind != WASM::ValueKind::F32 && kind != WASM::ValueKind::F64)
+			integerEntries += static_cast<sljit_s32>(WASM::argSlotCount(kind));
 
 	// Four integer scratch registers: R0-R3 carry a helper call with up to four
 	// integer arguments. Floating-point scratch registers are counted
@@ -1398,6 +1407,9 @@ bool OpcodeDispatcher::beginFunction()
 		if (isFloatKind(kind))
 			++floatParameters;
 	const std::uint32_t floatScratch = std::max<std::uint32_t>(3, floatParameters);
+	// Keep SLJIT's declared-argument count for `savedCount`; the extra saved
+	// register this reserves for a float+pointer signature is harmless and is
+	// what `sljit_emit_enter` checks against the argument list.
 	const sljit_s32 savedCount = nextSlot - 1;
 
 	// SLJIT requires every declared argument slot to own a saved register, and the
@@ -1433,11 +1445,11 @@ bool OpcodeDispatcher::beginFunction()
 	// Keep the out-buffer pointer too: the value is produced after helper calls,
 	// which clobber R0-R3 (the S registers are not held across one either).
 	if (resultViaBuffer) {
-		// Argument index i arrives in S(i - 1); `nextSlot` has already been
-		// advanced past the buffer, so its register is S(nextSlot - 2) -- the
-		// highest register `savedCount` preserves.
+		// Integer arguments are numbered independently of float arguments. The
+		// buffer follows the last integer entry, so it is S(integerEntries),
+		// not S(nextSlot - 2): a float parameter does not consume an S register.
 		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
-				resultBufferSlotOffset(), SLJIT_S(nextSlot - 2), 0));
+				resultBufferSlotOffset(), SLJIT_S(integerEntries), 0));
 	}
 
 	// Keep the staging frame pointer: the prologue and the epilogue reach the

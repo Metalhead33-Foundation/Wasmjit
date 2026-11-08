@@ -1070,7 +1070,7 @@ uses a rejected artifact and confirms the runtime remains usable.
 |---|---|---|
 | LibJIT | **Production-ready within its declared envelope** | default suite 22,442 assertions / 821 cases, green; x86-64 Linux only |
 | SLJIT | **Not production-ready** | `WASMJIT_BACKEND=sljit`: 821 cases, 720 passed, 101 failed; no crash |
-| AsmJIT | **Not production-ready** | `WASMJIT_BACKEND=asmjit`: 821 cases, 679 passed, 142 failed; no crash |
+| AsmJIT | **Not production-ready** | `WASMJIT_BACKEND=asmjit`: 821 cases, 712 passed, 109 failed; no crash |
 
 The blockers are not just “unimplemented opcodes”:
 
@@ -1084,9 +1084,11 @@ The blockers are not just “unimplemented opcodes”:
 * **AsmJIT:** `spec: func`, `spec: block`, `spec: br_table`, `spec: return`,
   `spec: unreachable` and `spec: switch` are green, including frame-form
   function-label branches and the multi-result tail-call fixture. `table.grow`,
-  `v128` globals and the integer lane family are implemented. Remaining
-  failures include several SIMD transport/relaxed opcodes, stack-switching
-  cases and `imports` allocation/trap cases.
+  `v128` globals, the integer lane family and integer/float splat are
+  implemented; empty modules no longer attempt to install a zero-sized code
+  holder. Remaining failures include several SIMD transport/relaxed opcodes,
+  stack-switching cases, one newly exposed component tag case and `imports`
+  allocation/trap cases.
 
 Promotion requires the full backend-selected suite to finish green (no abort,
 no segfault), the strict negative sweep to pass, the sanitizer run to be recorded,

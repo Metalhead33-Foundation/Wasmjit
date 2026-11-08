@@ -1960,10 +1960,14 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 		const WASM::FuncType calledType = module.funcTypeAt(typeIndex);
 		if (calledType.results.size() > 1)
 			throw std::runtime_error("AsmJit call_indirect currently supports at most one result");
+		// Frame mode handles a v128 parameter/result through the frame block; the
+		// register form has no aggregate spelling for it.
 		for (const auto& parameter : calledType.params)
-			requireScalar(parameter.val, "indirect-call parameters");
+			if (!frameMode || parameter.val.opcode != WASM::ValueTypeCode::V128)
+				requireScalar(parameter.val, "indirect-call parameters");
 		for (const auto& result : calledType.results)
-			requireScalar(result.val, "indirect-call results");
+			if (!frameMode || result.val.opcode != WASM::ValueTypeCode::V128)
+				requireScalar(result.val, "indirect-call results");
 		if (values.size() < calledType.params.size() + 1)
 			throw std::runtime_error("AsmJit call_indirect operand stack underflow");
 
@@ -4332,6 +4336,32 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		auto pointer = emitMemoryAddress(arg, 16, address);
 		copyVector(pointer, value);
 	}
+
+	void emitVectorSplatInteger(uint64_t helper, int width, const char* name)
+	{
+		if (values.empty())
+			throw std::runtime_error(std::string("AsmJit ") + name + " operand underflow");
+		auto scalar = values.back();
+		values.pop_back();
+		auto buffer = newVectorBuffer("vectorSplat");
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kVoid);
+		signature.add_arg(width == 8 ? asmjit::TypeId::kInt64 : asmjit::TypeId::kInt32);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke), helper, signature),
+				(std::string("AsmJit ") + name + " helper call failed").c_str());
+		invoke->set_arg(0, width == 8 ? asmjit::Reg(scalar.r64()) : asmjit::Reg(scalar.r32()));
+		invoke->set_arg(1, buffer);
+		values.push_back(buffer);
+	}
+
+	void dispatchI8x16Splat() override
+	{ emitVectorSplatInteger(reinterpret_cast<uint64_t>(&wasm_i8x16_splat), 4, "i8x16.splat"); }
+	void dispatchI16x8Splat() override
+	{ emitVectorSplatInteger(reinterpret_cast<uint64_t>(&wasm_i16x8_splat), 4, "i16x8.splat"); }
+	void dispatchI64x2Splat() override
+	{ emitVectorSplatInteger(reinterpret_cast<uint64_t>(&wasm_i64x2_splat), 8, "i64x2.splat"); }
 
 	void dispatchI32x4Splat() override
 	{
@@ -8336,6 +8366,13 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance,
 
 	if (module.functionBodies.size() != functionRecords.size())
 		throw std::runtime_error("AsmJit function declaration/body count mismatch");
+	if (module.functionBodies.empty()) {
+		// An empty module (memory/table/global declarations only) generates no
+		// code. `JitRuntime::add` rejects a zero-sized code holder with
+		// NoCodeGenerated, so do not create or install one.
+		functionRecords.clear();
+		return;
+	}
 
 	const std::size_t allocationCheckpoint = context.allocationCheckpoint();
 	try {

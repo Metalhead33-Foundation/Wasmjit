@@ -1365,7 +1365,7 @@ Full runs after the batch (serial, same seed):
 
 ```
 SLJIT   821 cases: 720 passed / 101 failed
-AsmJIT  821 cases: 679 passed / 142 failed
+AsmJIT  821 cases: 712 passed / 109 failed
 ```
 
 ### Lessons
@@ -1456,3 +1456,73 @@ initialisation run and the whole script pass.
   appeared in table index widening and was the hidden finalisation failure.
 * **Keep the backend representation at the boundary.** v128 globals are two
   words in a cell; each backend maps them to its own buffer/slot form.
+
+## Shared — SIMD splat/lane, register v128 invokes, empty modules
+
+### Intended
+
+Finish the remaining SIMD splat and lane scripts, then remove the last
+harness-level `v128` refusal on SLJIT.
+
+### Root cause
+
+* AsmJIT had only `i32x4.splat`; `i8x16`, `i16x8` and `i64x2` fell through to
+  the base refusal. `simd_lane` and all of `simd_splat` were blocked on that.
+* SLJIT's register-form test session refused every `v128` parameter/result:
+  libffi was only given scalar types. Once it accepted v128, a second defect
+  appeared in the prologue: the hidden result-buffer pointer was read from
+  `S(nextSlot - 2)`, a count that includes float parameters. For
+  `(f32) -> v128`, that reads an uninitialised S2 instead of the pointer in S1.
+* An AsmJIT module with no functions still created a `CodeHolder`, finalised it
+  and called `JitRuntime::add`, which rejects zero-sized code with
+  `NoCodeGenerated` (error 10). Empty declaration-only modules therefore failed
+  to instantiate and took several spec scripts with them.
+
+### Fix
+
+* AsmJIT: one integer-splat emitter shared by `i8x16`, `i16x8` and `i64x2`,
+  using the existing `wasm_*_splat` helpers.
+* SLJIT session: a `v128` parameter is two `ffi_type_uint64` arguments (the two
+  halves of the 16-byte slot); a `v128` result appends a pointer to the caller's
+  16-byte result buffer.
+* SLJIT prologue: count *integer* argument entries separately from argument
+  ordinals. The result buffer is `S(integerEntries)`, so a preceding float does
+  not shift it. `savedCount` stays the declared-argument count that
+  `sljit_emit_enter` validates against; the extra saved register for a
+  float+pointer shape is harmless.
+* AsmJIT: return early from `compileFunctions` when there are no bodies, after
+  clearing the function records. No executable allocation is attempted.
+
+### Evidence
+
+```
+SLJIT  spec: simd_splat       162 passed / 0 failed
+SLJIT  simd_store8/16/32/64_lane  49/33/21/13 passed, 0 failed
+AsmJIT spec: simd_splat       162 passed / 0 failed
+AsmJIT spec: simd_lane        286 passed / 0 failed
+AsmJIT spec: simd_const       517 passed / 0 failed
+```
+
+Full serial runs:
+
+```
+SLJIT   821 cases: 720 passed / 101 failed
+AsmJIT  821 cases: 712 passed / 109 failed
+```
+
+The AsmJIT jump from 679 to 712 includes the empty-module fix and the SIMD
+splat/lane work. One component tag case (`tags.wast` `run-a`) is newly exposed
+now that those modules instantiate; it is a functional failure, not a signal.
+
+### Lessons
+
+* **An empty module is still a legal module.** Do not allocate or install code
+  just because a compiler object exists.
+* **Float and integer argument registers are independent sequences.** Any
+  saved-register index derived from a mixed ordinal is a bug waiting for the
+  first float-before-pointer signature.
+* **A harness refusal can hide several real successes.** The SLJIT v128 result
+  buffer path had never run for a float-parameter function until libffi could
+  describe it.
+* **One missing splat blocks an entire proposal script.** Complete the width
+  family, as with the bit-count family earlier.

@@ -209,8 +209,10 @@ bool Session::invoke(const WASM::ModuleInstance& instance,
 		}
 		return true;
 	}
-	// The register form accepts three Wasm parameters plus the context, one
-	// result, and no `v128`; `invoke` refuses exactly the same shapes.
+	// The register form accepts three Wasm parameters plus the context and one
+	// result. A `v128` parameter occupies two C argument slots; a `v128` result
+	// travels through a trailing out-buffer pointer, exactly as the ABI doc
+	// specifies (docs/backends/V128_SIGNATURE_DECISION.md).
 	if (functionType.params.size() > 3 || functionType.results.size() > 1)
 		return false;
 	if (arguments.size() != functionType.params.size())
@@ -218,14 +220,23 @@ bool Session::invoke(const WASM::ModuleInstance& instance,
 
 	std::vector<ffi_type*> argumentTypes;
 	std::vector<void*> argumentValues;
-	argumentTypes.reserve(1 + functionType.params.size());
-	argumentValues.reserve(1 + functionType.params.size());
+	argumentTypes.reserve(2 + functionType.params.size());
+	argumentValues.reserve(2 + functionType.params.size());
 
 	void* vmContext = context;
 	argumentTypes.push_back(&ffi_type_pointer);
 	argumentValues.push_back(&vmContext);
 
 	for (std::size_t i = 0; i < functionType.params.size(); ++i) {
+		if (functionType.params[i].val.opcode == WASM::ValueTypeCode::V128) {
+			// The ScriptRunner's argument slot is already 16-byte aligned.
+			argumentTypes.push_back(&ffi_type_uint64);
+			argumentTypes.push_back(&ffi_type_uint64);
+			argumentValues.push_back(const_cast<void*>(arguments[i]));
+			argumentValues.push_back(
+					const_cast<std::uint8_t*>(static_cast<const std::uint8_t*>(arguments[i]) + 8));
+			continue;
+		}
 		ffi_type* type = ffiTypeOf(functionType.params[i].val.opcode);
 		if (type == nullptr)
 			return false;
@@ -233,9 +244,19 @@ bool Session::invoke(const WASM::ModuleInstance& instance,
 		argumentValues.push_back(const_cast<void*>(arguments[i]));
 	}
 
+	void* resultOut = result;
+	const bool resultV128 = functionType.results.size() == 1
+			&& functionType.results[0].val.opcode == WASM::ValueTypeCode::V128;
+	if (resultV128) {
+		if (result == nullptr || resultCapacity < 16)
+			return false;
+		argumentTypes.push_back(&ffi_type_pointer);
+		argumentValues.push_back(&resultOut);
+	}
+
 	ffi_type* returnType = &ffi_type_void;
 	std::size_t resultSize = 0;
-	if (functionType.results.size() == 1) {
+	if (functionType.results.size() == 1 && !resultV128) {
 		returnType = ffiTypeOf(functionType.results[0].val.opcode);
 		if (returnType == nullptr)
 			return false;
