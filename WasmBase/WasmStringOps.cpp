@@ -54,7 +54,11 @@ void* makeString(WASM::VMContext* context, std::vector<uint32_t> codePoints)
 		WASM::reportTrap(WASM::TrapKind::Internal, "string allocation has no module context");
 		return nullptr;
 	}
-	return context->module->store().strings().create(std::move(codePoints));
+	WASM::StringStore& strings = context->module->store().strings();
+	WASM::StringObject* result = strings.create(std::move(codePoints));
+	if (result != nullptr)
+		strings.retain(result);
+	return result;
 }
 
 template <typename Decode>
@@ -178,11 +182,22 @@ extern "C" void* wasm_string_concat(WASM::VMContext* context, void* leftHandle,
 		const WASM::StringObject* right = stringObjectOrTrap(rightHandle);
 		if (right == nullptr)
 			return nullptr;
-		return context->module->store().strings().create(
+		return makeString(context,
 				WASM::concatCodePoints(left->codePoints, right->codePoints));
 	} catch (...) {
 		WASM::reportTrap(WASM::TrapKind::Internal);
 		return nullptr;
+	}
+}
+
+extern "C" void wasm_string_release(WASM::VMContext* context, void* handle) noexcept
+{
+	try {
+		if (context == nullptr || context->module == nullptr || handle == nullptr)
+			return;
+		context->module->store().strings().release(handle);
+	} catch (...) {
+		WASM::reportTrap(WASM::TrapKind::Internal);
 	}
 }
 
@@ -403,8 +418,11 @@ void* makeStringView(WASM::VMContext* context, void* handle, bool iterator)
 	if (string == nullptr)
 		return nullptr;
 	WASM::StringStore& strings = context->module->store().strings();
-	return iterator ? static_cast<void*>(strings.createIterator(string))
+	void* result = iterator ? static_cast<void*>(strings.createIterator(string))
 			: static_cast<void*>(strings.createView(string));
+	if (result != nullptr)
+		strings.retain(result);
+	return result;
 }
 
 uint64_t encodeWtf8View(WASM::VMContext* context, void* viewHandle,

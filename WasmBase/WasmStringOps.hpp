@@ -64,6 +64,9 @@ WASMJIT_API int32_t wasm_string_encode_wtf8(WASM::VMContext* context, uint32_t m
 /** \brief Encodes a string as WTF-16 into linear memory. \param context Module context. \param memoryIndex Linear-memory index. \param handle String handle. \param pointer Destination offset. \return Code-unit count, or 0 after a trap. */
 WASMJIT_API int32_t wasm_string_encode_wtf16(WASM::VMContext* context, uint32_t memoryIndex, void* handle, uint32_t pointer) noexcept;
 
+/** \brief Releases one ownership count of a string, view or iterator. \param context Module context. \param handle String-family handle. */
+WASMJIT_API void wasm_string_release(WASM::VMContext* context, void* handle) noexcept;
+
 /** \brief Creates a WTF-8 view of a string. \param context Module context. \param handle String handle. \return New unowned view, or null after a trap. */
 WASMJIT_API void* wasm_string_as_wtf8(WASM::VMContext* context, void* handle) noexcept;
 

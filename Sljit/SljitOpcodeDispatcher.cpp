@@ -1759,6 +1759,10 @@ void OpcodeDispatcher::push(int width)
 		throw UnsupportedBody{};
 	}
 	stackWidths_.push_back(width);
+	// Keep the ownership shadow in step with the live stack. Direct resizes
+	// elsewhere shrink `stackWidths_` first; recreating to its size discards any
+	// stale flags above the new top.
+	stackRefKinds_.resize(stackWidths_.size(), 0);
 	if (stackWidths_.size() > maxStackDepth_)
 		maxStackDepth_ = stackWidths_.size();
 }
@@ -1768,7 +1772,23 @@ int OpcodeDispatcher::pop()
 	const int width = stackWidths_.empty() ? 0 : stackWidths_.back();
 	if (!stackWidths_.empty())
 		stackWidths_.pop_back();
+	if (stackRefKinds_.size() > stackWidths_.size())
+		stackRefKinds_.resize(stackWidths_.size());
 	return width;
+}
+
+void OpcodeDispatcher::markTopStringRef()
+{
+	if (stackWidths_.empty())
+		return;
+	stackRefKinds_.resize(stackWidths_.size(), 0);
+	stackRefKinds_.back() = 1;
+}
+
+bool OpcodeDispatcher::topIsStringRef() const
+{
+	return !stackWidths_.empty() && stackRefKinds_.size() >= stackWidths_.size()
+			&& stackRefKinds_[stackWidths_.size() - 1] != 0;
 }
 
 void OpcodeDispatcher::require(bool condition, const char* reason)
@@ -3617,6 +3637,13 @@ void OpcodeDispatcher::dispatchDrop()
 	if (!reachable_)
 		return;
 	requireStack(1);
+	const bool stringRef = topIsStringRef();
+	if (!measureOnly_ && stringRef) {
+		const std::size_t top = stackWidths_.size() - 1;
+		loadContext(SLJIT_R0);
+		loadSlot(SLJIT_R1, top, 8);
+		emitHelper(SLJIT_ARGS2V(P, P), &::wasm_string_release);
+	}
 	pop();
 }
 
@@ -8823,6 +8850,7 @@ void OpcodeDispatcher::dispatchStringConcat()
 	emitPendingTrapCheck();
 	pop(); pop();
 	push(8);
+	markTopStringRef();
 }
 
 void OpcodeDispatcher::dispatchStringEq()
@@ -8886,6 +8914,7 @@ void OpcodeDispatcher::emitStringNew(WASM::MemIdx memory, const void* helper)
 	emitPendingTrapCheck();
 	pop(); pop();
 	push(8);
+	markTopStringRef();
 }
 
 void OpcodeDispatcher::emitStringEncode(WASM::MemIdx memory, const void* helper)
@@ -8990,6 +9019,7 @@ void OpcodeDispatcher::emitStringNewArray(WASM::TypeIdx type, int mode)
 	emitPendingTrapCheck();
 	pop(); pop(); pop();
 	push(8);
+	markTopStringRef();
 }
 
 void OpcodeDispatcher::emitStringEncodeArray(WASM::TypeIdx type, int mode)
@@ -9085,6 +9115,7 @@ void OpcodeDispatcher::emitStringViewCreate(const void* helper)
 	emitPendingTrapCheck();
 	pop();
 	push(8);
+	markTopStringRef();
 }
 
 void OpcodeDispatcher::emitStringViewWtf8Encode(const void* helper,
@@ -9159,6 +9190,7 @@ void OpcodeDispatcher::emitStringViewRange(const void* helper)
 	for (int i = 0; i < 3; ++i)
 		pop();
 	push(8);
+	markTopStringRef();
 }
 
 void OpcodeDispatcher::emitStringViewWtf16Encode(WASM::MemIdx memory)
@@ -9394,6 +9426,7 @@ void OpcodeDispatcher::dispatchStringViewIterSlice()
 	pop();
 	pop();
 	push(8);
+	markTopStringRef();
 }
 
 void OpcodeDispatcher::dispatchMemoryDiscard(WASM::MemIdx memory)

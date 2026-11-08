@@ -2362,7 +2362,51 @@ Default 22,448 assertions in 821 cases, green
   range and layout are part of the helper contract now.
 
 
-## Stringview and iterator lowering
+## String ownership on `drop`
+
+### Intended
+
+Make a discarded `string.concat` result release its `StringStore` object, not
+just disappear from the operand stack.
+
+### Fix
+
+* Operation results (`concat`, `new_*`, GC-array constructors, view/iterator
+  factories and slices) now arrive retained: `makeString` and `makeStringView`
+  take one ownership count, and `concat` goes through the same path.
+* `wasm_string_release` is the shared release helper.
+* SLJIT carries a `stackRefKinds_` shadow beside `stackWidths_`; every marked
+  producer sets the top bit and `drop` releases only when that bit is set.
+* AsmJIT records the virtual-register ids of owned string results in
+  `stringValues`; `drop` releases only a tracked id. Virtual ids are unique, so
+  a stale entry cannot match a later value.
+* `string.const` deliberately pushes a borrowed literal, so dropping it does not
+  release the instance-owned literal.
+
+### Evidence
+
+```
+SLJIT   a discarded string concat result   6/6
+AsmJIT  a discarded string concat result   6/6
+```
+
+Full serial runs:
+
+```
+SLJIT   821 cases: 794 passed / 27 failed; no signal
+AsmJIT  821 cases: 789 passed / 32 failed; no signal
+Default 22,448 assertions in 821 cases, green
+```
+
+### Lessons
+
+* **`drop` is type-directed even though the opcode is polymorphic.** A backend
+  needs an ownership side-table beside the operand stack; treating every word as
+  a reference would corrupt `i64` values.
+* **Producers must create owned values.** Releasing an unowned `StringStore`
+  object is a no-op, so retention belongs on the producing helper.
+
+
 
 ### Intended
 

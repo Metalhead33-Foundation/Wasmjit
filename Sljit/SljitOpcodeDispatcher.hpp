@@ -833,6 +833,10 @@ private:
 	 * \param width 4 for an i32 slot, 8 for an i64 slot.
 	 */
 	void push(int width);
+	/** \brief Marks the top operand as owning one string-family reference. */
+	void markTopStringRef();
+	/** \brief Tests the ownership bit of the current operand-stack top. \return true when `drop` must release it. */
+	bool topIsStringRef() const;
 	/*!
 	 * \brief Pops one operand-stack slot.
 	 * \return The width of the popped slot.
@@ -1521,6 +1525,9 @@ public:
 	std::vector<int> resultWidths_;
 
 	std::vector<int> stackWidths_; //!< Widths of the live operand stack, bottom first.
+	//! String-family ownership bits for the same stack; 1 means the slot owns one
+	//! `StringStore` reference and must release it on `drop`.
+	std::vector<std::uint8_t> stackRefKinds_;
 	std::size_t maxStackDepth_ = 0; //!< High-water mark of the operand stack.
 	//! Operand depth the prologue reserved on the emitting pass. A push past it
 	//! is a compiler bug and is refused before SLJIT can assert.

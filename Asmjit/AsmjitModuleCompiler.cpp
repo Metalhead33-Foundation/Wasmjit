@@ -26,6 +26,7 @@
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -1575,6 +1576,12 @@ protected:
         emitSelect();
     }
 
+	void pushStringValue(const asmjit::x86::Gp& value)
+	{
+		values.push_back(value);
+		stringValues.insert(value.id());
+	}
+
 	void dispatchDrop() override
 	{
 		// Polymorphic dead code after a terminator has no operand stack to
@@ -1583,7 +1590,22 @@ protected:
 			return;
 		if (values.empty())
 			throw std::runtime_error("AsmJit drop operand stack underflow");
+		const bool stringRef = stringValues.erase(values.back().id()) != 0;
+		auto dropped = values.back();
 		values.pop_back();
+		if (!stringRef)
+			return;
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kVoid);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke),
+				reinterpret_cast<uint64_t>(&::wasm_string_release), signature),
+				"AsmJit string drop helper call failed");
+		invoke->set_arg(0, vmContext);
+		invoke->set_arg(1, dropped);
+		emitPendingTrapReturn();
 	}
 
 	void dispatchBlock(const WASM::BlockType& type) override
@@ -7372,7 +7394,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		invoke->set_arg(2, right);
 		auto result = compiler.new_gp_ptr("stringConcatResult");
 		invoke->set_ret(0, result);
-		values.push_back(result);
+		pushStringValue(result);
 		emitPendingTrapReturn();
 	}
 
@@ -7455,7 +7477,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		invoke->set_arg(3, length);
 		auto result = compiler.new_gp_ptr("stringNewResult");
 		invoke->set_ret(0, result);
-		values.push_back(result);
+		pushStringValue(result);
 		emitPendingTrapReturn();
 	}
 
@@ -7540,7 +7562,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		invoke->set_arg(1, string);
 		auto result = compiler.new_gp_ptr("stringViewResult");
 		invoke->set_ret(0, result);
-		values.push_back(result);
+		pushStringValue(result);
 		emitPendingTrapReturn();
 	}
 
@@ -7567,7 +7589,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		invoke->set_arg(2, range);
 		auto result = compiler.new_gp_ptr("stringViewSlice");
 		invoke->set_ret(0, result);
-		values.push_back(result);
+		pushStringValue(result);
 		emitPendingTrapReturn();
 	}
 
@@ -7866,7 +7888,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		invoke->set_arg(2, count);
 		auto result = compiler.new_gp_ptr("stringIterSlice");
 		invoke->set_ret(0, result);
-		values.push_back(result);
+		pushStringValue(result);
 		emitPendingTrapReturn();
 	}
 
@@ -7913,7 +7935,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		invoke->set_arg(3, asmjit::Imm(layout));
 		auto result = compiler.new_gp_ptr("stringNewArrayResult");
 		invoke->set_ret(0, result);
-		values.push_back(result);
+		pushStringValue(result);
 		emitPendingTrapReturn();
 	}
 
@@ -9691,6 +9713,10 @@ private:
 	//! Slot width of every local (4/8, or 16 for a v128 buffer).
 	std::vector<int> localWidths;
 	std::vector<asmjit::x86::Gp> values;
+	//! Virtual-register ids of operand-stack values that own one string-family
+	//! reference. AsmJIT ids are unique, so a consumed value's stale entry can
+	//! never match a later, different value.
+	std::unordered_set<uint32_t> stringValues;
 	//! True while the current arm can fall through; a branch or return clears it.
 	bool armTerminated = false;
 
