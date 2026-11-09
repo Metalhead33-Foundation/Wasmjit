@@ -1,10 +1,13 @@
+;; Historical name: this was the AsmJIT/SLJIT "unsupported" probe. Both now
+;; support v128 block results (BLOCKRESV128), so it is a small positive fixture
+;; for the SLJIT block-result path. The durable AsmJIT refusal probe is
+;; asmjit_brtable_multi_unsupported.wat.
 (module
   (func (export "already_compiled") (result i32)
     i32.const 42)
-  ;; The initial slice is integer-only, so a floating-point signature is
-  ;; rejected while the module is compiled — after the first function has
-  ;; already been emitted (docs/WRITING_A_BACKEND.md §9). Keep this unsupported:
-  ;; `i32.eqz` used to serve here and is now lowered.
-  (func (export "unsupported") (param f32) (result f32)
-    local.get 0)
-)
+  (func (export "unsupported") (result i32)
+    block (result v128)
+      v128.const i32x4 0 0 0 0
+    end
+    drop
+    i32.const 1))

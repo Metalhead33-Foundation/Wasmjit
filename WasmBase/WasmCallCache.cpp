@@ -1,5 +1,7 @@
 #include "WasmCallCache.hpp"
 
+#include "WasmBase/WasmBackendAbi.hpp"
+
 #include "WasmModule.hpp"
 #include "WasmStore.hpp"
 #include "WasmType.hpp"
@@ -107,14 +109,59 @@ ModuleCallCache::ModuleCallCache(ModuleInstance& instance)
 		entry.callable = *callable;
 		entry.paramCount = view.funcParams().size();
 		entry.multiResult = view.funcResults().size() > 1u;
+		entry.resultCount = view.funcResults().size();
+		for (const CanonStorageType& result : view.funcResults())
+			entry.resultKinds.push_back(result.value.opcode);
+		if (entry.resultCount == 1u)
+			entry.resultKind = view.funcResults().front().value.opcode;
 		entry.argTypes.reserve(1u + entry.paramCount
 				+ (entry.multiResult ? 1u : 0u));
 		entry.argTypes.push_back(&ffi_type_pointer); // VMContext*
-		for (const CanonStorageType& parameter : view.funcParams())
-			entry.argTypes.push_back(ffiTypeFor(parameter));
-		if (entry.multiResult)
+		for (const CanonStorageType& parameter : view.funcParams()) {
+			entry.paramKinds.push_back(parameter.value.opcode);
+			const std::uint32_t slots = argSlotCount(valueKindOf(parameter.value.opcode));
+			if (slots == 1) {
+				entry.argTypes.push_back(ffiTypeFor(parameter));
+			} else if (instance.v128ParameterIsAggregate()) {
+				// This backend spells a vector as one 16-byte aggregate, so the
+				// cif must describe that shape or the call is misclassified on
+				// MS x64 (docs/backends/LIBJIT_ARGUMENT_DEFECT.md §12).
+				entry.argTypes.push_back(v128Type());
+			} else {
+				// `argSlotCount` decides how many C arguments a kind occupies; a vector
+				// occupies two scalar words (decision note §28), because a 16-byte
+				// aggregate is passed by reference on MS x64.
+				for (std::uint32_t slot = 0; slot < slots; ++slot)
+					entry.argTypes.push_back(&ffi_type_uint64);
+			}
+		}
+		// The packer's buffer has to hold the whole frame: 8 bytes per scalar slot,
+		// 16 per vector, arguments first and then the results. Computed HERE, after
+		// `paramKinds` is filled -- the first version computed it before the loop,
+		// read an empty vector, and sized every frame at 8 bytes.
+		{
+			const auto slotWidth = [](WASM::ValueTypeCode code) {
+				return code == WASM::ValueTypeCode::V128 ? 16u : 8u;
+			};
+			std::size_t bytes = 0;
+			for (const WASM::ValueTypeCode code : entry.paramKinds)
+				bytes += slotWidth(code);
+			for (const WASM::ValueTypeCode code : entry.resultKinds)
+				bytes += slotWidth(code);
+			entry.frameBytes = bytes;
+		}
+		// A backend that returns a v128 through a caller-supplied buffer describes the
+		// same shape as a multi-value tuple: a trailing pointer argument and a void
+		// return (docs/backends/V128_SIGNATURE_DECISION.md).
+		const bool bufferedVectorResult = !entry.multiResult
+				&& view.funcResults().size() == 1u
+				&& view.funcResults().front().value.opcode
+						== WASM::ValueTypeCode::V128
+				&& instance.v128ResultIsBuffered();
+		if (entry.multiResult || bufferedVectorResult)
 			entry.argTypes.push_back(&ffi_type_pointer); // result buffer
 		entry.returnType = view.funcResults().empty() || entry.multiResult
+				|| bufferedVectorResult
 				? &ffi_type_void
 				: ffiTypeFor(view.funcResults().front());
 		auto cif = std::make_unique<ffi_cif>();
@@ -153,13 +200,86 @@ void ModuleCallCache::call(const ModuleFfiEntry& entry, void* result,
 		throw std::runtime_error("module call cache: entry is not from this cache");
 	const auto index = static_cast<std::size_t>(found - entries_.begin());
 	ffi_cif* cif = static_cast<ffi_cif*>(cifs_[index]);
+	// Staging-frame ABI (docs/backends/EXPORT_SIGNATURE.md sections 17 and 21): the
+	// embedder keeps the typed grammar and this cache is the only place that knows
+	// the callee wanted a frame. No backend changes, no per-signature thunk.
+	if (instance_->frameCallAbi()) {
+		const auto widthOf = [](WASM::ValueTypeCode code) -> std::size_t {
+			switch (code) {
+			case WASM::ValueTypeCode::V128: return 16;
+			case WASM::ValueTypeCode::I32: return 4;
+			case WASM::ValueTypeCode::F32: return 4;
+			default: return 8;
+			}
+		};
+		alignas(16) std::uint8_t inlineFrame[512] = {};
+		std::unique_ptr<std::uint8_t[]> heapFrame;
+		std::uint8_t* frame = inlineFrame;
+		if (entry.frameBytes > sizeof(inlineFrame)) {
+			// A signature wider than the inline block gets an exactly sized heap
+			// frame. `operator new[]` returns storage aligned for `max_align_t`,
+			// which is 16 on every target this project supports, so a `v128` slot
+			// stays aligned (docs/backends/EXPORT_SIGNATURE.md section 23).
+			heapFrame = std::make_unique<std::uint8_t[]>(entry.frameBytes + 16);
+			frame = heapFrame.get();
+			std::memset(frame, 0, entry.frameBytes + 16);
+		}
+		std::size_t offset = 0;
+		for (std::size_t i = 0; i < entry.paramCount; ++i) {
+			const std::size_t width = widthOf(entry.paramKinds[i]);
+			// A frame slot is 8 bytes but an i32 argument points at 4, so the slot
+			// is zeroed first and only the value's own width is copied -- never a
+			// blind 8-byte copy, which would read past the caller's value.
+			std::memcpy(frame + offset, args[i], width);
+			offset += width == 16 ? 16 : 8;
+		}
+		const auto entryPoint = reinterpret_cast<void (*)(void*, void*)>(
+				entry.callable.fnPtr);
+		void* frameContext = entry.callable.context != nullptr
+				? static_cast<void*>(entry.callable.context)
+				: static_cast<void*>(instance_->context());
+		entryPoint(frameContext, frame);
+		if (result != nullptr) {
+			// Results land in the caller's buffer as slots, in declaration order --
+			// the same layout the frame uses. That is the invariant: the embedder
+			// never learns which backend produced the values
+			// (docs/backends/EXPORT_SIGNATURE.md section 31).
+			std::size_t frameOffset = offset;
+			std::size_t bufferOffset = 0;
+			for (const WASM::ValueTypeCode code : entry.resultKinds) {
+				const std::size_t width = widthOf(code);
+				std::memcpy(static_cast<std::uint8_t*>(result) + bufferOffset,
+						frame + frameOffset, width);
+				frameOffset += width == 16 ? 16 : 8;
+				bufferOffset += width == 16 ? 16 : 8;
+			}
+		}
+		return;
+	}
+
 	std::vector<void*> arguments(entry.argTypes.size(), nullptr);
 	void* context = entry.callable.context != nullptr
 			? static_cast<void*>(entry.callable.context)
 			: static_cast<void*>(instance_->context());
 	arguments[0] = &context;
-	for (std::size_t i = 0; i < entry.paramCount; ++i)
-		arguments[i + 1u] = args[i];
+	std::size_t slot = 1; // argument 0 is the VMContext*
+	for (std::size_t i = 0; i < entry.paramCount; ++i) {
+		const std::uint32_t count = argSlotCount(valueKindOf(entry.paramKinds[i]));
+		if (count == 1) {
+			arguments[slot++] = args[i];
+		} else if (instance_->v128ParameterIsAggregate()) {
+			// This backend's cif describes the vector as ONE 16-byte aggregate
+			// (docs/backends/LIBJIT_ARGUMENT_DEFECT.md section 12), so it takes one
+			// pointer to 16 bytes -- not two word pointers, which is what the
+			// canonical two-word spelling wants and what the branch below does.
+			arguments[slot++] = args[i];
+		} else {
+			// A vector is handed over as its low word, then its high word.
+			auto* bytes = static_cast<std::uint8_t*>(args[i]);
+			for (std::uint32_t word = 0; word < count; ++word)
+				arguments[slot++] = bytes + word * sizeof(std::uint64_t);
+		}
+	}
 	void* resultBuffer = result;
 	if (entry.multiResult)
 		arguments.back() = &resultBuffer;

@@ -20,6 +20,8 @@ WASMJIT_VISIBLE_BEGIN
 #include <memory>
 namespace WASM {
 
+struct VMContext;
+
 //! Must remain standard-layout. backend accesses fields via offsetof().
 //! NEVER add std::vector, virtual functions, or non-trivial members here.
 struct LinearMemory {
@@ -54,6 +56,10 @@ static_assert(std::is_standard_layout_v<LinearMemory>,
 //! growing a shared memory is observed atomically (THREADS.md TH-3/T7).
 /** \brief Reads the current memory size with sequential consistency. \param memory Backend-visible linear-memory descriptor. \return Current memory size in bytes. */
 uint64_t wasm_memory_size(const LinearMemory* memory);
+
+/** \brief Zero-fills a memory range and discards whole pages when the provider supports it. \param context Module context. \param memoryIndex Linear-memory index. \param destination Start byte offset. \param length Byte count. */
+void wasm_memory_discard(VMContext* context, uint32_t memoryIndex,
+		uint64_t destination, uint64_t length);
 
 //! How a linear memory obtains and grows its bytes
 //! (docs/proposals/MEMORY_PROVIDER.md MP-1).

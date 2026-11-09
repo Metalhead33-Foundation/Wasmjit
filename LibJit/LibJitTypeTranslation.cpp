@@ -202,6 +202,18 @@ jit_type_t LibJitTypeTranslator::translateFunctionSignature(const WASM::FuncType
 
 	// Implicit leading `WASM::VMContext*`, lowered as an opaque pointer in LibJIT.
 	params.push_back(translateVMContextPointerType());
+	if (frameAbi_) {
+		// Staging-frame ABI (docs/backends/STAGING_CALL_ABI.md, step 4a): this
+		// overload is the one `translateTypes` uses, so the frame form has to be
+		// spelled here as well as in the CoreTypeView overload. The context plus
+		// one opaque frame pointer replace the typed parameters, which lifts the
+		// sixth-argument defect (docs/backends/LIBJIT_ARGUMENT_DEFECT.md). The
+		// The canonical frame signature returns void; every result is written into
+		// the caller's result block by the callee.
+		params.push_back(jit_type_void_ptr);
+		return jit_type_create_signature(jit_abi_cdecl, jit_type_void,
+			params.data(), params.size(), 1);
+	}
 	for(const auto& it : wasm_func.params) {
 		params.push_back(translateType(it.val));
 	}
@@ -300,6 +312,22 @@ jit_type_t LibJitTypeTranslator::translateFunctionSignature(WASM::CoreTypeView v
 	return_types.reserve(view.funcResults().size());
 
 	params.push_back(translateVMContextPointerType());
+	if (frameAbi_) {
+		// Staging-frame ABI (docs/backends/STAGING_CALL_ABI.md, step 4a): the
+		// context plus one opaque frame pointer replace the typed parameters,
+		// which is what lifts the sixth-argument defect
+		// (docs/backends/LIBJIT_ARGUMENT_DEFECT.md). The return stays typed: the
+		// compiled function hands its single scalar back in a register, and the
+		// driver -- the only entry an embedder sees -- stores it into the frame,
+		// so both halves honour one contract.
+		params.push_back(jit_type_void_ptr);
+		// The canonical staging-frame signature returns void; every result is
+		// written into the caller's result block (docs/EXPORT_SIGNATURE.md §40).
+		// Keeping a scalar return here would make a callee's result appear in a
+		// register while a frame caller expects it in the frame.
+		return jit_type_create_signature(jit_abi_cdecl, jit_type_void,
+			params.data(), params.size(), 1);
+	}
 	for (const WASM::CanonStorageType& p : view.funcParams())
 		params.push_back(translateCanonStorage(p));
 	for (const WASM::CanonStorageType& r : view.funcResults())

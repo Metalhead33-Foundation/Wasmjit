@@ -1,5 +1,6 @@
 #include "LibjitModuleCompiler.hpp"
 #include "LibjitOpcodeDispatcher.hpp"
+#include "../WasmBase/WasmBackendAbi.hpp"
 #include "../WasmBase/WasmStack.hpp"
 #include "../WasmBase/WasmStore.hpp"
 #include "../WasmBase/WasmTrap.hpp"
@@ -181,8 +182,40 @@ void ModuleCompiler::compileFunction(jit_function_t fn, uint32_t funcTypeIdx, co
 	std::vector<jit_value_t> locals;
 	locals.reserve(stack.allLocals.size());
 
-	for (uint32_t i = 0; i < stack.parameterCount; ++i)
-		locals.push_back(jit_value_get_param(fn, i + 1));
+	if (instance.frameCallAbi()) {
+		// Staging-frame ABI (docs/backends/STAGING_CALL_ABI.md, step 4a): the
+		// arguments are already in the caller's frame, so each parameter is
+		// copied out of it into a local. A `v128` moves as two eight-byte words.
+		jit_value_t framePtr = jit_value_get_param(fn, 1);
+		uint32_t offset = 0;
+		for (uint32_t i = 0; i < stack.parameterCount; ++i) {
+			const WASM::ValueType& vt = stack.allLocals[i];
+			jit_type_t jt = typeTranslator.translateType(vt);
+			jit_value_t slot = jit_value_create(fn, jt);
+			jit_value_t addr = jit_insn_add(fn, framePtr,
+				jit_value_create_nint_constant(fn, jit_type_void_ptr,
+					static_cast<jit_nint>(offset)));
+			const size_t width = jit_type_get_size(jt);
+			if (width <= sizeof(uint64_t))
+				jit_insn_store(fn, slot, jit_insn_load_relative(fn, addr, 0, jt));
+			else {
+				// A `v128` local is an aggregate: LibJIT stores into it through
+				// its address, never through the value itself.
+				jit_value_t slotAddr = jit_insn_address_of(fn, slot);
+				for (size_t half = 0; half < width; half += sizeof(uint64_t)) {
+					jit_value_t w = jit_value_create(fn, jit_type_ulong);
+					jit_insn_store(fn, w, jit_insn_load_relative(fn, addr,
+						static_cast<jit_nint>(half), jit_type_ulong));
+					jit_insn_store_relative(fn, slotAddr, static_cast<jit_nint>(half), w);
+				}
+			}
+			locals.push_back(slot);
+			offset += WASM::frameValueBytes(WASM::valueKindOf(vt.opcode));
+		}
+	} else {
+		for (uint32_t i = 0; i < stack.parameterCount; ++i)
+			locals.push_back(jit_value_get_param(fn, i + 1));
+	}
 
 	for (uint32_t i = 0; i < stack.localCount; ++i) {
 		const WASM::ValueType& vt = stack.allLocals[stack.parameterCount + i];
@@ -224,6 +257,22 @@ void ModuleCompiler::translateTypes(WASM::ModuleInstance& instance, const WASM::
 	// We must do this before declaring any function, because each
 	// function's signature is expressed as a type index, and we need
 	// the jit_type_t for that index to create the jit_function_t.
+	// Staging-frame ABI (docs/backends/STAGING_CALL_ABI.md, step 4a): the frame
+	// form is OPT-IN, never inferred. LibJIT spells a `v128` as one 16-byte
+	// aggregate, so a wide vector signature already crosses the register form
+	// intact and there is no local ceiling to lift; switching every such module
+	// automatically produced ten suite failures and a crash. The register form is
+	// therefore the default -- it is the fastest form this backend has -- and the
+	// frame form is used when an embedder asks for one ABI everywhere.
+	// The choice must be made before translation, because the signature itself
+	// changes shape.
+	{
+		const bool frame = WASM::frameCallAbiOptIn();
+		// The frame form is still opt-in, but once selected it is complete:
+		// calls, imports and multi-result signatures use the same frame contract.
+		typeTranslator.setFrameCallAbi(frame);
+		instance.setFrameCallAbi(frame);
+	}
 	typeTranslator.translateTypes(module.typeIds, instance.store().types().store());
 	internals.translatedTypes.resize(typeTranslator.getTranslatedTypes().size());
 	for(size_t i = 0; i < typeTranslator.getTranslatedTypes().size();++i)
@@ -272,6 +321,13 @@ void ModuleCompiler::declareFunctions(WASM::ModuleInstance& instance, const WASM
 
 void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM::Module& module, WASM::ModuleInstanceInternals& internals)
 {
+	// This backend spells every `v128` parameter as one 16-byte aggregate rather
+	// than the canonical two scalar words, because libjit loses the sixth
+	// integer argument (docs/backends/LIBJIT_ARGUMENT_DEFECT.md §8.1/§12). The
+	// call cache needs to know, so it describes the same shape to libffi; on
+	// SysV the two spellings are the same ABI, on MS x64 they are not.
+	instance.setV128ParameterIsAggregate(true);
+
 	// The import count tells us where the "internal function" index space
 	// begins. Function index N refers to an internal function at
 	// compiledFunctions[N - importedFuncCount].
@@ -352,6 +408,11 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM
 
 	std::unordered_map<uint32_t, void*> tailThunks;
 	const auto generateTailThunk = [&](uint32_t typeIdx) -> void* {
+		// Frame tails use a frame call followed by a frame return. A register-form
+		// thunk would stage typed arguments against the (ctx, frame) signature, so
+		// the frame mode deliberately has no tail thunks.
+		if (instance.frameCallAbi())
+			return nullptr;
 		const auto known = tailThunks.find(typeIdx);
 		if (known != tailThunks.end())
 			return known->second;
@@ -425,7 +486,17 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM
 	{
 		const uint32_t typeIdx = module.internalFunctionTypeIndices[i];
 		jit_type_t sig = static_cast<jit_type_t>(internals.translatedTypes[typeIdx]);
-		jit_function_t driver = jit_function_create(context, sig);
+		const bool frameAbi = instance.frameCallAbi();
+		jit_type_t driverSigType = sig;
+		if (frameAbi) {
+			// Staging-frame ABI (step 4a): the embedder-visible entry takes
+			// (ctx, frame) and returns void, while the compiled function keeps
+			// its typed return; this driver moves the value into the frame.
+			jit_type_t frameParams[2] = { jit_type_void_ptr, jit_type_void_ptr };
+			driverSigType = jit_type_create_signature(jit_abi_cdecl, jit_type_void,
+				frameParams, 2, 1);
+		}
+		jit_function_t driver = jit_function_create(context, driverSigType);
 		jit_type_t retType = jit_type_get_return(sig);
 		assert(module.typeView(typeIdx).kind() == WASM::CanonTypeKind::Func);
 		const WASM::FuncType driverSig = module.funcTypeAt(typeIdx);
@@ -459,7 +530,7 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM
 		jit_value_t state = jit_value_create(driver, jit_type_void_ptr);
 		jit_insn_store(driver, state, jit_insn_call_native(driver, "wasm_tail_call_state",
 			reinterpret_cast<void*>(&WASM::currentTailCallState), stateSig, nullptr, 0, 0));
-		if (hasResultBuffer) {
+		if (hasResultBuffer && !frameAbi) {
 			jit_insn_store_relative(driver, state,
 				static_cast<jit_nint>(offsetof(WASM::TailCallState, resultBuffer)),
 				jit_value_get_param(driver, paramCount + 1));
@@ -477,13 +548,17 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM
 			static_cast<jit_nint>(offsetof(WASM::Callable, rawFnPtr)), jit_type_void_ptr);
 		jit_value_t calleeCtx = jit_insn_load_relative(driver, target,
 			static_cast<jit_nint>(offsetof(WASM::Callable, context)), jit_type_void_ptr);
-		std::vector<jit_value_t> callArgs(1 + static_cast<size_t>(paramCount)
-				+ (hasResultBuffer ? 1u : 0u));
-		callArgs[0] = calleeCtx;
-		for (unsigned int p = 0; p < paramCount; ++p)
-			callArgs[1 + p] = jit_value_get_param(driver, p + 1);
-		if (hasResultBuffer)
-			callArgs.back() = jit_value_get_param(driver, paramCount + 1);
+		std::vector<jit_value_t> callArgs;
+		callArgs.push_back(calleeCtx);
+		if (frameAbi) {
+			// The frame travels as it arrived: the arguments are already in it.
+			callArgs.push_back(jit_value_get_param(driver, 1));
+		} else {
+			for (unsigned int p = 0; p < paramCount; ++p)
+				callArgs.push_back(jit_value_get_param(driver, p + 1));
+			if (hasResultBuffer)
+				callArgs.push_back(jit_value_get_param(driver, paramCount + 1));
+		}
 		jit_value_t callRet = jit_insn_call_indirect(driver, fnPtr, sig, callArgs.data(),
 			static_cast<unsigned>(callArgs.size()), 0);
 		if (slotResult) {
@@ -549,7 +624,7 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM
 		jit_insn_branch(driver, &loopLabel);
 
 		jit_insn_label(driver, &doneLabel);
-		if (retType == jit_type_void || hasResultBuffer) {
+		if (frameAbi || retType == jit_type_void || hasResultBuffer) {
 			jit_insn_return(driver, nullptr);
 		} else if (slotResult) {
 			jit_insn_return(driver, jit_insn_load_relative(driver, state,
@@ -589,6 +664,19 @@ void ModuleCompiler::callStartFunction(WASM::ModuleInstance& instance, uint32_t 
 		throw std::runtime_error("start function has no compiled body");
 
 	using StartFn = void (*)(WASM::VMContext*);
+	using StartFrameFn = void (*)(WASM::VMContext*, void*);
+	if (instance.frameCallAbi()) {
+		// A start function has no parameters or results, but in frame mode its
+		// signature is still (ctx, frame). The frame is never read.
+		alignas(16) std::uint8_t frame[16] = {};
+		StartFrameFn frameFn = reinterpret_cast<StartFrameFn>(callable->fnPtr);
+		{
+			WASM::CallDepthScope depth;
+			frameFn(callable->context, frame);
+		}
+		WASM::checkTrap();
+		return;
+	}
 	StartFn fn = reinterpret_cast<StartFn>(callable->fnPtr);
 	// The start function runs at the host boundary: a trap it reports comes back
 	// here as a `WASM::Trap` exception, so `instantiate` unwinds normally and the

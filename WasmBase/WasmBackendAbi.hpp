@@ -18,6 +18,7 @@ WASMJIT_VISIBLE_BEGIN
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <vector>
 #include <type_traits>
 
 namespace WASM {
@@ -194,6 +195,160 @@ static_assert(std::is_standard_layout_v<SignatureView>);
 static_assert(std::is_standard_layout_v<FieldLayout>);
 static_assert(std::is_standard_layout_v<AggregateLayout>);
 static_assert(sizeof(FieldLayout) == 12, "the C plugin view pins the layout");
+
+/** \brief Number of C argument slots one value kind occupies at the canonical boundary.
+\param kind The value kind.
+\return 2 for `v128`, 1 for every other kind.
+This is the single source of truth for the rule in
+[`docs/backends/V128_SIGNATURE_DECISION.md`](../docs/backends/V128_SIGNATURE_DECISION.md) §28: a vector
+crosses as **two scalar words, low first**, because MS x64 passes 16-byte aggregates by reference.
+*/
+inline constexpr std::uint32_t argSlotCount(ValueKind kind) noexcept
+{
+	return kind == ValueKind::V128 ? 2u : 1u;
+}
+
+/** \brief One wasm parameter's placement in the canonical C argument list. */
+struct ArgSlot {
+	std::uint32_t parameter = 0; //!< Index of the wasm parameter.
+	std::uint32_t firstSlot = 0; //!< First C argument slot, counting from the first wasm parameter.
+	std::uint32_t slots = 1; //!< Slots occupied: 2 for a vector, 1 otherwise.
+};
+
+/** \brief Maps wasm parameters onto C argument slots.
+\param kinds The parameter kinds, in declaration order.
+\return One entry per parameter, with cumulative first-slot indices.
+Every backend that indexes parameters positionally must use this instead of recomputing the
+walk by hand: a vector occupying two slots shifts every later parameter, and hand arithmetic
+for that mapping produced three separate corruption investigations in a positional backend.
+*/
+inline std::vector<ArgSlot> mapArgSlots(std::span<const ValueKind> kinds)
+{
+	std::vector<ArgSlot> slots;
+	slots.reserve(kinds.size());
+	std::uint32_t next = 0;
+	for (std::uint32_t i = 0; i < kinds.size(); ++i) {
+		const std::uint32_t count = argSlotCount(kinds[i]);
+		slots.push_back(ArgSlot {i, next, count});
+		next += count;
+	}
+	return slots;
+}
+
+//! Staging-frame arithmetic (`docs/backends/STAGING_CALL_ABI.md`).
+//! In the frame form a compiled function is `void fn(VMContext*, void* frame)` and
+//! every parameter and result lives in bytes. Both sides derive the offsets from
+//! the same FuncType, which is what makes the form canonical: it is defined by
+//! bytes, not by registers, so no target's argument classification can change it.
+
+/** \brief Bytes one value kind occupies in a staging frame.
+\param kind The value kind.
+\return 16 for `v128`, 8 for every other kind.
+A value is stored at its natural width rounded up to 8, and a vector's 16 bytes are
+exactly what `argSlotCount` already counts as two words.
+*/
+inline constexpr std::uint32_t frameValueBytes(ValueKind kind) noexcept
+{
+	return argSlotCount(kind) * 8u;
+}
+
+/** \brief Total bytes the parameter list occupies in a staging frame.
+\param kinds The parameter kinds, in declaration order.
+\return The byte size of the argument block.
+*/
+inline std::uint32_t frameArgumentsBytes(std::span<const ValueKind> kinds) noexcept
+{
+	std::uint32_t bytes = 0;
+	for (const ValueKind kind : kinds)
+		bytes += frameValueBytes(kind);
+	return bytes;
+}
+
+/** \brief Total bytes a result tuple occupies in a staging frame.
+\param kinds The result kinds, in declaration order.
+\return The byte size of the result block.
+*/
+inline std::uint32_t frameResultsBytes(std::span<const ValueKind> kinds) noexcept
+{
+	return frameArgumentsBytes(kinds);
+}
+
+/** \brief Byte offset of one parameter inside the argument block.
+\param kinds The parameter kinds, in declaration order.
+\param parameter Zero-based index of the parameter.
+\return The offset from the start of the frame, or 0 when `parameter` is out of range.
+*/
+inline std::uint32_t frameArgumentOffset(std::span<const ValueKind> kinds,
+		std::uint32_t parameter) noexcept
+{
+	if (parameter >= kinds.size())
+		return 0;
+	std::uint32_t offset = 0;
+	for (std::uint32_t i = 0; i < parameter; ++i)
+		offset += frameValueBytes(kinds[i]);
+	return offset;
+}
+
+/** \brief Byte offset of one result inside the result block, which follows the arguments.
+\param argumentKinds The parameter kinds, in declaration order.
+\param resultKinds The result kinds, in declaration order.
+\param result Zero-based index of the result.
+\return The offset from the start of the frame, or 0 when `result` is out of range.
+*/
+inline std::uint32_t frameResultOffset(std::span<const ValueKind> argumentKinds,
+		std::span<const ValueKind> resultKinds, std::uint32_t result) noexcept
+{
+	if (result >= resultKinds.size())
+		return 0;
+	std::uint32_t offset = frameArgumentsBytes(argumentKinds);
+	for (std::uint32_t i = 0; i < result; ++i)
+		offset += frameValueBytes(resultKinds[i]);
+	return offset;
+}
+
+/** \brief Total bytes a call frame needs: the argument block then the result block.
+\param argumentKinds The parameter kinds, in declaration order.
+\param resultKinds The result kinds, in declaration order.
+\return The byte size the caller must allocate, 16-byte aligned by the caller.
+*/
+inline std::uint32_t frameBytes(std::span<const ValueKind> argumentKinds,
+		std::span<const ValueKind> resultKinds) noexcept
+{
+	return frameArgumentsBytes(argumentKinds) + frameResultsBytes(resultKinds);
+}
+
+/*! \brief The process-wide staging-frame preference, mutable for the opt-in.
+\return The flag a backend reads when it chooses a calling form.
+*/
+inline bool& frameCallAbiPreference() noexcept
+{
+	static bool preferred = false;
+	return preferred;
+}
+
+/** \brief Opts every module compiled afterwards into the staging-frame ABI.
+\param enabled Whether a backend should prefer the frame form.
+
+The frame form is an option, never an inference: a backend must not switch a
+module by measuring signatures, because the form has to be honoured end to end
+(calls, drivers, embedder entries) and a silent switch changes behaviour of
+modules that already work. Setting this is a deliberate request -- typically by a
+test or an embedder that needs one ABI everywhere -- and it applies to every
+module compiled while it is set.
+*/
+inline void setFrameCallAbiOptIn(bool enabled) noexcept
+{
+	frameCallAbiPreference() = enabled;
+}
+
+/*! \brief Reports whether the staging-frame ABI was opted into.
+\return The current preference.
+*/
+inline bool frameCallAbiOptIn() noexcept
+{
+	return frameCallAbiPreference();
+}
+
 
 } // namespace WASM
 

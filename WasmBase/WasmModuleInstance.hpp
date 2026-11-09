@@ -32,6 +32,43 @@ WASMJIT_VISIBLE_BEGIN
 #include <vector>
 namespace WASM {
 
+/** \brief Performs the reference write barrier for a global cell. \param context Module context. \param globalIndex Global index. \param value New reference value. */
+WASMJIT_API void wasm_global_set_ref(VMContext* context, uint32_t globalIndex,
+		void* value) noexcept;
+
+/** \brief Retains one ownership count of a reference. \param context Module context. \param value Reference value. \return The same reference value. */
+WASMJIT_API void* wasm_ref_clone(VMContext* context, void* value) noexcept;
+
+/** \brief Releases one ownership count of a reference. \param context Module context. \param value Reference value. */
+WASMJIT_API void wasm_ref_drop(VMContext* context, void* value) noexcept;
+
+/** \brief The reference write barrier for a store-owned slot (`ModuleInstance::refStore`).
+\param context Module context.
+\param slot Address of the slot being written.
+\param value New reference value.
+This is the one barrier a backend uses for a reference *local*: it retains \p value for the slot,
+stores it, then releases the value the slot held. Splitting it into a clone, a store and a drop
+needs a scratch slot for the old value, and getting that order wrong either leaks the old value or
+frees the new one; the core does it in one place instead. Embedders and second backends use it for
+the same reason, and [`ABI_PORTABILITY.md`](../docs/ABI_PORTABILITY.md) owns the ownership rules it
+implements. */
+WASMJIT_API void wasm_ref_store(VMContext* context, void** slot, void* value) noexcept;
+
+/** \brief Reports whether a callable is a compiled module function rather than a host entry.
+\param callable The callable to classify.
+\return True when the callable was produced by a module compiler, which is the case exactly when
+it carries both a raw compiled entry point and a non-null instance context. A native import carries
+neither, so the same predicate tells a backend which call form to emit and tells the core whether a
+callable's instance can be consulted at all. */
+WASMJIT_API bool callableIsCompiled(const Callable& callable) noexcept;
+
+/** \brief Reports whether a compiled callable was built with the staging-frame call form.
+\param callable The callable to inspect; a host entry always answers false.
+\return True when the callable's owning instance compiled its functions into the staging frame.
+The embedder never sees this: it is the backend seam, and `ModuleCallCache` marshals typed
+arguments into a frame on the way in (docs/backends/EXPORT_SIGNATURE.md). */
+WASMJIT_API bool callableUsesFrameForm(const Callable& callable) noexcept;
+
 //! Forward declarations
 class ModuleInstantiator;
 class StoreOwnedTable;
@@ -72,6 +109,12 @@ struct ModuleInstanceInternals {
 	std::vector<TableInstance*> tableRefs;
 	//! One `Callable` per defined function, indexed by defined-function order.
 	std::vector<Callable> internalCallables;
+	//! Why each defined function could not be compiled, by defined-function index.
+	//! Empty for a function the backend compiled, and for a backend that reports
+	//! nothing. A null `fnPtr` alone cannot carry this: it also means this backend
+	//! provides no compiled entries, so support cannot be inferred from it
+	//! (docs/backends/EXPORT_SIGNATURE.md section 39).
+	std::vector<std::string> internalUnsupportedReasons;
 	std::vector<Callable>  importStorage; //!< Owns the WasmCallable objects for imports
 	//! Tags are process-wide identities owned by the Store (`TagId`); this is the
 	//! module's tag index space, imports first, then the module's own tags
@@ -143,6 +186,11 @@ struct ModuleInstanceInternals {
 	{
 		return trapMessages.insert(std::move(message)).first->c_str();
 	}
+	//! Backend-neutral cross-function tail-call drivers/thunks, or null.
+	void* tailTrampolines = nullptr;
+	//! Releases the trampoline table; defined out of line because the concrete
+	//! type is private to the backend-neutral trampoline implementation.
+	~ModuleInstanceInternals();
 };
 
 //! \brief The C++ owner of the VMContext and all its allocations.
@@ -271,6 +319,21 @@ public:
 	//! default dependency-free boundary.
 	/** \brief Returns the optional borrowed host bridge. \return Installed bridge, or nullptr when none was supplied. */
 	const HostBridge* hostBridge() const { return ctx.hostBridge; }
+	/*!
+	 * \brief Records why a defined function could not be compiled.
+	 * \param internalIndex Index in the defined-function (internal) index space.
+	 * \param reason Backend-supplied explanation; an empty reason clears the entry.
+	 */
+	void setFunctionUnsupported(std::uint32_t internalIndex, std::string reason);
+
+	/*!
+	 * \brief Reports why an exported function could not be compiled.
+	 * \param name Export name.
+	 * \return The backend reason, or nullopt when the export is compiled, is not a
+	 *         function, is an import, or was never reported.
+	 */
+	std::optional<std::string> unsupportedReason(std::string_view name) const;
+
 	/** \brief Looks up an exported function by name. \param name Export field name. \return Callable descriptor, or nullopt when no function export has that name. */
 	std::optional<Callable> exportedFunction(std::string_view name) const;
 	/** \brief Looks up several exported functions in one pass. \param names Export field names. \return One optional callable per requested name, in the same order. */
@@ -307,6 +370,8 @@ public:
 	bool growTable(uint32_t tableIdx, uint64_t deltaEntries);
 	/** \brief Copies a data-segment range into linear memory. \param memIdx Destination memory index. \param dataIdx Data-segment index. \param dstOffset Destination byte offset. \param srcOffset Source byte offset within the segment. \param len Number of bytes to copy. */
 	void memoryInit(uint32_t memIdx, uint32_t dataIdx, uint32_t dstOffset, uint32_t srcOffset, uint32_t len);
+	/** \brief 64-bit-offset variant of memoryInit for a memory64 destination. \param memIdx Memory index. \param dataIdx Data-segment index. \param dstOffset Destination byte offset. \param srcOffset Source byte offset into the segment. \param len Number of bytes to copy. */
+	void memoryInit64(uint32_t memIdx, uint32_t dataIdx, uint64_t dstOffset, uint64_t srcOffset, uint64_t len);
 	/** \brief Marks a data segment dropped so later memory.init sees an empty segment. \param dataIdx Data-segment index. */
 	void dataDrop(uint32_t dataIdx);
 	/** \brief Copies element-segment references into a table. \param elemIdx Source element-segment index. \param tableIdx Destination table index. \param dstOffset Destination element offset. \param srcOffset Source element offset. \param len Number of elements to copy. */
@@ -325,6 +390,24 @@ public:
 	//! `array.new_data`-style construction from a memory range.
 	void* arrayNewMemory(uint32_t dstTypeIdx, uint32_t memIdx,
 			uint32_t start, uint32_t length);
+	//! Constructs an array from a data segment, validating the segment range
+	//! before allocating.
+	//! \param dstTypeIdx Module-local array type index.
+	//! \param dataIdx Data segment index.
+	//! \param srcOffset Byte offset inside the segment.
+	//! \param length Element count.
+	//! \return The new array, or nullptr after reporting a trap.
+	void* arrayNewData(uint32_t dstTypeIdx, uint32_t dataIdx,
+			uint32_t srcOffset, uint32_t length);
+	//! Constructs an array from an element segment, validating the source range
+	//! before allocating.
+	//! \param dstTypeIdx Module-local array type index.
+	//! \param elemIdx Element segment index.
+	//! \param srcOffset First source element.
+	//! \param length Element count.
+	//! \return The new array, or nullptr after reporting a trap.
+	void* arrayNewElem(uint32_t dstTypeIdx, uint32_t elemIdx,
+			uint32_t srcOffset, uint32_t length);
 	//! `array.new_elem`-style construction from a table range.
 	void* arrayNewTable(uint32_t dstTypeIdx, uint32_t tableIdx,
 			uint32_t start, uint32_t length);
@@ -339,6 +422,62 @@ public:
 	void* allocateStructObject(uint32_t size, uint32_t localTypeIdx, void* descriptor = nullptr);
 	//! Allocates a GC array of `length` elements.
 	void* allocateArrayObject(uint32_t dataOffset, uint32_t elementSize, uint32_t length, uint32_t localTypeIdx);
+	/** \brief Allocates an array of a declared type, deriving its element layout from the type. \param localTypeIdx Module-local array type index. \param length Element count. \return The new object, or nullptr after reporting a trap. */
+	void* allocateArrayObject(uint32_t localTypeIdx, uint32_t length);
+//! Copies a data segment into an allocated GC array object.
+//! \param array Object from `allocateArrayObject`, already of the right length.
+//! \param localTypeIdx The array's module-local type index.
+	//! \param dataIdx Data segment index.
+	//! \param srcOffset Byte offset inside the data segment.
+	void arrayInitFromData(void* array, uint32_t localTypeIdx, uint32_t dataIdx, uint32_t srcOffset);
+	//! Copies an element segment into an allocated GC array of function references.
+	//! \param array Object from `allocateArrayObject`, already of the right length.
+	//! \param localTypeIdx The array's module-local type index.
+	//! \param elemIdx Element segment index.
+	//! \param packedOffsetAndIndex `segmentElementIndex << 32 | elementIndex`, packed
+	//!        because the helper ABI carries four arguments at most.
+	//! Only `funcref` arrays are lowered: a GC reference element would need a
+	//! retain per element, and this path does not do ownership yet.
+	void arrayInitFromElem(void* array, uint32_t localTypeIdx, uint32_t elemIdx,
+			uint64_t packedOffsetAndIndex);
+	//! Copies a byte range of a data segment into a sub-range of an array.
+	//! \param array Destination array.
+	//! \param localTypeIdx The array's module-local type index.
+	//! \param dataIdx Data segment index.
+	//! \param dstIndex First destination element.
+	//! \param srcOffset Byte offset inside the data segment.
+	//! \param len Number of elements to copy.
+	void arrayInitDataRange(void* array, uint32_t localTypeIdx, uint32_t dataIdx,
+			uint32_t dstIndex, uint32_t srcOffset, uint32_t len);
+	//! Copies a range of an element segment into a sub-range of an array.
+	//! \param array Destination array.
+	//! \param localTypeIdx The array's module-local type index.
+	//! \param elemIdx Element segment index.
+	//! \param dstIndex First destination element.
+	//! \param srcIndex First source element.
+	//! \param len Number of elements to copy.
+	void arrayInitElemRange(void* array, uint32_t localTypeIdx, uint32_t elemIdx,
+			uint32_t dstIndex, uint32_t srcIndex, uint32_t len);
+	//! Tests whether one runtime type id is a subtype of another.
+	//! \param actualTypeId Type id stored in the object header.
+	//! \param expectedTypeId Type id of the target type.
+	//! \return true when the object type is the target or a subtype of it.
+	//! This is the runtime half of `Module::isSubtype`: the header carries a
+	//! store-scoped id, so the module-local indices are recovered first.
+	bool typeIdIsSubtype(uint32_t actualTypeId, uint32_t expectedTypeId) const;
+	//! Tests whether a runtime type id belongs to an abstract heap kind.
+	//! \param typeId The type id stored in the object header.
+	//! \param kind The abstract heap type, as an `AbstractHeapType` value.
+	//! \return true when the type is of that kind.
+	//! Only the kinds a GC object can have are answered: `struct`, `array`, and the
+	//! `any`/`eq` supertypes of both. Function and external references are not
+	//! header-tagged objects, so they answer false here.
+	bool typeIdMatchesAbstractKind(uint32_t typeId, uint32_t kind) const;
+	//! Test hook: makes the next N allocations throw `std::bad_alloc`.
+	//! \param count Number of allocations to fail; 0 disables the hook.
+	//! Exists so the helper exception guards can be exercised by a test; it is
+	//! never armed in production, and it changes no layout or calling convention.
+	static void failAllocationsForTesting(uint32_t count);
 	//! Custom Descriptors: the RTT/descriptor reference stored in a struct's
 	//! header, or nullptr for a null/non-struct reference. `ref.get_desc` traps
 	//! when this returns nullptr.
@@ -452,6 +591,58 @@ public:
 	void leaveCall() noexcept { activeCalls.fetch_sub(1, std::memory_order_acq_rel); }
 	/** \brief Tests whether any agent is currently inside this instance. \return true when active call count is non-zero. */
 	bool inCall() const noexcept { return activeCalls.load(std::memory_order_acquire) != 0; }
+
+	//! How this module's backend spells a `v128` parameter at the C boundary.
+	//! `false` (the canonical default) means two 64-bit words, low first
+	//! (`docs/backends/V128_SIGNATURE_DECISION.md` §28). A backend that cannot
+	//! implement that rule sets this to true and passes the value as one 16-byte
+	//! aggregate instead; the call cache then describes the same shape to libffi
+	//! (`docs/backends/LIBJIT_ARGUMENT_DEFECT.md` §12). The two spellings are the
+	//! same ABI on SysV and differ on MS x64, where an aggregate is passed by
+	//! reference.
+	bool v128ParameterIsAggregate_ = false;
+
+	/** \brief Records how the backend spells a `v128` parameter. \param aggregate true when it is one 16-byte aggregate. */
+	void setV128ParameterIsAggregate(bool aggregate) noexcept { v128ParameterIsAggregate_ = aggregate; }
+	/** \brief Reports how the backend spells a `v128` parameter. \return true when a vector crosses as one 16-byte aggregate. */
+	bool v128ParameterIsAggregate() const noexcept { return v128ParameterIsAggregate_; }
+
+	//! How this module's backend returns a `v128` result. `false` (the default) means
+	//! the backend returns it itself -- in a register or an aggregate, as its own
+	//! convention says. `true` means the canonical rule: the caller passes a 16-byte
+	//! buffer as a trailing pointer parameter and the function returns void
+	//! (`docs/backends/V128_SIGNATURE_DECISION.md`). The call cache needs to know,
+	//! because the two describe different C signatures to libffi.
+	bool v128ResultIsBuffered_ = false;
+
+	/** \brief Records whether a `v128` result crosses through the caller's buffer. \param buffered true when it does. */
+	void setV128ResultIsBuffered(bool buffered) noexcept { v128ResultIsBuffered_ = buffered; }
+	/** \brief Reports whether a `v128` result crosses through the caller's buffer. \return true when the caller supplies the 16-byte result buffer. */
+	bool v128ResultIsBuffered() const noexcept { return v128ResultIsBuffered_; }
+
+	//! Whether this module's compiled functions use the **staging-frame** call ABI
+	//! (`docs/backends/STAGING_CALL_ABI.md`): the C signature is
+	//! `void fn(VMContext*, void* frame)`, with every parameter and result in a
+	//! caller-allocated, 16-byte-aligned frame whose layout both sides derive from
+	//! the same `FuncType`. Default `false`: the per-backend register spellings
+	//! stay in force until a backend flips, one at a time, each behind its own
+	//! pins.
+	bool frameCallAbi_ = false;
+
+	/** \brief Records whether this module's functions use the staging-frame call ABI. \param enabled true when they do. */
+	void setFrameCallAbi(bool enabled) noexcept { frameCallAbi_ = enabled; }
+	/** \brief Reports whether this module's functions use the staging-frame call ABI. \return true when `fn(VMContext*, void* frame)` applies. */
+	bool frameCallAbi() const noexcept { return frameCallAbi_; }
+
+	//! Refuses an imported compiled function whose exporting instance chose the
+	//! other call form. A call site emits the **caller's** form, so a graph that
+	//! mixes the two would enter a `void fn(VMContext*, void* frame)` function
+	//! through a register-form call, which is memory corruption rather than a
+	//! trap. Both forms are known once the importing module is compiled, so the
+	//! check runs there (`ModuleInstantiator::instantiate`), once, for every
+	//! backend ([`docs/backends/CALL_FORM_GRANULARITY.md`](../docs/backends/CALL_FORM_GRANULARITY.md)).
+	//! \throws std::runtime_error when an import's form differs from this module's.
+	void verifyImportCallForms() const;
 
 	//! Objects whose count reached zero are only *queued*; `gcCollect()` does
 	//! the actual recycling. Call it only at a safepoint where no Wasm frame is

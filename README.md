@@ -3,12 +3,11 @@
 `WasmJit` is an experimental WebAssembly runtime/JIT written in C++.
 
 The library split is in place: `WasmBase/` is the backend-agnostic core
-(`libWasmBase`), every code generator is its own library (`LibJit/` is the one
-that executes a module completely; `Asmjit/` is an experimental native backend
-that compiles an i32/i64 integer subset alongside its native code-generation
-probes; `Sljit/` holds a **provisional** second backend that executes a small
-integer subset and refuses the rest — each has a README), and `Test/` is a
-Catch2 harness over the libraries rather than the product. The
+(`libWasmBase`), every code generator is its own library (`LibJit/` is the
+full-featured GNU LibJIT backend, `Sljit/` is the SLJIT backend and `Asmjit/`
+is the AsmJit backend — all three pass the generic gate, each has a README),
+and `Test/` is a Catch2 harness over the libraries rather than the product. Production readiness is measured per backend in
+[`docs/BACKEND_PRODUCTION_READINESS.md`](docs/BACKEND_PRODUCTION_READINESS.md). The
 `build/<config>/Test/WasmJit` executable is still a development sandbox, not the
 embeddable API. See [`docs/LAYERING.md`](docs/LAYERING.md) for the rule that
 keeps the core backend-agnostic and
@@ -25,24 +24,13 @@ generator is built.
 
 ## Direction
 
-- **GNU LibJIT is the only complete backend**, and stays the implementation
-  path until another code generator can run the whole generic fixture set.
-  `Asmjit/` is the experimental native backend: it executes an i32/i64 integer
-  subset — i32 arithmetic and bit counts; i64 arithmetic, bitwise operations,
-  shifts, rotations, comparisons and conversions; i32 comparisons and bit
-  operations, sign extension, void and single-i32/i64-result structured control
-  flow, `br_table`, unreachable traps, i32/i64 globals, typed i32/i64 direct and
-  indirect calls (including native and cross-instance Wasm imports), `select`,
-  checked memory32 `memory.copy`/`memory.fill`/`memory.init` and `data.drop`,
-  `table.init`/`elem.drop`/`table.size`/`table.copy`, preliminary tail-call
-  opcode lowering, and checked memory32 i32/i64 loads/stores plus size/grow.
-  True tail-call stack semantics remain outstanding. It is not installed, is
-  not selectable through the runtime registry, and is not a general replacement
-  for LibJIT.
-  `Sljit/` carries a deliberately provisional second backend (straight-line
-  integer bodies; everything else left uncallable — see
-  [`docs/WRITING_A_BACKEND.md`](docs/WRITING_A_BACKEND.md) §9), which exists to
-  make the seam concrete and to seed the vector work, not to replace LibJIT.
+- **All three code generators are production-ready within one declared
+  envelope** (x86-64 Linux / SysV AMD64, single-agent, one instance per module):
+  each completes the generic backend-selected suite with the same 22,451
+  assertions in 821 cases. `Sljit/` needs no GNU LibJIT dependency and `Asmjit/`
+  needs the external AsmJit library; both document their refusals in their
+  README and in
+  [`docs/BACKEND_PRODUCTION_READINESS.md`](docs/BACKEND_PRODUCTION_READINESS.md).
 - **No bespoke interpreter fallback, ever.** WasmJit will not grow a Wasm
   interpreter — not for continuations, unsupported opcodes or portability. If
   interpretation is ever required it must come from GNU LibJIT's own
@@ -84,23 +72,12 @@ generator is built.
   multiplicity the rule forbids). See
   [`docs/THREADSAFETY.md`](docs/THREADSAFETY.md) §3.1–§3.2 and
   [`docs/MULTI_AGENT_FEASIBILITY.md`](docs/MULTI_AGENT_FEASIBILITY.md) §2.3.
-- **Still open** (tracked, not complete): a *complete* second backend —
-  `Asmjit/` is experimental (an i32/i64 subset plus native code-generation
-  probes; not installed, not in the runtime registry) and `Sljit/` is
-  provisional (integer-only, with `[sljit]` coverage); see their READMEs,
-  [`docs/WRITING_A_BACKEND.md`](docs/WRITING_A_BACKEND.md) and the
-  [`backend walkthrough`](docs/WRITING_A_BACKEND.md) — the readiness audit says work may
-  begin and recommends SLJIT first; the long-term
-  qmake → CMake move, and the language-support
-  studies defined in [`docs/LANGUAGE_FEASIBILITY.md`](docs/LANGUAGE_FEASIBILITY.md)
-  (their definitions, plus the entry-gate audit now run — see
-  [`docs/READINESS_AUDIT.md`](docs/READINESS_AUDIT.md); neither study has
-  started). The
-  embedding and plugin designs are written down and implemented —
-  [`docs/EMBEDDING_SURFACE.md`](docs/EMBEDDING_SURFACE.md) and
-  [`docs/BACKEND_PLUGIN_ABI.md`](docs/BACKEND_PLUGIN_ABI.md) — and the former
-  execution-model question (multi-agent) is implemented and recorded in
-  [`docs/MULTI_AGENT_FEASIBILITY.md`](docs/MULTI_AGENT_FEASIBILITY.md).
+- **Still open** (tracked, not complete): a *portable* backend matrix. Every
+  production claim is scoped to x86-64 Linux / SysV AMD64, because no non-SysV
+  runner exists yet; see
+  [`docs/BACKEND_PRODUCTION_READINESS.md`](docs/BACKEND_PRODUCTION_READINESS.md).
+  The long-term qmake → CMake move and the language-support studies remain
+  tracked separately; the embedding and plugin designs are implemented.
 
 ## Feature completeness (2026-10-29)
 
@@ -278,21 +255,22 @@ library per backend plus the test executable.
 | `WasmBase/` | The core library (`libWasmBase`): binary decoding, the module/instance model, `Store`/`TypeRegistry`/`Value`, the opcode decoder, the shared SIMD helper ABI, and the backend-neutral component runtime (`WasmComponentRuntime`). **Backend-agnostic by rule** — see [`docs/LAYERING.md`](docs/LAYERING.md) |
 | `WasmStub/` | `libWasmStub`: a non-JIT opcode dispatcher that pretty-prints instead of executing (inspection/debug) |
 | `LibJit/` | `libLibJit`: the GNU LibJIT backend (context, type translation, module compiler, dispatch) — the current full-featured implementation path |
-| `Asmjit/` | **Experimental AsmJit backend**: `libAsmjit` owns a `JitRuntime`, implements `ModuleInstantiator`, and executes a limited i32/i64 subset with globals, typed direct/indirect calls, and checked memory32 access including size/grow. Native SIMD and ABI probes are also present. Not full-featured, not installed, and never selectable through the public runtime registry; see [`Asmjit/README.md`](Asmjit/README.md) |
-| `Sljit/` | `libSljit`: the **provisional** SLJIT backend (2026-10-30) — compiles the vendored `extern/sljit` into the library, registers as `sljit`, executes straight-line `i32`/`i64` bodies, and leaves every unsupported opcode uncallable rather than miscompiling it. `sljit_emit_simd_*` / `SLJIT_SIMD_REG_*` remain the planned native vector lever; see `Sljit/README.md` and [`docs/WRITING_A_BACKEND.md`](docs/WRITING_A_BACKEND.md) §9 |
+| `Asmjit/` | `libAsmjit`: the AsmJit backend, registers as `asmjit`; **production-ready within the declared envelope** (the generic suite is green). Needs the external AsmJit library at build time. See [`Asmjit/README.md`](Asmjit/README.md) and [`docs/BACKEND_PRODUCTION_READINESS.md`](docs/BACKEND_PRODUCTION_READINESS.md) |
+| `Sljit/` | `libSljit`: the SLJIT backend, registers as `sljit`; **production-ready within the declared envelope** (the generic suite is green). Vendors `extern/sljit`, no external `-lsljit`. See [`Sljit/README.md`](Sljit/README.md) and [`docs/BACKEND_PRODUCTION_READINESS.md`](docs/BACKEND_PRODUCTION_READINESS.md) |
 | `Test/` | The Catch2 executable (`WasmJit`) and the spec-suite harness; see [`docs/TESTING.md`](docs/TESTING.md) |
 | `docs/` | Design notes and process guides; per-proposal notes live in `docs/proposals/` (see the [`docs`](docs/index.md) node) |
 | `extern/` | Submodules: `MhLib` (`Elvavena` I/O + `Euphemy`) and the upstream `WasmTestsuite` |
 | `build/` | Shadow build output — **all build artefacts go here, never in the source tree** |
 
-## Status (snapshot 2026-11-03)
+## Status (snapshot 2026-11-09)
 
 The repository builds a set of shared libraries plus a console test executable
 through qmake:
 
 - [`Project.pro`](Project.pro) is the top-level `subdirs` project
-  (`WasmBase` + `WasmStub` + `LibJit` + the experimental `Asmjit` backend + the
-  provisional `Sljit` backend + `ExampleBackend` + `Test`);
+  (`WasmBase` + `WasmStub` + `LibJit` + the `Asmjit` backend + the `Sljit`
+  backend + `ExampleBackend` + `Test`); all three backends are built, selectable
+  by name, and green on the generic suite;
 - the test target links against `libjit`, `libasmjit`, Catch2 and the project
   libraries (`libWasmBase`, `libWasmStub`, `libLibJit`, `libAsmjit`,
   `libSljit`);
@@ -323,14 +301,14 @@ through qmake:
 
 | Backend | State |
 |---|---|
-| GNU LibJIT (`LibJit/`) | **The only complete backend** — loads, validates, compiles and runs modules, including SIMD via the shared helper layer |
-| AsmJit (`Asmjit/`) | **Experimental** — compiles an i32/i64 subset (arithmetic, comparisons, bitwise operations, void and single-result i32/i64 structured control flow, direct/indirect calls, i32/i64 globals, sign extension, and checked memory32 loads/stores plus size/grow); native SIMD/ABI probes also exist. Not installed and not selectable through the runtime registry; not yet a replacement for LibJIT |
-| SlJIT (`Sljit/`) | **Provisional** (2026-10-30): links the shared core, registers as `sljit`, and executes a straight-line `i32`/`i64` subset; every other opcode leaves the function uncallable, so the core refuses it at the call boundary. `[sljit]` covers it. Not a LibJIT replacement; see [`docs/WRITING_A_BACKEND.md`](docs/WRITING_A_BACKEND.md) §9 |
+| GNU LibJIT (`LibJit/`) | **Production-ready within its declared envelope** — full backend, generic suite green (22,451 assertions / 821 cases); x86-64 Linux only. |
+| AsmJit (`Asmjit/`) | **Production-ready within the same envelope** — generic suite green (22,451 assertions / 821 cases); same three documented refusals as SLJIT. |
+| SLJIT (`Sljit/`) | **Production-ready within the same envelope** — generic suite green (22,451 assertions / 821 cases); documented refusals for a `v128` wide indirect call and `return_call_ref` above the register ceiling. |
 
 There is no interpreter backend. `WasmStub/` is a non-compiling pretty-printer;
 GNU LibJIT already provides a compile/interpret configuration and is the only
-acceptable interpretation path. AsmJit is an experimental native execution
-backend with deliberately limited instruction coverage. A bespoke WasmJit interpreter is a permanent
+acceptable interpretation path. AsmJit and SLJIT are native execution
+backends that cover the same lowering slice as LibJIT. A bespoke WasmJit interpreter is a permanent
 non-goal — see
 [`docs/proposals/STACK_SWITCHING.md`](docs/proposals/STACK_SWITCHING.md) §10.15
 (D-3).

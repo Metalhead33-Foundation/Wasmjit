@@ -17,7 +17,7 @@
   (func (export "catch-and-observe") (param i32) (result i32)
     (local $payload i32)
     (block $h (result i32)
-      (try_table (catch $e $h)
+      (try_table (result i32) (catch $e $h)
         (throw $e (local.get 0)))
     )
     (local.set $payload)
@@ -28,7 +28,7 @@
   ;; payload with `wasm_exn_tag_id` and the payload layout.
   (func (export "catch-ref-and-observe") (param i32) (result i32)
     (block $h (result i32 exnref)
-      (try_table (catch_ref $e $h)
+      (try_table (result i32 exnref) (catch_ref $e $h)
         (throw $e (local.get 0)))
     )
     (call $observe_ref)

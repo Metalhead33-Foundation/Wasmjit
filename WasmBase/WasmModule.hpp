@@ -93,6 +93,8 @@ public:
 	std::vector<ImportOrder> importOrder;
 	//! Type index of each *defined* function (imports first, then these).
 	std::vector<uint32_t> internalFunctionTypeIndices;
+	//! Set by the validator when a tail-call opcode is present.
+	mutable bool hasTailCalls_ = false;
 	//! Defined tables.
 	std::vector<TableType> tables;
 	std::vector<MemoryType> memories; //!< Declared (and imported) memories.
@@ -253,6 +255,12 @@ public:
 	//! typeView() directly (TM-7).
 	/** \brief Materializes a compatibility function-signature view for backend compilation. \param idx Module-local type index. \return Function signature derived from the canonical Store type. */
 	FuncType funcTypeAt(uint32_t idx) const;
+	//! Records that validation saw a tail-call opcode; the backends use this to
+	//! decide whether the module needs cross-function trampolines at all.
+	void markTailCalls() const noexcept { hasTailCalls_ = true; }
+	//! True once a `return_call`, `return_call_indirect` or `return_call_ref`
+	//! was validated (docs/TAILCALLS.md).
+	bool hasTailCalls() const noexcept { return hasTailCalls_; }
 	//! Looks up a name from the well-known `name` custom section. Returns
 	//! nullptr when the subsection or the index is absent. Names are metadata
 	//! only: they never participate in validation, dispatch or identity

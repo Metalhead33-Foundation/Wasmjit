@@ -1,6 +1,7 @@
 #include "SljitModuleCompiler.hpp"
 
 #include "SljitOpcodeDispatcher.hpp"
+#include "../WasmBase/WasmTailTrampoline.hpp"
 
 #include "../WasmBase/WasmStore.hpp"
 #include "../WasmBase/WasmTrap.hpp"
@@ -10,7 +11,70 @@
 #include <string>
 #include <utility>
 
+namespace {
+
+//! Whether a signature cannot be expressed by the SLJIT register form.
+//!
+//! The count is of C argument entries, not Wasm parameters: `VMContext*` is
+//! always present, a `v128` parameter is two words, and a `v128` result adds a
+//! hidden trailing out-buffer pointer. The latter is easy to miss because the
+//! Wasm signature does not spell it, but the prologue and every caller both
+//! declare it (docs/backends/STAGING_CALL_ABI.md).
+bool signatureNeedsFrame(const WASM::FuncType& type)
+{
+	std::uint32_t entries = 1; // VMContext*
+	for (const WASM::StorageType& parameter : type.params)
+		entries += WASM::argSlotCount(WASM::valueKindOf(parameter.val.opcode));
+	if (type.results.size() > 1)
+		return true; // results travel in the caller's result block
+	if (!type.results.empty()
+			&& type.results.front().val.opcode == WASM::ValueTypeCode::V128)
+		++entries; // hidden result out-buffer
+	return entries > Sljit::kRegisterArgumentCeiling;
+}
+
+} // namespace
+
 namespace Sljit {
+
+WASM::Callable* ModuleCompiler::resolveCallable(WASM::VMContext* vm,
+		std::uint32_t functionIndex) noexcept
+{
+	if (vm == nullptr) {
+		WASM::reportTrap(WASM::TrapKind::Internal, "SLJIT call has no VMContext");
+		return nullptr;
+	}
+	auto* instance = reinterpret_cast<WASM::ModuleInstance*>(vm);
+	WASM::ModuleInstanceInternals& internals = instanceInternals(*instance);
+	const std::uint32_t importedCount = vm->importedFunctionCount;
+	if (functionIndex < importedCount) {
+		if (functionIndex >= internals.importStorage.size()) {
+			WASM::reportTrap(WASM::TrapKind::Internal,
+					"SLJIT call references an unknown function import");
+			return nullptr;
+		}
+		WASM::Callable* callable = &internals.importStorage[functionIndex];
+		if (callable->fnPtr == nullptr) {
+			WASM::reportTrap(WASM::TrapKind::Internal,
+					"SLJIT call references an unresolved function import");
+			return nullptr;
+		}
+		return callable;
+	}
+	const std::uint32_t internalIndex = functionIndex - importedCount;
+	if (internalIndex >= internals.internalCallables.size()) {
+		WASM::reportTrap(WASM::TrapKind::Internal,
+				"SLJIT call function index is out of range");
+		return nullptr;
+	}
+	WASM::Callable* callable = &internals.internalCallables[internalIndex];
+	if (callable->fnPtr == nullptr) {
+		WASM::reportTrap(WASM::TrapKind::Internal,
+				"SLJIT call target has no compiled body");
+		return nullptr;
+	}
+	return callable;
+}
 
 void ModuleCompiler::translateTypes(WASM::ModuleInstance& instance, const WASM::Module& module,
 		WASM::ModuleInstanceInternals& internals)
@@ -49,8 +113,25 @@ void ModuleCompiler::declareFunctions(WASM::ModuleInstance& instance, const WASM
 void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM::Module& module,
 		WASM::ModuleInstanceInternals& internals)
 {
-	(void)instance;
 	unsupportedFunctions_.clear();
+
+	// A module compiles entirely in one form: if any *defined* function's
+	// signature needs more C argument entries than SLJIT's register form allows,
+	// the whole module uses the staging frame
+	// (docs/backends/STAGING_CALL_ABI.md). Imported signatures deliberately do
+	// not choose the module ABI: a host import is a native C function with its
+	// own register-form entry, and a frame-mode caller must not invoke it as if
+	// it took a staging frame. The import call path is chosen when the import is
+	// resolved, not by this module-wide flag.
+	// `setFrameCallAbiOptIn(true)` is a request for one form everywhere, so it
+	// decides the module's form on its own: a module compiled while it is set must
+	// be frame-form even when every signature would fit the register form
+	// (docs/backends/EXPORT_SIGNATURE.md section 4).
+	bool frameMode = WASM::frameCallAbiOptIn();
+	for (const std::uint32_t typeIdx : module.internalFunctionTypeIndices)
+		if (signatureNeedsFrame(module.funcTypeAt(typeIdx)))
+			frameMode = true;
+	instance.setFrameCallAbi(frameMode);
 
 	for (std::size_t i = 0; i < module.functionBodies.size(); ++i) {
 		const uint32_t typeIdx = module.internalFunctionTypeIndices[i];
@@ -60,33 +141,42 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM
 		const uint32_t functionIndex =
 				static_cast<uint32_t>(module.importFunctions.size() + i);
 
-		OpcodeDispatcher dispatcher(module, funcType, module.functionBodies[i], functionIndex);
+		OpcodeDispatcher dispatcher(module, funcType, module.functionBodies[i], functionIndex,
+				frameMode, internals.tagIds, internals, profile());
 		void* entry = nullptr;
 		if (!dispatcher.compile(entry)) {
-			// The function stays uncallable; the core refuses it at the call
-			// boundary. Never install a partially emitted body.
-			unsupportedFunctions_.push_back(dispatcher.unsupportedReason());
-			continue;
+			// No partial modules: an instantiable module must have every function
+			// callable, or an exported function could be one that cannot be called.
+			// The first failure aborts the module with its reason
+			// (docs/backends/PRODUCTION_GAPS.md section 15).
+			throw std::runtime_error("the SLJIT backend could not compile function "
+					+ std::to_string(functionIndex) + ": "
+					+ dispatcher.unsupportedReason());
 		}
 		internals.internalCallables[i].fnPtr = entry;
-		// No trampoline driver wraps this entry, so the raw pointer and the
-		// callable's entry are the same address. `tailEntry` stays null and the
-		// core falls back to `call` + `return` for a tail call
-		// (docs/proposals/TAILCALLS.md TC-5).
 		internals.internalCallables[i].rawFnPtr = entry;
 	}
+	// Register-form modules with a tail call get one driver per internal function
+	// and one thunk per type, so a cross-function chain loops instead of growing
+	// the native stack. A module without one is left exactly as compiled; if the
+	// table cannot be installed, refuse the module rather than emit state-writing
+	// tail calls whose driver does not exist.
+	if (WASM::tailCallTrampolinesEligible(module, frameMode)
+			&& !WASM::installTailCallTrampolines(module, internals, frameMode))
+		throw std::runtime_error("the SLJIT backend could not install tail-call trampolines");
 }
 
 void ModuleCompiler::releaseInstance(WASM::ModuleInstance& instance) noexcept
 {
 	// `sljit_generate_code` handed back executable memory from the process-wide
 	// allocator; nothing else owns it once the per-body compiler object is freed.
-	// `rawFnPtr` is the same address as `fnPtr` here (no trampoline wraps it), so
-	// freeing fnPtr and clearing both is enough — and clearing makes a second
-	// call harmless (`ModuleInstantiator::releaseInstance`'s contract).
+	// The callable's `fnPtr` may be a libffi driver, so the SLJIT code is
+	// `rawFnPtr`; the trampoline table (closures) is released first. Clearing
+	// makes a second call harmless (`ModuleInstantiator::releaseInstance`).
+	WASM::releaseTailCallTrampolines(instanceInternals(instance));
 	for (WASM::Callable& callable : instanceInternals(instance).internalCallables) {
-		if (callable.fnPtr != nullptr)
-			sljit_free_code(callable.fnPtr, nullptr);
+		if (callable.rawFnPtr != nullptr)
+			sljit_free_code(callable.rawFnPtr, nullptr);
 		callable.fnPtr = nullptr;
 		callable.rawFnPtr = nullptr;
 		callable.tailEntry = nullptr;

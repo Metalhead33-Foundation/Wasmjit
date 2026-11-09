@@ -129,6 +129,12 @@ struct TailCallState {
 	//! every link in a tail chain shares the caller's result tuple, so the
 	//! driver publishes its own out-buffer pointer here once.
 	void*     resultBuffer = nullptr;
+	//! Scratch staging frame for a frame-form tail chain. The thunk lays the
+	//! callee's arguments out with the canonical byte offsets and the driver
+	//! copies the final result block back to the original caller's frame.
+	alignas(16) std::uint8_t frame[kTailCallArgSlots * 2 * 16] = {};
+	//! Byte offset of the result block inside `frame`, set by the last thunk.
+	std::uint32_t frameResultOffset = 0;
 };
 
 //! True when `ft` fits the trampoline's uniform 16-byte slot representation.
@@ -151,6 +157,66 @@ inline bool tailCallSlotsSupported(const FuncType& ft)
 	};
 	return !hasVector(ft.params) && !hasVector(ft.results);
 }
+
+//! True when `ft` fits the frame-form tail-call slot representation.
+//! The frame thunk copies each value into a staging frame, so a `v128` (16
+//! bytes) is representable; only the uniform slot count limits it.
+/** \brief Tests whether a signature fits the frame tail-call slot buffer. \param ft Function signature to inspect. \return false when either list exceeds the slot limit. */
+inline bool tailCallFrameSupported(const FuncType& ft)
+{
+	//! A 16-byte slot holds a v128; the frame thunk copies that width. Only the
+	//! slot count limits the form.
+	return ft.params.size() <= kTailCallArgSlots
+			&& ft.results.size() <= kTailCallArgSlots;
+}
+
+//! True when a result tuple cannot come back in one return word.
+//! The caller-supplied out-buffer is not about *count*: it is about a result
+//! that does not fit a single return register. A multi-result tuple is the case
+//! that first forced it (docs/proposals/MULTI_VALUE.md MV5); a `v128` is the
+//! same case with one element, because 16 bytes never fit one word.
+//!
+//! **No backend consumes this yet.** Each backend states its own result spelling
+//! and the call cache follows it; the predicate records the rule that unifies
+//! them for the day one of them is converted
+//! (`docs/backends/V128_SIGNATURE_DECISION.md`, "Compliance registry").
+/** \brief Tests whether a result tuple must be returned through the caller-supplied out-buffer. \param ft Function signature to inspect. \return true when the tuple has more than one element or any element is v128. */
+inline bool needsResultBuffer(const FuncType& ft)
+{
+	if (ft.results.size() > 1)
+		return true;
+	for (const StorageType& type : ft.results) {
+		if (!type.isPacked && type.val.opcode == ValueTypeCode::V128)
+			return true;
+	}
+	return false;
+}
+
+//! Invokes a callable whose single result is a `v128`, through the canonical
+//! caller-supplied buffer.
+//!
+//! A `v128` result cannot come back in one return register, so a backend that
+//! follows `docs/backends/V128_SIGNATURE_DECISION.md` compiles such a function as
+//! `void(VMContext*, params..., void* out)` and writes the 16 bytes at `out`. This
+//! helper supplies that buffer and returns its contents, so an embedder or a test
+//! does not have to spell the trailing pointer itself. The trap check is the one
+//! `callCallable` performs.
+//!
+//! \tparam Args Argument types forwarded to the callable.
+//! \param callable Callable descriptor to invoke.
+//! \param args Arguments matching the callable's lowered signature.
+//! \return The sixteen bytes the callee wrote, as four 32-bit lanes in
+//!         little-endian order.
+//! \throws WASM::Trap when the call reports a pending trap at the host boundary.
+template<typename... Args>
+std::array<std::uint32_t, 4> callCallableVector(const Callable& callable, Args&&... args)
+{
+	alignas(16) std::array<std::uint32_t, 4> result {};
+	callCallable<void>(callable, std::forward<Args>(args)...,
+			static_cast<void*>(result.data()));
+	return result;
+}
+
 
 //! Address of the current execution state's tail-call state. Generated code
 //! calls this helper; it is the only supported way for a backend to reach the
@@ -210,6 +276,30 @@ void callCallableWithResults(const Callable& callable, void* results, Args&&... 
 		fn(callable.context, std::forward<Args>(args)..., results);
 	}
 	checkTrap();
+}
+
+//! Invokes a callable through the **staging-frame** call ABI.
+//!
+//! Under that ABI (`docs/backends/STAGING_CALL_ABI.md`) a compiled function is
+//! `void fn(VMContext*, void* frame)` and every parameter and result lives in the
+//! caller's frame, whose layout both sides derive from the same `FuncType` via
+//! `frameArgumentsBytes` / `frameArgumentOffset` / `frameResultOffset`. The point
+//! of the form is that the argument list is always **two** C arguments, so no
+//! target's argument-register budget or aggregate classification can constrain a
+//! signature.
+//!
+//! The caller owns the frame: it must be 16-byte aligned and at least
+//! `frameBytes(argumentKinds, resultKinds)` long, with the arguments already
+//! written at their offsets. Results appear in the frame's result block when the
+//! call returns. The trap check is the one `callCallable` performs.
+//!
+//! \param callable Callable descriptor to invoke; it must have been compiled with
+//!                 the frame ABI (`ModuleInstance::frameCallAbi()`).
+//! \param frame Caller-allocated, 16-byte-aligned argument-and-result frame.
+//! \throws WASM::Trap when the call reports a pending trap at the host boundary.
+inline void callCallableFrame(const Callable& callable, void* frame)
+{
+	callCallable<void>(callable, frame);
 }
 
 }

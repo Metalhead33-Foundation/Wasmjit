@@ -1824,6 +1824,7 @@ void Validator::dispatchCall(FuncIdx arg)
 
 void Validator::dispatchReturnCall(FuncIdx arg)
 {
+	module.markTailCalls();
 	const FuncType& type = functionType(arg);
 	popTypes(paramTypes(type));
 	checkTailCallResults(type);
@@ -1844,6 +1845,7 @@ void Validator::dispatchCallIndirect(TypeIdx typeIdx, TableIdx tableIdx)
 
 void Validator::dispatchReturnCallIndirect(TypeIdx typeIdx, TableIdx tableIdx)
 {
+	module.markTailCalls();
 	const FuncType& type = funcTypeAt(typeIdx);
 	requireTableIndex(tableIdx);
 	if (!tableIsFuncRef(tableIdx))
@@ -1865,6 +1867,7 @@ void Validator::dispatchCallRef(TypeIdx typeIdx)
 
 void Validator::dispatchReturnCallRef(TypeIdx typeIdx)
 {
+	module.markTailCalls();
 	const FuncType& type = funcTypeAt(typeIdx);
 	popExpect(ValueType{ValueTypeCode::RefNull, static_cast<int32_t>(typeIdx)});
 	popTypes(paramTypes(type));
@@ -1923,7 +1926,11 @@ void Validator::dispatchThrow(TagIdx arg)
 
 void Validator::dispatchThrowRef()
 {
-	popExpect(ValueTypeCode::ExnRef);
+	// The operand is `(ref null exn)`, which the type system spells as a
+	// `Ref`/`RefNull` with the `exn` heap type -- not the bare `ExnRef` code.
+	const auto actual = popAny();
+	if (actual && !refSubtype(*actual, ValueType{ValueTypeCode::ExnRef, -1}))
+		fail("type mismatch: throw_ref operand is not an exnref");
 	setUnreachable();
 }
 
@@ -2376,11 +2383,10 @@ void Validator::dispatchTryTable(const BlockType& blockType, std::vector<CatchCl
 		}
 	}
 	beginBlock(blockType, false, false);
-	// A catch injects its payload into an *outer* label, which this linear
-	// stack does not model; keep immediate/index checks for the rest of the
-	// body but stop trusting the operand stack when there are catches.
-	if (!catches.empty())
-		typeTainted = true;
+	// A catch payload is checked against the outer label's types above; it does
+	// not flow through the linear operand stack, so the body keeps its normal
+	// stack typing. (Tainting the rest of the module here hid invalid modules
+	// that left extra values at a block end -- V-1.)
 }
 
 void Validator::dispatchSelectT(std::vector<ValueType>&& types)
@@ -3085,13 +3091,6 @@ void Validator::dispatchAtomicFence(uint8_t ordering) {
 void Validator::dispatchAtomicPause() {}
 
 namespace {
-ValueType sharedStorageValueType(const CanonStorageType& storage)
-{
-	if (storage.isPacked)
-		return ValueType{ValueTypeCode::I32, -1};
-	return ValueType{storage.value.opcode, -1};
-}
-
 // The operand type for a struct field or array element: packed storage is
 // carried as i32, and a reference preserves its heap type and nullability.
 ValueType storageOperandType(const Module& module, const CanonStorageType& storage)
@@ -3102,22 +3101,48 @@ ValueType storageOperandType(const Module& module, const CanonStorageType& stora
 }
 } // namespace
 
+ValueType Validator::sharedStorageValueType(const CanonStorageType& storage)
+{
+	if (storage.isPacked)
+		return ValueType{ValueTypeCode::I32, -1};
+	const ValueTypeCode code = storage.value.opcode;
+	// The shared-everything proposal makes only i8/i16/i32/i64 and anyref
+	// subtypes atomic-addressable; f32/f64/v128 slots are not.
+	if (code == ValueTypeCode::F32 || code == ValueTypeCode::F64
+			|| code == ValueTypeCode::V128)
+		fail("shared atomic: value type is not atomic-addressable");
+	ValueType type = module.storageTypeFromCanon(storage).val;
+	if (isReferenceType(type.opcode))
+		type.isShared = true;
+	return type;
+}
+
 void Validator::dispatchGlobalAtomicGet(uint8_t ordering, GlobalIdx arg)
 {
 	if (ordering > 1) fail("global.atomic: invalid ordering immediate");
-	pushValue(globalType(arg));
+	const ValueType value = globalType(arg);
+	if (value.opcode == ValueTypeCode::F32 || value.opcode == ValueTypeCode::F64
+			|| value.opcode == ValueTypeCode::V128)
+		fail("global.atomic: value type is not atomic-addressable");
+	pushValue(value);
 }
 void Validator::dispatchGlobalAtomicSet(uint8_t ordering, GlobalIdx arg)
 {
 	if (ordering > 1) fail("global.atomic: invalid ordering immediate");
 	if (!globalIsMutable(arg)) fail("global.atomic.set of an immutable global");
-	popExpect(globalType(arg));
+	const ValueType value = globalType(arg);
+	if (value.opcode == ValueTypeCode::F32 || value.opcode == ValueTypeCode::F64
+			|| value.opcode == ValueTypeCode::V128)
+		fail("global.atomic: value type is not atomic-addressable");
+	popExpect(value);
 }
 #define WJ_VALIDATE_GLOBAL_RMW(n) \
 void Validator::dispatchGlobalAtomicRmw##n(uint8_t ordering, GlobalIdx arg) { \
 	if (ordering > 1) fail("global.atomic: invalid ordering immediate"); \
 	if (!globalIsMutable(arg)) fail("global.atomic.rmw of an immutable global"); \
 	const ValueType t = globalType(arg); \
+	if (t.opcode == ValueTypeCode::F32 || t.opcode == ValueTypeCode::F64 || t.opcode == ValueTypeCode::V128) \
+		fail("global.atomic: value type is not atomic-addressable"); \
 	popExpect(t); \
 	pushValue(t); \
 }
@@ -3133,6 +3158,8 @@ void Validator::dispatchGlobalAtomicRmwCmpxchg(uint8_t ordering, GlobalIdx arg)
 	if (ordering > 1) fail("global.atomic: invalid ordering immediate");
 	if (!globalIsMutable(arg)) fail("global.atomic.rmw.cmpxchg of an immutable global");
 	const ValueType t = globalType(arg);
+	if (t.opcode == ValueTypeCode::F32 || t.opcode == ValueTypeCode::F64 || t.opcode == ValueTypeCode::V128)
+		fail("global.atomic: value type is not atomic-addressable");
 	popExpect(t);
 	popExpect(t);
 	pushValue(t);

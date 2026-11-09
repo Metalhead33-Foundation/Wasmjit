@@ -254,6 +254,27 @@ struct ValueType {
 		opcode = static_cast<ValueTypeCode>(firstByte);
 		isShared = false;
 		isExact = false;
+		//! Shared reference shorthand: `0x65 ht` at value-type position. The same
+		//! byte is the string-view `wtf16` value type, so only a following byte
+		//! that names a heap type selects the shared form.
+		if (firstByte == static_cast<int8_t>(ValueTypeCode::StringViewWtf16)) {
+			const long position = stream.device.tell();
+			uint8_t next = 0;
+			const bool read = stream.device.read(&next, 1, 1) == 1;
+			stream.device.seek(position, Elv::Io::SeekOrigin::SET);
+			const bool heapByte = read
+					&& (next == 0x6A || next == 0x6B || next == 0x6C || next == 0x6D
+							|| next == 0x6E || next == 0x6F || next == 0x70 || next == 0x71
+							|| next == 0x72 || next == 0x73);
+			if (heapByte) {
+				opcode = ValueTypeCode::RefNull;
+				isShared = true;
+				int32_t ht;
+				stream >> Elv::Io::Leb(ht);
+				this->heapType = ht;
+				return;
+			}
+		}
 		//! 0x6B (ref) or 0x6C (ref null)
 		if (opcode == ValueTypeCode::Ref || opcode == ValueTypeCode::RefNull) {
 			int32_t ht;

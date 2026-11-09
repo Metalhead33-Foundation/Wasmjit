@@ -1,5 +1,6 @@
 #include "WasmRuntime.hpp"
 
+#include "WasmBackendAbi.hpp"
 #include "WasmComponent.hpp"
 #include "WasmValidation.hpp"
 
@@ -287,8 +288,18 @@ ModuleInstance& Runtime::instantiate(const Module& module, ImportResolver& impor
 	}
 
 	const auto existing = instances_.find(&module);
-	if (existing != instances_.end())
+	if (existing != instances_.end()) {
+		// Idempotent: one instance per Module. The call ABI is decided at the
+		// module's *first* compilation, so asking for the other one here would
+		// silently return an instance compiled the other way -- the trap that cost
+		// two diagnostic rounds (docs/backends/EXPORT_SIGNATURE.md section 19).
+		// Refusing is the only honest answer: reload the module to change its ABI.
+		if (existing->second.instance->frameCallAbi() != WASM::frameCallAbiOptIn())
+			throw std::runtime_error("the module is already instantiated with the other"
+					" call ABI; load it again to instantiate it in this one"
+					" (docs/backends/EXPORT_SIGNATURE.md section 45)");
 		return *existing->second.instance; // idempotent: one instance per Module
+	}
 
 	if (!backend_.instantiator)
 		throw std::runtime_error("the runtime has no backend instantiator");

@@ -29,6 +29,12 @@ the one-line check to run.
   The core must not name, include, link or describe any specific backend: `LibJit/` is the first of
   several planned code generators, and `WasmBase/` states the contracts they all must honour.
 
+- **[`docs/ABI_PORTABILITY.md`](docs/ABI_PORTABILITY.md) — read before changing a signature, a prolog, or a GC object layout.**
+  Every compiled function is C-linkage with the **host C ABI** of the target (SysV AMD64, MS x64,
+  AAPCS64, RISC-V, MIPS), and a backend may diverge in implementation only while the signature stays
+  canonical and the ABI non-degenerate. **Portability outranks performance.** It also owns the
+  canonical GC object/allocator ABI. Untested targets are labelled *provisional*, not dropped.
+
 - **No bespoke interpreter fallback.** WasmJit does not grow a Wasm interpreter: interpretation, if
   ever required, is the backend's own compile/interpret configuration (currently GNU LibJIT, which
   already provides an interpreter), never a core fallback or a new execution engine. See

@@ -27,6 +27,8 @@ std::string emitRustModule(const nlohmann::ordered_json& input)
 	out << "// Generated from the " << schema.at("schema").get<std::string>()
 		<< " " << schema.at("direction").get<std::string>()
 		<< " schema. Do not edit.\n\n";
+	out << "// A v128 crosses the C boundary as two scalar words, low first: pass lo and hi\n"
+		   "// as two u64 parameters, never as this struct.\n";
 	out << "#[repr(C)]\npub struct wasm_v128 { pub bytes: [u8; 16] }\n";
 	for (const std::string& ref : refs)
 		out << "#[repr(C)]\npub struct " << ref << " { _private: [u8; 0] }\n";

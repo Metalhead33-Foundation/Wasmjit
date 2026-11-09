@@ -117,6 +117,15 @@ Tail Call is a **Phase 5** proposal, integrated into WebAssembly **3.0**.
   harness compares the trap's kind like `assert_trap` does. No nested child and
   no `SIGSEGV` are involved any more.
 
+- **Frame-form `return_call` on SLJIT and AsmJIT (2026-11-07).** Both backends now
+  accept a `return_call`/`return_call_indirect` whose signature forces the staging
+  frame: the callee writes into the caller-provided frame and the function returns
+  it through the frame result block. The value is correct; this is still call +
+  return, so the constant-stack guarantee remains the trampoline path's property
+  (and LibJIT's register form). AsmJIT's frame form previously refused because the
+  tail-call validator was i32-only; the frame path now checks the result types and
+  uses `emitFrameReturnValue`.
+
 ## 5. Gaps
 
 | # | Gap | Evidence | Severity |

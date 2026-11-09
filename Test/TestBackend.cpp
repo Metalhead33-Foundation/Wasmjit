@@ -10,6 +10,7 @@
 #include <utility>
 #include <vector>
 
+#include <ffi.h>
 #include <jit/jit.h>
 
 #include "Asmjit/AsmjitContext.hpp"
@@ -17,6 +18,7 @@
 #include "LibJit/LibJitContext.hpp"
 #include "LibJit/LibjitModuleCompiler.hpp"
 #include "Sljit/SljitBackend.hpp"
+#include "WasmBase/WasmBackendAbi.hpp"
 #include "WasmBase/WasmDiagnostics.hpp"
 #include "WasmBase/WasmGcHeader.hpp"
 
@@ -61,33 +63,22 @@ void callWithV128ParamsVoid(void* fnPtr, void* context, const AbiV128* args, siz
 	}
 }
 
-template <typename Ret>
-Ret callI32Function(void* function, void* vm, const std::vector<const void*>& args)
+//! libffi type of one Wasm value type, or null when the session cannot
+//! marshal it. `v128` is a deliberate gap: a register-form call has no
+//! aggregate slot model, and the frame path is handled before this helper.
+ffi_type* ffiTypeOf(WASM::ValueTypeCode code)
 {
-	auto value = [&](std::size_t i) { return *static_cast<const std::int32_t*>(args[i]); };
-	switch (args.size()) {
-	case 0: return reinterpret_cast<Ret (*)(void*)>(function)(vm);
-	case 1: return reinterpret_cast<Ret (*)(void*, std::int32_t)>(function)(vm, value(0));
-	case 2: return reinterpret_cast<Ret (*)(void*, std::int32_t, std::int32_t)>(function)(vm, value(0), value(1));
-	case 3: return reinterpret_cast<Ret (*)(void*, std::int32_t, std::int32_t, std::int32_t)>(function)(vm, value(0), value(1), value(2));
-	case 4: return reinterpret_cast<Ret (*)(void*, std::int32_t, std::int32_t, std::int32_t, std::int32_t)>(function)(vm, value(0), value(1), value(2), value(3));
-	case 5: return reinterpret_cast<Ret (*)(void*, std::int32_t, std::int32_t, std::int32_t, std::int32_t, std::int32_t)>(function)(vm, value(0), value(1), value(2), value(3), value(4));
-	default: throw std::runtime_error("AsmJit test session supports at most five i32 parameters");
+	switch (WASM::valueKindOf(code)) {
+	case WASM::ValueKind::I32:  return &ffi_type_sint32;
+	case WASM::ValueKind::I64:  return &ffi_type_sint64;
+	case WASM::ValueKind::F32:  return &ffi_type_float;
+	case WASM::ValueKind::F64:  return &ffi_type_double;
+	case WASM::ValueKind::Ref:  return &ffi_type_pointer;
+	case WASM::ValueKind::V128:
+	case WASM::ValueKind::Void:
+		return nullptr;
 	}
-}
-
-void callI32VoidFunction(void* function, void* vm, const std::vector<const void*>& args)
-{
-	auto value = [&](std::size_t i) { return *static_cast<const std::int32_t*>(args[i]); };
-	switch (args.size()) {
-	case 0: reinterpret_cast<void (*)(void*)>(function)(vm); return;
-	case 1: reinterpret_cast<void (*)(void*, std::int32_t)>(function)(vm, value(0)); return;
-	case 2: reinterpret_cast<void (*)(void*, std::int32_t, std::int32_t)>(function)(vm, value(0), value(1)); return;
-	case 3: reinterpret_cast<void (*)(void*, std::int32_t, std::int32_t, std::int32_t)>(function)(vm, value(0), value(1), value(2)); return;
-	case 4: reinterpret_cast<void (*)(void*, std::int32_t, std::int32_t, std::int32_t, std::int32_t)>(function)(vm, value(0), value(1), value(2), value(3)); return;
-	case 5: reinterpret_cast<void (*)(void*, std::int32_t, std::int32_t, std::int32_t, std::int32_t, std::int32_t)>(function)(vm, value(0), value(1), value(2), value(3), value(4)); return;
-	default: throw std::runtime_error("AsmJit test session supports at most five i32 parameters");
-	}
+	return nullptr;
 }
 
 class AsmJitLaneWiseOp final : public LaneWiseOp
@@ -131,23 +122,112 @@ public:
 			void* result, std::size_t capacity, bool& trapped, WASM::TrapKind& trapKind,
 			std::string& trapMessage) override
 	{
-		(void)instance; trapped = false;
-		if (callable.fnPtr == nullptr || args.size() != type.params.size()
-				|| args.size() > 5 || type.results.size() > 1)
+		trapped = false;
+		if (callable.fnPtr == nullptr)
+			return false;
+		if (instance.frameCallAbi()) {
+			std::vector<WASM::ValueKind> paramKinds;
+			std::vector<WASM::ValueKind> resultKinds;
+			for (const auto& p : type.params)
+				paramKinds.push_back(WASM::valueKindOf(p.val.opcode));
+			for (const auto& r : type.results)
+				resultKinds.push_back(WASM::valueKindOf(r.val.opcode));
+			if (args.size() != type.params.size())
+				return false;
+			const std::uint32_t bytes = WASM::frameBytes(paramKinds, resultKinds);
+			std::vector<std::max_align_t> storage(
+					(bytes + sizeof(std::max_align_t) - 1) / sizeof(std::max_align_t) + 1);
+			auto* frame = reinterpret_cast<std::uint8_t*>(storage.data());
+			std::memset(frame, 0, bytes);
+			for (std::size_t i = 0; i < args.size(); ++i)
+				std::memcpy(frame + WASM::frameArgumentOffset(paramKinds,
+						static_cast<std::uint32_t>(i)), args[i],
+						WASM::valueKindSize(paramKinds[i]));
+			const AggregateLayout layout = aggregateLayout(type.results);
+			if (!type.results.empty() && (result == nullptr || capacity < layout.size))
+				return false;
+			using FrameEntry = void (*)(void*, void*);
+			{
+				WASM::CallDepthScope depth;
+				reinterpret_cast<FrameEntry>(callable.fnPtr)(vmContext, frame);
+			}
+			for (std::size_t i = 0; i < type.results.size(); ++i)
+				std::memcpy(static_cast<std::uint8_t*>(result) + layout.fields[i].offset,
+						frame + WASM::frameResultOffset(paramKinds, resultKinds,
+								static_cast<std::uint32_t>(i)),
+						WASM::valueKindSize(resultKinds[i]));
+			const WASM::TrapInfo info = WASM::takePendingTrap();
+			if (info.trapped) {
+				trapped = true;
+				trapKind = info.kind;
+				trapMessage = info.message != nullptr ? info.message : "";
+				WASM::emitTrapDiagnostic(info.kind, info.message, info.functionIndex,
+						info.instructionOffset, info.functionName);
+			}
+			return true;
+		}
+		if (args.size() != type.params.size() || type.results.size() > 1)
 			return false;
 		for (const void* argument : args)
 			if (argument == nullptr)
 				return false;
-		for (const auto& p : type.params)
-			if (p.isPacked || p.val.opcode != WASM::ValueTypeCode::I32)
+
+		// The register form is the host C ABI, so the harness calls it through
+		// libffi rather than enumerating signatures by hand. That keeps the
+		// measurement about the backend: a scalar/ref signature the backend can
+		// emit is a signature the ScriptRunner can invoke.
+		std::vector<ffi_type*> argumentTypes;
+		std::vector<void*> argumentValues;
+		argumentTypes.reserve(1 + args.size());
+		argumentValues.reserve(1 + args.size());
+		void* vm = vmContext;
+		argumentTypes.push_back(&ffi_type_pointer);
+		argumentValues.push_back(&vm);
+		for (std::size_t i = 0; i < type.params.size(); ++i) {
+			if (type.params[i].isPacked)
 				return false;
-		if (!type.results.empty() && type.results.front().val.opcode != WASM::ValueTypeCode::I32) return false;
-		if (!type.results.empty() && (result == nullptr || capacity < sizeof(std::int32_t)))
+			ffi_type* argumentType = ffiTypeOf(type.params[i].val.opcode);
+			if (argumentType == nullptr)
+				return false;
+			argumentTypes.push_back(argumentType);
+			argumentValues.push_back(const_cast<void*>(args[i]));
+		}
+
+		ffi_type* returnType = &ffi_type_void;
+		std::size_t resultSize = 0;
+		if (!type.results.empty()) {
+			if (type.results.front().isPacked)
+				return false;
+			returnType = ffiTypeOf(type.results.front().val.opcode);
+			if (returnType == nullptr)
+				return false;
+			resultSize = WASM::valueKindSize(
+					WASM::valueKindOf(type.results.front().val.opcode));
+			if (result == nullptr || capacity < resultSize)
+				return false;
+		}
+
+		ffi_cif interface{};
+		if (ffi_prep_cif(&interface, FFI_DEFAULT_ABI,
+				static_cast<unsigned>(argumentTypes.size()), returnType,
+				argumentTypes.data()) != FFI_OK)
 			return false;
+
+		trapped = false;
 		{
+			// libffi may write a full machine word for a narrow integer return.
+			alignas(16) std::array<std::uint8_t, 16> returnStorage{};
+			void* returnBuffer = result;
+			if (returnType != &ffi_type_void) {
+				if (returnType->size > returnStorage.size())
+					return false;
+				returnBuffer = returnStorage.data();
+			}
 			WASM::CallDepthScope depth;
-			if (type.results.empty()) callI32VoidFunction(callable.fnPtr, vmContext, args);
-			else { const std::int32_t value = callI32Function<std::int32_t>(callable.fnPtr, vmContext, args); std::memcpy(result, &value, sizeof(value)); }
+			ffi_call(&interface, reinterpret_cast<void (*)()>(callable.fnPtr),
+					returnBuffer, argumentValues.data());
+			if (returnBuffer != result)
+				std::memcpy(result, returnStorage.data(), resultSize);
 		}
 		const WASM::TrapInfo info = WASM::takePendingTrap();
 		if (info.trapped) {
@@ -394,9 +474,10 @@ std::unique_ptr<Session> create()
 	if (name == "asmjit")
 		return std::make_unique<AsmJitSession>();
 	// The session factory lives with the backend, never in the core
-	// (docs/WRITING_A_BACKEND.md §8). SLJIT is provisional: it executes a small
-	// integer subset and refuses the rest, so most generic fixtures are expected
-	// to fail under it (docs/WRITING_A_BACKEND.md §9).
+	// (docs/WRITING_A_BACKEND.md §8). SLJIT executes the shared P0-P2 integer,
+	// control-flow, call and memory slice and refuses floating point,
+	// references/GC, exceptions and SIMD (docs/WRITING_A_BACKEND.md §11), so
+	// fixtures from those families are expected to fail under it.
 	if (name == "sljit")
 		return Sljit::createSession();
 	throw std::runtime_error("unknown WASMJIT_BACKEND '" + name

@@ -1,6 +1,7 @@
 #ifndef LIBJITOPCODEDISPATCHER_HPP
 #define LIBJITOPCODEDISPATCHER_HPP
 
+#include "../WasmBase/WasmBackendAbi.hpp"
 #include "../WasmBase/WasmModuleInstance.hpp"
 #include "../WasmBase/WasmOpcodeDispatcher.hpp"
 #include "../WasmBase/WasmTrap.hpp"
@@ -312,6 +313,29 @@ private:
 	WASM::TypeIdx continuationFuncIndex(WASM::TypeIdx contTypeIdx) const;
 	//! Function signature wrapped by continuation type `contTypeIdx`.
 	WASM::FuncType continuationSignature(WASM::TypeIdx contTypeIdx) const;
+	//! True when this module uses the opted-in staging-frame ABI.
+	bool frameAbi() const;
+	//! The ABI kinds of a parameter/result vector, in declaration order.
+	static std::vector<WASM::ValueKind> frameKinds(std::span<const WASM::StorageType> types);
+	//! Allocates an aligned local call frame for `callee`.
+	jit_value_t allocateCallFrame(const WASM::FuncType& callee);
+	//! Writes `arguments` into `frame` at the canonical argument offsets.
+	void storeFrameArguments(jit_value_t frame, const WASM::FuncType& callee,
+			const std::vector<jit_value_t>& arguments);
+	//! Reads `callee`'s results from `frame` and pushes them as owned values.
+	void pushFrameResults(jit_value_t frame, const WASM::FuncType& callee);
+	//! Writes one value into a frame slot (two qwords for a v128).
+	void storeFrameValue(jit_value_t frame, std::uint32_t offset,
+			const WASM::StorageType& type, jit_value_t value);
+	//! Reads one value from a frame slot (a fresh buffer for a v128).
+	jit_value_t loadFrameValue(jit_value_t frame, std::uint32_t offset,
+			const WASM::StorageType& type);
+	//! Writes the current function's `values` into its frame result block.
+	void storeFrameResults(const std::vector<jit_value_t>& values);
+	//! Calls `fnPtr(ctx, frame)` and pushes the callee frame results.
+	void emitFrameInvocation(jit_value_t fnPtr, jit_value_t calleeContext,
+			const WASM::FuncType& callee, WASM::TypeIdx typeIdx,
+			const std::vector<jit_value_t>& arguments);
 	//! Pointer to the callable for function index `funcIdx` (import or local).
 	jit_value_t callablePointerForFuncIndex(WASM::FuncIdx funcIdx);
 	void dispatchCallThroughCallable(jit_value_t callablePtr, WASM::TypeIdx typeIdx); //!< Lower this opcode into the backend IR.

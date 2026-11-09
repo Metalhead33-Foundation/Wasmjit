@@ -1,5 +1,11 @@
 # WasmJit ABI: VMContext Passing Convention {#doc_abi}
 
+> **Read with [`ABI_PORTABILITY.md`](ABI_PORTABILITY.md).** This document says *what*
+> the canonical signature is (arg0 `VMContext*`, the multi-result buffer, the call-kind
+> context rules). That document says **which** calling convention realises it — the host
+> C ABI with C linkage, on every target — what a backend may and may not do while
+> lowering it, and what the canonical ABI for GC heap objects is.
+
 ## Overview
 
 Every JIT-compiled Wasm function takes a `VMContext*` as its first argument

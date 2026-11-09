@@ -5,6 +5,10 @@ CONFIG -= qt
 # (header-only; the same dependency WasmBase declares).
 CONFIG += link_pkgconfig
 PKGCONFIG += nlohmann_json
+# The test harness invokes register-form exports through libffi, as the SLJIT
+# backend session already does, so the backend's ABI is measured rather than a
+# hand-written list of C signatures.
+PKGCONFIG += libffi
 
 TARGET = WasmJit
 
@@ -42,6 +46,9 @@ include(../WasmBase/WasmBase.pri)
 
 INCLUDEPATH += $$PWD/..
 INCLUDEPATH += $$PWD/../Tools/Bindings
+# The SLJIT-derived backend include (sljitLir.h); the [sljit] unit tests that
+# measure SLJIT’s own ABI need it.
+INCLUDEPATH += $$PWD/../extern/sljit/sljit_src
 
 # Compile every AssemblyScript test module found under Test/wasm into its own .wasm output
 # using a single shared node_modules install under Test/, not one per module.
@@ -100,7 +107,9 @@ WAT_SOURCES = $$files($$PWD/wasm_wat/*.wat)
 wat2wasm.name = wasm-tools parse ${QMAKE_FILE_IN}
 wat2wasm.input = WAT_SOURCES
 wat2wasm.output = $$WASM_BUILD_OUTPUT_DIR/${QMAKE_FILE_BASE}.wasm
-wat2wasm.commands = $$QMAKE_MKDIR $$WASM_BUILD_OUTPUT_DIR && $$WASM_TOOLS parse ${QMAKE_FILE_IN} -o ${QMAKE_FILE_OUT}
+# The output is removed first: a failed parse must leave no .wasm behind, or the
+# previous binary survives and impersonates a passing fixture (docs §37/§38).
+wat2wasm.commands = $$QMAKE_MKDIR $$WASM_BUILD_OUTPUT_DIR && rm -f ${QMAKE_FILE_OUT} && $$WASM_TOOLS parse ${QMAKE_FILE_IN} -o ${QMAKE_FILE_OUT}
 wat2wasm.dependency_type = TYPE_C
 wat2wasm.CONFIG += no_link target_predeps
 

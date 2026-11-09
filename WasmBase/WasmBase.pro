@@ -63,12 +63,15 @@ SOURCES += \
         WasmOpcodeDispatcher.cpp \
         WasmRegistryImportResolver.cpp \
         WasmRuntime.cpp \
+        WasmRoundingOps.cpp \
         WasmSection.cpp \
         WasmStack.cpp \
         WasmStore.cpp \
         WasmString.cpp \
+        WasmStringOps.cpp \
         WasmTable.cpp \
         WasmTrap.cpp \
+        WasmTailTrampoline.cpp \
         WasmType.cpp \
         WasmTypeStore.cpp \
         WasmTypeRegistry.cpp \
@@ -118,12 +121,15 @@ HEADERS += \
     WasmProfile.hpp \
     WasmRegistryImportResolver.hpp \
     WasmRuntime.hpp \
+    WasmRoundingOps.hpp \
     WasmSafety.hpp \
     WasmSection.hpp \
     WasmStack.hpp \
     WasmStore.hpp \
     WasmString.hpp \
+    WasmStringOps.hpp \
     WasmTable.hpp \
+    WasmTailTrampoline.hpp \
     WasmTrap.hpp \
     WasmTracing.hpp \
     WasmTypeStore.hpp \
@@ -159,6 +165,7 @@ WASMJIT_INTERNAL_HEADERS = \
     $$PWD/WasmTypeRegistry.hpp \
     $$PWD/WasmGcHeap.hpp \
     $$PWD/WasmValidator.hpp \
+    $$PWD/WasmTailTrampoline.hpp \
     $$PWD/WasmValidation.hpp \
     $$PWD/WasmDeterminism.hpp \
     $$PWD/WasmComponent.hpp \
