@@ -22,8 +22,13 @@
 
 #include <Euphemy/Io/EuphConstBufferDevice.hpp>
 
+#include <ffi.h>
+
 #include <algorithm>
 #include <cmath>
+#include <map>
+#include <mutex>
+#include <string>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -465,6 +470,64 @@ extern "C" void* sljitStructNew(WASM::VMContext* vm, uint32_t size, uint32_t typ
 		WASM::reportTrap(WASM::TrapKind::Internal);
 		return nullptr;
 	}
+}
+
+extern "C" void* sljitStructNewDesc(WASM::VMContext* vm, uint32_t size,
+		uint32_t typeIndex, void* descriptor) noexcept
+{
+	// Custom Descriptors: the heap retains the descriptor and stamps it into the
+	// new object's header slot (docs/proposals/CUSTOM_DESCRIPTORS.md). The
+	// operand-stack value is a borrow in this backend's reference model, so the
+	// retain the helper performs is the only count the new object owns.
+	try {
+		return reinterpret_cast<WASM::ModuleInstance*>(vm)->allocateStructObject(
+				size, typeIndex, descriptor);
+	} catch (...) {
+		WASM::reportTrap(WASM::TrapKind::Internal);
+		return nullptr;
+	}
+}
+
+extern "C" void* sljitRefGetDesc(WASM::VMContext* vm, void* ref) noexcept
+{
+	// `ref.get_desc` has two distinct traps: a null structure reference and a
+	// declared reference whose header carries no descriptor
+	// (docs/proposals/CUSTOM_DESCRIPTORS.md).
+	WASM::ModuleInstance* instance = reinterpret_cast<WASM::ModuleInstance*>(vm);
+	if (ref == nullptr) {
+		WASM::reportTrap(WASM::TrapKind::NullStructureReference,
+				"ref.get_desc: null structure reference");
+		return nullptr;
+	}
+	void* descriptor = instance->structDescriptor(ref);
+	if (descriptor == nullptr) {
+		WASM::reportTrap(WASM::TrapKind::NullReference,
+				"ref.get_desc: null custom descriptor");
+		return nullptr;
+	}
+	return descriptor;
+}
+
+extern "C" int32_t sljitDescEq(WASM::VMContext* vm, void* ref, void* descriptor,
+		int32_t allowNull) noexcept
+{
+	// One predicate serves `ref.cast_desc_eq`, its `_null` form and both
+	// `br_on_cast_desc_eq` directions: the descriptor must be non-null, and a
+	// null reference matches only when the cast type is nullable.
+	WASM::ModuleInstance* instance = reinterpret_cast<WASM::ModuleInstance*>(vm);
+	if (descriptor == nullptr) {
+		WASM::reportTrap(WASM::TrapKind::NullReference,
+				"cast_desc_eq: null custom descriptor");
+		return 0;
+	}
+	if (ref == nullptr) {
+		if (allowNull != 0)
+			return 1;
+		WASM::reportTrap(WASM::TrapKind::NullStructureReference,
+				"cast_desc_eq: null structure reference");
+		return 0;
+	}
+	return instance->structDescriptor(ref) == descriptor ? 1 : 0;
 }
 
 //! Reports a trap of @p kind through the shared trap slot.
@@ -1364,6 +1427,173 @@ sljit_s32 callArgTypes(const WASM::FuncType& type, WASM::ValueTypeCode resultKin
 	return types;
 }
 
+// ── Staged native-import calls ──────────────────────────────────────────────
+// SLJIT's C-call form accepts at most four arguments, so a native import whose
+// Wasm signature carries more than three parameters cannot be called directly.
+// One libffi closure per distinct signature stages the arguments in the
+// canonical frame and marshals them onto the real import, so the import keeps
+// its own host C signature. This is a limitation of *this* code generator, so
+// the workaround stays here (docs/WRITING_A_BACKEND.md §10).
+
+//! The marshalling shape of one staged native-import call.
+struct StagedShape {
+	ffi_cif callCif {}; //!< The import's own host signature.
+	ffi_cif closureCif {}; //!< `void(VMContext*, Callable*, void* frame)`.
+	//! The closure's own argument types; `ffi_cif` stores the *pointer*, so the
+	//! array has to outlive the prep call with the entry.
+	std::vector<ffi_type*> closureArgTypes = {&ffi_type_pointer,
+			&ffi_type_pointer, &ffi_type_pointer};
+	std::vector<ffi_type*> argTypes; //!< Context, then one entry per parameter.
+	std::vector<WASM::ValueKind> paramKinds;
+	std::size_t paramCount = 0;
+	std::uint32_t resultOffset = 0; //!< Byte offset of the result block.
+	bool single = false; //!< One result, returned by value.
+	bool multi = false; //!< Several results, through a trailing buffer pointer.
+	ffi_type* resultType = &ffi_type_void;
+};
+
+//! Host C type of one Wasm value kind, or null for `v128`, whose C spelling is
+//! not a single `ffi_type` and which the staged form therefore refuses.
+ffi_type* stagedFfiType(WASM::ValueKind kind) noexcept
+{
+	switch (kind) {
+	case WASM::ValueKind::I32: return &ffi_type_sint32;
+	case WASM::ValueKind::I64: return &ffi_type_sint64;
+	case WASM::ValueKind::F32: return &ffi_type_float;
+	case WASM::ValueKind::F64: return &ffi_type_double;
+	case WASM::ValueKind::V128: return nullptr;
+	default: return &ffi_type_pointer; // references are one word
+	}
+}
+
+//! One process-lifetime closure, shared by every call site with its signature.
+struct StagedEntry {
+	StagedShape shape;
+	ffi_closure* closure = nullptr;
+	void* code = nullptr;
+};
+
+//! The closure body: load the staged arguments and call the import through the
+//! host C ABI. A trap is reported, never thrown (docs/SAFETY.md §2.6).
+void stagedImportCall(ffi_cif*, void*, void** args, void* userData)
+{
+	StagedEntry* entry = static_cast<StagedEntry*>(userData);
+	WASM::VMContext* vm = *static_cast<WASM::VMContext**>(args[0]);
+	WASM::Callable* target = *static_cast<WASM::Callable**>(args[1]);
+	void* frame = *static_cast<void**>(args[2]);
+	if (target == nullptr || target->fnPtr == nullptr) {
+		WASM::reportTrap(WASM::TrapKind::Internal,
+				"SLJIT staged import call has no target");
+		return;
+	}
+	// A native import carries no context: it runs against the caller's.
+	void* context = target->context != nullptr
+			? static_cast<void*>(target->context) : static_cast<void*>(vm);
+	std::vector<void*> callArgs(entry->shape.argTypes.size(), nullptr);
+	callArgs[0] = &context;
+	for (std::size_t i = 0; i < entry->shape.paramCount; ++i)
+		callArgs[1 + i] = static_cast<std::uint8_t*>(frame)
+				+ WASM::frameArgumentOffset(entry->shape.paramKinds,
+						static_cast<std::uint32_t>(i));
+	void* buffer = static_cast<std::uint8_t*>(frame) + entry->shape.resultOffset;
+	if (entry->shape.multi)
+		callArgs.back() = &buffer;
+	// libffi stores an `ffi_arg` word for a scalar result narrower than a word,
+	// so give it word-sized scratch and narrow into the frame slot ourselves.
+	ffi_arg word = 0;
+	ffi_call(&entry->shape.callCif, FFI_FN(target->fnPtr),
+			entry->shape.single ? static_cast<void*>(&word) : nullptr,
+			callArgs.data());
+	if (entry->shape.single)
+		std::memcpy(static_cast<std::uint8_t*>(frame) + entry->shape.resultOffset,
+				&word, entry->shape.resultType->size);
+}
+
+//! The process-wide closure cache; entries live for the process lifetime.
+//!
+//! Deliberately never destroyed: the entries own executable closures, so freeing
+//! them at static-destruction time would release code another thread may still
+//! be inside. Keeping the table itself reachable also means a leak checker sees
+//! a live cache rather than an unreachable allocation.
+std::map<std::string, StagedEntry*>& stagedEntries()
+{
+	static std::map<std::string, StagedEntry*>* entries =
+			new std::map<std::string, StagedEntry*>();
+	return *entries;
+}
+
+std::mutex& stagedMutex()
+{
+	static std::mutex mutex;
+	return mutex;
+}
+
+//! Returns the staged-import entry for @p type, or null when the signature has a
+//! `v128` (outside the uniform slot model).
+void* stagedImportEntry(const WASM::FuncType& type)
+{
+	StagedShape shape;
+	shape.paramCount = type.params.size();
+	shape.argTypes.push_back(&ffi_type_pointer); // VMContext*
+	std::string key;
+	for (const WASM::StorageType& parameter : type.params) {
+		const WASM::ValueKind kind = WASM::valueKindOf(parameter.val.opcode);
+		ffi_type* ffiType = stagedFfiType(kind);
+		if (ffiType == nullptr)
+			return nullptr;
+		shape.paramKinds.push_back(kind);
+		shape.argTypes.push_back(ffiType);
+		key.push_back(static_cast<char>(static_cast<unsigned>(kind)));
+	}
+	shape.single = type.results.size() == 1;
+	shape.multi = type.results.size() > 1;
+	if (shape.multi)
+		shape.argTypes.push_back(&ffi_type_pointer); // result buffer
+	if (shape.single) {
+		shape.resultType = stagedFfiType(
+				WASM::valueKindOf(type.results.front().val.opcode));
+		if (shape.resultType == nullptr)
+			return nullptr;
+	}
+	shape.resultOffset = WASM::frameArgumentsBytes(shape.paramKinds);
+	key.push_back('>');
+	for (const WASM::StorageType& result : type.results)
+		key.push_back(static_cast<char>(
+				static_cast<unsigned>(WASM::valueKindOf(result.val.opcode))));
+
+	const std::lock_guard<std::mutex> lock(stagedMutex());
+	auto& entries = stagedEntries();
+	const auto found = entries.find(key);
+	if (found != entries.end())
+		return found->second->code;
+
+	if (ffi_prep_cif(&shape.callCif, FFI_DEFAULT_ABI,
+			static_cast<unsigned>(shape.argTypes.size()),
+			shape.single ? shape.resultType : &ffi_type_void,
+			shape.argTypes.data()) != FFI_OK)
+		return nullptr;
+	if (ffi_prep_cif(&shape.closureCif, FFI_DEFAULT_ABI, 3, &ffi_type_void,
+			shape.closureArgTypes.data()) != FFI_OK)
+		return nullptr;
+
+	StagedEntry* entry = new StagedEntry();
+	entry->shape = std::move(shape);
+	entry->closure = static_cast<ffi_closure*>(
+			ffi_closure_alloc(sizeof(ffi_closure), &entry->code));
+	if (entry->closure == nullptr || entry->code == nullptr) {
+		delete entry;
+		return nullptr;
+	}
+	if (ffi_prep_closure_loc(entry->closure, &entry->shape.closureCif,
+			&stagedImportCall, entry, entry->code) != FFI_OK) {
+		ffi_closure_free(entry->closure);
+		delete entry;
+		return nullptr;
+	}
+	entries.emplace(std::move(key), entry);
+	return entry->code;
+}
+
 } // namespace
 
 OpcodeDispatcher::OpcodeDispatcher(const WASM::Module& module, const WASM::FuncType& funcType,
@@ -1386,6 +1616,11 @@ OpcodeDispatcher::OpcodeDispatcher(const WASM::Module& module, const WASM::FuncT
 	frameKinds_.reserve(funcType.params.size());
 	for (const auto& parameter : funcType.params)
 		frameKinds_.push_back(WASM::valueKindOf(parameter.val.opcode));
+	// A native import carries no context; those are the callees that cannot take
+	// a v128 through the staged adapter (`stagedImportEntry`).
+	for (const WASM::Callable& imported : internals.importStorage)
+		if (imported.context == nullptr)
+			moduleHasNativeImports_ = true;
 
 	WASM::PreparedFunctionStack prepared;
 	try {
@@ -2026,6 +2261,29 @@ void OpcodeDispatcher::transferToBase(const std::vector<int>& widths, std::size_
 			storeSlot(SLJIT_R0, base + i, widths[i]);
 		}
 	}
+}
+
+void OpcodeDispatcher::emitRetainStackObject(std::size_t depth)
+{
+	// A fresh GC object is created *unowned* (count 0); the operand stack owns
+	// one count per reference it holds, so the value takes a count as it is
+	// pushed (docs/WRITING_A_BACKEND.md §6, "Reference ownership").
+	loadContext(SLJIT_R0);
+	loadSlot(SLJIT_R1, depth, 8);
+	emitHelper(SLJIT_ARGS2(P, P, P), &WASM::wasm_ref_clone);
+	storeSlot(SLJIT_R0, depth, 8);
+	emitPendingTrapCheck();
+}
+
+void OpcodeDispatcher::emitDropStackRef(std::size_t depth)
+{
+	// A reference operand that the instruction consumes is released here: the
+	// operand stack owns one count per reference it holds, and the callee has
+	// already retained whatever it keeps (docs/WRITING_A_BACKEND.md §6).
+	loadContext(SLJIT_R0);
+	loadSlot(SLJIT_R1, depth, 8);
+	emitHelper(SLJIT_ARGS2V(P, P), &WASM::wasm_ref_drop);
+	emitPendingTrapCheck();
 }
 
 void OpcodeDispatcher::emitDropReferenceLocals()
@@ -3071,7 +3329,22 @@ void OpcodeDispatcher::dispatchThrowRef()
 	markUnreachable();
 }
 
-void OpcodeDispatcher::emitResolvedCall(const WASM::FuncType& type, int callableReg)
+void* OpcodeDispatcher::stagedImportFor(const WASM::FuncType& type)
+{
+	// A module without native imports can never need the adapter, so it pays
+	// neither the closure nor the run-time branch on `Callable::context`.
+	if (!moduleHasNativeImports_)
+		return nullptr;
+	// Otherwise the adapter is needed whenever the register form cannot express
+	// the signature, or when the module is frame-form (where any callee may be a
+	// native import).
+	if (!frameAbi_ && type.params.size() <= kMaxWasmParameters)
+		return nullptr;
+	return stagedImportEntry(type);
+}
+
+void OpcodeDispatcher::emitResolvedCall(const WASM::FuncType& type, int callableReg,
+		void* stagedImport)
 {
 	// Load the target and its context out of the resolved `Callable`.
 	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R1, 0, SLJIT_MEM1(callableReg),
@@ -3081,15 +3354,23 @@ void OpcodeDispatcher::emitResolvedCall(const WASM::FuncType& type, int callable
 	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP), targetSlotOffset(),
 			SLJIT_R1, 0));
 
-	// A native import carries no context: it runs against the caller's.
-	emit(sljit_emit_op2u(compiler_, SLJIT_SUB | SLJIT_SET_Z, SLJIT_R2, 0, SLJIT_IMM, 0));
-	emit(sljit_emit_select(compiler_, SLJIT_EQUAL, SLJIT_R2,
-			SLJIT_MEM1(SLJIT_SP), contextSlotOffset(), SLJIT_R2));
+	// The callable pointer has to survive the staging loop, which uses R1/R3.
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+			scratchSlotOffset(), callableReg, 0));
+	if (stagedImport == nullptr) {
+		// A native import carries no context: it runs against the caller's.
+		emit(sljit_emit_op2u(compiler_, SLJIT_SUB | SLJIT_SET_Z, SLJIT_R2, 0,
+				SLJIT_IMM, 0));
+		emit(sljit_emit_select(compiler_, SLJIT_EQUAL, SLJIT_R2,
+				SLJIT_MEM1(SLJIT_SP), contextSlotOffset(), SLJIT_R2));
+	}
 
-	// Frame form: pack the arguments into the caller's staging scratch area, call
-	// `(context, frame)`, then copy the results back into the operand slots
-	// (docs/backends/STAGING_CALL_ABI.md, step 3b).
-	if (frameAbi_) {
+	// A signature wider than the register form, or any call in a frame-form
+	// module, travels through the staging frame. That is the only shape SLJIT can
+	// express for four or more Wasm parameters, and the only shape a native import
+	// with such a signature can be called through (see `stagedImportEntry`).
+	const bool wideRegisterCall = !frameAbi_ && type.params.size() > kMaxWasmParameters;
+	if (frameAbi_ || wideRegisterCall) {
 		const std::size_t base = stackWidths_.size() - type.params.size();
 		std::vector<WASM::ValueKind> argumentKinds;
 		argumentKinds.reserve(type.params.size());
@@ -3126,8 +3407,51 @@ void OpcodeDispatcher::emitResolvedCall(const WASM::FuncType& type, int callable
 						SLJIT_R3, 0));
 			}
 		}
-		emit(sljit_emit_icall(compiler_, SLJIT_CALL, SLJIT_ARGS2V(P, P),
-				SLJIT_MEM1(SLJIT_SP), targetSlotOffset()));
+		if (stagedImport == nullptr) {
+			// The callee is a frame-form Wasm function: `(context, frame)`.
+			emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0, SLJIT_R2, 0));
+			emit(sljit_get_local_base(compiler_, SLJIT_R1, 0, callFrameOffset()));
+			emit(sljit_emit_icall(compiler_, SLJIT_CALL, SLJIT_ARGS2V(P, P),
+					SLJIT_MEM1(SLJIT_SP), targetSlotOffset()));
+		} else {
+			// The target may be a native import, which takes its own host C
+			// signature rather than a frame: branch on `Callable::context` and route
+			// a native target through the staged adapter.
+			sljit_jump* notNative = sljit_emit_cmp(compiler_, SLJIT_NOT_EQUAL,
+					SLJIT_R2, 0, SLJIT_IMM, 0);
+			if (notNative == nullptr)
+				ok_ = false;
+			emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0, SLJIT_MEM1(SLJIT_SP),
+					contextSlotOffset()));
+			emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R1, 0, SLJIT_MEM1(SLJIT_SP),
+					scratchSlotOffset()));
+			emit(sljit_get_local_base(compiler_, SLJIT_R2, 0, callFrameOffset()));
+			emit(sljit_emit_icall(compiler_, SLJIT_CALL, SLJIT_ARGS3V(P, P, P),
+					SLJIT_IMM, codeAddress(stagedImport)));
+			sljit_jump* done = sljit_emit_jump(compiler_, SLJIT_JUMP);
+			if (done == nullptr)
+				ok_ = false;
+			sljit_label* frameCall = sljit_emit_label(compiler_);
+			if (frameCall == nullptr)
+				ok_ = false;
+			else if (notNative != nullptr)
+				sljit_set_label(notNative, frameCall);
+			// The context is non-null on this path; substitute the caller's anyway so
+			// a frame-form module never passes a null one to a callee.
+			emit(sljit_emit_op2u(compiler_, SLJIT_SUB | SLJIT_SET_Z, SLJIT_R2, 0,
+					SLJIT_IMM, 0));
+			emit(sljit_emit_select(compiler_, SLJIT_EQUAL, SLJIT_R2,
+					SLJIT_MEM1(SLJIT_SP), contextSlotOffset(), SLJIT_R2));
+			emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0, SLJIT_R2, 0));
+			emit(sljit_get_local_base(compiler_, SLJIT_R1, 0, callFrameOffset()));
+			emit(sljit_emit_icall(compiler_, SLJIT_CALL, SLJIT_ARGS2V(P, P),
+					SLJIT_MEM1(SLJIT_SP), targetSlotOffset()));
+			sljit_label* join = sljit_emit_label(compiler_);
+			if (join == nullptr)
+				ok_ = false;
+			else if (done != nullptr)
+				sljit_set_label(done, join);
+		}
 		if (!type.results.empty()) {
 			// R1 is caller-saved, so the scratch address is taken again. Results
 			// start where the argument block ends and overwrite the argument slots.
@@ -3227,9 +3551,17 @@ void OpcodeDispatcher::emitCall(WASM::FuncIdx index, bool isTail)
 	const WASM::FuncType calledType = module_.funcTypeAt(typeIndex);
 	if (frameAbi_)
 		needsStagingCall_ = true;
-	if (0 == static_cast<int>(frameAbi_))
-		require(calledType.params.size() <= kMaxWasmParameters,
-			"the SLJIT backend cannot call a function with more than three parameters");
+	// A signature wider than the register form travels through the staging frame:
+	// a Wasm callee is frame-form, and a native import is reached through the
+	// staged adapter (`stagedImportFor`). Only a shape the adapter cannot carry --
+	// a `v128` in a wide signature -- is refused.
+	const bool wideCall = calledType.params.size() > kMaxWasmParameters;
+	void* const stagedImport = stagedImportFor(calledType);
+	if (wideCall || stagedImport != nullptr)
+		needsStagingCall_ = true;
+	require(!(wideCall && stagedImport == nullptr && moduleHasNativeImports_),
+			"the SLJIT backend cannot pass a v128 in a signature with more than three "
+			"parameters when the module also imports a native function");
 	require(frameAbi_ || calledType.results.size() <= 1,
 			"the SLJIT register form cannot call a multi-result function");
 	for (const WASM::StorageType& parameter : calledType.params)
@@ -3253,7 +3585,7 @@ void OpcodeDispatcher::emitCall(WASM::FuncIdx index, bool isTail)
 			ok_ = false;
 		else if (resolved != nullptr)
 			sljit_set_label(resolved, continueLabel);
-		emitResolvedCall(calledType, SLJIT_R0);
+		emitResolvedCall(calledType, SLJIT_R0, stagedImport);
 	}
 
 	stackWidths_.resize(stackWidths_.size() - calledType.params.size());
@@ -3278,9 +3610,17 @@ void OpcodeDispatcher::emitCallIndirect(WASM::TypeIdx typeIndex, WASM::TableIdx 
 	const WASM::FuncType calledType = module_.funcTypeAt(typeIndex);
 	if (frameAbi_)
 		needsStagingCall_ = true;
-	if (0 == static_cast<int>(frameAbi_))
-		require(calledType.params.size() <= kMaxWasmParameters,
-			"the SLJIT backend cannot call a function with more than three parameters");
+	// A signature wider than the register form travels through the staging frame:
+	// a Wasm callee is frame-form, and a native import is reached through the
+	// staged adapter (`stagedImportFor`). Only a shape the adapter cannot carry --
+	// a `v128` in a wide signature -- is refused.
+	const bool wideCall = calledType.params.size() > kMaxWasmParameters;
+	void* const stagedImport = stagedImportFor(calledType);
+	if (wideCall || stagedImport != nullptr)
+		needsStagingCall_ = true;
+	require(!(wideCall && stagedImport == nullptr && moduleHasNativeImports_),
+			"the SLJIT backend cannot pass a v128 in a signature with more than three "
+			"parameters when the module also imports a native function");
 	require(frameAbi_ || calledType.results.size() <= 1,
 			"the SLJIT register form cannot call a multi-result function");
 	for (const WASM::StorageType& parameter : calledType.params)
@@ -3312,7 +3652,7 @@ void OpcodeDispatcher::emitCallIndirect(WASM::TypeIdx typeIndex, WASM::TableIdx 
 			ok_ = false;
 		else if (resolved != nullptr)
 			sljit_set_label(resolved, continueLabel);
-		emitResolvedCall(calledType, SLJIT_R0);
+		emitResolvedCall(calledType, SLJIT_R0, stagedImport);
 	}
 
 	stackWidths_.resize(stackWidths_.size() - calledType.params.size());
@@ -3645,7 +3985,8 @@ void OpcodeDispatcher::dispatchCallRef(WASM::TypeIdx typeIndex)
 			"the SLJIT register form cannot call a multi-result function");
 	if (!frameAbi_)
 		require(calledType.params.size() <= kMaxWasmParameters,
-				"the SLJIT backend cannot call a function with more than three parameters");
+				"the SLJIT backend cannot call a reference-typed function with more than three parameters");
+	void* const stagedImport = stagedImportFor(calledType);
 	for (const WASM::StorageType& parameter : calledType.params)
 		require(widthOf(parameter.val) != 0, "the SLJIT backend only calls i32/i64 signatures");
 	for (const WASM::StorageType& result : calledType.results)
@@ -3656,7 +3997,7 @@ void OpcodeDispatcher::dispatchCallRef(WASM::TypeIdx typeIndex)
 	if (!measureOnly_) {
 		loadSlot(SLJIT_R0, callableDepth, 8);
 		emitNullRefCheck(SLJIT_R0);
-		emitResolvedCall(calledType, SLJIT_R0);
+		emitResolvedCall(calledType, SLJIT_R0, stagedImport);
 	}
 	stackWidths_.resize(stackWidths_.size() - calledType.params.size());
 	for (const WASM::StorageType& result : calledType.results)
@@ -3675,7 +4016,8 @@ void OpcodeDispatcher::dispatchReturnCallRef(WASM::TypeIdx typeIndex)
 			"the SLJIT register form cannot tail-call a multi-result function");
 	if (!frameAbi_)
 		require(calledType.params.size() <= kMaxWasmParameters,
-				"the SLJIT backend cannot tail-call a function with more than three parameters");
+				"the SLJIT backend cannot tail-call a reference-typed function with more than three parameters");
+	void* const stagedImport = stagedImportFor(calledType);
 	for (const WASM::StorageType& parameter : calledType.params)
 		require(widthOf(parameter.val) != 0, "the SLJIT backend only calls i32/i64 signatures");
 	for (const WASM::StorageType& result : calledType.results)
@@ -3703,7 +4045,7 @@ void OpcodeDispatcher::dispatchReturnCallRef(WASM::TypeIdx typeIndex)
 				ok_ = false;
 			else if (fallback != nullptr)
 				sljit_set_label(fallback, fallbackLabel);
-			emitResolvedCall(calledType, SLJIT_R0);
+			emitResolvedCall(calledType, SLJIT_R0, stagedImport);
 			// Model the call result before returning it; see the note in
 			// emitTailCallIndirectState.
 			stackWidths_.resize(stackWidths_.size() - calledType.params.size());
@@ -3711,7 +4053,7 @@ void OpcodeDispatcher::dispatchReturnCallRef(WASM::TypeIdx typeIndex)
 				push(widthOf(result.val));
 			emitReturnValue();
 		} else {
-			emitResolvedCall(calledType, SLJIT_R0);
+			emitResolvedCall(calledType, SLJIT_R0, stagedImport);
 			stackWidths_.resize(stackWidths_.size() - calledType.params.size());
 			for (const WASM::StorageType& result : calledType.results)
 				push(widthOf(result.val));
@@ -5612,8 +5954,10 @@ void OpcodeDispatcher::dispatchStructNewDefault(WASM::TypeIdx arg)
 		}
 	}
 	push(8);
-	if (!measureOnly_)
+	if (!measureOnly_) {
 		storeSlot(SLJIT_R0, stackWidths_.size() - 1, 8);
+		emitRetainStackObject(stackWidths_.size() - 1);
+	}
 }
 
 void OpcodeDispatcher::dispatchStructNew(WASM::TypeIdx arg)
@@ -5647,7 +5991,9 @@ void OpcodeDispatcher::dispatchStructNew(WASM::TypeIdx arg)
 				storeOp = fields[i].storage.packed == WASM::ValueTypeCode::I8 ? SLJIT_MOV_U8 : SLJIT_MOV_U16;
 			else if (stackWidths_.back() == 4)
 				storeOp = SLJIT_MOV32;
-			loadSlot(SLJIT_R1, depth, 4);
+			// Load with the operand's own width: a 64-bit field must not be
+			// truncated to its low word on the way into the object.
+			loadSlot(SLJIT_R1, depth, stackWidths_.back() == 4 ? 4 : 8);
 			emit(sljit_emit_op1(compiler_, storeOp,
 					SLJIT_MEM1(SLJIT_R0), static_cast<sljit_sw>(offset), SLJIT_R1, 0));
 			pop();
@@ -5657,8 +6003,258 @@ void OpcodeDispatcher::dispatchStructNew(WASM::TypeIdx arg)
 			pop();
 	}
 	push(8);
-	if (!measureOnly_)
+	if (!measureOnly_) {
 		storeSlot(SLJIT_R0, stackWidths_.size() - 1, 8);
+		emitRetainStackObject(stackWidths_.size() - 1);
+	}
+}
+
+void OpcodeDispatcher::dispatchStructNewDesc(WASM::TypeIdx arg)
+{
+	if (!reachable_)
+		return;
+	const WASM::CoreTypeView view = module_.typeView(arg);
+	require(view.kind() == WASM::CanonTypeKind::Struct,
+			"struct.new_desc requires a struct type");
+	require(view.descriptor().has_value(),
+			"struct.new_desc requires a type with a descriptor clause");
+	const std::span<const WASM::CanonFieldType> fields = view.structFields();
+	// The descriptor sits on top of the field operands.
+	requireStack(fields.size() + 1);
+	for (const WASM::CanonFieldType& field : fields)
+		require(field.storage.isPacked || field.storage.value.opcode != WASM::ValueTypeCode::V128,
+				"the SLJIT backend does not lower v128 struct fields yet");
+	const std::size_t size = WASM::gcStructSize(fields);
+	const std::size_t descriptorDepth = stackWidths_.size() - 1;
+	const std::size_t base = descriptorDepth - fields.size();
+	if (!measureOnly_) {
+		// VMContext*, size, type index, descriptor -> new object in R0.
+		loadSlot(SLJIT_R3, descriptorDepth, 8);
+		loadContext(SLJIT_R0);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R1, 0, SLJIT_IMM,
+				static_cast<sljit_sw>(size)));
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R2, 0, SLJIT_IMM,
+				static_cast<sljit_sw>(arg)));
+		emitHelper(SLJIT_ARGS4(P, P, 32, 32, P), &sljitStructNewDesc);
+		emitPendingTrapCheck(); // ALLOC_TRAPCHECK
+		// Fields are stacked below the descriptor, in declaration order.
+		for (std::size_t i = fields.size(); i-- > 0;) {
+			const std::size_t offset = WASM::gcStructFieldOffset(fields, i);
+			const int width = stackWidths_[base + i];
+			sljit_s32 storeOp = SLJIT_MOV;
+			if (fields[i].storage.isPacked)
+				storeOp = fields[i].storage.packed == WASM::ValueTypeCode::I8 ? SLJIT_MOV_U8 : SLJIT_MOV_U16;
+			else if (width == 4)
+				storeOp = SLJIT_MOV32;
+			loadSlot(SLJIT_R1, base + i, width == 4 ? 4 : 8);
+			emit(sljit_emit_op1(compiler_, storeOp,
+					SLJIT_MEM1(SLJIT_R0), static_cast<sljit_sw>(offset), SLJIT_R1, 0));
+		}
+	}
+	stackWidths_.resize(base);
+	push(8);
+	if (!measureOnly_) {
+		storeSlot(SLJIT_R0, stackWidths_.size() - 1, 8);
+		// The new object retained the descriptor; the operand stack's own count
+		// is released here (Custom Descriptors, ownership rule §6).
+		emitDropStackRef(descriptorDepth);
+		emitRetainStackObject(stackWidths_.size() - 1);
+	}
+}
+
+void OpcodeDispatcher::dispatchStructNewDefaultDesc(WASM::TypeIdx arg)
+{
+	if (!reachable_)
+		return;
+	const WASM::CoreTypeView view = module_.typeView(arg);
+	require(view.kind() == WASM::CanonTypeKind::Struct,
+			"struct.new_default_desc requires a struct type");
+	require(view.descriptor().has_value(),
+			"struct.new_default_desc requires a type with a descriptor clause");
+	const std::span<const WASM::CanonFieldType> fields = view.structFields();
+	requireStack(1);
+	const std::size_t descriptorDepth = stackWidths_.size() - 1;
+	if (!measureOnly_) {
+		loadSlot(SLJIT_R3, descriptorDepth, 8);
+		loadContext(SLJIT_R0);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R1, 0, SLJIT_IMM,
+				static_cast<sljit_sw>(WASM::gcStructSize(fields))));
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R2, 0, SLJIT_IMM,
+				static_cast<sljit_sw>(arg)));
+		emitHelper(SLJIT_ARGS4(P, P, 32, 32, P), &sljitStructNewDesc);
+		emitPendingTrapCheck(); // ALLOC_TRAPCHECK
+		// Default fields are zero; the heap does not promise pre-zeroed memory.
+		for (std::size_t i = 0; i < fields.size(); ++i) {
+			const bool packed = fields[i].storage.isPacked;
+			const bool packedI8 = packed && fields[i].storage.packed == WASM::ValueTypeCode::I8;
+			const WASM::ValueTypeCode opcode = fields[i].storage.value.opcode;
+			const int width = packed ? (packedI8 ? 1 : 2)
+					: ((opcode == WASM::ValueTypeCode::I32
+						|| opcode == WASM::ValueTypeCode::F32) ? 4 : 8);
+			const sljit_s32 storeOp = packed ? (packedI8 ? SLJIT_MOV_U8 : SLJIT_MOV_U16)
+					: (width == 4 ? SLJIT_MOV32 : SLJIT_MOV);
+			emit(sljit_emit_op1(compiler_, storeOp, SLJIT_MEM1(SLJIT_R0),
+					static_cast<sljit_sw>(WASM::gcStructFieldOffset(fields, i)),
+					SLJIT_IMM, 0));
+		}
+	}
+	pop();
+	push(8);
+	if (!measureOnly_) {
+		// The result reuses the descriptor's slot, so release the descriptor
+		// first and keep the new object in the scratch word across that call.
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+				scratchSlotOffset(), SLJIT_R0, 0));
+		emitDropStackRef(descriptorDepth);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0, SLJIT_MEM1(SLJIT_SP),
+				scratchSlotOffset()));
+		storeSlot(SLJIT_R0, stackWidths_.size() - 1, 8);
+		emitRetainStackObject(stackWidths_.size() - 1);
+	}
+}
+
+void OpcodeDispatcher::dispatchRefGetDesc(WASM::TypeIdx arg)
+{
+	(void)arg; // The header slot carries the descriptor; the type is only a check.
+	if (!reachable_)
+		return;
+	requireStack(1);
+	require(stackWidths_.back() == 8, "ref.get_desc requires a reference operand");
+	const std::size_t depth = stackWidths_.size() - 1;
+	if (!measureOnly_) {
+		loadContext(SLJIT_R0);
+		loadSlot(SLJIT_R1, depth, 8);
+		emitHelper(SLJIT_ARGS2(P, P, P), &sljitRefGetDesc);
+		emitPendingTrapCheck();
+		storeSlot(SLJIT_R0, depth, 8);
+	}
+}
+
+void OpcodeDispatcher::emitRefCastDescEq(bool allowNull)
+{
+	if (!reachable_)
+		return;
+	requireStack(2);
+	require(stackWidths_.back() == 8 && stackWidths_[stackWidths_.size() - 2] == 8,
+			"cast_desc_eq requires a reference and a descriptor");
+	const std::size_t descriptorDepth = stackWidths_.size() - 1;
+	const std::size_t refDepth = descriptorDepth - 1;
+	if (!measureOnly_) {
+		loadContext(SLJIT_R0);
+		loadSlot(SLJIT_R1, refDepth, 8);
+		loadSlot(SLJIT_R2, descriptorDepth, 8);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R3, 0, SLJIT_IMM,
+				static_cast<sljit_sw>(allowNull ? 1 : 0)));
+		emitHelper(SLJIT_ARGS4(32, P, P, P, 32), &sljitDescEq);
+		emitPendingTrapCheck();
+		sljit_jump* matched = sljit_emit_cmp(compiler_, SLJIT_NOT_EQUAL,
+				SLJIT_R0, 0, SLJIT_IMM, 0);
+		if (matched == nullptr)
+			ok_ = false;
+		emitTrap(WASM::TrapKind::CastFailure);
+		sljit_label* after = sljit_emit_label(compiler_);
+		if (after == nullptr)
+			ok_ = false;
+		else if (matched != nullptr)
+			sljit_set_label(matched, after);
+		// Success path only: the descriptor operand is consumed.
+		emitDropStackRef(descriptorDepth);
+	}
+	// `[t* (ref null ht) descriptor] -> [t* (ref null ht)]`: the descriptor is
+	// consumed on both paths, the reference survives.
+	pop();
+}
+
+void OpcodeDispatcher::dispatchRefCastDescEq(const WASM::HeapType&)
+{
+	emitRefCastDescEq(false);
+}
+
+void OpcodeDispatcher::dispatchRefCastDescEqNull(const WASM::HeapType&)
+{
+	emitRefCastDescEq(true);
+}
+
+void OpcodeDispatcher::emitBrOnCastDescEq(uint8_t castop, WASM::LabelIdx depth, bool onFailure)
+{
+	if (!reachable_)
+		return;
+	require(depth <= controls_.size(), "br_on_cast_desc_eq label depth is out of range");
+	requireStack(2);
+	require(stackWidths_.back() == 8 && stackWidths_[stackWidths_.size() - 2] == 8,
+			"br_on_cast_desc_eq requires a reference and a descriptor");
+	const bool allowNull = (castop & 0x02) != 0;
+	const std::size_t descriptorDepth = stackWidths_.size() - 1;
+	const std::size_t refDepth = descriptorDepth - 1;
+	if (measureOnly_) {
+		if (depth < controls_.size()
+				&& controls_[controls_.size() - 1 - depth].kind != ControlKind::Loop)
+			controls_[controls_.size() - 1 - depth].endTargeted = true;
+		stackWidths_.resize(descriptorDepth);
+		return;
+	}
+	loadContext(SLJIT_R0);
+	loadSlot(SLJIT_R1, refDepth, 8);
+	loadSlot(SLJIT_R2, descriptorDepth, 8);
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R3, 0, SLJIT_IMM,
+			static_cast<sljit_sw>(allowNull ? 1 : 0)));
+	emitHelper(SLJIT_ARGS4(32, P, P, P, 32), &sljitDescEq);
+	emitPendingTrapCheck();
+	// The descriptor is consumed on both paths, so drop it from the model before
+	// the branch transfers the label window.
+	stackWidths_.resize(descriptorDepth);
+	sljit_jump* fallthrough = sljit_emit_cmp(compiler_,
+			onFailure ? SLJIT_NOT_EQUAL : SLJIT_EQUAL, SLJIT_R0, 0, SLJIT_IMM, 0);
+	if (fallthrough == nullptr)
+		ok_ = false;
+	// Both the branch and the fallthrough consume the descriptor.
+	emitDropStackRef(descriptorDepth);
+	if (depth == controls_.size()) {
+		require(resultWidths_.size() <= stackWidths_.size(),
+				"br_on_cast_desc_eq does not carry the function results");
+		emitReturnValue();
+		sljit_label* after = sljit_emit_label(compiler_);
+		if (after == nullptr)
+			ok_ = false;
+		else if (fallthrough != nullptr)
+			sljit_set_label(fallthrough, after);
+		return;
+	}
+	ControlFrame& frame = controls_[controls_.size() - 1 - depth];
+	const std::vector<int>& widths =
+			frame.kind == ControlKind::Loop ? frame.paramWidths : frame.resultWidths;
+	require(widths.size() <= stackWidths_.size(),
+			"br_on_cast_desc_eq does not carry the label's values");
+	transferToBase(widths, frame.baseDepth, stackWidths_.size());
+	sljit_jump* jump = sljit_emit_jump(compiler_, SLJIT_JUMP);
+	if (jump == nullptr) {
+		ok_ = false;
+	} else if (frame.kind == ControlKind::Loop) {
+		if (frame.begin == nullptr)
+			ok_ = false;
+		else
+			sljit_set_label(jump, frame.begin);
+	} else {
+		frame.endJumps.push_back(jump);
+		frame.endTargeted = true;
+	}
+	sljit_label* after = sljit_emit_label(compiler_);
+	if (after == nullptr)
+		ok_ = false;
+	else if (fallthrough != nullptr)
+		sljit_set_label(fallthrough, after);
+}
+
+void OpcodeDispatcher::dispatchBrOnCastDescEq(uint8_t castop, WASM::LabelIdx depth,
+		WASM::HeapType, WASM::HeapType)
+{
+	emitBrOnCastDescEq(castop, depth, false);
+}
+
+void OpcodeDispatcher::dispatchBrOnCastDescEqFail(uint8_t castop, WASM::LabelIdx depth,
+		WASM::HeapType, WASM::HeapType)
+{
+	emitBrOnCastDescEq(castop, depth, true);
 }
 
 void OpcodeDispatcher::dispatchArrayGetS(WASM::TypeIdx arg)

@@ -509,6 +509,15 @@ protected:
 	void dispatchBrOnCastFail(uint8_t arg1, WASM::LabelIdx arg2, WASM::HeapType arg3,
 			WASM::HeapType arg4) override; //!< `br_on_cast_fail`.
 	void dispatchStructNew(WASM::TypeIdx arg) override; //!< `struct.new`.
+	void dispatchStructNewDesc(WASM::TypeIdx arg) override; //!< `struct.new_desc`.
+	void dispatchStructNewDefaultDesc(WASM::TypeIdx arg) override; //!< `struct.new_default_desc`.
+	void dispatchRefGetDesc(WASM::TypeIdx arg) override; //!< `ref.get_desc`.
+	void dispatchRefCastDescEq(const WASM::HeapType& arg) override; //!< `ref.cast_desc_eq`.
+	void dispatchRefCastDescEqNull(const WASM::HeapType& arg) override; //!< `ref.cast_desc_eq` with a nullable target.
+	void dispatchBrOnCastDescEq(uint8_t castop, WASM::LabelIdx l, WASM::HeapType ht1,
+			WASM::HeapType ht2) override; //!< `br_on_cast_desc_eq`.
+	void dispatchBrOnCastDescEqFail(uint8_t castop, WASM::LabelIdx l, WASM::HeapType ht1,
+			WASM::HeapType ht2) override; //!< `br_on_cast_desc_eq_fail`.
 	void dispatchStructNewDefault(WASM::TypeIdx arg) override; //!< `struct.new_default`.
 	void dispatchStructGet(WASM::TypeIdx arg1, uint32_t arg2) override; //!< `struct.get`.
 	void dispatchStructSet(WASM::TypeIdx arg1, uint32_t arg2) override; //!< `struct.set`.
@@ -913,6 +922,8 @@ private:
 	//! (`docs/backends/STAGING_CALL_ABI.md`): `void fn(VMContext*, void* frame)`,
 	//! with every parameter and result in the caller's frame.
 	bool frameAbi_ = false;
+	//! True when the module has at least one native (context-less) function import.
+	bool moduleHasNativeImports_ = false;
 	//! Parameter kinds in declaration order, for the frame offsets.
 	std::vector<WASM::ValueKind> frameKinds_;
 	//! Byte offset of the result block inside the frame, after the argument block.
@@ -1181,8 +1192,23 @@ private:
 	 *        registers, the indirect call and the result store.
 	 * \param type Callee signature.
 	 * \param callableReg Register holding the resolved `Callable*`.
+	 * \param stagedImport Staged-call entry for a native import of this
+	 *        signature, or null; a staged call branches on `Callable::context`
+	 *        and routes a native target through the adapter.
 	 */
-	void emitResolvedCall(const WASM::FuncType& type, int callableReg);
+	void emitResolvedCall(const WASM::FuncType& type, int callableReg,
+			void* stagedImport = nullptr);
+	/*!
+	 * \brief Returns the staged native-import entry a call of @p type needs.
+	 *
+	 * Null when the register form can express the signature and the module is
+	 * not frame-form, and null when the shape carries a `v128` (outside the
+	 * uniform slot model the adapter marshals).
+	 *
+	 * \param type Callee signature.
+	 * \return A `void(VMContext*, Callable*, void* frame)` entry, or null.
+	 */
+	void* stagedImportFor(const WASM::FuncType& type);
 
 	/*!
 	 * \brief Validates a memory index and returns its type.
@@ -1322,6 +1348,22 @@ private:
 	//! \param onFailure True for `br_on_cast_fail`.
 	void emitBrOnCast(uint8_t castop, WASM::LabelIdx depth,
 			const WASM::HeapType& target, bool onFailure);
+	//! Emits the shared `ref.cast_desc_eq` predicate, trap and cast.
+	//! \param allowNull True for the nullable form, where a null reference matches.
+	void emitRefCastDescEq(bool allowNull);
+	//! Emits the shared `br_on_cast_desc_eq`/`br_on_cast_desc_eq_fail` predicate
+	//! and branch; the descriptor operand is consumed on both paths.
+	//! \param castop Instruction flags (bit 1 = nullable target).
+	//! \param depth Target label depth.
+	//! \param onFailure True for `br_on_cast_desc_eq_fail`.
+	void emitBrOnCastDescEq(uint8_t castop, WASM::LabelIdx depth, bool onFailure);
+	//! Retains a freshly created GC object into its operand-stack slot, so the
+	//! stack owns the one count the ownership model gives it.
+	//! \param depth Operand-stack depth of the reference.
+	void emitRetainStackObject(std::size_t depth);
+	//! Releases a reference operand the instruction consumed.
+	//! \param depth Operand-stack depth of the reference.
+	void emitDropStackRef(std::size_t depth);
 	/*!
 	 * \brief Emits a sign- or zero-extending read of a packed struct field.
 	 * \param arg1 Struct type index.
