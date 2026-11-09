@@ -2362,7 +2362,41 @@ Default 22,448 assertions in 821 cases, green
   range and layout are part of the helper contract now.
 
 
-## AsmJIT shift operands and `memory_buffer`
+## SIMD harness and the frame export ABI
+
+### Fix
+
+The two SIMD arithmetic suites used `callCallable` directly on
+`instance.exportedFunction(...)`. AsmJIT switches a module whose defined
+functions include a `v128` parameter or result to the staging-frame export ABI,
+so those scalar exports must be invoked with `callCallableFrame` and their
+result read from the frame. The shuffle suite already did this; the float and
+integer suites now use the same `frameCallAbi()` branch.
+
+This is a harness correction, not a backend lowering change: the backend's
+module-wide ABI choice is the documented one, and forcing all such modules back
+to the register form would re-open the previously untested v128-result return
+path.
+
+### Evidence
+
+```
+AsmJIT  simd: float arithmetic      69/69
+AsmJIT  simd: integer arithmetic   115/115
+SLJIT   simd: float arithmetic      69/69
+SLJIT   simd: integer arithmetic   115/115
+AsmJIT  full serial                 821 cases: 815 passed / 6 failed
+SLJIT   full serial                 821 cases: 814 passed / 7 failed
+Default full                        22,451 assertions in 821 cases, green
+```
+
+### Lesson
+
+* **A test that calls an export directly is asserting the export ABI.** When an
+  instance reports `frameCallAbi()`, the register harness is not a valid
+  observer, even for a scalar result.
+
+
 
 ### Fix
 

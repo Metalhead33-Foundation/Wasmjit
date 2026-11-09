@@ -33,7 +33,7 @@ All commands were run from `build/Desktop-Release` with
 | `[sljit]` targeted tests | **2,682 assertions in 70 cases, green** |
 | `[asmjit]` targeted tests | **1,778 assertions in 61 cases, green** |
 | `WASMJIT_BACKEND=sljit ./Test/WasmJit` | **821 cases: 814 passed / 7 failed; no signal** |
-| `WASMJIT_BACKEND=asmjit ./Test/WasmJit` | **821 cases: 813 passed / 8 failed; no signal** |
+| `WASMJIT_BACKEND=asmjit ./Test/WasmJit` | **821 cases: 815 passed / 6 failed; no signal** |
 
 Both non-LibJIT runs now complete the whole case set without a process signal.
 Their failures are functional and conformance gaps, not an early abort; the

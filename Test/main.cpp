@@ -8292,50 +8292,70 @@ TEST_CASE("simd: float arithmetic and comparisons run through the JIT")
 		REQUIRE(fn.has_value());
 		return *fn;
 	};
+	const auto callI32 = [&](const char* name) -> std::int32_t {
+		auto fn = i32Export(name);
+		if (!instance.frameCallAbi())
+			return WASM::callCallable<std::int32_t>(fn);
+		alignas(16) std::uint8_t frame[16] = {};
+		WASM::callCallableFrame(fn, frame);
+		std::int32_t value = 0;
+		std::memcpy(&value, frame, sizeof(value));
+		return value;
+	};
+	const auto callI64 = [&](const char* name) -> std::int64_t {
+		auto fn = i32Export(name);
+		if (!instance.frameCallAbi())
+			return WASM::callCallable<std::int64_t>(fn);
+		alignas(16) std::uint8_t frame[16] = {};
+		WASM::callCallableFrame(fn, frame);
+		std::int64_t value = 0;
+		std::memcpy(&value, frame, sizeof(value));
+		return value;
+	};
 
 	// Comparisons: `ne` is unordered (true on NaN), the rest are false.
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("cmp_ne_nan")) == 0xFFFF);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("cmp_eq_nan")) == 0x0000);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("cmp_lt_nan")) == 0x0000);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("cmp_lt_ok")) == 0xFFFF);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("cmp_ge_ok")) == 0x0000);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("cmp_ge_eq")) == 0xFFFF);
+	REQUIRE(callI32("cmp_ne_nan") == 0xFFFF);
+	REQUIRE(callI32("cmp_eq_nan") == 0x0000);
+	REQUIRE(callI32("cmp_lt_nan") == 0x0000);
+	REQUIRE(callI32("cmp_lt_ok") == 0xFFFF);
+	REQUIRE(callI32("cmp_ge_ok") == 0x0000);
+	REQUIRE(callI32("cmp_ge_eq") == 0xFFFF);
 
 	// Arithmetic, as bit patterns.
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("add_bits")) == 0x40400000);   // 3.0
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("sub_bits")) == static_cast<int32_t>(0xBF800000u));
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("mul_bits")) == 0x40000000);   // 2.0
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("div_bits")) == 0x3F000000);   // 0.5
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("sqrt_bits")) == 0x40000000);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("abs_bits")) == 0x3FC00000);   // 1.5
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("neg_bits")) == static_cast<int32_t>(0xBFC00000u));
+	REQUIRE(callI32("add_bits") == 0x40400000);   // 3.0
+	REQUIRE(callI32("sub_bits") == static_cast<int32_t>(0xBF800000u));
+	REQUIRE(callI32("mul_bits") == 0x40000000);   // 2.0
+	REQUIRE(callI32("div_bits") == 0x3F000000);   // 0.5
+	REQUIRE(callI32("sqrt_bits") == 0x40000000);
+	REQUIRE(callI32("abs_bits") == 0x3FC00000);   // 1.5
+	REQUIRE(callI32("neg_bits") == static_cast<int32_t>(0xBFC00000u));
 
 	// min/max: the zeros are ordered, and a NaN comes out as a NaN.
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("min_zero_bits")) == static_cast<int32_t>(0x80000000u));
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("max_zero_bits")) == 0);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("min_nan_exponent")) == 0xFF);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("max_nan_exponent")) == 0xFF);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("pmin_nan_bits")) == 0x7FC00000);   // the NaN itself
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("pmax_nan_bits")) == 0x3F800000);   // 1.0
+	REQUIRE(callI32("min_zero_bits") == static_cast<int32_t>(0x80000000u));
+	REQUIRE(callI32("max_zero_bits") == 0);
+	REQUIRE(callI32("min_nan_exponent") == 0xFF);
+	REQUIRE(callI32("max_nan_exponent") == 0xFF);
+	REQUIRE(callI32("pmin_nan_bits") == 0x7FC00000);   // the NaN itself
+	REQUIRE(callI32("pmax_nan_bits") == 0x3F800000);   // 1.0
 
 	// `nearest` ties to even, and the directed roundings are directed.
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("nearest_2_5")) == 0x40000000);    // 2.0
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("nearest_3_5")) == 0x40800000);    // 4.0
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("nearest_m2_5")) == static_cast<int32_t>(0xC0000000u));
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("nearest_m3_5")) == static_cast<int32_t>(0xC0800000u));
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("nearest_m0_5")) == static_cast<int32_t>(0x80000000u));
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("nearest_2_4")) == 0x40000000);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("nearest_inf")) == 0x7F800000);    // +inf passes through
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("ceil_m1_5")) == static_cast<int32_t>(0xBF800000u));
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("floor_m1_5")) == static_cast<int32_t>(0xC0000000u));
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("trunc_m1_5")) == static_cast<int32_t>(0xBF800000u));
+	REQUIRE(callI32("nearest_2_5") == 0x40000000);    // 2.0
+	REQUIRE(callI32("nearest_3_5") == 0x40800000);    // 4.0
+	REQUIRE(callI32("nearest_m2_5") == static_cast<int32_t>(0xC0000000u));
+	REQUIRE(callI32("nearest_m3_5") == static_cast<int32_t>(0xC0800000u));
+	REQUIRE(callI32("nearest_m0_5") == static_cast<int32_t>(0x80000000u));
+	REQUIRE(callI32("nearest_2_4") == 0x40000000);
+	REQUIRE(callI32("nearest_inf") == 0x7F800000);    // +inf passes through
+	REQUIRE(callI32("ceil_m1_5") == static_cast<int32_t>(0xBF800000u));
+	REQUIRE(callI32("floor_m1_5") == static_cast<int32_t>(0xC0000000u));
+	REQUIRE(callI32("trunc_m1_5") == static_cast<int32_t>(0xBF800000u));
 
 	// f64x2, the same three families.
-	REQUIRE(WASM::callCallable<int64_t>(i32Export("f64_add_bits")) == 0x4008000000000000ll);
-	REQUIRE(WASM::callCallable<int64_t>(i32Export("f64_min_zero_bits")) == static_cast<int64_t>(0x8000000000000000ull));
-	REQUIRE(WASM::callCallable<int64_t>(i32Export("f64_nearest_bits")) == 0x4000000000000000ll);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("f64_cmp_masks")) == 0xFFFF);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("f64_ne_nan")) == 0xFFFF);
+	REQUIRE(callI64("f64_add_bits") == 0x4008000000000000ll);
+	REQUIRE(callI64("f64_min_zero_bits") == static_cast<int64_t>(0x8000000000000000ull));
+	REQUIRE(callI64("f64_nearest_bits") == 0x4000000000000000ll);
+	REQUIRE(callI32("f64_cmp_masks") == 0xFFFF);
+	REQUIRE(callI32("f64_ne_nan") == 0xFFFF);
 }
 
 TEST_CASE("simd: the float/int conversions run through the JIT")
@@ -8616,85 +8636,105 @@ TEST_CASE("simd: integer arithmetic and comparisons run through the JIT")
 		REQUIRE(fn.has_value());
 		return *fn;
 	};
+	const auto callI32 = [&](const char* name) -> std::int32_t {
+		auto fn = i32Export(name);
+		if (!instance.frameCallAbi())
+			return WASM::callCallable<std::int32_t>(fn);
+		alignas(16) std::uint8_t frame[16] = {};
+		WASM::callCallableFrame(fn, frame);
+		std::int32_t value = 0;
+		std::memcpy(&value, frame, sizeof(value));
+		return value;
+	};
+	const auto callI64 = [&](const char* name) -> std::int64_t {
+		auto fn = i32Export(name);
+		if (!instance.frameCallAbi())
+			return WASM::callCallable<std::int64_t>(fn);
+		alignas(16) std::uint8_t frame[16] = {};
+		WASM::callCallableFrame(fn, frame);
+		std::int64_t value = 0;
+		std::memcpy(&value, frame, sizeof(value));
+		return value;
+	};
 
 	// Comparisons: `-128` against `1` is where the signed and unsigned answers part.
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("lt_s_lane0")) == 0xFF);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("lt_u_lane0")) == 0x00);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("gt_s_lane0")) == 0x00);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("gt_u_lane0")) == 0xFF);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("le_s_lane0")) == 0xFF);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("ge_u_lane0")) == 0xFF);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("eq_i32_lane0")) == -1);   // all ones
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("ne_i32_lane0")) == -1);
-	REQUIRE(WASM::callCallable<int64_t>(i32Export("i64_lt_s_lane0")) == -1);
+	REQUIRE(callI32("lt_s_lane0") == 0xFF);
+	REQUIRE(callI32("lt_u_lane0") == 0x00);
+	REQUIRE(callI32("gt_s_lane0") == 0x00);
+	REQUIRE(callI32("gt_u_lane0") == 0xFF);
+	REQUIRE(callI32("le_s_lane0") == 0xFF);
+	REQUIRE(callI32("ge_u_lane0") == 0xFF);
+	REQUIRE(callI32("eq_i32_lane0") == -1);   // all ones
+	REQUIRE(callI32("ne_i32_lane0") == -1);
+	REQUIRE(callI64("i64_lt_s_lane0") == -1);
 
 	// min/max, the same distinction.
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("min_s_lane0")) == 0x80);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("min_u_lane0")) == 0x01);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("max_s_lane0")) == 0x01);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("max_u_lane0")) == 0x80);
+	REQUIRE(callI32("min_s_lane0") == 0x80);
+	REQUIRE(callI32("min_u_lane0") == 0x01);
+	REQUIRE(callI32("max_s_lane0") == 0x01);
+	REQUIRE(callI32("max_u_lane0") == 0x80);
 
 	// Wrapping arithmetic, and the two values with no positive counterpart.
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("add_wrap_lane0")) == -128);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("sub_wrap_lane0")) == -1);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("neg_min_lane0")) == 0x80);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("abs_min_lane0")) == 0x80);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("mul_i32_lane0")) == -21);
-	REQUIRE(WASM::callCallable<int64_t>(i32Export("add_i64_lane0")) == -1);
+	REQUIRE(callI32("add_wrap_lane0") == -128);
+	REQUIRE(callI32("sub_wrap_lane0") == -1);
+	REQUIRE(callI32("neg_min_lane0") == 0x80);
+	REQUIRE(callI32("abs_min_lane0") == 0x80);
+	REQUIRE(callI32("mul_i32_lane0") == -21);
+	REQUIRE(callI64("add_i64_lane0") == -1);
 
 	// Shifts whose counts must be taken modulo the lane width: 33 for i32, 8 for
 	// i8, 64 for i64. Each would be an out-of-range shift if the count reached the
 	// helper unmasked — and the machine instruction would silently alias it.
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("shl_masked_lane0")) == 14);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("shl_i8_masked_lane0")) == 1);
-	REQUIRE(WASM::callCallable<int64_t>(i32Export("shr_u_i64_masked_lane0")) == 1);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("shr_s_neg_lane0")) == -64);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("shr_u_neg_lane0")) == 0x40);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("shl_i16_lane7")) == 0x8000);
+	REQUIRE(callI32("shl_masked_lane0") == 14);
+	REQUIRE(callI32("shl_i8_masked_lane0") == 1);
+	REQUIRE(callI64("shr_u_i64_masked_lane0") == 1);
+	REQUIRE(callI32("shr_s_neg_lane0") == -64);
+	REQUIRE(callI32("shr_u_neg_lane0") == 0x40);
+	REQUIRE(callI32("shl_i16_lane7") == 0x8000);
 
 	// Saturating arithmetic and the rounding average.
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("add_sat_s_lane0")) == 127);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("add_sat_u_lane0")) == 0xFF);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("sub_sat_s_lane0")) == -128);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("sub_sat_u_lane0")) == 0);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("avgr_u_lane0")) == 2);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("avgr_u_sat_lane0")) == 0xFF);
+	REQUIRE(callI32("add_sat_s_lane0") == 127);
+	REQUIRE(callI32("add_sat_u_lane0") == 0xFF);
+	REQUIRE(callI32("sub_sat_s_lane0") == -128);
+	REQUIRE(callI32("sub_sat_u_lane0") == 0);
+	REQUIRE(callI32("avgr_u_lane0") == 2);
+	REQUIRE(callI32("avgr_u_sat_lane0") == 0xFF);
 
 	// popcnt, and `q15mulr_sat_s`: the saturated and the rounding corner — the two
 	// values hazard Y5 is about.
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("popcnt_full_lane0")) == 8);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("popcnt_nibble_lane0")) == 4);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("q15_sat_lane0")) == 32767);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("q15_round_lane0")) == -32767);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("q15_quarter_lane0")) == 8192);
+	REQUIRE(callI32("popcnt_full_lane0") == 8);
+	REQUIRE(callI32("popcnt_nibble_lane0") == 4);
+	REQUIRE(callI32("q15_sat_lane0") == 32767);
+	REQUIRE(callI32("q15_round_lane0") == -32767);
+	REQUIRE(callI32("q15_quarter_lane0") == 8192);
 
 	// The reductions: 0/1, and the bitmask's sign bit per lane.
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("all_true_ones")) == 1);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("all_true_zero")) == 0);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("all_true_i16")) == 1);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("all_true_i64")) == 1);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("any_true_zero")) == 0);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("any_true_last_byte")) == 1);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("bitmask_lane0")) == 0x0001);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("bitmask_lane15")) == 0x8000);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("bitmask_i64_lane1")) == 0x2);
+	REQUIRE(callI32("all_true_ones") == 1);
+	REQUIRE(callI32("all_true_zero") == 0);
+	REQUIRE(callI32("all_true_i16") == 1);
+	REQUIRE(callI32("all_true_i64") == 1);
+	REQUIRE(callI32("any_true_zero") == 0);
+	REQUIRE(callI32("any_true_last_byte") == 1);
+	REQUIRE(callI32("bitmask_lane0") == 0x0001);
+	REQUIRE(callI32("bitmask_lane15") == 0x8000);
+	REQUIRE(callI32("bitmask_i64_lane1") == 0x2);
 
 	// The width-changing family. `1..16` makes a vector's halves tell each other
 	// apart, so a swapped `_low`/`_high` or a swapped `narrow` operand shows up.
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("extend_low_lane0")) == 1);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("extend_high_lane0")) == 9);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("extmul_low_lane0")) == 1);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("extmul_high_lane0")) == 81);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("extmul_u_lane0")) == 16384);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("extadd_pairwise_lane0")) == 3);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("dot_wrap_lane0")) == INT32_MIN);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("narrow_s_lane0")) == 0x7F);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("narrow_s_lane8")) == 0x80);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("narrow_u_lane0")) == 0xFF);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("narrow_u_lane8")) == 0x00);
+	REQUIRE(callI32("extend_low_lane0") == 1);
+	REQUIRE(callI32("extend_high_lane0") == 9);
+	REQUIRE(callI32("extmul_low_lane0") == 1);
+	REQUIRE(callI32("extmul_high_lane0") == 81);
+	REQUIRE(callI32("extmul_u_lane0") == 16384);
+	REQUIRE(callI32("extadd_pairwise_lane0") == 3);
+	REQUIRE(callI32("dot_wrap_lane0") == INT32_MIN);
+	REQUIRE(callI32("narrow_s_lane0") == 0x7F);
+	REQUIRE(callI32("narrow_s_lane8") == 0x80);
+	REQUIRE(callI32("narrow_u_lane0") == 0xFF);
+	REQUIRE(callI32("narrow_u_lane8") == 0x00);
 
 	// A two-op chain, so an intermediate really crosses a slot boundary.
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("chain_lane0")) == 127);
+	REQUIRE(callI32("chain_lane0") == 127);
 }
 
 TEST_CASE("simd: v128.const, splat and lane ops run through the JIT")
