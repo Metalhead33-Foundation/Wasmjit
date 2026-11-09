@@ -17,6 +17,7 @@
 #include "../WasmBase/WasmTracing.hpp"
 #include "../WasmBase/WasmVMContext.hpp"
 #include "../WasmBase/wasm_simd_scalar.hpp"
+#include "../WasmBase/wasm_f16.hpp"
 
 #include <Euphemy/Io/EuphConstBufferDevice.hpp>
 
@@ -442,6 +443,15 @@ uint64_t packedOffsetAndIndex) noexcept
 	} catch (...) {
 		WASM::reportTrap(WASM::TrapKind::Internal);
 	}
+}
+
+extern "C" void sljitF16x8Ternary(uint32_t op, const void* const* sources,
+		void* out) noexcept
+{
+	// SLJIT's helper-call form carries at most four C arguments. The three
+	// vector pointers travel in a small frame block, so the shared helper keeps
+	// its natural five-argument shape without a second lowering.
+	wasm_f16x8_ternary(op, sources[0], sources[1], sources[2], out);
 }
 
 extern "C" void* sljitStructNew(WASM::VMContext* vm, uint32_t size, uint32_t typeIndex) noexcept
@@ -4144,6 +4154,35 @@ void OpcodeDispatcher::emitMemoryStoreFloat(const WASM::MemArg& arg, int width)
 			SLJIT_MEM1(SLJIT_R0), 0, SLJIT_R1, 0));
 }
 
+void OpcodeDispatcher::emitF16Load(const WASM::MemArg& arg)
+{
+	if (!reachable_)
+		return;
+	requireStack(1);
+	const std::size_t depth = stackWidths_.size() - 1;
+	if (!measureOnly_) {
+		emitCheckedMemoryAddress(arg, 2, depth);
+		emitHelper(SLJIT_ARGS1(F32, P), codeAddress(&wasm_f32_load_f16));
+		storeFloatSlot(SLJIT_FR0, depth, 4);
+	}
+	stackWidths_.back() = 4;
+}
+
+void OpcodeDispatcher::emitF16Store(const WASM::MemArg& arg)
+{
+	if (!reachable_)
+		return;
+	requireStack(2);
+	const std::size_t base = stackWidths_.size() - 2;
+	pop();
+	pop();
+	if (measureOnly_)
+		return;
+	emitCheckedMemoryAddress(arg, 2, base);
+	loadFloatSlot(SLJIT_FR0, base + 1, 4);
+	emitHelper(SLJIT_ARGS2V(P, F32), codeAddress(&wasm_f32_store_f16));
+}
+
 void OpcodeDispatcher::emitIntToFloat(sljit_s32 conversion, int sourceWidth,
 		int resultWidth)
 {
@@ -4385,6 +4424,8 @@ void OpcodeDispatcher::dispatchF32ReinterpretI32() { emitReinterpret(4, false); 
 void OpcodeDispatcher::dispatchF64ReinterpretI64() { emitReinterpret(8, false); }
 
 void OpcodeDispatcher::dispatchF32Load(WASM::MemArg arg) { emitMemoryLoadFloat(arg, 4); }
+void OpcodeDispatcher::dispatchF32LoadF16(WASM::MemArg arg) { emitF16Load(arg); }
+void OpcodeDispatcher::dispatchF32StoreF16(WASM::MemArg arg) { emitF16Store(arg); }
 void OpcodeDispatcher::dispatchF64Load(WASM::MemArg arg) { emitMemoryLoadFloat(arg, 8); }
 void OpcodeDispatcher::dispatchF32Store(WASM::MemArg arg) { emitMemoryStoreFloat(arg, 4); }
 void OpcodeDispatcher::dispatchF64Store(WASM::MemArg arg) { emitMemoryStoreFloat(arg, 8); }
@@ -4790,6 +4831,79 @@ void OpcodeDispatcher::emitV128Ternary(sljit_sw address)
 	pop();
 }
 
+void OpcodeDispatcher::emitV128F16Unary(uint32_t op, sljit_sw address)
+{
+	if (!reachable_)
+		return;
+	requireStack(1);
+	const std::size_t depth = stackWidths_.size() - 1;
+	// Some conversions zero or widen into the output before finishing the read,
+	// so the result cannot alias the input buffer.
+	push(16);
+	const std::size_t outDepth = stackWidths_.size() - 1;
+	if (measureOnly_)
+		return;
+	slotAddress(SLJIT_R1, depth);
+	slotAddress(SLJIT_R2, outDepth);
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R0, 0, SLJIT_IMM,
+			static_cast<sljit_sw>(op)));
+	emitHelper(SLJIT_ARGS3V(32, P, P), address);
+	for (int word = 0; word < 2; ++word) {
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0, SLJIT_MEM1(SLJIT_SP),
+				stackSlotOffset(outDepth) + word * 8));
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+				stackSlotOffset(depth) + word * 8, SLJIT_R0, 0));
+	}
+	pop();
+}
+
+void OpcodeDispatcher::emitV128F16Binary(uint32_t op, sljit_sw address)
+{
+	if (!reachable_)
+		return;
+	requireStack(2);
+	if (measureOnly_)
+		return;
+	const std::size_t aDepth = stackWidths_.size() - 2;
+	slotAddress(SLJIT_R1, aDepth);
+	slotAddress(SLJIT_R2, stackWidths_.size() - 1);
+	slotAddress(SLJIT_R3, aDepth);
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R0, 0, SLJIT_IMM,
+			static_cast<sljit_sw>(op)));
+	emitHelper(SLJIT_ARGS4V(32, P, P, P), address);
+	pop();
+}
+
+void OpcodeDispatcher::emitV128F16Ternary(uint32_t op)
+{
+	if (!reachable_)
+		return;
+	requireStack(3);
+	if (measureOnly_)
+		return;
+	const std::size_t aDepth = stackWidths_.size() - 3;
+	const std::size_t bDepth = stackWidths_.size() - 2;
+	const std::size_t cDepth = stackWidths_.size() - 1;
+	// Three pointer arguments do not fit SLJIT's four-argument helper form; the
+	// adapter reads them from the reserved block (slots 3..5).
+	slotAddress(SLJIT_R1, aDepth);
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+			selectorBlockOffset(), SLJIT_R1, 0));
+	slotAddress(SLJIT_R1, bDepth);
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+			selectorBlockOffset() + 8, SLJIT_R1, 0));
+	slotAddress(SLJIT_R1, cDepth);
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+			selectorBlockOffset() + 16, SLJIT_R1, 0));
+	slotAddress(SLJIT_R2, aDepth);
+	emit(sljit_get_local_base(compiler_, SLJIT_R1, 0, selectorBlockOffset()));
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R0, 0, SLJIT_IMM,
+			static_cast<sljit_sw>(op)));
+	emitHelper(SLJIT_ARGS3V(32, P, P), codeAddress(&sljitF16x8Ternary));
+	pop();
+	pop();
+}
+
 void OpcodeDispatcher::dispatchV128And() { emitV128Binary(codeAddress(&wasm_v128_and)); }
 void OpcodeDispatcher::dispatchV128AndNot() { emitV128Binary(codeAddress(&wasm_v128_andnot)); }
 void OpcodeDispatcher::dispatchV128Or() { emitV128Binary(codeAddress(&wasm_v128_or)); }
@@ -4966,6 +5080,38 @@ void OpcodeDispatcher::dispatchF32x4ExtractLane(uint8_t lane) { emitV128ExtractF
 void OpcodeDispatcher::dispatchF64x2ExtractLane(uint8_t lane) { emitV128ExtractFloat(codeAddress(&wasm_f64x2_extract_lane), 8, lane); }
 void OpcodeDispatcher::dispatchF32x4ReplaceLane(uint8_t lane) { emitV128ReplaceFloat(codeAddress(&wasm_f32x4_replace_lane), 4, lane); }
 void OpcodeDispatcher::dispatchF64x2ReplaceLane(uint8_t lane) { emitV128ReplaceFloat(codeAddress(&wasm_f64x2_replace_lane), 8, lane); }
+
+void OpcodeDispatcher::dispatchSIMDF16x8(WASM::SIMDOpcode opcode, uint8_t lane)
+{
+	if (!reachable_)
+		return;
+	const uint32_t op = static_cast<uint32_t>(opcode);
+	if (op == 0x120u) {
+		emitV128SplatFloat(codeAddress(&wasm_f16x8_splat), 4);
+		return;
+	}
+	if (op == 0x121u) {
+		emitV128ExtractFloat(codeAddress(&wasm_f16x8_extract_lane), 4, lane);
+		return;
+	}
+	if (op == 0x122u) {
+		emitV128ReplaceFloat(codeAddress(&wasm_f16x8_replace_lane), 4, lane);
+		return;
+	}
+	if ((op >= 0x130u && op <= 0x136u) || (op >= 0x145u && op <= 0x14Du)) {
+		emitV128F16Unary(op, codeAddress(&wasm_f16x8_unary));
+		return;
+	}
+	if (op >= 0x137u && op <= 0x144u) {
+		emitV128F16Binary(op, codeAddress(&wasm_f16x8_binary));
+		return;
+	}
+	if (op == 0x14Eu || op == 0x14Fu) {
+		emitV128F16Ternary(op);
+		return;
+	}
+	throw std::runtime_error("the SLJIT backend does not lower this f16x8 sub-opcode");
+}
 
 void OpcodeDispatcher::dispatchV128Load8x8S(WASM::MemArg arg) { emitV128LoadTransform(arg, 8, codeAddress(&wasm_v128_load8x8_s)); }
 void OpcodeDispatcher::dispatchV128Load8x8U(WASM::MemArg arg) { emitV128LoadTransform(arg, 8, codeAddress(&wasm_v128_load8x8_u)); }

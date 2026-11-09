@@ -2362,7 +2362,37 @@ Default 22,448 assertions in 821 cases, green
   range and layout are part of the helper contract now.
 
 
-## SIMD harness and the frame export ABI
+## F16 SIMD in SLJIT and AsmJIT
+
+### Fix
+
+Both backends now lower `dispatchSIMDF16x8` and the scalar
+`f32.load_f16`/`f32.store_f16` pair:
+
+* splat, extract-lane and replace-lane reuse the existing float lane helpers;
+* unary, binary and ternary operations pass the 0xFD sub-opcode to the shared
+  `wasm_f16x8_*` helpers, which own binary16 conversion and arithmetic;
+* SLJIT's ternary form uses a small pointer-block adapter because its helper
+  call form carries at most four C arguments; unary results use a fresh v128
+  slot because the conversion helpers widen/zero the output in place.
+
+### Evidence
+
+```
+AsmJIT  f16 binary module   15/15
+SLJIT   f16 binary module   15/15
+AsmJIT  full serial         821 cases: 817 passed / 4 failed
+SLJIT   full serial         821 cases: 816 passed / 5 failed
+```
+
+### Lessons
+
+* **Reuse the scalar lane helpers, not a second half-float implementation.**
+  Only the shape of the operands belongs to a backend.
+* **A helper's output may not alias its input** when the conversion writes
+  zeros or widens lanes. SLJIT allocates a separate result slot for that case.
+
+
 
 ### Fix
 

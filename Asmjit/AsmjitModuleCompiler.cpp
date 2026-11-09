@@ -15,6 +15,7 @@
 #include "../WasmBase/WasmTracing.hpp"
 #include "../WasmBase/WasmVMContext.hpp"
 #include "../WasmBase/wasm_simd_scalar.hpp"
+#include "../WasmBase/wasm_f16.hpp"
 #include "../WasmBase/WasmType.hpp"
 #include "../WasmBase/WasmTailTrampoline.hpp"
 
@@ -5357,6 +5358,61 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 	{ emitVectorSplatFloat(8, reinterpret_cast<uint64_t>(&wasm_f64x2_splat)); }
 	void dispatchF32x4ExtractLane(uint8_t lane) override
 	{ emitVectorExtractFloat(4, reinterpret_cast<uint64_t>(&wasm_f32x4_extract_lane), lane); }
+	void dispatchSIMDF16x8(WASM::SIMDOpcode opcode, uint8_t lane) override
+	{
+		if (inDeadCode())
+			return;
+		const uint32_t op = static_cast<uint32_t>(opcode);
+		if (op == 0x120u) {
+			emitVectorSplatFloat(4, reinterpret_cast<uint64_t>(&wasm_f16x8_splat));
+			return;
+		}
+		if (op == 0x121u) {
+			emitVectorExtractFloat(4, reinterpret_cast<uint64_t>(&wasm_f16x8_extract_lane), lane);
+			return;
+		}
+		if (op == 0x122u) {
+			emitVectorReplaceFloat(4, reinterpret_cast<uint64_t>(&wasm_f16x8_replace_lane), lane);
+			return;
+		}
+		const auto emitOp = [&](uint64_t helper, int operands, int extra) {
+			if (values.size() < static_cast<std::size_t>(operands + extra))
+				throw std::runtime_error("AsmJit f16x8 helper operand underflow");
+			std::vector<asmjit::x86::Gp> sources(static_cast<std::size_t>(operands + extra));
+			for (int i = operands + extra; i > 0; --i) {
+				sources[static_cast<std::size_t>(i - 1)] = values.back();
+				values.pop_back();
+			}
+			auto buffer = newVectorBuffer("f16x8Result");
+			asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+			signature.set_ret(asmjit::TypeId::kVoid);
+			signature.add_arg(asmjit::TypeId::kUInt32);
+			for (int i = 0; i <= operands + extra; ++i)
+				signature.add_arg(asmjit::TypeId::kUIntPtr);
+			asmjit::InvokeNode* invoke = nullptr;
+			checkError(compiler.invoke(asmjit::Out(invoke), helper, signature),
+					"AsmJit f16x8 helper call failed");
+			invoke->set_arg(0, asmjit::Imm(op));
+			for (int i = 0; i < operands + extra; ++i)
+				invoke->set_arg(static_cast<uint32_t>(i + 1),
+						sources[static_cast<std::size_t>(i)]);
+			invoke->set_arg(static_cast<uint32_t>(operands + extra + 1), buffer);
+			values.push_back(buffer);
+		};
+		if ((op >= 0x130u && op <= 0x136u) || (op >= 0x145u && op <= 0x14Du)) {
+			emitOp(reinterpret_cast<uint64_t>(&wasm_f16x8_unary), 1, 0);
+			return;
+		}
+		if (op >= 0x137u && op <= 0x144u) {
+			emitOp(reinterpret_cast<uint64_t>(&wasm_f16x8_binary), 2, 0);
+			return;
+		}
+		if (op == 0x14Eu || op == 0x14Fu) {
+			emitOp(reinterpret_cast<uint64_t>(&wasm_f16x8_ternary), 3, 0);
+			return;
+		}
+		throw std::runtime_error("AsmJit does not lower this f16x8 sub-opcode");
+	}
 	void dispatchF64x2ExtractLane(uint8_t lane) override
 	{ emitVectorExtractFloat(8, reinterpret_cast<uint64_t>(&wasm_f64x2_extract_lane), lane); }
 	void dispatchF32x4ReplaceLane(uint8_t lane) override
@@ -9112,6 +9168,8 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 
 	void dispatchF32Load(WASM::MemArg arg) override
 	{ emitMemoryLoad(arg, 4, LoadKind::F32); }
+	void dispatchF32LoadF16(WASM::MemArg arg) override { emitF16Load(arg); }
+	void dispatchF32StoreF16(WASM::MemArg arg) override { emitF16Store(arg); }
 	void dispatchF64Load(WASM::MemArg arg) override
 	{ emitMemoryLoad(arg, 8, LoadKind::F64); }
 	void dispatchF32Store(WASM::MemArg arg) override { emitMemoryStore(arg, 4, true); }
@@ -10207,6 +10265,52 @@ private:
 		invoke->set_ret(0, pointer);
 		emitPendingTrapReturn();
 		return pointer;
+	}
+
+	void emitF16Load(const WASM::MemArg& arg)
+	{
+		if (inDeadCode())
+			return;
+		if (values.empty())
+			throw std::runtime_error("AsmJit f32.load_f16 operand stack underflow");
+		auto wasmAddress = values.back();
+		values.pop_back();
+		auto pointer = emitMemoryAddress(arg, 2, wasmAddress);
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kFloat32);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke),
+				reinterpret_cast<uint64_t>(&wasm_f32_load_f16), signature),
+				"AsmJit f32.load_f16 helper call failed");
+		invoke->set_arg(0, pointer);
+		auto result = compiler.new_xmm("f16Load");
+		invoke->set_ret(0, result);
+		values.push_back(bitsOfFloat(result, 4));
+	}
+
+	void emitF16Store(const WASM::MemArg& arg)
+	{
+		if (inDeadCode())
+			return;
+		if (values.size() < 2)
+			throw std::runtime_error("AsmJit f32.store_f16 operand stack underflow");
+		auto value = values.back();
+		values.pop_back();
+		auto wasmAddress = values.back();
+		values.pop_back();
+		auto pointer = emitMemoryAddress(arg, 2, wasmAddress);
+		const auto argument = materializeFloat(value, 4);
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kVoid);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kFloat32);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke),
+				reinterpret_cast<uint64_t>(&wasm_f32_store_f16), signature),
+				"AsmJit f32.store_f16 helper call failed");
+		invoke->set_arg(0, pointer);
+		invoke->set_arg(1, argument);
 	}
 
 	void emitMemoryLoad(const WASM::MemArg& arg, uint32_t width, LoadKind kind)

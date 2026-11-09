@@ -291,6 +291,8 @@ protected:
 	void dispatchF32ReinterpretI32() override; //!< `f32.reinterpret_i32`.
 	void dispatchF64ReinterpretI64() override; //!< `f64.reinterpret_i64`.
 	void dispatchF32Load(WASM::MemArg arg) override; //!< `f32.load`.
+	void dispatchF32LoadF16(WASM::MemArg arg) override; //!< `f32.load_f16`.
+	void dispatchF32StoreF16(WASM::MemArg arg) override; //!< `f32.store_f16`.
 	void dispatchF64Load(WASM::MemArg arg) override; //!< `f64.load`.
 	void dispatchF32Store(WASM::MemArg arg) override; //!< `f32.store`.
 	void dispatchF64Store(WASM::MemArg arg) override; //!< `f64.store`.
@@ -450,6 +452,7 @@ protected:
 	void dispatchF32x4ReplaceLane(uint8_t arg) override; //!< `f32x4.replace_lane`.
 	void dispatchF64x2ExtractLane(uint8_t arg) override; //!< `f64x2.extract_lane`.
 	void dispatchF64x2ReplaceLane(uint8_t arg) override; //!< `f64x2.replace_lane`.
+	void dispatchSIMDF16x8(WASM::SIMDOpcode opcode, uint8_t lane) override; //!< The `f16x8` family.
 	void dispatchV128Load8x8S(WASM::MemArg arg) override; //!< `v128.load8x8_s`.
 	void dispatchV128Load8x8U(WASM::MemArg arg) override; //!< `v128.load8x8_u`.
 	void dispatchV128Load16x4S(WASM::MemArg arg) override; //!< `v128.load16x4_s`.
@@ -1117,12 +1120,14 @@ private:
 	 * \param width 4 for f32, 8 for f64.
 	 */
 	void emitMemoryLoadFloat(const WASM::MemArg& arg, int width);
+	void emitF16Load(const WASM::MemArg& arg); //!< `f32.load_f16` through the shared helper.
 	/*!
 	 * \brief Emits one checked float memory store.
 	 * \param arg Memory immediate.
 	 * \param width 4 for f32, 8 for f64.
 	 */
 	void emitMemoryStoreFloat(const WASM::MemArg& arg, int width);
+	void emitF16Store(const WASM::MemArg& arg); //!< `f32.store_f16` through the shared helper.
 	/*!
 	 * \brief Emits an integer-to-float conversion over the top slot.
 	 * \param conversion SLJIT FOP1 conversion opcode.
@@ -1222,6 +1227,7 @@ private:
 	 * \param address Helper entry point.
 	 */
 	void emitV128Unary(sljit_sw address);
+	void emitV128F16Unary(uint32_t op, sljit_sw address); //!< Unary `f16x8` helper with its sub-opcode.
 	//! Emits `i31.get_s` (arithmetic) or `i31.get_u` (logical) over the top slot.
 	//! \param signExtend True for the signed extraction.
 	void emitI31Get(bool signExtend);
@@ -1295,8 +1301,10 @@ private:
 	 * \param address Helper entry point.
 	 */
 	void emitV128Binary(sljit_sw address);
+	void emitV128F16Binary(uint32_t op, sljit_sw address); //!< Binary `f16x8` helper with its sub-opcode.
 	//! Emits a ternary v128 helper (`a`, `b`, `c`, `out`) over the top three slots.
 	void emitV128Ternary(sljit_sw address);
+	void emitV128F16Ternary(uint32_t op); //!< Ternary `f16x8` helper through a pointer-block adapter.
 	/*!
 	 * \brief Emits a reference cast: null handling plus the type-id check.
 	 * \param arg Target heap type (must be a concrete type index).
