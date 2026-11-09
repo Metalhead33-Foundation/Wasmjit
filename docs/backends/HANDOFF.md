@@ -139,30 +139,45 @@ them, and the validator now rejects them (`V128ATOMIC`).
 
 ## 7. Next session's recommendation
 
-1. **Finish the reference-ownership model on both non-LibJIT backends.** The
-   paths the suites exercise are exact (arguments, locals, created objects,
-   returned references, the descriptor family), but three shapes are still
-   borrows that nothing releases: a reference read out of a struct field or an
-   array element, `select`’s unselected operand, and `drop` of a GC reference
-   (`dispatchDrop` releases only continuations and strings). Each is a leak, not
-   a wrong result, and each has a fixture already (`gc_refcount.wat`); the
-   change is `emitRetainStackObject`-shaped and belongs next to the existing
-   calls rather than at the return boundary.
-2. **Reduce the staged-import cost.** A native import with more than three
-   parameters now costs one libffi round trip per call. The cheap win is to keep
-   the *direct* 4-argument shape on the register form by reserving `S0`/`S1`
-   (SLJIT’s argument ceiling is four, so `ctx + 3` is the maximum and nothing
-   can be gained without staging; the win is only for imports that are called
-   once per message, and the post-mortem should measure before it changes).
-3. **Widen the frame-form tail path.** `return_call_ref` above the
-   register-form ceiling is still a semantic call+return on SLJIT; the frame
-   trampoline is the missing piece ([`PRODUCTION_GAPS.md`](PRODUCTION_GAPS.md)
-   §2.1).
-4. **Portability.** Every production sentence in this tree is scoped to x86-64
+**Done since this list was written (2026-11-09):** the reference-ownership model
+is complete on all three backends. `docs/WRITING_A_BACKEND.md` §6 now carries the
+rule as a table of sites, the `GC reference ownership: the operand stack owns one
+count per reference` case measures it with exact counts, and the three suites
+report the same 22,482 assertions in 822 cases. What was three shapes is now one
+`drop`, the local/parameter/epilogue model, the field and element paths, `select`,
+and the call argument boundary — on LibJIT, SLJIT **and** AsmJIT.
+
+1. **Close the native-import result asymmetry.** A compiled callee transfers the
+   count its operand stack held; a host C function returns a pointer and keeps
+   its own `Value::ref`, so the caller must clone. Only AsmJIT does that today
+   (`retainNativeCallResult`); SLJIT and LibJIT take the count over on a *direct*
+   call to an import, which over-releases if the host still holds the reference.
+   The fix is small in both; the reason it is not done is that it needs a fixture
+   that a reference-returning native import can be registered against, and an
+   unverified change to two green backends is worse than a recorded gap.
+2. **Call-form granularity — decided, not yet built.** The register-or-frame
+   choice is module-wide today, which is both a cost (one wide function switches
+   every call in the module to the frame form and forfeits the register tail-call
+   trampoline) and *unsound across modules* (a register-form module importing
+   from a frame-form one emits a register call into a frame entry, and nothing
+   compares the forms). [`CALL_FORM_GRANULARITY.md`](CALL_FORM_GRANULARITY.md)
+   states the rule that removes both — the form is a function of the *signature*
+   plus a backend-declared ceiling, never of the module and never of the
+   individual function — and answers the "wrap it so the embedder never sees a
+   frame" question (that wrapper is `ModuleCallCache`, already done). It is a
+   milestone of its own: it changes the behaviour of a frozen seam.
+3. **Reduce the staged-import cost.** A native import with more than three
+   parameters costs one libffi round trip per call on SLJIT. SLJIT's argument
+   ceiling is four, so `ctx + 3` is the maximum and nothing can be gained without
+   staging; measure before changing it.
+4. **Widen the frame-form tail path.** `return_call_ref` above the register-form
+   ceiling is still a semantic call+return on SLJIT; the frame trampoline is the
+   missing piece ([`PRODUCTION_GAPS.md`](PRODUCTION_GAPS.md) §2.1).
+5. **Portability.** Every production sentence in this tree is scoped to x86-64
    Linux / SysV AMD64. A single non-SysV runner (AArch64 or MS x64) would turn
    the `provisional` rows in [`ABI_PORTABILITY.md`](../ABI_PORTABILITY.md) into
-   evidence, and that is now the largest single gap between “production-ready”
-   and “portable”.
+   evidence, and that is the largest remaining gap between "production-ready" and
+   "portable".
 
 Keep the probe discipline: strengthen the fixture until it observes the
 property, validate the module, run all three backends, then record a row.

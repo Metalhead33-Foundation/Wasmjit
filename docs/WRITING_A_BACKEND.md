@@ -236,12 +236,59 @@ existing `two agents allocate and release GC objects on one instance` reclaim
 count went from 40,000 to 2. Static rules plus the entry-time retain are the only
 shape that survives both cases.
 
-**How to test it.** `Test/wasm_wat/gc_refcount.wat` covers the allocate-and-release
-loop; add the initialiser shape — a function that `struct.new`s inside an `if`,
-stores the object into its reference parameter and returns it, and a caller that
-stores and casts it — and assert the object is still alive at the cast. If you do
-not lower references yet (`Asmjit`, `Sljit` today), refuse them explicitly and
-keep `Callable::fnPtr` null; add this rule to your checklist *before* you do.
+### The counted operand stack: one rule, every site
+
+The three sentences above are the whole model, and all three backends now
+implement it the same way. The unconditional version is easier to get right than
+a per-instruction "does this slot own a count yet?" flag, and it is what the
+fixture measures:
+
+| Site | What it must do |
+|---|---|
+| `local.get` of a reference | clone for the stack, and mark the slot as owned |
+| `local.set` / `local.tee` of a reference | the write barrier (retain for the slot, store, release the overwritten value); `set` also releases the stack's count, `tee` does not because the value stays |
+| function entry | retain each reference parameter into its own slot (`emitReferenceParameterRetains`); the parameter arrived as the caller's borrow |
+| function exit (`return`, a `br` to the function label, **and the implicit end**) | release every reference local |
+| `drop` | release the popped reference |
+| `struct.get` / `array.get` | release the **container** operand, and clone+mark a reference field/element (the field keeps its own count) |
+| `struct.set` / `array.set` | the write barrier on the field/element, then release **both** operands (only the container for a scalar field) |
+| `select_t` over references | the winner's count crosses over; the **losing** arm is released, and which arm loses is only known at run time |
+| a call | release the reference **arguments** (a parameter is the caller's borrow) and take the count of a reference **result** |
+| `struct.new*` / `array.new*` | the value arrives at count 0, so the push takes one |
+| `ref.null`, `ref.i31`, `ref.func`, `table.get`, `ref.get_desc` | mark the slot; `table.get` also clones (the entry is store-owned) |
+| `ref.cast`, `ref.as_non_null`, the conversions | a pass-through: the operand's count moves to the result |
+
+**Use the universal pair, not a per-kind helper.** `wasm_ref_clone`,
+`wasm_ref_drop` and `wasm_ref_store` (`WasmModuleInstance.hpp`) dispatch to the
+continuation registry, the string store, the GC heap, the unboxed `i31`
+(uncounted) and an opaque host reference (through the host bridge's hook), so no
+site has to know which kind a reference is. `wasm_cont_drop_known` and
+`wasm_string_release` are therefore redundant; a `drop` that only knows how to
+release continuations silently leaks every GC object it sees.
+
+**The failure direction matters.** A missed release leaks one count, which is
+recoverable. A release of a value the stack never owned is not: it frees an
+object that is still reachable through the field it was read from, and the
+corruption surfaces later as a failed cast or a crash inside the type walker.
+When in doubt, *not* releasing is the safe mistake.
+
+**Reference results: a Wasm callee transfers, a native import borrows.** A
+compiled callee hands over the count its own operand stack held. A host C
+function returns a pointer and keeps its own `Value::ref`, so the caller must
+clone before the stack owns it. Only AsmJIT implements that distinction today
+(`retainNativeCallResult`); on SLJIT and LibJIT a *direct* call to a native
+import takes the count over, which over-releases if the host still holds the
+reference. Closing that is a fixture, not a redesign — see
+[`backends/HANDOFF.md`](backends/HANDOFF.md).
+
+**How to test it.** `Test/wasm_wat/gc_ownership.wat` plus the
+`GC reference ownership: the operand stack owns one count per reference` case is
+the measuring fixture: it calls one tiny function per row of the table above and
+asserts the exact reference count of the objects it owns afterwards, on every
+backend. `Test/wasm_wat/gc_refcount.wat` covers the allocate-and-release loop and
+the initialiser shape (`struct.new` inside an `if`, stored into a reference
+parameter and returned, then cast by the caller). Both are cheap; a leak changes
+no result, so nothing else in the suite can see it.
 
 ## 7. The session seam: `BackendSession`
 

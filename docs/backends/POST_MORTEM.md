@@ -2970,9 +2970,9 @@ four parameters on SLJIT.
 ### Evidence
 
 ```
-WASMJIT_BACKEND=libjit ./WasmJit --rng-seed 12345  -> All tests passed (22451 assertions in 821 test cases)
-WASMJIT_BACKEND=sljit  ./WasmJit --rng-seed 12345  -> All tests passed (22451 assertions in 821 test cases)
-WASMJIT_BACKEND=asmjit ./WasmJit --rng-seed 12345  -> All tests passed (22451 assertions in 821 test cases)
+WASMJIT_BACKEND=libjit ./WasmJit --rng-seed 12345  -> All tests passed (22482 assertions in 822 test cases)
+WASMJIT_BACKEND=sljit  ./WasmJit --rng-seed 12345  -> All tests passed (22482 assertions in 822 test cases)
+WASMJIT_BACKEND=asmjit ./WasmJit --rng-seed 12345  -> All tests passed (22482 assertions in 822 test cases)
 ```
 
 Per-case evidence for the items above (all three backends unless stated):

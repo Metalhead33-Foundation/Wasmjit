@@ -1171,3 +1171,42 @@ already linked libffi for `BackendSession::invoke`.
   continuations and strings. That is a leak, never a wrong result, and it is
   recorded here rather than silently fixed.
 
+
+## 31. Reference ownership is complete, and two things follow (2026-11-09)
+
+**Snapshot (2026-11-09, working tree):** all three backends run the whole suite
+identically -- 22,482 assertions in 822 cases, exit 0 -- including the new
+`GC reference ownership: the operand stack owns one count per reference` case,
+which asserts the exact reference count of every object it owns after each shape.
+
+What §30 recorded as "a partial-ownership model on both backends" is closed. The
+model is now the unconditional one (`docs/WRITING_A_BACKEND.md` §6 has the table
+of sites): the operand stack owns one count per reference, `drop` releases it,
+locals own theirs through a write barrier with an entry-time parameter retain and
+an epilogue release, and the field, element, `select` and call boundaries are all
+counted. `wasm_ref_clone` / `wasm_ref_drop` / `wasm_ref_store` are the universal
+pair-and-a-half; the per-kind helpers they replace were the reason a `drop` could
+silently release nothing.
+
+Three defects surfaced while making the three models agree, and they are recorded
+rather than quietly fixed:
+
+1. **A native import's reference result is a borrow.** A compiled callee transfers
+the count its operand stack held; a host C function returns a pointer and keeps
+its own `Value::ref`, so the caller must clone. Only AsmJIT does that today
+(`retainNativeCallResult`); SLJIT and LibJIT take the count over on a *direct*
+call to an import, which over-releases if the host still holds the reference.
+The asymmetry is invisible to the suite because no fixture registers a
+reference-returning native import. Direction: the fixture first, then the two
+backends.
+2. **The call form is module-wide, and that is unsound across modules.** A
+register-form module importing a function from a frame-form module emits a
+register-form call into a frame-form entry; nothing compares the two forms (the
+component runtime derives the form per callable, the plain module import path
+does not). See [`CALL_FORM_GRANULARITY.md`](CALL_FORM_GRANULARITY.md).
+3. **A trap leaks the frame's reference locals.** The trap epilogue returns the
+zero of each result without running the reference-local release, so a trap
+abandons the counts its locals held. Reclamation is deferred and a trap is
+typically terminal for the instance, so this is a bounded leak on an error path,
+not a corruption -- but it is a leak, and it is the one place where the epilogue
+rule above does not hold.

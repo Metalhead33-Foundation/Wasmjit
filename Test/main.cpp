@@ -6814,6 +6814,118 @@ TEST_CASE("GC refcount: clone saturates instead of wrapping the count")
 	REQUIRE(*count == 0xFFFFFFFFu);
 }
 
+TEST_CASE("GC reference ownership: the operand stack owns one count per reference")
+{
+	// RC-5, measured rather than reasoned (docs/WRITING_A_BACKEND.md §6,
+	// "Reference ownership"). Every function in `gc_ownership.wat` moves a
+	// reference through the operand stack and does nothing else, so each count
+	// below is a direct observation of one rule:
+	//
+	//   * producing a reference pushes a counted value;
+	//   * consuming one releases the stack's count, unless the consumer takes the
+	//     ownership over (`select`'s winner, a `return`);
+	//   * every store-owned slot (local, global, struct field, array element)
+	//     retains its own count and releases the one it overwrote.
+	//
+	// A leak shows up as a count that came back too high. The dangerous
+	// direction is the other one: a missing clone makes a later `drop` release a
+	// count the stack never held, which kills an object that is still reachable
+	// through the very field it was read from.
+	WASM::RegistryImportResolver imports;
+	auto backend = TestBackend::create();
+	auto loaded = loadAndInstantiateTestModule("gc_ownership", imports, *backend);
+	REQUIRE(loaded.instance.get() != nullptr);
+	WASM::ModuleInstance& instance = *loaded.instance;
+
+	auto make = loaded.instance->exportedFunction("make");
+	auto setField = loaded.instance->exportedFunction("set_field");
+	auto fieldDrop = loaded.instance->exportedFunction("field_drop");
+	auto selectDrop = loaded.instance->exportedFunction("select_drop");
+	auto dropArg = loaded.instance->exportedFunction("drop_arg");
+	auto elem = loaded.instance->exportedFunction("elem");
+	auto overwrite = loaded.instance->exportedFunction("local_overwrite");
+	auto loop = loaded.instance->exportedFunction("local_loop");
+	REQUIRE(make.has_value());
+	REQUIRE(setField.has_value());
+	REQUIRE(fieldDrop.has_value());
+	REQUIRE(selectDrop.has_value());
+	REQUIRE(dropArg.has_value());
+	REQUIRE(elem.has_value());
+	REQUIRE(overwrite.has_value());
+	REQUIRE(loop.has_value());
+
+	// A quiescent baseline: earlier cases share the store, and a queued object
+	// from one of them would be reclaimed by the first collect here.
+	instance.gcCollect();
+	const size_t liveBase = testStore().gc().liveObjectCount();
+
+	// A reference *result* is handed over owned, so the caller can hold it
+	// across a safepoint. Two counts each: the callee's transfer and this
+	// test's own retain.
+	void* parent = WASM::callCallable<void*>(*make);
+	REQUIRE(parent != nullptr);
+	REQUIRE(instance.gcRefCount(parent) == 1);
+	REQUIRE(instance.refClone(parent) == parent);
+	void* child = WASM::callCallable<void*>(*make);
+	REQUIRE(child != nullptr);
+	REQUIRE(instance.gcRefCount(child) == 1);
+	REQUIRE(instance.refClone(child) == child);
+	REQUIRE(instance.gcRefCount(parent) == 2);
+	REQUIRE(instance.gcRefCount(child) == 2);
+
+	// struct.set: the field retains the child (one more count) and the operand
+	// stack gives up its own, so the child ends one higher and the parent is
+	// untouched.
+	WASM::callCallable<void>(*setField, parent, child);
+	REQUIRE(instance.gcRefCount(parent) == 2);
+	REQUIRE(instance.gcRefCount(child) == 3);
+
+	// struct.get + drop: the read takes its own count and the drop gives it
+	// back, while the field keeps the one it holds. Nothing moves.
+	WASM::callCallable<void>(*fieldDrop, parent);
+	WASM::callCallable<void>(*dropArg, parent);
+	REQUIRE(instance.gcRefCount(parent) == 2);
+	REQUIRE(instance.gcRefCount(child) == 3);
+
+	// select over two references: the winner crosses over, the loser's count is
+	// released, and which arm loses depends on the condition -- so both arms are
+	// exercised.
+	WASM::callCallable<void>(*selectDrop, parent, child, int32_t(1));
+	REQUIRE(instance.gcRefCount(parent) == 2);
+	REQUIRE(instance.gcRefCount(child) == 3);
+	WASM::callCallable<void>(*selectDrop, parent, child, int32_t(0));
+	REQUIRE(instance.gcRefCount(parent) == 2);
+	REQUIRE(instance.gcRefCount(child) == 3);
+
+	// drop of a reference parameter.
+	WASM::callCallable<void>(*dropArg, parent);
+	REQUIRE(instance.gcRefCount(parent) == 2);
+
+	// array.set + array.get + drop: the element holds its own count and the
+	// array itself dies at the callee's epilogue.
+	WASM::callCallable<void>(*elem, child);
+	REQUIRE(instance.gcRefCount(child) == 4);
+
+	// The array is dead but only *queued*: reclamation is deferred to a
+	// safepoint, so collect before using the live count as a baseline.
+	instance.gcCollect();
+
+	// Locals. Three allocations into one local: every one of them is released,
+	// including the last, which the epilogue drops.
+	const size_t liveBeforeLocals = testStore().gc().liveObjectCount();
+	REQUIRE(liveBeforeLocals == liveBase + 2);
+	WASM::callCallable<int32_t>(*overwrite);
+	instance.gcCollect();
+	REQUIRE(testStore().gc().liveObjectCount() == liveBeforeLocals);
+
+	// The same shape in a loop, where a per-iteration leak is unbounded rather
+	// than merely wasteful.
+	WASM::callCallable<int32_t>(*loop, int32_t(10));
+	instance.gcCollect();
+	REQUIRE(testStore().gc().liveObjectCount() == liveBeforeLocals);
+	REQUIRE(testStore().gc().liveObjectCount() == liveBase + 2);
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // SIMD (docs/SIMD_LIBJIT.md §9, milestone SIMD-L1)
 //

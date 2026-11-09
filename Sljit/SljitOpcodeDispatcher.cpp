@@ -1978,6 +1978,11 @@ bool OpcodeDispatcher::beginFunction()
 					SLJIT_MEM1(SLJIT_SP), localSlotOffset(i), SLJIT_IMM, 0));
 		}
 	}
+	// A reference parameter is the caller's borrow, so the slot takes its own
+	// count now. This sits outside the self-tail-call loop label below: that path
+	// re-initialises the parameter slots itself and retains the new values.
+	emitReferenceParameterRetains();
+
 	// The body-entry label is the loop target of a direct self tail call; the
 	// prologue above has already run for this frame.
 	bodyStart_ = sljit_emit_label(compiler_);
@@ -2086,16 +2091,84 @@ int OpcodeDispatcher::pop()
 
 void OpcodeDispatcher::markTopStringRef()
 {
-	if (stackWidths_.empty())
+	// A string, a string view and a string iterator are references like any
+	// other: they are counted in the `StringStore` and released through the same
+	// universal pair, so the marker is the general one (docs/WRITING_A_BACKEND.md
+	// section 6).
+	markTopReference();
+}
+
+void OpcodeDispatcher::markTopReference()
+{
+	markReferenceAt(stackWidths_.size());
+}
+
+void OpcodeDispatcher::markReferenceAt(std::size_t depth)
+{
+	if (depth == 0 || depth > stackWidths_.size())
 		return;
-	stackRefKinds_.resize(stackWidths_.size(), 0);
-	stackRefKinds_.back() = 1;
+	resizeStack(stackWidths_.size());
+	stackRefKinds_[depth - 1] = 1;
+}
+
+void OpcodeDispatcher::emitDropCallArguments(const WASM::FuncType& type)
+{
+	// A parameter arrives as the caller's borrow, so the operand stack keeps its
+	// count and gives it back once the call has returned. This runs before the
+	// result is written into the same slots, which is why it belongs here rather
+	// than in the caller after it resizes the model.
+	if (measureOnly_)
+		return;
+	const std::size_t base = stackWidths_.size() - type.params.size();
+	for (std::size_t i = 0; i < type.params.size(); ++i) {
+		if (isReferenceKind(type.params[i].val.opcode))
+			emitDropStackRef(base + i);
+	}
+}
+
+void OpcodeDispatcher::finishCallResults(const WASM::FuncType& type)
+{
+	// A reference result arrives owning one count: the callee hands over the
+	// count its own operand stack held, so the slot is marked rather than
+	// cloned, and the caller's `drop` (or its return) releases it.
+	if (measureOnly_)
+		return;
+	const std::size_t base = stackWidths_.size() - type.results.size();
+	for (std::size_t i = 0; i < type.results.size(); ++i) {
+		if (isReferenceKind(type.results[i].val.opcode))
+			markReferenceAt(base + i + 1);
+	}
 }
 
 bool OpcodeDispatcher::topIsStringRef() const
 {
-	return !stackWidths_.empty() && stackRefKinds_.size() >= stackWidths_.size()
-			&& stackRefKinds_[stackWidths_.size() - 1] != 0;
+	return topIsReference();
+}
+
+bool OpcodeDispatcher::topIsReference() const
+{
+	return !stackWidths_.empty() && stackRefKinds_.size() == stackWidths_.size()
+			&& stackRefKinds_.back() != 0;
+}
+
+void OpcodeDispatcher::setTopOfStack(int width, bool reference)
+{
+	// An instruction that rewrites the top slot in place (a reference operand
+	// turned into a scalar result, or the reverse) has to rewrite the ownership
+	// shadow with it: a stale marker makes `drop` release a value the operand
+	// stack never owned, which frees an object that is still reachable.
+	stackWidths_.back() = width;
+	resizeStack(stackWidths_.size());
+	stackRefKinds_.back() = reference ? 1 : 0;
+}
+
+void OpcodeDispatcher::resizeStack(std::size_t size)
+{
+	// The ownership shadow has to shrink and grow with the stack: a stale entry
+	// under the new top would make an unrelated scalar look like a reference, and
+	// releasing that value corrupts the heap.
+	stackWidths_.resize(size);
+	stackRefKinds_.resize(size, 0);
 }
 
 void OpcodeDispatcher::require(bool condition, const char* reason)
@@ -2125,7 +2198,7 @@ void OpcodeDispatcher::markUnreachable()
 	reachable_ = false;
 	const std::size_t base = controls_.empty() ? 0 : controls_.back().baseDepth;
 	if (stackWidths_.size() > base)
-		stackWidths_.resize(base);
+		resizeStack(base);
 }
 
 sljit_sw OpcodeDispatcher::localSlotOffset(std::size_t index) const
@@ -2265,6 +2338,8 @@ void OpcodeDispatcher::transferToBase(const std::vector<int>& widths, std::size_
 
 void OpcodeDispatcher::emitRetainStackObject(std::size_t depth)
 {
+	if (measureOnly_)
+		return;
 	// A fresh GC object is created *unowned* (count 0); the operand stack owns
 	// one count per reference it holds, so the value takes a count as it is
 	// pushed (docs/WRITING_A_BACKEND.md §6, "Reference ownership").
@@ -2277,6 +2352,8 @@ void OpcodeDispatcher::emitRetainStackObject(std::size_t depth)
 
 void OpcodeDispatcher::emitDropStackRef(std::size_t depth)
 {
+	if (measureOnly_)
+		return;
 	// A reference operand that the instruction consumes is released here: the
 	// operand stack owns one count per reference it holds, and the callee has
 	// already retained whatever it keeps (docs/WRITING_A_BACKEND.md §6).
@@ -2286,6 +2363,55 @@ void OpcodeDispatcher::emitDropStackRef(std::size_t depth)
 	emitPendingTrapCheck();
 }
 
+void OpcodeDispatcher::emitRetainProducedRef(std::size_t depth)
+{
+	if (measureOnly_)
+		return;
+	// A reference an instruction produced *from a store-owned slot* (a struct
+	// field, an array element, a table entry) belongs to that slot; the operand
+	// stack takes its own count so a later `drop` cannot release the slot's.
+	emitRetainStackObject(depth);
+}
+
+void OpcodeDispatcher::emitLocalRefStore(WASM::LocalIdx index, std::size_t depth)
+{
+	if (measureOnly_)
+		return;
+	// The write barrier for a reference local: retain the incoming value for the
+	// slot, store it, release the value the slot held. One helper rather than
+	// three steps, because the three steps need the old value parked somewhere
+	// and getting the order wrong either leaks the old reference or frees the
+	// new one (docs/WRITING_A_BACKEND.md section 6).
+	loadContext(SLJIT_R0);
+	emit(sljit_get_local_base(compiler_, SLJIT_R1, 0, localSlotOffset(index)));
+	loadSlot(SLJIT_R2, depth, 8);
+	emitHelper(SLJIT_ARGS3V(P, P, P), &WASM::wasm_ref_store);
+	emitPendingTrapCheck();
+}
+
+void OpcodeDispatcher::emitReferenceParameterRetains()
+{
+	// A parameter arrives as the caller's borrow; the callee's slot owns nothing
+	// yet. Retaining once here makes the local rules static for every
+	// instruction -- including one that re-executes in a loop -- instead of
+	// forcing a per-instruction `does the slot own a count yet?` decision, which
+	// is the shape that leaked in LF-2 `F3d` (docs/WRITING_A_BACKEND.md section 6).
+	if (measureOnly_)
+		return;
+	const std::size_t count = std::min<std::size_t>(parameterCount_, localKinds_.size());
+	for (std::size_t i = 0; i < count; ++i) {
+		if (!isReferenceKind(localKinds_[i]) || localWidths_[i] != 8)
+			continue;
+		loadContext(SLJIT_R0);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R1, 0, SLJIT_MEM1(SLJIT_SP),
+				localSlotOffset(i)));
+		emitHelper(SLJIT_ARGS2(P, P, P), &WASM::wasm_ref_clone);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+				localSlotOffset(i), SLJIT_R0, 0));
+		emitPendingTrapCheck();
+	}
+}
+
 void OpcodeDispatcher::emitDropReferenceLocals()
 {
 	if (measureOnly_)
@@ -2293,9 +2419,14 @@ void OpcodeDispatcher::emitDropReferenceLocals()
 	for (std::size_t i = 0; i < localKinds_.size(); ++i) {
 		if (!isReferenceKind(localKinds_[i]) || localWidths_[i] != 8)
 			continue;
-		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0, SLJIT_MEM1(SLJIT_SP),
+		// Every reference local owns one count (parameters took theirs in the
+		// prologue), so the epilogue gives it back. `wasm_ref_drop` is the
+		// universal release: it dispatches to the continuation registry, the
+		// string store, the GC heap or the host bridge as the value requires.
+		loadContext(SLJIT_R0);
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R1, 0, SLJIT_MEM1(SLJIT_SP),
 				localSlotOffset(i)));
-		emitHelper(SLJIT_ARGS1V(P), &WASM::wasm_cont_drop_known);
+		emitHelper(SLJIT_ARGS2V(P, P), &WASM::wasm_ref_drop);
 	}
 }
 
@@ -2920,7 +3051,7 @@ void OpcodeDispatcher::dispatchElse()
 	// tail call, and the block still has a live result from the other arm.
 	frame.thenReachable = reachable_;
 	reachable_ = frame.entryReachable;
-	stackWidths_.resize(frame.baseDepth);
+	resizeStack(frame.baseDepth);
 	if (reachable_) {
 		for (int width : frame.paramWidths)
 			push(width);
@@ -2999,7 +3130,7 @@ void OpcodeDispatcher::dispatchEnd()
 	}
 
 	reachable_ = endReachable;
-	stackWidths_.resize(frame.baseDepth);
+	resizeStack(frame.baseDepth);
 	if (endReachable) {
 		for (int width : frame.resultWidths)
 			push(width);
@@ -3297,7 +3428,7 @@ void OpcodeDispatcher::dispatchThrow(WASM::TagIdx arg)
 		emitExceptionPropagation();
 	}
 
-	stackWidths_.resize(base);
+	resizeStack(base);
 	markUnreachable();
 }
 
@@ -3452,6 +3583,7 @@ void OpcodeDispatcher::emitResolvedCall(const WASM::FuncType& type, int callable
 			else if (done != nullptr)
 				sljit_set_label(done, join);
 		}
+		emitDropCallArguments(type);
 		if (!type.results.empty()) {
 			// R1 is caller-saved, so the scratch address is taken again. Results
 			// start where the argument block ends and overwrite the argument slots.
@@ -3588,9 +3720,10 @@ void OpcodeDispatcher::emitCall(WASM::FuncIdx index, bool isTail)
 		emitResolvedCall(calledType, SLJIT_R0, stagedImport);
 	}
 
-	stackWidths_.resize(stackWidths_.size() - calledType.params.size());
+	resizeStack(stackWidths_.size() - calledType.params.size());
 	for (const WASM::StorageType& result : calledType.results)
 		push(widthOf(result.val));
+	finishCallResults(calledType);
 }
 
 void OpcodeDispatcher::emitCallIndirect(WASM::TypeIdx typeIndex, WASM::TableIdx tableIndex,
@@ -3655,9 +3788,10 @@ void OpcodeDispatcher::emitCallIndirect(WASM::TypeIdx typeIndex, WASM::TableIdx 
 		emitResolvedCall(calledType, SLJIT_R0, stagedImport);
 	}
 
-	stackWidths_.resize(stackWidths_.size() - calledType.params.size());
+	resizeStack(stackWidths_.size() - calledType.params.size());
 	for (const WASM::StorageType& result : calledType.results)
 		push(widthOf(result.val));
+	finishCallResults(calledType);
 }
 
 void OpcodeDispatcher::dispatchCall(WASM::FuncIdx arg)
@@ -3752,7 +3886,7 @@ void OpcodeDispatcher::emitSelfTailCall()
 			ok_ = false;
 	}
 
-	stackWidths_.resize(base);
+	resizeStack(base);
 	markUnreachable();
 }
 
@@ -3802,7 +3936,7 @@ void OpcodeDispatcher::emitTailCallState(WASM::FuncIdx arg, const WASM::FuncType
 			emitTailCallDummyReturn();
 	}
 
-	stackWidths_.resize(base);
+	resizeStack(base);
 	markUnreachable();
 }
 
@@ -3847,7 +3981,7 @@ void OpcodeDispatcher::emitTailCallIndirectState(WASM::TypeIdx typeIndex, WASM::
 	const std::size_t base = selectorDepth - calledType.params.size();
 
 	if (measureOnly_) {
-		stackWidths_.resize(base);
+		resizeStack(base);
 		markUnreachable();
 		return;
 	}
@@ -3911,12 +4045,13 @@ void OpcodeDispatcher::emitTailCallIndirectState(WASM::TypeIdx typeIndex, WASM::
 	// The semantic fallback must model the call's result before returning it:
 	// `emitResolvedCall` performs the call but does not update the compile-time
 	// operand stack. Without these pushes `emitReturnValue` sees an empty stack.
-	stackWidths_.resize(stackWidths_.size() - calledType.params.size());
+	resizeStack(stackWidths_.size() - calledType.params.size());
 	for (const WASM::StorageType& result : calledType.results)
 		push(widthOf(result.val));
+	finishCallResults(calledType);
 	emitReturnValue();
 
-	stackWidths_.resize(base);
+	resizeStack(base);
 	markUnreachable();
 }
 
@@ -3999,9 +4134,10 @@ void OpcodeDispatcher::dispatchCallRef(WASM::TypeIdx typeIndex)
 		emitNullRefCheck(SLJIT_R0);
 		emitResolvedCall(calledType, SLJIT_R0, stagedImport);
 	}
-	stackWidths_.resize(stackWidths_.size() - calledType.params.size());
+	resizeStack(stackWidths_.size() - calledType.params.size());
 	for (const WASM::StorageType& result : calledType.results)
 		push(widthOf(result.val));
+	finishCallResults(calledType);
 }
 
 void OpcodeDispatcher::dispatchReturnCallRef(WASM::TypeIdx typeIndex)
@@ -4048,19 +4184,21 @@ void OpcodeDispatcher::dispatchReturnCallRef(WASM::TypeIdx typeIndex)
 			emitResolvedCall(calledType, SLJIT_R0, stagedImport);
 			// Model the call result before returning it; see the note in
 			// emitTailCallIndirectState.
-			stackWidths_.resize(stackWidths_.size() - calledType.params.size());
+			resizeStack(stackWidths_.size() - calledType.params.size());
 			for (const WASM::StorageType& result : calledType.results)
 				push(widthOf(result.val));
+			finishCallResults(calledType);
 			emitReturnValue();
 		} else {
 			emitResolvedCall(calledType, SLJIT_R0, stagedImport);
-			stackWidths_.resize(stackWidths_.size() - calledType.params.size());
+			resizeStack(stackWidths_.size() - calledType.params.size());
 			for (const WASM::StorageType& result : calledType.results)
 				push(widthOf(result.val));
+			finishCallResults(calledType);
 			emitReturnValue();
 		}
 	}
-	stackWidths_.resize(base);
+	resizeStack(base);
 	markUnreachable();
 }
 
@@ -4095,17 +4233,13 @@ void OpcodeDispatcher::dispatchDrop()
 	if (!reachable_)
 		return;
 	requireStack(1);
-	const bool stringRef = topIsStringRef();
-	const int width = stackWidths_.back();
-	if (!measureOnly_ && stringRef) {
-		const std::size_t top = stackWidths_.size() - 1;
-		loadContext(SLJIT_R0);
-		loadSlot(SLJIT_R1, top, 8);
-		emitHelper(SLJIT_ARGS2V(P, P), &::wasm_string_release);
-	} else if (!measureOnly_ && width == 8) {
-		const std::size_t top = stackWidths_.size() - 1;
-		loadSlot(SLJIT_R0, top, 8);
-		emitHelper(SLJIT_ARGS1V(P), &WASM::wasm_cont_drop_known);
+	// Discarding a reference releases the operand stack's ownership of it. One
+	// universal helper covers every reference kind -- a GC object, a string or a
+	// view of one, a continuation handle, an unboxed i31 (uncounted) and an
+	// opaque host reference (released through the host bridge's hook) -- so the
+	// shape being dropped never has to be known here.
+	if (!measureOnly_ && topIsReference()) {
+		emitDropStackRef(stackWidths_.size() - 1);
 	}
 	pop();
 }
@@ -4119,10 +4253,33 @@ void OpcodeDispatcher::dispatchSelect()
 	require(stackWidths_[stackWidths_.size() - 2] == valueWidth,
 			"select requires two values of the same type");
 	require(stackWidths_.back() == 4, "select requires an i32 condition");
+	// Both arms were pushed, so the operand stack owns a count for each even
+	// though only one becomes the result. The winner's count crosses over (its
+	// slot survives); the loser's must be released, and which arm loses is only
+	// known at run time.
+	const bool referenceArms = valueWidth == 8
+			&& stackRefKinds_.size() == stackWidths_.size()
+			&& stackRefKinds_[stackWidths_.size() - 3] != 0;
 	if (!measureOnly_) {
 		loadSlot(SLJIT_R0, stackWidths_.size() - 1, 4);
 		emit(sljit_emit_op2u(compiler_, SLJIT_SUB | SLJIT_SET_Z, SLJIT_R0, 0,
 				SLJIT_IMM, 0));
+		if (referenceArms) {
+			// The loser must be taken from the two *original* slots: the value
+			// select below overwrites the first arm's slot with the winner, so a
+			// loser computed afterwards would be the winner about half the time.
+			// Park it, because the select needs R1 and R2.
+			loadSlot(SLJIT_R1, stackWidths_.size() - 3, valueWidth);
+			loadSlot(SLJIT_R2, stackWidths_.size() - 2, valueWidth);
+			emit(sljit_emit_select(compiler_, SLJIT_EQUAL, SLJIT_R1,
+					SLJIT_R1, 0, SLJIT_R2));
+			emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+					scratchSlotOffset(), SLJIT_R1, 0));
+			// Restore the condition flags the value select needs.
+			loadSlot(SLJIT_R0, stackWidths_.size() - 1, 4);
+			emit(sljit_emit_op2u(compiler_, SLJIT_SUB | SLJIT_SET_Z, SLJIT_R0, 0,
+					SLJIT_IMM, 0));
+		}
 		if (valueWidth == 16) {
 			// A v128 is 16 bytes, so both words are selected under the same flags.
 			const sljit_sw aOffset = stackSlotOffset(stackWidths_.size() - 3);
@@ -4145,8 +4302,20 @@ void OpcodeDispatcher::dispatchSelect()
 					SLJIT_R1, SLJIT_R1, 0, SLJIT_R2));
 			storeSlot(SLJIT_R1, stackWidths_.size() - 3, valueWidth);
 		}
+		if (referenceArms) {
+			// Release the arm the condition did not pick. Dropping a null
+			// reference is a no-op, so a null arm costs nothing.
+			loadContext(SLJIT_R0);
+			emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R1, 0, SLJIT_MEM1(SLJIT_SP),
+					scratchSlotOffset()));
+			emitHelper(SLJIT_ARGS2V(P, P), &WASM::wasm_ref_drop);
+			emitPendingTrapCheck();
+		}
 	}
-	stackWidths_.resize(stackWidths_.size() - 2);
+	const bool resultIsReference = referenceArms;
+	resizeStack(stackWidths_.size() - 2);
+	if (resultIsReference)
+		markTopReference();
 }
 
 void OpcodeDispatcher::dispatchSelectT(std::vector<WASM::ValueType>&& types)
@@ -4179,6 +4348,8 @@ void OpcodeDispatcher::dispatchLocalGet(WASM::LocalIdx arg)
 		emitHelper(SLJIT_ARGS2(P, P, P), &WASM::wasm_ref_clone);
 		storeSlot(SLJIT_R0, depth, 8);
 		emitPendingTrapCheck();
+		// The clone is the operand stack's own count.
+		markTopReference();
 	}
 }
 
@@ -4193,6 +4364,13 @@ void OpcodeDispatcher::dispatchLocalSet(WASM::LocalIdx arg)
 		return;
 	if (localWidths_[arg] == 16) {
 		copyStackToLocal(stackWidths_.size(), arg);
+		return;
+	}
+	if (isReferenceKind(localKinds_[arg])) {
+		// The barrier retains for the slot and releases what it held; the stack's
+		// own count for the value is released here, because `set` consumes it.
+		emitLocalRefStore(arg, stackWidths_.size());
+		emitDropStackRef(stackWidths_.size());
 		return;
 	}
 	loadSlot(SLJIT_R0, stackWidths_.size(), localWidths_[arg]);
@@ -4210,6 +4388,13 @@ void OpcodeDispatcher::dispatchLocalTee(WASM::LocalIdx arg)
 		return;
 	if (localWidths_[arg] == 16) {
 		copyStackToLocal(stackWidths_.size() - 1, arg);
+		return;
+	}
+	if (isReferenceKind(localKinds_[arg])) {
+		// A `tee` leaves the value on the stack, so the slot and the operand
+		// stack each own a count: the barrier retains for the slot and the stack
+		// keeps the one it already had.
+		emitLocalRefStore(arg, stackWidths_.size() - 1);
 		return;
 	}
 	loadSlot(SLJIT_R0, stackWidths_.size() - 1, localWidths_[arg]);
@@ -4271,7 +4456,7 @@ void OpcodeDispatcher::emitIntegerUnary(sljit_s32 wordOp, int width, int resultW
 	loadSlot(SLJIT_R0, stackWidths_.size() - 1, width);
 	emit(sljit_emit_op1(compiler_, op, SLJIT_R0, 0, SLJIT_R0, 0));
 	storeSlot(SLJIT_R0, stackWidths_.size() - 1, resultWidth);
-	stackWidths_.back() = resultWidth;
+	setTopOfStack(resultWidth, false);
 }
 
 void OpcodeDispatcher::emitCompare(sljit_s32 condition, int width)
@@ -4281,7 +4466,7 @@ void OpcodeDispatcher::emitCompare(sljit_s32 condition, int width)
 	requireStack(2);
 	pop();
 	if (measureOnly_) {
-		stackWidths_.back() = 4;
+		setTopOfStack(4, false);
 		return;
 	}
 	const sljit_s32 type = width == 4 ? (condition | SLJIT_32) : condition;
@@ -4298,7 +4483,7 @@ void OpcodeDispatcher::emitCompare(sljit_s32 condition, int width)
 	else if (taken != nullptr)
 		sljit_set_label(taken, done);
 	storeSlot(SLJIT_R2, stackWidths_.size() - 1, 4);
-	stackWidths_.back() = 4;
+	setTopOfStack(4, false);
 }
 
 void OpcodeDispatcher::emitEqz(int width)
@@ -4309,7 +4494,7 @@ void OpcodeDispatcher::emitEqz(int width)
 	if (measureOnly_) {
 		// The result is always an i32; the measuring pass must model that or a
 		// following `if` sees the operand's old width.
-		stackWidths_.back() = 4;
+		setTopOfStack(4, false);
 		return;
 	}
 	const sljit_s32 type = width == 4 ? (SLJIT_EQUAL | SLJIT_32) : SLJIT_EQUAL;
@@ -4325,7 +4510,7 @@ void OpcodeDispatcher::emitEqz(int width)
 	else if (taken != nullptr)
 		sljit_set_label(taken, done);
 	storeSlot(SLJIT_R2, stackWidths_.size() - 1, 4);
-	stackWidths_.back() = 4;
+	setTopOfStack(4, false);
 }
 
 void OpcodeDispatcher::emitCheckedBinary(sljit_sw address, int width,
@@ -4343,7 +4528,7 @@ void OpcodeDispatcher::emitCheckedBinary(sljit_sw address, int width,
 	emitHelper(width == 4 ? SLJIT_ARGS2(32, 32, 32) : SLJIT_ARGS2(W, W, W), address);
 	storeSlot(SLJIT_R0, stackWidths_.size() - 1, width);
 	emitPendingTrapCheck();
-	stackWidths_.back() = width;
+	setTopOfStack(width, false);
 }
 
 void OpcodeDispatcher::loadFloatSlot(int freg, std::size_t depth, int width)
@@ -4422,7 +4607,7 @@ void OpcodeDispatcher::emitFloatCompare(sljit_s32 condition, int width)
 	if (measureOnly_) {
 		// The result is always an i32; the measuring pass must model that or a
 		// following `if` sees the operands' float width.
-		stackWidths_.back() = 4;
+		setTopOfStack(4, false);
 		return;
 	}
 	const sljit_s32 type = width == 4 ? (condition | SLJIT_32) : condition;
@@ -4440,7 +4625,7 @@ void OpcodeDispatcher::emitFloatCompare(sljit_s32 condition, int width)
 	else if (taken != nullptr)
 		sljit_set_label(taken, done);
 	storeSlot(SLJIT_R2, stackWidths_.size() - 1, 4);
-	stackWidths_.back() = 4;
+	setTopOfStack(4, false);
 }
 
 void OpcodeDispatcher::emitFloatConst(std::uint64_t bits, int width, std::size_t depth)
@@ -4472,8 +4657,8 @@ void OpcodeDispatcher::emitMemoryLoadFloat(const WASM::MemArg& arg, int width)
 					SLJIT_R0, 0, SLJIT_MEM1(SLJIT_R0), 0));
 			storeSlot(SLJIT_R0, base, width);
 		}
-		stackWidths_.resize(base + 1);
-		stackWidths_.back() = width;
+		resizeStack(base + 1);
+		setTopOfStack(width, false);
 		return;
 	}
 	requireStack(1);
@@ -4486,7 +4671,7 @@ void OpcodeDispatcher::emitMemoryLoadFloat(const WASM::MemArg& arg, int width)
 				SLJIT_R0, 0, SLJIT_MEM1(SLJIT_R0), 0));
 		storeSlot(SLJIT_R0, stackWidths_.size() - 1, width);
 	}
-	stackWidths_.back() = width;
+	setTopOfStack(width, false);
 }
 
 void OpcodeDispatcher::emitMemoryStoreFloat(const WASM::MemArg& arg, int width)
@@ -4503,7 +4688,7 @@ void OpcodeDispatcher::emitMemoryStoreFloat(const WASM::MemArg& arg, int width)
 			emit(sljit_emit_op1(compiler_, width == 4 ? SLJIT_MOV32 : SLJIT_MOV,
 					SLJIT_MEM1(SLJIT_R0), 0, SLJIT_R1, 0));
 		}
-		stackWidths_.resize(base);
+		resizeStack(base);
 		return;
 	}
 	requireStack(2);
@@ -4535,8 +4720,8 @@ void OpcodeDispatcher::emitF16Load(const WASM::MemArg& arg)
 			emitHelper(SLJIT_ARGS1(F32, P), codeAddress(&wasm_f32_load_f16));
 			storeFloatSlot(SLJIT_FR0, base, 4);
 		}
-		stackWidths_.resize(base + 1);
-		stackWidths_.back() = 4;
+		resizeStack(base + 1);
+		setTopOfStack(4, false);
 		return;
 	}
 	requireStack(1);
@@ -4546,7 +4731,7 @@ void OpcodeDispatcher::emitF16Load(const WASM::MemArg& arg)
 		emitHelper(SLJIT_ARGS1(F32, P), codeAddress(&wasm_f32_load_f16));
 		storeFloatSlot(SLJIT_FR0, depth, 4);
 	}
-	stackWidths_.back() = 4;
+	setTopOfStack(4, false);
 }
 
 void OpcodeDispatcher::emitF16Store(const WASM::MemArg& arg)
@@ -4561,7 +4746,7 @@ void OpcodeDispatcher::emitF16Store(const WASM::MemArg& arg)
 			loadFloatSlot(SLJIT_FR0, base + 2, 4);
 			emitHelper(SLJIT_ARGS2V(P, F32), codeAddress(&wasm_f32_store_f16));
 		}
-		stackWidths_.resize(base);
+		resizeStack(base);
 		return;
 	}
 	requireStack(2);
@@ -4586,7 +4771,7 @@ void OpcodeDispatcher::emitIntToFloat(sljit_s32 conversion, int sourceWidth,
 	loadSlot(SLJIT_R0, stackWidths_.size() - 1, sourceWidth);
 	emit(sljit_emit_fop1(compiler_, conversion, SLJIT_FR0, 0, SLJIT_R0, 0));
 	storeFloatSlot(SLJIT_FR0, stackWidths_.size() - 1, resultWidth);
-	stackWidths_.back() = resultWidth;
+	setTopOfStack(resultWidth, false);
 }
 
 void OpcodeDispatcher::emitFloatToInt(sljit_sw address, int sourceWidth,
@@ -4606,7 +4791,7 @@ void OpcodeDispatcher::emitFloatToInt(sljit_sw address, int sourceWidth,
 				address);
 	storeSlot(SLJIT_R0, stackWidths_.size() - 1, resultWidth);
 	emitPendingTrapCheck();
-	stackWidths_.back() = resultWidth;
+	setTopOfStack(resultWidth, false);
 }
 
 void OpcodeDispatcher::emitReinterpret(int width, bool canonicalizeFloat)
@@ -4620,7 +4805,7 @@ void OpcodeDispatcher::emitReinterpret(int width, bool canonicalizeFloat)
 		canonicalizeSlot(stackWidths_.size() - 1, width);
 	loadSlot(SLJIT_R0, stackWidths_.size() - 1, width);
 	storeSlot(SLJIT_R0, stackWidths_.size() - 1, width);
-	stackWidths_.back() = width;
+	setTopOfStack(width, false);
 }
 
 void OpcodeDispatcher::canonicalizeSlot(std::size_t depth, int width)
@@ -4759,7 +4944,7 @@ void OpcodeDispatcher::dispatchF32DemoteF64()
 	emit(sljit_emit_fop1(compiler_, SLJIT_CONV_F32_FROM_F64, SLJIT_FR0, 0,
 			SLJIT_FR0, 0));
 	storeFloatSlot(SLJIT_FR0, stackWidths_.size() - 1, 4);
-	stackWidths_.back() = 4;
+	setTopOfStack(4, false);
 }
 
 void OpcodeDispatcher::dispatchF64PromoteF32()
@@ -4773,7 +4958,7 @@ void OpcodeDispatcher::dispatchF64PromoteF32()
 	emit(sljit_emit_fop1(compiler_, SLJIT_CONV_F64_FROM_F32, SLJIT_FR0, 0,
 			SLJIT_FR0, 0));
 	storeFloatSlot(SLJIT_FR0, stackWidths_.size() - 1, 8);
-	stackWidths_.back() = 8;
+	setTopOfStack(8, false);
 }
 
 void OpcodeDispatcher::dispatchI32TruncF32S()
@@ -4858,8 +5043,8 @@ void OpcodeDispatcher::dispatchV128Load(WASM::MemArg arg)
 						offset + word * 8, SLJIT_R1, 0));
 			}
 		}
-		stackWidths_.resize(base + 1);
-		stackWidths_.back() = 16;
+		resizeStack(base + 1);
+		setTopOfStack(16, false);
 		return;
 	}
 	requireStack(1);
@@ -4895,7 +5080,7 @@ void OpcodeDispatcher::dispatchV128Store(WASM::MemArg arg)
 						word * 8, SLJIT_R1, 0));
 			}
 		}
-		stackWidths_.resize(base);
+		resizeStack(base);
 		return;
 	}
 	requireStack(2);
@@ -4926,7 +5111,7 @@ void OpcodeDispatcher::emitV128ExtractInteger(sljit_sw address, int resultWidth,
 		emitHelper(resultWidth == 8 ? SLJIT_ARGS2(W, P, 32) : SLJIT_ARGS2(32, P, 32), address);
 		storeSlot(SLJIT_R0, stackWidths_.size() - 1, resultWidth);
 	}
-	stackWidths_.back() = resultWidth;
+	setTopOfStack(resultWidth, false);
 }
 
 void OpcodeDispatcher::emitV128ReplaceInteger(sljit_sw address, int scalarWidth, uint8_t lane)
@@ -4999,7 +5184,7 @@ void OpcodeDispatcher::dispatchI32x4ExtractLane(uint8_t lane)
 		emitHelper(SLJIT_ARGS2(32, P, 32), &wasm_i32x4_extract_lane);
 		storeSlot(SLJIT_R0, stackWidths_.size() - 1, 4);
 	}
-	stackWidths_.back() = 4;
+	setTopOfStack(4, false);
 }
 
 void OpcodeDispatcher::dispatchI32x4ReplaceLane(uint8_t lane)
@@ -5045,7 +5230,7 @@ void OpcodeDispatcher::emitV128Reduce(sljit_sw address)
 		emitHelper(SLJIT_ARGS1(32, P), address);
 		storeSlot(SLJIT_R0, stackWidths_.size() - 1, 4);
 	}
-	stackWidths_.back() = 4;
+	setTopOfStack(4, false);
 }
 
 void OpcodeDispatcher::emitV128SplatFloat(sljit_sw address, int width)
@@ -5075,7 +5260,7 @@ void OpcodeDispatcher::emitV128ExtractFloat(sljit_sw address, int width, uint8_t
 		emitHelper(width == 4 ? SLJIT_ARGS2(F32, P, 32) : SLJIT_ARGS2(F64, P, 32), address);
 		storeFloatSlot(SLJIT_FR0, stackWidths_.size() - 1, width);
 	}
-	stackWidths_.back() = width;
+	setTopOfStack(width, false);
 }
 
 void OpcodeDispatcher::emitV128ReplaceFloat(sljit_sw address, int width, uint8_t lane)
@@ -5364,7 +5549,7 @@ void OpcodeDispatcher::dispatchV128AnyTrue()
 			sljit_set_label(taken, done);
 		storeSlot(SLJIT_R2, stackWidths_.size() - 1, 4);
 	}
-	stackWidths_.back() = 4;
+	setTopOfStack(4, false);
 }
 
 void OpcodeDispatcher::dispatchI8x16Shl() { emitV128Shift(codeAddress(&wasm_i8x16_shl)); }
@@ -5613,6 +5798,7 @@ void OpcodeDispatcher::dispatchRefNull(const WASM::HeapType&)
 	if (measureOnly_)
 		return;
 	storeSlot(SLJIT_IMM, stackWidths_.size() - 1, 8);
+	markTopReference();
 }
 
 void OpcodeDispatcher::dispatchRefIsNull()
@@ -5635,7 +5821,7 @@ void OpcodeDispatcher::dispatchRefIsNull()
 			sljit_set_label(taken, done);
 		storeSlot(SLJIT_R1, stackWidths_.size() - 1, 4);
 	}
-	stackWidths_.back() = 4;
+	setTopOfStack(4, false);
 }
 
 void OpcodeDispatcher::dispatchRefI31()
@@ -5651,7 +5837,9 @@ void OpcodeDispatcher::dispatchRefI31()
 				SLJIT_IMM, 1));
 		storeSlot(SLJIT_R0, stackWidths_.size() - 1, 8);
 	}
-	stackWidths_.back() = 8;
+	// An i31 is a tagged reference value: uncounted, but a reference, so a
+	// consumer must not treat it as a scalar.
+	setTopOfStack(8, true);
 }
 
 void OpcodeDispatcher::emitI31Get(bool signExtend)
@@ -5681,7 +5869,7 @@ void OpcodeDispatcher::emitI31Get(bool signExtend)
 		emit(sljit_emit_op2(compiler_, shift, SLJIT_R0, 0, SLJIT_R0, 0, SLJIT_IMM, 1));
 		storeSlot(SLJIT_R0, depth, 4);
 	}
-	stackWidths_.back() = 4;
+	setTopOfStack(4, false);
 }
 
 void OpcodeDispatcher::dispatchI31GetS() { emitI31Get(true); }
@@ -5957,6 +6145,7 @@ void OpcodeDispatcher::dispatchStructNewDefault(WASM::TypeIdx arg)
 	if (!measureOnly_) {
 		storeSlot(SLJIT_R0, stackWidths_.size() - 1, 8);
 		emitRetainStackObject(stackWidths_.size() - 1);
+		markTopReference();
 	}
 }
 
@@ -6006,6 +6195,7 @@ void OpcodeDispatcher::dispatchStructNew(WASM::TypeIdx arg)
 	if (!measureOnly_) {
 		storeSlot(SLJIT_R0, stackWidths_.size() - 1, 8);
 		emitRetainStackObject(stackWidths_.size() - 1);
+		markTopReference();
 	}
 }
 
@@ -6051,7 +6241,7 @@ void OpcodeDispatcher::dispatchStructNewDesc(WASM::TypeIdx arg)
 					SLJIT_MEM1(SLJIT_R0), static_cast<sljit_sw>(offset), SLJIT_R1, 0));
 		}
 	}
-	stackWidths_.resize(base);
+	resizeStack(base);
 	push(8);
 	if (!measureOnly_) {
 		storeSlot(SLJIT_R0, stackWidths_.size() - 1, 8);
@@ -6059,6 +6249,7 @@ void OpcodeDispatcher::dispatchStructNewDesc(WASM::TypeIdx arg)
 		// is released here (Custom Descriptors, ownership rule §6).
 		emitDropStackRef(descriptorDepth);
 		emitRetainStackObject(stackWidths_.size() - 1);
+		markTopReference();
 	}
 }
 
@@ -6110,6 +6301,7 @@ void OpcodeDispatcher::dispatchStructNewDefaultDesc(WASM::TypeIdx arg)
 				scratchSlotOffset()));
 		storeSlot(SLJIT_R0, stackWidths_.size() - 1, 8);
 		emitRetainStackObject(stackWidths_.size() - 1);
+		markTopReference();
 	}
 }
 
@@ -6190,7 +6382,7 @@ void OpcodeDispatcher::emitBrOnCastDescEq(uint8_t castop, WASM::LabelIdx depth, 
 		if (depth < controls_.size()
 				&& controls_[controls_.size() - 1 - depth].kind != ControlKind::Loop)
 			controls_[controls_.size() - 1 - depth].endTargeted = true;
-		stackWidths_.resize(descriptorDepth);
+		resizeStack(descriptorDepth);
 		return;
 	}
 	loadContext(SLJIT_R0);
@@ -6202,7 +6394,7 @@ void OpcodeDispatcher::emitBrOnCastDescEq(uint8_t castop, WASM::LabelIdx depth, 
 	emitPendingTrapCheck();
 	// The descriptor is consumed on both paths, so drop it from the model before
 	// the branch transfers the label window.
-	stackWidths_.resize(descriptorDepth);
+	resizeStack(descriptorDepth);
 	sljit_jump* fallthrough = sljit_emit_cmp(compiler_,
 			onFailure ? SLJIT_NOT_EQUAL : SLJIT_EQUAL, SLJIT_R0, 0, SLJIT_IMM, 0);
 	if (fallthrough == nullptr)
@@ -6375,9 +6567,23 @@ void OpcodeDispatcher::dispatchArraySet(WASM::TypeIdx arg)
 		emit(sljit_emit_op2(compiler_, SLJIT_ADD, SLJIT_R1, 0, SLJIT_R1, 0, SLJIT_R2, 0));
 		emit(sljit_emit_op2(compiler_, SLJIT_ADD, SLJIT_R1, 0, SLJIT_R1, 0, SLJIT_IMM,
 				static_cast<sljit_sw>(WASM::gcArrayDataOffset(element.storage))));
-		const sljit_s32 storeOp = packed ? (packedI8 ? SLJIT_MOV_U8 : SLJIT_MOV_U16)
-				: (width == 4 ? SLJIT_MOV32 : SLJIT_MOV);
-		emit(sljit_emit_op1(compiler_, storeOp, SLJIT_MEM1(SLJIT_R1), 0, SLJIT_R3, 0));
+		if (!packed && isReferenceKind(opcode)) {
+			// A reference element is store-owned, so the write barrier retains the
+			// new value and releases the one it held. Both operands were the operand
+			// stack's and give their counts back below, from their slots.
+			emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R2, 0, SLJIT_R3, 0));
+			loadContext(SLJIT_R0);
+			emitHelper(SLJIT_ARGS3V(P, P, P), &WASM::wasm_ref_store);
+			emitPendingTrapCheck();
+			emitDropStackRef(refDepth);
+			emitDropStackRef(valueDepth);
+		} else {
+			const sljit_s32 storeOp = packed ? (packedI8 ? SLJIT_MOV_U8 : SLJIT_MOV_U16)
+					: (width == 4 ? SLJIT_MOV32 : SLJIT_MOV);
+			emit(sljit_emit_op1(compiler_, storeOp, SLJIT_MEM1(SLJIT_R1), 0, SLJIT_R3, 0));
+			// The container operand was the operand stack's.
+			emitDropStackRef(refDepth);
+		}
 	}
 	pop();
 	pop();
@@ -6430,6 +6636,10 @@ void OpcodeDispatcher::dispatchArrayGet(WASM::TypeIdx arg)
 		loadSlot(SLJIT_R1, refDepth, 8);
 		loadSlot(SLJIT_R2, indexDepth, 4);
 
+		// The element value is about to overwrite the container's slot, which the
+		// operand stack owned: park the container, read the element, then release.
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+				scratchSlotOffset(), SLJIT_R1, 0));
 		emit(sljit_emit_op2(compiler_, SLJIT_MUL, SLJIT_R2, 0, SLJIT_R2, 0, SLJIT_IMM,
 				static_cast<sljit_sw>(WASM::gcStorageBytes(element.storage))));
 		emit(sljit_emit_op2(compiler_, SLJIT_ADD, SLJIT_R1, 0, SLJIT_R1, 0, SLJIT_R2, 0));
@@ -6437,11 +6647,23 @@ void OpcodeDispatcher::dispatchArrayGet(WASM::TypeIdx arg)
 				SLJIT_MEM1(SLJIT_R1),
 				static_cast<sljit_sw>(WASM::gcArrayDataOffset(element.storage))));
 		storeSlot(SLJIT_R2, refDepth, width);
+		loadContext(SLJIT_R0);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R1, 0, SLJIT_MEM1(SLJIT_SP),
+				scratchSlotOffset()));
+		emitHelper(SLJIT_ARGS2V(P, P), &WASM::wasm_ref_drop);
+		emitPendingTrapCheck();
+		// A reference element belongs to the array; the operand stack takes its own
+		// count so a later `drop` cannot release the element's.
+		if (width == 8 && isReferenceKind(opcode))
+			emitRetainProducedRef(refDepth);
 	}
 	pop();
 	pop();
 	push(width);
+	if (!measureOnly_ && width == 8 && isReferenceKind(opcode))
+		markTopReference();
 }
+
 
 void OpcodeDispatcher::dispatchArrayCopy(WASM::TypeIdx arg1, WASM::TypeIdx arg2)
 {
@@ -6712,6 +6934,10 @@ void OpcodeDispatcher::dispatchArrayNewData(WASM::TypeIdx arg1, uint32_t arg2)
 	pop();
 	push(8);
 	storeSlot(SLJIT_R0, stackWidths_.size() - 1, 8);
+	// A fresh array is unowned; the operand stack owns one count per
+	// reference it holds, so the push takes one (RC-5).
+	emitRetainStackObject(stackWidths_.size() - 1);
+	markTopReference();
 }
 
 void OpcodeDispatcher::dispatchArrayNewArray(WASM::TypeIdx dst, WASM::TypeIdx src)
@@ -6743,6 +6969,10 @@ void OpcodeDispatcher::dispatchArrayNewArray(WASM::TypeIdx dst, WASM::TypeIdx sr
 	for (int i = 0; i < 3; ++i)
 		pop();
 	push(8);
+	// A fresh array is unowned; the operand stack owns one count per
+	// reference it holds, so the push takes one (RC-5).
+	emitRetainStackObject(stackWidths_.size() - 1);
+	markTopReference();
 }
 
 void OpcodeDispatcher::dispatchArrayNewMemory(WASM::TypeIdx dst, WASM::MemIdx src)
@@ -6771,6 +7001,10 @@ void OpcodeDispatcher::dispatchArrayNewMemory(WASM::TypeIdx dst, WASM::MemIdx sr
 	emitPendingTrapCheck();
 	pop(); pop();
 	push(8);
+	// A fresh array is unowned; the operand stack owns one count per
+	// reference it holds, so the push takes one (RC-5).
+	emitRetainStackObject(stackWidths_.size() - 1);
+	markTopReference();
 }
 
 void OpcodeDispatcher::dispatchArrayNewTable(WASM::TypeIdx dst, WASM::TableIdx src)
@@ -6799,6 +7033,10 @@ void OpcodeDispatcher::dispatchArrayNewTable(WASM::TypeIdx dst, WASM::TableIdx s
 	emitPendingTrapCheck();
 	pop(); pop();
 	push(8);
+	// A fresh array is unowned; the operand stack owns one count per
+	// reference it holds, so the push takes one (RC-5).
+	emitRetainStackObject(stackWidths_.size() - 1);
+	markTopReference();
 }
 
 void OpcodeDispatcher::dispatchArrayNewElem(WASM::TypeIdx arg1, uint32_t arg2)
@@ -6832,6 +7070,10 @@ void OpcodeDispatcher::dispatchArrayNewElem(WASM::TypeIdx arg1, uint32_t arg2)
 	pop();
 	push(8);
 	storeSlot(SLJIT_R0, stackWidths_.size() - 1, 8);
+	// A fresh array is unowned; the operand stack owns one count per
+	// reference it holds, so the push takes one (RC-5).
+	emitRetainStackObject(stackWidths_.size() - 1);
+	markTopReference();
 }
 
 void OpcodeDispatcher::dispatchArrayInitData(WASM::TypeIdx arg1, uint32_t arg2)
@@ -6956,6 +7198,10 @@ void OpcodeDispatcher::dispatchArrayNewDefault(WASM::TypeIdx arg)
 	push(8);
 	if (!measureOnly_)
 		storeSlot(SLJIT_R0, stackWidths_.size() - 1, 8);
+	// A fresh array is unowned; the operand stack owns one count per
+	// reference it holds, so the push takes one (RC-5).
+	emitRetainStackObject(stackWidths_.size() - 1);
+	markTopReference();
 }
 
 void OpcodeDispatcher::dispatchArrayNewFixed(WASM::TypeIdx arg1, uint32_t arg2)
@@ -7002,6 +7248,10 @@ void OpcodeDispatcher::dispatchArrayNewFixed(WASM::TypeIdx arg1, uint32_t arg2)
 	push(8);
 	if (!measureOnly_)
 		storeSlot(SLJIT_R0, stackWidths_.size() - 1, 8);
+	// A fresh array is unowned; the operand stack owns one count per
+	// reference it holds, so the push takes one (RC-5).
+	emitRetainStackObject(stackWidths_.size() - 1);
+	markTopReference();
 }
 
 void OpcodeDispatcher::dispatchArrayNew(WASM::TypeIdx arg)
@@ -7065,6 +7315,9 @@ void OpcodeDispatcher::dispatchArrayNew(WASM::TypeIdx arg)
 	push(8);
 	if (!measureOnly_)
 		storeSlot(SLJIT_R0, stackWidths_.size() - 1, 8);
+	// A fresh array is unowned; the operand stack owns one count (RC-5).
+	emitRetainStackObject(stackWidths_.size() - 1);
+	markTopReference();
 }
 
 void OpcodeDispatcher::dispatchArrayLen()
@@ -7088,7 +7341,7 @@ void OpcodeDispatcher::dispatchArrayLen()
 				static_cast<sljit_sw>(WASM::GcHeader::kArrayLengthOffset)));
 		storeSlot(SLJIT_R2, stackWidths_.size() - 1, 4);
 	}
-	stackWidths_.back() = 4;
+	setTopOfStack(4, false);
 }
 
 void OpcodeDispatcher::dispatchStructGetS(WASM::TypeIdx arg1, uint32_t arg2)
@@ -7132,7 +7385,7 @@ void OpcodeDispatcher::emitStructGetPacked(WASM::TypeIdx arg1, uint32_t arg2, bo
 				static_cast<sljit_sw>(WASM::gcStructFieldOffset(fields, arg2))));
 		storeSlot(SLJIT_R2, stackWidths_.size() - 1, 4);
 	}
-	stackWidths_.back() = 4;
+	setTopOfStack(4, false);
 }
 
 void OpcodeDispatcher::dispatchStructSet(WASM::TypeIdx arg1, uint32_t arg2)
@@ -7164,13 +7417,30 @@ void OpcodeDispatcher::dispatchStructSet(WASM::TypeIdx arg1, uint32_t arg2)
 			ok_ = false;
 		else if (notNull != nullptr)
 			sljit_set_label(notNull, done);
-		loadSlot(SLJIT_R2, stackWidths_.size() - 1, width);
-		const sljit_s32 storeOp = packed ? (packedI8 ? SLJIT_MOV_U8 : SLJIT_MOV_U16)
-				: (width == 4 ? SLJIT_MOV32 : SLJIT_MOV);
-		emit(sljit_emit_op1(compiler_, storeOp,
-				SLJIT_MEM1(SLJIT_R1),
-				static_cast<sljit_sw>(WASM::gcStructFieldOffset(fields, arg2)),
-				SLJIT_R2, 0));
+		const sljit_sw fieldOffset = static_cast<sljit_sw>(WASM::gcStructFieldOffset(fields, arg2));
+		if (!packed && isReferenceKind(opcode)) {
+			// A reference field is store-owned: the write barrier retains the new
+			// value for the field and releases the one it held. The operand stack
+			// then gives up the counts it held for *both* operands -- the container
+			// and the value -- which is safe to do from the slots after the store.
+			loadSlot(SLJIT_R2, stackWidths_.size() - 1, 8);
+			emit(sljit_emit_op2(compiler_, SLJIT_ADD, SLJIT_R1, 0, SLJIT_R1, 0,
+					SLJIT_IMM, fieldOffset));
+			loadContext(SLJIT_R0);
+			emitHelper(SLJIT_ARGS3V(P, P, P), &WASM::wasm_ref_store);
+			emitPendingTrapCheck();
+			emitDropStackRef(stackWidths_.size() - 2);
+			emitDropStackRef(stackWidths_.size() - 1);
+		} else {
+			loadSlot(SLJIT_R2, stackWidths_.size() - 1, width);
+			const sljit_s32 storeOp = packed ? (packedI8 ? SLJIT_MOV_U8 : SLJIT_MOV_U16)
+					: (width == 4 ? SLJIT_MOV32 : SLJIT_MOV);
+			emit(sljit_emit_op1(compiler_, storeOp,
+					SLJIT_MEM1(SLJIT_R1), fieldOffset, SLJIT_R2, 0));
+			// The container operand was the operand stack's; a scalar field holds
+			// no reference, so that is the only count to give back.
+			emitDropStackRef(stackWidths_.size() - 2);
+		}
 	}
 	pop();
 	pop();
@@ -7209,13 +7479,28 @@ void OpcodeDispatcher::dispatchStructGet(WASM::TypeIdx arg1, uint32_t arg2)
 			ok_ = false;
 		else if (notNull != nullptr)
 			sljit_set_label(notNull, done);
+		// The container operand is about to be overwritten by the field value, so
+		// park it: the operand stack owned one count of it and gives it back below.
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+				scratchSlotOffset(), SLJIT_R1, 0));
 		emit(sljit_emit_op1(compiler_, width == 4 ? SLJIT_MOV32 : SLJIT_MOV,
 				SLJIT_R2, 0, SLJIT_MEM1(SLJIT_R1),
 				static_cast<sljit_sw>(WASM::gcStructFieldOffset(fields, arg2))));
 		storeSlot(SLJIT_R2, stackWidths_.size() - 1, width);
+		loadContext(SLJIT_R0);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R1, 0, SLJIT_MEM1(SLJIT_SP),
+				scratchSlotOffset()));
+		emitHelper(SLJIT_ARGS2V(P, P), &WASM::wasm_ref_drop);
+		emitPendingTrapCheck();
+		// A reference read out of the field belongs to the field; the operand stack
+		// takes its own count, or a later `drop` would release the field's and leave
+		// the struct pointing at an already-reclaimed object.
+		if (width == 8 && isReferenceKind(opcode))
+			emitRetainProducedRef(stackWidths_.size() - 1);
 	}
-	stackWidths_.back() = width;
+	setTopOfStack(width, width == 8 && isReferenceKind(opcode));
 }
+
 
 void OpcodeDispatcher::dispatchTableGet(WASM::TableIdx arg)
 {
@@ -7233,8 +7518,10 @@ void OpcodeDispatcher::dispatchTableGet(WASM::TableIdx arg)
 		emitHelper(SLJIT_ARGS3(P, P, 32, W), &WASM::wasm_table_get);
 		storeSlot(SLJIT_R0, depth, 8);
 		emitPendingTrapCheck();
+		// The entry is store-owned; the operand stack takes its own count.
+		emitRetainProducedRef(depth);
 	}
-	stackWidths_.back() = 8;
+	setTopOfStack(8, true);
 }
 
 void OpcodeDispatcher::dispatchTableSet(WASM::TableIdx arg)
@@ -7255,7 +7542,7 @@ void OpcodeDispatcher::dispatchTableSet(WASM::TableIdx arg)
 		emitHelper(SLJIT_ARGS4V(P, 32, W, P), &WASM::wasm_table_set);
 		emitPendingTrapCheck();
 	}
-	stackWidths_.resize(stackWidths_.size() - 2);
+	resizeStack(stackWidths_.size() - 2);
 }
 
 void OpcodeDispatcher::dispatchTableAtomicGet(uint8_t ordering, WASM::TableIdx arg)
@@ -7276,8 +7563,9 @@ void OpcodeDispatcher::dispatchTableAtomicGet(uint8_t ordering, WASM::TableIdx a
 		emitHelper(SLJIT_ARGS4(P, P, 32, W, 32), &WASM::wasm_atomic_table_get);
 		storeSlot(SLJIT_R0, depth, 8);
 		emitPendingTrapCheck();
+		emitRetainProducedRef(depth);
 	}
-	stackWidths_.back() = 8;
+	setTopOfStack(8, true);
 }
 
 void OpcodeDispatcher::dispatchTableAtomicSet(uint8_t ordering, WASM::TableIdx arg)
@@ -7299,7 +7587,7 @@ void OpcodeDispatcher::dispatchTableAtomicSet(uint8_t ordering, WASM::TableIdx a
 		emitHelper(SLJIT_ARGS4V(P, W, W, P), &sljitAtomicTableSet);
 		emitPendingTrapCheck();
 	}
-	stackWidths_.resize(indexDepth);
+	resizeStack(indexDepth);
 }
 
 void OpcodeDispatcher::dispatchTableAtomicRmwXchg(uint8_t ordering, WASM::TableIdx arg)
@@ -7322,8 +7610,8 @@ void OpcodeDispatcher::dispatchTableAtomicRmwXchg(uint8_t ordering, WASM::TableI
 		storeSlot(SLJIT_R0, indexDepth, 8);
 		emitPendingTrapCheck();
 	}
-	stackWidths_.resize(indexDepth + 1);
-	stackWidths_.back() = 8;
+	resizeStack(indexDepth + 1);
+	setTopOfStack(8, true);
 }
 
 void OpcodeDispatcher::dispatchTableAtomicRmwCmpxchg(uint8_t ordering, WASM::TableIdx arg)
@@ -7354,8 +7642,8 @@ void OpcodeDispatcher::dispatchTableAtomicRmwCmpxchg(uint8_t ordering, WASM::Tab
 		storeSlot(SLJIT_R0, indexDepth, 8);
 		emitPendingTrapCheck();
 	}
-	stackWidths_.resize(indexDepth + 1);
-	stackWidths_.back() = 8;
+	resizeStack(indexDepth + 1);
+	setTopOfStack(8, true);
 }
 
 void OpcodeDispatcher::dispatchRefFunc(WASM::FuncIdx arg)
@@ -7372,6 +7660,7 @@ void OpcodeDispatcher::dispatchRefFunc(WASM::FuncIdx arg)
 			static_cast<sljit_sw>(arg)));
 	emitHelper(SLJIT_ARGS2(P, P, 32), &ModuleCompiler::resolveCallable);
 	storeSlot(SLJIT_R0, stackWidths_.size() - 1, 8);
+	markTopReference();
 }
 
 void OpcodeDispatcher::emitRefCast(const WASM::HeapType& arg, bool nullable)
@@ -7466,7 +7755,7 @@ void OpcodeDispatcher::emitRefTest(const WASM::HeapType& arg, bool nullable)
 		emitHelper(SLJIT_ARGS4(32, P, P, W, 32), &sljitRefMatchesHeapType);
 		storeSlot(SLJIT_R0, stackWidths_.size() - 1, 4);
 	}
-	stackWidths_.back() = 4;
+	setTopOfStack(4, false);
 }
 
 void OpcodeDispatcher::dispatchRefTest(const WASM::HeapType& arg)
@@ -7618,7 +7907,7 @@ void OpcodeDispatcher::dispatchI32Popcnt()
 	loadSlot(SLJIT_R0, stackWidths_.size() - 1, 4);
 	emitHelper(SLJIT_ARGS1(32, 32), &sljitI32Popcnt);
 	storeSlot(SLJIT_R0, stackWidths_.size() - 1, 4);
-	stackWidths_.back() = 4;
+	setTopOfStack(4, false);
 }
 
 void OpcodeDispatcher::dispatchI32DivS() { emitCheckedBinary(codeAddress(&sljitI32DivS), 4, "i32.div_s"); }
@@ -7649,12 +7938,12 @@ void OpcodeDispatcher::dispatchI32WrapI64()
 	if (measureOnly_) {
 		// The result is an i32 even though the operand is i64. A following
 		// br_table rejects anything else as a non-i32 selector.
-		stackWidths_.back() = 4;
+		setTopOfStack(4, false);
 		return;
 	}
 	loadSlot(SLJIT_R0, stackWidths_.size() - 1, 4);
 	storeSlot(SLJIT_R0, stackWidths_.size() - 1, 4);
-	stackWidths_.back() = 4;
+	setTopOfStack(4, false);
 }
 
 namespace {
@@ -7866,7 +8155,7 @@ void OpcodeDispatcher::dispatchI64Popcnt()
 	loadSlot(SLJIT_R0, stackWidths_.size() - 1, 8);
 	emitHelper(SLJIT_ARGS1(W, W), &sljitI64Popcnt);
 	storeSlot(SLJIT_R0, stackWidths_.size() - 1, 8);
-	stackWidths_.back() = 8;
+	setTopOfStack(8, false);
 }
 
 void OpcodeDispatcher::dispatchI64Eqz() { emitEqz(8); }
@@ -7895,7 +8184,7 @@ void OpcodeDispatcher::dispatchI64ExtendI32S()
 	loadSlot(SLJIT_R0, stackWidths_.size() - 1, 4);
 	emit(sljit_emit_op1(compiler_, SLJIT_MOV_S32, SLJIT_R0, 0, SLJIT_R0, 0));
 	storeSlot(SLJIT_R0, stackWidths_.size() - 1, 8);
-	stackWidths_.back() = 8;
+	setTopOfStack(8, false);
 }
 
 void OpcodeDispatcher::dispatchI64ExtendI32U()
@@ -7907,7 +8196,7 @@ void OpcodeDispatcher::dispatchI64ExtendI32U()
 		return;
 	loadSlot(SLJIT_R0, stackWidths_.size() - 1, 4);
 	storeSlot(SLJIT_R0, stackWidths_.size() - 1, 8);
-	stackWidths_.back() = 8;
+	setTopOfStack(8, false);
 }
 
 const WASM::GlobalType& OpcodeDispatcher::requireGlobalIndex(WASM::GlobalIdx index)
@@ -7963,6 +8252,8 @@ void OpcodeDispatcher::dispatchGlobalGet(WASM::GlobalIdx arg)
 		emitHelper(SLJIT_ARGS2(P, P, P), &WASM::wasm_ref_clone);
 		storeSlot(SLJIT_R0, depth, 8);
 		emitPendingTrapCheck();
+		// The global cell keeps its own count; the clone is the stack's.
+		markTopReference();
 	}
 }
 
@@ -8127,8 +8418,8 @@ void OpcodeDispatcher::emitMemoryLoad(const WASM::MemArg& arg, std::uint32_t wid
 			emit(sljit_emit_op1(compiler_, loadOp, SLJIT_R1, 0, SLJIT_MEM1(SLJIT_R0), 0));
 			storeSlot(SLJIT_R1, base, resultWidth);
 		}
-		stackWidths_.resize(base + 1);
-		stackWidths_.back() = resultWidth;
+		resizeStack(base + 1);
+		setTopOfStack(resultWidth, false);
 		return;
 	}
 	requireStack(1);
@@ -8137,7 +8428,7 @@ void OpcodeDispatcher::emitMemoryLoad(const WASM::MemArg& arg, std::uint32_t wid
 		emit(sljit_emit_op1(compiler_, loadOp, SLJIT_R1, 0, SLJIT_MEM1(SLJIT_R0), 0));
 		storeSlot(SLJIT_R1, stackWidths_.size() - 1, resultWidth);
 	}
-	stackWidths_.back() = resultWidth;
+	setTopOfStack(resultWidth, false);
 }
 
 void OpcodeDispatcher::emitMemoryStore(const WASM::MemArg& arg, std::uint32_t width,
@@ -8153,7 +8444,7 @@ void OpcodeDispatcher::emitMemoryStore(const WASM::MemArg& arg, std::uint32_t wi
 			loadSlot(SLJIT_R1, base + 2, static_cast<int>(width));
 			emit(sljit_emit_op1(compiler_, storeOp, SLJIT_MEM1(SLJIT_R0), 0, SLJIT_R1, 0));
 		}
-		stackWidths_.resize(base);
+		resizeStack(base);
 		return;
 	}
 	requireStack(2);
@@ -8184,7 +8475,7 @@ void OpcodeDispatcher::emitAtomicLoad(const WASM::MemArg& arg, std::uint32_t wid
 		emitPendingTrapCheck();
 		storeSlot(SLJIT_R0, depth, resultWidth);
 	}
-	stackWidths_.back() = resultWidth;
+	setTopOfStack(resultWidth, false);
 }
 
 void OpcodeDispatcher::emitAtomicStore(const WASM::MemArg& arg, std::uint32_t width,
@@ -8851,7 +9142,7 @@ void OpcodeDispatcher::dispatchStructAtomicGet(uint8_t ordering, WASM::TypeIdx a
 		emitStructAtomicAddress(refDepth, offset);
 		emitSharedAtomicLoad(ordering, width, resultWidth, refDepth, 0);
 	}
-	stackWidths_.back() = resultWidth;
+	setTopOfStack(resultWidth, false);
 }
 
 void OpcodeDispatcher::dispatchStructAtomicGetS(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2)
@@ -8877,7 +9168,7 @@ void OpcodeDispatcher::dispatchStructAtomicGetS(uint8_t ordering, WASM::TypeIdx 
 		emitStructAtomicAddress(refDepth, offset);
 		emitSharedAtomicLoad(ordering, width, resultWidth, refDepth, width * 8);
 	}
-	stackWidths_.back() = resultWidth;
+	setTopOfStack(resultWidth, false);
 }
 
 void OpcodeDispatcher::dispatchStructAtomicGetU(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2)
@@ -8903,7 +9194,7 @@ void OpcodeDispatcher::dispatchStructAtomicGetU(uint8_t ordering, WASM::TypeIdx 
 		emitStructAtomicAddress(refDepth, offset);
 		emitSharedAtomicLoad(ordering, width, resultWidth, refDepth, 0);
 	}
-	stackWidths_.back() = resultWidth;
+	setTopOfStack(resultWidth, false);
 }
 
 void OpcodeDispatcher::dispatchStructAtomicSet(uint8_t ordering, WASM::TypeIdx arg1, uint32_t arg2)
@@ -9174,7 +9465,7 @@ void OpcodeDispatcher::dispatchArrayAtomicGet(uint8_t ordering, WASM::TypeIdx ar
 		emitArrayAtomicAddress(refDepth, indexDepth, lengthOffset, dataOffset, elementBytes);
 		emitSharedAtomicLoad(ordering, width, resultWidth, refDepth, 0);
 	}
-	stackWidths_.resize(refDepth);
+	resizeStack(refDepth);
 	push(resultWidth);
 }
 
@@ -9204,7 +9495,7 @@ void OpcodeDispatcher::dispatchArrayAtomicGetS(uint8_t ordering, WASM::TypeIdx a
 		emitArrayAtomicAddress(refDepth, indexDepth, lengthOffset, dataOffset, elementBytes);
 		emitSharedAtomicLoad(ordering, width, resultWidth, refDepth, width * 8);
 	}
-	stackWidths_.resize(refDepth);
+	resizeStack(refDepth);
 	push(resultWidth);
 }
 
@@ -9234,7 +9525,7 @@ void OpcodeDispatcher::dispatchArrayAtomicGetU(uint8_t ordering, WASM::TypeIdx a
 		emitArrayAtomicAddress(refDepth, indexDepth, lengthOffset, dataOffset, elementBytes);
 		emitSharedAtomicLoad(ordering, width, resultWidth, refDepth, 0);
 	}
-	stackWidths_.resize(refDepth);
+	resizeStack(refDepth);
 	push(resultWidth);
 }
 
@@ -9629,7 +9920,7 @@ void OpcodeDispatcher::dispatchMemoryCopy(WASM::MemIdx arg1, WASM::MemIdx arg2)
 		}
 		emitPendingTrapCheck();
 	}
-	stackWidths_.resize(base);
+	resizeStack(base);
 }
 
 void OpcodeDispatcher::dispatchMemoryFill(WASM::MemIdx arg)
@@ -9654,7 +9945,7 @@ void OpcodeDispatcher::dispatchMemoryFill(WASM::MemIdx arg)
 			emitHelper(SLJIT_ARGS4V(P, W, 32, 32), &sljitMemoryFill);
 		emitPendingTrapCheck();
 	}
-	stackWidths_.resize(base);
+	resizeStack(base);
 }
 
 void OpcodeDispatcher::dispatchMemoryInit(uint32_t arg1, WASM::MemIdx arg2)
@@ -9688,7 +9979,7 @@ void OpcodeDispatcher::dispatchMemoryInit(uint32_t arg1, WASM::MemIdx arg2)
 		}
 		emitPendingTrapCheck();
 	}
-	stackWidths_.resize(base);
+	resizeStack(base);
 }
 
 void OpcodeDispatcher::dispatchDataDrop(uint32_t arg)
@@ -9741,7 +10032,7 @@ void OpcodeDispatcher::dispatchTableFill(WASM::TableIdx arg)
 		emitHelper(SLJIT_ARGS3V(P, 32, P), &WASM::wasm_table_fill_args);
 		emitPendingTrapCheck();
 	}
-	stackWidths_.resize(base);
+	resizeStack(base);
 }
 
 void OpcodeDispatcher::dispatchTableInit(uint32_t arg1, WASM::TableIdx arg2)
@@ -9768,7 +10059,7 @@ void OpcodeDispatcher::dispatchTableInit(uint32_t arg1, WASM::TableIdx arg2)
 		emitHelper(SLJIT_ARGS4V(P, W, W, 32), &sljitTableInit);
 		emitPendingTrapCheck();
 	}
-	stackWidths_.resize(stackWidths_.size() - 3);
+	resizeStack(stackWidths_.size() - 3);
 }
 
 void OpcodeDispatcher::dispatchElemDrop(uint32_t arg)
@@ -9808,7 +10099,7 @@ void OpcodeDispatcher::dispatchTableCopy(WASM::TableIdx arg1, WASM::TableIdx arg
 		emitHelper(SLJIT_ARGS4V(P, W, W, 32), &sljitTableCopy);
 		emitPendingTrapCheck();
 	}
-	stackWidths_.resize(stackWidths_.size() - 3);
+	resizeStack(stackWidths_.size() - 3);
 }
 
 void OpcodeDispatcher::dispatchTableGrow(WASM::TableIdx arg)
@@ -10807,7 +11098,7 @@ void OpcodeDispatcher::dispatchResumeThrow(WASM::TypeIdx type, WASM::TagIdx tag,
 		// Move the continuation operand down over the payload slots.
 		loadSlot(SLJIT_R1, base + payloadCount, 8);
 		storeSlot(SLJIT_R1, base, 8);
-		stackWidths_.resize(base + 1);
+		resizeStack(base + 1);
 	} else {
 		for (std::size_t i = 0; i < payloadCount; ++i)
 			pop();
@@ -10841,7 +11132,7 @@ void OpcodeDispatcher::dispatchResumeThrowRef(WASM::TypeIdx type,
 				exceptionPtrSlotOffset(), SLJIT_R1, 0));
 		loadSlot(SLJIT_R1, base + 1, 8);
 		storeSlot(SLJIT_R1, base, 8);
-		stackWidths_.resize(base + 1);
+		resizeStack(base + 1);
 	} else {
 		pop();
 	}
@@ -10867,7 +11158,7 @@ void OpcodeDispatcher::dispatchResume(WASM::TypeIdx type,
 		for (const WASM::ContHandlerClause& handler : handlers) {
 			if (handler.isSwitch)
 				continue;
-			stackWidths_.resize(base);
+			resizeStack(base);
 			const WASM::FuncType tagType = tagPayloadType(handler.tag);
 			for (const WASM::StorageType& parameter : tagType.params)
 				push(widthOf(parameter.val));
@@ -10878,7 +11169,7 @@ void OpcodeDispatcher::dispatchResume(WASM::TypeIdx type,
 					target.endTargeted = true;
 			}
 		}
-		stackWidths_.resize(base);
+		resizeStack(base);
 		for (const WASM::StorageType& result : function.results)
 			push(widthOf(result.val));
 		return;
@@ -10942,7 +11233,7 @@ void OpcodeDispatcher::dispatchResume(WASM::TypeIdx type,
 		ok_ = false;
 	else if (toCompleted != nullptr)
 		sljit_set_label(toCompleted, completed);
-	stackWidths_.resize(outBase);
+	resizeStack(outBase);
 	for (std::size_t i = 0; i < resultCount; ++i)
 		push(widthOf(function.results[i].val));
 	for (std::size_t i = 0; i < resultCount; ++i) {
@@ -10998,7 +11289,7 @@ void OpcodeDispatcher::dispatchResume(WASM::TypeIdx type,
 		if (handlerJumps[i] != nullptr)
 			sljit_set_label(handlerJumps[i], handlerLabel);
 		reachable_ = true;
-		stackWidths_.resize(outBase);
+		resizeStack(outBase);
 		continuationFrameAddress(SLJIT_R3);
 		const WASM::FuncType tagType = tagPayloadType(handlers[i].tag);
 		for (std::size_t j = 0; j < tagType.params.size(); ++j)

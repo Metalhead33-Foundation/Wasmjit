@@ -1506,11 +1506,18 @@ public:
 			localWidths.push_back(slotWidthOf(local.opcode));
 			localKinds.push_back(local.opcode);
 		}
+		parameterCount = stack.parameterCount;
+		// A reference parameter is the caller's borrow, so the slot takes its own
+		// count now. This sits before the body label below, outside the loop a
+		// direct self tail call jumps to: that path moves the argument counts
+		// into the parameter slots itself (they travel in the operand stack, so
+		// their counts cross over rather than being retained twice).
+		emitReferenceParameterRetains();
 		// The body-entry label is the loop target of a direct self tail call; the
-		// prologue above (context, trap slot, locals) has already run for this frame.
+		// prologue above (context, trap slot, locals, parameter retains) has
+		// already run for this frame.
 		bodyStart = compiler.new_label();
 		checkError(compiler.bind(bodyStart), "AsmJit body-start label binding failed");
-		parameterCount = stack.parameterCount;
 		resultCount = static_cast<uint32_t>(type.results.size());
 		resultTypes.reserve(type.results.size());
 		for (const auto& result : type.results)
@@ -1533,6 +1540,9 @@ public:
 			// placeholders the dead structured blocks synthesized; there is no
 			// live path to observe them. Drop them and emit the void return.
 			values.clear();
+			// The implicit end is a return too, so every reference local gives
+			// its count back here exactly as an explicit `return` does.
+			emitDropReferenceLocals();
 			checkError(compiler.ret(), "AsmJit void function return emission failed");
 		} else {
 			const std::size_t expectedResults = frameMode ? resultCount : 1u;
@@ -1546,6 +1556,10 @@ public:
 						values.end() - static_cast<std::ptrdiff_t>(expectedResults));
 			if (values.size() != expectedResults)
 				throw std::runtime_error("AsmJit function ended with the wrong number of results");
+			// The implicit end releases every reference local's count here, then
+			// hands the operand stack's own count to the caller through the
+			// result, exactly as an explicit `return` does.
+			emitDropReferenceLocals();
 			if (frameMode && resultCount > 1) {
 				// Multi-result (docs/backends/EXPORT_SIGNATURE.md section 29): every
 				// result goes into the frame in declaration order, 8 bytes per scalar
@@ -1634,8 +1648,11 @@ protected:
 		asmjit::x86::Gp copy = locals[i].size() == 8
 				? compiler.new_gp64("localCopy") : compiler.new_gp32("localCopy");
 		checkError(compiler.mov(copy, locals[i]), "AsmJit local.get emission failed");
-		if (isReferenceKind(localKinds[i]))
+		if (isReferenceKind(localKinds[i])) {
+			// The slot keeps its own count; the clone is the operand stack's.
 			copy = emitRefClone(copy);
+			markReference(copy);
+		}
 		values.push_back(copy);
 	}
 
@@ -1652,6 +1669,14 @@ protected:
 			copyVector(locals[i], value);
 			return;
 		}
+		if (isReferenceKind(localKinds[i])) {
+			// The slot owns one count and the stack one: the barrier retains for
+			// the slot, and `set` consumes the stack's value, so its count goes.
+			referenceValues.erase(value.id());
+			emitLocalRefStore(i, value);
+			emitRefDrop(value);
+			return;
+		}
 		checkError(compiler.mov(locals[i], value), "AsmJit local.set emission failed");
 	}
 
@@ -1664,6 +1689,13 @@ protected:
 			throw std::runtime_error("AsmJit local.tee stack/index underflow");
 		if (localWidths[i] == 16) {
 			copyVector(locals[i], values.back());
+			return;
+		}
+		if (isReferenceKind(localKinds[i])) {
+			// A `tee` leaves the value on the stack, so the slot and the stack each
+			// own a count: the barrier retains for the slot and the stack keeps the
+			// one it already holds -- the value itself must not be released.
+			emitLocalRefStore(i, values.back());
 			return;
 		}
 		asmjit::x86::Gp copy = locals[i].size() == 8
@@ -1694,6 +1726,50 @@ protected:
 	{
 		values.push_back(value);
 		stringValues.insert(value.id());
+		referenceValues.insert(value.id());
+	}
+
+	//! Marks a value that was just pushed as owning one reference count.
+	void markReference(const asmjit::x86::Gp& value)
+	{
+		referenceValues.insert(value.id());
+	}
+
+	//! Reports whether a value owns a reference count.
+	bool isReferenceValue(const asmjit::x86::Gp& value) const
+	{
+		return referenceValues.count(value.id()) != 0;
+	}
+
+	//! Emits the reference write barrier for a local: retain the incoming value
+	//! for the slot, store it, release the value the slot held.
+	void emitLocalRefStore(std::size_t index, const asmjit::x86::Gp& value)
+	{
+		// The old value is copied into a fresh register first: writing the local
+		// overwrites its virtual register, so a handle to it would read the new
+		// value afterwards.
+		const asmjit::x86::Gp old = compiler.new_gp64("localOldRef");
+		checkError(compiler.mov(old, locals[index]),
+				"AsmJit local reference barrier old-value copy failed");
+		const asmjit::x86::Gp kept = emitRefClone(value);
+		checkError(compiler.mov(locals[index], kept),
+				"AsmJit local reference barrier store failed");
+		emitRefDrop(old);
+	}
+
+	//! Retains every reference parameter into its own local slot, so the local
+	//! ownership rules hold for every instruction -- including one that
+	//! re-executes in a loop -- without per-instruction bookkeeping.
+	void emitReferenceParameterRetains()
+	{
+		const std::size_t count = std::min<std::size_t>(parameterCount, localKinds.size());
+		for (std::size_t i = 0; i < count; ++i) {
+			if (!isReferenceKind(localKinds[i]) || localWidths[i] != 8)
+				continue;
+			const asmjit::x86::Gp kept = emitRefClone(locals[i]);
+			checkError(compiler.mov(locals[i], kept),
+					"AsmJit reference parameter retain failed");
+		}
 	}
 
 	asmjit::x86::Gp emitRefClone(const asmjit::x86::Gp& value)
@@ -1728,6 +1804,27 @@ protected:
 		emitPendingTrapReturn();
 	}
 
+	//! Emits the reference write barrier for a store-owned slot that lives in
+	//! memory (a struct field, an array element).
+	//! \param address Address of the slot being written.
+	//! \param value New reference value.
+	void emitRefStore(const asmjit::x86::Gp& address, const asmjit::x86::Gp& value)
+	{
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kVoid);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke),
+				reinterpret_cast<uint64_t>(&WASM::wasm_ref_store), signature),
+				"AsmJit reference store barrier call failed");
+		invoke->set_arg(0, vmContext);
+		invoke->set_arg(1, address);
+		invoke->set_arg(2, value);
+		emitPendingTrapReturn();
+	}
+
 	void dispatchDrop() override
 	{
 		// Polymorphic dead code after a terminator has no operand stack to
@@ -1736,32 +1833,16 @@ protected:
 			return;
 		if (values.empty())
 			throw std::runtime_error("AsmJit drop operand stack underflow");
-		const bool stringRef = stringValues.erase(values.back().id()) != 0;
 		auto dropped = values.back();
 		values.pop_back();
-		if (!stringRef) {
-			asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
-			signature.set_ret(asmjit::TypeId::kVoid);
-			signature.add_arg(asmjit::TypeId::kUIntPtr);
-			asmjit::InvokeNode* invoke = nullptr;
-			checkError(compiler.invoke(asmjit::Out(invoke),
-					reinterpret_cast<uint64_t>(&WASM::wasm_cont_drop_known), signature),
-					"AsmJit continuation drop helper call failed");
-			invoke->set_arg(0, dropped);
-			emitPendingTrapReturn();
+		const bool reference = referenceValues.erase(dropped.id()) != 0;
+		stringValues.erase(dropped.id());
+		// Discarding a reference releases the operand stack's ownership of it; a
+		// scalar has no count to give back.
+		if (reference) {
+			emitRefDrop(dropped);
 			return;
 		}
-		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
-		signature.set_ret(asmjit::TypeId::kVoid);
-		signature.add_arg(asmjit::TypeId::kUIntPtr);
-		signature.add_arg(asmjit::TypeId::kUIntPtr);
-		asmjit::InvokeNode* invoke = nullptr;
-		checkError(compiler.invoke(asmjit::Out(invoke),
-				reinterpret_cast<uint64_t>(&::wasm_string_release), signature),
-				"AsmJit string drop helper call failed");
-		invoke->set_arg(0, vmContext);
-		invoke->set_arg(1, dropped);
-		emitPendingTrapReturn();
 	}
 
 	void dispatchBlock(const WASM::BlockType& type) override
@@ -2432,6 +2513,11 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 		checkError(compiler.jnz(callerContext), "AsmJit indirect context branch failed");
 		checkError(compiler.mov(calleeContext, vmContext), "AsmJit native indirect context selection failed");
 		checkError(compiler.bind(callerContext), "AsmJit indirect context label binding failed");
+		// A parameter is the caller's borrow: the counts the operand stack holds
+		// must survive the invoke, so each reference argument is parked in its
+		// own stack slot first and released from there afterwards.
+		const std::vector<asmjit::x86::Mem> keptArguments =
+				spillCallReferenceArguments(calledType, resolved.arguments);
 		if (frameMode) {
 			uint32_t argBytes = 0;
 			for (const WASM::StorageType& parameter : calledType.params)
@@ -2486,12 +2572,17 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 					checkError(compiler.mov(result,
 							asmjit::x86::Mem(frameAddress, resultOffset, result.size())),
 							"AsmJit indirect frame result load failed");
+					// A reference result arrives owning one count (the callee hands
+					// over the count its operand stack held).
+					if (isReferenceKind(resultType.val.opcode))
+						markReference(result);
 					values.push_back(result);
 					resultOffset += 8;
 				}
 			}
 			emitPendingTrapReturn();
 			emitPendingExceptionCheck();
+			dropCallReferenceArguments(keptArguments);
 			return;
 		}
 
@@ -2504,6 +2595,7 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 		emitCallResult(invoke, calledType, "indirectCallResult");
 		emitPendingTrapReturn();
 		emitPendingExceptionCheck();
+		dropCallReferenceArguments(keptArguments);
 	}
 
 	//! Traps when a function reference is null, continuing on the non-null path.
@@ -2540,6 +2632,11 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 		checkError(compiler.jnz(callerContext), "AsmJit call_ref context branch failed");
 		checkError(compiler.mov(calleeContext, vmContext), "AsmJit call_ref native context selection failed");
 		checkError(compiler.bind(callerContext), "AsmJit call_ref context label binding failed");
+		// A parameter is the caller's borrow: the counts the operand stack holds
+		// must survive the invoke, so each reference argument is parked in its
+		// own stack slot first and released from there afterwards.
+		const std::vector<asmjit::x86::Mem> keptArguments =
+				spillCallReferenceArguments(calledType, arguments);
 		if (frameMode) {
 			// Staging-frame ABI: pack the arguments, invoke (ctx, frame), read the
 			// result block back into the value stack.
@@ -2596,12 +2693,17 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 					checkError(compiler.mov(result,
 							asmjit::x86::Mem(frameAddress, resultOffset, result.size())),
 							"AsmJit call_ref frame result load failed");
+					// A reference result arrives owning one count (the callee hands
+					// over the count its operand stack held).
+					if (isReferenceKind(resultType.val.opcode))
+						markReference(result);
 					values.push_back(result);
 					resultOffset += 8;
 				}
 			}
 			emitPendingTrapReturn();
 			emitPendingExceptionCheck();
+			dropCallReferenceArguments(keptArguments);
 			return;
 		}
 		auto preparedArguments = prepareCallArguments(calledType, arguments);
@@ -2613,6 +2715,7 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 		emitCallResult(invoke, calledType, "callRefResult");
 		emitPendingTrapReturn();
 		emitPendingExceptionCheck();
+		dropCallReferenceArguments(keptArguments);
 	}
 
 	void dispatchCallRef(WASM::TypeIdx typeIndex) override
@@ -2754,6 +2857,12 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 					"AsmJit imported VMContext materialisation failed");
 		}
 
+		// A parameter is the caller's borrow: the counts the operand stack holds
+		// for reference arguments must survive the invoke, so each one is parked
+		// in its own stack slot here and released from there after the call.
+		const std::vector<asmjit::x86::Mem> keptArguments =
+				spillCallReferenceArguments(calledType, arguments);
+
 		if (frameMode) {
 			// A native import is a host C function with the typed register ABI,
 			// not a staging-frame callee. Call it through the register form and
@@ -2777,8 +2886,10 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 				invoke->set_arg(0, vmContext);
 				setCallArguments(invoke, preparedArguments);
 				emitCallResult(invoke, calledType, "nativeImportResult");
+				retainNativeCallResult(calledType);
 				emitPendingTrapReturn();
 				emitPendingExceptionCheck();
+				dropCallReferenceArguments(keptArguments);
 				return;
 			}
 			// Staging-frame ABI (step 5d): the arguments are packed into a frame
@@ -2844,12 +2955,16 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 					checkError(compiler.mov(resultRegister,
 							asmjit::x86::Mem(frameAddress, resultOffset, resultRegister.size())),
 							"AsmJit call frame result load failed");
+					// A reference result arrives owning one count.
+					if (isReferenceKind(resultType.val.opcode))
+						markReference(resultRegister);
 					values.push_back(resultRegister);
 					resultOffset += 8;
 				}
 			}
 			emitPendingTrapReturn();
 			emitPendingExceptionCheck();
+			dropCallReferenceArguments(keptArguments);
 			return;
 		}
 
@@ -2865,8 +2980,14 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 			invoke->set_arg(0, importedContext);
 		setCallArguments(invoke, preparedArguments);
 		emitCallResult(invoke, calledType, "callResult");
+		// A native import keeps its own count of a reference result, so the
+		// operand stack takes one of its own; a Wasm callee hands its count over
+		// and cloning would leave the stack holding two.
+		if (!isInternal && importedCallee == nullptr)
+			retainNativeCallResult(calledType);
 		emitPendingTrapReturn();
 		emitPendingExceptionCheck();
+		dropCallReferenceArguments(keptArguments);
 	}
 
 	//! Names this function and instruction on a trap that a helper reported
@@ -5692,6 +5813,9 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 				"AsmJit ref.i31 widening failed");
 		checkError(compiler.shl(reference, 1), "AsmJit ref.i31 shift failed");
 		checkError(compiler.or_(reference, 1), "AsmJit ref.i31 tag failed");
+		// An i31 is a tagged immediate: uncounted, but still a reference, so a
+		// consumer must not treat it as a scalar.
+		markReference(reference);
 		values.push_back(reference);
 	}
 
@@ -5742,6 +5866,10 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		invoke->set_arg(1, reference);
 		auto result = compiler.new_gp64("externConversion");
 		invoke->set_ret(0, result);
+		// The conversion produces a reference in place of the operand it
+		// consumed, so the operand stack's one count moves onto the new value.
+		if (referenceValues.erase(reference.id()) != 0)
+			markReference(result);
 		values.push_back(result);
 	}
 
@@ -5951,8 +6079,10 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 				checkError(compiler.mov(asmjit::x86::qword_ptr(object, offset),
 						static_cast<uint64_t>(0)), "AsmJit struct.new_default zeroing failed");
 		}
-		// The operand stack owns one count per reference it holds.
+		// A fresh object is created unowned; the operand stack owns one count
+		// per reference it holds, so the push takes one (RC-5).
 		values.push_back(emitRefClone(object));
+		markReference(values.back());
 	}
 
 	void dispatchStructNew(WASM::TypeIdx arg) override
@@ -6012,7 +6142,10 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 						static_cast<int32_t>(offset)), operands[i]),
 						"AsmJit struct.new field store failed");
 		}
+		// A fresh object is created unowned; the operand stack owns one count
+		// per reference it holds, so the push takes one (RC-5).
 		values.push_back(emitRefClone(object));
+		markReference(values.back());
 	}
 
 	void dispatchStructNewDesc(WASM::TypeIdx arg) override
@@ -6080,7 +6213,10 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		// The new object retained the descriptor; the operand's own count goes,
 		// and the stack then owns one count of the new object.
 		emitRefDrop(descriptor);
+		// A fresh object is created unowned; the operand stack owns one count
+		// per reference it holds, so the push takes one (RC-5).
 		values.push_back(emitRefClone(object));
+		markReference(values.back());
 	}
 
 	void dispatchStructNewDefaultDesc(WASM::TypeIdx arg) override
@@ -6130,7 +6266,10 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 						static_cast<uint64_t>(0)),
 						"AsmJit struct.new_default_desc zeroing failed");
 		}
+		// A fresh object is created unowned; the operand stack owns one count
+		// per reference it holds, so the push takes one (RC-5).
 		values.push_back(emitRefClone(object));
+		markReference(values.back());
 	}
 
 	void dispatchRefGetDesc(WASM::TypeIdx) override
@@ -6154,6 +6293,10 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		auto descriptor = compiler.new_gp_ptr("descriptorRef");
 		invoke->set_ret(0, descriptor);
 		emitPendingTrapReturn();
+		// `ref.get_desc` yields a reference in place of the one it consumed, so
+		// the operand stack's one count moves onto the descriptor.
+		if (referenceValues.erase(reference.id()) != 0)
+			markReference(descriptor);
 		values.push_back(descriptor);
 	}
 
@@ -6401,6 +6544,17 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		checkError(compiler.add(address,
 				static_cast<int32_t>(WASM::gcArrayDataOffset(element.storage))),
 				"AsmJit array.set data offset failed");
+		if (!packed && isReferenceKind(element.storage.value.opcode)) {
+			// A reference element is store-owned: the barrier retains the new
+			// value for the element and releases the one it held. The operand
+			// stack then gives up the counts it held for both operands -- the
+			// container and the value -- which is safe from the registers after
+			// the store, because both were computed before it.
+			emitRefStore(address, value);
+			emitRefDrop(object);
+			emitRefDrop(value);
+			return;
+		}
 		if (packed) {
 			if (packedI8)
 				checkError(compiler.mov(asmjit::x86::byte_ptr(address), value.r8()),
@@ -6414,6 +6568,9 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		else
 			checkError(compiler.mov(asmjit::x86::qword_ptr(address), value),
 					"AsmJit array.set element store failed");
+		// The element holds no reference, so the container operand's count is
+		// the only one to give back.
+		emitRefDrop(object);
 	}
 
 	void dispatchArrayGet(WASM::TypeIdx arg) override
@@ -6475,6 +6632,17 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		else
 			checkError(compiler.mov(result, asmjit::x86::qword_ptr(object, byteOffset)),
 					"AsmJit array.get element load failed");
+		// The container operand belonged to the operand stack, so its count goes
+		// back. The element is already in a fresh register, so no spill is
+		// needed, and the drop cannot invalidate it.
+		emitRefDrop(object);
+		if (isReferenceKind(element.storage.value.opcode)) {
+			// A reference read out of the element belongs to the element; the
+			// operand stack takes its own count, or a later `drop` would release
+			// the element's and leave the array pointing at a reclaimed object.
+			result = emitRefClone(result);
+			markReference(result);
+		}
 		values.push_back(result);
 	}
 
@@ -6503,6 +6671,10 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		invoke->set_ret(0, object);
 		emitPendingTrapReturn();
 		values.push_back(object);
+		// A fresh object is created unowned; the operand stack owns one count
+		// per reference it holds, so the push takes one (RC-5).
+		values.back() = emitRefClone(values.back());
+		markReference(values.back());
 	}
 
 	void dispatchArrayNewArray(WASM::TypeIdx dst, WASM::TypeIdx src) override
@@ -6531,6 +6703,10 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		auto result = compiler.new_gp_ptr("arrayNewArrayResult");
 		invoke->set_ret(0, result);
 		values.push_back(result);
+		// A fresh object is created unowned; the operand stack owns one count
+		// per reference it holds, so the push takes one (RC-5).
+		values.back() = emitRefClone(values.back());
+		markReference(values.back());
 		emitPendingTrapReturn();
 	}
 
@@ -6558,7 +6734,10 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		invoke->set_arg(2, packedRange);
 		auto result = compiler.new_gp_ptr("arrayNewIndexResult");
 		invoke->set_ret(0, result);
-		values.push_back(result);
+		// A fresh array is unowned; the operand stack owns one count per reference
+		// it holds, so the push takes one (RC-5).
+		values.push_back(emitRefClone(result));
+		markReference(values.back());
 		emitPendingTrapReturn();
 	}
 
@@ -6599,6 +6778,10 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		invoke->set_ret(0, object);
 		emitPendingTrapReturn();
 		values.push_back(object);
+		// A fresh object is created unowned; the operand stack owns one count
+		// per reference it holds, so the push takes one (RC-5).
+		values.back() = emitRefClone(values.back());
+		markReference(values.back());
 	}
 
 	void dispatchArrayInitData(WASM::TypeIdx arg1, uint32_t arg2) override
@@ -6727,6 +6910,10 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		checkError(compiler.bind(loopDone), "AsmJit array.new_default label bind failed");
 		values.pop_back();
 		values.push_back(object);
+		// A fresh object is created unowned; the operand stack owns one count
+		// per reference it holds, so the push takes one (RC-5).
+		values.back() = emitRefClone(values.back());
+		markReference(values.back());
 	}
 
 	void dispatchArrayNewFixed(WASM::TypeIdx arg1, uint32_t arg2) override
@@ -6782,6 +6969,10 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 						"AsmJit array.new_fixed element store failed");
 		}
 		values.push_back(object);
+		// A fresh object is created unowned; the operand stack owns one count
+		// per reference it holds, so the push takes one (RC-5).
+		values.back() = emitRefClone(values.back());
+		markReference(values.back());
 	}
 
 	void dispatchArrayCopy(WASM::TypeIdx arg1, WASM::TypeIdx arg2) override
@@ -7090,6 +7281,10 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		checkError(compiler.jmp(fillStart), "AsmJit array.new back edge failed");
 		checkError(compiler.bind(fillDone), "AsmJit array.new loop label binding failed");
 		values.push_back(object);
+		// A fresh object is created unowned; the operand stack owns one count
+		// per reference it holds, so the push takes one (RC-5).
+		values.back() = emitRefClone(values.back());
+		markReference(values.back());
 	}
 
 	void dispatchArrayLen() override
@@ -7199,6 +7394,19 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 				"AsmJit struct.set null trap emission failed");
 		emitPendingTrapReturn();
 		checkError(compiler.bind(notNull), "AsmJit struct.set label binding failed");
+		if (!packed && isReferenceKind(fields[arg2].storage.value.opcode)) {
+			// A reference field is store-owned: the barrier retains the new value
+			// for the field and releases the one it held. The operand stack then
+			// gives up the counts it held for both operands -- the container and
+			// the value -- which is safe from the registers after the store.
+			asmjit::x86::Gp fieldAddress = compiler.new_gp_ptr("structSetField");
+			checkError(compiler.lea(fieldAddress, asmjit::x86::qword_ptr(object, offset)),
+					"AsmJit struct.set field address failed");
+			emitRefStore(fieldAddress, value);
+			emitRefDrop(object);
+			emitRefDrop(value);
+			return;
+		}
 		if (packed) {
 			if (packedI8)
 				checkError(compiler.mov(asmjit::x86::byte_ptr(object, offset), value.r8()),
@@ -7212,6 +7420,9 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		else
 			checkError(compiler.mov(asmjit::x86::qword_ptr(object, offset), value),
 					"AsmJit struct.set field store failed");
+		// The field holds no reference, so the container operand's count is the
+		// only one to give back.
+		emitRefDrop(object);
 	}
 
 	void dispatchStructGet(WASM::TypeIdx arg1, uint32_t arg2) override
@@ -7253,6 +7464,17 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		else
 			checkError(compiler.mov(result, asmjit::x86::qword_ptr(object,
 					static_cast<int32_t>(offset))), "AsmJit struct.get field load failed");
+		// The container operand belonged to the operand stack, so its count goes
+		// back. The field value is already in a fresh register, so no spill is
+		// needed and the drop cannot invalidate it.
+		emitRefDrop(object);
+		if (isReferenceKind(field.storage.value.opcode)) {
+			// A reference read out of the field belongs to the field; the operand
+			// stack takes its own count, or a later `drop` would release the
+			// field's and leave the struct pointing at a reclaimed object.
+			result = emitRefClone(result);
+			markReference(result);
+		}
 		values.push_back(result);
 	}
 
@@ -7288,6 +7510,10 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		auto result = compiler.new_gp_ptr("tableGetResult");
 		invoke->set_ret(0, result);
 		emitPendingTrapReturn();
+		// The entry is store-owned by the table; the operand stack takes its own
+		// count, or a later `drop` would release the table's.
+		result = emitRefClone(result);
+		markReference(result);
 		values.push_back(result);
 	}
 
@@ -7359,6 +7585,10 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		auto result = compiler.new_gp_ptr("tableAtomicGetResult");
 		invoke->set_ret(0, result);
 		emitPendingTrapReturn();
+		// The entry is store-owned by the table; the operand stack takes its own
+		// count, or a later `drop` would release the table's.
+		result = emitRefClone(result);
+		markReference(result);
 		values.push_back(result);
 	}
 
@@ -7500,6 +7730,9 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		checkError(compiler.mov(reference,
 				asmjit::Imm(reinterpret_cast<uint64_t>(referencePtr))),
 				"AsmJit ref.func materialisation failed");
+		// The Callable is store-owned by the instance; the operand stack takes
+		// its own count so a later `drop` cannot release the instance's.
+		markReference(reference);
 		values.push_back(reference);
 	}
 
@@ -9549,17 +9782,14 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 	//! `return`, a `br` to the function label and a conditional function branch.
 	void emitDropReferenceLocals()
 	{
-		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
-		signature.set_ret(asmjit::TypeId::kVoid);
-		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		// Every reference local owns one count (parameters take theirs in the
+		// prologue), so the epilogue gives each one back. `wasm_ref_drop` is the
+		// universal release: it dispatches to the continuation registry, the
+		// string store, the GC heap or the host bridge as the value requires.
 		for (std::size_t i = 0; i < localKinds.size(); ++i) {
 			if (!isReferenceKind(localKinds[i]) || localWidths[i] != 8)
 				continue;
-			asmjit::InvokeNode* invoke = nullptr;
-			checkError(compiler.invoke(asmjit::Out(invoke),
-					reinterpret_cast<uint64_t>(&WASM::wasm_cont_drop_known), signature),
-					"AsmJit local continuation drop failed");
-			invoke->set_arg(0, locals[i]);
+			emitRefDrop(locals[i]);
 		}
 	}
 
@@ -9825,6 +10055,59 @@ private:
 			invoke->set_arg(i + 1, prepared[i]);
 	}
 
+	//! Spills the reference-typed arguments of a call into stack slots, so the
+	//! counts the operand stack owns survive the invoke, which clobbers every
+	//! argument register.
+	//! \param type Signature of the callee.
+	//! \param arguments Argument values, already popped from the operand stack.
+	//! \return One stack slot per reference argument, in argument order.
+	std::vector<asmjit::x86::Mem> spillCallReferenceArguments(const WASM::FuncType& type,
+			const std::vector<asmjit::x86::Gp>& arguments)
+	{
+		std::vector<asmjit::x86::Mem> kept;
+		for (std::size_t i = 0; i < arguments.size() && i < type.params.size(); ++i) {
+			// A packed parameter travels as a scalar; a v128 is 16 bytes and is
+			// not a reference either.
+			if (type.params[i].isPacked || !isReferenceKind(type.params[i].val.opcode))
+				continue;
+			asmjit::x86::Mem slot = compiler.new_stack(8, 8, "refArgKeep");
+			checkError(compiler.mov(slot, arguments[i]),
+					"AsmJit reference argument spill failed");
+			kept.push_back(slot);
+		}
+		return kept;
+	}
+
+	//! Releases the operand stack's counts for a call's reference arguments.
+	//! A parameter is the caller's borrow, so the caller gives its count back
+	//! once the callee has returned, having retained whatever it keeps.
+	//! \param kept Slots written by spillCallReferenceArguments().
+	void dropCallReferenceArguments(const std::vector<asmjit::x86::Mem>& kept)
+	{
+		for (const asmjit::x86::Mem& slot : kept) {
+			auto value = compiler.new_gp64("refArgDrop");
+			checkError(compiler.mov(value, slot),
+					"AsmJit reference argument reload failed");
+			emitRefDrop(value);
+		}
+	}
+
+	//! Takes the operand stack's own count of a native import's reference
+	//! result. A host C function hands back a *borrow*: it keeps its own count,
+	//! so the operand stack clones before it can hold the value across a
+	//! safepoint or release it (contrast a Wasm callee, which hands over the
+	//! count its own operand stack held).
+	//! \param type Signature of the callee.
+	void retainNativeCallResult(const WASM::FuncType& type)
+	{
+		if (type.results.empty() || values.empty())
+			return;
+		if (!isReferenceKind(type.results.front().val.opcode))
+			return;
+		values.back() = emitRefClone(values.back());
+		markReference(values.back());
+	}
+
 	//! Materialises every call argument before the invoke node is appended.
 	std::vector<asmjit::Reg> prepareCallArguments(const WASM::FuncType& type,
 			const std::vector<asmjit::x86::Gp>& arguments)
@@ -9856,6 +10139,11 @@ private:
 		} else {
 			auto result = newIntegerRegister(compiler, declared, name);
 			invoke->set_ret(0, result);
+			// A reference result arrives owning one count: the callee hands over
+			// the count its own operand stack held, so the slot is marked rather
+			// than cloned, and the caller's `drop` (or its `return`) releases it.
+			if (isReferenceKind(declared.opcode))
+				markReference(result);
 			values.push_back(result);
 		}
 	}
@@ -10121,17 +10409,38 @@ private:
         if (condition.size() != 4 || first.size() != second.size()
                 || (first.size() != 4 && first.size() != 8))
             throw std::runtime_error("AsmJit select requires an i32 condition and matching i32/i64/f32/f64 values");
+        // Both arms were pushed, so the operand stack owns a count for each even
+        // though only one becomes the result. The winner's count crosses over
+        // (its slot survives); the loser's must be released, and which arm loses
+        // is only known at run time.
+        const bool referenceArms = isReferenceValue(first) || isReferenceValue(second);
+        referenceValues.erase(first.id());
+        referenceValues.erase(second.id());
         auto result = first.size() == 8
                 ? compiler.new_gp64("selectResult") : compiler.new_gp32("selectResult");
+        auto loser = first.size() == 8
+                ? compiler.new_gp64("selectLoser") : compiler.new_gp32("selectLoser");
         auto chooseSecond = compiler.new_label();
         auto done = compiler.new_label();
         checkError(compiler.mov(result, first), "AsmJit select first-value copy failed");
+        if (referenceArms)
+            checkError(compiler.mov(loser, second),
+                    "AsmJit select losing-arm copy failed");
         checkError(compiler.test(condition, condition), "AsmJit select condition test failed");
         checkError(compiler.jz(chooseSecond), "AsmJit select condition branch failed");
         checkError(compiler.jmp(done), "AsmJit select completion jump failed");
         checkError(compiler.bind(chooseSecond), "AsmJit select second-value label failed");
         checkError(compiler.mov(result, second), "AsmJit select second-value copy failed");
+        if (referenceArms)
+            checkError(compiler.mov(loser, first),
+                    "AsmJit select losing-arm copy failed");
         checkError(compiler.bind(done), "AsmJit select completion label failed");
+        if (referenceArms) {
+            // Release the arm the condition did not pick. Dropping a null
+            // reference is a no-op, so a null arm is free.
+            emitRefDrop(loser);
+            markReference(result);
+        }
         values.push_back(result);
     }
 
@@ -10434,8 +10743,11 @@ private:
 					static_cast<int32_t>(offsetof(WASM::Value, i32)))),
 					"AsmJit 32-bit global.get load failed");
 		}
-		if (isReferenceKind(type.contentType.opcode))
+		if (isReferenceKind(type.contentType.opcode)) {
+			// The global cell keeps its own count; the clone is the stack's.
 			value = emitRefClone(value);
+			markReference(value);
+		}
 		values.push_back(value);
 	}
 
@@ -11164,6 +11476,15 @@ private:
 	//! Slot width of every local (4/8, or 16 for a v128 buffer).
 	std::vector<int> localWidths;
 	std::vector<asmjit::x86::Gp> values;
+
+	//! Virtual-register ids of operand-stack values that own one reference of
+	//! any kind -- a GC object, a string or a view of one, a continuation handle,
+	//! an unboxed i31 (uncounted but still a reference) or a host reference.
+	//! The operand stack owns one count per reference it holds
+	//! (docs/WRITING_A_BACKEND.md section 6), so a consumer must release it.
+	//! AsmJIT ids are unique, so a consumed value's stale entry can never match
+	//! a later, different value.
+	std::unordered_set<uint32_t> referenceValues;
 	//! Virtual-register ids of operand-stack values that own one string-family
 	//! reference. AsmJIT ids are unique, so a consumed value's stale entry can
 	//! never match a later, different value.

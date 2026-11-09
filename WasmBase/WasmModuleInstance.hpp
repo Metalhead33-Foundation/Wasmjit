@@ -42,6 +42,18 @@ WASMJIT_API void* wasm_ref_clone(VMContext* context, void* value) noexcept;
 /** \brief Releases one ownership count of a reference. \param context Module context. \param value Reference value. */
 WASMJIT_API void wasm_ref_drop(VMContext* context, void* value) noexcept;
 
+/** \brief The reference write barrier for a store-owned slot (`ModuleInstance::refStore`).
+\param context Module context.
+\param slot Address of the slot being written.
+\param value New reference value.
+This is the one barrier a backend uses for a reference *local*: it retains \p value for the slot,
+stores it, then releases the value the slot held. Splitting it into a clone, a store and a drop
+needs a scratch slot for the old value, and getting that order wrong either leaks the old value or
+frees the new one; the core does it in one place instead. Embedders and second backends use it for
+the same reason, and [`ABI_PORTABILITY.md`](../docs/ABI_PORTABILITY.md) owns the ownership rules it
+implements. */
+WASMJIT_API void wasm_ref_store(VMContext* context, void** slot, void* value) noexcept;
+
 //! Forward declarations
 class ModuleInstantiator;
 class StoreOwnedTable;

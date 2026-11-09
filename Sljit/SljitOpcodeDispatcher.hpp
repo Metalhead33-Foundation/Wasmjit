@@ -1364,6 +1364,41 @@ private:
 	//! Releases a reference operand the instruction consumed.
 	//! \param depth Operand-stack depth of the reference.
 	void emitDropStackRef(std::size_t depth);
+	//! Retains every reference parameter into its own local slot, so the local
+	//! ownership rules hold for every instruction (including one that re-executes
+	//! in a loop) without per-instruction bookkeeping.
+	void emitReferenceParameterRetains();
+	//! Emits the reference write barrier for a local: retain for the slot, store,
+	//! release the overwritten value.
+	//! \param index Local index whose slot is written.
+	//! \param depth Operand-stack depth of the incoming value.
+	void emitLocalRefStore(WASM::LocalIdx index, std::size_t depth);
+	//! Retains a reference that an instruction produced from a store-owned slot
+	//! (a struct field, an array element, a table entry), so the operand stack
+	//! owns one count of it.
+	//! \param depth Operand-stack depth of the produced reference.
+	void emitRetainProducedRef(std::size_t depth);
+	//! Marks the top of the operand stack as holding one counted reference.
+	void markTopReference();
+	//! Marks one operand-stack slot as holding one counted reference.
+	//! \param depth One-based depth of the slot, counting from the bottom.
+	void markReferenceAt(std::size_t depth);
+	//! Releases the operand stack's counts for the reference arguments of a call.
+	//! \param type Signature of the callee.
+	void emitDropCallArguments(const WASM::FuncType& type);
+	//! Marks the reference results a call just pushed as owning one count each.
+	//! \param type Signature of the callee.
+	void finishCallResults(const WASM::FuncType& type);
+	//! Reports whether the top of the operand stack holds a counted reference.
+	//! \return True when the top slot owns one count.
+	bool topIsReference() const;
+	//! Resizes the operand-stack model, keeping the reference shadow in step.
+	//! \param size New depth of the operand stack.
+	void resizeStack(std::size_t size);
+	//! Rewrites the top of the operand stack in place, shadow included.
+	//! \param width New width of the top slot.
+	//! \param reference Whether the new value is a counted reference.
+	void setTopOfStack(int width, bool reference);
 	/*!
 	 * \brief Emits a sign- or zero-extending read of a packed struct field.
 	 * \param arg1 Struct type index.
@@ -1596,8 +1631,13 @@ public:
 	std::vector<int> resultWidths_;
 
 	std::vector<int> stackWidths_; //!< Widths of the live operand stack, bottom first.
-	//! String-family ownership bits for the same stack; 1 means the slot owns one
-	//! `StringStore` reference and must release it on `drop`.
+	//! Reference ownership shadow of the same stack, kept in lockstep by `push`,
+	//! `pop` and `resizeStack`: non-zero means the slot holds one counted
+	//! reference and a consumer must release it (`docs/WRITING_A_BACKEND.md`
+	//! section 6, "Reference ownership"). A slot that is not marked is not
+	//! released -- a leak rather than an over-release, which is the safe
+	//! direction, because a release of a value the stack never owned can free an
+	//! object that is still reachable through the field it came from.
 	std::vector<std::uint8_t> stackRefKinds_;
 	std::size_t maxStackDepth_ = 0; //!< High-water mark of the operand stack.
 	//! Set during measurement when the body uses a frame-form call.

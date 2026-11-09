@@ -2603,6 +2603,20 @@ void wasm_ref_drop(VMContext* context, void* value) noexcept
 	}
 }
 
+void wasm_ref_store(VMContext* context, void** slot, void* value) noexcept
+{
+	try {
+		if (context == nullptr || slot == nullptr)
+			return;
+		// The VMContext is the first member, so the instance address is the
+		// context address (the same convention the other reference helpers use).
+		auto* instance = reinterpret_cast<ModuleInstance*>(context);
+		instance->refStore(slot, value);
+	} catch (...) {
+		reportTrap(TrapKind::Internal);
+	}
+}
+
 void ModuleInstance::reclaimGcObject(void* ref)
 {
 	// MF-3: another agent's safepoint may be collecting at the same time; the

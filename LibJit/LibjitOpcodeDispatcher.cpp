@@ -4941,6 +4941,15 @@ void OpcodeDispatcher::dispatchSelect()
 	jit_value_t v2 = popValue();
 	jit_value_t v1 = popValue();
 
+	// Both arms were popped, so the operand stack holds a count for each of them
+	// even though only one can become the result. The winner's count moves into
+	// the result (pushOwnedValue below); the loser's must be released here, and
+	// which arm loses is only known at run time (RC-5).
+	const bool referenceArms = isRefJitValue(v1);
+	jit_value_t loser = nullptr;
+	if (referenceArms)
+		loser = jit_value_create(function, jit_value_get_type(v1));
+
 	// Both arms must contribute exactly one value to the *compile-time* stack
 	// model, so merge them through a slot. (Pushing one value per branch here
 	// left the modelled stack one entry too high.)
@@ -4950,12 +4959,21 @@ void OpcodeDispatcher::dispatchSelect()
 	jit_label_t lbMerge = jit_label_undefined;
 	jit_insn_branch_if(function, cond, &lbTrue);
 	jit_insn_store(function, result, v2);
+	if (referenceArms)
+		jit_insn_store(function, loser, v1);
 	jit_insn_branch(function, &lbMerge);
 	jit_insn_label(function, &lbTrue);
 	jit_insn_store(function, result, v1);
+	if (referenceArms)
+		jit_insn_store(function, loser, v2);
 	jit_insn_label(function, &lbMerge);
 
-	pushValue(result);
+	// The result takes the winner's count directly: no clone, or the stack would
+	// hold two counts for one value and the caller would never release the
+	// second.
+	pushOwnedValue(result);
+	if (referenceArms)
+		emitDropValue(loser);
 }
 
 void OpcodeDispatcher::dispatchSelectT(std::vector<WASM::ValueType>&& arg)
@@ -6451,6 +6469,10 @@ void OpcodeDispatcher::dispatchStructGet(WASM::TypeIdx arg1, uint32_t arg2) {
 	emitTrapIfNull(WASM::TrapKind::NullStructureReference, refAsVoidPtr(ref));
 	jit_type_t fieldType = typeTranslator.translateCanonStorage(fields[arg2].storage);
 	pushValue(jit_insn_load_relative(function, refAsVoidPtr(ref), structFieldOffset(arg1, arg2), fieldType));
+	// The container operand belonged to the operand stack, which gives up its
+	// count here; the loaded field value took its own count in pushValue, and
+	// the field keeps the one it already had (RC-5).
+	emitDropValue(ref);
 }
 void OpcodeDispatcher::dispatchStructGetS(WASM::TypeIdx arg1, uint32_t arg2) {
 	const auto fields = structTypeForIndex(arg1).structFields();
@@ -6462,6 +6484,9 @@ void OpcodeDispatcher::dispatchStructGetS(WASM::TypeIdx arg1, uint32_t arg2) {
 	jit_type_t loadType = isI8 ? jit_type_sbyte : jit_type_short;
 	jit_value_t raw = jit_insn_load_relative(function, refAsVoidPtr(ref), structFieldOffset(arg1, arg2), loadType);
 	pushValue(jit_insn_convert(function, raw, jit_type_int, 0));
+	// A packed field is never a reference, but the container operand is, and the
+	// operand stack owned one count of it.
+	emitDropValue(ref);
 }
 void OpcodeDispatcher::dispatchStructGetU(WASM::TypeIdx arg1, uint32_t arg2) {
 	const auto fields = structTypeForIndex(arg1).structFields();
@@ -6473,6 +6498,7 @@ void OpcodeDispatcher::dispatchStructGetU(WASM::TypeIdx arg1, uint32_t arg2) {
 	jit_type_t loadType = isI8 ? jit_type_ubyte : jit_type_ushort;
 	jit_value_t raw = jit_insn_load_relative(function, refAsVoidPtr(ref), structFieldOffset(arg1, arg2), loadType);
 	pushValue(jit_insn_convert(function, raw, jit_type_int, 0));
+	emitDropValue(ref);
 }
 void OpcodeDispatcher::dispatchStructSet(WASM::TypeIdx arg1, uint32_t arg2) {
 	const auto fields = structTypeForIndex(arg1).structFields();
@@ -6752,6 +6778,9 @@ void OpcodeDispatcher::dispatchArrayGet(WASM::TypeIdx arg) {
 	jit_type_t elemType = arrayElementJitType(arg);
 	jit_value_t dataPtr = arrayElementBase(ref, arg);
 	pushValue(jit_insn_load_elem(function, dataPtr, index, elemType));
+	// The array operand was the operand stack's; a reference element loaded here
+	// took its own count in pushValue, and the element keeps its own (RC-5).
+	emitDropValue(ref);
 }
 void OpcodeDispatcher::dispatchArrayGetS(WASM::TypeIdx arg) {
 	jit_value_t index = jit_insn_convert(function, popValue(), jit_type_uint, 0);
@@ -6767,6 +6796,9 @@ void OpcodeDispatcher::dispatchArrayGetS(WASM::TypeIdx arg) {
 	jit_value_t dataPtr = arrayElementBase(ref, arg);
 	jit_value_t raw = jit_insn_load_elem(function, dataPtr, index, elemType);
 	pushValue(jit_insn_convert(function, raw, jit_type_int, 0));
+	// The array operand's stack count goes; a packed element is never a
+	// reference, so nothing else changes.
+	emitDropValue(ref);
 }
 void OpcodeDispatcher::dispatchArrayGetU(WASM::TypeIdx arg) {
 	jit_value_t index = jit_insn_convert(function, popValue(), jit_type_uint, 0);
@@ -6786,6 +6818,7 @@ void OpcodeDispatcher::dispatchArrayGetU(WASM::TypeIdx arg) {
 	jit_type_t loadType = isI8 ? jit_type_ubyte : jit_type_ushort;
 	jit_value_t raw = jit_insn_load_relative(function, addr, 0, loadType);
 	pushValue(jit_insn_convert(function, raw, jit_type_int, 0));
+	emitDropValue(ref);
 }
 void OpcodeDispatcher::dispatchArraySet(WASM::TypeIdx arg) {
 	jit_value_t value = popValue();
