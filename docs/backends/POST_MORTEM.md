@@ -3008,3 +3008,179 @@ Per-case evidence for the items above (all three backends unless stated):
   assertions is a stronger statement than three greens of different sizes; the
   earlier snapshots reported only pass/fail totals, which hid that different
   cases were failing on each backend.
+
+---
+
+# Epilogue: what writing three code generators taught us
+
+*A guide for whoever writes the fourth backend. Everything below is dated
+2026-11-09 and measured; the numbers are a snapshot, the rules are not.*
+
+## E.1 The shape of the work
+
+| | Lines | Note |
+|---|---|---|
+| `WasmBase/` | ~56,000 | the contract: types, validation, the instance, the GC, the ABI views |
+| `LibJit/` | ~13,700 | the reference implementation; the first backend, and the most complete |
+| `Sljit/` | ~14,000 | the second; slot-based, with a four-argument C-call ceiling |
+| `Asmjit/` | ~12,700 | the third; virtual-register based, with its own ceilings |
+| `Test/` | ~32,500 | the suite that decides whether any of it is true |
+
+Three backends of roughly the same size, written by different hands over
+several milestones, now pass the same 824 cases with the same assertion count
+(22,524; LibJIT runs two extra assertions because one fixture takes its positive
+branch there). That equality is the single most useful conformance signal in the
+tree — see rule 10.
+
+What a backend actually is, once the surprise wears off: **twelve ABI obligations
+and one ownership model** (`WRITING_A_BACKEND.md` §6), wrapped around an
+instruction-selection problem you already know how to solve. The hard part is not
+the instructions. It is agreeing with the other two backends about what a value
+*means* when it crosses a boundary.
+
+## E.2 Ten rules, each paid for in blood
+
+**1. A rule without a fixture is not implemented; it is hoped.** The
+reference-ownership model was written down in prose, and each backend implemented
+a different subset of it. The suite stayed green for months because a leak
+changes no result: the same module ran, returned the same value, and dropped the
+count on the floor. The fix that finally worked was not a code review; it was a
+fixture that asserts the *exact* reference count after each shape
+(`gc_ownership.wat`). If you cannot measure a rule, you do not have it.
+
+**2. Compensating errors are indistinguishable from correctness.** SLJIT cloned
+a reference on every `local.get` and released nothing on `drop`. Each mistake
+covered for the other on the paths the suite walked, so the counts looked right
+until a loop ran (`local_loop(10)` leaked ten objects). Two wrongs do not make a
+right; they make a defect that hides.
+
+**3. Pick the failure direction, and pick leaking.** A missed release costs one
+count and is recoverable at a safepoint. Releasing a value the stack never owned
+frees an object that is still reachable through the field it came from, and the
+corruption surfaces much later as a failed cast inside the type walker. Bias
+every helper so that an *unknown* value is not released — and prefer one
+polymorphic release (`wasm_ref_drop`) over per-kind helpers, because a `drop`
+that only knows how to release continuations will silently leak every GC object
+it sees.
+
+**4. Write the ABI as a table of sites, not as three sentences.** "The operand
+stack owns one count per reference" is true and useless. What made three
+backends agree was a row per instruction family: what `struct.get` does to the
+container, what `select` does to the losing arm, what a call does to its
+arguments and its result. `WRITING_A_BACKEND.md` §6 is that table now. Start your
+backend from the table, not from the sentence.
+
+**5. A signature ceiling is the only honest reason for a second call form.** The
+staging frame exists because SLJIT can pass four argument entries and AsmJIT
+four, and because a multi-result or `v128`-result signature does not fit a
+register return. It costs a store per argument and a load per parameter, and it
+changes `v128`-result semantics. So: derive the form from the *signature*, never
+from convenience, never from a measurement, and remember that a form is a
+property of a type — two functions with the same type must compile the same way,
+or nothing can call them.
+
+**6. Never let the embedder see a backend seam.** The frame is a backend detail;
+the marshaller that hides it belongs to the core (one libffi-based
+`ModuleCallCache`), not to each backend. Two marshallers drift. If your backend
+wants a special entry point for embedders, that is the design telling you the
+seam is in the wrong place.
+
+**7. Every exit path is the epilogue's business.** Explicit `return`, the
+*implicit* end of a body, a trap, an exception, a tail call. The implicit end was
+the one that leaked in AsmJIT (a bare `ret` with no reference-local release), and
+the trap path was the one that leaked in all three until an explicit
+`unreachable` was included. Write the epilogue once, call it from every exit, and
+add a fixture per exit path — `trap_after_alloc` is five trapped calls and a live
+count.
+
+**8. A two-pass compiler needs inert emitters.** Measuring the frame size and
+emitting the code are two passes over the same dispatcher. A helper that emits a
+load or a store during the measuring pass makes the frame one slot too small, and
+the result is a segfault in generated code with no line number. Guard every
+emission helper on `measureOnly_` at the top, not at the call site.
+
+**9. Refuse narrowly, and say how to get out.** A refusal that was too broad once
+rejected every wide call in a frame-form module, including modules with no imports
+at all, and took a working probe down with it. A refusal must name the thing that
+cannot be expressed, the reason, and the way forward; and it must be scoped to
+exactly that thing. A named exception is a diagnosis; silent wrong code is a
+mystery.
+
+**10. Cross-backend assertion counts are the conformance signal.** When two
+backends report different counts for the same suite, one of them is skipping work
+it should be doing — silently. Keep the numbers equal, and treat a difference as
+a defect until proven otherwise (one legitimate difference is documented: a
+fixture that takes a positive branch only where the provider stays register-form).
+
+**11. Bugs live in the combinations nobody crossed.** Register-form caller with a
+frame-form callee. Frame form across a module boundary. A native import returning
+a reference. A descriptor clause on a struct that is also a function parameter.
+None of these appear in a single-backend suite, and all of them were broken the
+first time they were tried. For each pair of features you support, ask what
+happens when they meet, and write the two-line fixture.
+
+**12. Your build system will lie to you.** A same-second edit plus a one-second
+mtime granularity means `make` skips the rebuild. A killed `make` leaves a
+zero-byte object that `make` then treats as up to date, and the next link fails
+with an unrelated symbol error. Both cost more time than the code did. When a
+build behaves impossibly, delete the object and look for `find build -size 0`.
+
+## E.3 The order to do it in
+
+The checklist below is the order that would have saved the most time, mapped onto
+[`WRITING_A_BACKEND.md`](../WRITING_A_BACKEND.md).
+
+1. **Declare your limits before you emit anything.** Your argument ceiling, whether
+you can spell a `v128` parameter, a `v128` result, a multi-result tuple. Those four
+numbers decide your call form, and every later decision depends on them.
+2. **Make the whole generic suite run against your backend.** It will refuse most
+of it; that is the point. A backend that passes its own tests and refuses the
+shared suite has learned nothing about the contract. `Callable::fnPtr = nullptr`
+plus a named refusal is a legitimate state; silent wrong code is not.
+3. **Scalars before references, references before exceptions, exceptions before
+continuations.** Each layer's invariants depend on the previous one's being exact
+(a `throw` moves references; a continuation saves frames).
+4. **Bring the ownership fixture up with the code, not after it.**
+`gc_ownership.wat` + one test case per row of the §6 table. Probe first: print the
+counts, read the table, then write the code. The probe is twenty minutes; guessing
+is two days.
+5. **Then the frame form, then tail calls, then the embedder seam.** In that order,
+because each one is specified in terms of the previous one, and because the frame
+form's cross-module path is the one we still do not have — do not assume it works
+because the single-module case does.
+6. **Keep a defect ledger as you go.** `PRODUCTION_GAPS.md` is why this project can
+resume after a break: every refusal, every leak, every "works on two of three"
+has a paragraph with a date and a measurement. Your fourth backend will produce
+the same list, and a list you wrote is worth ten you have to rediscover.
+
+## E.4 What we would do differently
+
+* **Write the ABI as a table of sites first**, and make the fixture generation a
+  chore: one small `.wat` function per site, one assertion per function. Most of
+  the defects in this tree would have been caught the day they were written.
+* **Decide the call form once, in the core, as a function of the type.** Every
+  backend re-deriving it is how we ended up with a module-wide flag, three
+  predicates, one backend that ignored the opt-in, and a cross-module hole.
+* **Treat "the suite is green" as necessary, never sufficient.** Three green
+  backends disagreed about reference counts, about who owns a native import's
+  result, and about what a frame means across a module boundary.
+* **Do not let a backend invent a second embedder entry.** One marshaller.
+* **Timebox the elegance.** The universal reference pair (`clone`/`drop`/`store`)
+  replaced a dozen per-kind helpers and made the model uniform; the per-kind
+  helpers existed because each one had seemed simpler at the time.
+
+## E.5 What is still open
+
+The honest list a fourth backend author should know about, as of 2026-11-09:
+
+| Gap | Where it hurts | Note |
+|---|---|---|
+| The call form is decided **per module** | one wide function pays the frame's cost for every call in that module, and forfeits the register tail-call trampoline module-wide | the rule and the cost analysis are in [`CALL_FORM_GRANULARITY.md`](CALL_FORM_GRANULARITY.md); the unsound half is refused now |
+| The frame form has **no cross-module path** | a graph with `setFrameCallAbiOptIn(true)` cannot import a compiled function | refused with a named exception instead of crashing |
+| A **native import's reference result** is a borrow | a backend that takes the count over releases the host's | documented, pinned by the stringref fixture on all three |
+| A **trap** abandons the operand stack's reference slots | one leak per trap, on an error path whose frame is dying anyway | the *locals* are released on the trap path; the stack slots are not |
+| `table.set` / `table.atomic.*` do not release their operands | a leak on a reference-typed table | no fixture yet; the shapes are listed in `PRODUCTION_GAPS.md` §31 |
+| Everything is **x86-64 Linux / SysV AMD64** | no non-SysV runner exists | the `provisional` rows in [`../ABI_PORTABILITY.md`](../ABI_PORTABILITY.md) are exactly this gap |
+
+None of these is a wrong result. That is not a comfort: it is rule 1. Each one is
+waiting for the fixture that would make it visible.

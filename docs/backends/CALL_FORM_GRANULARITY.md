@@ -26,7 +26,46 @@ recommendation, §3 the evidence, §4 the cost of doing it, §5 what is delibera
 | SLJIT/AsmJIT use the frame form **by default** | **Disagree** | The frame costs one store per argument at the caller and one load per parameter in the callee, and buys nothing unless the register form cannot express the signature. It also changes `v128`-result semantics (register form: caller buffer; frame form: result block) and forfeits the register-form tail-call trampoline for every function in the module. `EXPORT_SIGNATURE.md` §4 already argued this; nothing has changed. |
 | A wrapper so the embedder never sees a frame | **Already true** | `ModuleCallCache` marshals typed arguments into a frame for the embedder (`WasmCallCache.cpp`, the `frameCallAbi()` branch), and `WASM::callCallable<Ret>` is literally `Ret fn(VMContext*, Args…)`. A second template wrapper would duplicate it. The *inverse* direction — native C++ exposed to wasm — is a `Callable` with a native `fnPtr` and a null `context`, which every backend calls in the register form by construction. |
 
-## 2. Recommendation
+## 2. What landed in this pass (2026-11-09), and what did not
+
+**Landed: the unsoundness is gone.** `ModuleInstantiator::instantiate` now calls
+`ModuleInstance::verifyImportCallForms()` right after the two-pass compile -- the
+only point where both modules' forms are known -- and refuses a graph that mixes
+them with a named exception
+([`WasmModuleInstance.cpp`](../../WasmBase/WasmModuleInstance.cpp)). One place,
+all three backends, no behaviour change for a graph that already worked. The
+fixture that proves it is `Test/wasm_wat/call_form_provider.wat` (frame-form
+because of a wide sibling function) imported by `call_form_importer.wat`
+(register-form): it crashed on **all three** backends before the check existed.
+
+Three more defects fell out of writing that fixture, and they are recorded rather
+than hidden:
+
+1. **SLJIT ignored `setFrameCallAbiOptIn` entirely.** It derived the form from the
+   signatures alone, so "one form everywhere" was a no-op on that backend. Fixed:
+   the opt-in now decides the module's form on its own.
+2. **The frame form has no cross-module path on any backend.** With the opt-in on,
+   both modules are frame-form, the forms agree -- and the call still crashed
+   (measured on libjit, sljit and asmjit). It is now refused with a second named
+   exception instead, so the gap is a diagnosis. The register form is the one the
+   linking fixtures pin, and it is what a graph gets unless an embedder opts in.
+3. **`callableIsCompiled` / `callableUsesFrameForm` are shared helpers now.** The
+   "compiled module function versus host entry" test (`rawFnPtr != nullptr &&
+   context != nullptr`) was a static in the component runtime and prose in two
+   documents; it is one function in `WasmModuleInstance.hpp` now.
+
+**Not landed: the granularity itself.** The form is still decided per module, so
+§3's contagion cost is still paid, and the per-signature rule below is still the
+recommendation. The reason is scope, stated plainly: the decision appears at ~25
+sites across the three call paths (direct, indirect, ref, tail), plus the export
+cache and the continuation invoke, and every one of them has to switch from "my
+form" to "the callee's form" at once -- a half-converted backend is worse than a
+module-wide one. What makes it tractable now is that the form is a pure function
+of the *type*, and every call site names its callee's type, so no runtime branch
+and no `Callable` field is needed; the remaining work is mechanical and needs the
+fixture above to flip from "refused" to "42".
+
+## 3. Recommendation
 
 1. **Keep the rule "frame only when the register form cannot express the
    signature", and move the decision from the module to the signature.** One
@@ -45,7 +84,7 @@ recommendation, §3 the evidence, §4 the cost of doing it, §5 what is delibera
    the continuation invoke path) even though no header's shape changes, and
    `API_ABI_STABILITY.md` requires a milestone decision for that.
 
-## 3. Why the module-wide rule is a defect, not a preference
+## 4. Why the module-wide rule is a defect, not a preference
 
 **Snapshot (2026-11-09, working tree):** all three backends compile and run the
 whole suite identically (22,482 assertions in 822 cases each), so the defects
@@ -60,7 +99,7 @@ here so the next session measures them rather than rediscovering them.
 Both defects disappear under the §2 rule; neither is fixed by recording the form
 per function *and* keeping module-wide defaults.
 
-## 4. What it costs
+## 5. What it costs
 
 | Work item | Where | Note |
 |---|---|---|
@@ -76,7 +115,7 @@ reason it is not part of this change: it moves references between frames, and th
 reference-ownership work that *was* done here is its prerequisite (a form switch
 must not move ownership).
 
-## 5. What is deliberately not proposed
+## 6. What is deliberately not proposed
 
 * **Frame by default on any backend.** It inverts `EXPORT_SIGNATURE.md` §4, pays a
   cost on every call to buy nothing, and silently changes the ABI of modules that

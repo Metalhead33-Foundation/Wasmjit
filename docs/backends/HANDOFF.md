@@ -139,45 +139,42 @@ them, and the validator now rejects them (`V128ATOMIC`).
 
 ## 7. Next session's recommendation
 
-**Done since this list was written (2026-11-09):** the reference-ownership model
-is complete on all three backends. `docs/WRITING_A_BACKEND.md` §6 now carries the
-rule as a table of sites, the `GC reference ownership: the operand stack owns one
-count per reference` case measures it with exact counts, and the three suites
-report the same 22,482 assertions in 822 cases. What was three shapes is now one
-`drop`, the local/parameter/epilogue model, the field and element paths, `select`,
-and the call argument boundary — on LibJIT, SLJIT **and** AsmJIT.
+**State at the end of the 2026-11-09 pass.** Reference ownership is exact on all
+three backends, measured shape by shape: 22,526 assertions in 824 cases on LibJIT,
+22,524 on SLJIT and AsmJIT (the difference is one fixture taking the positive
+branch only where the provider stays register-form). The consumer sites that were
+"left for later" are closed -- `ref.test`/`ref.is_null`/`ref.eq`, the pass-through
+casts, the packed field and element reads, call arguments, a native import's
+borrowed result, and every trap path. `PRODUCTION_GAPS.md` §32 carries the table.
 
-1. **Close the native-import result asymmetry.** A compiled callee transfers the
-   count its operand stack held; a host C function returns a pointer and keeps
-   its own `Value::ref`, so the caller must clone. Only AsmJIT does that today
-   (`retainNativeCallResult`); SLJIT and LibJIT take the count over on a *direct*
-   call to an import, which over-releases if the host still holds the reference.
-   The fix is small in both; the reason it is not done is that it needs a fixture
-   that a reference-returning native import can be registered against, and an
-   unverified change to two green backends is worse than a recorded gap.
-2. **Call-form granularity — decided, not yet built.** The register-or-frame
-   choice is module-wide today, which is both a cost (one wide function switches
-   every call in the module to the frame form and forfeits the register tail-call
-   trampoline) and *unsound across modules* (a register-form module importing
-   from a frame-form one emits a register call into a frame entry, and nothing
-   compares the forms). [`CALL_FORM_GRANULARITY.md`](CALL_FORM_GRANULARITY.md)
-   states the rule that removes both — the form is a function of the *signature*
-   plus a backend-declared ceiling, never of the module and never of the
-   individual function — and answers the "wrap it so the embedder never sees a
-   frame" question (that wrapper is `ModuleCallCache`, already done). It is a
-   milestone of its own: it changes the behaviour of a frozen seam.
-3. **Reduce the staged-import cost.** A native import with more than three
-   parameters costs one libffi round trip per call on SLJIT. SLJIT's argument
-   ceiling is four, so `ctx + 3` is the maximum and nothing can be gained without
-   staging; measure before changing it.
-4. **Widen the frame-form tail path.** `return_call_ref` above the register-form
-   ceiling is still a semantic call+return on SLJIT; the frame trampoline is the
-   missing piece ([`PRODUCTION_GAPS.md`](PRODUCTION_GAPS.md) §2.1).
+What is left, in the order it should be taken:
+
+1. **Per-signature call form.** The one remaining *design* gap: the form is still
+decided per module, so one wide function makes every call in that module pay the
+frame's stores and loads and forfeits the register tail-call trampoline
+module-wide. [`CALL_FORM_GRANULARITY.md`](CALL_FORM_GRANULARITY.md) §2 has the
+rule, the ~25 sites it touches, and the fixture that must flip from "refused" to
+"42". Do this as its own milestone: it changes the behaviour of a frozen seam.
+2. **The frame form's cross-module path.** Both modules frame-form, forms agree,
+   and the call still crashed on all three backends -- so the combination is
+   refused today with a named exception. Implementing it is what lets a graph use
+   the opt-in at all.
+3. **`table.set` and the atomic table forms** do not release their reference
+   operands. A reference-typed table fixture is the missing piece; there is none,
+   which is exactly why this stayed a list entry.
+4. **A `return_call_ref` above the register-form ceiling** is still a semantic
+   call plus return on SLJIT ([`PRODUCTION_GAPS.md`](PRODUCTION_GAPS.md) §2.1).
 5. **Portability.** Every production sentence in this tree is scoped to x86-64
    Linux / SysV AMD64. A single non-SysV runner (AArch64 or MS x64) would turn
    the `provisional` rows in [`ABI_PORTABILITY.md`](../ABI_PORTABILITY.md) into
-   evidence, and that is the largest remaining gap between "production-ready" and
-   "portable".
+   evidence.
 
+*Answered by analysis, no code change:* the staged-import cost on SLJIT. Its
+C-call form takes four argument entries and `VMContext*` is the first, so
+`ctx + 3` is the maximum and reserving `S0`/`S1` cannot express a wider signature.
+Staging is the only shape that can, so the cost is structural rather than a
+missing optimisation.
+
+Keep the probe discipline: strengthen the fixture until it observes the
 Keep the probe discipline: strengthen the fixture until it observes the
 property, validate the module, run all three backends, then record a row.

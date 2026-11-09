@@ -546,7 +546,7 @@ for a merge to `master` — so that "green" means the same thing to every review
 | Run | Command | Evidence it produces | Last measured |
 | --- | --- | --- | --- |
 | Strict validator sweep | `WASM_SPEC_VALIDATE=1 ./WasmJit` (curated) and `WASM_SPEC_VALIDATE=1 ./WasmJit '[spec]'` (all) | every curated binary negative module is rejected; the all-scripts sweep exercises the hidden decoder/validator/linker cases too | **curated 3,275 / 3,277** (`tag` is the two-entry known failure), **all-scripts 257 / 257**, 2026-11-03 |
-| AddressSanitizer build + suite | configure a second shadow build (below), then run the default suite with `ASAN_OPTIONS=detect_leaks=1:abort_on_error=1` and `LSAN_OPTIONS=suppressions=Test/asan.supp` | no use-after-free, overflow or engine leak; only LibJIT's uninstrumented process-wide caches are suppressed | **611 cases / 22,036 assertions passed, no ASan memory error, LeakSanitizer clean, 2026-11-09** (exit 0); `[compilation-policy]` is excluded because LibJIT's CFG optimizer under ASan exceeds the runtime budget |
+| AddressSanitizer build + suite | configure a second shadow build (below), then run the default suite with `ASAN_OPTIONS=detect_leaks=1:abort_on_error=1` and `LSAN_OPTIONS=suppressions=Test/asan.supp` | no use-after-free, overflow or engine leak; only LibJIT's uninstrumented process-wide caches are suppressed | **613 cases / 22,080 assertions passed, no ASan memory error, LeakSanitizer clean, 2026-11-09** (exit 0); `[compilation-policy]` is excluded because LibJIT's CFG optimizer under ASan exceeds the runtime budget |
 | Execution-budget run | `./WasmJit '*per-agent step budget*'` (part of `[config]`) | a finite fuel budget stops a runaway loop with `TrapKind::OutOfFuel` and leaves `fuelRemaining()` at zero | **64-unit budget**, `[config]` green, 2026-11-03 |
 | ThreadSanitizer concurrency run | configure a third shadow build (below), then `./WasmJit '[multiagent]'` | no data race on the multi-agent path (waiter table, entry counter, GC queue/counters, shared-global atomics) | `[multiagent]` **51 assertions / 6 cases** and `[concurrency]` **80 / 13**, **no TSan report**, 2026-11-03 |
 | ABI check | `./Test/abi-check.sh build/<config>` | no exported symbol disappeared since the baseline (the additive-only rule of `API_ABI_STABILITY.md` G2); `--update` records an intentional addition | **3,093 dynamic / 1,992 strong symbols, 0 removed**, 2026-11-03 |
@@ -720,11 +720,11 @@ tests, and it is green — on **every** backend (snapshot 2026-11-09):
 
 ```
 $ ./WasmJit                                    # LibJIT
-All tests passed (22482 assertions in 822 test cases)
+All tests passed (22524 assertions in 824 test cases)
 $ WASMJIT_BACKEND=sljit  ./WasmJit
-All tests passed (22482 assertions in 822 test cases)
+All tests passed (22524 assertions in 824 test cases)
 $ WASMJIT_BACKEND=asmjit ./WasmJit
-All tests passed (22482 assertions in 822 test cases)
+All tests passed (22524 assertions in 824 test cases)
 ```
 
 A full sweep is green. `WASM_SPEC_TOLERANT=1` remains available for surveys (it

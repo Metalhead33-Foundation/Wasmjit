@@ -1204,9 +1204,64 @@ register-form module importing a function from a frame-form module emits a
 register-form call into a frame-form entry; nothing compares the two forms (the
 component runtime derives the form per callable, the plain module import path
 does not). See [`CALL_FORM_GRANULARITY.md`](CALL_FORM_GRANULARITY.md).
-3. **A trap leaks the frame's reference locals.** The trap epilogue returns the
-zero of each result without running the reference-local release, so a trap
-abandons the counts its locals held. Reclamation is deferred and a trap is
-typically terminal for the instance, so this is a bounded leak on an error path,
-not a corruption -- but it is a leak, and it is the one place where the epilogue
-rule above does not hold.
+3. ~~**A trap leaks the frame's reference locals.**~~ **Closed (2026-11-09).** Every
+trap path now runs the reference-local release before returning -- the post-call
+check, the zero-return epilogue and the explicit `unreachable` (which returned
+without it on all three backends). The fixture is `trap_after_alloc`: five
+trapped calls that allocate, then a collect that must find nothing alive. The
+*operand stack's* slots are still abandoned by a trap; that residue is bounded by
+the frame that is already dying, and it is recorded in the epilogue of
+[`POST_MORTEM.md`](POST_MORTEM.md) §E.5 rather than fixed.
+
+## 32. The consumer sites, closed, and what the call form turned out to be (2026-11-09)
+
+**Snapshot (2026-11-09, working tree):** 22,526 assertions in 824 cases on
+LibJIT, 22,524 on SLJIT and AsmJIT (LibJIT runs two extra assertions because a
+call-form fixture takes its positive branch there).
+
+§31 listed the remaining consumer sites as leftovers. All of them are closed now,
+each with a shape in `Test/wasm_wat/gc_ownership.wat` that measures it:
+
+| Site | What it does now |
+|---|---|
+| `ref.is_null`, `ref.test`, `ref.eq` | release the consumed reference (it was leaking the stack's count) |
+| `ref.cast`, `ref.as_non_null` | move the count to the result instead of cloning it again (LibJIT cloned) |
+| `struct.get_s/u`, `array.get_s/u` | release the container operand even though the field or element is packed |
+| a call | release the reference arguments (a parameter is the caller's borrow) |
+| a native import returning a reference | clone it: the host keeps its own count, unlike a compiled callee, which hands its stack count over |
+| a trap, in any form | release the reference locals before returning |
+
+AsmJIT also lowers a packed field in `struct.new_default` now; it used to refuse
+the whole shape, which is why the packed rows could not be measured there at all.
+
+**The call form turned out to be two defects, not one.**
+
+* The *unsound* half is closed. `ModuleInstantiator::instantiate` calls
+  `ModuleInstance::verifyImportCallForms()` right after the two-pass compile and
+  refuses a module graph that mixes the register and frame forms with a named
+  exception. The fixture that proves it crashed on all three backends before the
+  check existed (`call_form_provider.wat` imported by `call_form_importer.wat`).
+* Two more defects fell out of that fixture. **SLJIT ignored
+  `setFrameCallAbiOptIn`** entirely -- it derived the form from the signatures
+  alone, so "one form everywhere" was a no-op there -- and **the frame form has no
+  cross-module path on any backend**: with the opt-in on, both modules agree on
+  the form and the call still crashed on libjit, sljit and asmjit. That
+  combination is refused now, so the gap is a diagnosis instead of a segfault.
+* The *cost* half -- the form is still decided per module, so one wide function
+  makes every call in that module pay the frame -- is **not** closed. The rule,
+  the count of sites (~25 across the three call paths plus the export cache and
+  the continuation invoke), and why it needs its own milestone are in
+  [`CALL_FORM_GRANULARITY.md`](CALL_FORM_GRANULARITY.md) §2.
+
+Still open after this pass, and named so the next session does not have to
+rediscover them:
+
+1. **Per-signature call form** (the cost half above).
+2. **The frame form's cross-module path** (refused, not implemented).
+3. **`table.set`, `table.atomic.set` and the atomic `table.*.rmw` forms** do not
+   release their reference operands. No fixture covers a reference-typed table
+   yet, and that is the reason it is a list entry rather than a fix.
+4. **A `return_call_ref` above the register-form ceiling** is still a semantic
+   call plus return on SLJIT (§2.1): the frame trampoline is missing.
+5. **Portability**: every sentence in this tree is scoped to x86-64 Linux / SysV
+   AMD64 because that is the only runner that exists.
