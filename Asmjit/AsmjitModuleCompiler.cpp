@@ -2823,24 +2823,32 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 
 		if (typeIndex >= signatures.size() || !signatures[typeIndex])
 			throw std::runtime_error("AsmJit call references an unavailable function signature");
+		// The translated signature table is spelled in *this module's* form. When
+		// the callee was compiled in the other one, its own spelling is translated
+		// on demand -- the mixed-graph path, which is rare enough that a cached
+		// second table would be wasted memory (docs/backends/CALL_FORM_GRANULARITY.md).
+		bool calleeFrameForm = isInternal
+				? frameMode : WASM::callableUsesFrameForm(internals.importStorage[index]);
+		std::unique_ptr<asmjit::FuncSignature> foreignFormSignature;
+		if (calleeFrameForm != frameMode)
+			foreignFormSignature = std::make_unique<asmjit::FuncSignature>(
+					TypeTranslator::translateFunctionType(
+							module.funcTypeAt(typeIndex), calleeFrameForm));
+		const asmjit::FuncSignature& calleeSignature = foreignFormSignature != nullptr
+				? *foreignFormSignature : *signatures[typeIndex];
 		const WASM::FuncType calledType = module.funcTypeAt(typeIndex);
 		if (inDeadCode())
 			return;
-		// The call shape below is chosen from this module's form, so a compiled
-		// callee that was built in the other form cannot be called from here. That
-		// is a property of this backend's lowering, not of the module graph: SLJIT
-		// derives the shape from the callee instead. Refuse by name rather than
-		// emit the wrong ABI (docs/backends/CALL_FORM_GRANULARITY.md).
-		if (!isInternal && WASM::callableIsCompiled(internals.importStorage[index])
-				&& WASM::callableUsesFrameForm(internals.importStorage[index]) != frameMode)
-			throw std::runtime_error("AsmJit: the module imports a function compiled in"
-					" the other call form, which this backend cannot call; instantiate the"
-					" graph without WASM::setFrameCallAbiOptIn so that every narrow signature"
-					" stays register-form"
-					" (docs/backends/CALL_FORM_GRANULARITY.md)");
-		if (!frameMode && calledType.results.size() > 1)
+		// The call shape follows the *callee*, not this module: a compiled callee
+		// from another module may have been built in either form, and a native
+		// import is always the register form because it is a host C function. That
+		// is what lets two modules that disagree about the form call each other
+		// (docs/backends/CALL_FORM_GRANULARITY.md).
+		if (!isInternal && !WASM::callableIsCompiled(internals.importStorage[index]))
+			calleeFrameForm = false;
+		if (!calleeFrameForm && calledType.results.size() > 1)
 			throw std::runtime_error("AsmJit register-form calls support at most one result");
-		if (!frameMode) {
+		if (!calleeFrameForm) {
 			for (const auto& parameter : calledType.params)
 				requireScalar(parameter.val, "call parameters");
 			for (const auto& result : calledType.results)
@@ -2875,10 +2883,11 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 		const std::vector<asmjit::x86::Mem> keptArguments =
 				spillCallReferenceArguments(calledType, arguments);
 
-		if (frameMode) {
-			// A native import is a host C function with the typed register ABI,
-			// not a staging-frame callee. Call it through the register form and
-			// leave its result on the value stack for the frame-mode caller.
+		if (calleeFrameForm) {
+			// A native import is a host C function with the typed register ABI, not a
+			// staging-frame callee. It never reaches this branch -- `calleeFrameForm`
+			// is false for a callable with no compiled entry -- so the register path
+			// below handles it.
 			if (!isInternal && importedCallee == nullptr) {
 				for (const WASM::StorageType& parameter : calledType.params)
 					if (parameter.val.opcode == WASM::ValueTypeCode::V128)
@@ -2938,8 +2947,8 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 			}
 			asmjit::InvokeNode* frameInvoke = nullptr;
 			const asmjit::Error frameError = isInternal
-					? compiler.invoke(asmjit::Out(frameInvoke), targetLabel, *signatures[typeIndex])
-					: compiler.invoke(asmjit::Out(frameInvoke), target, *signatures[typeIndex]);
+					? compiler.invoke(asmjit::Out(frameInvoke), targetLabel, calleeSignature)
+					: compiler.invoke(asmjit::Out(frameInvoke), target, calleeSignature);
 			checkError(frameError, "AsmJit frame-call emission failed");
 			if (importedCallee == nullptr)
 				frameInvoke->set_arg(0, vmContext);
@@ -2983,8 +2992,8 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 		auto preparedArguments = prepareCallArguments(calledType, arguments);
 		asmjit::InvokeNode* invoke = nullptr;
 		const asmjit::Error error = isInternal
-				? compiler.invoke(asmjit::Out(invoke), targetLabel, *signatures[typeIndex])
-				: compiler.invoke(asmjit::Out(invoke), target, *signatures[typeIndex]);
+				? compiler.invoke(asmjit::Out(invoke), targetLabel, calleeSignature)
+				: compiler.invoke(asmjit::Out(invoke), target, calleeSignature);
 		checkError(error, "AsmJit function-call emission failed");
 		if (importedCallee == nullptr)
 			invoke->set_arg(0, vmContext);
