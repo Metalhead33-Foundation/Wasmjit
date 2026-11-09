@@ -174,3 +174,42 @@ The state left behind: a uniform graph works in either form on every backend, a
 **mixed** graph works on LibJIT and SLJIT and is refused by name on AsmJIT (whose
 call lowering takes the convention from its own module form), and a both-frame
 cross-module call works everywhere.
+
+## 8. Making the frame form the default on SLJIT and AsmJIT: the obstacle found (2026-11-09)
+
+**The decision is sound and is where this should go.** The register form is a
+liability on a low-level backend: it is the reason SLJIT and AsmJIT have a
+signature ceiling, the reason a mixed graph could exist at all, and the reason
+`return_call_ref` above that ceiling needs a fallback. LibJIT, which translates
+through a higher-level IR, has no such ceiling and is the backend that keeps the
+register form well. So: frame form as the *default* on SLJIT and AsmJIT, register
+form as the default on LibJIT, and the module-wide contract (`frameCallAbi()`)
+stays true either way.
+
+Two things are needed before the default can flip, and the first one was
+attempted:
+
+1. **The typed entry points must marshal, so the embedder and the harness keep
+   `Ret fn(VMContext*, Args…)`.** `ModuleCallCache` already does; `callCallable`
+   does not, and 1,339 test call sites use it. A frame-aware `callCallable` (build
+   the frame from the typed arguments, call `void(VMContext*, void*)`, read the
+   result block back) was written and works for a plain callee.
+2. **The tail-call driver sits between them, and that is what broke.** For a
+   module with tail calls, `Callable::fnPtr` is the *driver* (`Ret fn(VMContext*,
+   Args…)`, which loads `rawFnPtr` and re-dispatches through `TailCallState`), not
+   the raw frame entry. Marshalling in `callCallable` therefore calls a
+   register-form driver with a frame pointer. Measured: a tail chain returned its
+   placeholder instead of `1` (`CallCacheTests`, `direct == 1` → `0`) and one
+   SLJIT case faulted. `callCallableFrame` did not hit this because it bypasses the
+   driver by design.
+
+So the work is one level lower than it looks: either the driver presents the
+frame shape at the boundary (so `callCallable` keeps calling `fnPtr` in one
+shape), or `Callable` carries a frame-form *driver* built for that shape, or the
+marshaller calls `rawFnPtr` for frame-form callees and gives up the driver's
+constant-stack guarantee for direct host entries. The third is a regression; the
+first two are the real options, and both are a focused piece of work on
+`WasmTailTrampoline.cpp` plus each backend's driver emission.
+
+The attempt was reverted rather than half-landed: the tree is green at
+22,534 / 22,534 / 22,532 assertions in 824 cases.
