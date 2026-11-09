@@ -72,4 +72,49 @@
   ;; the count a reference result arrives with.
   (func (export "make_and_return") (result (ref $pair))
     (struct.new_default $pair))
+
+  ;; ── Consumers that inspect a reference without keeping it ─────────────────
+  ;; Each one pops a reference and produces a scalar, so the operand stack's
+  ;; count must be released; nothing else in the function touches a count.
+  (func (export "is_null") (param $a (ref $pair)) (result i32)
+    (ref.is_null (local.get $a)))
+
+  (func (export "test_type") (param $a (ref $pair)) (result i32)
+    (ref.test (ref $pair) (local.get $a)))
+
+  ;; `ref.eq` consumes two references.
+  (func (export "ref_eq") (param $a (ref $pair)) (param $b (ref $pair)) (result i32)
+    (ref.eq (local.get $a) (local.get $b)))
+
+  ;; ── Pass-throughs: the count moves to the result, it is not duplicated ────
+  (func (export "cast") (param $a (ref $pair)) (result (ref $pair))
+    (ref.cast (ref $pair) (local.get $a)))
+
+  (func (export "as_non_null") (param $a (ref $pair)) (result (ref $pair))
+    (ref.as_non_null (local.get $a)))
+
+  ;; ── Packed field and element reads still consume a reference ──────────────
+  (type $packed (struct (field i8) (field (mut (ref null $pair)))))
+  (type $i8arr (array (mut i8)))
+
+  (func (export "new_packed") (result (ref $packed))
+    (struct.new_default $packed))
+
+  (func (export "new_i8arr") (result (ref $i8arr))
+    (array.new_default $i8arr (i32.const 4)))
+
+  (func (export "packed_get") (param $p (ref null $packed)) (result i32)
+    (struct.get_u $packed 0 (local.get $p)))
+
+  (func (export "packed_elem") (param $arr (ref null $i8arr)) (result i32)
+    (array.get_u $i8arr (local.get $arr) (i32.const 0)))
+
+  ;; ── A trap is an exit path too ────────────────────────────────────────────
+  ;; The frame leaves through the trap, never reaching the return epilogue, so
+  ;; the reference local's count has to be given back on the way out. Without
+  ;; that, every trapped call leaks one object.
+  (func (export "trap_after_alloc") (result i32)
+    (local $a (ref null $pair))
+    (local.set $a (struct.new_default $pair))
+    (unreachable))
 )

@@ -3027,6 +3027,10 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 		checkError(compiler.test(pending, pending), "AsmJit post-call trap test failed");
 		checkError(compiler.jz(noTrap), "AsmJit post-call trap branch failed");
 		emitTrapSiteAnnotation();
+		// A trap leaves through the return below, so the frame's reference
+		// locals give their counts back here instead of at an epilogue that
+		// never runs (see `emitTrapLocalRelease`).
+		emitTrapLocalRelease();
 		if (frameMode || resultCount == 0) {
 			// Frame mode returns void: the results live in the caller's frame, and
 			// on a trap they are undefined, so there is nothing to return
@@ -3081,6 +3085,10 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 
 	void emitZeroReturn()
 	{
+		// The zero return is the trap and exception epilogue: the frame exits
+		// here without reaching `emitFunctionReturnValues`, so the reference
+		// locals give their counts back first.
+		emitTrapLocalRelease();
 		if (frameMode || resultCount == 0 || bufferedVectorResult) {
 			checkError(compiler.ret(), "AsmJit exception-path void return failed");
 			return;
@@ -5892,6 +5900,10 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		checkError(compiler.test(reference, reference), "AsmJit ref.is_null test failed");
 		checkError(compiler.set(asmjit::x86::CondCode::kE, result.r8()),
 				"AsmJit ref.is_null set failed");
+		// The operand was the operand stack's and the result is an i32, so the
+		// stack gives its count up; the answer is already a plain integer.
+		if (referenceValues.erase(reference.id()) != 0)
+			emitRefDrop(reference);
 		values.push_back(result);
 	}
 
@@ -5969,7 +5981,11 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		if (!loopTarget)
 			target.endTargeted = true;
 		checkError(compiler.bind(skip), "AsmJit br_on_non_null skip binding failed");
-		// Fallthrough consumes the reference.
+		// Fallthrough consumes the reference: it is a move, not a clone. Control
+		// only reaches this point when the reference was null, so the release is
+		// a no-op at run time and the count is not taken twice.
+		if (referenceValues.erase(reference.id()) != 0)
+			emitRefDrop(reference);
 		values.pop_back();
 	}
 
@@ -6066,12 +6082,20 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		invoke->set_ret(0, object);
 		emitPendingTrapReturn();
 		for (std::size_t i = 0; i < fields.size(); ++i) {
-			if (fields[i].storage.isPacked)
-				throw std::runtime_error("AsmJit struct.new_default does not lower packed fields yet");
+			const auto offset = static_cast<int32_t>(WASM::gcStructFieldOffset(fields, i));
+			if (fields[i].storage.isPacked) {
+				// A packed field is one or two bytes and its default value is zero for
+				// both, so it is one store of the field's own width.
+				const bool isI8 = fields[i].storage.packed == WASM::ValueTypeCode::I8;
+				checkError(isI8
+						? compiler.mov(asmjit::x86::byte_ptr(object, offset), static_cast<uint8_t>(0))
+						: compiler.mov(asmjit::x86::word_ptr(object, offset), static_cast<uint16_t>(0)),
+						"AsmJit struct.new_default packed zeroing failed");
+				continue;
+			}
 			const int width = kindWidth(fields[i].storage.value.opcode);
 			if (width != 4 && width != 8)
 				throw std::runtime_error("AsmJit struct.new_default does not lower this field type yet");
-			const auto offset = static_cast<int32_t>(WASM::gcStructFieldOffset(fields, i));
 			if (width == 4)
 				checkError(compiler.mov(asmjit::x86::dword_ptr(object, offset),
 						static_cast<uint32_t>(0)), "AsmJit struct.new_default zeroing failed");
@@ -6482,6 +6506,11 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 				checkError(compiler.movzx(result, asmjit::x86::word_ptr(object, byteOffset)),
 						"AsmJit array.get_u word load failed");
 		}
+		// The container operand was the operand stack's, so its count goes
+		// back. The element is already in a fresh register, so the drop cannot
+		// invalidate it, and a packed element holds no reference of its own.
+		if (referenceValues.erase(object.id()) != 0)
+			emitRefDrop(object);
 		values.push_back(result);
 	}
 
@@ -6811,6 +6840,10 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		invoke->set_arg(3, packedDst);
 		invoke->set_arg(4, length);
 		emitPendingTrapReturn();
+		// The array operand was the operand stack's; the helper only wrote into
+		// it (the data segment is store-owned, not the stack's).
+		if (referenceValues.erase(reference.id()) != 0)
+			emitRefDrop(reference);
 	}
 
 	void dispatchArrayInitElem(WASM::TypeIdx arg1, uint32_t arg2) override
@@ -6840,6 +6873,10 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		invoke->set_arg(3, packedDst);
 		invoke->set_arg(4, length);
 		emitPendingTrapReturn();
+		// The array operand was the operand stack's; the helper only wrote into
+		// it (the element segment is store-owned, not the stack's).
+		if (referenceValues.erase(reference.id()) != 0)
+			emitRefDrop(reference);
 	}
 
 	void dispatchArrayNewDefault(WASM::TypeIdx arg) override
@@ -7085,6 +7122,12 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		checkError(compiler.dec(counter), "AsmJit array.copy forward counter failed");
 		checkError(compiler.jmp(forward), "AsmJit array.copy forward edge failed");
 		checkError(compiler.bind(done), "AsmJit array.copy done label failed");
+		// Both containers were the operand stack's; the copy loop only read one
+		// and wrote the other, so each one's count goes back.
+		if (referenceValues.erase(dstObject.id()) != 0)
+			emitRefDrop(dstObject);
+		if (referenceValues.erase(srcObject.id()) != 0)
+			emitRefDrop(srcObject);
 	}
 
 	void emitCopyTransfer(bool packed, bool packedI8, int width, const asmjit::x86::Gp& dst,
@@ -7211,6 +7254,13 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		checkError(compiler.dec(counter), "AsmJit array.fill counter step failed");
 		checkError(compiler.jmp(loopStart), "AsmJit array.fill back edge failed");
 		checkError(compiler.bind(loopDone), "AsmJit array.fill loop label binding failed");
+		// The array operand was the operand stack's and the fill only wrote
+		// through it, so its count goes back. The fill value is left alone: a
+		// reference element type has no per-element retain in this lowering yet,
+		// and releasing the value here would leave every element pointing at a
+		// dead object.
+		if (referenceValues.erase(object.id()) != 0)
+			emitRefDrop(object);
 	}
 
 	void dispatchArrayNew(WASM::TypeIdx arg) override
@@ -7308,6 +7358,10 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		checkError(compiler.mov(length, asmjit::x86::dword_ptr(object,
 				static_cast<int32_t>(WASM::GcHeader::kArrayLengthOffset))),
 				"AsmJit array.len load failed");
+		// The array operand was the operand stack's and the result is an i32,
+		// so the stack gives its count up.
+		if (referenceValues.erase(object.id()) != 0)
+			emitRefDrop(object);
 		values.push_back(length);
 	}
 
@@ -7354,6 +7408,11 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 				checkError(compiler.movzx(result, asmjit::x86::word_ptr(object, offset)),
 						"AsmJit struct.get_u word load failed");
 		}
+		// The container operand was the operand stack's, so its count goes
+		// back. The field value is already in a fresh register and a packed
+		// field holds no reference of its own.
+		if (referenceValues.erase(object.id()) != 0)
+			emitRefDrop(object);
 		values.push_back(result);
 	}
 
@@ -7819,6 +7878,10 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		invoke->set_arg(3, asmjit::Imm(nullable ? 1 : 0));
 		auto result = compiler.new_gp32("refTest");
 		invoke->set_ret(0, result);
+		// The tested reference was the operand stack's and the result is an
+		// i32, so the stack gives its count up.
+		if (referenceValues.erase(reference.id()) != 0)
+			emitRefDrop(reference);
 		values.push_back(result);
 	}
 
@@ -7860,6 +7923,15 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		checkError(compiler.cmp(lhs, rhs), "AsmJit ref.eq compare failed");
 		checkError(compiler.set(asmjit::x86::CondCode::kE, result.r8()),
 				"AsmJit ref.eq set failed");
+		// Both operands were the operand stack's and the result is an i32, so
+		// each one's count goes back. One `erase` per operand also covers the
+		// case where both operands are the same value.
+		const bool lhsOwned = referenceValues.erase(lhs.id()) != 0;
+		const bool rhsOwned = referenceValues.erase(rhs.id()) != 0;
+		if (lhsOwned)
+			emitRefDrop(lhs);
+		if (rhsOwned)
+			emitRefDrop(rhs);
 		values.push_back(result);
 	}
 
@@ -8006,6 +8078,10 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		const size_t stackHeight = controls.empty() ? 0 : controls.back().stackHeight;
 		const size_t placeholderCount = controls.empty() ? resultCount : controls.back().resultCount;
 		values.resize(stackHeight);
+		// An explicit `unreachable` is an exit path like any other: the frame
+		// returns from here without reaching the return epilogue, so the reference
+		// locals give their counts back first (docs/WRITING_A_BACKEND.md section 6).
+		emitTrapLocalRelease();
 		if (frameMode || resultCount == 0 || bufferedVectorResult) {
 			checkError(compiler.ret(), "AsmJit unreachable void return emission failed");
 		} else if (resultCount == 1) {
@@ -9778,10 +9854,24 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 	void dispatchF64Store(WASM::MemArg arg) override { emitMemoryStore(arg, 8, true); }
 
 
-	//! Emits the return for the current value stack in either ABI. Shared by
-	//! `return`, a `br` to the function label and a conditional function branch.
+	//! Releases one count for every reference local of the frame.
+	//!
+	//! This is the one release primitive: the ordinary epilogue
+	//! (`emitFunctionReturnValues`, and the implicit end), and every exit path
+	//! that does not reach it -- a reported trap, an exception propagating out
+	//! of the function, a tail call that leaves through the pending tail-call
+	//! state -- all come here, so no exit releases a local twice.
+	//!
+	//! The re-entrancy guard matters because `wasm_ref_drop` is itself a call
+	//! whose pending-trap return would otherwise re-enter this loop and release
+	//! locals this path has already dropped. With it, a trap raised *inside* the
+	//! release stops the release -- a leak in a case that is already a trap,
+	//! never a count dropped twice.
 	void emitDropReferenceLocals()
 	{
+		if (releasingTrapLocals)
+			return;
+		releasingTrapLocals = true;
 		// Every reference local owns one count (parameters take theirs in the
 		// prologue), so the epilogue gives each one back. `wasm_ref_drop` is the
 		// universal release: it dispatches to the continuation registry, the
@@ -9791,8 +9881,24 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 				continue;
 			emitRefDrop(locals[i]);
 		}
+		releasingTrapLocals = false;
 	}
 
+	//! Releases every reference local on an exit path that does not run the
+	//! ordinary epilogue -- a reported trap, or an exception propagating out of
+	//! the function.
+	//!
+	//! Without it such a path returns while the frame's reference locals still
+	//! hold their counts, which a trapping loop turns into an unbounded leak:
+	//! the trap is reported, the frame returns, and nothing ever releases the
+	//! locals it owned.
+	void emitTrapLocalRelease()
+	{
+		emitDropReferenceLocals();
+	}
+
+	//! Emits the return for the current value stack in either ABI. Shared by
+	//! `return`, a `br` to the function label and a conditional function branch.
 	void emitFunctionReturnValues()
 	{
 		emitDropReferenceLocals();
@@ -11489,6 +11595,9 @@ private:
 	//! reference. AsmJIT ids are unique, so a consumed value's stale entry can
 	//! never match a later, different value.
 	std::unordered_set<uint32_t> stringValues;
+	//! True while `emitDropReferenceLocals` is emitting its sequence, so a
+	//! nested pending-trap return does not release the same locals twice.
+	bool releasingTrapLocals = false;
 	//! True while the current arm can fall through; a branch or return clears it.
 	bool armTerminated = false;
 

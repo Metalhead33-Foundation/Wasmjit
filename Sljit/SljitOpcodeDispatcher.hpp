@@ -1389,9 +1389,21 @@ private:
 	//! Marks the reference results a call just pushed as owning one count each.
 	//! \param type Signature of the callee.
 	void finishCallResults(const WASM::FuncType& type);
+	//! Takes the operand stack's own count of a reference result that a *native*
+	//! import returned, because the host keeps the count of the value it handed
+	//! back and a compiled callee transfers its own instead.
+	//! \param type Signature of the callee.
+	//! \param nativeCallee True when the callee is a host import, not compiled Wasm.
+	void emitRetainNativeCallResult(const WASM::FuncType& type, bool nativeCallee);
 	//! Reports whether the top of the operand stack holds a counted reference.
 	//! \return True when the top slot owns one count.
 	bool topIsReference() const;
+	//! Reports whether one operand-stack slot holds a counted reference, so a
+	//! consumer knows whether there is a count to release before it overwrites
+	//! the slot with a scalar result.
+	//! \param depth Zero-based index of the slot, counting from the bottom.
+	//! \return True when the slot's shadow entry records an owned count.
+	bool referenceAt(std::size_t depth) const;
 	//! Resizes the operand-stack model, keeping the reference shadow in step.
 	//! \param size New depth of the operand stack.
 	void resizeStack(std::size_t size);

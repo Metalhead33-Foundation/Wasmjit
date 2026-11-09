@@ -2017,6 +2017,13 @@ bool OpcodeDispatcher::finish(void*& entry)
 	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R2, 0, SLJIT_IMM,
 			codeAddress(functionName_)));
 	emitHelper(SLJIT_ARGS3V(32, 32, P), &WASM::wasm_trap_annotate);
+	// The frame leaves through the trap instead of the return epilogue, so the
+	// reference locals' counts have to be given back here as well -- otherwise
+	// every trap leaks one count per reference local. This label is reachable
+	// only from `trapJumps_`, and every normal exit path ends in a return, so no
+	// path runs both this release and the one in `emitReturnValue`. The release
+	// clobbers R0-R3, which is why it precedes the zero result below.
+	emitDropReferenceLocals();
 	if (frameAbi_ || resultWidth_ == 0 || resultWidth_ == 16) {
 		emit(sljit_emit_return_void(compiler_));
 	} else if (isFloatKind(resultKind_)) {
@@ -2140,6 +2147,22 @@ void OpcodeDispatcher::finishCallResults(const WASM::FuncType& type)
 	}
 }
 
+void OpcodeDispatcher::emitRetainNativeCallResult(const WASM::FuncType& type, bool nativeCallee)
+{
+	if (measureOnly_ || !nativeCallee || type.results.empty())
+		return;
+	// A host C function hands back a *borrow*: it keeps its own count of the
+	// value it returned, so the operand stack clones before it can hold the
+	// reference across a safepoint or release it. A compiled Wasm callee hands
+	// over the count its own operand stack held, and cloning that would leave
+	// the stack holding two (docs/WRITING_A_BACKEND.md section 6).
+	const std::size_t base = stackWidths_.size() - type.results.size();
+	for (std::size_t i = 0; i < type.results.size(); ++i) {
+		if (isReferenceKind(type.results[i].val.opcode))
+			emitRetainStackObject(base + i);
+	}
+}
+
 bool OpcodeDispatcher::topIsStringRef() const
 {
 	return topIsReference();
@@ -2147,8 +2170,13 @@ bool OpcodeDispatcher::topIsStringRef() const
 
 bool OpcodeDispatcher::topIsReference() const
 {
-	return !stackWidths_.empty() && stackRefKinds_.size() == stackWidths_.size()
-			&& stackRefKinds_.back() != 0;
+	return !stackWidths_.empty() && referenceAt(stackWidths_.size() - 1);
+}
+
+bool OpcodeDispatcher::referenceAt(std::size_t depth) const
+{
+	return depth < stackWidths_.size() && stackRefKinds_.size() == stackWidths_.size()
+			&& stackRefKinds_[depth] != 0;
 }
 
 void OpcodeDispatcher::setTopOfStack(int width, bool reference)
@@ -3649,6 +3677,33 @@ void OpcodeDispatcher::emitResolvedCall(const WASM::FuncType& type, int callable
 	emit(sljit_emit_icall(compiler_, SLJIT_CALL,
 			callArgTypes(type, resultKind, resultWidth),
 			SLJIT_MEM1(SLJIT_SP), targetSlotOffset()));
+	// A parameter is the caller's borrow: the callee has retained whatever it
+	// keeps, so the operand stack gives its own count back now. The release is a
+	// helper call and clobbers R0 (and the float scratch registers), so a
+	// single-register result is parked in the scratch cell across it. A `v128`
+	// result comes back through the staging frame, which no helper touches.
+	bool dropArguments = false;
+	for (const WASM::StorageType& parameter : type.params)
+		if (isReferenceKind(parameter.val.opcode))
+			dropArguments = true;
+	const bool parkResult = dropArguments && resultWidth != 0 && !resultViaBuffer;
+	if (parkResult) {
+		if (isFloatKind(resultKind))
+			emit(sljit_emit_fop1(compiler_, resultWidth == 4 ? SLJIT_MOV_F32 : SLJIT_MOV_F64,
+					SLJIT_MEM1(SLJIT_SP), scratchSlotOffset(), SLJIT_FR0, 0));
+		else
+			emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+					scratchSlotOffset(), SLJIT_R0, 0));
+	}
+	emitDropCallArguments(type);
+	if (parkResult) {
+		if (isFloatKind(resultKind))
+			emit(sljit_emit_fop1(compiler_, resultWidth == 4 ? SLJIT_MOV_F32 : SLJIT_MOV_F64,
+					SLJIT_FR0, 0, SLJIT_MEM1(SLJIT_SP), scratchSlotOffset()));
+		else
+			emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0,
+					SLJIT_MEM1(SLJIT_SP), scratchSlotOffset()));
+	}
 	if (resultViaBuffer) {
 		// R1 is caller-saved, so take the staging address again and copy both
 		// words into the one 16-byte operand slot.
@@ -3702,6 +3757,13 @@ void OpcodeDispatcher::emitCall(WASM::FuncIdx index, bool isTail)
 		require(widthOf(result.val) != 0, "the SLJIT backend only calls i32/i64 signatures");
 	requireStack(calledType.params.size());
 
+	// A direct call to an import is the one place where the callee *kind* is
+	// known statically: an import whose `Callable` carries no context is a host
+	// function, and the count of a reference it returns stays the host's own
+	// (the same test `emitResolvedCall` uses to pick the caller's context).
+	const bool nativeCallee = index < importedCount && index < internals_.importStorage.size()
+			&& internals_.importStorage[index].context == nullptr;
+
 	if (!measureOnly_) {
 		loadContext(SLJIT_R0);
 		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R1, 0, SLJIT_IMM,
@@ -3724,6 +3786,7 @@ void OpcodeDispatcher::emitCall(WASM::FuncIdx index, bool isTail)
 	for (const WASM::StorageType& result : calledType.results)
 		push(widthOf(result.val));
 	finishCallResults(calledType);
+	emitRetainNativeCallResult(calledType, nativeCallee);
 }
 
 void OpcodeDispatcher::emitCallIndirect(WASM::TypeIdx typeIndex, WASM::TableIdx tableIndex,
@@ -5807,8 +5870,13 @@ void OpcodeDispatcher::dispatchRefIsNull()
 		return;
 	requireStack(1);
 	require(stackWidths_.back() == 8, "ref.is_null requires a reference operand");
+	const std::size_t depth = stackWidths_.size() - 1;
+	// The reference is inspected, never kept: the operand stack owns one count of
+	// it, so that count goes back before the slot is overwritten by the i32
+	// result. A stale flag would make a later `drop` release it a second time.
+	const bool owned = referenceAt(depth);
 	if (!measureOnly_) {
-		loadSlot(SLJIT_R0, stackWidths_.size() - 1, 8);
+		loadSlot(SLJIT_R0, depth, 8);
 		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R1, 0, SLJIT_IMM, 0));
 		sljit_jump* taken = sljit_emit_cmp(compiler_, SLJIT_NOT_EQUAL, SLJIT_R0, 0, SLJIT_IMM, 0);
 		if (taken == nullptr)
@@ -5819,7 +5887,15 @@ void OpcodeDispatcher::dispatchRefIsNull()
 			ok_ = false;
 		else if (taken != nullptr)
 			sljit_set_label(taken, done);
-		storeSlot(SLJIT_R1, stackWidths_.size() - 1, 4);
+		// The release is a helper call and clobbers R0-R3, so the predicate is
+		// parked in the scratch cell while the reference is still in its slot.
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_MEM1(SLJIT_SP),
+				scratchSlotOffset(), SLJIT_R1, 0));
+		if (owned)
+			emitDropStackRef(depth);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R1, 0, SLJIT_MEM1(SLJIT_SP),
+				scratchSlotOffset()));
+		storeSlot(SLJIT_R1, depth, 4);
 	}
 	setTopOfStack(4, false);
 }
@@ -6313,13 +6389,29 @@ void OpcodeDispatcher::dispatchRefGetDesc(WASM::TypeIdx arg)
 	requireStack(1);
 	require(stackWidths_.back() == 8, "ref.get_desc requires a reference operand");
 	const std::size_t depth = stackWidths_.size() - 1;
+	// The described object is consumed and the descriptor takes its place. The
+	// object's count goes back, and the descriptor -- which the object holds, not
+	// the operand stack -- has to be retained so the stack owns the count its own
+	// `drop` will later release (docs/WRITING_A_BACKEND.md section 6).
+	const bool owned = referenceAt(depth);
 	if (!measureOnly_) {
 		loadContext(SLJIT_R0);
 		loadSlot(SLJIT_R1, depth, 8);
 		emitHelper(SLJIT_ARGS2(P, P, P), &sljitRefGetDesc);
 		emitPendingTrapCheck();
+		// The release is a helper call and clobbers R0, so the descriptor is
+		// parked in the scratch cell while the object is still in its slot.
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+				scratchSlotOffset(), SLJIT_R0, 0));
+		if (owned)
+			emitDropStackRef(depth);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0, SLJIT_MEM1(SLJIT_SP),
+				scratchSlotOffset()));
 		storeSlot(SLJIT_R0, depth, 8);
+		emitRetainProducedRef(depth);
 	}
+	// The slot holds a reference again, and the stack owns the count just taken.
+	markTopReference();
 }
 
 void OpcodeDispatcher::emitRefCastDescEq(bool allowNull)
@@ -6471,6 +6563,8 @@ void OpcodeDispatcher::emitArrayGetPacked(WASM::TypeIdx arg, bool signExtend)
 	requireStack(2);
 	const std::size_t refDepth = stackWidths_.size() - 2;
 	const std::size_t indexDepth = stackWidths_.size() - 1;
+	// The array operand is a counted reference the operand stack owns.
+	const bool owned = referenceAt(refDepth);
 	if (!measureOnly_) {
 		loadSlot(SLJIT_R1, refDepth, 8);
 		sljit_jump* notNull = sljit_emit_cmp(compiler_, SLJIT_NOT_EQUAL, SLJIT_R1, 0, SLJIT_IMM, 0);
@@ -6506,6 +6600,15 @@ void OpcodeDispatcher::emitArrayGetPacked(WASM::TypeIdx arg, bool signExtend)
 		const sljit_s32 loadOp = isI8 ? (signExtend ? SLJIT_MOV_S8 : SLJIT_MOV_U8)
 				: (signExtend ? SLJIT_MOV_S16 : SLJIT_MOV_U16);
 		emit(sljit_emit_op1(compiler_, loadOp, SLJIT_R3, 0, SLJIT_MEM1(SLJIT_R1), 0));
+		// The array operand is a reference the operand stack owned and the slot
+		// now becomes an i32: release that count. The release is a helper call,
+		// so the loaded element is parked in the scratch cell first.
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+				scratchSlotOffset(), SLJIT_R3, 0));
+		if (owned)
+			emitDropStackRef(refDepth);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R3, 0, SLJIT_MEM1(SLJIT_SP),
+				scratchSlotOffset()));
 		storeSlot(SLJIT_R3, refDepth, 4);
 	}
 	pop();
@@ -7326,8 +7429,12 @@ void OpcodeDispatcher::dispatchArrayLen()
 		return;
 	requireStack(1);
 	require(stackWidths_.back() == 8, "array.len requires a reference operand");
+	const std::size_t depth = stackWidths_.size() - 1;
+	// The container is a reference the operand stack owned and the result is an
+	// i32 in its place, so the count goes back.
+	const bool owned = referenceAt(depth);
 	if (!measureOnly_) {
-		loadSlot(SLJIT_R1, stackWidths_.size() - 1, 8);
+		loadSlot(SLJIT_R1, depth, 8);
 		sljit_jump* notNull = sljit_emit_cmp(compiler_, SLJIT_NOT_EQUAL, SLJIT_R1, 0, SLJIT_IMM, 0);
 		if (notNull == nullptr)
 			ok_ = false;
@@ -7339,7 +7446,15 @@ void OpcodeDispatcher::dispatchArrayLen()
 			sljit_set_label(notNull, done);
 		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R2, 0, SLJIT_MEM1(SLJIT_R1),
 				static_cast<sljit_sw>(WASM::GcHeader::kArrayLengthOffset)));
-		storeSlot(SLJIT_R2, stackWidths_.size() - 1, 4);
+		// The release is a helper call and clobbers R0-R3, so the length is
+		// parked in the scratch cell while the array is still in its slot.
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+				scratchSlotOffset(), SLJIT_R2, 0));
+		if (owned)
+			emitDropStackRef(depth);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R2, 0, SLJIT_MEM1(SLJIT_SP),
+				scratchSlotOffset()));
+		storeSlot(SLJIT_R2, depth, 4);
 	}
 	setTopOfStack(4, false);
 }
@@ -7365,8 +7480,12 @@ void OpcodeDispatcher::emitStructGetPacked(WASM::TypeIdx arg1, uint32_t arg2, bo
 	require(fields[arg2].storage.isPacked, "struct.get_s/u requires a packed field");
 	requireStack(1);
 	require(stackWidths_.back() == 8, "struct.get_s/u requires a reference operand");
+	const std::size_t depth = stackWidths_.size() - 1;
+	// The container operand is a reference the operand stack owned, and the
+	// packed read replaces the slot with an i32: the count goes back here.
+	const bool owned = referenceAt(depth);
 	if (!measureOnly_) {
-		loadSlot(SLJIT_R1, stackWidths_.size() - 1, 8);
+		loadSlot(SLJIT_R1, depth, 8);
 		sljit_jump* notNull = sljit_emit_cmp(compiler_, SLJIT_NOT_EQUAL, SLJIT_R1, 0, SLJIT_IMM, 0);
 		if (notNull == nullptr)
 			ok_ = false;
@@ -7377,13 +7496,21 @@ void OpcodeDispatcher::emitStructGetPacked(WASM::TypeIdx arg1, uint32_t arg2, bo
 		else if (notNull != nullptr)
 			sljit_set_label(notNull, done);
 		// The trap block clobbered R1: reload, then read the packed field.
-		loadSlot(SLJIT_R1, stackWidths_.size() - 1, 8);
+		loadSlot(SLJIT_R1, depth, 8);
 		const bool isI8 = fields[arg2].storage.packed == WASM::ValueTypeCode::I8;
 		const sljit_s32 loadOp = isI8 ? (signExtend ? SLJIT_MOV_S8 : SLJIT_MOV_U8)
 				: (signExtend ? SLJIT_MOV_S16 : SLJIT_MOV_U16);
 		emit(sljit_emit_op1(compiler_, loadOp, SLJIT_R2, 0, SLJIT_MEM1(SLJIT_R1),
 				static_cast<sljit_sw>(WASM::gcStructFieldOffset(fields, arg2))));
-		storeSlot(SLJIT_R2, stackWidths_.size() - 1, 4);
+		// The release is a helper call and clobbers R0-R3, so the loaded scalar
+		// is parked in the scratch cell while the container is still in its slot.
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+				scratchSlotOffset(), SLJIT_R2, 0));
+		if (owned)
+			emitDropStackRef(depth);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R2, 0, SLJIT_MEM1(SLJIT_SP),
+				scratchSlotOffset()));
+		storeSlot(SLJIT_R2, depth, 4);
 	}
 	setTopOfStack(4, false);
 }
@@ -7738,10 +7865,16 @@ void OpcodeDispatcher::emitRefTest(const WASM::HeapType& arg, bool nullable)
 {
 	requireStack(1);
 	require(stackWidths_.back() == 8, "ref.test requires a reference operand");
+	const std::size_t depth = stackWidths_.size() - 1;
+	// `ref.test` inspects the reference and produces a scalar, so the operand
+	// stack's own count goes back. The predicate has to run first: the heap-type
+	// matcher dereferences the reference, which a release may already have
+	// reclaimed.
+	const bool owned = referenceAt(depth);
 	if (!measureOnly_) {
 		const std::uint32_t value = arg.isTypeIndex ? arg.typeIndex
 				: static_cast<std::uint32_t>(static_cast<std::int32_t>(arg.abstract));
-		loadSlot(SLJIT_R1, stackWidths_.size() - 1, 8);
+		loadSlot(SLJIT_R1, depth, 8);
 		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R2, 0, SLJIT_IMM,
 				static_cast<sljit_sw>(value)));
 		if (arg.isTypeIndex) {
@@ -7753,7 +7886,15 @@ void OpcodeDispatcher::emitRefTest(const WASM::HeapType& arg, bool nullable)
 				static_cast<sljit_sw>(nullable ? 1 : 0)));
 		loadContext(SLJIT_R0);
 		emitHelper(SLJIT_ARGS4(32, P, P, W, 32), &sljitRefMatchesHeapType);
-		storeSlot(SLJIT_R0, stackWidths_.size() - 1, 4);
+		// The release is a helper call and clobbers R0-R3, so the predicate is
+		// parked in the scratch cell before the count is given back.
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_MEM1(SLJIT_SP),
+				scratchSlotOffset(), SLJIT_R0, 0));
+		if (owned)
+			emitDropStackRef(depth);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R0, 0, SLJIT_MEM1(SLJIT_SP),
+				scratchSlotOffset()));
+		storeSlot(SLJIT_R0, depth, 4);
 	}
 	setTopOfStack(4, false);
 }
@@ -7800,9 +7941,15 @@ void OpcodeDispatcher::dispatchRefEq()
 	requireStack(2);
 	require(stackWidths_.back() == 8 && stackWidths_[stackWidths_.size() - 2] == 8,
 			"ref.eq requires two reference operands");
+	const std::size_t lowDepth = stackWidths_.size() - 2;
+	const std::size_t highDepth = stackWidths_.size() - 1;
+	// Both operands are consumed and the result is an i32, so both counts the
+	// operand stack owned go back; the lower slot survives as the predicate.
+	const bool lowOwned = referenceAt(lowDepth);
+	const bool highOwned = referenceAt(highDepth);
 	if (!measureOnly_) {
-		loadSlot(SLJIT_R0, stackWidths_.size() - 2, 8);
-		loadSlot(SLJIT_R1, stackWidths_.size() - 1, 8);
+		loadSlot(SLJIT_R0, lowDepth, 8);
+		loadSlot(SLJIT_R1, highDepth, 8);
 		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R2, 0, SLJIT_IMM, 0));
 		sljit_jump* taken = sljit_emit_cmp(compiler_, SLJIT_NOT_EQUAL, SLJIT_R0, 0, SLJIT_R1, 0);
 		if (taken == nullptr)
@@ -7813,9 +7960,23 @@ void OpcodeDispatcher::dispatchRefEq()
 			ok_ = false;
 		else if (taken != nullptr)
 			sljit_set_label(taken, done);
-		storeSlot(SLJIT_R2, stackWidths_.size() - 2, 4);
+		// The releases are helper calls and clobber R0-R3, so the predicate is
+		// parked in the scratch cell while the references are still in their
+		// slots -- the lower one is about to be overwritten by the i32 result.
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_MEM1(SLJIT_SP),
+				scratchSlotOffset(), SLJIT_R2, 0));
+		if (lowOwned)
+			emitDropStackRef(lowDepth);
+		if (highOwned)
+			emitDropStackRef(highDepth);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R2, 0, SLJIT_MEM1(SLJIT_SP),
+				scratchSlotOffset()));
+		storeSlot(SLJIT_R2, lowDepth, 4);
 	}
 	pop();
+	// The surviving slot holds the predicate, so it is a 4-byte scalar that no
+	// longer owns a count.
+	setTopOfStack(4, false);
 }
 
 void OpcodeDispatcher::dispatchI8x16Add() { emitV128Binary(codeAddress(&wasm_i8x16_add)); }

@@ -6910,13 +6910,84 @@ TEST_CASE("GC reference ownership: the operand stack owns one count per referenc
 	// safepoint, so collect before using the live count as a baseline.
 	instance.gcCollect();
 
+	// ── Consumers that inspect a reference without keeping it ────────────────
+	// Each acquires its own count with `local.get`, so the same count must go
+	// back out; the object the test owns is untouched.
+	auto isNull = loaded.instance->exportedFunction("is_null");
+	auto testType = loaded.instance->exportedFunction("test_type");
+	auto refEq = loaded.instance->exportedFunction("ref_eq");
+	REQUIRE(isNull.has_value());
+	REQUIRE(testType.has_value());
+	REQUIRE(refEq.has_value());
+	REQUIRE(WASM::callCallable<int32_t>(*isNull, parent) == 0);
+	REQUIRE(instance.gcRefCount(parent) == 2);
+	REQUIRE(WASM::callCallable<int32_t>(*testType, parent) == 1);
+	REQUIRE(instance.gcRefCount(parent) == 2);
+	REQUIRE(WASM::callCallable<int32_t>(*refEq, parent, child) == 0);
+	REQUIRE(instance.gcRefCount(parent) == 2);
+	REQUIRE(instance.gcRefCount(child) == 3);
+
+	// A pass-through cast moves the count; it must not clone it as well.
+	auto cast = loaded.instance->exportedFunction("cast");
+	auto asNonNull = loaded.instance->exportedFunction("as_non_null");
+	REQUIRE(cast.has_value());
+	REQUIRE(asNonNull.has_value());
+	void* casted = WASM::callCallable<void*>(*cast, parent);
+	REQUIRE(casted == parent);
+	REQUIRE(instance.gcRefCount(parent) == 3); // the test holds the result now
+	instance.refDrop(casted);
+	REQUIRE(instance.gcRefCount(parent) == 2);
+	void* nonNull = WASM::callCallable<void*>(*asNonNull, parent);
+	REQUIRE(nonNull == parent);
+	REQUIRE(instance.gcRefCount(parent) == 3);
+	instance.refDrop(nonNull);
+	REQUIRE(instance.gcRefCount(parent) == 2);
+
+	// A packed field or element read consumes its container operand.
+	auto newPacked = loaded.instance->exportedFunction("new_packed");
+	auto newI8Arr = loaded.instance->exportedFunction("new_i8arr");
+	auto packedGet = loaded.instance->exportedFunction("packed_get");
+	auto packedElem = loaded.instance->exportedFunction("packed_elem");
+	REQUIRE(newPacked.has_value());
+	REQUIRE(newI8Arr.has_value());
+	REQUIRE(packedGet.has_value());
+	REQUIRE(packedElem.has_value());
+	void* packed = WASM::callCallable<void*>(*newPacked);
+	REQUIRE(packed != nullptr);
+	REQUIRE(instance.gcRefCount(packed) == 1);
+	REQUIRE(WASM::callCallable<int32_t>(*packedGet, packed) == 0);
+	REQUIRE(instance.gcRefCount(packed) == 1);
+	void* i8arr = WASM::callCallable<void*>(*newI8Arr);
+	REQUIRE(i8arr != nullptr);
+	REQUIRE(instance.gcRefCount(i8arr) == 1);
+	REQUIRE(WASM::callCallable<int32_t>(*packedElem, i8arr) == 0);
+	REQUIRE(instance.gcRefCount(i8arr) == 1);
+	instance.refDrop(packed);
+	instance.refDrop(i8arr);
+
 	// Locals. Three allocations into one local: every one of them is released,
 	// including the last, which the epilogue drops.
+	//
+	// Collect first: reclamation is deferred to a safepoint, so the two objects
+	// just dropped are still *counted* until one runs.
+	instance.gcCollect();
 	const size_t liveBeforeLocals = testStore().gc().liveObjectCount();
 	REQUIRE(liveBeforeLocals == liveBase + 2);
 	WASM::callCallable<int32_t>(*overwrite);
 	instance.gcCollect();
 	REQUIRE(testStore().gc().liveObjectCount() == liveBeforeLocals);
+
+	// A trap is an exit path too: the frame never reaches the return epilogue,
+	// so the reference local it holds must give its count back on the way out.
+	// Five trapped calls must leave nothing behind.
+	auto trapAfterAlloc = loaded.instance->exportedFunction("trap_after_alloc");
+	REQUIRE(trapAfterAlloc.has_value());
+	instance.gcCollect();
+	const size_t liveBeforeTrap = testStore().gc().liveObjectCount();
+	for (int i = 0; i < 5; ++i)
+		REQUIRE_THROWS_AS(WASM::callCallable<int32_t>(*trapAfterAlloc), WASM::Trap);
+	instance.gcCollect();
+	REQUIRE(testStore().gc().liveObjectCount() == liveBeforeTrap);
 
 	// The same shape in a loop, where a per-iteration leak is unbounded rather
 	// than merely wasteful.
@@ -11981,17 +12052,18 @@ TEST_CASE("native imports exchange stringrefs with the guest")
 	REQUIRE(g_nativeStringSeen == "Hi");
 	REQUIRE(g_nativeStringCalls == 3);
 
-	// The reference-argument/result path keeps a transient count for the
-	// duration of these calls (the operand stack owns a reference while it is
-	// in flight), so the host does not assume the object dies on one release:
-	// it releases every count it can see until the Store frees the object. That
-	// proves the host's own count is real, that no release underflows, and that
-	// the Store reclaims the string (STRINGREF.md STR-8).
+	// Exactly one count is left: the host's own. A guest that receives a
+	// reference *result* from a native import must clone it, because the host
+	// still holds the `Value::ref` it returned -- a *compiled* callee hands its
+	// own stack count over instead, which is why the rule is stated per callee
+	// kind (docs/WRITING_A_BACKEND.md section 6). Taking the count over here
+	// would release the host's, and the loop below would find nothing to
+	// release.
 	REQUIRE(strings.owns(hostString));
 	int released = 0;
 	while (strings.owns(hostString) && strings.release(hostString))
 		++released;
-	REQUIRE(released >= 1);
+	REQUIRE(released == 1);
 	REQUIRE_FALSE(strings.owns(hostString));
 }
 

@@ -2825,6 +2825,8 @@ void OpcodeDispatcher::dispatchCallThroughCallable(jit_value_t callablePtr, WASM
 		jit_value_t calleeContext = jit_insn_load_relative(function, callablePtr,
 				offsetof(WASM::Callable, context), jit_type_void_ptr);
 		emitFrameInvocation(fnPtr, calleeContext, calleeSig, typeIdx, stackArgs);
+		for (jit_value_t argument : stackArgs)
+			emitDropValue(argument);
 		return;
 	}
 
@@ -2843,6 +2845,10 @@ void OpcodeDispatcher::dispatchCallThroughCallable(jit_value_t callablePtr, WASM
 		function, fnPtr, calleeJitSig, args.data(), static_cast<unsigned>(args.size()), 0);
 	emitPendingExceptionCheck();
 	pushCallResults(calleeSig, ret, outBuffer);
+	// The callee took its arguments as a borrow; the operand stack's counts on
+	// the reference ones are released here (RC-5).
+	for (jit_value_t argument : stackArgs)
+		emitDropValue(argument);
 }
 
 void OpcodeDispatcher::emitTrap(WASM::TrapKind kind)
@@ -4528,6 +4534,36 @@ void OpcodeDispatcher::dispatchCall(WASM::FuncIdx funcIdx)
 	for (size_t i = calleeSig.params.size(); i--; )
 		stackArgs[i] = popValue();
 
+	// A host C function (a native import: an import with no instance context)
+	// returns a *borrow* and keeps its own count, while a compiled Wasm callee
+	// hands the count its own operand stack held over. Only the former needs a
+	// clone before the operand stack can hold or release the result
+	// (docs/WRITING_A_BACKEND.md §6).
+	const bool nativeImport = funcIdx < importedFuncCount
+			&& internals.importStorage[funcIdx].context == nullptr;
+
+	// The reference side of a finished call, run on the path that continues
+	// after it. A parameter is the caller's borrow — the callee retained its own
+	// count in its prologue and releases it in its epilogue — so the operand
+	// stack's counts on the reference arguments go here. A native import's
+	// reference *result* is cloned first, because the host keeps the count it
+	// returned (RC-5, docs/WRITING_A_BACKEND.md §6).
+	const auto resolveCallReferences = [&]() {
+		if (nativeImport) {
+			const size_t count = calleeSig.results.size();
+			for (size_t i = 0; i < count && count <= valueStack.size(); ++i) {
+				const size_t index = valueStack.size() - count + i;
+				jit_value_t value = valueStack[index];
+				if (!isRefJitValue(value))
+					continue;
+				valueStack[index] = castRefValue(emitRefClone(value),
+						jit_value_get_type(value));
+			}
+		}
+		for (jit_value_t argument : stackArgs)
+			emitDropValue(argument);
+	};
+
 	if (frameAbi()) {
 		jit_value_t fnPtr = nullptr;
 		jit_value_t calleeContext = nullptr;
@@ -4556,6 +4592,7 @@ void OpcodeDispatcher::dispatchCall(WASM::FuncIdx funcIdx)
 					offsetof(WASM::Callable, fnPtr), jit_type_void_ptr);
 		}
 		emitFrameInvocation(fnPtr, calleeContext, calleeSig, typeIdx, stackArgs);
+		resolveCallReferences();
 		return;
 	}
 
@@ -4595,6 +4632,7 @@ void OpcodeDispatcher::dispatchCall(WASM::FuncIdx funcIdx)
 		jit_value_t ret = jit_insn_call_indirect(function, fnPtr, calleeJitSig, args.data(), numArgs, 0);
 		emitPendingExceptionCheck();
 		pushCallResults(calleeSig, ret, outBuffer);
+		resolveCallReferences();
 		return;
 	}
 
@@ -4616,6 +4654,10 @@ void OpcodeDispatcher::dispatchCall(WASM::FuncIdx funcIdx)
 	jit_value_t ret = jit_insn_call_indirect(function, fnPtr, calleeJitSig, args.data(), numArgs, 0);
 	emitPendingExceptionCheck();
 	pushCallResults(calleeSig, ret, outBuffer);
+	// A compiled callee transferred the result; the arguments were its borrow,
+	// so the operand stack's counts on them are released here (RC-5).
+	for (jit_value_t argument : stackArgs)
+		emitDropValue(argument);
 }
 
 void OpcodeDispatcher::dispatchCallIndirect(WASM::TypeIdx typeIdx, WASM::TableIdx tableIdx)
@@ -4644,6 +4686,8 @@ void OpcodeDispatcher::dispatchCallIndirect(WASM::TypeIdx typeIdx, WASM::TableId
 		function, callablePtr, offsetof(WASM::Callable, context), jit_type_void_ptr);
 	if (frameAbi()) {
 		emitFrameInvocation(fnPtr, calleeCtx, ft, typeIdx, stackArgs);
+		for (jit_value_t argument : stackArgs)
+			emitDropValue(argument);
 		return;
 	}
 
@@ -4659,6 +4703,10 @@ void OpcodeDispatcher::dispatchCallIndirect(WASM::TypeIdx typeIdx, WASM::TableId
 											 static_cast<unsigned>(args.size()), 0);
 	emitPendingExceptionCheck();
 	pushCallResults(ft, ret, outBuffer);
+	// The callee took its arguments as a borrow; the operand stack's counts on
+	// the reference ones are released here (RC-5).
+	for (jit_value_t argument : stackArgs)
+		emitDropValue(argument);
 }
 
 bool OpcodeDispatcher::emitDirectTailCall(WASM::FuncIdx funcIdx)
@@ -6252,6 +6300,9 @@ void OpcodeDispatcher::dispatchRefIsNull() {
 	jit_value_t ref = popValue();
 	jit_value_t nullRef = typedNullRef(jit_value_get_type(ref));
 	pushValue(jit_insn_eq(function, ref, nullRef));
+	// The inspected reference was the operand stack's, and the result is an
+	// i32: the stack gives its count up here (docs/proposals/GC.md RC-5).
+	emitDropValue(ref);
 }
 void OpcodeDispatcher::dispatchRefFunc(WASM::FuncIdx arg) {
 	WASM::HeapType ht;
@@ -6263,11 +6314,17 @@ void OpcodeDispatcher::dispatchRefEq() {
 	jit_value_t rhs = popValue();
 	jit_value_t lhs = popValue();
 	pushValue(jit_insn_eq(function, refAsVoidPtr(lhs), refAsVoidPtr(rhs)));
+	// `ref.eq` consumes two references and produces an i32, so both stack
+	// counts are released (RC-5).
+	emitDropValue(lhs);
+	emitDropValue(rhs);
 }
 void OpcodeDispatcher::dispatchRefAsNonNull() {
 	jit_value_t ref = popValue();
 	emitTrapIfNull(WASM::TrapKind::NullReference, refAsVoidPtr(ref));
-	pushValue(ref);
+	// A pass-through: the operand's ownership moves to the result, so it must
+	// not be cloned again (that would leave two counts for one reference).
+	pushOwnedValue(ref);
 }
 void OpcodeDispatcher::dispatchBrOnNull(WASM::LabelIdx arg) {
 	// Dead code: the compile-time stack is polymorphic (see
@@ -6280,14 +6337,15 @@ void OpcodeDispatcher::dispatchBrOnNull(WASM::LabelIdx arg) {
 	jit_value_t isNull = jit_insn_eq(function, ref, nullRef);
 
 	// `br_on_null l` has type `[t* (ref null ht)] -> [t* (ref ht)]`; the label
-	// carries only `t*` — the reference itself stays on the fall-through path.
+	// carries only `t*` — the reference itself stays on the fall-through path,
+	// which takes the popped operand's ownership over instead of cloning it.
 	if (arg >= controlStack.size()) {
 		// Conditional return of the function's results (the `t*` list).
 		jit_label_t skip = jit_label_undefined;
 		jit_insn_branch_if_not(function, isNull, &skip);
 		emitFunctionReturn(false);
 		jit_insn_label(function, &skip);
-		pushValue(ref);
+		pushOwnedValue(ref);
 		return;
 	}
 	ControlBlock& target = branchTarget(arg);
@@ -6297,7 +6355,7 @@ void OpcodeDispatcher::dispatchBrOnNull(WASM::LabelIdx arg) {
 	// last `t*` value with a reference the label does not even expect.
 	storeStackTopToSlots(slots);
 	jit_insn_branch_if(function, isNull, &target.label);
-	pushValue(ref);
+	pushOwnedValue(ref);
 }
 void OpcodeDispatcher::dispatchBrOnNonNull(WASM::LabelIdx arg) {
 	if (unreachableCode)
@@ -6316,7 +6374,7 @@ void OpcodeDispatcher::dispatchBrOnNonNull(WASM::LabelIdx arg) {
 		emitFunctionReturn(false);
 		valueStack.pop_back();
 		jit_insn_label(function, &skip);
-		return; // fall-through: the reference is consumed
+		return; // fall-through: the reference is consumed (and null here)
 	}
 	ControlBlock& target = branchTarget(arg);
 	const auto& slots = branchSlotsForTarget(target);
@@ -6326,7 +6384,11 @@ void OpcodeDispatcher::dispatchBrOnNonNull(WASM::LabelIdx arg) {
 	storeStackTopToSlots(slots);
 	valueStack.pop_back();
 	jit_insn_branch_if_not(function, isNull, &target.label);
-	// Fall-through: only `t*` remains — the reference is consumed.
+	// Fall-through: only `t*` remains — the reference is consumed, so the
+	// operand stack's count on it is released here. The control only reaches
+	// this point when the reference was null, so the release is a no-op at run
+	// time and no ownership is taken from the branch path (RC-5).
+	emitDropValue(ref);
 }
 void OpcodeDispatcher::dispatchStructNew(WASM::TypeIdx arg) {
 	const WASM::CoreTypeView st = structTypeForIndex(arg);
@@ -6849,6 +6911,9 @@ void OpcodeDispatcher::dispatchArrayLen() {
 	jit_value_t len = jit_insn_load_relative(function, refAsVoidPtr(ref),
 			static_cast<jit_nint>(WASM::GcHeader::kArrayLengthOffset), jit_type_uint);
 	pushValue(jit_insn_convert(function, len, jit_type_int, 0));
+	// The array operand was the operand stack's and the result is an i32, so
+	// the stack gives its count up (RC-5).
+	emitDropValue(ref);
 }
 void OpcodeDispatcher::dispatchArrayFill(WASM::TypeIdx arg) {
 	jit_value_t len = jit_insn_convert(function, popValue(), jit_type_uint, 0);
@@ -6918,6 +6983,10 @@ void OpcodeDispatcher::dispatchArrayCopy(WASM::TypeIdx arg1, WASM::TypeIdx arg2)
 	};
 	jit_insn_call_native(function, "wasm_buffer_copy_impl",
 						 reinterpret_cast<void*>(wasm_buffer_copy_impl), sig, args, 8, 0);
+	// Both containers were the operand stack's; the helper only read them, so
+	// their counts are released here (RC-5).
+	emitDropValue(dstRef);
+	emitDropValue(srcRef);
 }
 void OpcodeDispatcher::dispatchArrayInitData(WASM::TypeIdx arg1, uint32_t arg2) {
 	jit_value_t len = jit_insn_convert(function, popValue(), jit_type_uint, 0);
@@ -6945,6 +7014,9 @@ void OpcodeDispatcher::dispatchArrayInitData(WASM::TypeIdx arg1, uint32_t arg2) 
 						  refAsVoidPtr(dstPtr), src, byteLen};
 	jit_insn_call_native(function, "wasm_buffer_init_from_data_impl",
 						 reinterpret_cast<void*>(wasm_buffer_init_from_data_impl), sig, args, 5, 0);
+	// The array operand was the operand stack's; the helper only wrote into it
+	// (RC-5).
+	emitDropValue(ref);
 }
 void OpcodeDispatcher::dispatchArrayInitElem(WASM::TypeIdx arg1, uint32_t arg2) {
 	jit_value_t len = jit_insn_convert(function, popValue(), jit_type_uint, 0);
@@ -6967,14 +7039,21 @@ void OpcodeDispatcher::dispatchArrayInitElem(WASM::TypeIdx arg1, uint32_t arg2) 
 						  refAsVoidPtr(dstPtr), src, len};
 	jit_insn_call_native(function, "wasm_buffer_init_from_elems_impl",
 						 reinterpret_cast<void*>(wasm_buffer_init_from_elems_impl), sig, args, 5, 0);
+	// The array operand was the operand stack's; the helper only wrote into it
+	// (the element segment is store-owned, not the stack's).
+	emitDropValue(ref);
 }
 void OpcodeDispatcher::dispatchRefTest(const WASM::HeapType& arg) {
 	jit_value_t ref = popValue();
 	pushValue(emitRefTypeTest(ref, arg, false));
+	// The tested reference was the operand stack's and the result is an i32
+	// (RC-5).
+	emitDropValue(ref);
 }
 void OpcodeDispatcher::dispatchRefTestNull(const WASM::HeapType& arg) {
 	jit_value_t ref = popValue();
 	pushValue(emitRefTypeTest(ref, arg, true));
+	emitDropValue(ref);
 }
 void OpcodeDispatcher::dispatchRefCast(const WASM::HeapType& arg) {
 	jit_value_t ref = popValue();
@@ -6984,7 +7063,9 @@ void OpcodeDispatcher::dispatchRefCast(const WASM::HeapType& arg) {
 	emitTrap(WASM::TrapKind::CastFailure);
 	jit_insn_label(function, &matched);
 	jit_value_t casted = castRefValue(ref, jitRefTypeForHeapType(arg, false));
-	pushValue(casted);
+	// A pass-through: the popped reference's ownership moves to the result
+	// instead of being cloned a second time (RC-5).
+	pushOwnedValue(casted);
 }
 void OpcodeDispatcher::dispatchRefCastNull(const WASM::HeapType& arg) {
 	jit_value_t ref = popValue();
@@ -6993,7 +7074,7 @@ void OpcodeDispatcher::dispatchRefCastNull(const WASM::HeapType& arg) {
 	jit_insn_branch_if(function, ok, &matched);
 	emitTrap(WASM::TrapKind::CastFailure);
 	jit_insn_label(function, &matched);
-	pushValue(castRefValue(ref, jitRefTypeForHeapType(arg, true)));
+	pushOwnedValue(castRefValue(ref, jitRefTypeForHeapType(arg, true)));
 }
 void OpcodeDispatcher::dispatchRefCastDescEq(const WASM::HeapType& arg) {
 	jit_value_t descriptor = popValue();
