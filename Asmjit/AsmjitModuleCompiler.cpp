@@ -16,6 +16,7 @@
 #include "../WasmBase/WasmVMContext.hpp"
 #include "../WasmBase/wasm_simd_scalar.hpp"
 #include "../WasmBase/wasm_f16.hpp"
+#include "../WasmBase/WasmGcHeader.hpp"
 #include "../WasmBase/WasmType.hpp"
 #include "../WasmBase/WasmTailTrampoline.hpp"
 
@@ -4774,7 +4775,16 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 			throw std::runtime_error("AsmJit v128.load address underflow");
 		auto address = values.back();
 		values.pop_back();
-		auto pointer = emitMemoryAddress(arg, 16, address);
+		asmjit::x86::Gp pointer;
+		if (arg.isArray) {
+			if (values.empty())
+				throw std::runtime_error("AsmJit GC-array v128.load reference underflow");
+			auto reference = values.back();
+			values.pop_back();
+			pointer = emitGcArrayAddress(arg, 16, reference, address);
+		} else {
+			pointer = emitMemoryAddress(arg, 16, address);
+		}
 		auto buffer = newVectorBuffer("v128Load");
 		copyVector(buffer, pointer);
 		values.push_back(buffer);
@@ -4788,7 +4798,16 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		values.pop_back();
 		auto address = values.back();
 		values.pop_back();
-		auto pointer = emitMemoryAddress(arg, 16, address);
+		asmjit::x86::Gp pointer;
+		if (arg.isArray) {
+			if (values.empty())
+				throw std::runtime_error("AsmJit GC-array v128.store reference underflow");
+			auto reference = values.back();
+			values.pop_back();
+			pointer = emitGcArrayAddress(arg, 16, reference, address);
+		} else {
+			pointer = emitMemoryAddress(arg, 16, address);
+		}
 		copyVector(pointer, value);
 	}
 
@@ -10216,6 +10235,43 @@ private:
 		(void)width;
 	}
 
+	//! Computes a GC-array byte address through the shared bounds-checking helper.
+	asmjit::x86::Gp emitGcArrayAddress(const WASM::MemArg& arg, uint32_t width,
+			const asmjit::x86::Gp& reference, const asmjit::x86::Gp& address)
+	{
+		const WASM::CoreTypeView view = module.typeView(arg.arrayTypeIdx);
+		const uint32_t elementSize = static_cast<uint32_t>(
+				WASM::gcStorageBytes(view.arrayElement().storage));
+		const uint32_t dataOffset = static_cast<uint32_t>(
+				WASM::gcArrayDataOffset(view.arrayElement().storage));
+		const uint32_t packed = (width & 0xFFu) | (elementSize << 8)
+				| (dataOffset << 16);
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		signature.add_arg(asmjit::TypeId::kUInt64);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		auto offset = compiler.new_gp64("arrayOffset");
+		checkError(compiler.mov(offset, arg.offset),
+				"AsmJit GC-array offset materialisation failed");
+		auto packedValue = compiler.new_gp32("arrayPacked");
+		checkError(compiler.mov(packedValue, packed),
+				"AsmJit GC-array descriptor materialisation failed");
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke),
+				reinterpret_cast<uint64_t>(&WASM::gcArrayByteAddress), signature),
+				"AsmJit GC-array address helper call failed");
+		invoke->set_arg(0, reference);
+		invoke->set_arg(1, address);
+		invoke->set_arg(2, offset);
+		invoke->set_arg(3, packedValue);
+		auto pointer = compiler.new_gp_ptr("arrayAddress");
+		invoke->set_ret(0, pointer);
+		emitPendingTrapReturn();
+		return pointer;
+	}
+
 	asmjit::x86::Gp emitMemoryAddress(const WASM::MemArg& arg, uint32_t width,
 			const asmjit::x86::Gp& wasmAddress)
 	{
@@ -10275,7 +10331,16 @@ private:
 			throw std::runtime_error("AsmJit f32.load_f16 operand stack underflow");
 		auto wasmAddress = values.back();
 		values.pop_back();
-		auto pointer = emitMemoryAddress(arg, 2, wasmAddress);
+		asmjit::x86::Gp pointer;
+		if (arg.isArray) {
+			if (values.empty())
+				throw std::runtime_error("AsmJit GC-array f16 load reference underflow");
+			auto reference = values.back();
+			values.pop_back();
+			pointer = emitGcArrayAddress(arg, 2, reference, wasmAddress);
+		} else {
+			pointer = emitMemoryAddress(arg, 2, wasmAddress);
+		}
 		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
 		signature.set_ret(asmjit::TypeId::kFloat32);
 		signature.add_arg(asmjit::TypeId::kUIntPtr);
@@ -10299,7 +10364,16 @@ private:
 		values.pop_back();
 		auto wasmAddress = values.back();
 		values.pop_back();
-		auto pointer = emitMemoryAddress(arg, 2, wasmAddress);
+		asmjit::x86::Gp pointer;
+		if (arg.isArray) {
+			if (values.empty())
+				throw std::runtime_error("AsmJit GC-array f16 store reference underflow");
+			auto reference = values.back();
+			values.pop_back();
+			pointer = emitGcArrayAddress(arg, 2, reference, wasmAddress);
+		} else {
+			pointer = emitMemoryAddress(arg, 2, wasmAddress);
+		}
 		const auto argument = materializeFloat(value, 4);
 		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
 		signature.set_ret(asmjit::TypeId::kVoid);
@@ -10321,7 +10395,16 @@ private:
 			throw std::runtime_error("AsmJit memory.load operand stack underflow");
 		auto wasmAddress = values.back();
 		values.pop_back();
-		auto pointer = emitMemoryAddress(arg, width, wasmAddress);
+		asmjit::x86::Gp pointer;
+		if (arg.isArray) {
+			if (values.empty())
+				throw std::runtime_error("AsmJit GC-array load reference underflow");
+			auto reference = values.back();
+			values.pop_back();
+			pointer = emitGcArrayAddress(arg, width, reference, wasmAddress);
+		} else {
+			pointer = emitMemoryAddress(arg, width, wasmAddress);
+		}
 		const bool wide = kind == LoadKind::I64 || kind == LoadKind::I64I8Signed
 				|| kind == LoadKind::I64I8Unsigned || kind == LoadKind::I64I16Signed
 				|| kind == LoadKind::I64I16Unsigned || kind == LoadKind::I64I32Signed
@@ -10374,7 +10457,16 @@ private:
 		// address so the helper call cannot disturb the address register.
 		const asmjit::x86::Gp stored = canonicalizeFloat
 				? canonicalizeFloatBits(value, static_cast<int>(width)) : value;
-		auto pointer = emitMemoryAddress(arg, width, wasmAddress);
+		asmjit::x86::Gp pointer;
+		if (arg.isArray) {
+			if (values.empty())
+				throw std::runtime_error("AsmJit GC-array store reference underflow");
+			auto reference = values.back();
+			values.pop_back();
+			pointer = emitGcArrayAddress(arg, width, reference, wasmAddress);
+		} else {
+			pointer = emitMemoryAddress(arg, width, wasmAddress);
+		}
 		switch (width) {
 		case 1:
 			checkError(compiler.mov(asmjit::x86::byte_ptr(pointer), stored.r8()), "AsmJit store8 emission failed"); break;

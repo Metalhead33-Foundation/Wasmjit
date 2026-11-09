@@ -1,4 +1,5 @@
 #include "WasmModuleInstance.hpp"
+#include "WasmGcHeader.hpp"
 #include "WasmTailTrampoline.hpp"
 #include "WasmContinuation.hpp"
 #include "WasmException.hpp"
@@ -1154,6 +1155,37 @@ constexpr size_t kGcHeaderBytes = GcHeader::kHeaderBytes;
 constexpr size_t kArrayLengthOffset = GcHeader::kArrayLengthOffset;
 
 // Delegate to the shared helpers so the runtime and the backend cannot drift (H1).
+void* gcArrayByteAddressImpl(void* reference, uint32_t address, uint64_t offset,
+		uint32_t packed) noexcept
+{
+	const uint32_t width = packed & 0xFFu;
+	const uint32_t elementSize = (packed >> 8) & 0xFFu;
+	const uint32_t dataOffset = packed >> 16;
+	if (reference == nullptr) {
+		reportTrap(TrapKind::NullArrayReference);
+		return nullptr;
+	}
+	const uint64_t byteOffset = static_cast<uint64_t>(address) + offset;
+	if (byteOffset < static_cast<uint64_t>(address)) {
+		reportTrap(TrapKind::OutOfBoundsArrayAccess);
+		return nullptr;
+	}
+	const uint64_t end = byteOffset + width;
+	if (end < byteOffset) {
+		reportTrap(TrapKind::OutOfBoundsArrayAccess);
+		return nullptr;
+	}
+	const auto* bytes = static_cast<const uint8_t*>(reference);
+	uint32_t length = 0;
+	std::memcpy(&length, bytes + GcHeader::kArrayLengthOffset, sizeof(length));
+	const uint64_t bound = static_cast<uint64_t>(length) * elementSize;
+	if (end > bound) {
+		reportTrap(TrapKind::OutOfBoundsArrayAccess);
+		return nullptr;
+	}
+	return const_cast<uint8_t*>(bytes) + dataOffset + byteOffset;
+}
+
 size_t storageBytes(const StorageType& st) { return gcStorageBytes(st); }
 size_t storageAlign(const StorageType& st) { return gcStorageAlign(st); }
 size_t storageBytes(const CanonStorageType& st) { return gcStorageBytes(st); }
@@ -1205,6 +1237,13 @@ void storeValue(void* base, size_t offset, const StorageType& st, const Value& v
 }
 
 } // namespace
+
+void* gcArrayByteAddress(void* reference, uint32_t address, uint64_t offset,
+		uint32_t packed) noexcept
+{
+	return gcArrayByteAddressImpl(reference, address, offset, packed);
+}
+
 
 Value ModuleInstance::evalConstantExpr(const std::span<const std::byte>& expr)
 {

@@ -178,7 +178,8 @@ inline size_t gcArrayDataOffset(const CanonStorageType& element)
 	return gcArrayDataOffset(gcStorageView(element));
 }
 
-//! True for every value type that *may* point at a GC heap object (or be null).
+/** \\brief Computes and bounds-checks the byte address of a multibyte array access. \\param reference The GC array reference (may be null, which traps). \\param address The wasm i32 byte address, zero-extended. \\param offset The memarg's constant byte offset. \\param packed Access width in bits 0..7, element size in bits 8..15, and data offset in bits 16..31. \\return Pointer to the accessed byte, or null after reporting a pending trap. */
+WASMJIT_API void* gcArrayByteAddress(void* reference, uint32_t address, uint64_t offset, uint32_t packed) noexcept;
 //! The string codes are Store-owned references with their own StringStore count
 //! (docs/proposals/STRINGREF.md STR-8); they have no GC header, so the GC
 //! reference-counting paths treat them separately.

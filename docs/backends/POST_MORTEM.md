@@ -2362,7 +2362,41 @@ Default 22,448 assertions in 821 cases, green
   range and layout are part of the helper contract now.
 
 
-## F16 SIMD in SLJIT and AsmJIT
+## GC-array byte addressing
+
+### Fix
+
+Multibyte Array Access (`MemArg::isArray`) previously stopped at the backend:
+AsmJIT rejected the memarg and SLJIT looked it up as a linear-memory index.
+
+* Added `WASM::gcArrayByteAddress` as the shared, backend-agnostic address
+  helper. It checks the null reference, address/offset/width overflow and the
+  array's byte payload bound, reports `NullArrayReference` or
+  `OutOfBoundsArrayAccess`, and returns the element address.
+* Both backends pass the array reference, the zero-extended i32 address, the
+  memarg offset and a packed `(width, elementSize, dataOffset)` word.
+* Scalar, float, F16 and v128 loads/stores now consume the extra array
+  reference and leave the correct stack shape.
+
+### Evidence
+
+```
+AsmJIT  multibyte array access   19/19
+SLJIT   multibyte array access   19/19
+AsmJIT  full serial              821 cases: 818 passed / 3 failed
+SLJIT   full serial              821 cases: 817 passed / 4 failed
+Default full                     22,451 assertions in 821 cases, green
+```
+
+### Lessons
+
+* **Bounds and layout belong in the core, not in each backend.** The packed
+  descriptor keeps the helper inside SLJIT's four-argument call form without a
+  second copy of the array-layout rules.
+* **An array memarg changes the operand stack, not just the address.** Every
+  load/store shape has to consume the reference below the address.
+
+
 
 ### Fix
 

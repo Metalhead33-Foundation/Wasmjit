@@ -13,6 +13,7 @@
 #include "../WasmBase/WasmStore.hpp"
 #include "../WasmBase/WasmStringOps.hpp"
 #include "../WasmBase/WasmRoundingOps.hpp"
+#include "../WasmBase/WasmGcHeader.hpp"
 #include "../WasmBase/WasmTrap.hpp"
 #include "../WasmBase/WasmTracing.hpp"
 #include "../WasmBase/WasmVMContext.hpp"
@@ -4120,6 +4121,19 @@ void OpcodeDispatcher::emitMemoryLoadFloat(const WASM::MemArg& arg, int width)
 {
 	if (!reachable_)
 		return;
+	if (arg.isArray) {
+		requireStack(2);
+		const std::size_t base = stackWidths_.size() - 2;
+		if (!measureOnly_) {
+			emitCheckedMemoryAddress(arg, static_cast<std::uint32_t>(width), base + 1);
+			emit(sljit_emit_op1(compiler_, width == 4 ? SLJIT_MOV_U32 : SLJIT_MOV,
+					SLJIT_R0, 0, SLJIT_MEM1(SLJIT_R0), 0));
+			storeSlot(SLJIT_R0, base, width);
+		}
+		stackWidths_.resize(base + 1);
+		stackWidths_.back() = width;
+		return;
+	}
 	requireStack(1);
 	if (!measureOnly_) {
 		emitCheckedMemoryAddress(arg, static_cast<std::uint32_t>(width),
@@ -4137,6 +4151,19 @@ void OpcodeDispatcher::emitMemoryStoreFloat(const WASM::MemArg& arg, int width)
 {
 	if (!reachable_)
 		return;
+	if (arg.isArray) {
+		requireStack(3);
+		const std::size_t base = stackWidths_.size() - 3;
+		if (!measureOnly_) {
+			canonicalizeSlot(base + 2, width);
+			emitCheckedMemoryAddress(arg, static_cast<std::uint32_t>(width), base + 1);
+			loadSlot(SLJIT_R1, base + 2, width);
+			emit(sljit_emit_op1(compiler_, width == 4 ? SLJIT_MOV32 : SLJIT_MOV,
+					SLJIT_MEM1(SLJIT_R0), 0, SLJIT_R1, 0));
+		}
+		stackWidths_.resize(base);
+		return;
+	}
 	requireStack(2);
 	pop();
 	pop();
@@ -4158,6 +4185,18 @@ void OpcodeDispatcher::emitF16Load(const WASM::MemArg& arg)
 {
 	if (!reachable_)
 		return;
+	if (arg.isArray) {
+		requireStack(2);
+		const std::size_t base = stackWidths_.size() - 2;
+		if (!measureOnly_) {
+			emitCheckedMemoryAddress(arg, 2, base + 1);
+			emitHelper(SLJIT_ARGS1(F32, P), codeAddress(&wasm_f32_load_f16));
+			storeFloatSlot(SLJIT_FR0, base, 4);
+		}
+		stackWidths_.resize(base + 1);
+		stackWidths_.back() = 4;
+		return;
+	}
 	requireStack(1);
 	const std::size_t depth = stackWidths_.size() - 1;
 	if (!measureOnly_) {
@@ -4172,6 +4211,17 @@ void OpcodeDispatcher::emitF16Store(const WASM::MemArg& arg)
 {
 	if (!reachable_)
 		return;
+	if (arg.isArray) {
+		requireStack(3);
+		const std::size_t base = stackWidths_.size() - 3;
+		if (!measureOnly_) {
+			emitCheckedMemoryAddress(arg, 2, base + 1);
+			loadFloatSlot(SLJIT_FR0, base + 2, 4);
+			emitHelper(SLJIT_ARGS2V(P, F32), codeAddress(&wasm_f32_store_f16));
+		}
+		stackWidths_.resize(base);
+		return;
+	}
 	requireStack(2);
 	const std::size_t base = stackWidths_.size() - 2;
 	pop();
@@ -4453,6 +4503,23 @@ void OpcodeDispatcher::dispatchV128Load(WASM::MemArg arg)
 {
 	if (!reachable_)
 		return;
+	if (arg.isArray) {
+		requireStack(2);
+		const std::size_t base = stackWidths_.size() - 2;
+		if (!measureOnly_) {
+			emitCheckedMemoryAddress(arg, 16, base + 1);
+			const sljit_sw offset = stackSlotOffset(base);
+			for (int word = 0; word < 2; ++word) {
+				emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R1, 0,
+						SLJIT_MEM1(SLJIT_R0), word * 8));
+				emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+						offset + word * 8, SLJIT_R1, 0));
+			}
+		}
+		stackWidths_.resize(base + 1);
+		stackWidths_.back() = 16;
+		return;
+	}
 	requireStack(1);
 	const std::size_t depth = stackWidths_.size() - 1;
 	if (!measureOnly_) {
@@ -4473,6 +4540,22 @@ void OpcodeDispatcher::dispatchV128Store(WASM::MemArg arg)
 {
 	if (!reachable_)
 		return;
+	if (arg.isArray) {
+		requireStack(3);
+		const std::size_t base = stackWidths_.size() - 3;
+		if (!measureOnly_) {
+			emitCheckedMemoryAddress(arg, 16, base + 1);
+			const sljit_sw offset = stackSlotOffset(base + 2);
+			for (int word = 0; word < 2; ++word) {
+				emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R1, 0,
+						SLJIT_MEM1(SLJIT_SP), offset + word * 8));
+				emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_R0),
+						word * 8, SLJIT_R1, 0));
+			}
+		}
+		stackWidths_.resize(base);
+		return;
+	}
 	requireStack(2);
 	const std::size_t addressDepth = stackWidths_.size() - 2;
 	const std::size_t valueDepth = stackWidths_.size() - 1;
@@ -7357,9 +7440,30 @@ const WASM::MemoryType& OpcodeDispatcher::requireMemoryIndex(WASM::MemIdx index)
 void OpcodeDispatcher::emitCheckedMemoryAddress(const WASM::MemArg& arg,
 		std::uint32_t width, std::size_t addressDepth)
 {
+	if (arg.isArray) {
+		require(addressDepth > 0, "a GC-array access has no array reference");
+		const WASM::CoreTypeView view = module_.typeView(arg.arrayTypeIdx);
+		const std::size_t elementSize = WASM::gcStorageBytes(view.arrayElement().storage);
+		const std::size_t dataOffset = WASM::gcArrayDataOffset(view.arrayElement().storage);
+		const std::uint32_t packed = (width & 0xFFu)
+				| (static_cast<std::uint32_t>(elementSize) << 8)
+				| (static_cast<std::uint32_t>(dataOffset) << 16);
+		loadSlot(SLJIT_R0, addressDepth - 1, 8);
+		loadSlot(SLJIT_R1, addressDepth, 4);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R2, 0, SLJIT_IMM,
+				static_cast<sljit_sw>(arg.offset)));
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R3, 0, SLJIT_IMM,
+				static_cast<sljit_sw>(packed)));
+		emitHelper(SLJIT_ARGS4(P, P, 32, W, 32), &WASM::gcArrayByteAddress);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+				scratchSlotOffset(), SLJIT_R0, 0));
+		emitPendingTrapCheck();
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0, SLJIT_MEM1(SLJIT_SP),
+				scratchSlotOffset()));
+		return;
+	}
 	const WASM::MemoryType& memory = requireMemoryIndex(arg.memidx);
 	const bool is64 = memory.indexType == WASM::MemoryIndexType::I64;
-	require(!arg.isArray, "the SLJIT backend does not lower GC-array access");
 	if (!is64)
 		require(arg.offset <= UINT32_MAX, "the memory32 offset exceeds the encoded u32 range");
 
@@ -7419,6 +7523,18 @@ void OpcodeDispatcher::emitMemoryLoad(const WASM::MemArg& arg, std::uint32_t wid
 {
 	if (!reachable_)
 		return;
+	if (arg.isArray) {
+		requireStack(2);
+		const std::size_t base = stackWidths_.size() - 2;
+		if (!measureOnly_) {
+			emitCheckedMemoryAddress(arg, width, base + 1);
+			emit(sljit_emit_op1(compiler_, loadOp, SLJIT_R1, 0, SLJIT_MEM1(SLJIT_R0), 0));
+			storeSlot(SLJIT_R1, base, resultWidth);
+		}
+		stackWidths_.resize(base + 1);
+		stackWidths_.back() = resultWidth;
+		return;
+	}
 	requireStack(1);
 	if (!measureOnly_) {
 		emitCheckedMemoryAddress(arg, width, stackWidths_.size() - 1);
@@ -7433,6 +7549,17 @@ void OpcodeDispatcher::emitMemoryStore(const WASM::MemArg& arg, std::uint32_t wi
 {
 	if (!reachable_)
 		return;
+	if (arg.isArray) {
+		requireStack(3);
+		const std::size_t base = stackWidths_.size() - 3;
+		if (!measureOnly_) {
+			emitCheckedMemoryAddress(arg, width, base + 1);
+			loadSlot(SLJIT_R1, base + 2, static_cast<int>(width));
+			emit(sljit_emit_op1(compiler_, storeOp, SLJIT_MEM1(SLJIT_R0), 0, SLJIT_R1, 0));
+		}
+		stackWidths_.resize(base);
+		return;
+	}
 	requireStack(2);
 	pop();
 	pop();
