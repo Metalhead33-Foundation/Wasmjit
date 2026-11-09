@@ -28,15 +28,18 @@ recommendation, §3 the evidence, §4 the cost of doing it, §5 what is delibera
 
 ## 2. What landed in this pass (2026-11-09), and what did not
 
-**Landed: the unsoundness is gone.** `ModuleInstantiator::instantiate` now calls
-`ModuleInstance::verifyImportCallForms()` right after the two-pass compile -- the
-only point where both modules' forms are known -- and refuses a graph that mixes
-them with a named exception
-([`WasmModuleInstance.cpp`](../../WasmBase/WasmModuleInstance.cpp)). One place,
-all three backends, no behaviour change for a graph that already worked. The
-fixture that proves it is `Test/wasm_wat/call_form_provider.wat` (frame-form
-because of a wide sibling function) imported by `call_form_importer.wat`
-(register-form): it crashed on **all three** backends before the check existed.
+**Landed: a mixed graph works where the backend can express it.** A direct call now
+emits the shape the *callee* was compiled in — read from the resolved callable —
+instead of the caller's module form. That is a per-call-site change: the
+module-wide contract (`frameCallAbi()` promises that every export of the module is
+frame-form) is untouched, which is why no test had to change. The fixture is
+`Test/wasm_wat/call_form_provider.wat` (frame-form because of a wide sibling
+function) imported by `call_form_importer.wat` (register-form): it crashed on
+**all three** backends before the change; it now passes on LibJIT and SLJIT.
+AsmJIT's call lowering picks the convention from its own module form, so it
+refuses that one call by name — a capability difference, not a graph-level rule.
+The backend-neutral guard that refused the whole graph (and with it the backends
+that can handle it) is gone with it.
 
 Three more defects fell out of writing that fixture, and they are recorded rather
 than hidden:
@@ -167,6 +170,7 @@ Two things were learned that a future attempt should not re-derive:
    red). A struct-layout change needs a full rebuild of the tree, not a rebuild of
    the files that look related.
 
-The state left behind is the sound one: a mixed graph is **refused by name**
-(`ModuleInstance::verifyImportCallForms`), a uniform graph works in either form,
-and a both-frame cross-module call works.
+The state left behind: a uniform graph works in either form on every backend, a
+**mixed** graph works on LibJIT and SLJIT and is refused by name on AsmJIT (whose
+call lowering takes the convention from its own module form), and a both-frame
+cross-module call works everywhere.

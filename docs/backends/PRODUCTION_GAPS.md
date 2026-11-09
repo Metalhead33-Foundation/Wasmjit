@@ -1215,9 +1215,9 @@ the frame that is already dying, and it is recorded in the epilogue of
 
 ## 32. The consumer sites, closed, and what the call form turned out to be (2026-11-09)
 
-**Snapshot (2026-11-09, working tree):** 22,526 assertions in 824 cases on
-LibJIT, 22,524 on SLJIT and AsmJIT (LibJIT runs two extra assertions because a
-call-form fixture takes its positive branch there).
+**Snapshot (2026-11-09, working tree):** 22,534 assertions in 824 cases on LibJIT
+and SLJIT, 22,532 on AsmJIT (the two-assertion difference is AsmJIT's call-form
+fixture taking the named-refusal branch).
 
 §31 listed the remaining consumer sites as leftovers. All of them are closed now,
 each with a shape in `Test/wasm_wat/gc_ownership.wat` that measures it:
@@ -1236,11 +1236,19 @@ the whole shape, which is why the packed rows could not be measured there at all
 
 **The call form turned out to be two defects, not one.**
 
-* The *unsound* half is closed. `ModuleInstantiator::instantiate` calls
-  `ModuleInstance::verifyImportCallForms()` right after the two-pass compile and
-  refuses a module graph that mixes the register and frame forms with a named
-  exception. The fixture that proves it crashed on all three backends before the
-  check existed (`call_form_provider.wat` imported by `call_form_importer.wat`).
+* **A mixed module graph now works** on the backends that can express it. A direct
+  call emits the shape the *callee* was compiled in (read from the resolved
+  callable), not the caller's module form, so a register-form module calls a
+  frame-form import correctly. The fixture is `call_form_provider.wat` (frame-form
+  because of a wide sibling) imported by `call_form_importer.wat`: it crashed on
+  all three backends before the change, and now passes on LibJIT and SLJIT.
+  AsmJIT's call lowering picks the convention from its own module form, so it
+  refuses that one call by name; the backend-neutral guard that used to refuse the
+  whole graph -- including on backends that could handle it -- is gone.
+* **`table.set` releases the reference slot's stack count** (LibJIT already did;
+  SLJIT and AsmJIT leaked it), measured by a reference-typed table in the
+  ownership fixture. The atomic `table.atomic.set` form goes through the same
+  barrier.
 * One more defect fell out of that fixture: **SLJIT ignored
   `setFrameCallAbiOptIn`** entirely -- it derived the form from the signatures
   alone, so "one form everywhere" was a no-op there. Fixed.

@@ -140,9 +140,9 @@ them, and the validator now rejects them (`V128ATOMIC`).
 ## 7. Next session's recommendation
 
 **State at the end of the 2026-11-09 pass.** Reference ownership is exact on all
-three backends, measured shape by shape: 22,526 assertions in 824 cases on LibJIT,
-22,524 on SLJIT and AsmJIT (the difference is one fixture taking the positive
-branch only where the provider stays register-form). The consumer sites that were
+three backends, measured shape by shape: 22,534 assertions in 824 cases on LibJIT
+and SLJIT, 22,532 on AsmJIT (the difference is its call-form fixture taking the
+named-refusal branch). The consumer sites that were
 "left for later" are closed -- `ref.test`/`ref.is_null`/`ref.eq`, the pass-through
 casts, the packed field and element reads, call arguments, a native import's
 borrowed result, and every trap path. `PRODUCTION_GAPS.md` §32 carries the table.
