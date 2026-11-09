@@ -151,17 +151,18 @@ and shared, like the rest of the process-wide helper caches.
 
 ## Next steps
 
-1. `ref.func` (which also unlocks a `ref.eq` fixture), then the remaining
-   reference/exception/continuation work. `v128` in signatures is **deferred by
-   decision** — see [`docs/backends/V128_SIGNATURE_DECISION.md`](../docs/backends/V128_SIGNATURE_DECISION.md);
-   it must be revisited before the saga closes. What landed is recorded in
-   [`docs/backends/ASMJIT_SLJIT_P3_SIMD1.md`](../docs/backends/ASMJIT_SLJIT_P3_SIMD1.md)
-   and [`docs/backends/ASMJIT_SLJIT_P3_SIMD2.md`](../docs/backends/ASMJIT_SLJIT_P3_SIMD2.md).
-2. References/GC, `ref.*`, GC barriers and exceptions (P4), following
-   [`docs/WRITING_A_BACKEND.md`](../docs/WRITING_A_BACKEND.md) §6 "Reference
-   ownership" — the initialiser-shape test is the gate, not an optional
-   refinement.
-3. Continuations and `call_ref` (P5).
+1. **Finish the reference-ownership model.** The paths the suites exercise are
+   exact, but a reference read out of a struct field or array element, the
+   unselected operand of `select`, and `drop` of a GC reference are still
+   borrows that nothing releases. Each is a leak, not a wrong result;
+   [`docs/backends/HANDOFF.md`](../docs/backends/HANDOFF.md) §7 names the sites.
+2. **A frame-form tail trampoline.** `return_call_ref` above the register-form
+   ceiling is a semantic call+return here
+   ([`docs/backends/PRODUCTION_GAPS.md`](../docs/backends/PRODUCTION_GAPS.md)
+   §2.1).
+3. **Portability.** One non-SysV runner would turn the `provisional` rows in
+   [`docs/ABI_PORTABILITY.md`](../docs/ABI_PORTABILITY.md) into evidence; the
+   backend has no SysV-specific code beyond what SLJIT itself abstracts.
 4. Once a slice lands, extend the shared `[sljit][module][parity]` fixtures
    before calling it done; the checklist stays in
    [`docs/WRITING_A_BACKEND.md`](../docs/WRITING_A_BACKEND.md) §12.

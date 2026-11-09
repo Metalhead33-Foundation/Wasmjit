@@ -37,14 +37,14 @@ LibJIT.
 the two-pass instantiation contract and enabling forward and mutually recursive
 direct calls. Each generated function emits the required
   `wasm_stack_check(VMContext*)` prologue call.
-- The body compiler supports the full shared lowering slice, including the
+- The body compiler covers the same lowering slice as LibJIT, including the
   Custom Descriptors family (`struct.new_desc`, `struct.new_default_desc`,
   `ref.get_desc`, `ref.cast_desc_eq(_null)`, `br_on_cast_desc_eq(_fail)`), whose
   descriptor operand is retained into the new object's header slot and released
   from the operand stack, and trap-site attribution: `unreachable` reports at
   its own instruction and a helper-raised trap is annotated with the calling
   function's index, offset and `$name` before the frame returns.
-- The body compiler currently supports i32/i64/f32/f64 parameters, results, and
+- The scalar core supports i32/i64/f32/f64 parameters, results, and
   locals; i32/i64 constants and local access; i32.wrap_i64, i64.extend_i32_s/u and i64.extend8/16/32_s; i64 arithmetic (`add/sub/mul/div/rem`),
   bitwise operations, shifts, rotations, comparisons, and `eqz`; i32 arithmetic,
   bit counts, sign extension, comparisons, bitwise operations, shifts, and rotations;
