@@ -2,12 +2,15 @@
 
 *The SLJIT backend*
 
-Status: **Snapshot (2026-11-07):** the targeted `[sljit]` suite is green, but the
-**generic backend-selected suite does not pass** — 41 failures followed by a
-process abort. The backend is **provisional and not production-ready**. See
+Status: **Snapshot (2026-11-09):** **production-ready within the declared
+envelope** — `WASMJIT_BACKEND=sljit ./Test/WasmJit --rng-seed 12345` reports
+**22,451 assertions in 821 cases, green**, the same case set and assertion count
+as the reference backend. The envelope is x86-64 Linux / SysV AMD64, and the
+documented refusals are listed in "Known limitations" below. See
 [`docs/BACKEND_PRODUCTION_READINESS.md`](../docs/BACKEND_PRODUCTION_READINESS.md)
-for the measured evidence and open blockers. The design notes below are history;
-they are not a support matrix.
+for the measured evidence and
+[`docs/backends/PRODUCTION_GAPS.md`](../docs/backends/PRODUCTION_GAPS.md) §30 for
+the defect ledger that closed the last failures.
 
 ## What executes today
 
@@ -64,20 +67,28 @@ A unit test exercises the same `asmjit_i32_basic`/`asmjit_i64_basic` fixtures
 that the AsmJit suite uses (`[sljit][module][parity]`), so the shared slice is
 checked against one fixture set rather than two drifting ones.
 
-## What the generic run currently exposes
+## Conformance
 
-The promotion blockers are in [`docs/BACKEND_PRODUCTION_READINESS.md`](../docs/BACKEND_PRODUCTION_READINESS.md)
-§4. In summary: core spec scripts fail (`func`, `i64`, `f32`, `if`, `br_if`,
-`stack`, `local_init`, `table_fill`, several SIMD scripts, `float_memory64`,
-multi-memory, legacy EH, stringref); `table.fill` and SIMD lane extraction are
-missing; `float_memory64` returns the wrong bits; `br_table` requires identical
-target signatures; tail-call tests fail; the run aborts.
+The generic backend-selected run is the gate, and it is green: 22,451 assertions
+in 821 cases. The last failures were four cases with two root causes:
 
-A refused function leaves that function's `Callable::fnPtr` **null**; the core
-reports "no compiled body" at the call boundary. Refusal is the intended
-failure mode, but it does not excuse the wrong-result, abort or missing-lowering
-rows above. The per-function reasons are available from
-`Sljit::ModuleCompiler::unsupportedFunctions()`.
+* the Custom Descriptors family (`struct.new_desc`, `struct.new_default_desc`,
+  `ref.get_desc`, `ref.cast_desc_eq(_null)`, `br_on_cast_desc_eq(_fail)`) had no
+  lowering here — it was LibJIT-only;
+* a native import with four parameters could not be called, because SLJIT’s
+  C-call form accepts four arguments and `VMContext*` is the first. AssemblyScript
+  `abort(msg, file, line, col)` needs five.
+
+The second is fixed by staging the arguments and marshalling them through a
+per-signature libffi closure (`stagedImportEntry` in `SljitOpcodeDispatcher.cpp`),
+which also makes a native import inside a frame-form module correct: the call site
+branches on `Callable::context`, so a null context routes to the adapter and a
+non-null one to the ordinary `(ctx, frame)` call.
+
+A refused function leaves that function’s `Callable::fnPtr` **null**; the core
+reports "no compiled body" at the call boundary, and the module compiler refuses
+the whole module with the function index and the reason
+(`Sljit::ModuleCompiler::unsupportedFunctions()` still lists per-function reasons).
 
 ## How the slice is emitted
 
@@ -115,16 +126,28 @@ Nothing in `WasmBase/` had to change to add it. That is the point of the seam.
 
 ## Known limitations
 
-- one executable mapping per function, because `SLJIT_WX_EXECUTABLE_ALLOCATOR=1`
+* one executable mapping per function, because `SLJIT_WX_EXECUTABLE_ALLOCATOR=1`
   is defined so code never lives in a read-write-execute page;
-- no `rawFnPtr` driver and no `tailEntry` thunk: the callable's entry is the raw
-  generated code and the core falls back to `call` + `return` for tail calls;
-- the helper-call lowering of division, memory access and calls is deliberately
+* a native import with more than three Wasm parameters, or any native import in a
+  frame-form module, is called through the staged adapter, i.e. one libffi call
+  per invocation. That is the price of SLJIT’s four-argument C-call ceiling;
+* an **indirect** call whose signature carries a `v128` *and* more than three
+  parameters is refused in a module that also imports a native function: the
+  adapter has no `ffi_type` for a vector. `return_call_ref` keeps the
+  register-form ceiling for the same reason;
+* the operand stack’s reference ownership is exact for the paths the suites
+  exercise (arguments, locals, created objects, returned references, the
+  descriptor family), but a reference read out of a struct field or array
+  element is still a *borrow*, and `drop` releases only continuations and
+  strings. That is a leak, never a wrong result
+  ([`docs/backends/PRODUCTION_GAPS.md`](../docs/backends/PRODUCTION_GAPS.md) §30);
+* the helper-call lowering of division, memory access and calls is deliberately
   correctness-first; a later slice can inline the checked paths where the
   post-mortem measures a benefit.
 
 Generated code **is** released on `Runtime::unload` and runtime teardown through
-`ModuleCompiler::releaseInstance`.
+`ModuleCompiler::releaseInstance`. The staged-import closures are process-lifetime
+and shared, like the rest of the process-wide helper caches.
 
 ## Next steps
 

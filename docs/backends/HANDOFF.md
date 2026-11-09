@@ -9,17 +9,25 @@ curated capability ledger) and section 29 (the production gaps), and
 
 ## 1. Where the tree is
 
-**Snapshot (2026-11-07, this working tree):** `--rng-seed 12345` -> **22442
-assertions, 821 cases, green**. Gates: `[headerdoc]`, `[docs]`, `doxygen` 0
-warnings, `abi-check` OK.
+**Snapshot (2026-11-09, this working tree):** the generic backend-selected suite
+is **green on all three code generators**, with the same case set and assertion
+count each:
 
-The frame ABI work is done on all three backends. Exceptions (including
-`catch_ref` and multi-value payloads), the memory-atomics family, the numeric
-shared-everything atomics and frame-form tail calls are implemented on SLJIT and
-AsmJIT. The curated capability ledger has no open opcode/ABI row. **That is not a
-production verdict:** the generic full-suite runs for SLJIT and AsmJIT fail and
-crash, so only LibJIT is production-ready today. See
-[`PRODUCTION_READINESS.md`](../BACKEND_PRODUCTION_READINESS.md). The LibJIT frame form stays
+```
+WASMJIT_BACKEND=libjit ./WasmJit --rng-seed 12345 -> 22,451 assertions in 821 cases
+WASMJIT_BACKEND=sljit  ./WasmJit --rng-seed 12345 -> 22,451 assertions in 821 cases
+WASMJIT_BACKEND=asmjit ./WasmJit --rng-seed 12345 -> 22,451 assertions in 821 cases
+```
+
+Gates: `[headerdoc]`, `[docs]`, `doxygen` (0 warnings), the strict
+`WASM_SPEC_VALIDATE=1` sweep on SLJIT (curated and `[spec]`), and the ASan
+configuration.
+
+All three backends are now production-ready within the same declared envelope
+(x86-64 Linux / SysV AMD64); the verdict and the documented refusals live in
+[`BACKEND_PRODUCTION_READINESS.md`](../BACKEND_PRODUCTION_READINESS.md) §7, and
+the defect ledger that closed the last failures is
+[`PRODUCTION_GAPS.md`](PRODUCTION_GAPS.md) §30. The LibJIT frame form stays
 opt-in and its frame tails are call+return rather than constant-stack.
 
 ## 2. The sweep defects
@@ -131,9 +139,30 @@ them, and the validator now rejects them (`V128ATOMIC`).
 
 ## 7. Next session's recommendation
 
-1. **Shared reference/table atomics.** Numeric slots are done. Reference slots
-   need the retain/release barrier (`wasm_atomic_ref_*`); table slots additionally
-   need table.get/set lowering, which neither backend has yet.
+1. **Finish the reference-ownership model on both non-LibJIT backends.** The
+   paths the suites exercise are exact (arguments, locals, created objects,
+   returned references, the descriptor family), but three shapes are still
+   borrows that nothing releases: a reference read out of a struct field or an
+   array element, `select`’s unselected operand, and `drop` of a GC reference
+   (`dispatchDrop` releases only continuations and strings). Each is a leak, not
+   a wrong result, and each has a fixture already (`gc_refcount.wat`); the
+   change is `emitRetainStackObject`-shaped and belongs next to the existing
+   calls rather than at the return boundary.
+2. **Reduce the staged-import cost.** A native import with more than three
+   parameters now costs one libffi round trip per call. The cheap win is to keep
+   the *direct* 4-argument shape on the register form by reserving `S0`/`S1`
+   (SLJIT’s argument ceiling is four, so `ctx + 3` is the maximum and nothing
+   can be gained without staging; the win is only for imports that are called
+   once per message, and the post-mortem should measure before it changes).
+3. **Widen the frame-form tail path.** `return_call_ref` above the
+   register-form ceiling is still a semantic call+return on SLJIT; the frame
+   trampoline is the missing piece ([`PRODUCTION_GAPS.md`](PRODUCTION_GAPS.md)
+   §2.1).
+4. **Portability.** Every production sentence in this tree is scoped to x86-64
+   Linux / SysV AMD64. A single non-SysV runner (AArch64 or MS x64) would turn
+   the `provisional` rows in [`ABI_PORTABILITY.md`](../ABI_PORTABILITY.md) into
+   evidence, and that is now the largest single gap between “production-ready”
+   and “portable”.
 
 Keep the probe discipline: strengthen the fixture until it observes the
 property, validate the module, run all three backends, then record a row.

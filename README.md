@@ -4,10 +4,9 @@
 
 The library split is in place: `WasmBase/` is the backend-agnostic core
 (`libWasmBase`), every code generator is its own library (`LibJit/` is the
-full-featured backend and the only production-ready one; `Asmjit/` is an
-experimental native backend; `Sljit/` is a provisional backend — each has a
-README), and `Test/` is a Catch2 harness over the libraries rather than the
-product. Production readiness is measured per backend in
+full-featured GNU LibJIT backend, `Sljit/` is the SLJIT backend and `Asmjit/`
+is the AsmJit backend — all three pass the generic gate, each has a README),
+and `Test/` is a Catch2 harness over the libraries rather than the product. Production readiness is measured per backend in
 [`docs/BACKEND_PRODUCTION_READINESS.md`](docs/BACKEND_PRODUCTION_READINESS.md). The
 `build/<config>/Test/WasmJit` executable is still a development sandbox, not the
 embeddable API. See [`docs/LAYERING.md`](docs/LAYERING.md) for the rule that
@@ -25,13 +24,13 @@ generator is built.
 
 ## Direction
 
-- **GNU LibJIT is the only production backend**, and stays the implementation
-  path until another code generator can run the whole generic fixture set.
-  `Asmjit/` is experimental and `Sljit/` is provisional: both execute substantial
-  targeted slices, but the generic backend-selected suite does not pass (and
-  currently aborts or segfaults). Their detailed capability and production gaps
-  are in [`docs/BACKEND_PRODUCTION_READINESS.md`](docs/BACKEND_PRODUCTION_READINESS.md);
-  neither is a general replacement for LibJIT.
+- **All three code generators are production-ready within one declared
+  envelope** (x86-64 Linux / SysV AMD64, single-agent, one instance per module):
+  each completes the generic backend-selected suite with the same 22,451
+  assertions in 821 cases. `Sljit/` needs no GNU LibJIT dependency and `Asmjit/`
+  needs the external AsmJit library; both document their refusals in their
+  README and in
+  [`docs/BACKEND_PRODUCTION_READINESS.md`](docs/BACKEND_PRODUCTION_READINESS.md).
 - **No bespoke interpreter fallback, ever.** WasmJit will not grow a Wasm
   interpreter — not for continuations, unsupported opcodes or portability. If
   interpretation is ever required it must come from GNU LibJIT's own
@@ -73,9 +72,9 @@ generator is built.
   multiplicity the rule forbids). See
   [`docs/THREADSAFETY.md`](docs/THREADSAFETY.md) §3.1–§3.2 and
   [`docs/MULTI_AGENT_FEASIBILITY.md`](docs/MULTI_AGENT_FEASIBILITY.md) §2.3.
-- **Still open** (tracked, not complete): a *complete* second backend. `Asmjit/`
-  is experimental and `Sljit/` is provisional; both have targeted coverage, but
-  neither passes the generic backend-selected suite; see
+- **Still open** (tracked, not complete): a *portable* backend matrix. Every
+  production claim is scoped to x86-64 Linux / SysV AMD64, because no non-SysV
+  runner exists yet; see
   [`docs/BACKEND_PRODUCTION_READINESS.md`](docs/BACKEND_PRODUCTION_READINESS.md).
   The long-term qmake → CMake move and the language-support studies remain
   tracked separately; the embedding and plugin designs are implemented.
@@ -256,22 +255,22 @@ library per backend plus the test executable.
 | `WasmBase/` | The core library (`libWasmBase`): binary decoding, the module/instance model, `Store`/`TypeRegistry`/`Value`, the opcode decoder, the shared SIMD helper ABI, and the backend-neutral component runtime (`WasmComponentRuntime`). **Backend-agnostic by rule** — see [`docs/LAYERING.md`](docs/LAYERING.md) |
 | `WasmStub/` | `libWasmStub`: a non-JIT opcode dispatcher that pretty-prints instead of executing (inspection/debug) |
 | `LibJit/` | `libLibJit`: the GNU LibJIT backend (context, type translation, module compiler, dispatch) — the current full-featured implementation path |
-| `Asmjit/` | **Experimental AsmJit backend**: registers as `asmjit` and executes a targeted native slice, but is **not production-ready**; the generic backend-selected suite fails and segfaults. See [`Asmjit/README.md`](Asmjit/README.md) and [`docs/BACKEND_PRODUCTION_READINESS.md`](docs/BACKEND_PRODUCTION_READINESS.md) |
-| `Sljit/` | `libSljit`: the **provisional** SLJIT backend; registers as `sljit` and has targeted coverage, but is **not production-ready**; the generic backend-selected suite has 41 failures and aborts. See `Sljit/README.md` and [`docs/BACKEND_PRODUCTION_READINESS.md`](docs/BACKEND_PRODUCTION_READINESS.md) |
+| `Asmjit/` | `libAsmjit`: the AsmJit backend, registers as `asmjit`; **production-ready within the declared envelope** (the generic suite is green). Needs the external AsmJit library at build time. See [`Asmjit/README.md`](Asmjit/README.md) and [`docs/BACKEND_PRODUCTION_READINESS.md`](docs/BACKEND_PRODUCTION_READINESS.md) |
+| `Sljit/` | `libSljit`: the SLJIT backend, registers as `sljit`; **production-ready within the declared envelope** (the generic suite is green). Vendors `extern/sljit`, no external `-lsljit`. See [`Sljit/README.md`](Sljit/README.md) and [`docs/BACKEND_PRODUCTION_READINESS.md`](docs/BACKEND_PRODUCTION_READINESS.md) |
 | `Test/` | The Catch2 executable (`WasmJit`) and the spec-suite harness; see [`docs/TESTING.md`](docs/TESTING.md) |
 | `docs/` | Design notes and process guides; per-proposal notes live in `docs/proposals/` (see the [`docs`](docs/index.md) node) |
 | `extern/` | Submodules: `MhLib` (`Elvavena` I/O + `Euphemy`) and the upstream `WasmTestsuite` |
 | `build/` | Shadow build output — **all build artefacts go here, never in the source tree** |
 
-## Status (snapshot 2026-11-07)
+## Status (snapshot 2026-11-09)
 
 The repository builds a set of shared libraries plus a console test executable
 through qmake:
 
 - [`Project.pro`](Project.pro) is the top-level `subdirs` project
-  (`WasmBase` + `WasmStub` + `LibJit` + the experimental `Asmjit` backend + the
-  provisional `Sljit` backend + `ExampleBackend` + `Test`); all three backends
-  are built and selectable by name, but only LibJIT is production-ready;
+  (`WasmBase` + `WasmStub` + `LibJit` + the `Asmjit` backend + the `Sljit`
+  backend + `ExampleBackend` + `Test`); all three backends are built, selectable
+  by name, and green on the generic suite;
 - the test target links against `libjit`, `libasmjit`, Catch2 and the project
   libraries (`libWasmBase`, `libWasmStub`, `libLibJit`, `libAsmjit`,
   `libSljit`);
@@ -302,14 +301,14 @@ through qmake:
 
 | Backend | State |
 |---|---|
-| GNU LibJIT (`LibJit/`) | **Production-ready within its declared envelope** — full backend, default suite green; x86-64 Linux only. |
-| AsmJit (`Asmjit/`) | **Experimental — not production-ready.** Targeted `[asmjit]` tests pass, but the generic backend-selected suite fails and then segfaults. |
-| SLJIT (`Sljit/`) | **Provisional — not production-ready.** Targeted `[sljit]` tests pass, but the generic backend-selected suite has 41 failures and then aborts. |
+| GNU LibJIT (`LibJit/`) | **Production-ready within its declared envelope** — full backend, generic suite green (22,451 assertions / 821 cases); x86-64 Linux only. |
+| AsmJit (`Asmjit/`) | **Production-ready within the same envelope** — generic suite green (22,451 assertions / 821 cases); same three documented refusals as SLJIT. |
+| SLJIT (`Sljit/`) | **Production-ready within the same envelope** — generic suite green (22,451 assertions / 821 cases); documented refusals for a `v128` wide indirect call and `return_call_ref` above the register ceiling. |
 
 There is no interpreter backend. `WasmStub/` is a non-compiling pretty-printer;
 GNU LibJIT already provides a compile/interpret configuration and is the only
-acceptable interpretation path. AsmJit is an experimental native execution
-backend with deliberately limited instruction coverage. A bespoke WasmJit interpreter is a permanent
+acceptable interpretation path. AsmJit and SLJIT are native execution
+backends that cover the same lowering slice as LibJIT. A bespoke WasmJit interpreter is a permanent
 non-goal — see
 [`docs/proposals/STACK_SWITCHING.md`](docs/proposals/STACK_SWITCHING.md) §10.15
 (D-3).

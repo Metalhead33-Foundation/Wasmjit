@@ -17,9 +17,9 @@ verdicts, and the gap ledger that says which documented shortfalls are compatibl
 with the milestone and which would sink it. It contains **no code**, changes no
 behaviour, and adds no test.
 
-**Scope of the production claim:** G1 is about LibJIT. SLJIT and AsmJIT are
-implemented and have targeted coverage, but they are **not production-ready**;
-their measured blockers are in
+**Scope of the production claim:** G1 was written for LibJIT. SLJIT and AsmJIT
+now pass the same generic gate and are production-ready within the same envelope
+(snapshot 2026-11-09); their measured status is in
 [`BACKEND_PRODUCTION_READINESS.md`](BACKEND_PRODUCTION_READINESS.md).
 
 ## 1. Document map
@@ -727,16 +727,17 @@ Re-measured on 2026-11-03 for the FP16/M8 slice (`4d52031`), from
   conventions this note borrows (`AAS<n>`, `AASD<n>`, `AAS-<n>`).
 - `AGENTS.md` — the one-line rules a contributor reads first.
 
-## 13. Backend production status (2026-11-07)
+## 13. Backend production status (2026-11-09)
 
-This milestone is **met for LibJIT**, the production backend. It is not a
-three-backend production claim. The measured status is:
+This milestone was written for LibJIT and is met on all three code generators;
+snapshot 2026-11-09 is a three-backend production claim within one envelope. The
+measured status is:
 
 | Backend | Status |
 |---|---|
 | LibJIT | Production-ready within the declared x86-64 Linux / single-agent envelope |
-| SLJIT | Provisional; not production-ready — generic backend suite fails then aborts |
-| AsmJIT | Experimental; not production-ready — generic backend suite fails then segfaults |
+| SLJIT | Production-ready within the same envelope — generic suite green (22,451 assertions / 821 cases) |
+| AsmJIT | Production-ready within the same envelope — generic suite green (22,451 assertions / 821 cases) |
 
 The evidence and promotion criteria are owned by
 [`BACKEND_PRODUCTION_READINESS.md`](BACKEND_PRODUCTION_READINESS.md); this note

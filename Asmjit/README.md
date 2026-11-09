@@ -2,14 +2,21 @@
 
 *Experimental AsmJit backend*
 
-This directory contains an experimental, deliberately limited WebAssembly
-backend. It implements the four `ModuleInstantiator` hooks and executes a
-targeted native slice. It is **experimental and not production-ready**: the
-targeted `[asmjit]` tests pass, but the generic backend-selected suite fails and
-then segfaults. See
+This directory contains a native WebAssembly backend built on AsmJit. It
+implements the four `ModuleInstantiator` hooks and executes the shared lowering
+slice with AsmJit’s register allocator.
+
+**Status (2026-11-09):** **production-ready within the declared envelope** —
+`WASMJIT_BACKEND=asmjit ./Test/WasmJit --rng-seed 12345` reports **22,451
+assertions in 821 cases, green**, the same case set and assertion count as the
+reference backend. The envelope is x86-64 Linux / SysV AMD64 with the external
+AsmJit library available at build time, and the documented refusals are the same
+three as SLJIT’s (see `Sljit/README.md` "Known limitations"). See
 [`docs/BACKEND_PRODUCTION_READINESS.md`](../docs/BACKEND_PRODUCTION_READINESS.md)
-for the measured evidence. It must not be treated as a drop-in replacement for
-GNU LibJIT.
+for the measured evidence and
+[`docs/backends/PRODUCTION_GAPS.md`](../docs/backends/PRODUCTION_GAPS.md) §30 for
+the defect ledger. It is still not a *code-quality* drop-in replacement for GNU
+LibJIT.
 
 ## What exists
 
@@ -30,6 +37,13 @@ GNU LibJIT.
 the two-pass instantiation contract and enabling forward and mutually recursive
 direct calls. Each generated function emits the required
   `wasm_stack_check(VMContext*)` prologue call.
+- The body compiler supports the full shared lowering slice, including the
+  Custom Descriptors family (`struct.new_desc`, `struct.new_default_desc`,
+  `ref.get_desc`, `ref.cast_desc_eq(_null)`, `br_on_cast_desc_eq(_fail)`), whose
+  descriptor operand is retained into the new object's header slot and released
+  from the operand stack, and trap-site attribution: `unreachable` reports at
+  its own instruction and a helper-raised trap is annotated with the calling
+  function's index, offset and `$name` before the frame returns.
 - The body compiler currently supports i32/i64/f32/f64 parameters, results, and
   locals; i32/i64 constants and local access; i32.wrap_i64, i64.extend_i32_s/u and i64.extend8/16/32_s; i64 arithmetic (`add/sub/mul/div/rem`),
   bitwise operations, shifts, rotations, comparisons, and `eqz`; i32 arithmetic,

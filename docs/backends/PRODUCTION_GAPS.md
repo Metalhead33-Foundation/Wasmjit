@@ -1,10 +1,11 @@
 # Production-readiness gaps, backend by backend
 
-**Status:** living note, 2026-11-07 (`backendsMh33`). Companions:
+**Status:** living note, 2026-11-09 (`backendsMh33`). Companions:
 [`EXPORT_SIGNATURE.md`](EXPORT_SIGNATURE.md) (the ABI itself),
-[`STAGING_CALL_ABI.md`](STAGING_CALL_ABI.md) (its history). **Section 27 is the current
-curated capability ledger; section 29 is the production-readiness gap ledger**;
-23-26 are history.
+[`STAGING_CALL_ABI.md`](STAGING_CALL_ABI.md) (its history). **Section 27 is the
+curated capability ledger, section 29 the production-readiness gap ledger as it
+stood on 2026-11-07, and section 30 the batch that closed it** — the generic
+suite is now green on all three backends; 23-26 are history.
 
 This note exists because a survey of refusal strings (EXPORT_SIGNATURE §44) described
 "limits" that are **not limits**: the frame form exists precisely to remove them.
@@ -1108,3 +1109,65 @@ backend.
 **Reproduce:** `WASMJIT_BACKEND=sljit ./Test/WasmJit --rng-seed 12345` and
 `WASMJIT_BACKEND=asmjit ./Test/WasmJit --rng-seed 12345` from
 `build/Desktop-Release`.
+
+## 30. The promotion gate is met on all three backends (2026-11-09)
+
+**Snapshot (2026-11-09, working tree after this batch):** the generic
+backend-selected suite is **green on all three code generators**, with the same
+assertion count on each:
+
+| Backend | `WASMJIT_BACKEND=<name> ./WasmJit --rng-seed 12345` | Exit |
+|---|---|---|
+| LibJIT | **22,451 assertions in 821 cases, green** | 0 |
+| SLJIT | **22,451 assertions in 821 cases, green** | 0 |
+| AsmJIT | **22,451 assertions in 821 cases, green** | 0 |
+
+Equal assertion counts are the point: every case now runs to completion on every
+backend, so the three runs are a conformance result rather than three different
+subsets. The promotion criteria live in
+[`BACKEND_PRODUCTION_READINESS.md`](../BACKEND_PRODUCTION_READINESS.md) §7; the
+remaining ones (strict negative sweep, sanitizer, target matrix, doc
+consistency) are recorded there.
+
+### What closed, and why each was a defect rather than a gap
+
+| Item | Backends | What was wrong |
+|---|---|---|
+| Custom Descriptors (`struct.new_desc`, `struct.new_default_desc`, `ref.get_desc`, `ref.cast_desc_eq(_null)`, `br_on_cast_desc_eq(_fail)`) | SLJIT, AsmJIT | The whole `0xFB 32..38` family was **LibJIT-only**, so `custom descriptors allocate and retrieve their RTT` failed to instantiate. |
+| Reference ownership of a created object | SLJIT, AsmJIT | `struct.new` pushed the new object **without** the count the operand stack owns, so a returned object arrived unowned and the fixture's second `refDrop` underflowed. |
+| Consumed descriptor operands | SLJIT, AsmJIT | `struct.new_desc` and `cast_desc_eq` left the stack's count on the descriptor unreleased — a `local.get` clone that nothing ever dropped. |
+| Trap-site attribution | AsmJIT | `unreachable` reported without a location and helper traps were never annotated, so `diagnostic.location.functionIndex` was `kNoDiagnosticIndex`. |
+| A native import with four parameters | SLJIT | SLJIT's C-call form accepts **four** arguments and `VMContext*` is the first, so `env.abort(msg, file, line, col)` (AssemblyScript's abort) was refused at compile time. Three AssemblyScript interop cases depended on it. |
+| Frame-form native imports (latent) | SLJIT | A native import carries no `Callable::context`, and the frame path used to call it as `(ctx, frame)`. Unreachable before this batch; the staged adapter branch makes it correct. |
+
+### What the SLJIT staged-import adapter is
+
+`sljit_emit_icall` cannot express more than four C arguments, and that ceiling is
+SLJIT's own (`function_check_arguments`, `sljitLir.c`). A native import keeps its
+own host C signature, so the only way to call a wide one is to *stage* the
+arguments and marshal them in C: the backend builds **one libffi closure per
+distinct signature** (process-lifetime, keyed by the value-kind list) whose
+signature is `void(VMContext*, Callable*, void* frame)`. Generated code stages
+the arguments into the canonical frame and calls the closure, which unpacks them
+onto the real import. A call site that may reach a native import branches on
+`Callable::context`: null means "native import" and takes the adapter, non-null
+means "frame-form Wasm function" and takes `(ctx, frame)`.
+
+This is a workaround for a limitation of *one* code generator, so it lives in
+`Sljit/` and not in `WasmBase/` (`WRITING_A_BACKEND.md` §10). It is also the
+first use of libffi *inside* a backend's generated-code path — the backend
+already linked libffi for `BackendSession::invoke`.
+
+### Deliberate limits that remain
+
+* An indirect call (`call_indirect`, `call_ref`) whose signature carries a
+  `v128` **and** more than three parameters is refused in a module that also
+  imports a native function: the adapter has no `ffi_type` for a vector, so it
+  cannot stage one. No fixture needs the shape; the refusal names the reason.
+* `return_call_ref` keeps the register-form ceiling for the same reason.
+* Reference *counts* are exact for the paths above, but the operand stack is
+  still a partial-ownership model on both backends: a reference read out of a
+  struct field or array element is a borrow, and `drop` releases only
+  continuations and strings. That is a leak, never a wrong result, and it is
+  recorded here rather than silently fixed.
+

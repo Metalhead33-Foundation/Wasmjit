@@ -546,7 +546,7 @@ for a merge to `master` — so that "green" means the same thing to every review
 | Run | Command | Evidence it produces | Last measured |
 | --- | --- | --- | --- |
 | Strict validator sweep | `WASM_SPEC_VALIDATE=1 ./WasmJit` (curated) and `WASM_SPEC_VALIDATE=1 ./WasmJit '[spec]'` (all) | every curated binary negative module is rejected; the all-scripts sweep exercises the hidden decoder/validator/linker cases too | **curated 3,275 / 3,277** (`tag` is the two-entry known failure), **all-scripts 257 / 257**, 2026-11-03 |
-| AddressSanitizer build + suite | configure a second shadow build (below), then run the default suite with `ASAN_OPTIONS=detect_leaks=1:abort_on_error=1` and `LSAN_OPTIONS=suppressions=Test/asan.supp` | no use-after-free, overflow or engine leak; only LibJIT's uninstrumented process-wide caches are suppressed | **400 cases / 17,141 assertions passed, no ASan memory error, LeakSanitizer clean after 1.78 MB of LibJIT cache suppressions, 2026-11-03** (exit 0); `[compilation-policy]` is excluded because LibJIT's CFG optimizer under ASan exceeds the runtime budget |
+| AddressSanitizer build + suite | configure a second shadow build (below), then run the default suite with `ASAN_OPTIONS=detect_leaks=1:abort_on_error=1` and `LSAN_OPTIONS=suppressions=Test/asan.supp` | no use-after-free, overflow or engine leak; only LibJIT's uninstrumented process-wide caches are suppressed | **610 cases / 22,005 assertions passed, no ASan memory error, LeakSanitizer clean, 2026-11-09** (exit 0); `[compilation-policy]` is excluded because LibJIT's CFG optimizer under ASan exceeds the runtime budget |
 | Execution-budget run | `./WasmJit '*per-agent step budget*'` (part of `[config]`) | a finite fuel budget stops a runaway loop with `TrapKind::OutOfFuel` and leaves `fuelRemaining()` at zero | **64-unit budget**, `[config]` green, 2026-11-03 |
 | ThreadSanitizer concurrency run | configure a third shadow build (below), then `./WasmJit '[multiagent]'` | no data race on the multi-agent path (waiter table, entry counter, GC queue/counters, shared-global atomics) | `[multiagent]` **51 assertions / 6 cases** and `[concurrency]` **80 / 13**, **no TSan report**, 2026-11-03 |
 | ABI check | `./Test/abi-check.sh build/<config>` | no exported symbol disappeared since the baseline (the additive-only rule of `API_ABI_STABILITY.md` G2); `--update` records an intentional addition | **3,093 dynamic / 1,992 strong symbols, 0 removed**, 2026-11-03 |
@@ -557,15 +557,16 @@ Targeted `[libjit]`/`[sljit]`/`[asmjit]` tags are not sufficient to call a
 backend production-ready. The promotion gate is the **generic suite selected
 for that backend**:
 
-| Backend | Command | Status at the 2026-11-07 snapshot |
+| Backend | Command | Status at the 2026-11-09 snapshot |
 |---|---|---|
-| LibJIT | `WASMJIT_BACKEND=libjit ./WasmJit` | **green** — 22,442 assertions / 821 cases |
-| SLJIT | `WASMJIT_BACKEND=sljit ./WasmJit` | **not green** — 10 / 12 cases passed, 2 failed, then segfault (stops early) |
-| AsmJIT | `WASMJIT_BACKEND=asmjit ./WasmJit` | **not green** — 16 / 21 cases passed, 5 failed, then segfault |
+| LibJIT | `WASMJIT_BACKEND=libjit ./WasmJit` | **green** — 22,451 assertions / 821 cases, exit 0 |
+| SLJIT | `WASMJIT_BACKEND=sljit ./WasmJit` | **green** — 22,451 assertions / 821 cases, exit 0 |
+| AsmJIT | `WASMJIT_BACKEND=asmjit ./WasmJit` | **green** — 22,451 assertions / 821 cases, exit 0 |
 
-The exact blockers and promotion criteria are owned by
-[`BACKEND_PRODUCTION_READINESS.md`](BACKEND_PRODUCTION_READINESS.md). A backend
-with a red promotion row must not be advertised as production-ready.
+All three runs execute the same case set and report the same assertion count, so
+"green" now means the same thing on every backend. The promotion criteria and the
+documented refusals are owned by
+[`BACKEND_PRODUCTION_READINESS.md`](BACKEND_PRODUCTION_READINESS.md) §7.
 
 `Test/spec_known_failures.txt` is the only place a spec failure may be
 subtracted from the gate. It is not an exemption: the named line must still
@@ -715,11 +716,15 @@ from module input.
 ### Current status (for orientation)
 
 The default run is the curated list (189 scripts) plus the manual and component
-tests, and it is green:
+tests, and it is green — on **every** backend (snapshot 2026-11-09):
 
 ```
-$ ./WasmJit
-All tests passed (17417 assertions in 585 test cases)
+$ ./WasmJit                                    # LibJIT
+All tests passed (22451 assertions in 821 test cases)
+$ WASMJIT_BACKEND=sljit  ./WasmJit
+All tests passed (22451 assertions in 821 test cases)
+$ WASMJIT_BACKEND=asmjit ./WasmJit
+All tests passed (22451 assertions in 821 test cases)
 ```
 
 A full sweep is green. `WASM_SPEC_TOLERANT=1` remains available for surveys (it

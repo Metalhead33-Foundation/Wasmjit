@@ -2907,3 +2907,104 @@ Default 22,448 assertions in 821 cases, green
   code.
 * **Diagnostic text is part of the backend contract.** The trap name must be
   composed and interned the same way the reference backend does it.
+
+## The promotion batch — descriptors, trap sites and a four-argument import (2026-11-09)
+
+This is the batch that took the generic backend-selected suite from
+`820 / 821` on both non-LibJIT backends to **green on all three**, with the same
+assertion count (22,451 in 821 cases). Every item below was a defect, not a
+missing feature; the ledger entry is
+[`PRODUCTION_GAPS.md`](PRODUCTION_GAPS.md) §30.
+
+### Intended
+
+Close the last six failures: the Custom Descriptors instruction family on SLJIT
+and AsmJIT, AsmJIT’s missing trap-site attribution, and a native import with
+four parameters on SLJIT.
+
+### Root causes, in the order they surfaced
+
+1. **The descriptor family was one backend’s.** `0xFB 32..38` had lowerings only
+   in `LibJit/`. With no lowering the module refused to instantiate, so the
+   failure was a *gap*, not a wrong result.
+
+2. **A freshly created object was not owned by the operand stack.** SLJIT’s
+   `dispatchStructNew` pushed the pointer without the `refClone` that the
+   ownership model (`WRITING_A_BACKEND.md` §6) gives a stack value. The fixture
+   that caught it returns a struct to the host and drops it twice: the first
+   `refDrop` reclaimed the object, the second underflowed
+   (`GC reference count underflow`).
+
+3. **A consumed reference operand was never released.** `struct.new_desc` retains
+   the descriptor into the object header, but the stack’s own count (created by
+   the `local.get` that produced it) was left behind. The count assertion that
+   exposed it (`gcRefCount(releasedDesc) == 1`, measured 2) is exactly the
+   “child reference” property the descriptor test exists to check.
+
+4. **A blanket “retain every reference result” fix over-counted.** The first
+   attempt cloned every reference result at the return boundary. That is right
+   for a value the stack *borrows*, and wrong for one it already owns: `get`
+   (`global.get`) then returned a doubly-counted host reference and
+   `host bridge reference callbacks participate in externref barriers` failed
+   with `first.refs == 3`. The correct shape is: the producer establishes the
+   count (`local.get`, `global.get`, `struct.new`), and the return *transfers*
+   it.
+
+5. **libffi keeps the `arg_types` pointer, not a copy.** The staged-import
+   closure was prepared from a function-local `std::vector<ffi_type*>`; the
+   vector died when the factory returned, and the first staged call jumped into
+   freed arg-type memory (SIGSEGV inside `libffi.so.8`). The array now lives in
+   the same object as the `ffi_cif`.
+
+6. **Removing a context substitution broke narrow native imports.** The call
+   path substitutes the *caller’s* `VMContext*` for an import whose
+   `Callable::context` is null. The staged-call rewrite dropped that `select`,
+   so `host_observe_utf8` received a null context and reported
+   “the import has no memory”.
+
+7. **A refusal that was too broad.** “Cannot stage a signature carrying a
+   `v128`” was applied to every wide call, including frame-form modules with no
+   imports at all, which refused the constant-stack v128 frame-tail probe. The
+   refusal now applies only when the module actually imports a native function.
+
+### Evidence
+
+```
+WASMJIT_BACKEND=libjit ./WasmJit --rng-seed 12345  -> All tests passed (22451 assertions in 821 test cases)
+WASMJIT_BACKEND=sljit  ./WasmJit --rng-seed 12345  -> All tests passed (22451 assertions in 821 test cases)
+WASMJIT_BACKEND=asmjit ./WasmJit --rng-seed 12345  -> All tests passed (22451 assertions in 821 test cases)
+```
+
+Per-case evidence for the items above (all three backends unless stated):
+`custom descriptors allocate and retrieve their RTT` 29 assertions;
+`host bridge reference callbacks participate in externref barriers` 17;
+`trap site: a helper-raised trap is annotated with the calling function` 6;
+`diagnostics: a runtime trap carries its function and instruction location` 12;
+`tail calls: v128 frame-form mutual recursion is constant-stack` 6;
+`AssemblyScript aborts and native import failures remain traps` 13;
+`AssemblyScript arrays and cached host handles ...` 22;
+`AssemblyScript strings ... both encodings` 14.
+
+### Lessons
+
+* **“Make the fixture pass” is a bad objective; “make the count true” is the
+  good one.** The descriptor failure was reported as an underflow and then as an
+  off-by-one count; both were symptoms of *ownership rules applied in one place
+  and not another*. Fixing the rule (produce a count, release a consumed
+  reference) fixed both, and the intermediate “clone at the return” attempt
+  made a different test fail — which is the signal that the rule, not the site,
+  was wrong.
+* **A C library that stores a pointer stores a pointer.** `ffi_prep_cif`
+  remembers `arg_types`; passing a temporary’s buffer is a use-after-free that
+  only shows up on the first call. Keep the array in the same object as the cif.
+* **A rewrite must re-home every behaviour it deletes.** The null-context
+  substitution looked like a detail of “call the callee and substitute the
+  context”; it was in fact the only thing making a native import see the
+  caller’s instance, and dropping it produced a plausible-looking, wrong call.
+* **A workaround for one code generator belongs in that code generator.** The
+  staged-import adapter is 150 lines in `Sljit/`; putting it in `WasmBase/`
+  would have added a helper only SLJIT needs (`WRITING_A_BACKEND.md` §10).
+* **Measure the *set*, not the count.** Three runs reporting the same 22,451
+  assertions is a stronger statement than three greens of different sizes; the
+  earlier snapshots reported only pass/fail totals, which hid that different
+  cases were failing on each backend.
