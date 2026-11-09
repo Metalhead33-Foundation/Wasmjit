@@ -48,6 +48,7 @@
 #include "WasmBase/WasmExn.hpp"
 #include "WasmBase/WasmOpcode.hpp"
 #include "WasmBase/WasmBackendAbi.hpp"
+#include "WasmBase/WasmCallCache.hpp"
 #include "WasmBase/WasmProfile.hpp"
 #include "WasmBase/WasmStore.hpp"
 #include "WasmBase/WasmTypeRegistry.hpp"
@@ -6834,16 +6835,28 @@ TEST_CASE("call form: a two-module graph must not mix the register and frame for
 	provider->registerExports(imports, "provider");
 	const bool providerFrameForm = provider->frameCallAbi();
 
-	if (providerFrameForm) {
-		// The importer's own signatures all fit the register form, so it would
-		// call `narrow` in that form: refuse rather than corrupt.
-		REQUIRE_THROWS(backend->instantiator().instantiate(importerModule, imports));
-	} else {
+	// The provider's `wide` sibling puts the whole provider in the frame form on
+	// the backends that decide the form per module, while the importer's own
+	// signatures keep it register-form. A backend whose call sites follow the
+	// *callee's* form (SLJIT) calls it correctly; one whose call lowering is fixed
+	// by its own module form (AsmJIT) must refuse by name. Neither may corrupt.
+	try {
 		auto importer = backend->instantiator().instantiate(importerModule, imports);
 		REQUIRE(importer.get() != nullptr);
 		auto call = importer->exportedFunction("call_narrow");
 		REQUIRE(call.has_value());
-		REQUIRE(WASM::callCallable<int32_t>(*call, int32_t(14)) == 42);
+		if (importer->frameCallAbi()) {
+			WASM::ModuleCallCache cache(*importer);
+			REQUIRE(cache.call<int32_t>("call_narrow", int32_t(14)) == 42);
+		} else {
+			REQUIRE(WASM::callCallable<int32_t>(*call, int32_t(14)) == 42);
+		}
+	} catch (const std::exception& error) {
+		// The one acceptable failure: a named refusal, never a wrong value.
+		const std::string message = error.what();
+		const bool named = message.find("call form") != std::string::npos
+				|| message.find("call ABI") != std::string::npos;
+		REQUIRE(named);
 	}
 }
 
@@ -6866,11 +6879,17 @@ TEST_CASE("call form: the opt-in makes a two-module graph consistent")
 	REQUIRE(provider->frameCallAbi());
 	provider->registerExports(imports, "provider");
 
-	// Both modules are frame-form now, so the two sides agree -- but the frame
-	// form has no cross-module path yet, and the call crashed on all three
-	// backends before the check existed. The engine refuses it instead, so the
-	// gap is a diagnosis rather than a segfault.
-	REQUIRE_THROWS(backend->instantiator().instantiate(importerModule, imports));
+	// Both modules are frame-form now, so the two sides agree and the call is
+	// legal on every backend. The export is a frame entry, so the call goes
+	// through the marshaller: `WASM::callCallable` is the register-form shape by
+	// definition (docs/ABI.md), while a frame-form export is
+	// `void fn(VMContext*, void*)` and only `ModuleCallCache` builds the frame.
+	auto importer = backend->instantiator().instantiate(importerModule, imports);
+	REQUIRE(importer.get() != nullptr);
+	REQUIRE(importer->frameCallAbi());
+	WASM::ModuleCallCache cache(*importer);
+	REQUIRE(cache.find("call_narrow") != nullptr);
+	REQUIRE(cache.call<int32_t>("call_narrow", int32_t(14)) == 42);
 }
 
 TEST_CASE("GC reference ownership: the operand stack owns one count per reference")
@@ -7035,6 +7054,18 @@ TEST_CASE("GC reference ownership: the operand stack owns one count per referenc
 	WASM::callCallable<int32_t>(*overwrite);
 	instance.gcCollect();
 	REQUIRE(testStore().gc().liveObjectCount() == liveBeforeLocals);
+
+	// A reference-typed table is a store-owned slot like a field or an element:
+	// the store retains its own count, the operand stack gives its own back, and
+	// a read takes a count the drop returns.
+	auto tableSet = loaded.instance->exportedFunction("table_set");
+	auto tableGetDrop = loaded.instance->exportedFunction("table_get_drop");
+	REQUIRE(tableSet.has_value());
+	REQUIRE(tableGetDrop.has_value());
+	WASM::callCallable<void>(*tableSet, parent);
+	REQUIRE(instance.gcRefCount(parent) == 3); // the test's two plus the table's
+	REQUIRE(WASM::callCallable<int32_t>(*tableGetDrop) == 0);
+	REQUIRE(instance.gcRefCount(parent) == 3);
 
 	// A trap is an exit path too: the frame never reaches the return epilogue,
 	// so the reference local it holds must give its count back on the way out.

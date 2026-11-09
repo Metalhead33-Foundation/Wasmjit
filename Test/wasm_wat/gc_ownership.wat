@@ -109,6 +109,20 @@
   (func (export "packed_elem") (param $arr (ref null $i8arr)) (result i32)
     (array.get_u $i8arr (local.get $arr) (i32.const 0)))
 
+  ;; ── A reference-typed table ───────────────────────────────────────────────
+  ;; `table.set` goes through the reference write barrier (retain the new value,
+  ;; release the one it overwrote), so the *operand stack's* count on the value
+  ;; has to be given back by the caller.
+  (table $slots 4 (ref null $pair))
+
+  (func (export "table_set") (param $child (ref $pair))
+    (table.set $slots (i32.const 0) (local.get $child)))
+
+  ;; The slot keeps its own count; the read takes one and the drop gives it back.
+  (func (export "table_get_drop") (result i32)
+    (drop (table.get $slots (i32.const 0)))
+    (i32.const 0))
+
   ;; ── A trap is an exit path too ────────────────────────────────────────────
   ;; The frame leaves through the trap, never reaching the return epilogue, so
   ;; the reference local's count has to be given back on the way out. Without

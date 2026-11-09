@@ -1195,9 +1195,14 @@ private:
 	 * \param stagedImport Staged-call entry for a native import of this
 	 *        signature, or null; a staged call branches on `Callable::context`
 	 *        and routes a native target through the adapter.
+	 * \param calleeFrameForm True when the callee was compiled in the staging-frame
+	 *        form, read from the resolved callable; a cross-module callee may have
+	 *        been compiled by a module whose form differs from this one's, and the
+	 *        call has to follow the callee
+	 *        (docs/backends/CALL_FORM_GRANULARITY.md).
 	 */
 	void emitResolvedCall(const WASM::FuncType& type, int callableReg,
-			void* stagedImport = nullptr);
+			void* stagedImport, bool calleeFrameForm);
 	/*!
 	 * \brief Returns the staged native-import entry a call of @p type needs.
 	 *

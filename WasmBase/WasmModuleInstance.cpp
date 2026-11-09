@@ -115,12 +115,6 @@ std::unique_ptr<ModuleInstance> ModuleInstantiator::instantiate(const Module& mo
 	declareFunctions(*instance, module, instance->internals);
 	compileFunctions(*instance, module, instance->internals);
 
-	// A call site emits the *caller* module's call form, so an imported compiled
-	// function from an instance that chose the other form would be entered
-	// through the wrong signature -- corruption, not a trap. Both forms are known
-	// here and nowhere earlier.
-	instance->verifyImportCallForms();
-
 	// `ref.func` globals could only be stored as sentinels during construction;
 	// resolve them now that the callable tables exist.
 	instance->resolveGlobalRefFuncs();

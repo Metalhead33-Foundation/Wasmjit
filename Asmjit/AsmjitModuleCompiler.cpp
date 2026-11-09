@@ -2826,6 +2826,18 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 		const WASM::FuncType calledType = module.funcTypeAt(typeIndex);
 		if (inDeadCode())
 			return;
+		// The call shape below is chosen from this module's form, so a compiled
+		// callee that was built in the other form cannot be called from here. That
+		// is a property of this backend's lowering, not of the module graph: SLJIT
+		// derives the shape from the callee instead. Refuse by name rather than
+		// emit the wrong ABI (docs/backends/CALL_FORM_GRANULARITY.md).
+		if (!isInternal && WASM::callableIsCompiled(internals.importStorage[index])
+				&& WASM::callableUsesFrameForm(internals.importStorage[index]) != frameMode)
+			throw std::runtime_error("AsmJit: the module imports a function compiled in"
+					" the other call form, which this backend cannot call; instantiate the"
+					" graph without WASM::setFrameCallAbiOptIn so that every narrow signature"
+					" stays register-form"
+					" (docs/backends/CALL_FORM_GRANULARITY.md)");
 		if (!frameMode && calledType.results.size() > 1)
 			throw std::runtime_error("AsmJit register-form calls support at most one result");
 		if (!frameMode) {
@@ -7610,6 +7622,13 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		invoke->set_arg(2, index64);
 		invoke->set_arg(3, value);
 		emitPendingTrapReturn();
+		// The slot went through the reference write barrier, which retained its
+		// own count and released the value it overwrote; the count the operand
+		// stack held on the incoming value is given back here (RC-5).
+		if (isReferenceValue(value)) {
+			referenceValues.erase(value.id());
+			emitRefDrop(value);
+		}
 	}
 
 	void dispatchTableAtomicGet(uint8_t ordering, WASM::TableIdx tableIndex) override

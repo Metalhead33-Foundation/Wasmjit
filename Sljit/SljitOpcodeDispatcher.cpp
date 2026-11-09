@@ -3503,7 +3503,7 @@ void* OpcodeDispatcher::stagedImportFor(const WASM::FuncType& type)
 }
 
 void OpcodeDispatcher::emitResolvedCall(const WASM::FuncType& type, int callableReg,
-		void* stagedImport)
+		void* stagedImport, bool calleeFrameForm)
 {
 	// Load the target and its context out of the resolved `Callable`.
 	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R1, 0, SLJIT_MEM1(callableReg),
@@ -3524,12 +3524,15 @@ void OpcodeDispatcher::emitResolvedCall(const WASM::FuncType& type, int callable
 				SLJIT_MEM1(SLJIT_SP), contextSlotOffset(), SLJIT_R2));
 	}
 
-	// A signature wider than the register form, or any call in a frame-form
-	// module, travels through the staging frame. That is the only shape SLJIT can
-	// express for four or more Wasm parameters, and the only shape a native import
-	// with such a signature can be called through (see `stagedImportEntry`).
-	const bool wideRegisterCall = !frameAbi_ && type.params.size() > kMaxWasmParameters;
-	if (frameAbi_ || wideRegisterCall) {
+	// The callee's form decides the call shape: a compiled callee built for the
+	// staging frame takes a frame wherever it lives, and a register-form callee --
+	// which is what a native import always is -- takes arguments. Using the
+	// *caller's* form here is what made a cross-module call between two
+	// differently compiled modules corrupt memory
+	// (docs/backends/CALL_FORM_GRANULARITY.md).
+	const bool calleeUsesFrame = calleeFrameForm || stagedImport != nullptr;
+	const bool wideRegisterCall = !calleeUsesFrame && type.params.size() > kMaxWasmParameters;
+	if (calleeUsesFrame || wideRegisterCall) {
 		const std::size_t base = stackWidths_.size() - type.params.size();
 		std::vector<WASM::ValueKind> argumentKinds;
 		argumentKinds.reserve(type.params.size());
@@ -3736,7 +3739,14 @@ void OpcodeDispatcher::emitCall(WASM::FuncIdx index, bool isTail)
 			? module_.importFunctions[index].typeIdx
 			: module_.internalFunctionTypeIndices[index - importedCount];
 	const WASM::FuncType calledType = module_.funcTypeAt(typeIndex);
-	if (frameAbi_)
+	// The call shape follows the *callee*: an internal function shares this
+	// module's form, while an import was resolved -- and in another module,
+	// possibly compiled -- before any body here compiled, so its form is known.
+	// A native import carries no context and is a host C function: register form.
+	const bool calleeFrameForm = index < importedCount
+			? WASM::callableUsesFrameForm(internals_.importStorage[index])
+			: frameAbi_;
+	if (calleeFrameForm)
 		needsStagingCall_ = true;
 	// A signature wider than the register form travels through the staging frame:
 	// a Wasm callee is frame-form, and a native import is reached through the
@@ -3749,7 +3759,7 @@ void OpcodeDispatcher::emitCall(WASM::FuncIdx index, bool isTail)
 	require(!(wideCall && stagedImport == nullptr && moduleHasNativeImports_),
 			"the SLJIT backend cannot pass a v128 in a signature with more than three "
 			"parameters when the module also imports a native function");
-	require(frameAbi_ || calledType.results.size() <= 1,
+	require(calleeFrameForm || calledType.results.size() <= 1,
 			"the SLJIT register form cannot call a multi-result function");
 	for (const WASM::StorageType& parameter : calledType.params)
 		require(widthOf(parameter.val) != 0, "the SLJIT backend only calls i32/i64 signatures");
@@ -3779,7 +3789,7 @@ void OpcodeDispatcher::emitCall(WASM::FuncIdx index, bool isTail)
 			ok_ = false;
 		else if (resolved != nullptr)
 			sljit_set_label(resolved, continueLabel);
-		emitResolvedCall(calledType, SLJIT_R0, stagedImport);
+		emitResolvedCall(calledType, SLJIT_R0, stagedImport, calleeFrameForm);
 	}
 
 	resizeStack(stackWidths_.size() - calledType.params.size());
@@ -3848,7 +3858,7 @@ void OpcodeDispatcher::emitCallIndirect(WASM::TypeIdx typeIndex, WASM::TableIdx 
 			ok_ = false;
 		else if (resolved != nullptr)
 			sljit_set_label(resolved, continueLabel);
-		emitResolvedCall(calledType, SLJIT_R0, stagedImport);
+		emitResolvedCall(calledType, SLJIT_R0, stagedImport, frameAbi_);
 	}
 
 	resizeStack(stackWidths_.size() - calledType.params.size());
@@ -4104,7 +4114,7 @@ void OpcodeDispatcher::emitTailCallIndirectState(WASM::TypeIdx typeIndex, WASM::
 		ok_ = false;
 	else if (fallback != nullptr)
 		sljit_set_label(fallback, fallbackLabel);
-	emitResolvedCall(calledType, SLJIT_R0);
+	emitResolvedCall(calledType, SLJIT_R0, nullptr, frameAbi_);
 	// The semantic fallback must model the call's result before returning it:
 	// `emitResolvedCall` performs the call but does not update the compile-time
 	// operand stack. Without these pushes `emitReturnValue` sees an empty stack.
@@ -4195,7 +4205,7 @@ void OpcodeDispatcher::dispatchCallRef(WASM::TypeIdx typeIndex)
 	if (!measureOnly_) {
 		loadSlot(SLJIT_R0, callableDepth, 8);
 		emitNullRefCheck(SLJIT_R0);
-		emitResolvedCall(calledType, SLJIT_R0, stagedImport);
+		emitResolvedCall(calledType, SLJIT_R0, stagedImport, frameAbi_);
 	}
 	resizeStack(stackWidths_.size() - calledType.params.size());
 	for (const WASM::StorageType& result : calledType.results)
@@ -4244,7 +4254,7 @@ void OpcodeDispatcher::dispatchReturnCallRef(WASM::TypeIdx typeIndex)
 				ok_ = false;
 			else if (fallback != nullptr)
 				sljit_set_label(fallback, fallbackLabel);
-			emitResolvedCall(calledType, SLJIT_R0, stagedImport);
+			emitResolvedCall(calledType, SLJIT_R0, stagedImport, frameAbi_);
 			// Model the call result before returning it; see the note in
 			// emitTailCallIndirectState.
 			resizeStack(stackWidths_.size() - calledType.params.size());
@@ -4253,7 +4263,7 @@ void OpcodeDispatcher::dispatchReturnCallRef(WASM::TypeIdx typeIndex)
 			finishCallResults(calledType);
 			emitReturnValue();
 		} else {
-			emitResolvedCall(calledType, SLJIT_R0, stagedImport);
+			emitResolvedCall(calledType, SLJIT_R0, stagedImport, frameAbi_);
 			resizeStack(stackWidths_.size() - calledType.params.size());
 			for (const WASM::StorageType& result : calledType.results)
 				push(widthOf(result.val));
@@ -7668,6 +7678,10 @@ void OpcodeDispatcher::dispatchTableSet(WASM::TableIdx arg)
 		loadSlot(SLJIT_R3, valueDepth, 8);
 		emitHelper(SLJIT_ARGS4V(P, 32, W, P), &WASM::wasm_table_set);
 		emitPendingTrapCheck();
+		// The slot went through the reference write barrier, which retained its
+		// own count and released the value it overwrote; the count the operand
+		// stack held on the incoming value is given back here (RC-5).
+		emitDropStackRef(valueDepth);
 	}
 	resizeStack(stackWidths_.size() - 2);
 }
