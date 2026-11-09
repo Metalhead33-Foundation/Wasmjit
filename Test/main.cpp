@@ -47,6 +47,7 @@
 #include "WasmBase/WasmNativeImport.hpp"
 #include "WasmBase/WasmExn.hpp"
 #include "WasmBase/WasmOpcode.hpp"
+#include "WasmBase/WasmBackendAbi.hpp"
 #include "WasmBase/WasmProfile.hpp"
 #include "WasmBase/WasmStore.hpp"
 #include "WasmBase/WasmTypeRegistry.hpp"
@@ -6812,6 +6813,64 @@ TEST_CASE("GC refcount: clone saturates instead of wrapping the count")
 	// wrapped count would let a later drop look like the last reference.
 	REQUIRE(instance.refClone(object) == object);
 	REQUIRE(*count == 0xFFFFFFFFu);
+}
+
+TEST_CASE("call form: a two-module graph must not mix the register and frame forms")
+{
+	// The provider is forced into the staging-frame form by its *wide* function
+	// on the backends whose register form has an argument ceiling; LibJIT keeps
+	// the register form unless the opt-in asks for the frame. Its narrow export
+	// is compiled in the same form as its wide sibling, so an importer that
+	// emits the register form would enter a frame-form entry -- corruption, not
+	// a trap. The engine refuses the link instead
+	// (docs/backends/CALL_FORM_GRANULARITY.md).
+	WASM::Module providerModule = loadTestModule("call_form_provider");
+	WASM::Module importerModule = loadTestModule("call_form_importer");
+	auto backend = TestBackend::create();
+
+	WASM::RegistryImportResolver imports;
+	auto provider = backend->instantiator().instantiate(providerModule, imports);
+	REQUIRE(provider.get() != nullptr);
+	provider->registerExports(imports, "provider");
+	const bool providerFrameForm = provider->frameCallAbi();
+
+	if (providerFrameForm) {
+		// The importer's own signatures all fit the register form, so it would
+		// call `narrow` in that form: refuse rather than corrupt.
+		REQUIRE_THROWS(backend->instantiator().instantiate(importerModule, imports));
+	} else {
+		auto importer = backend->instantiator().instantiate(importerModule, imports);
+		REQUIRE(importer.get() != nullptr);
+		auto call = importer->exportedFunction("call_narrow");
+		REQUIRE(call.has_value());
+		REQUIRE(WASM::callCallable<int32_t>(*call, int32_t(14)) == 42);
+	}
+}
+
+TEST_CASE("call form: the opt-in makes a two-module graph consistent")
+{
+	// With the frame form requested process-wide, both modules compile in it and
+	// the cross-module call is legal on every backend.
+	struct OptInScope {
+		OptInScope() { WASM::setFrameCallAbiOptIn(true); }
+		~OptInScope() { WASM::setFrameCallAbiOptIn(false); }
+	} scope;
+
+	WASM::Module providerModule = loadTestModule("call_form_provider");
+	WASM::Module importerModule = loadTestModule("call_form_importer");
+	auto backend = TestBackend::create();
+
+	WASM::RegistryImportResolver imports;
+	auto provider = backend->instantiator().instantiate(providerModule, imports);
+	REQUIRE(provider.get() != nullptr);
+	REQUIRE(provider->frameCallAbi());
+	provider->registerExports(imports, "provider");
+
+	// Both modules are frame-form now, so the two sides agree -- but the frame
+	// form has no cross-module path yet, and the call crashed on all three
+	// backends before the check existed. The engine refuses it instead, so the
+	// gap is a diagnosis rather than a segfault.
+	REQUIRE_THROWS(backend->instantiator().instantiate(importerModule, imports));
 }
 
 TEST_CASE("GC reference ownership: the operand stack owns one count per reference")

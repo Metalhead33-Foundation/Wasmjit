@@ -123,7 +123,11 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM
 	// own register-form entry, and a frame-mode caller must not invoke it as if
 	// it took a staging frame. The import call path is chosen when the import is
 	// resolved, not by this module-wide flag.
-	bool frameMode = false;
+	// `setFrameCallAbiOptIn(true)` is a request for one form everywhere, so it
+	// decides the module's form on its own: a module compiled while it is set must
+	// be frame-form even when every signature would fit the register form
+	// (docs/backends/EXPORT_SIGNATURE.md section 4).
+	bool frameMode = WASM::frameCallAbiOptIn();
 	for (const std::uint32_t typeIdx : module.internalFunctionTypeIndices)
 		if (signatureNeedsFrame(module.funcTypeAt(typeIdx)))
 			frameMode = true;

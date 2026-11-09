@@ -115,6 +115,12 @@ std::unique_ptr<ModuleInstance> ModuleInstantiator::instantiate(const Module& mo
 	declareFunctions(*instance, module, instance->internals);
 	compileFunctions(*instance, module, instance->internals);
 
+	// A call site emits the *caller* module's call form, so an imported compiled
+	// function from an instance that chose the other form would be entered
+	// through the wrong signature -- corruption, not a trap. Both forms are known
+	// here and nowhere earlier.
+	instance->verifyImportCallForms();
+
 	// `ref.func` globals could only be stored as sentinels during construction;
 	// resolve them now that the callable tables exist.
 	instance->resolveGlobalRefFuncs();
@@ -747,6 +753,31 @@ void ModuleInstance::resolveTypeImports(ImportResolver& resolver)
 	}
 }
 
+
+void ModuleInstance::verifyImportCallForms() const
+{
+	for (const Callable& callable : internals.importStorage) {
+		if (!callableIsCompiled(callable))
+			continue; // a native import is a host C function: always the register form
+		const bool calleeFrameForm = callableUsesFrameForm(callable);
+		if (calleeFrameForm != frameCallAbi_)
+			throw std::runtime_error("the module imports a function from an instance"
+					" compiled with the other call ABI; instantiate both modules with the"
+					" same WASM::setFrameCallAbiOptIn setting"
+					" (docs/backends/CALL_FORM_GRANULARITY.md)");
+		// Both sides agree on the frame form, but the frame form has no
+		// cross-module path yet: the register form is the one the linking fixtures
+		// pin, and a frame-form import reaches the callee through the wrong
+		// signature on every backend (it crashed on all three before this check
+		// existed). Refusing is the honest answer until the frame path is
+		// implemented for imports as well.
+		if (calleeFrameForm)
+			throw std::runtime_error("the module imports a function from another"
+					" module in the staging-frame call form, which has no cross-module path"
+					" yet; instantiate the graph without WASM::setFrameCallAbiOptIn"
+					" (docs/backends/CALL_FORM_GRANULARITY.md)");
+	}
+}
 
 void ModuleInstance::resolveImports(ImportResolver& resolver)
 {
@@ -2601,6 +2632,24 @@ void wasm_ref_drop(VMContext* context, void* value) noexcept
 	} catch (...) {
 		reportTrap(TrapKind::Internal);
 	}
+}
+
+bool callableIsCompiled(const Callable& callable) noexcept
+{
+	// A module compiler is the only producer that fills both fields: `fnPtr`
+	// alone is a host entry (a native import), and a host entry's `context` is
+	// arbitrary embedder state rather than a ModuleInstance.
+	return callable.fnPtr != nullptr && callable.rawFnPtr != nullptr
+			&& callable.context != nullptr;
+}
+
+bool callableUsesFrameForm(const Callable& callable) noexcept
+{
+	if (!callableIsCompiled(callable))
+		return false;
+	// A ModuleInstance keeps its VMContext first, so the context pointer is also
+	// the instance pointer (the same convention the reference helpers rely on).
+	return reinterpret_cast<const ModuleInstance*>(callable.context)->frameCallAbi();
 }
 
 void wasm_ref_store(VMContext* context, void** slot, void* value) noexcept

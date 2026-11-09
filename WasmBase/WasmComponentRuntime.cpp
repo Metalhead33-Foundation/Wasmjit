@@ -348,17 +348,6 @@ uint64_t alignUp(uint64_t value, uint64_t alignment)
 	return alignment <= 1 ? value : (value + alignment - 1) / alignment * alignment;
 }
 
-//! True when a compiled core callable was built with the staging-frame ABI.
-//! `ModuleInstance` keeps its `VMContext` first, so the context pointer is also
-//! the instance pointer; `rawFnPtr` distinguishes a compiled module function
-//! from a native import/closure, whose context may be arbitrary host state.
-bool callableUsesFrameAbi(const WASM::Callable& callable) noexcept
-{
-	if (callable.rawFnPtr == nullptr || callable.context == nullptr)
-		return false;
-	return reinterpret_cast<const WASM::ModuleInstance*>(callable.context)->frameCallAbi();
-}
-
 //! Calls a frame-form `(VMContext*, void* frame)` core function.
 void callFrameEntry(const WASM::Callable& callable, void* frame)
 {
@@ -400,7 +389,7 @@ uint64_t allocate(const MemView& memory, uint64_t size, uint64_t alignment)
 		throw std::runtime_error(
 				"component runtime: canonical ABI realloc is not configured");
 	uint64_t address = 0;
-	if (callableUsesFrameAbi(memory.realloc)) {
+	if (WASM::callableUsesFrameForm(memory.realloc)) {
 		// Frame form: `void(VMContext*, frame)`, four 8-byte argument slots and
 		// the result at the byte after them.
 		alignas(16) std::array<std::uint8_t, 64> frame{};
@@ -4684,7 +4673,7 @@ void ComponentRuntime::invokeCore(const WASM::Callable& callable,
 		argumentValues.push_back(&slots[i]);
 	}
 
-	if (callableUsesFrameAbi(callable)) {
+	if (WASM::callableUsesFrameForm(callable)) {
 		// The core module was compiled module-wide in the staging-frame form
 		// because at least one of its signatures needs it (for example a
 		// four-parameter realloc). Marshal the same canonical frame here.

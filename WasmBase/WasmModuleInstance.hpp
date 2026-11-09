@@ -54,6 +54,21 @@ the same reason, and [`ABI_PORTABILITY.md`](../docs/ABI_PORTABILITY.md) owns the
 implements. */
 WASMJIT_API void wasm_ref_store(VMContext* context, void** slot, void* value) noexcept;
 
+/** \brief Reports whether a callable is a compiled module function rather than a host entry.
+\param callable The callable to classify.
+\return True when the callable was produced by a module compiler, which is the case exactly when
+it carries both a raw compiled entry point and a non-null instance context. A native import carries
+neither, so the same predicate tells a backend which call form to emit and tells the core whether a
+callable's instance can be consulted at all. */
+WASMJIT_API bool callableIsCompiled(const Callable& callable) noexcept;
+
+/** \brief Reports whether a compiled callable was built with the staging-frame call form.
+\param callable The callable to inspect; a host entry always answers false.
+\return True when the callable's owning instance compiled its functions into the staging frame.
+The embedder never sees this: it is the backend seam, and `ModuleCallCache` marshals typed
+arguments into a frame on the way in (docs/backends/EXPORT_SIGNATURE.md). */
+WASMJIT_API bool callableUsesFrameForm(const Callable& callable) noexcept;
+
 //! Forward declarations
 class ModuleInstantiator;
 class StoreOwnedTable;
@@ -618,6 +633,16 @@ public:
 	void setFrameCallAbi(bool enabled) noexcept { frameCallAbi_ = enabled; }
 	/** \brief Reports whether this module's functions use the staging-frame call ABI. \return true when `fn(VMContext*, void* frame)` applies. */
 	bool frameCallAbi() const noexcept { return frameCallAbi_; }
+
+	//! Refuses an imported compiled function whose exporting instance chose the
+	//! other call form. A call site emits the **caller's** form, so a graph that
+	//! mixes the two would enter a `void fn(VMContext*, void* frame)` function
+	//! through a register-form call, which is memory corruption rather than a
+	//! trap. Both forms are known once the importing module is compiled, so the
+	//! check runs there (`ModuleInstantiator::instantiate`), once, for every
+	//! backend ([`docs/backends/CALL_FORM_GRANULARITY.md`](../docs/backends/CALL_FORM_GRANULARITY.md)).
+	//! \throws std::runtime_error when an import's form differs from this module's.
+	void verifyImportCallForms() const;
 
 	//! Objects whose count reached zero are only *queued*; `gcCollect()` does
 	//! the actual recycling. Call it only at a safepoint where no Wasm frame is
