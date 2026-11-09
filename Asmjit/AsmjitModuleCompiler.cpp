@@ -855,19 +855,69 @@ void* asmjitStructNew(WASM::VMContext* vm, uint32_t size, uint32_t typeIndex) no
 	}
 }
 
+void* asmjitStructNewDesc(WASM::VMContext* vm, uint32_t size, uint32_t typeIndex,
+		void* descriptor) noexcept
+{
+	// Custom Descriptors: the heap retains the descriptor into the new object's
+	// header slot. The operand-stack value is a borrow in this backend's
+	// reference model, so no drop follows the call.
+	try {
+		return reinterpret_cast<WASM::ModuleInstance*>(vm)->allocateStructObject(
+				size, typeIndex, descriptor);
+	} catch (...) {
+		WASM::reportTrap(WASM::TrapKind::Internal);
+		return nullptr;
+	}
+}
+
 void asmjitReportNullReference() noexcept
 {
 	WASM::reportTrap(WASM::TrapKind::NullReference);
 }
 
+void* asmjitRefGetDesc(WASM::VMContext* vm, void* ref) noexcept
+{
+	// `ref.get_desc` has two distinct traps: a null structure reference and a
+	// reference whose header carries no descriptor (Custom Descriptors).
+	WASM::ModuleInstance* instance = reinterpret_cast<WASM::ModuleInstance*>(vm);
+	if (ref == nullptr) {
+		WASM::reportTrap(WASM::TrapKind::NullStructureReference,
+				"ref.get_desc: null structure reference");
+		return nullptr;
+	}
+	void* descriptor = instance->structDescriptor(ref);
+	if (descriptor == nullptr) {
+		WASM::reportTrap(WASM::TrapKind::NullReference,
+				"ref.get_desc: null custom descriptor");
+		return nullptr;
+	}
+	return descriptor;
+}
+
+int32_t asmjitDescEq(WASM::VMContext* vm, void* ref, void* descriptor,
+		int32_t allowNull) noexcept
+{
+	// One predicate serves `ref.cast_desc_eq`, its `_null` form and both
+	// `br_on_cast_desc_eq` directions.
+	WASM::ModuleInstance* instance = reinterpret_cast<WASM::ModuleInstance*>(vm);
+	if (descriptor == nullptr) {
+		WASM::reportTrap(WASM::TrapKind::NullReference,
+				"cast_desc_eq: null custom descriptor");
+		return 0;
+	}
+	if (ref == nullptr) {
+		if (allowNull != 0)
+			return 1;
+		WASM::reportTrap(WASM::TrapKind::NullStructureReference,
+				"cast_desc_eq: null structure reference");
+		return 0;
+	}
+	return instance->structDescriptor(ref) == descriptor ? 1 : 0;
+}
+
 void asmjitReportNullFunctionReference() noexcept
 {
 	WASM::reportTrap(WASM::TrapKind::NullFunctionReference);
-}
-
-void asmjitReportUnreachable(const char* detail) noexcept
-{
-	WASM::reportTrap(WASM::TrapKind::Unreachable, detail);
 }
 
 void asmjitReportInternal(const char* detail) noexcept
@@ -1294,6 +1344,11 @@ public:
 		  functions(functions), signatures(signatures), functionIndex(functionIndex),
 		  deterministicFloats(deterministicFloats)
 	{
+		// The diagnostic names the function; interning keeps the pointer valid
+		// for the instance's lifetime.
+		if (const std::string* name = module.findName(WASM::NameKind::Function, functionIndex);
+				name != nullptr)
+			functionName = internals.internTrapMessage(*name);
 		WASM::PreparedFunctionStack stack;
 		stack.prepare(type, body);
 
@@ -2814,6 +2869,25 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 		emitPendingExceptionCheck();
 	}
 
+	//! Names this function and instruction on a trap that a helper reported
+	//! without a site (docs/DIAGNOSTICS.md DG-2). The core keeps the first
+	//! annotation, so an outer generated frame never rewrites an inner one.
+	void emitTrapSiteAnnotation()
+	{
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kVoid);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke),
+				reinterpret_cast<uint64_t>(&WASM::wasm_trap_annotate), signature),
+				"AsmJit trap-site annotation call failed");
+		invoke->set_arg(0, asmjit::Imm(functionIndex));
+		invoke->set_arg(1, asmjit::Imm(static_cast<uint32_t>(instructionOffset)));
+		invoke->set_arg(2, asmjit::Imm(reinterpret_cast<uint64_t>(functionName)));
+	}
+
 	void emitPendingTrapReturn()
 	{
 		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
@@ -2831,6 +2905,7 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 		auto noTrap = compiler.new_label();
 		checkError(compiler.test(pending, pending), "AsmJit post-call trap test failed");
 		checkError(compiler.jz(noTrap), "AsmJit post-call trap branch failed");
+		emitTrapSiteAnnotation();
 		if (frameMode || resultCount == 0) {
 			// Frame mode returns void: the results live in the caller's frame, and
 			// on a trap they are undefined, so there is nothing to return
@@ -5876,7 +5951,8 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 				checkError(compiler.mov(asmjit::x86::qword_ptr(object, offset),
 						static_cast<uint64_t>(0)), "AsmJit struct.new_default zeroing failed");
 		}
-		values.push_back(object);
+		// The operand stack owns one count per reference it holds.
+		values.push_back(emitRefClone(object));
 	}
 
 	void dispatchStructNew(WASM::TypeIdx arg) override
@@ -5936,8 +6012,270 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 						static_cast<int32_t>(offset)), operands[i]),
 						"AsmJit struct.new field store failed");
 		}
-		values.push_back(object);
+		values.push_back(emitRefClone(object));
 	}
+
+	void dispatchStructNewDesc(WASM::TypeIdx arg) override
+	{
+		const WASM::CoreTypeView view = module.typeView(arg);
+		if (view.kind() != WASM::CanonTypeKind::Struct)
+			throw std::runtime_error("AsmJit struct.new_desc requires a struct type");
+		if (!view.descriptor().has_value())
+			throw std::runtime_error("AsmJit struct.new_desc requires a type with a descriptor clause");
+		const std::span<const WASM::CanonFieldType> fields = view.structFields();
+		if (values.size() < fields.size() + 1)
+			throw std::runtime_error("AsmJit struct.new_desc operand stack underflow");
+		// The descriptor sits on top of the field operands.
+		auto descriptor = values.back();
+		values.pop_back();
+		std::vector<asmjit::x86::Gp> operands(fields.size());
+		for (std::size_t i = fields.size(); i-- > 0;) {
+			operands[i] = values.back();
+			values.pop_back();
+		}
+		const std::size_t size = WASM::gcStructSize(fields);
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke),
+				reinterpret_cast<uint64_t>(&asmjitStructNewDesc), signature),
+				"AsmJit struct.new_desc allocation call failed");
+		invoke->set_arg(0, vmContext);
+		invoke->set_arg(1, asmjit::Imm(static_cast<uint64_t>(size)));
+		invoke->set_arg(2, asmjit::Imm(static_cast<uint64_t>(arg)));
+		invoke->set_arg(3, descriptor);
+		auto object = compiler.new_gp_ptr("structObjectDesc");
+		invoke->set_ret(0, object);
+		emitPendingTrapReturn();
+		for (std::size_t i = 0; i < fields.size(); ++i) {
+			const auto& field = fields[i];
+			const std::size_t offset = WASM::gcStructFieldOffset(fields, i);
+			if (field.storage.isPacked) {
+				if (field.storage.packed == WASM::ValueTypeCode::I8)
+					checkError(compiler.mov(asmjit::x86::byte_ptr(object,
+							static_cast<int32_t>(offset)), operands[i].r8()),
+							"AsmJit struct.new_desc packed field store failed");
+				else
+					checkError(compiler.mov(asmjit::x86::word_ptr(object,
+							static_cast<int32_t>(offset)), operands[i].r16()),
+							"AsmJit struct.new_desc packed field store failed");
+				continue;
+			}
+			const int width = kindWidth(field.storage.value.opcode);
+			if (width != 4 && width != 8)
+				throw std::runtime_error("AsmJit struct.new_desc does not lower this field type yet");
+			if (width == 4)
+				checkError(compiler.mov(asmjit::x86::dword_ptr(object,
+						static_cast<int32_t>(offset)), operands[i]),
+						"AsmJit struct.new_desc field store failed");
+			else
+				checkError(compiler.mov(asmjit::x86::qword_ptr(object,
+						static_cast<int32_t>(offset)), operands[i]),
+						"AsmJit struct.new_desc field store failed");
+		}
+		// The new object retained the descriptor; the operand's own count goes,
+		// and the stack then owns one count of the new object.
+		emitRefDrop(descriptor);
+		values.push_back(emitRefClone(object));
+	}
+
+	void dispatchStructNewDefaultDesc(WASM::TypeIdx arg) override
+	{
+		const WASM::CoreTypeView view = module.typeView(arg);
+		if (view.kind() != WASM::CanonTypeKind::Struct)
+			throw std::runtime_error("AsmJit struct.new_default_desc requires a struct type");
+		if (!view.descriptor().has_value())
+			throw std::runtime_error("AsmJit struct.new_default_desc requires a type with a descriptor clause");
+		const std::span<const WASM::CanonFieldType> fields = view.structFields();
+		if (values.empty())
+			throw std::runtime_error("AsmJit struct.new_default_desc operand stack underflow");
+		auto descriptor = values.back();
+		values.pop_back();
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke),
+				reinterpret_cast<uint64_t>(&asmjitStructNewDesc), signature),
+				"AsmJit struct.new_default_desc allocation call failed");
+		invoke->set_arg(0, vmContext);
+		invoke->set_arg(1, asmjit::Imm(static_cast<uint64_t>(WASM::gcStructSize(fields))));
+		invoke->set_arg(2, asmjit::Imm(static_cast<uint64_t>(arg)));
+		invoke->set_arg(3, descriptor);
+		auto object = compiler.new_gp_ptr("structObjectDefaultDesc");
+		invoke->set_ret(0, object);
+		emitPendingTrapReturn();
+		// The new object retained the descriptor; the operand's own count goes.
+		emitRefDrop(descriptor);
+		for (std::size_t i = 0; i < fields.size(); ++i) {
+			if (fields[i].storage.isPacked)
+				throw std::runtime_error("AsmJit struct.new_default_desc does not lower packed fields yet");
+			const int width = kindWidth(fields[i].storage.value.opcode);
+			if (width != 4 && width != 8)
+				throw std::runtime_error("AsmJit struct.new_default_desc does not lower this field type yet");
+			const auto offset = static_cast<int32_t>(WASM::gcStructFieldOffset(fields, i));
+			if (width == 4)
+				checkError(compiler.mov(asmjit::x86::dword_ptr(object, offset),
+						static_cast<uint32_t>(0)),
+						"AsmJit struct.new_default_desc zeroing failed");
+			else
+				checkError(compiler.mov(asmjit::x86::qword_ptr(object, offset),
+						static_cast<uint64_t>(0)),
+						"AsmJit struct.new_default_desc zeroing failed");
+		}
+		values.push_back(emitRefClone(object));
+	}
+
+	void dispatchRefGetDesc(WASM::TypeIdx) override
+	{
+		if (inDeadCode())
+			return;
+		if (values.empty())
+			throw std::runtime_error("AsmJit ref.get_desc operand stack underflow");
+		auto reference = values.back();
+		values.pop_back();
+		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
+		signature.set_ret(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke),
+				reinterpret_cast<uint64_t>(&asmjitRefGetDesc), signature),
+				"AsmJit ref.get_desc helper call failed");
+		invoke->set_arg(0, vmContext);
+		invoke->set_arg(1, reference);
+		auto descriptor = compiler.new_gp_ptr("descriptorRef");
+		invoke->set_ret(0, descriptor);
+		emitPendingTrapReturn();
+		values.push_back(descriptor);
+	}
+
+	void emitRefCastDescEq(bool nullable)
+	{
+		if (inDeadCode())
+			return;
+		if (values.size() < 2)
+			throw std::runtime_error("AsmJit cast_desc_eq operand stack underflow");
+		auto descriptor = values.back();
+		values.pop_back();
+		auto reference = values.back();
+		values.pop_back();
+		asmjit::FuncSignature predicate(asmjit::CallConvId::kCDecl);
+		predicate.set_ret(asmjit::TypeId::kInt32);
+		predicate.add_arg(asmjit::TypeId::kUIntPtr);
+		predicate.add_arg(asmjit::TypeId::kUIntPtr);
+		predicate.add_arg(asmjit::TypeId::kUIntPtr);
+		predicate.add_arg(asmjit::TypeId::kUInt32);
+		asmjit::FuncSignature voidSignature(asmjit::CallConvId::kCDecl);
+		voidSignature.set_ret(asmjit::TypeId::kVoid);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke),
+				reinterpret_cast<uint64_t>(&asmjitDescEq), predicate),
+				"AsmJit cast_desc_eq predicate call failed");
+		invoke->set_arg(0, vmContext);
+		invoke->set_arg(1, reference);
+		invoke->set_arg(2, descriptor);
+		invoke->set_arg(3, asmjit::Imm(nullable ? 1 : 0));
+		auto matches = compiler.new_gp32("descEqMatch");
+		invoke->set_ret(0, matches);
+		asmjit::Label afterCast = compiler.new_label();
+		checkError(compiler.test(matches, matches), "AsmJit cast_desc_eq test failed");
+		checkError(compiler.jnz(afterCast), "AsmJit cast_desc_eq match branch failed");
+		asmjit::InvokeNode* failCall = nullptr;
+		checkError(compiler.invoke(asmjit::Out(failCall),
+				reinterpret_cast<uint64_t>(&asmjitReportCastFailure), voidSignature),
+				"AsmJit cast_desc_eq failure trap emission failed");
+		emitPendingTrapReturn();
+		checkError(compiler.bind(afterCast), "AsmJit cast_desc_eq label binding failed");
+		// Success path only: the descriptor operand is consumed.
+		emitRefDrop(descriptor);
+		values.push_back(reference);
+	}
+
+	void dispatchRefCastDescEq(const WASM::HeapType&) override
+	{ emitRefCastDescEq(false); }
+	void dispatchRefCastDescEqNull(const WASM::HeapType&) override
+	{ emitRefCastDescEq(true); }
+
+	void emitBrOnCastDescEq(uint8_t castop, WASM::LabelIdx depth, bool onFailure)
+	{
+		if (inDeadCode())
+			return;
+		if (values.size() < 2)
+			throw std::runtime_error("AsmJit br_on_cast_desc_eq operand underflow");
+		if (depth > controls.size())
+			throw std::runtime_error("AsmJit br_on_cast_desc_eq label depth is out of range");
+		auto descriptor = values.back();
+		values.pop_back();
+		auto reference = values.back();
+		asmjit::FuncSignature predicate(asmjit::CallConvId::kCDecl);
+		predicate.set_ret(asmjit::TypeId::kInt32);
+		predicate.add_arg(asmjit::TypeId::kUIntPtr);
+		predicate.add_arg(asmjit::TypeId::kUIntPtr);
+		predicate.add_arg(asmjit::TypeId::kUIntPtr);
+		predicate.add_arg(asmjit::TypeId::kUInt32);
+		asmjit::InvokeNode* invoke = nullptr;
+		checkError(compiler.invoke(asmjit::Out(invoke),
+				reinterpret_cast<uint64_t>(&asmjitDescEq), predicate),
+				"AsmJit br_on_cast_desc_eq predicate call failed");
+		invoke->set_arg(0, vmContext);
+		invoke->set_arg(1, reference);
+		invoke->set_arg(2, descriptor);
+		invoke->set_arg(3, asmjit::Imm((castop & 0x02) != 0 ? 1 : 0));
+		auto matches = compiler.new_gp32("brDescEqMatch");
+		invoke->set_ret(0, matches);
+		// The descriptor is consumed on both paths; `values` still holds the
+		// reference, which the branch transfers.
+		emitRefDrop(descriptor);
+		if (depth == controls.size()) {
+			if (values.size() < resultCount)
+				throw std::runtime_error("AsmJit br_on_cast_desc_eq function branch has too few results");
+			auto fallthrough = compiler.new_label();
+			checkError(compiler.test(matches, matches), "AsmJit br_on_cast_desc_eq test failed");
+			checkError(onFailure ? compiler.jnz(fallthrough) : compiler.jz(fallthrough),
+					"AsmJit br_on_cast_desc_eq function fallthrough failed");
+			emitFunctionReturnValues();
+			checkError(compiler.bind(fallthrough),
+					"AsmJit br_on_cast_desc_eq fallthrough binding failed");
+			return;
+		}
+		ControlFrame& frame = controls[controls.size() - 1 - depth];
+		const bool loopTarget = frame.kind == ControlKind::Loop;
+		const size_t branchValues = loopTarget ? frame.paramCount : frame.resultCount;
+		if (branchValues > values.size() || values.size() - branchValues < frame.stackHeight)
+			throw std::runtime_error("AsmJit br_on_cast_desc_eq operand stack does not match its target label");
+		auto fallthrough = compiler.new_label();
+		checkError(compiler.test(matches, matches), "AsmJit br_on_cast_desc_eq test failed");
+		checkError(onFailure ? compiler.jnz(fallthrough) : compiler.jz(fallthrough),
+				"AsmJit br_on_cast_desc_eq fallthrough branch failed");
+		const size_t first = values.size() - branchValues;
+		const std::vector<asmjit::x86::Gp>& destinations = loopTarget ? frame.params : frame.results;
+		const std::vector<WASM::ValueTypeCode>& codes = loopTarget
+				? frame.paramTypes : frame.resultTypes;
+		for (size_t i = 0; i < branchValues; ++i)
+			transferValue(destinations[i], values[first + i], codes[i],
+					"AsmJit br_on_cast_desc_eq result transfer failed");
+		checkError(compiler.jmp(loopTarget ? frame.begin : frame.end),
+				"AsmJit br_on_cast_desc_eq branch failed");
+		if (!loopTarget)
+			frame.endTargeted = true;
+		checkError(compiler.bind(fallthrough),
+				"AsmJit br_on_cast_desc_eq fallthrough binding failed");
+	}
+
+	void dispatchBrOnCastDescEq(uint8_t castop, WASM::LabelIdx depth,
+			WASM::HeapType, WASM::HeapType) override
+	{ emitBrOnCastDescEq(castop, depth, false); }
+	void dispatchBrOnCastDescEqFail(uint8_t castop, WASM::LabelIdx depth,
+			WASM::HeapType, WASM::HeapType) override
+	{ emitBrOnCastDescEq(castop, depth, true); }
 
 	void emitArrayGetPacked(WASM::TypeIdx arg, bool signExtend)
 	{
@@ -7413,13 +7751,25 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		armTerminated = true;
 		const char* detail = internals.internTrapMessage("unreachable in function "
 				+ module.describeIndex(WASM::NameKind::Function, functionIndex));
+		// Report *at* the site: `unreachable` has a compile-time location, so it
+		// must not depend on a helper annotation to acquire one
+		// (docs/DIAGNOSTICS.md DG-2).
 		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
 		signature.set_ret(asmjit::TypeId::kVoid);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		signature.add_arg(asmjit::TypeId::kUIntPtr);
+		signature.add_arg(asmjit::TypeId::kUInt32);
+		signature.add_arg(asmjit::TypeId::kUInt32);
 		signature.add_arg(asmjit::TypeId::kUIntPtr);
 		asmjit::InvokeNode* invoke = nullptr;
-		checkError(compiler.invoke(asmjit::Out(invoke), reinterpret_cast<uint64_t>(&asmjitReportUnreachable), signature),
+		checkError(compiler.invoke(asmjit::Out(invoke),
+				reinterpret_cast<uint64_t>(&WASM::wasm_trap_report_at), signature),
 				"AsmJit unreachable trap helper emission failed");
-		invoke->set_arg(0, asmjit::Imm(reinterpret_cast<uint64_t>(detail)));
+		invoke->set_arg(0, asmjit::Imm(static_cast<uint32_t>(WASM::TrapKind::Unreachable)));
+		invoke->set_arg(1, asmjit::Imm(reinterpret_cast<uint64_t>(detail)));
+		invoke->set_arg(2, asmjit::Imm(functionIndex));
+		invoke->set_arg(3, asmjit::Imm(static_cast<uint32_t>(instructionOffset)));
+		invoke->set_arg(4, asmjit::Imm(reinterpret_cast<uint64_t>(functionName)));
 		const size_t stackHeight = controls.empty() ? 0 : controls.back().stackHeight;
 		const size_t placeholderCount = controls.empty() ? resultCount : controls.back().resultCount;
 		values.resize(stackHeight);
@@ -10786,8 +11136,13 @@ private:
 	WASM::ModuleInstanceInternals& internals;
 	const std::vector<asmjit::FuncNode*>& functions;
 	const std::vector<std::unique_ptr<asmjit::FuncSignature>>& signatures;
-	//! Module function index of this body (direct self tail calls).
+	//! Module function index of this body (direct self tail calls, and the
+	//! function a trap in this body is attributed to).
 	uint32_t functionIndex = 0;
+	//! Interned `$name` of this function, or null: a trap annotation embeds the
+	//! pointer, so the string must outlive every call into the instance
+	//! (docs/DIAGNOSTICS.md DG-2, docs/proposals/EXTENDED_NAME_SECTION.md ENS-5).
+	const char* functionName = nullptr;
 	//! Number of Wasm parameters (the first parameterCount locals).
 	uint32_t parameterCount = 0;
 	//! Loop target of a direct self tail call.
