@@ -107,6 +107,8 @@ std::vector<uint8_t> stringRefModuleBytes()
 }
 
 std::string readText(const std::filesystem::path& path);
+//! Sanitizer flags a generated child program must inherit from this binary.
+std::string childSanitizerFlags();
 bool haveTool(const char* probe);
 std::filesystem::path bindingsDir();
 
@@ -139,7 +141,8 @@ void runCppAdapterConformance(const char* moduleName, const std::string& mainSou
 			std::filesystem::path(WASM_TESTSUITE_SOURCE_DIR).parent_path().parent_path();
 	const std::filesystem::path buildRoot = std::filesystem::path(WASM_TEST_DIR)
 			.parent_path().parent_path().parent_path();
-	const std::string compile = "g++ -std=c++2a -I\"" + dir.string() + "\" -I\""
+	const std::string compile = "g++ -std=c++2a" + childSanitizerFlags()
+			+ " -I\"" + dir.string() + "\" -I\""
 			+ sourceRoot.string() + "\" -I\"" + (sourceRoot / "extern" / "MhLib").string()
 			+ "\" \"" + (dir / "main.cpp").string() + "\" \""
 			+ (dir / "adapter.cpp").string() + "\" -L\""
@@ -162,6 +165,18 @@ void runCppAdapterConformance(const char* moduleName, const std::string& mainSou
 			+ "\" > \"" + (dir / "run.log").string() + "\" 2>&1";
 	INFO(readText(dir / "run.log"));
 	REQUIRE(std::system(run.c_str()) == 0);
+}
+
+// The flags a generated child program needs so that it can link this binary's
+// core: when the harness is instrumented the child must be too, because the
+// sanitizer runtime has to be the first library in the process.
+std::string childSanitizerFlags()
+{
+#if defined(__SANITIZE_ADDRESS__)
+	return " -fsanitize=address -fno-omit-frame-pointer";
+#else
+	return {};
+#endif
 }
 
 std::string readText(const std::filesystem::path& path)
@@ -1604,7 +1619,8 @@ int main(int argc, char** argv)
 	const std::filesystem::path buildRoot = std::filesystem::path(WASM_TEST_DIR)
 			.parent_path().parent_path().parent_path();
 	const std::filesystem::path log = dir / "compile.log";
-	const std::string compile = "g++ -std=c++2a -I\"" + dir.string() + "\" -I\""
+	const std::string compile = "g++ -std=c++2a" + childSanitizerFlags()
+			+ " -I\"" + dir.string() + "\" -I\""
 			+ sourceRoot.string() + "\" -I\""
 			+ (sourceRoot / "extern" / "MhLib").string() + "\" \""
 			+ (dir / "main.cpp").string() + "\" \"" + (dir / "callables.cpp").string()

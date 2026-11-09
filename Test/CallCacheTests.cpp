@@ -744,7 +744,9 @@ if (!instance->frameCallAbi()) {
 std::fprintf(stderr, "register form -- probe does not apply\n");
 continue;
 }
-alignas(16) std::uint8_t frame[48] = {};
+// Three v128 arguments occupy 48 bytes; the result block follows them, so the
+// frame must be at least 64 bytes (docs/backends/EXPORT_SIGNATURE.md section 40).
+alignas(16) std::uint8_t frame[64] = {};
 const std::uint32_t lanes[3][4] = {{1, 1, 1, 1}, {2, 2, 2, 2}, {3, 3, 3, 3}};
 for (int i = 0; i < 3; ++i)
 std::memcpy(frame + 16 * i, lanes[i], 16);
