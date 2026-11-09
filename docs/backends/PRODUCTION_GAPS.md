@@ -1241,12 +1241,17 @@ the whole shape, which is why the packed rows could not be measured there at all
   refuses a module graph that mixes the register and frame forms with a named
   exception. The fixture that proves it crashed on all three backends before the
   check existed (`call_form_provider.wat` imported by `call_form_importer.wat`).
-* Two more defects fell out of that fixture. **SLJIT ignored
+* One more defect fell out of that fixture: **SLJIT ignored
   `setFrameCallAbiOptIn`** entirely -- it derived the form from the signatures
-  alone, so "one form everywhere" was a no-op there -- and **the frame form has no
-  cross-module path on any backend**: with the opt-in on, both modules agree on
-  the form and the call still crashed on libjit, sljit and asmjit. That
-  combination is refused now, so the gap is a diagnosis instead of a segfault.
+  alone, so "one form everywhere" was a no-op there. Fixed.
+* **Correction (2026-11-09, later the same day).** An earlier revision of this
+  section claimed the frame form has no cross-module path because the both-frame
+  case crashed on all three backends. That was wrong: the crash was in the
+  *fixture*, which called a frame-form export through `WASM::callCallable` -- the
+  raw register-form entry point -- instead of `ModuleCallCache`, the marshaller
+  that builds the frame. With the fixture corrected, a both-frame cross-module
+  call works on libjit, sljit and asmjit. The only genuinely unsupported case is a
+  graph that *mixes* the two forms, which is refused by name.
 * The *cost* half -- the form is still decided per module, so one wide function
   makes every call in that module pay the frame -- is **not** closed. The rule,
   the count of sites (~25 across the three call paths plus the export cache and

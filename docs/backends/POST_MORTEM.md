@@ -3122,8 +3122,13 @@ happens when they meet, and write the two-line fixture.
 **12. Your build system will lie to you.** A same-second edit plus a one-second
 mtime granularity means `make` skips the rebuild. A killed `make` leaves a
 zero-byte object that `make` then treats as up to date, and the next link fails
-with an unrelated symbol error. Both cost more time than the code did. When a
-build behaves impossibly, delete the object and look for `find build -size 0`.
+with an unrelated symbol error. Growing a struct that half the tree includes is
+worse: the translation units that do not rebuild keep the old layout, and the
+symptom is *garbage data in a field that has nothing to do with your change* (a
+`Callable` field cost nine call-cache cases: `resultCount` read as a pointer).
+After a layout change, rebuild the tree from scratch, not the files that look
+related. When a build behaves impossibly, delete the object and look for
+`find build -size 0`.
 
 ## E.3 The order to do it in
 

@@ -44,11 +44,13 @@ than hidden:
 1. **SLJIT ignored `setFrameCallAbiOptIn` entirely.** It derived the form from the
    signatures alone, so "one form everywhere" was a no-op on that backend. Fixed:
    the opt-in now decides the module's form on its own.
-2. **The frame form has no cross-module path on any backend.** With the opt-in on,
-   both modules are frame-form, the forms agree -- and the call still crashed
-   (measured on libjit, sljit and asmjit). It is now refused with a second named
-   exception instead, so the gap is a diagnosis. The register form is the one the
-   linking fixtures pin, and it is what a graph gets unless an embedder opts in.
+2. ~~**The frame form has no cross-module path on any backend.**~~ **Withdrawn
+   (2026-11-09):** the crash was in the fixture, not the engine. It called a
+   frame-form export through `WASM::callCallable`, which is the *raw register-form
+   entry point*; the marshaller that builds a frame is `ModuleCallCache`. With the
+   fixture corrected, a both-frame cross-module call works on all three backends.
+   Only a graph that *mixes* the two forms is unsupported, and it is refused by
+   name.
 3. **`callableIsCompiled` / `callableUsesFrameForm` are shared helpers now.** The
    "compiled module function versus host entry" test (`rawFnPtr != nullptr &&
    context != nullptr`) was a static in the component runtime and prose in two
@@ -128,3 +130,43 @@ must not move ownership).
 * **Mixing backends in one call graph.** Still refused by review
   (`EXPORT_SIGNATURE.md` §6): each backend's frame path is pinned only by its own
   tests.
+
+## 7. The per-signature experiment, attempted and reverted (2026-11-09)
+
+After the mixed-form case above was measured, the obvious next step looked cheap:
+make the form a property of the *signature* so a narrow function stays
+register-form inside a module that also has a wide one, and let both sides of a
+cross-module call derive the form from the callee's type. It was implemented for
+SLJIT (per-body form, call sites deriving the callee's form from its type) and it
+did make the mixed fixture pass. It was then reverted, because it breaks a
+contract that is older and wider than the defect:
+
+* **`ModuleInstance::frameCallAbi()` is the embedder-facing promise that *every*
+  export of this module is frame-form.** Sixty-three test call sites use
+  `WASM::callCallableFrame` on the strength of it (`Test/main.cpp`, the three
+  backend test files and `CallCacheTests.cpp`), and
+  [`EXPORT_SIGNATURE.md`](EXPORT_SIGNATURE.md) §2 documents the frame as the
+  module's shape. With per-signature forms a module can be *partly* frame-form,
+  and that promise is false.
+* The honest version of the change is therefore a **contract revision**: a
+  per-callee query (`Callable::frameForm`) that the embedder reads instead of the
+  module flag, the 63 call sites adapted, and the frame section of
+  `EXPORT_SIGNATURE.md` rewritten. That is a milestone, not a patch, and it is the
+  concrete remaining scope of this note.
+
+Two things were learned that a future attempt should not re-derive:
+
+1. **A per-callee form record is the right primitive** and was prototyped: one
+   `bool` on `Callable`, read by `ModuleCallCache`, the continuation invoke path
+   and the component runtime, with call sites deriving the form from the type so
+   a stale record can never change a call. It works; what it needs is the
+   contract revision above, not more mechanism.
+2. **Growing `Callable` invalidates every translation unit that includes it.** An
+   incremental build mixed old and new struct layouts and produced garbage in
+   `ModuleFfiEntry` (`resultCount` read as a pointer value, nine call-cache cases
+   red). A struct-layout change needs a full rebuild of the tree, not a rebuild of
+   the files that look related.
+
+The state left behind is the sound one: a mixed graph is **refused by name**
+(`ModuleInstance::verifyImportCallForms`), a uniform graph works in either form,
+and a both-frame cross-module call works.
