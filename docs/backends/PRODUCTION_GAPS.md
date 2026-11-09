@@ -1215,9 +1215,9 @@ the frame that is already dying, and it is recorded in the epilogue of
 
 ## 32. The consumer sites, closed, and what the call form turned out to be (2026-11-09)
 
-**Snapshot (2026-11-09, working tree):** 22,534 assertions in 824 cases on LibJIT
-and SLJIT, 22,532 on AsmJIT (the two-assertion difference is AsmJIT's call-form
-fixture taking the named-refusal branch).
+**Snapshot (2026-11-09, working tree):** 22,534 assertions in 824 cases on all
+three backends -- identical, which is what the count is for: the last capability
+difference (AsmJIT calling a callee compiled in the other form) is closed.
 
 §31 listed the remaining consumer sites as leftovers. All of them are closed now,
 each with a shape in `Test/wasm_wat/gc_ownership.wat` that measures it:
@@ -1241,9 +1241,9 @@ the whole shape, which is why the packed rows could not be measured there at all
   callable), not the caller's module form, so a register-form module calls a
   frame-form import correctly. The fixture is `call_form_provider.wat` (frame-form
   because of a wide sibling) imported by `call_form_importer.wat`: it crashed on
-  all three backends before the change, and now passes on LibJIT and SLJIT.
-  AsmJIT's call lowering picks the convention from its own module form, so it
-  refuses that one call by name; the backend-neutral guard that used to refuse the
+  all three backends before the change, and now passes on **all three** — AsmJIT
+  included, once its call lowering followed the callee instead of its own module
+  form. The backend-neutral guard that used to refuse the
   whole graph -- including on backends that could handle it -- is gone.
 * **`table.set` releases the reference slot's stack count** (LibJIT already did;
   SLJIT and AsmJIT leaked it), measured by a reference-typed table in the

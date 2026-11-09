@@ -140,9 +140,9 @@ them, and the validator now rejects them (`V128ATOMIC`).
 ## 7. Next session's recommendation
 
 **State at the end of the 2026-11-09 pass.** Reference ownership is exact on all
-three backends, measured shape by shape: 22,534 assertions in 824 cases on LibJIT
-and SLJIT, 22,532 on AsmJIT (the difference is its call-form fixture taking the
-named-refusal branch). The consumer sites that were
+three backends, measured shape by shape: 22,534 assertions in 824 cases on **all
+three**, identical. That equality now covers the last capability difference too --
+AsmJIT calling a compiled callee that was built in the other call form. The consumer sites that were
 "left for later" are closed -- `ref.test`/`ref.is_null`/`ref.eq`, the pass-through
 casts, the packed field and element reads, call arguments, a native import's
 borrowed result, and every trap path. `PRODUCTION_GAPS.md` §32 carries the table.
@@ -150,21 +150,26 @@ borrowed result, and every trap path. `PRODUCTION_GAPS.md` §32 carries the tabl
 What is left, in the order it should be taken:
 
 1. **Per-signature call form.** The one remaining *design* gap: the form is still
-decided per module, so one wide function makes every call in that module pay the
-frame's stores and loads and forfeits the register tail-call trampoline
-module-wide. [`CALL_FORM_GRANULARITY.md`](CALL_FORM_GRANULARITY.md) §2 has the
-rule, the ~25 sites it touches, and the fixture that must flip from "refused" to
-"42". Do this as its own milestone: it changes the behaviour of a frozen seam.
-2. **The frame form's cross-module path.** Both modules frame-form, forms agree,
-   and the call still crashed on all three backends -- so the combination is
-   refused today with a named exception. Implementing it is what lets a graph use
-   the opt-in at all.
-3. **`table.set` and the atomic table forms** do not release their reference
-   operands. A reference-typed table fixture is the missing piece; there is none,
-   which is exactly why this stayed a list entry.
-4. **A `return_call_ref` above the register-form ceiling** is still a semantic
-   call plus return on SLJIT ([`PRODUCTION_GAPS.md`](PRODUCTION_GAPS.md) §2.1).
-5. **Portability.** Every production sentence in this tree is scoped to x86-64
+   decided per module, so one wide function makes every call in that module pay the
+   frame's stores and loads and forfeits the register tail-call trampoline
+   module-wide. [`CALL_FORM_GRANULARITY.md`](CALL_FORM_GRANULARITY.md) has the rule,
+   the sites it touches, and the contract question that makes it a milestone (a
+   per-signature form makes `frameCallAbi()` -- "every export of this module is
+   frame-form" -- false, and 63 call sites rely on it). Its section 8 records the
+   agreed direction instead: make the frame form the *default* on SLJIT and
+   AsmJIT, whose register form is the source of the ceiling, of the mixed-graph
+   case and of the tail-call fallback, and keep the register form on LibJIT. The
+   obstacle is named there too: for a tail-capable module `Callable::fnPtr` is the
+   driver, so marshalling in `callCallable` calls a register-form driver with a
+   frame -- the driver has to present the frame shape at the boundary first.
+2. **`return_call_ref` above the register-form ceiling** is a semantic call plus
+   return on SLJIT ([`PRODUCTION_GAPS.md`](PRODUCTION_GAPS.md) section 2.1). In a
+   frame-form module the frame trampoline carries the chain, so this closes with
+   item 1 rather than on its own.
+3. **The atomic table `rmw` forms** (`xchg`, `cmpxchg`) have no fixture: a shared,
+   reference-typed table is not constructible in the harness yet. `table.set`,
+   `table.get` and `table.atomic.set` are fixed and measured.
+4. **Portability.** Every production sentence in this tree is scoped to x86-64
    Linux / SysV AMD64. A single non-SysV runner (AArch64 or MS x64) would turn
    the `provisional` rows in [`ABI_PORTABILITY.md`](../ABI_PORTABILITY.md) into
    evidence.

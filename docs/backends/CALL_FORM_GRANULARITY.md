@@ -35,9 +35,12 @@ module-wide contract (`frameCallAbi()` promises that every export of the module 
 frame-form) is untouched, which is why no test had to change. The fixture is
 `Test/wasm_wat/call_form_provider.wat` (frame-form because of a wide sibling
 function) imported by `call_form_importer.wat` (register-form): it crashed on
-**all three** backends before the change; it now passes on LibJIT and SLJIT.
-AsmJIT's call lowering picks the convention from its own module form, so it
-refuses that one call by name — a capability difference, not a graph-level rule.
+**all three** backends before the change; it now passes on all three, and the
+three suites agree exactly (22,534 assertions in 824 cases). AsmJIT needed one
+more step than SLJIT because its *translated signature table* is spelled in the
+module's own form: when the callee's form differs, its spelling is translated on
+demand for that call. That keeps the change inside `dispatchCall`, so the
+per-callee record and the module-wide contract are untouched.
 The backend-neutral guard that refused the whole graph (and with it the backends
 that can handle it) is gone with it.
 
@@ -170,10 +173,12 @@ Two things were learned that a future attempt should not re-derive:
    red). A struct-layout change needs a full rebuild of the tree, not a rebuild of
    the files that look related.
 
-The state left behind: a uniform graph works in either form on every backend, a
-**mixed** graph works on LibJIT and SLJIT and is refused by name on AsmJIT (whose
-call lowering takes the convention from its own module form), and a both-frame
-cross-module call works everywhere.
+The state left behind: **every** module graph works on every backend, in either
+form or mixed. A uniform graph is trivially fine; a mixed one works because both
+SLJIT and AsmJIT emit the call in the *callee's* form, and a both-frame
+cross-module call works everywhere. The three suites report the same 22,534
+assertions in 824 cases — which is the point: a difference in that number is how a
+capability gap announces itself.
 
 ## 8. Making the frame form the default on SLJIT and AsmJIT: the obstacle found (2026-11-09)
 
