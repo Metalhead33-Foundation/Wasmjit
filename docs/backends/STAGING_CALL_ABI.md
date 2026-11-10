@@ -1,9 +1,11 @@
-# Staging call ABI: two arguments, one frame {#doc_staging_call_abi}
+# Staging call ABI {#backend_staging_call_abi}
 
-**Status:** proposal, 2026-11-06. Amends
-[`V128_SIGNATURE_DECISION.md`](V128_SIGNATURE_DECISION.md) §28 (not yet adopted).
-**Author of the idea:** the observation that a compiled function only ever *needs*
-two arguments — the `VMContext*` and a pointer to an argument/result frame.
+*Two arguments, one frame: design, migration and after-action log*
+
+Status: implementation record, revision 2 (2026-11-10). **Adopted as the opt-in
+frame ABI on all three backends** (`WASM::setFrameCallAbiOptIn(true)`); the
+register form remains the default. The proposal below is kept, followed by the
+migration log that records every step, its gates and its defects.
 
 ## 1. Why
 

@@ -1,4 +1,6 @@
-# `LF2-ABI` — Cross-language ABI and host-binding amendment {#lf2_abi}
+# LF2-ABI — Cross-language ABI {#lf2_abi}
+
+*Host bindings and the scalar-to-GC difficulty scale*
 
 Status: cross-cutting `LF-2` amendment, revision 4 (2026-11-04). It adds the
 ABI/interop dimension the cluster reports did not treat as one subject: how a

@@ -1,4 +1,6 @@
-# `F2` — Legacy `delegate` (`LE-8`): Workaround and Long-Term Options {#lf2_deep_f2}
+# F2 — Legacy `delegate` (`LE-8`) {#lf2_deep_f2}
+
+*Workaround and long-term options*
 
 Status: deep-study note (revision 2 — 2026-10-30: **`F2` is fixed**). `LE-8` now
 translates the delegating shape in place, so `T05` (C++ with libc++, default

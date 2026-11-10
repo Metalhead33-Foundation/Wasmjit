@@ -1,4 +1,4 @@
-# Legacy Exception Handling (`try`/`catch`) {#prop_legacy_exceptions}
+# Legacy Exceptions {#prop_legacy_exceptions}
 
 *Compatibility Notes, Encodings, and the Cost of Admission*
 

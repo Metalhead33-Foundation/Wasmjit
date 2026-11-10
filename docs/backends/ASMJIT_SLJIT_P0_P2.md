@@ -1,4 +1,6 @@
-# Post-mortem: the AsmJit/SLJIT P0–P2 parity slice
+# AsmJit/SLJIT P0–P2 parity slice {#backend_p0_p2}
+
+*Post-mortem: bringing SLJIT up to AsmJit's execution surface*
 
 **Snapshot (2026-11-05, working tree on `backendsMh33`):** one slice brought
 `Sljit/` up to `Asmjit/`'s execution surface, registered AsmJit under its name,
@@ -48,7 +50,7 @@ for the fourth backend author, not as a changelog.
 
 | Constraint | Consequence | Accepted or temporary |
 |---|---|---|
-| `sljit_emit_enter`/`sljit_emit_icall` take at most four integer arguments | at most three Wasm parameters and one result | accepted for the slice; documented in the README and §11 |
+| `sljit_emit_enter`/`sljit_emit_icall` take at most four integer arguments | at most three Wasm parameters and one result | accepted for the slice; documented in the backend page and §11 |
 | SLJIT has no cross-compiler call target | direct calls resolve through `ModuleCompiler::resolveCallable` at run time (one extra indirect call) | accepted; an inlining slice may remove it once measured |
 | SLJIT has no `POPCNT` op | `i32.popcnt` uses a backend-private helper | accepted |
 | helper calls carry at most four arguments | memory/table helpers pack two 32-bit operands into one 64-bit word (`(hi << 32) | lo`) | accepted; the packing is documented at the helper |

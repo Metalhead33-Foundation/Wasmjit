@@ -1,4 +1,6 @@
-# `F1` — The Backend Compile Failure: A Deep Study {#lf2_deep_f1}
+# F1 — Backend Compile Failure {#lf2_deep_f1}
+
+*The deep study of the Emscripten `-O2` abort*
 
 Status: deep-study note (revision 1 — 2026-10-30). It investigates `F1` of
 [`LF2_INDEX.md`](LF2_INDEX.md) §5 — the LibJIT abort on an Emscripten `-O2`

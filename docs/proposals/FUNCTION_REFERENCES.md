@@ -1,4 +1,4 @@
-# Function References (Typed Function References) {#prop_function_references}
+# Function References {#prop_function_references}
 
 *Implementation Notes, Spec Status, and Deliberate Deviations*
 

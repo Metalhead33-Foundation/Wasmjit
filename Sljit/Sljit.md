@@ -1,10 +1,10 @@
-# `Sljit/`
+# SLJIT backend {#backend_sljit}
 
-*The SLJIT backend*
+*The second code generator: vendored SLJIT, emitted surface and refusals*
 
-Status: **Snapshot (2026-11-09):** **production-ready within the declared
+Status: **Snapshot (2026-11-10):** **production-ready within the declared
 envelope** — `WASMJIT_BACKEND=sljit ./Test/WasmJit --rng-seed 12345` reports
-**22,451 assertions in 821 cases, green**, the same case set and assertion count
+**22,593 assertions in 824 cases, green**, the same case set and assertion count
 as the reference backend. The envelope is x86-64 Linux / SysV AMD64, and the
 documented refusals are listed in "Known limitations" below. See
 [`docs/BACKEND_PRODUCTION_READINESS.md`](../docs/BACKEND_PRODUCTION_READINESS.md)
@@ -25,9 +25,11 @@ WASMJIT_BACKEND=sljit ./Test/WasmJit '[sljit]'  // harness path
 
 The emitter lowers:
 
-- up to **three** Wasm parameters and zero or one result, each `i32`, `i64`,
-  `f32` or `f64` (SLJIT's `sljit_emit_enter` and its C call ABI accept at most
-  four arguments, and `VMContext*` is the first);
+- the **register form** covers up to **three** Wasm parameters and zero or one
+  result, each `i32`, `i64`, `f32` or `f64` (SLJIT's `sljit_emit_enter` and its
+  C call ABI accept at most four arguments, and `VMContext*` is the first). A
+  defined signature above that ceiling switches the whole module to the opt-in
+  staging frame, which has no arity limit and takes `void fn(VMContext*, void*)`;
 - `i32`/`i64` constants, locals, globals; `add`/`sub`/`mul`, checked
   `div`/`rem`, `and`/`or`/`xor`, `shl`/`shr_s`/`shr_u`, `rotl`/`rotr`,
   `clz`/`ctz`/`popcnt`, all comparisons, `eqz`, sign-extension and
@@ -46,7 +48,7 @@ The emitter lowers:
   `table.init`/`copy`/`size` and `elem.drop`;
 - `select`/`select_t`, `drop`, `nop`, `return`, `unreachable`, and the guest
   stack guard with the pending-trap epilogue;
-- the first two `v128` slices: `v128.const`/`load`/`store`, `v128` locals,
+- the shared `v128` surface: `v128.const`/`load`/`store`, `v128` locals,
   `i32x4.splat`/`extract_lane`/`replace_lane`, the bitwise family
   (`not`/`and`/`andnot`/`or`/`xor`/`bitselect`), `any_true`, the integer lane
   arithmetic (`add`/`sub` for every shape, `mul` where the spec has it), the
@@ -58,10 +60,11 @@ The emitter lowers:
   `splat`/`extract_lane`/`replace_lane`), and the transport families (extending,
   splatting and zeroing loads, lane loads and lane stores, `i8x16.swizzle` and
   `i8x16.shuffle`), all through the core's shared helper ABI;
-- `ref.null`, `ref.is_null`, `ref.eq`, `ref.as_non_null` with its null trap,
-  `ref.func` (resolved at run time, internal and imported) and `br_on_null`; `ref.eq` is lowered but
-  unfixtured until GC values exist, and `br_on_non_null` waits on AsmJit block
-  parameters.
+- the reference family (`ref.null`, `ref.is_null`, `ref.eq`, `ref.as_non_null`
+  with its null trap, `ref.func` resolved at run time, `br_on_null` and
+  `br_on_non_null`), together with GC construction and access
+  (`struct.new*`/`struct.get*`/`struct.set`, `array.new*`/`array.get*`/`array.set`,
+  `array.len`, `ref.test`/`ref.cast`) and the Custom Descriptors family.
 
 A unit test exercises the same `asmjit_i32_basic`/`asmjit_i64_basic` fixtures
 that the AsmJit suite uses (`[sljit][module][parity]`), so the shared slice is
@@ -69,8 +72,8 @@ checked against one fixture set rather than two drifting ones.
 
 ## Conformance
 
-The generic backend-selected run is the gate, and it is green: 22,451 assertions
-in 821 cases. The last failures were four cases with two root causes:
+The generic backend-selected run is the gate, and it is green: 22,593 assertions
+in 824 cases. The last failures were four cases with two root causes:
 
 * the Custom Descriptors family (`struct.new_desc`, `struct.new_default_desc`,
   `ref.get_desc`, `ref.cast_desc_eq(_null)`, `br_on_cast_desc_eq(_fail)`) had no

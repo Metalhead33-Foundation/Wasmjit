@@ -9,7 +9,8 @@ Each row is also a `\subpage` link, which is what nests the note under this page
 in the generated tree instead of flattening it. **Adding a note** takes two steps:
 give its `# Title` line an explicit id (`# Title {#doc_what_it_is}`) and add one
 row here. A note missing from this table builds as a *sibling* and fails the
-`[docs]` check — see [`DOCUMENTATION.md`](DOCUMENTATION.md) §9.
+`[docs]` check — see [`DOCUMENTATION.md`](DOCUMENTATION.md) §9. The same rule
+applies to `proposals/`, `languages/` and `backends/`.
 
 ## 1. Start from the task
 
@@ -26,12 +27,13 @@ row here. A note missing from this table builds as a *sibling* and fails the
 | change type identity, canonicalisation or `match` | \subpage doc_type_identity | module-local indices → store-scoped `TypeId`, interning, `rec` groups |
 | add or change a diagnostic | \subpage doc_diagnostics | the id/record/schema contract, the ring, the sink, the host flags |
 | emit, call or embed compiled code | \subpage doc_abi | `VMContext*` as arg0, `Callable`, result tuples, `v128`, references, the embedder guide |
+| audit or refresh the link-visible ABI | \subpage doc_abi_baselines | the `libWasmBase`/`libLibJit` export baselines and what `abi-check.sh` treats as a break |
 | change a signature, a function prolog, or a GC object layout | \subpage doc_abi_portability | C linkage and the host C ABI on every target, portability over performance, what a backend may not do, the target matrix, the GC object/allocator ABI |
 | plan the `v128` / register-and-stack ABI refactor | \subpage doc_abi_refactor_study | the blast radius by layer (L1-L9), the five change classes, the waterfall phases with an exit criterion each, and the portability-first two-tier rule |
 | learn how that refactor went after it merged | \subpage doc_abi_refactor_post_mortem | what shipped per backend, what went well, the seven failures with root causes, the numbers at merge, and the four follow-ups in recommended order |
 | embed the engine, or change its install/version story | \subpage doc_embedding_surface | `WASM::Runtime`, the three header tiers, soname/visibility, the install layout |
 | change an embedder-facing surface or the backend seam | \subpage doc_api_abi_stability | the milestone and its four gates, the frozen surfaces, the break classes, the merge readiness |
-| decide whether a backend is production-ready | \subpage doc_backend_production_readiness | the per-backend verdict, the measured full-suite runs, the SLJIT/AsmJIT blockers, and the promotion gate |
+| decide whether a backend is production-ready | \subpage doc_backend_production_readiness | the per-backend verdict, the measured full-suite runs, the documented refusals, and the promotion gate |
 | add or change SIMD support | \subpage doc_simd_backends | what each backend can do for vectors, and the helper-based lowering every backend starts from |
 | change the LibJIT SIMD path | \subpage doc_simd_libjit | the LibJIT decision, the measured cost, the milestone plan |
 | build, run or fix the test suite | \subpage doc_testing | the suite, the spec-suite conversion, the curated list, the refresh recipe |
@@ -42,6 +44,7 @@ row here. A note missing from this table builds as a *sibling* and fails the
 | check whether a second code generator may begin | \subpage doc_readiness_audit | `G3` and `LF-0a` in one sweep, the seam inventory, the pinned snapshot |
 | decide whether something is an engine gap or an out-of-scope boundary | \subpage doc_scope | the triage rule, the embedder/text/encoding-blocked tables, the recorded deviations |
 | find a per-proposal note | \subpage proposals_index | the per-proposal notes: spec demands → shipped state → gaps → deviations → plan → tests |
+| find a backend slice, defect or measurement | \subpage backends_index | the per-backend ledgers, the frame/v128 ABI notes, and the dated slice post-mortems |
 | find a language study | \subpage languages_index | the `LF-1` triage, the `LF-2` arms, the verdicts and engine findings |
 
 ## 2. What is deliberately *not* a separate document

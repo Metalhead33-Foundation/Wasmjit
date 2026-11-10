@@ -1,22 +1,30 @@
-# Handoff: state of the tree for the next session
+# Backend handoff {#backend_handoff}
+
+*State of the tree for the next session*
+
+**Status:** handoff record, revision 2 (2026-11-10). It is kept as the list of
+sweep defects and open work from the 2026-11-07 session; the **current** verdict
+is owned by [`BACKEND_PRODUCTION_READINESS.md`](../BACKEND_PRODUCTION_READINESS.md)
+and the current per-feature ledger by [`PRODUCTION_GAPS.md`](PRODUCTION_GAPS.md)
+§27/§30. The snapshot below was re-measured on 2026-11-10.
 
 **Written:** 2026-11-07, `backendsMh33`, after the defect round, the capability
 close-out and the validator/ multi-value follow-up.
-**Read first:** [`PRODUCTION_READINESS.md`](../BACKEND_PRODUCTION_READINESS.md) (the
+**Read first:** [`BACKEND_PRODUCTION_READINESS.md`](../BACKEND_PRODUCTION_READINESS.md) (the
 production verdict), [`PRODUCTION_GAPS.md`](PRODUCTION_GAPS.md) section 27 (the
 curated capability ledger) and section 29 (the production gaps), and
 [`CAPABILITY_PROBES.md`](CAPABILITY_PROBES.md) section 19 (the latest re-run).
 
 ## 1. Where the tree is
 
-**Snapshot (2026-11-09, this working tree):** the generic backend-selected suite
-is **green on all three code generators**, with the same case set and assertion
-count each:
+**Snapshot (2026-11-10, working tree on `2cce7b9`):** the generic
+backend-selected suite is **green on all three code generators**, with the same
+case set and assertion count each:
 
 ```
-WASMJIT_BACKEND=libjit ./WasmJit --rng-seed 12345 -> 22,451 assertions in 821 cases
-WASMJIT_BACKEND=sljit  ./WasmJit --rng-seed 12345 -> 22,451 assertions in 821 cases
-WASMJIT_BACKEND=asmjit ./WasmJit --rng-seed 12345 -> 22,451 assertions in 821 cases
+WASMJIT_BACKEND=libjit ./WasmJit --rng-seed 12345 -> 22,593 assertions in 824 cases
+WASMJIT_BACKEND=sljit  ./WasmJit --rng-seed 12345 -> 22,593 assertions in 824 cases
+WASMJIT_BACKEND=asmjit ./WasmJit --rng-seed 12345 -> 22,593 assertions in 824 cases
 ```
 
 Gates: `[headerdoc]`, `[docs]`, `doxygen` (0 warnings), the strict
@@ -140,7 +148,7 @@ them, and the validator now rejects them (`V128ATOMIC`).
 ## 7. Next session's recommendation
 
 **State at the end of the 2026-11-09 pass.** Reference ownership is exact on all
-three backends, measured shape by shape: 22,534 assertions in 824 cases on **all
+three backends, measured shape by shape: 22,593 assertions in 824 cases on **all
 three**, identical. That equality now covers the last capability difference too --
 AsmJIT calling a compiled callee that was built in the other call form. The consumer sites that were
 "left for later" are closed -- `ref.test`/`ref.is_null`/`ref.eq`, the pass-through

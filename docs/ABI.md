@@ -1,4 +1,6 @@
-# WasmJit ABI: VMContext Passing Convention {#doc_abi}
+# WasmJit ABI {#doc_abi}
+
+*`VMContext` passing, result tuples and call kinds*
 
 > **Read with [`ABI_PORTABILITY.md`](ABI_PORTABILITY.md).** This document says *what*
 > the canonical signature is (arg0 `VMContext*`, the multi-result buffer, the call-kind

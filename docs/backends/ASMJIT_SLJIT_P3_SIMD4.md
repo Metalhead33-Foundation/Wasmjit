@@ -1,4 +1,6 @@
-# Post-mortem: the AsmJit/SLJIT v128 slice 4 (widening, extmul, extadd_pairwise, dot, narrow)
+# AsmJit/SLJIT v128 slice 4 {#backend_p3_simd4}
+
+*Post-mortem: widening, `extmul`, `extadd_pairwise`, `dot`, `narrow`*
 
 **Snapshot (2026-11-05, working tree on `backendsMh33`): opened on day one, as
 §14.7 requires. Both backends landed in the same session.**

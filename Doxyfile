@@ -26,10 +26,10 @@ USE_MDFILE_AS_MAINPAGE = README.md
 # every generated or third-party file is out of scope.
 #
 # The notes are pages, and Doxygen nests a page only when another page names it
-# with `\subpage`. The two index pages below do exactly that, so the tree view is
-# README -> docs -> proposals instead of a flat list of 55 pages:
-# `docs/index.md` is the `docs` node, `docs/proposals/index.md` the `proposals`
-# one (docs/DOCUMENTATION.md §9; `./Test/WasmJit '[docs]'` keeps them complete).
+# with `\subpage`. The four index pages below do exactly that, so the tree view is
+# README -> docs -> {proposals, languages, backends} instead of a flat list of 100+
+# pages: `docs/index.md` is the `docs` node, and the other three are its children
+# (docs/DOCUMENTATION.md §9; `./Test/WasmJit '[docs]'` keeps them complete).
 INPUT                  = WasmBase LibJit Sljit Asmjit WasmStub Test README.md docs docs/proposals
 FILE_PATTERNS          = *.h *.hpp *.md
 RECURSIVE              = YES

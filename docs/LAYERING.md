@@ -49,19 +49,18 @@ What the core **may** (and must) do is state the *contract a backend has to
 satisfy*: the calling convention, the shared layouts, the PODs generated code
 touches. Those are core facts; the backend is the party that has to honour them.
 
-Backends (`LibJit/`, and the `Asmjit/`/`Sljit/` scaffolds), the non-compiling
+Backends (`LibJit/`, `Sljit/`, `Asmjit/`), the non-compiling
 `WasmStub/` pretty-printer, and the harness (`Test/`) are all free to name
 whatever they like.
 
 ## 3. Why the rule exists
 
-1. **The backend set is deliberately plural and isn't finished.** `LibJit/` is
-   the implementation path today; `Asmjit/` and `Sljit/` exist as scaffolds
-   precisely so that a second and third code generator can be filled in later
-   (see [`SIMD_BACKENDS.md`](SIMD_BACKENDS.md) and, for the SIMD angle,
-   [`SIMD_LIBJIT.md`](SIMD_LIBJIT.md) §3). A core that names LibJIT is a core
-   that has to be edited in many places — with no test able to catch a miss —
-   the day another backend executes anything.
+1. **The backend set is deliberately plural and isn't closed.** `LibJit/`,
+   `Sljit/` and `Asmjit/` are three executing code generators (see
+   [`BACKEND_PRODUCTION_READINESS.md`](BACKEND_PRODUCTION_READINESS.md)), and a
+   fourth is expected to be able to join without editing the core. A core that
+   names LibJIT is a core that has to be edited in many places — with no test
+   able to catch a miss — the day another backend executes anything.
 2. **The core is where the *contract* lives, and a contract that names its only
    current implementation is not a contract.** "The runtime and `LibJitTypeTranslator`
    must agree" is a statement about one class; "the runtime and each backend's
@@ -173,10 +172,11 @@ suite run. The same pass removed the stray `libSljit.so*` files that had been
 sitting in `Sljit/`, outside `build/`.
 
 Layering follow-up, 2026-11-04: `wasmjit.pc` is core-only (`-lWasmBase`,
-`-lElvavena`, `-lEuphemy`), and the executing backend is packaged as
-`libwasmjit-backend-libjit.so`. The out-of-tree consumer links no backend and
-loads it through `WASMJIT_BACKEND_PATH`; the `[layering]` test also guards the
-core `.pro` and `.pc` against reintroducing a `-l` backend dependency.
+`-lElvavena`, `-lEuphemy`), and the LibJIT backend is also packaged as
+`libwasmjit-backend-libjit.so`; `libSljit` and `libAsmjit` are separate shared
+libraries selected by name. The out-of-tree consumer links no backend and loads
+one through `WASMJIT_BACKEND_PATH`; the `[layering]` test also guards the core
+`.pro` and `.pc` against reintroducing a `-l` backend dependency.
 
 ## 8. Deliberate tensions and waivers
 

@@ -2,7 +2,7 @@
 
 *What “production-ready” means for LibJIT, SLJIT and AsmJIT, measured*
 
-Status: **snapshot (2026-11-09, working tree after the descriptor/trap/import batch)**.
+Status: **snapshot (2026-11-10, working tree on `2cce7b9`)**.
 This note owns the per-backend production verdict. The curated capability ledger
 ([`PRODUCTION_GAPS.md`](backends/PRODUCTION_GAPS.md) §27 and §30) owns individual
 implemented features; the two answer different questions.
@@ -19,17 +19,19 @@ SLJIT or AsmJIT, and anyone reviewing a status sentence in another note.
 | **AsmJIT** | **Production-ready within the same envelope, with the documented refusals below** | The third conformant code generator; needs the external AsmJit library at build time. |
 
 The green suite is now a **three-backend conformance result**, not a LibJIT-only
-one: all three runs report the same 22,451 assertions in the same 821 cases.
+one: all three runs report the same 22,593 assertions in the same 824 cases.
 
 ## 2. Measurement
 
-All commands were run from `build/Desktop-Release` with `--rng-seed 12345`.
+All commands were run from `build/Desktop-Release` with `--rng-seed 12345`, one
+backend at a time (concurrent runs share temporary paths and are not a valid
+measurement).
 
 | Run | Result |
 |---|---|
-| Default (`libjit`) suite | **22,451 assertions in 821 cases, green** (exit 0) |
-| `WASMJIT_BACKEND=sljit ./Test/WasmJit` | **22,451 assertions in 821 cases, green** (exit 0) |
-| `WASMJIT_BACKEND=asmjit ./Test/WasmJit` | **22,451 assertions in 821 cases, green** (exit 0) |
+| Default (`libjit`) suite | **22,593 assertions in 824 cases, green** (exit 0) |
+| `WASMJIT_BACKEND=sljit ./Test/WasmJit` | **22,593 assertions in 824 cases, green** (exit 0) |
+| `WASMJIT_BACKEND=asmjit ./Test/WasmJit` | **22,593 assertions in 824 cases, green** (exit 0) |
 
 Identical assertion counts matter more than the pass count: every case executes
 on every backend, so no case is skipped, refused early or cut short by a crash.
@@ -109,8 +111,8 @@ last blockers were:
 
 Refusals that remain are the same three as SLJIT’s.
 
-The backend’s README still describes it as a scalar-first native backend that is
-not a drop-in replacement for LibJIT in *code quality*; that remains accurate.
+Both backend pages describe themselves as production-ready but not a drop-in
+replacement for LibJIT in *code quality*; that remains accurate.
 
 **Verdict:** production-ready for the same envelope, with the documented
 refusals and an external AsmJit build dependency.
@@ -120,7 +122,7 @@ refusals and an external AsmJit build dependency.
 1. **All three backends now run the same case set to completion.** The default
    suite is LibJIT’s suite, but `WASMJIT_BACKEND` selects a backend that now
    produces the same assertion count.
-2. **The status documents agree.** This note, both backend READMEs,
+2. **The status documents agree.** This note, both backend pages,
    `HANDOFF.md`, `PRODUCTION_GAPS.md` §30, `TESTING.md`’s promotion table and the
    root `README.md` all report the same three-backend result.
 3. **Refusal is still not failure isolation, but no wrong-result path remains in
@@ -143,7 +145,7 @@ A promotion needs all of the following, and the status of each is recorded here:
 | 3 | Every failure is fixed or an explicit, documented refusal; no wrong-result or crash path | **met**; the three refusals are listed in §4/§5 |
 | 4 | The sanitizer run is recorded and clean for that backend | recorded in [`TESTING.md`](TESTING.md); the LibJIT caches are the only entries in `Test/asan.supp` |
 | 5 | The target matrix is exercised beyond x86-64 Linux, or the claim is limited to SysV AMD64 | **limited to x86-64 Linux / SysV AMD64**, explicitly, for all three |
-| 6 | README, backend READMEs, `HANDOFF.md`, `VALIDATION.md`, `API_ABI_STABILITY.md` and this note tell the same story | **met** |
+| 6 | README, backend pages, `HANDOFF.md`, `VALIDATION.md`, `API_ABI_STABILITY.md` and this note tell the same story | **met** |
 
 Until a non-SysV runner exists, the supported production configuration is **any
 of the three backends on x86-64 Linux**, and every portability statement in this

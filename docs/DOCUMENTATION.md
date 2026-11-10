@@ -2,9 +2,10 @@
 
 *Doxygen Style in the Headers, and the Note Tree*
 
-Status: policy note (revision 3 — 2026-11-01). Every header outside `extern/` is
+Status: policy note (revision 4 — 2026-11-10). Every header outside `extern/` is
 covered by the Doxygen rules and the `[headerdoc]` check; the Markdown note tree
-is part of the generated site with stable page ids, and §9 carries the current
+is part of the generated site with four index pages (`docs/`, `proposals/`,
+`languages/`, `backends/`), stable page ids, and §9 carries the current
 header/note counts. Revision history lives in git.
 Audience: anyone adding or editing a header or a note, or reviewing a change
 that touches one.
@@ -181,7 +182,7 @@ which is why they are listed rather than left to intuition:
 | a **code span split across two lines**, or any line with an odd number of backticks (a test name broken over a line boundary) | opens a verbatim block and searches for a closing backtick to the end of the file ("Reached end of file while still searching closing backtick of a verbatim block"), swallowing the rest of the page | keep each span on one line, and keep the backtick count on a line even; `GC.md` and `TRAP_CLEANUP.md` each had one such split |
 | a member-style name in plain prose, e.g. `O(#functions)` | the `#` starts a link request, exactly as in a header comment ("explicit link request to 'functions' could not be resolved") | keep it inside a code span (as here), or escape the hash with a backslash when it sits in prose |
 | a bare angle-bracket placeholder in prose, even inside a code span, e.g. a quoted boilerplate block | "Unsupported xml/html tag \<name> found" | escape the angle bracket by writing a backslash immediately before it |
-| a **relative link to a file outside the `Doxyfile`'s `INPUT`**, e.g. `[AGENTS.md](../AGENTS.md)` or a link to `Sljit/README.md` | "unable to resolve reference to … for \ref command": the target is not a page, so the link cannot be made | name it as inline code (`AGENTS.md`) instead of linking it |
+| a **relative link to a file outside the `Doxyfile`'s `INPUT`**, e.g. `[AGENTS.md](../AGENTS.md)` | "unable to resolve reference to … for \ref command": the target is not a page, so the link cannot be made | name it as inline code (`AGENTS.md`) instead of linking it |
 | an anchor link whose heading carries no explicit label, e.g. `[note](#environment-notes)` | the anchor is not a Doxygen label, so the reference cannot be resolved | put a label on the heading (`{#environment-notes}`) and link to that |
 
 **Rule of thumb:** the generated site is the arbiter, not the Markdown preview.
@@ -256,8 +257,8 @@ render is the gate, and it is warning-free.
     not listed one by one;
   - **322 `\return` gaps** on operators, trampolines and factories;
   - **11 declarations with no block at all**, all in `Asmjit/`
-    (`AsmjitContext.hpp`, `AsmjitModuleCompiler.hpp`) — the experimental backend,
-    which is not installed.
+    (`AsmjitContext.hpp`, `AsmjitModuleCompiler.hpp`) — the third backend,
+    which `[headerdoc]` keeps at the file-block level.
 
   Before the documentation sweep **4,591** declarations had no block; that number
   is history, and it is the one this milestone closed. The remaining 1,810 are
@@ -291,13 +292,14 @@ render is the gate, and it is warning-free.
 The site renders the Markdown notes as pages, and `GENERATE_TREEVIEW = YES` shows
 them in the sidebar. Doxygen nests a page only when another page names it with
 `\subpage`; without that every note is a *sibling* at the top level, which is what
-a flat tree is. The hierarchy is therefore built by three index pages:
+a flat tree is. The hierarchy is therefore built by four index pages:
 
 | Index page | Id | Children |
 |---|---|---|
-| [`index.md`](index.md) | `docs_index` | the 22 notes in `docs/`, `proposals` **and** `languages` |
-| [`proposals/index.md`](proposals/index.md) | `proposals_index` | the 38 proposal notes |
-| [`languages/index.md`](languages/index.md) | `languages_index` | the 16 language notes (the `LF-1` set and the `LF-2` reports) |
+| [`index.md`](index.md) | `docs_index` | the 26 notes in `docs/`, plus the three child folders and the ABI-baseline page |
+| [`proposals/index.md`](proposals/index.md) | `proposals_index` | the 39 proposal notes |
+| [`languages/index.md`](languages/index.md) | `languages_index` | the 17 language notes (the `LF-1` set and the `LF-2` reports) |
+| [`backends/index.md`](backends/index.md) | `backends_index` | the 24 backend notes, plus the two backend pages |
 
 A note declares its own id on the title line, and its folder's index lists that
 id in a table row:
@@ -313,17 +315,26 @@ which produces:
 WasmJit            (README.md, the main page)
 ├── Direction, Feature completeness, …   (the README's own sections)
 └── docs                                 (docs/index.md)
-    ├── ABI, API/ABI stability, …        (22 notes, each with its own sections)
+    ├── ABI, API/ABI stability, …        (26 notes, each with its own sections)
+    ├── backends                         (docs/backends/index.md)
+    │   └── Readiness, frame ABI, slice post-mortems …   (24 notes)
     ├── languages                        (docs/languages/index.md)
-    │   └── Triage, Clustering, Charters, Evidence, LF-2 …   (16 study notes)
+    │   └── Triage, Clustering, Charters, Evidence, LF-2 …   (17 study notes)
     └── proposals                        (docs/proposals/index.md)
         └── GC, SIMD, THREADS, …         (39 notes)
 ```
 
 **Adding a note** takes three steps: create the file; append `{#doc_what_it_is}`
-(or `{#prop_what_it_is}`, or `{#lf_what_it_is}` for the study folder) to its
-`# Title` line; add one row to its folder's index. Moving a note between the
-folders means changing both the id prefix and the row.
+(or `{#prop_what_it_is}`, `{#lf_what_it_is}` for the study folder, or
+`{#backend_what_it_is}` for a backend note) to its `# Title` line; add one row to
+its folder's index. Moving a note between the folders means changing both the id
+prefix and the row.
+
+**Keep the title short.** The `# Title` is what the sidebar and the page tree show,
+so it stays a name, not a paragraph: put the qualifying detail on the italic
+subtitle line right below it (`*Implementation Notes, Spec Status, and Deliberate
+Deviations*`). A title longer than roughly sixty characters is a table-of-contents
+defect.
 
 **Front matter keeps one revision.** The `Status:` line names only the current
 revision and the current state; earlier revision notes are git history, not a
@@ -332,8 +343,14 @@ the previous summary with the new one.
 
 **A new folder** takes one more: a folder without an index page is not part of
 the tree, so it gets `<folder>/index.md` with its own id, a `\subpage` row in
-`docs/index.md`, and an entry in the `[docs]` check below. `docs/languages/` was
-added that way, which is why the check now knows three index pages.
+`docs/index.md`, and an entry in the `[docs]` check below. `docs/backends/` was
+added that way, which is why the check now knows four index pages.
+
+**Not every page can be a `README.md`.** Doxygen 1.18 renders a subdirectory
+`README.md` as a *file reference*, not a Markdown page, so a `\subpage` target in
+it cannot resolve. The two backend pages and the ABI-baseline page are therefore
+`Asmjit/Asmjit.md`, `Sljit/Sljit.md` and `Test/abi/ABI_BASELINES.md`, and the
+`[docs]` check declares all three.
 
 **Why the ids are explicit.** Doxygen derives an id from the path when it has to
 (`md_docs_2TESTING`): it changes when the file moves and reads like a hash. An
@@ -343,19 +360,21 @@ style links keep working because the file links resolve to the page).
 
 **Enforced, not remembered.** `./Test/WasmJit '[docs]'` fails when
 
-- a note in `docs/`, `docs/proposals/` or `docs/languages/` has no `{#id}` on its
-  title line;
+- a note in `docs/`, `docs/proposals/`, `docs/languages/` or `docs/backends/` has
+  no `{#id}` on its title line;
 - a note is missing from its folder's index — which is the silent failure: it
   would still build, as a sibling of the whole sub-tree;
 - an index names an id that no note declares (a typo Doxygen would drop without
-  complaint).
+  complaint). The two backend pages and `Test/abi/ABI_BASELINES.md` are declared
+  pages too, so their `\subpage` rows resolve like any note.
 
 `[headerdoc]` keeps the Doxyfile's settings honest (`QT_AUTOBRIEF`,
 `WARN_NO_PARAMDOC`, the output directory); the note tree adds no setting of its
 own beyond the ones that turn Markdown on: `FILE_PATTERNS = … *.md` with
-`README.md` and `docs` in `INPUT` (`RECURSIVE = YES`, so `docs/proposals` and
-`docs/languages` are both reached), and `USE_MDFILE_AS_MAINPAGE = README.md`,
-which is what makes the README the root page rather than another sibling.
+`README.md` and `docs` in `INPUT` (`RECURSIVE = YES`, so `docs/proposals`,
+`docs/languages` and `docs/backends` are all reached), and
+`USE_MDFILE_AS_MAINPAGE = README.md`, which is what makes the README the root page
+rather than another sibling.
 
 ## 10. References
 

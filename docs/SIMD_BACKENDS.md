@@ -2,16 +2,17 @@
 
 *Research Note: LibJIT, SLJIT, AsmJit, and the Native-Helper Middle Path*
 
-Status: research note (revision 3), with a **2026-11-07 update**: AsmJIT and
-SLJIT now carry targeted SIMD slices, so the “deferred-but-planned” framing below
-is historical. Neither backend is production-ready; their generic-suite blockers
-are owned by [`BACKEND_PRODUCTION_READINESS.md`](BACKEND_PRODUCTION_READINESS.md).
-The decision that follows from this survey lives in
-[`SIMD_LIBJIT.md`](SIMD_LIBJIT.md).
-Audience: anyone about to start a milestone from
-[`proposals/SIMD.md`](proposals/SIMD.md) §7, or anyone touching the backend
-abstraction (`Project.pro`, the `*OpcodeDispatcher` families, the type
-translators).
+Status: research note, revision 4 (2026-11-10). The survey below is the **decision
+record from before the SIMD slices landed**; it is kept for its per-engine
+evidence and the helper-versus-native argument. The current state is that all
+three backends lower the shared `v128` surface — LibJIT through the helper ABI by
+decision ([`SIMD_LIBJIT.md`](SIMD_LIBJIT.md)), SLJIT and AsmJit through the same
+helpers on top of their own vector registers — and the generic suite is green on
+each. The production verdict is
+[`BACKEND_PRODUCTION_READINESS.md`](BACKEND_PRODUCTION_READINESS.md).
+Audience: anyone touching the backend abstraction (`Project.pro`, the
+`*OpcodeDispatcher` families, the type translators) or reviewing the SIMD
+lowering decision.
 
 This note exists to answer one question *before* any SIMD code is written: **can
 the backends we have lower `v128`, and if not, what is the cheapest conforming
@@ -49,15 +50,15 @@ below.
 
 | Backend | `v128` as a value type | Vector registers / instructions | Verdict |
 |---|---|---|---|
-| **GNU LibJIT** (installed, primary) | ✗ none — no vector type exists anywhere in the API | ✗ none — no packed/SSE/AVX opcode exists | **No SIMD. The only way is to synthesise `v128` out of scalar primitives and lower every op to a call.** |
-| **SLJIT** | ✗ (it has no typed-value model at all) | ✓ full — `SLJIT_SIMD_REG_128`/`SLJIT_SIMD_REG_256` widths, `SLJIT_VRn` registers, `sljit_emit_simd_*` | **Yes, at the register/instruction level** — but it is not wired into this repo and would need the whole value/operand model on top. |
-| **AsmJit** | ✗ (assembler/IR + register allocation, not a value model) | ✓ complete — MMX/SSE…SSE4/AVX/AVX-512 (`Vec` = Xmm/Ymm/Zmm, `KReg`, `Tmm`), AArch64 NEON | **Yes, at the instruction level** — same caveat, plus the backend lowers no Wasm `v128` yet (it executes an i32/i64 subset, and its SIMD code is native probe work). |
+| **GNU LibJIT** | Synthesised: no vector type exists in the API | No packed/SSE/AVX opcode | **Implemented through the helper ABI** — the portable baseline, by decision ([`SIMD_LIBJIT.md`](SIMD_LIBJIT.md)). |
+| **SLJIT** | No typed-value model; the backend supplies the slot model | Full — `SLJIT_SIMD_REG_128`/`256`, `SLJIT_VRn`, `sljit_emit_simd_*` | **Implemented**: the complete shared SIMD surface, lowered through the helpers. |
+| **AsmJit** | Assembler/IR plus register allocation, not a value model | Complete — SSE…AVX-512, `Vec`, `KReg`, AArch64 NEON | **Implemented**: the complete shared SIMD surface, lowered through the helpers. |
 
-Two consequences fall out immediately:
+Two consequences fell out at the time of the survey, and the first is now history:
 
-1. **No available backend can be handed a `v128` and asked for a vector op.**
-   LibJIT is the only backend that is actually built and linked, and it has
-   *zero* vector surface. So the `v128` representation and the per-op lowering
+1. **None of the toolkits hands the engine a ready-made `v128` value model.**
+   LibJIT has zero vector surface; SLJIT and AsmJit have vector instructions but
+   no Wasm-level value model. The `v128` representation and the per-op lowering
    are ours to design at the WasmJit layer, whatever engine is underneath.
 2. **"Add SIMD support to the backend" is the wrong framing for the near term.**
    The right framing is "define a `v128` value/ABI and a lowering that works on
@@ -150,20 +151,21 @@ means writing a whole new operand model, calling convention and register
 allocator at our layer (the same work the current LibJIT backend does for
 scalars, redone for vectors).
 
-**State of `Sljit/` (2026-10-30):** the toolkit is now vendored as
-`extern/sljit` and a **provisional** backend compiles it into `libSljit.so`
-(registered as `sljit`, with `[sljit]` coverage). That backend lowers a
+**State of `Sljit/` (historical snapshot, 2026-10-30):** the toolkit was vendored
+as `extern/sljit` and a **provisional** backend compiled it into `libSljit.so`
+(registered as `sljit`, with `[sljit]` coverage). At that point it lowered a
 straight-line integer subset only — no `v128`, no calls, no control flow, no
-memory access — so this note's SIMD conclusions are unchanged: the shared helper
-layer is still the portable baseline, and a *native* `v128` lowering on SLJIT
-remains future work ([`WRITING_A_BACKEND.md`](WRITING_A_BACKEND.md) §9 lists the
-exact subset).
+memory access. **Today it lowers the complete shared SIMD surface and is
+production-ready within the envelope**; the shared helper layer is still the
+portable baseline, and a *native* inline `v128` lowering on SLJIT remains an
+optional performance path ([`WRITING_A_BACKEND.md`](WRITING_A_BACKEND.md) §11 is
+the worked example).
 
 | Fact | Evidence |
 |---|---|
 | `Sljit/` contains four source units and `Sljit.pro` compiles `extern/sljit/sljit_src/sljitLir.c` into the library (no external `-lsljit`) | `Sljit/Sljit.pro` |
 | The backend is selectable: `Runtime::create("sljit")` and `WASMJIT_BACKEND=sljit` | `Test/SljitBackendTests.cpp` (`[sljit]`) |
-| It executes `i32`/`i64` straight-line bodies and refuses everything else with a null `Callable::fnPtr` | `Sljit/SljitOpcodeDispatcher.cpp`, `Sljit/README.md` |
+| It executes `i32`/`i64` straight-line bodies and refuses everything else with a null `Callable::fnPtr` | `Sljit/SljitOpcodeDispatcher.cpp`, `Sljit/Sljit.md` |
 
 ### 3.3 AsmJit — real SIMD, complete instruction coverage, no backend yet
 

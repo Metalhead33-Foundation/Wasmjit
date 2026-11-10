@@ -1,4 +1,6 @@
-# LibJIT: the sixth integer argument is corrupted (defect note)
+# LibJIT sixth-argument defect {#backend_libjit_argument_defect}
+
+*Defect note: the sixth integer argument is corrupted*
 
 **Status (2026-11-06):** open, reproducible, isolated, and **not** ours to fix in IR.
 **Scope:** the LibJIT backend only. It appears when a compiled function's C

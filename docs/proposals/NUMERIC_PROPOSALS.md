@@ -1,4 +1,4 @@
-# Wide Arithmetic, Half Precision, and Rounding-Mode Control {#prop_numeric_proposals}
+# Numeric Proposals {#prop_numeric_proposals}
 
 *Implementation Notes, Spec Status, and Deliberate Deviations*
 

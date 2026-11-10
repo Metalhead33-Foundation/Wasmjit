@@ -26,8 +26,9 @@ the one-line check to run.
 ## Documentation to follow
 
 - **[`docs/LAYERING.md`](docs/LAYERING.md) — read before editing `WasmBase/` or working on a backend.**
-  The core must not name, include, link or describe any specific backend: `LibJit/` is the first of
-  several planned code generators, and `WasmBase/` states the contracts they all must honour.
+  The core must not name, include, link or describe any specific backend: `LibJit/`, `Sljit/` and
+  `Asmjit/` are three code generators behind the same seam, and `WasmBase/` states the contracts
+  they all must honour.
 
 - **[`docs/ABI_PORTABILITY.md`](docs/ABI_PORTABILITY.md) — read before changing a signature, a prolog, or a GC object layout.**
   Every compiled function is C-linkage with the **host C ABI** of the target (SysV AMD64, MS x64,

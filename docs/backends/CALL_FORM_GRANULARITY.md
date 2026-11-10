@@ -1,6 +1,8 @@
-# Call-form granularity: per module, per signature or per callable?
+# Call-form granularity {#backend_call_form_granularity}
 
-**Status:** living note, 2026-11-09 (measured snapshot, see §3).
+*Per module, per signature, or per callable?*
+
+**Status:** living note, revision 2 (2026-11-10; measured snapshot in §3).
 **Companions:** [`STAGING_CALL_ABI.md`](STAGING_CALL_ABI.md) (the form itself),
 [`EXPORT_SIGNATURE.md`](EXPORT_SIGNATURE.md) (what the frame changes at the
 embedder seam), [`../ABI_PORTABILITY.md`](../ABI_PORTABILITY.md) (the canonical
@@ -36,7 +38,7 @@ frame-form) is untouched, which is why no test had to change. The fixture is
 `Test/wasm_wat/call_form_provider.wat` (frame-form because of a wide sibling
 function) imported by `call_form_importer.wat` (register-form): it crashed on
 **all three** backends before the change; it now passes on all three, and the
-three suites agree exactly (22,534 assertions in 824 cases). AsmJIT needed one
+three suites agree exactly (22,593 assertions in 824 cases). AsmJIT needed one
 more step than SLJIT because its *translated signature table* is spelled in the
 module's own form: when the callee's form differs, its spelling is translated on
 demand for that call. That keeps the change inside `dispatchCall`, so the
@@ -176,7 +178,7 @@ Two things were learned that a future attempt should not re-derive:
 The state left behind: **every** module graph works on every backend, in either
 form or mixed. A uniform graph is trivially fine; a mixed one works because both
 SLJIT and AsmJIT emit the call in the *callee's* form, and a both-frame
-cross-module call works everywhere. The three suites report the same 22,534
+cross-module call works everywhere. The three suites report the same 22,593
 assertions in 824 cases — which is the point: a difference in that number is how a
 capability gap announces itself.
 
@@ -217,4 +219,4 @@ first two are the real options, and both are a focused piece of work on
 `WasmTailTrampoline.cpp` plus each backend's driver emission.
 
 The attempt was reverted rather than half-landed: the tree is green at
-22,534 / 22,534 / 22,532 assertions in 824 cases.
+22,593 / 22,593 / 22,593 assertions in 824 cases.

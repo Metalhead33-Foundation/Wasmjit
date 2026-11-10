@@ -1,14 +1,23 @@
-> **DECIDED 2026-11-06** (was deferred 2025-11-05). The canonical shape is **two `uint64_t`
-> parameters, low word first**, with a `v128` result carried in the multi-value buffer as
-> `lo, hi`. See §28 for the decision, its per-target justification and the migration plan;
-> the analysis in Parts I-III is kept as the record of why the alternatives were rejected.
-> The ABI refactor's work breakdown is in
-> [`../ABI_REFACTOR_STUDY.md`](../ABI_REFACTOR_STUDY.md) (phases P0-P6).
+# v128 across the function boundary {#backend_v128_signature_decision}
 
-# Decision note: `v128` across the function boundary (P3's last item)
+*Decision note: the canonical `v128` ABI, and why the alternatives were rejected*
 
-**Snapshot (2026-11-05, working tree on `backendsMh33`). Status: analysed, not
-implemented. No ABI code was started, on purpose — see §5.**
+Status: decision record, revision 5 (2026-11-10). **Decided 2026-11-06 and
+implemented on all three backends.** The canonical shape is **two `uint64_t`
+parameters, low word first**, with a `v128` result carried in the multi-value
+buffer as `lo, hi`. §28 owns the decision, its per-target justification and the
+migration plan; Parts I–III are kept as the record of why the alternatives were
+rejected. The ABI refactor's work breakdown is in
+[`../ABI_REFACTOR_STUDY.md`](../ABI_REFACTOR_STUDY.md) (phases P0–P6).
+
+**Historical snapshot (2026-11-05, working tree on `backendsMh33`):** analysed,
+not implemented at that point; no ABI code had been started, on purpose — see §5.
+
+> **Reading note.** Parts I–III record the analysis as it was made. Intermediate
+> conclusions such as "SLJIT `v128` results are a permanent refusal" or "`v128`
+> block types are deferred" describe the state *before* the decision. **§28 is the
+> current contract** and supersedes them; the alternatives are kept to explain why
+> they were rejected.
 
 **Revision 4 (2026-11-06):** **Part III (§21–§27)** is an impact study grounded in
 this tree: the host ABI already passes `v128` by value *including results*, the
@@ -297,17 +306,21 @@ AsmJit**, and one of them (block types) is implementable in SLJIT alone. That is
 capability divergence, not an ABI one: the core reports "no compiled body" for the
 AsmJit function, exactly as it does for SLJIT `v128` results.
 
-**Consequence for saga closure:** `v128` results on SLJIT/AsmJit are a permanent,
-documented limitation of those toolkits (only LibJIT supports them), and `v128`
-block types are SLJIT-only. Both belong in the final saga post-mortem as
-*permanently refused with the toolkit limitation named*, not as pending work.
+**Consequence for saga closure, as read at the time:** `v128` results on
+SLJIT/AsmJit were a documented limitation of those toolkits (only LibJIT
+supported them then), and `v128` block types were SLJIT-only. **Superseded:** the
+`v128` decision in §28 and the frame ABI made all three backends carry `v128`
+parameters and results.
 
-## 11. Long-term plan: `v128` returns as a lowered multi-return (DEFERRED)
+## 11. Long-term plan: `v128` returns as a lowered multi-return (SUPERSEDED)
 
-**Status: deferred by decision (2026-11-05). This is an ABI-breaking, long-term
-refactor, to be executed only after the remaining AsmJit and SLJIT backend work
-(in this saga: the rest of P3, then P4 references/GC and exceptions, then P5
-`call_ref`/continuations) is complete.**
+> **Superseded (2026-11-06):** §28 records the decision that replaced this
+> deferral. The text below is kept as the analysis that led to the canonical
+> two-word form; it is not a current plan.
+
+**Status at the time: deferred by decision (2026-11-05). This was an
+ABI-breaking, long-term refactor, to be executed only after the remaining AsmJit
+and SLJIT backend work was complete.**
 
 ### The plan
 

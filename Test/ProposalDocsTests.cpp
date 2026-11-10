@@ -180,7 +180,7 @@ TEST_CASE("proposal notes keep the documented structure", "[docs]")
 }
 
 // Enforces docs/DOCUMENTATION.md §9: the generated site nests the notes instead
-// of flattening them, and it does so through three index pages. A note that is
+// of flattening them, and it does so through four index pages. A note that is
 // missing from its folder's index builds as a *sibling* of the whole sub-tree,
 // which is exactly the failure a reader would not notice -- so a missing row is
 // a test failure, not a review comment.
@@ -191,21 +191,26 @@ TEST_CASE("the documentation tree is hierarchical", "[docs]")
 	const std::filesystem::path docs = root / "docs";
 	const std::filesystem::path proposals = docs / "proposals";
 	const std::filesystem::path languages = docs / "languages";
+	const std::filesystem::path backends = docs / "backends";
 
 	const std::string docsIndexText = readTextFile(docs / "index.md");
 	const std::string proposalsIndexText = readTextFile(proposals / "index.md");
 	const std::string languagesIndexText = readTextFile(languages / "index.md");
+	const std::string backendsIndexText = readTextFile(backends / "index.md");
 	const std::set<std::string> docsChildren = subpageTargets(docsIndexText);
 	const std::set<std::string> proposalChildren = subpageTargets(proposalsIndexText);
 	const std::set<std::string> languageChildren = subpageTargets(languagesIndexText);
+	const std::set<std::string> backendChildren = subpageTargets(backendsIndexText);
 
-	// `proposals` and `languages` are children of `docs`, and each index page is
-	// the parent of the notes beside it.
+	// `proposals`, `languages` and `backends` are children of `docs`, and each
+	// index page is the parent of the notes beside it.
 	REQUIRE(declaredPageId(docsIndexText) == "docs_index");
 	REQUIRE(declaredPageId(proposalsIndexText) == "proposals_index");
 	REQUIRE(declaredPageId(languagesIndexText) == "languages_index");
+	REQUIRE(declaredPageId(backendsIndexText) == "backends_index");
 	REQUIRE(docsChildren.count("proposals_index") == 1);
 	REQUIRE(docsChildren.count("languages_index") == 1);
+	REQUIRE(docsChildren.count("backends_index") == 1);
 
 	std::set<std::string> declared;
 	std::vector<std::string> missing;
@@ -230,9 +235,21 @@ TEST_CASE("the documentation tree is hierarchical", "[docs]")
 	std::size_t docsNotes = 0;
 	std::size_t proposalNotes = 0;
 	std::size_t languageNotes = 0;
+	std::size_t backendNotes = 0;
 	collect(docs, docsChildren, docsNotes);
 	collect(proposals, proposalChildren, proposalNotes);
 	collect(languages, languageChildren, languageNotes);
+	collect(backends, backendChildren, backendNotes);
+
+	// Pages that live beside their sources but are still part of the tree: the
+	// two backend pages and the ABI-baseline page.
+	for (const std::filesystem::path& extra : { root / "Asmjit" / "Asmjit.md",
+			root / "Sljit" / "Sljit.md", root / "Test" / "abi" / "ABI_BASELINES.md" }) {
+		const std::string id = declaredPageId(readTextFile(extra));
+		INFO("indexed page: " << extra.string());
+		REQUIRE_FALSE(id.empty());
+		declared.insert(id);
+	}
 
 	std::string missingText;
 	for (const std::string& line : missing)
@@ -240,14 +257,15 @@ TEST_CASE("the documentation tree is hierarchical", "[docs]")
 	INFO("notes missing from their folder index:\n" << missingText);
 	REQUIRE(missing.empty());
 	// A new note must be counted, so the check cannot pass by grading nothing.
-	REQUIRE(docsNotes >= 21);
-	REQUIRE(proposalNotes >= 35);
-	REQUIRE(languageNotes >= 4);
+	REQUIRE(docsNotes >= 26);
+	REQUIRE(proposalNotes >= 39);
+	REQUIRE(languageNotes >= 17);
+	REQUIRE(backendNotes >= 24);
 
 	// Every `\subpage` must resolve: a mistyped id silently drops the note from
 	// the tree instead of failing the Doxygen run.
 	for (const std::set<std::string>* children : { &docsChildren, &proposalChildren,
-			&languageChildren }) {
+			&languageChildren, &backendChildren }) {
 		for (const std::string& id : *children) {
 			INFO("\\subpage target: " << id);
 			REQUIRE(declared.count(id) == 1);

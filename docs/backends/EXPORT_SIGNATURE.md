@@ -1,6 +1,8 @@
-# What the staging frame changes about exported signatures
+# Exported signatures {#backend_export_signature}
 
-**Status:** living note, 2026-11-06 (`backendsMh33`, commit `aa5fb47`).
+*Under the frame ABI: what changes at the embedder seam*
+
+**Status:** living note, revision 2 (2026-11-10).
 **Companions:** [`STAGING_CALL_ABI.md`](STAGING_CALL_ABI.md) (the design and its
 step scoreboard), [`LIBJIT_ARGUMENT_DEFECT.md`](LIBJIT_ARGUMENT_DEFECT.md) (the
 measured loss), [`../ABI_PORTABILITY.md`](../ABI_PORTABILITY.md) (the ABI and the
@@ -67,7 +69,8 @@ parameter in the callee's prologue. That is cheap but not free, so:
   vector signatures) and takes the frame only on request;
 * **SLJIT** needs it to exceed four argument entries, so it is the form a wide
   module gets;
-* **AsmJIT** will follow its own measured ceiling (see §6).
+* **AsmJIT** uses the same rule: the register form until a signature needs the
+  frame, the frame for a wide module, and the opt-in when one ABI is requested.
 
 The request is explicit: `WASM::setFrameCallAbiOptIn(true)`
 (`WasmBase/WasmBackendAbi.hpp`). A backend must never *infer* the form from
@@ -780,15 +783,15 @@ cases (SLJIT's ceiling, LibJIT's aggregate spelling, AsmJIT's buffered result). 
 now **one typed call** from an embedder on two of three backends, with no special
 case visible anywhere above the cache.
 
-### Cache status
+### Cache status (historical, at that point)
 
 | | |
 |---|---|
 | SLJIT, six argument words -> 6 | **green** |
 | AsmJIT, `v128` result -> 16 bytes | **green** |
 | bound guard | **green** (refuses above 512 bytes) |
-| LibJIT through the cache | **not tested** -- its register form should need none of this, which is exactly why it deserves the test |
-| multi-result through the frame | not started |
+| LibJIT through the cache | **not tested then** -- its register form should need none of this, which is exactly why it deserved the test |
+| multi-result through the frame | not started then; implemented since |
 
 ## 24. All three backends answer the same typed call (the requirement, met)
 
@@ -1438,7 +1441,11 @@ advertised, revisit; the refusal is what makes deferring safe.
 multi-result. The opt-in policy is unchanged; frame tails are call+return, not
 constant-stack.
 
-### Priority order for what remains
+### Priority order at that point (historical)
+
+> The frame multi-result path, `unsupportedReason(name)` and the housekeeping
+> items were subsequently closed; the table records what was open when the
+> report was written.
 
 | Rank | Item | Why this order |
 |---|---|---|

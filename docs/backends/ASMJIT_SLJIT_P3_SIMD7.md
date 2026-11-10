@@ -1,4 +1,6 @@
-# Post-mortem: the v128 slice 7 (float lane access)
+# AsmJit/SLJIT v128 slice 7 {#backend_p3_simd7}
+
+*Post-mortem: float lane access*
 
 **Snapshot (2026-11-05, working tree on `backendsMh33`): opened on day one, as
 §14.7 requires. Both backends landed in the same session.**

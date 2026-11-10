@@ -1,4 +1,6 @@
-# `F3` — Bottom Heap Types: The GC Subtyping Gap and Its Fix {#lf2_deep_f3}
+# F3 — Bottom Heap Types {#lf2_deep_f3}
+
+*The GC subtyping gap and its fix*
 
 Status: deep-study + fix note (revision 1 — 2026-10-30). It investigates `F3` of
 [`LF2_INDEX.md`](LF2_INDEX.md) §5 — a **valid** WasmGC module refused by the

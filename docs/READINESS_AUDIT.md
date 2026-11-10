@@ -143,7 +143,7 @@ not a description of the LibJIT implementation.
 | Invoke the start function through the compiled ABI | §2 (`callStartFunction`) | the start-section fixtures (spec suite) |
 | Drive or be driven through `BackendSession` | §3 | `[runtime]` "create, load, instantiate and call"; `[runtime]` "the null backend exercises the seam without executing" |
 | Emit the eight ABI obligations (calling convention, GC layout, POD views, trap entry point, continuation slot ABI, aggregate layout, `v128`, rejection of unmodelled types) | [`LAYERING.md`](LAYERING.md) §4; work order §4–§5 | `[backendabi]` (4 cases: tuple layout, `v128` alignment, empty tuple, kind→class), `ABI.md`, `[plugin]` helper-symbol resolution |
-| Package: own directory, own `.pro`, own `WASMJIT_CAP_*`, honest `abi_version`/`build_flags`, nothing installed that is not a real backend | work order §7 | `Project.pro` (both scaffolds present, commented as planned); `[plugin]` ABI/build-kind/refusal cases; `Test/abi-check.sh` baselines `libLibJit` separately from `libWasmBase` |
+| Package: own directory, own `.pro`, own `WASMJIT_CAP_*`, honest `abi_version`/`build_flags`, nothing installed that is not a real backend | work order §7 | `Project.pro` (all three backends present at this audit; `Asmjit/` and `Sljit/` were then-documented scaffolds); `[plugin]` ABI/build-kind/refusal cases; `Test/abi-check.sh` baselines `libLibJit` separately from `libWasmBase` |
 
 ### 4.4 What the backend does **not** have to build
 
@@ -383,7 +383,7 @@ subsections that follow it are the evidence behind each state. Summary:
 | Suite | **11,579 assertions / 485 cases**, all green (§9); the audit's own run at `5c3d194` was 11,460 / 484 |
 | Documentation inventory | **21 notes** in `docs/` (this one included) and **34** under `docs/proposals/` |
 | Layering | §6 check of `LAYERING.md`: **0 hits** in `WasmBase/` + `WasmStub/`; `[layering]` enforces it |
-| Backends | `"libjit"` (executes), `"null"` (structural), `"example"` (loadable plugin); `Asmjit/`, `Sljit/` are documented placeholders with no sources |
+| Backends | `"libjit"` (executes), `"null"` (structural), `"example"` (loadable plugin); `Asmjit/`, `Sljit/` were documented placeholders with no sources **at audit time** (both execute today) |
 
 ### 6.3 Moving targets
 

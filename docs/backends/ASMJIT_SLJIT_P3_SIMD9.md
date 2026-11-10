@@ -1,4 +1,6 @@
-# Post-mortem: the v128 slice 9 (`i8x16.shuffle`, the five-argument helper)
+# AsmJit/SLJIT v128 slice 9 {#backend_p3_simd9}
+
+*Post-mortem: `i8x16.shuffle`, the five-argument helper*
 
 **Snapshot (2026-11-05, working tree on `backendsMh33`): opened on day one, as
 §14.7 requires. Both backends landed in the same session.**

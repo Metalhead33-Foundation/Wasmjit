@@ -1,4 +1,4 @@
-# Multibyte Array Access, More Array Constructors, and Frozen Values {#prop_gc_extensions}
+# GC Extensions {#prop_gc_extensions}
 
 *Implementation Notes, Spec Status, and Deliberate Deviations*
 

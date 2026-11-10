@@ -1,7 +1,12 @@
-# Study: the ABI refactor's blast radius, and portability before performance {#doc_abi_refactor_study}
+# ABI Refactor Study {#doc_abi_refactor_study}
 
-**Status:** study, 2026-11-06. No code has been changed for this. It bounds the work before
-it starts, because "everything" is not a plan.
+*Blast radius, and portability before performance*
+
+**Status:** study, 2026-11-06 (**historical** — the refactor has since shipped;
+see [`ABI_REFACTOR_POST_MORTEM.md`](ABI_REFACTOR_POST_MORTEM.md)). No code had been
+changed when this note was written; it bounded the work before it started,
+because "everything" is not a plan. The phase tables below are the plan as it
+stood, not a statement of what remains.
 
 This note answers two questions asked before authorising the `v128` / register-and-stack
 refactor:
@@ -13,8 +18,8 @@ refactor:
 
 It sits downstream of [`ABI_PORTABILITY.md`](ABI_PORTABILITY.md) (which owns the contract) and
 [`backends/V128_SIGNATURE_DECISION.md`](backends/V128_SIGNATURE_DECISION.md) (which owns the
-deferred decision). This note owns only the **work**: what moves, in what order, and what
-proves each step.
+decision, now implemented). This note owns only the **work**: what moved, in what
+order, and what proved each step.
 
 ## 1. Method, and why the count is not the estimate
 

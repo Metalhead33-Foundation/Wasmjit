@@ -1,4 +1,6 @@
-# The ABI baselines
+# ABI baselines {#doc_abi_baselines}
+
+*The link-visible export lists and `abi-check.sh`*
 
 `libWasmBase.exports` and `libLibJit.exports` are the **linker-visible ABI** of
 the two libraries at the last accepted state: one `symbol TYPE` line per strong

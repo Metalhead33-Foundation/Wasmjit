@@ -1,4 +1,6 @@
-# Type Identity, Equivalence, and Matching {#doc_type_identity}
+# Type Identity {#doc_type_identity}
+
+*Equivalence, canonicalisation, and matching*
 
 Status: design note / implementation reference (revision 2).
 Audience: anyone touching `WasmType`, `WasmTypeRegistry`, `ModuleInstance`,

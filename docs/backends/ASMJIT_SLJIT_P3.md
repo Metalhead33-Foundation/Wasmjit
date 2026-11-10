@@ -1,4 +1,6 @@
-# Post-mortem: the AsmJit/SLJIT P3 floating-point slice
+# AsmJit/SLJIT P3 floating-point slice {#backend_p3_float}
+
+*Post-mortem: scalar `f32`/`f64` across both backends*
 
 **Snapshot (2026-11-05, working tree on `backendsMh33`): opened on day one, as
 §14.7 requires. The log below is appended as each backend lands, so the

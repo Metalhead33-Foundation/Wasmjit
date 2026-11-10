@@ -1,4 +1,6 @@
-# Post-mortem: the AsmJit/SLJIT v128 slice 2 (integer lanes, comparisons, all_true)
+# AsmJit/SLJIT v128 slice 2 {#backend_p3_simd2}
+
+*Post-mortem: integer lanes, comparisons, `all_true`*
 
 **Snapshot (2026-11-05, working tree on `backendsMh33`): opened on day one, as
 §14.7 requires. Both backends landed in the same session.**

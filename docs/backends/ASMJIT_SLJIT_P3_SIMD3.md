@@ -1,4 +1,6 @@
-# Post-mortem: the AsmJit/SLJIT v128 slice 3 (shifts, saturation, min/max, abs, popcnt)
+# AsmJit/SLJIT v128 slice 3 {#backend_p3_simd3}
+
+*Post-mortem: shifts, saturation, `min`/`max`, `abs`, `popcnt`*
 
 **Snapshot (2026-11-05, working tree on `backendsMh33`): opened on day one, as
 §14.7 requires. Both backends landed in the same session.**

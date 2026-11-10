@@ -1,4 +1,6 @@
-# Post-mortem: the reference slice 1 (`ref.null`, `ref.is_null`, `ref.eq`)
+# AsmJit/SLJIT reference slice 1 {#backend_p3_refs1}
+
+*Post-mortem: `ref.null`, `ref.is_null`, `ref.eq`*
 
 **Snapshot (2026-11-05, working tree on `backendsMh33`). Both backends landed in
   the same session.**

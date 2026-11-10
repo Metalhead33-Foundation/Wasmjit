@@ -1,4 +1,6 @@
-# Post-mortem: the v128 slice 6 (float lanes: arithmetic, comparisons, unary, conversions)
+# AsmJit/SLJIT v128 slice 6 {#backend_p3_simd6}
+
+*Post-mortem: float lanes — arithmetic, comparisons, unary, conversions*
 
 **Snapshot (2026-11-05, working tree on `backendsMh33`): opened on day one, as
 §14.7 requires. Both backends landed in the same session.**

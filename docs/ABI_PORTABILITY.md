@@ -1,4 +1,6 @@
-# The C ABI Contract: C Linkage, Portability and the GC/Object ABI {#doc_abi_portability}
+# C ABI Contract {#doc_abi_portability}
+
+*C linkage, portability, and the GC/object ABI*
 
 **Status:** decision, adopted 2026-11-06. This document states a contract, not a
 snapshot; measured per-backend states carry a dated stamp.

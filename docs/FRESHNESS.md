@@ -429,7 +429,7 @@ test cases**; `[docs]` 1015/2,
 exported symbols. **These are a snapshot, not a promise** — they are here to show
 what the output looks like, and to make a reader notice when it does not.
 
-**Current (2026-11-03, FP16/M8/promoted-spec working tree on `4d52031`):** **17,587
+**Snapshot (2026-11-03, FP16/M8/promoted-spec working tree on `4d52031`):** **17,587
 assertions in 611 test cases**; **77** `.hpp`/`.h` files under the five backend
 directories; **3,093 dynamic / 1,992 strong** exported `libWasmBase` symbols;
 `[component-corpus]`/`[component-subtyping]` 520/1,
@@ -442,6 +442,14 @@ upstream primitive/structured-return sweep, including JSON nested-value rows), `
 `[compilation-policy]` 30/3, `[config]` 4,190/13, `[mem-provider]` 122/7,
 `[abi]` 24/6, `[surface]` 4/1, `[layering]` 4/1. Re-run the probe; these are
 a dated snapshot, not a promise.
+
+**Current (2026-11-10, working tree on `2cce7b9` — re-run the probe):** **22,593
+assertions in 824 test cases**, green on each of the three backends; **27 / 40 /
+18 / 25** `.md` files under `docs/`, `docs/proposals/`, `docs/languages/` and
+`docs/backends/` (26 / 39 / 17 / 24 notes); `[docs]` **1084/2** (the fourth index
+page and the backend pages added 59 assertions), `[headerdoc]` **6/3**. The per-tag and symbol counts
+above are an earlier snapshot; re-run the probe rather than trusting either
+block.
 
 Three things moved those numbers while this note was being written, which is the
 whole problem in miniature:

@@ -12,7 +12,7 @@ the current headers; §7.1 records the implementation deviations.
 Audience: anyone touching the compilation seam (`ModuleInstantiator` in
 `WasmBase/WasmModuleInstance.hpp`, `WASM::Runtime` in
 `WasmBase/WasmRuntime.{hpp,cpp}`), `LibJit/LibjitModuleCompiler.cpp` /
-`LibJit/LibJitContext.{hpp,cpp}`, the scaffold backends (`Sljit/`, `Asmjit/`),
+`LibJit/LibJitContext.{hpp,cpp}`, the alternative backends (`Sljit/`, `Asmjit/`),
 and anyone reading the `F1` finding in
 [`../languages/LF2_DEEP_F1_BACKEND.md`](../languages/LF2_DEEP_F1_BACKEND.md).
 
@@ -274,7 +274,7 @@ what is still owed.
 
 ### 4.5 The other backends, which the policy must not break
 
-`Sljit/` and `Asmjit/` are scaffold backends with their own tests (for example
+`Sljit/` and `Asmjit/` are executing backends with their own tests (for example
 `sljit: an unsupported opcode is refused, never miscompiled`). Neither exposes
 an optimisation level, and neither can interpret. Under the shipped vocabulary
 that means — and this is now what the capability query *answers*, not what a note
@@ -290,8 +290,8 @@ proposes:
 The table is the reason `CP-1` shipped a **capability query** and not just an
 enum: "refused by name at the boundary" is the engine's established answer to a
 request a backend cannot serve (`supportsConcurrency`, `supportsProfileConfig`),
-and reusing it keeps `CPD6` honest. The two scaffolds inherit the non-pure
-default rather than answering for themselves, so a scaffold that later grows an
+and reusing it keeps `CPD6` honest. The two backends inherit the non-pure
+default rather than answering for themselves, so a backend that later grows an
 optimiser changes one override and nothing in the core.
 
 ### 4.6 What the diagnostics provide
@@ -477,7 +477,7 @@ the implementation diverged, and why:
 |---|---|
 | `WASMJIT_LIBJIT_OPT=1` on `t01_emcc.wasm` / `t04_empp_reactor.wasm` (manual, [`../languages/LF2_DEEP_F1_BACKEND.md`](../languages/LF2_DEEP_F1_BACKEND.md) §7) | the escape hatch reproduces `F1` as a *reported* failure, not a crash |
 | the one-function reproducer `(func (param i32) local.get 0 if loop br 0 end end)` | it instantiates at level 0 where it used to abort |
-| `[asmjit]` `AsmJit rolls back code allocations when a later function is unsupported` | a scaffold backend refuses instead of miscompiling |
+| `[asmjit]` `AsmJit rolls back code allocations when a later function is unsupported` | a backend refuses instead of miscompiling |
 | `[sljit]` `an unsupported opcode is refused, never miscompiled` | the same for SLJIT |
 | `./Test/WasmJit` (default) | the whole suite compiles at level 0 |
 

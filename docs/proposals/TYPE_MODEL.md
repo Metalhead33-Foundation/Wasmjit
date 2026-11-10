@@ -1,4 +1,4 @@
-# Unified Type Store and Component Type Identity {#prop_type_model}
+# Unified Type Store {#prop_type_model}
 
 *Implementation Notes, Spec Status, and Deliberate Deviations*
 

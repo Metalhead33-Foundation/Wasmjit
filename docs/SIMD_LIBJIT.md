@@ -85,15 +85,16 @@ Three consequences shape everything below:
 ## 3. Scope: why the first SIMD path runs on LibJIT alone
 
 AsmJit and SLJIT are **deferred for SIMD, not cancelled**. Both are planned
-backends and both are expected to be *leveraged* for SIMD when their turn
-comes — that is a second, later performance lever, not an abandoned idea. Neither
-lowers a Wasm `v128` today, so the first SIMD path is LibJIT-only. What that
-defers, and why it is worth waiting for:
+backends and both were expected to be *leveraged* for SIMD when their turn came —
+that was a second, later performance lever, not an abandoned idea. At the time of
+this study neither lowered a Wasm `v128`, so the first SIMD path was LibJIT-only.
+Both now lower the shared `v128` surface through the same helpers. What that
+deferred, and why it was worth waiting for:
 
 | Deferred | Why it is not first | What it will add for SIMD |
 |---|---|---|
 | **AsmJit** | Its Wasm surface is an i32/i64 subset with no `v128` lowering (the SIMD code that exists is native `Vec`/ABI probe work, not a Wasm opcode path). It is an assembler/IR allocator with no value model, so it would still need the `v128` operand model, ABI and semantics layer built from scratch — the work §4 D1–D5 and §7 describe is backend-independent. | Complete x86 instruction coverage (MMX/SSE…SSE4/AVX/AVX-512) **plus a vector-aware register allocator** (`asmjit/x86/x86_ra_pass.cpp`): `v128` values living in `xmm/ymm/zmm` instead of memory, and the option of processing several `v128` values per instruction. |
-| **SLJIT** | Historical note: at the time of this study it executed straight-line i32/i64 bodies and mapped no Wasm `v128` to a register. It now has targeted SIMD slices, but is not production-ready; see [`BACKEND_PRODUCTION_READINESS.md`](BACKEND_PRODUCTION_READINESS.md). | First-class SIMD registers — `SLJIT_SIMD_REG_128/256/512`, `SLJIT_VR0…`, `sljit_emit_simd_*` — so the same helper semantics could be lowered inline instead of called. |
+| **SLJIT** | Historical note: at the time of this study it executed straight-line i32/i64 bodies and mapped no Wasm `v128` to a register. It now lowers the complete shared SIMD surface through the helpers and is production-ready within the envelope; see [`BACKEND_PRODUCTION_READINESS.md`](BACKEND_PRODUCTION_READINESS.md). | First-class SIMD registers — `SLJIT_SIMD_REG_128/256/512`, `SLJIT_VR0…`, `sljit_emit_simd_*` — so the same helper semantics could be lowered inline instead of called. |
 
 What deferring them does **not** remove: the semantics layer (§7), the `v128`
 ABI/alignment question (S4/S9) and the harness gaps (S7/S8). Those are

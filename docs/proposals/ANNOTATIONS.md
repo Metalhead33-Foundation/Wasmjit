@@ -1,4 +1,4 @@
-# Custom Annotation Syntax for the Wasm Text Format {#prop_annotations}
+# Custom Annotation Syntax {#prop_annotations}
 
 *Implementation Notes, Spec Status, and Deliberate Deviations*
 

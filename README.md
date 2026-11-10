@@ -26,8 +26,8 @@ generator is built.
 
 - **All three code generators are production-ready within one declared
   envelope** (x86-64 Linux / SysV AMD64, single-agent, one instance per module):
-  each completes the generic backend-selected suite with the same 22,451
-  assertions in 821 cases. `Sljit/` needs no GNU LibJIT dependency and `Asmjit/`
+  each completes the generic backend-selected suite with the same 22,593
+  assertions in 824 cases. `Sljit/` needs no GNU LibJIT dependency and `Asmjit/`
   needs the external AsmJit library; both document their refusals in their
   README and in
   [`docs/BACKEND_PRODUCTION_READINESS.md`](docs/BACKEND_PRODUCTION_READINESS.md).
@@ -110,10 +110,11 @@ form, these become ordinary additive work.
 
 
 `docs/` holds the long-form design notes and process guides; `docs/proposals/`
-holds one note per WebAssembly proposal. Every proposal note follows the same
-shape: what the spec demands → what it does *not* demand → what is implemented →
-gaps → where we deliberately deviate → plan → test survey → references. The
-tables below are the index.
+holds one note per WebAssembly proposal and `docs/backends/` the per-backend
+slices, ledgers and post-mortems. Every proposal note follows the same shape:
+what the spec demands → what it does *not* demand → what is implemented → gaps →
+where we deliberately deviate → plan → test survey → references. The tables
+below are the index.
 
 **Completeness is an estimate** of how much of the proposal's required surface
 behaves correctly today. It is read off each note's §4 (implemented), §5 (gaps)
@@ -138,10 +139,10 @@ per-milestone done markers, is the authoritative per-item status.
 | [`ABI.md`](docs/ABI.md) | The `VMContext*`-as-arg0 calling convention, the `Callable` layout, store-owned entities, the optional `HostBridge` host boundary, and the embedder guide | Reference (describes shipped behaviour) | `████████████████████` current |
 | [`TYPE_IDENTITY.md`](docs/TYPE_IDENTITY.md) | Module-local type indices → store-scoped `TypeId`: canonicalisation, interning, `rec` groups, the `match` relation | Design note + implementation reference | `████████████████████` 100% — M0–M8 shipped; M8 measured the 250:1 dedup ratio and 16-byte store records and decided against the parser-`Subtype` shrink |
 | [`TESTING.md`](docs/TESTING.md) | Building/running the Catch2 suite, the `wasm-tools` spec-suite conversion, the curated `wast_supported.txt` workflow, reading the output | Guide (process) | `████████████████████` current |
-| [`DOCUMENTATION.md`](docs/DOCUMENTATION.md) | Why every header comment is a Doxygen comment, the Qt-style forms (`//!`, `/*!`, `\file`, `\brief`, `\par`), the prose that breaks a Doxygen run, and how the Markdown notes are nested into a tree (`docs/index.md` → `docs/proposals/index.md`, `docs/languages/index.md`) rather than flattened | Policy + guide (process) | `████████████████████` current — every header outside `extern/` converted, 22 + 39 + 16 notes in the tree, `doxygen Doxyfile` warning-free |
+| [`DOCUMENTATION.md`](docs/DOCUMENTATION.md) | Why every header comment is a Doxygen comment, the Qt-style forms (`//!`, `/*!`, `\file`, `\brief`, `\par`), the prose that breaks a Doxygen run, and how the Markdown notes are nested into a tree (`docs/index.md` → `docs/proposals/index.md`, `docs/languages/index.md`, `docs/backends/index.md`) rather than flattened | Policy + guide (process) | `████████████████████` current — every header outside `extern/` converted, 26 + 39 + 17 + 24 notes in the tree, `doxygen Doxyfile` warning-free |
 | [`FRESHNESS.md`](docs/FRESHNESS.md) | Keeping the notes in step with the tree: the three kinds of state claim (contract, dated snapshot, history), the one home of each measured fact, the triggers that re-open a §4 when a milestone lands, and the probe that re-measures every number the notes cite | Policy + guide (process) | `████████████████████` current — revision 1 (2026-11-01) re-cut the two engine-seam §4 snapshots and gave every drifted total a date |
 | [`VALIDATION.md`](docs/VALIDATION.md) | The validating front end: what `Module::validate()` checks, the conservative taint policy, measured `assert_invalid` coverage, and the remaining rules | Design + status | `████████████████████` 3,275 / 3,277 curated (the two `tag` known failures); all-scripts 257 / 257 (the same known failure) |
-| [`WRITING_A_BACKEND.md`](docs/WRITING_A_BACKEND.md) | **The checklist and the walkthrough** for a new code generator: the two seams (`ModuleInstantiator`, `BackendSession`), the four hooks, the twelve ABI obligations (including reference ownership), memory/GC ownership, which helpers to call and which to bring, packaging/registration/capabilities/selection, the SLJIT scaffold as the worked example, the definition of done, and §14's joint AsmJit/SLJIT production plan, mandatory post-mortems and fourth-backend candidates | Contract + how-to | `████████████████████` current — revision 3 adds §14, the dual-backend plan and post-mortem |
+| [`WRITING_A_BACKEND.md`](docs/WRITING_A_BACKEND.md) | **The checklist and the walkthrough** for a new code generator: the two seams (`ModuleInstantiator`, `BackendSession`), the four hooks, the twelve ABI obligations (including reference ownership), memory/GC ownership, which helpers to call and which to bring, packaging/registration/capabilities/selection, the SLJIT worked example, the definition of done, and §14's record of how AsmJit and SLJIT were delivered, the mandatory post-mortems and fourth-backend candidates | Contract + how-to | `████████████████████` current — revision 5 records the two backends as delivered |
 | [`SAFETY.md`](docs/SAFETY.md) | The safety policies: artifact detection, input-derived allocation bounds, the allocation budget, traps vs `abort`, RAII for locks, and the pitfalls that produced them | Policy + pitfalls | `████████████████████` current |
 | [`THREADSAFETY.md`](docs/THREADSAFETY.md) | Guest-side vs host-side thread safety, the one-instance-per-module target, import/export overlap, C++ mutex/trap caveats, and the responsibilities of the engine, module author and embedder | Policy + reference | `████████████████████` current |
 | [`TRAP_CLEANUP.md`](docs/TRAP_CLEANUP.md) | Why the trap path is a pending status instead of `longjmp`: helpers report and return, the host boundary throws `WASM::Trap`, the POD-only rule is gone, and the optional `WASM::defer` stack covers external state — plus the option set and the per-backend feasibility study that chose it | Design note / implementation reference | `████████████████████` 100% — TRAP-1…TRAP-7 shipped: the trap path is a per-agent pending status; `Agent`/`ExecutionState` own the trap, exception, tail-call, defer, counter and stack-limit state (TRAP-6). True multi-agent execution remains deferred with THREADS TH-5 |
@@ -156,6 +157,7 @@ per-milestone done markers, is the authoritative per-item status.
 | [`LANGUAGE_FEASIBILITY.md`](docs/LANGUAGE_FEASIBILITY.md) | The definitions of the two language-support studies and the entry-gate readiness audit that gates them: the **pre-feasibility / scoping** study (screen the canonical `awesome-wasm-langs` list, triage on three axes, cluster by shared blocker, per-cluster charters and trigger conditions, a don't-study list) and the **full feasibility** study (exports, cross-module and native imports, multi-memory/shared-memory interaction, evidence and PoCs); the colour coding and kill signals, the evaluation criteria, the budgets, the `RG1`–`RG6` audit rows of the entry gate, and `LF-0…LF-3` | Process definition + study charter | `████████████████████` `LF-0a` run 2026-10-30 (see [`READINESS_AUDIT.md`](docs/READINESS_AUDIT.md)); `LF-1` and `LF-2` both run, reports in [`languages/`](docs/languages/index.md) |
 | [`languages/index.md`](docs/languages/index.md) | **The `LF-1` and `LF-2` result** — the pre-feasibility screen of the whole `awesome-wasm-langs` list (the triage: 102 rows over all 84 entries, each with its bottleneck, three axes, evidence tier, cost, cluster and trigger; the clustering map `L1`–`L12`; five charters; the don't-study list; the evidence log), **and** the commissioned `LF-2` studies (15 arms built and run across C/C++, Rust, TinyGo, Go, Zig, AssemblyScript, Lua, Kotlin/Wasm and Dart, colour verdicts per pinned version, and three engine findings `F1`–`F3`). **No support claim, no engine change** — support is `LF-3` | Study report set | `████████████████████` `LF-1` 2026-10-30; `LF-2` run 2026-10-30 (15 arms, 3 findings); 83 non-killed rows untested with a named condition |
 | [`READINESS_AUDIT.md`](docs/READINESS_AUDIT.md) | The combined readiness audit: `G3` of the API/ABI milestone (can a second code generator begin — `RA1`–`RA7`, the seam inventory, the SLJIT-vs-AsmJit comparison) and `LF-0a` of the language charter (the `RG1`–`RG6` readiness report, the pinned snapshot, the moving-targets and not-audited lists) — one sweep, because both measure the same engine-owned surfaces | Audit report | `████████████████████` run 2026-10-30 — `G3` holds, all six `RG` rows `Pinned`, nothing `Unpinned` |
+| [`backends/index.md`](docs/backends/index.md) | **The per-backend node** — the current production verdict and feature ledgers, the frame/v128 ABI design notes, the probes, and the dated slice post-mortems. It separates *current* ledgers from *historical* records so a post-mortem's numbers are never mistaken for today's | Index + status router | `████████████████████` current — all 24 notes indexed; the three backends run the same 22,593 assertions / 824 cases |
 
 ### Proposal notes (`docs/proposals/`)
 
@@ -255,14 +257,14 @@ library per backend plus the test executable.
 | `WasmBase/` | The core library (`libWasmBase`): binary decoding, the module/instance model, `Store`/`TypeRegistry`/`Value`, the opcode decoder, the shared SIMD helper ABI, and the backend-neutral component runtime (`WasmComponentRuntime`). **Backend-agnostic by rule** — see [`docs/LAYERING.md`](docs/LAYERING.md) |
 | `WasmStub/` | `libWasmStub`: a non-JIT opcode dispatcher that pretty-prints instead of executing (inspection/debug) |
 | `LibJit/` | `libLibJit`: the GNU LibJIT backend (context, type translation, module compiler, dispatch) — the current full-featured implementation path |
-| `Asmjit/` | `libAsmjit`: the AsmJit backend, registers as `asmjit`; **production-ready within the declared envelope** (the generic suite is green). Needs the external AsmJit library at build time. See [`Asmjit/README.md`](Asmjit/README.md) and [`docs/BACKEND_PRODUCTION_READINESS.md`](docs/BACKEND_PRODUCTION_READINESS.md) |
-| `Sljit/` | `libSljit`: the SLJIT backend, registers as `sljit`; **production-ready within the declared envelope** (the generic suite is green). Vendors `extern/sljit`, no external `-lsljit`. See [`Sljit/README.md`](Sljit/README.md) and [`docs/BACKEND_PRODUCTION_READINESS.md`](docs/BACKEND_PRODUCTION_READINESS.md) |
+| `Asmjit/` | `libAsmjit`: the AsmJit backend, registers as `asmjit`; **production-ready within the declared envelope** (the generic suite is green). Needs the external AsmJit library at build time. See [`Asmjit/Asmjit.md`](Asmjit/Asmjit.md) and [`docs/BACKEND_PRODUCTION_READINESS.md`](docs/BACKEND_PRODUCTION_READINESS.md) |
+| `Sljit/` | `libSljit`: the SLJIT backend, registers as `sljit`; **production-ready within the declared envelope** (the generic suite is green). Vendors `extern/sljit`, no external `-lsljit`. See [`Sljit/Sljit.md`](Sljit/Sljit.md) and [`docs/BACKEND_PRODUCTION_READINESS.md`](docs/BACKEND_PRODUCTION_READINESS.md) |
 | `Test/` | The Catch2 executable (`WasmJit`) and the spec-suite harness; see [`docs/TESTING.md`](docs/TESTING.md) |
-| `docs/` | Design notes and process guides; per-proposal notes live in `docs/proposals/` (see the [`docs`](docs/index.md) node) |
+| `docs/` | Design notes and process guides; per-proposal notes live in `docs/proposals/` and per-backend notes in `docs/backends/` (see the [`docs`](docs/index.md) node) |
 | `extern/` | Submodules: `MhLib` (`Elvavena` I/O + `Euphemy`) and the upstream `WasmTestsuite` |
 | `build/` | Shadow build output — **all build artefacts go here, never in the source tree** |
 
-## Status (snapshot 2026-11-09)
+## Status (snapshot 2026-11-10)
 
 The repository builds a set of shared libraries plus a console test executable
 through qmake:
@@ -301,9 +303,9 @@ through qmake:
 
 | Backend | State |
 |---|---|
-| GNU LibJIT (`LibJit/`) | **Production-ready within its declared envelope** — full backend, generic suite green (22,451 assertions / 821 cases); x86-64 Linux only. |
-| AsmJit (`Asmjit/`) | **Production-ready within the same envelope** — generic suite green (22,451 assertions / 821 cases); same three documented refusals as SLJIT. |
-| SLJIT (`Sljit/`) | **Production-ready within the same envelope** — generic suite green (22,451 assertions / 821 cases); documented refusals for a `v128` wide indirect call and `return_call_ref` above the register ceiling. |
+| GNU LibJIT (`LibJit/`) | **Production-ready within its declared envelope** — full backend, generic suite green (22,593 assertions / 824 cases); x86-64 Linux only. |
+| AsmJit (`Asmjit/`) | **Production-ready within the same envelope** — generic suite green (22,593 assertions / 824 cases); same three documented refusals as SLJIT. |
+| SLJIT (`Sljit/`) | **Production-ready within the same envelope** — generic suite green (22,593 assertions / 824 cases); documented refusals for a `v128` wide indirect call and `return_call_ref` above the register ceiling. |
 
 There is no interpreter backend. `WasmStub/` is a non-compiling pretty-printer;
 GNU LibJIT already provides a compile/interpret configuration and is the only
@@ -401,8 +403,10 @@ work in progress:
   [`docs/EMBEDDING_SURFACE.md`](docs/EMBEDDING_SURFACE.md) §7
 - the shared libraries install with headers and a `wasmjit.pc`; the only
   packaging work left is vcpkg/Conan-style recipes, if anyone wants them
-- backend abstraction is stable enough for a second backend (see the
-  [`backend walkthrough`](docs/WRITING_A_BACKEND.md)); Asmjit has an initial i32 execution slice, and SLJIT is not started
+- backend abstraction is stable enough for further code generators (see the
+  [`backend walkthrough`](docs/WRITING_A_BACKEND.md)); LibJIT, SLJIT and AsmJIT
+  all execute the generic suite, and the remaining work is portability outside
+  x86-64 Linux
 - the Catch2 executable is still a test harness, not the embedding interface;
   the supported embedding interface is the installed `wasmjit/wasmjit.hpp`
 - before reporting a missing feature as an engine gap, check
@@ -411,4 +415,7 @@ work in progress:
 
 ## Intent
 
-This repository is best understood today as the foundation of a future embeddable WASM JIT library, with GNU LibJIT as the current implementation path and additional backend support planned once the core architecture settles.
+This repository is best understood today as an embeddable WebAssembly JIT
+library with three production code generators — GNU LibJIT, SLJIT and AsmJIT —
+behind one backend-neutral core. The core architecture is settled; the open work
+is a portable target matrix, not another backend.

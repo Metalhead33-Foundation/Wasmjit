@@ -1,4 +1,4 @@
-# Compilation Hints and Relaxed Dead-Code Validation {#prop_parser_proposals}
+# Parser Proposals {#prop_parser_proposals}
 
 *Implementation Notes, Spec Status, and Deliberate Deviations*
 

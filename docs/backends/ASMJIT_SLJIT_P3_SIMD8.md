@@ -1,4 +1,6 @@
-# Post-mortem: the v128 slice 8 (transport: extending/splat/zero loads, lane loads, lane stores, swizzle)
+# AsmJit/SLJIT v128 slice 8 {#backend_p3_simd8}
+
+*Post-mortem: transport — extending/splat/zero loads, lane loads, lane stores, swizzle*
 
 **Snapshot (2026-11-05, working tree on `backendsMh33`): opened on day one, as
 §14.7 requires. Both backends landed in the same session.**

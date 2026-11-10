@@ -1,4 +1,11 @@
-# Remaining-work post-mortem (2026-11-07)
+# Backend remaining-work post-mortem {#backend_post_mortem}
+
+*Item-by-item record of the 2026-11-07 pass*
+
+**Status:** historical record (2026-11-07). The numbers below are that pass's
+snapshot; the current verdict is in
+[`BACKEND_PRODUCTION_READINESS.md`](../BACKEND_PRODUCTION_READINESS.md) and the
+current ledger in [`PRODUCTION_GAPS.md`](PRODUCTION_GAPS.md) §30.
 
 This note is the mandatory record of the "what remains" work, item by item, in
 the order of `HANDOFF.md` section 7. Each section records what was intended, what
@@ -17,10 +24,10 @@ actually happened, the root cause of every surprise, and what is still open.
 
 Suite at the last commit: **22445 assertions in 821 cases** under
 `--rng-seed 12345`, green; `[headerdoc]`, `[docs]`, `doxygen` and `abi-check` are clean.
-The curated capability ledger has no open opcode/ABI row. That is not a
-production verdict: the generic runs for SLJIT and AsmJIT fail and crash, so
-only LibJIT is production-ready. See
-[`PRODUCTION_READINESS.md`](../BACKEND_PRODUCTION_READINESS.md). The frame form on LibJIT
+The curated capability ledger has no open opcode/ABI row. That was not a
+production verdict: at that point the generic runs for SLJIT and AsmJIT failed
+and crashed, so only LibJIT was production-ready. See
+[`BACKEND_PRODUCTION_READINESS.md`](../BACKEND_PRODUCTION_READINESS.md). The frame form on LibJIT
 stays opt-in, and its frame tails are call+return rather than constant-stack.
 
 ## Item 1 — constant-stack tail calls

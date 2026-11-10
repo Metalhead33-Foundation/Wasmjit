@@ -1,17 +1,17 @@
-# `Asmjit/`
+# AsmJit backend {#backend_asmjit}
 
-*Experimental AsmJit backend*
+*The third code generator: AsmJit registration, emitted surface and refusals*
 
 This directory contains a native WebAssembly backend built on AsmJit. It
 implements the four `ModuleInstantiator` hooks and executes the shared lowering
 slice with AsmJit’s register allocator.
 
-**Status (2026-11-09):** **production-ready within the declared envelope** —
-`WASMJIT_BACKEND=asmjit ./Test/WasmJit --rng-seed 12345` reports **22,451
-assertions in 821 cases, green**, the same case set and assertion count as the
+**Status (2026-11-10):** **production-ready within the declared envelope** —
+`WASMJIT_BACKEND=asmjit ./Test/WasmJit --rng-seed 12345` reports **22,593
+assertions in 824 cases, green**, the same case set and assertion count as the
 reference backend. The envelope is x86-64 Linux / SysV AMD64 with the external
 AsmJit library available at build time, and the documented refusals are the same
-three as SLJIT’s (see `Sljit/README.md` "Known limitations"). See
+three as SLJIT’s (see `Sljit/Sljit.md` "Known limitations"). See
 [`docs/BACKEND_PRODUCTION_READINESS.md`](../docs/BACKEND_PRODUCTION_READINESS.md)
 for the measured evidence and
 [`docs/backends/PRODUCTION_GAPS.md`](../docs/backends/PRODUCTION_GAPS.md) §30 for
@@ -55,23 +55,30 @@ direct calls. Each generated function emits the required
   pattern in a Gp and materialises in an Xmm only at an arithmetic/compare/ABI
   boundary, so `select`, block transfer and locals are the same code as for
   integers;
-  `drop`, untyped and typed scalar `select`; i32/i64/f32/f64 globals; void and single-scalar-result `block`/`loop`/`if`/`else`, `br`/`br_if`/`br_table`,
+  `drop`, untyped and typed scalar `select`; i32/i64/f32/f64 globals; void and scalar/`v128`-result `block`/`loop`/`if`/`else`, `br`/`br_if`/`br_table`,
   branches to the implicit function label, and explicit/implicit returns; direct calls
   (native imports, forward calls and mutual recursion), typed `call_indirect`,
   with scalar signatures including native and cross-instance Wasm imports;
-  direct/indirect/reference tail-call opcodes (targeted constant-stack coverage is
-  in `[asmjit]`; the generic suite still segfaults on the tail-call test);
+  direct/indirect/reference tail-call opcodes with constant-stack coverage
+  (`[asmjit]` and the generic suite);
   and memory32/memory64 i32/i64/f32/f64 loads/stores, including signed/unsigned narrow extensions,
   `memory.size`/`memory.grow` at both index widths, checked memory32 `memory.copy` (with overlap-safe `memmove` semantics), `memory.fill`, `memory.init`, `data.drop`, `table.init`, `elem.drop`, `table.size`, and checked overlap-safe `table.copy`.
   Memory accesses use a checked helper that observes the shared-memory size
   accessor and reports out-of-bounds traps through the pending-trap protocol.
   Function nodes are declared in one CodeHolder before any bodies are emitted,
   so direct-call labels resolve across the entire module. Result-bearing blocks
-  now support scalar and `v128` results and block parameters; `br_table` still
+  support scalar and `v128` results and block parameters; `br_table` still
   requires identical target stack heights/signatures. The `unreachable`
   instruction reports a trap and supplies a limited single-result placeholder,
-  but general unreachable-stack polymorphism remains unsupported. Cross-instance scalar Wasm imports are covered by tests. Scalar globals are lowered; the first four `v128` slices (const/load/store, locals, `i32x4` lane access, the bitwise family, `any_true`, integer lane arithmetic, the comparison families, `all_true`, the shifts, saturating arithmetic, `min`/`max`, `avgr_u`, `abs`/`popcnt`, widening, `extmul`, `extadd_pairwise`, `dot`, both narrowing families, the `f32x4`/`f64x2` arithmetic/comparison/unary/conversion families, float lane access and the transport families (extending/splat/zero loads, lane loads and stores, `i8x16.swizzle`, `i8x16.shuffle`), through the shared helper ABI, and `ref.null`/`ref.is_null`/`ref.eq`/`ref.as_non_null`/`ref.func` (internal and imported) /`br_on_null`) are lowered, while `v128` signatures and block types (deferred by decision — see `docs/backends/V128_SIGNATURE_DECISION.md`), `ref.func`, `f16`, bulk memory on a memory64 and
-  most remaining instructions are still unsupported and fail explicitly.
+  but general unreachable-stack polymorphism remains unsupported. Cross-instance
+  Wasm imports are covered by tests. Globals are lowered. The complete shared
+  SIMD surface, the reference family, GC construction and access, the Custom
+  Descriptors family, exceptions and continuations all execute; `v128`
+  signatures are implemented (two `uint64_t` words, per
+  [`docs/backends/V128_SIGNATURE_DECISION.md`](../docs/backends/V128_SIGNATURE_DECISION.md)),
+  and the opt-in frame ABI is available on the same terms as the other two
+  backends. What remains are the named refusals, not a missing instruction
+  family; `f16` has no stable encoding.
 - `Test/TestBackend.cpp` exposes an `AsmJitSession` through
   `WASMJIT_BACKEND=asmjit`, including i32 invocation marshalling, aggregate
   layout calculation, and the existing lane-wise SIMD diagnostic interface.
@@ -112,11 +119,11 @@ direct calls. Each generated function emits the required
 - The dependency is confined to this subproject. `WasmBase/` remains
   backend-agnostic and does not include or link AsmJit.
 
-The module compiler is an initial execution slice, not full Wasm ABI or semantic
-coverage. It lowers the first Wasm SIMD slice (value transport, bitwise
-operations and `i32x4` lane access) by calling the core's shared `wasm_v128_*`
-helper ABI; the packed-storage probes are still native code-generation
-diagnostics, and packed GC field operations are not lowered.
+The module compiler covers the same lowering slice as the other two backends and
+runs the generic suite to completion. The remaining precision limits are the
+ones recorded in [`docs/backends/PRODUCTION_GAPS.md`](../docs/backends/PRODUCTION_GAPS.md)
+§30 — notably reference ownership through a struct field or array element is a
+borrow, not an owned count — and they are leaks, never wrong results.
 
 ## Build dependency
 
@@ -132,32 +139,25 @@ The sources target the installed AsmJit 1.21 API (`asmjit::Out<>` for output
 parameters such as `invoke`'s `InvokeNode*`, and `ASMJIT_ARCH_X86` for the
 target-architecture check).
 
-## Next implementation stages
+## Known limitations and next steps
 
-1. `ref.func`, then the remaining reference/exception work. `v128` in signatures
-   is deferred by decision and must be revisited before the saga closes; SLJIT
-   landed the same slices, so the shared
-   `[sljit][asmjit][parity][simd]` fixture grows with both. See
-   [`docs/backends/ASMJIT_SLJIT_P3_SIMD1.md`](../docs/backends/ASMJIT_SLJIT_P3_SIMD1.md)
-   and [`docs/backends/ASMJIT_SLJIT_P3_SIMD2.md`](../docs/backends/ASMJIT_SLJIT_P3_SIMD2.md).
-2. Extend structured control flow to general unreachable-stack polymorphism
-   (SLJIT already covers block parameters and multi-value block results, so the
-   two backends currently differ there).
-3. References/GC, exceptions, continuations and packed GC field operations
-   (P4/P5).
-   When references/GC arrive, implement the ownership rule in
-   [`docs/WRITING_A_BACKEND.md`](../docs/WRITING_A_BACKEND.md) §6
-   “Reference ownership”: a reference parameter is the caller's borrow, a
-   reference local owns one count, and retaining a parameter at entry is what
-   keeps the `local.set`/epilogue rules static (a per-instruction flag does not
-   survive a loop). LibJIT's `emitReferenceParameterRetains()` is the worked
-   example, and `F3d` in
-   [`docs/languages/LF2_DEEP_F3_GC.md`](../docs/languages/LF2_DEEP_F3_GC.md)
-   §7.1 is what skipping it costs.
-4. Meet every applicable item in
-   [`docs/WRITING_A_BACKEND.md`](../docs/WRITING_A_BACKEND.md) before calling
-   the backend complete.
+1. **Reference ownership is exact on the paths the suites exercise**, but a
+   reference read out of a struct field or array element, the unselected operand
+   of `select`, and `drop` of a GC reference are still *borrows*. Each is a leak,
+   never a wrong result; [`docs/backends/PRODUCTION_GAPS.md`](../docs/backends/PRODUCTION_GAPS.md)
+   §30 names the sites.
+2. **A frame-form tail trampoline.** `return_call_ref` above the register-form
+   ceiling is a semantic call + return here
+   ([`docs/backends/PRODUCTION_GAPS.md`](../docs/backends/PRODUCTION_GAPS.md) §2.1).
+3. **Portability.** Only x86-64 Linux / SysV AMD64 is exercised; the target
+   matrix in [`docs/ABI_PORTABILITY.md`](../docs/ABI_PORTABILITY.md) keeps the
+   other rows *provisional*.
+4. **A wide `v128` indirect call in a module with a native import** is refused,
+   because the staged-import adapter has no `ffi_type` for a vector.
+5. Meet every applicable item in
+   [`docs/WRITING_A_BACKEND.md`](../docs/WRITING_A_BACKEND.md) before calling the
+   backend complete.
 
-GNU LibJIT remains the only full-featured WebAssembly backend. AsmJit and SLJIT
-are the two partial execution backends and, since 2026-11-05, they execute the
-same P0–P2 slice.
+GNU LibJIT, SLJIT and AsmJIT execute the same generic suite and are
+production-ready within the same envelope. LibJIT remains the most mature in
+*code quality*, not the only full-featured backend.

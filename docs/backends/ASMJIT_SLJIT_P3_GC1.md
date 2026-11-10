@@ -1,4 +1,6 @@
-# After-action report: GC slice 1 — `struct.new`/`struct.get` on SLJIT
+# AsmJit/SLJIT GC slice 1 {#backend_p3_gc1}
+
+*After-action report: `struct.new` and `struct.get` on SLJIT*
 
 **Snapshot (2026-11-06, `backendsMh33`). Coarse-grained by request: one report for
 the layout contract plus the first backend slice.**

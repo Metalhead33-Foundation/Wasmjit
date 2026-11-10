@@ -1,10 +1,14 @@
-# Capability probes: what the tree actually does, per backend
+# Capability probes {#backend_capability_probes}
 
-**Status:** living note, 2026-11-07 (`backendsMh33`). Companion to
+*What the tree actually does, per backend*
+
+**Status:** living note, revision 2 (2026-11-10). Companion to
 [`PRODUCTION_GAPS.md`](PRODUCTION_GAPS.md), which holds the **matrix**; this note holds
 the **instruments** that fill it. Section 16 records the corrected probes; 17 the
 capability close-out; 18 the V-1/multi-value/shared-atomic follow-up; 19 the
-production-readiness run and the corrections to earlier outcome cells.
+production-readiness run and the corrections to earlier outcome cells. The last
+full re-run (2026-11-10) reported **22,593 assertions / 824 cases** on each of the
+three backends.
 
 A probe is a fixture plus one test that runs it on every backend and records one of
 exactly three outcomes. The rule that governs all of them:
@@ -595,12 +599,12 @@ shared-everything-threads` where the proposal needs it.
   refusals are explicit.
 * AsmJIT structured block **parameters** remain refused.
 
-## 19. Production-readiness run (2026-11-07)
+## 19. Production-readiness run (historical, 2026-11-07)
 
-**Snapshot (2026-11-07, working tree on `195e1ea`):** the targeted probe tags are
-green, but the generic backend-selected suite is not. The production verdict and
-promotion criteria are owned by
-[`PRODUCTION_READINESS.md`](../BACKEND_PRODUCTION_READINESS.md).
+**Historical snapshot (2026-11-07, working tree on `195e1ea`):** the targeted
+probe tags were green, but the generic backend-selected suite was not yet. **All
+three now complete it** — see the current status at the top of this note and
+[`BACKEND_PRODUCTION_READINESS.md`](../BACKEND_PRODUCTION_READINESS.md).
 
 | Run | Result |
 |---|---|

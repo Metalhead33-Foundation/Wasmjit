@@ -1,4 +1,6 @@
-# Post-mortem: the v128 slice 5 (fixing the quarantined AsmJit narrow defect)
+# AsmJit/SLJIT v128 slice 5 {#backend_p3_simd5}
+
+*Post-mortem: fixing the quarantined AsmJit `narrow` defect*
 
 **Snapshot (2026-11-05, working tree on `backendsMh33`): opened as the fix step
 that slice 4 handed over. Both backends are green and the quarantine is lifted.**

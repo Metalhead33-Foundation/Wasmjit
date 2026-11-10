@@ -1,4 +1,6 @@
-# Post-mortem: the AsmJit/SLJIT v128 slice 1 (transport, bitwise, i32x4 lanes)
+# AsmJit/SLJIT v128 slice 1 {#backend_p3_simd1}
+
+*Post-mortem: transport, bitwise, `i32x4` lanes*
 
 **Snapshot (2026-11-05, working tree on `backendsMh33`): opened on day one, as
 §14.7 requires. Both backends landed in the same session, so the log records

@@ -2,10 +2,10 @@
 
 *The checklist and the walkthrough*
 
-Status: how-to note, revision 4 (2026-11-05). It is both the checklist of what a
+Status: how-to note, revision 5 (2026-11-10). It is both the checklist of what a
 code generator must provide and the walkthrough of how to provide it; §14 is the
-production plan for the AsmJit and SLJIT backends and the post-mortem they must
-produce. It contains no engine behaviour of its own.
+implementation record for the AsmJit and SLJIT backends and the post-mortem they
+produced. It contains no engine behaviour of its own.
 
 This note is the **checklist** (what a code generator must provide) *and* the
 **walkthrough** (which class to subclass, which method to implement, in what
@@ -13,9 +13,8 @@ order). [`LAYERING.md`](LAYERING.md) §4 states what a backend **may not violate
 this note states what it **must provide** and how to provide it.
 
 **If you only read one section**, read §3 (the four hooks), §6 (the ABI you emit —
-including reference ownership) and §11 (what the SLJIT backend does and
-deliberately does not do). A backend author continuing one of the two partial
-implementations should also read §14 before planning a slice.
+including reference ownership) and §11 (the SLJIT worked example). §14 records
+how the two additional backends were delivered.
 
 ## 1. Document map
 
@@ -30,10 +29,10 @@ implementations should also read §14 before planning a slice.
 | §8 | How is the backend packaged, registered, given capabilities and selected? |
 | §9 | What may I allocate, and what belongs to the `Store`? |
 | §10 | Which helpers do I call, and which must I bring? |
-| §11 | What does the SLJIT backend contain, and what does it not do yet? |
+| §11 | What does the SLJIT backend contain, and what is the worked example? |
 | §12 | How do I test it, and what counts as done? |
 | §13 | References |
-| §14 | What is the production plan for AsmJit and SLJIT, and what must their post-mortem contain? |
+| §14 | How did AsmJit and SLJIT become production backends, and what did their post-mortem record? |
 
 ## 2. What is a backend, and what is not mine to write?
 
@@ -412,14 +411,15 @@ layering violation with extra steps.
 
 
 
-## 11. The SLJIT backend — a worked example, and its honest limits
+## 11. The SLJIT backend — the worked example
 
-`Sljit/` is the second executing backend. As of **snapshot 2026-11-07** it has
-targeted coverage well beyond the P0–P3 scalar slice (including exceptions,
-atomics, references and SIMD slices), but the **generic backend-selected suite
-does not pass** — 41 failures followed by an abort. It is provisional and not
-production-ready; see
-[`BACKEND_PRODUCTION_READINESS.md`](BACKEND_PRODUCTION_READINESS.md) §4.
+`Sljit/` is the second executing backend, and the worked example this checklist
+was distilled from. It is **production-ready within the declared envelope**
+(22,593 assertions / 824 cases, the same case set as LibJIT and AsmJit). The
+emitted surface, the refusals and the next steps are owned by
+[`Sljit/Sljit.md`](../Sljit/Sljit.md) and
+[`BACKEND_PRODUCTION_READINESS.md`](BACKEND_PRODUCTION_READINESS.md); this
+section keeps only the file map and the two design facts a new author needs.
 
 | File | Role |
 |---|---|
@@ -428,57 +428,22 @@ production-ready; see
 | [`SljitOpcodeDispatcher.hpp`](../Sljit/SljitOpcodeDispatcher.hpp) / `.cpp` | the body emitter: frame slots, the operand-stack model, the prologue/trap epilogue |
 | [`SljitBackendSession.hpp`](../Sljit/SljitBackendSession.hpp) / `.cpp` | `BackendSession`: `aggregateLayout`, `createLaneWiseOp`, `invoke` (libffi) |
 
-**What it executes today** (and therefore what the tests may assert):
+Two facts shape every line of the emitter:
 
-- up to **three** Wasm parameters, each `i32` or `i64`, plus `VMContext*`
-  (SLJIT's `sljit_emit_enter` and its call ABI accept at most four arguments);
-- zero or one result, `i32` or `i64`;
-- `local.get`, `local.set`, `local.tee`, `i32.const`, `i64.const`;
-- `i32`/`i64` `add`/`sub`/`mul`, checked `div`/`rem`, `and`/`or`/`xor`,
-  `shl`/`shr_s`/`shr_u`, `rotl`/`rotr`, `i32` `clz`/`ctz`/`popcnt`, every
-  comparison and `eqz`, the sign-extensions and `i32.wrap_i64`;
-- `block`/`loop`/`if`/`else`, `br`/`br_if`/`br_table`, including block
-  parameters and multi-value block results, plus `select`/`select_t`,
-  `unreachable`, `drop`, `nop`, `return` and the implicit `end`;
-- direct and indirect calls, forward/mutually recursive targets, native and
-  cross-instance imports, and `return_call*` lowered to call + return;
-- `f32`/`f64` constants, locals, globals, arithmetic, `min`/`max`,
-  `abs`/`neg`/`sqrt`, rounding, `copysign`, comparisons, checked and saturating
-  integer conversions, `demote`/`promote` and reinterpretation;
-- `i32`/`i64` globals, memory32 and memory64 loads/stores at every integer and
-  float width, `memory.size`/`grow` at both index widths, `memory.copy`/`fill`/`init`
-  (memory32), `data.drop`, `table.init`/`copy`/`size` and `elem.drop`;
-- the stack guard and a pending-trap epilogue, so a call reports a
-  `CallStackExhausted` trap as a pending status rather than crashing.
+- **One executable mapping per function.** `Sljit.pro` compiles the vendored
+  `extern/sljit` sources into `libSljit.so` (no external `-lsljit`) and defines
+  `SLJIT_WX_EXECUTABLE_ALLOCATOR=1`, so code goes through the read-write →
+  read-execute handoff instead of asking the host for RWX pages.
+- **Runtime-resolved direct calls.** A body is emitted in its own SLJIT compiler,
+  so a forward or recursive target does not exist yet;
+  `ModuleCompiler::resolveCallable` resolves it at run time. That costs one
+  indirect call per Wasm call and buys per-function code ownership and
+  `Runtime::unload`.
 
-**What it refuses, loudly and safely:** `v128`/SIMD, the `f16` proposal,
-references/GC, exceptions, continuations, atomics, bulk memory on a memory64,
-a call with more than three parameters and a function with more than one result.
-Each leaves
-that function's `Callable::fnPtr` **null**. The core then refuses the call at
-the boundary with the existing "no compiled body" error. Nothing is
-miscompiled, nothing is interpreted, and no half-emitted code is ever installed.
-
-**Known limitations, recorded rather than hidden:**
-
-| Limitation | Why | What replaces it |
-|---|---|---|
-| full generic conformance | `WASMJIT_BACKEND=sljit` has 41 failures and then aborts; missing `table.fill`/SIMD lane paths, wrong `float_memory64` bits, `br_table` signature restriction, tail-call failures | [`BACKEND_PRODUCTION_READINESS.md`](BACKEND_PRODUCTION_READINESS.md); LibJIT for production |
-| not production-ready | targeted slices are green but do not prove general conformance or process safety | promotion gate in the readiness note |
-| one executable mapping per function | the W^X allocator maps each block separately | acceptable for a second backend; the default pooled allocator trades W^X for density |
-| one indirect call per direct call | a body is emitted in its own SLJIT compiler, so `ModuleCompiler::resolveCallable` resolves the target at run time | an inlining slice once the post-mortem measures the cost |
-
-The list no longer contains "generated code is never freed": since the unloader
-shipped (2026-11-01), `Runtime::unload` — and runtime teardown — reaches
-`releaseInstance`, which is where this backend calls `sljit_free_code` for every
-entry point it handed out. AsmJit implements the same hook by releasing the
-module's one installed allocation. That is now a *requirement* a backend
-satisfies, not a limitation it documents (§9 item 6).
-
-`Sljit.pro` compiles the vendored `extern/sljit` sources into `libSljit.so` — no
-external `-lsljit` — and defines `SLJIT_WX_EXECUTABLE_ALLOCATOR=1` so the
-generated code goes through the read-write → read-execute handoff instead of
-asking the host for RWX pages.
+A refusal leaves that function's `Callable::fnPtr` **null**; the core reports
+"no compiled body" at the call boundary. Nothing is miscompiled, nothing is
+interpreted, and no half-emitted code is installed. `releaseInstance` frees every
+entry point on `Runtime::unload` and teardown (§9 item 6).
 
 ## 12. Testing, and what counts as done
 
@@ -504,7 +469,7 @@ Start with the smallest possible module and grow:
 
 `[sljit]` in [`Test/SljitBackendTests.cpp`](../Test/SljitBackendTests.cpp) is
 exactly those five steps. The broader definition of done is the table below, and
-a provisional backend is expected to fail most of it. That is compatible with
+a backend in progress is expected to fail most of it. That is compatible with
 this note only if the failure is **documented and refused**, not silently wrong.
 
 | The full definition of done | How |
@@ -547,15 +512,15 @@ shape — not a silent wrong answer (§11's limitations table is the worked exam
   `WasmBase/WasmOpcodeDispatcher.hpp`,
   `WasmBase/WasmNullInstantiator.cpp` (the smallest correct
   `declareFunctions`), `WasmBase/WasmBackendAbi.hpp` (the executable tuple
-  rule), `LibJit/LibjitModuleCompiler.cpp` (complete), `Sljit/` (provisional),
+  rule), `LibJit/LibjitModuleCompiler.cpp` (complete), `Sljit/` (complete),
   `Test/TestBackend.cpp` (the harness).
-## 14. Production plan: AsmJit and SLJIT, implemented together
+## 14. Implementation record: AsmJit and SLJIT, delivered together
 
-This section is a **plan**, not a claim about the tree. It extends the checklist
-above with the order in which the two existing partial backends become
-production backends, and with the post-mortem they must leave behind for the
-next author. LibJIT remains the reference implementation and the oracle for
-every semantic question unless a row below explicitly says otherwise.
+This section is the **record of a plan that has been executed**, not a claim about
+work still to do. It extends the checklist above with the order in which the two
+partial backends became production backends, and with the post-mortem they left
+behind for the next author. LibJIT remains the reference implementation and the
+oracle for every semantic question unless a row below explicitly says otherwise.
 
 ### 14.1 Dated starting point
 
@@ -571,14 +536,16 @@ every semantic question unless a row below explicitly says otherwise.
   operations. Both register under their own name, both implement
   `releaseInstance`, and both pass `[backendabi]`, `[asmjit]`/`[sljit]` and the
   shared `[sljit][module][parity]` fixtures over the same `.wat` modules.
-- **Update (2026-11-07):** the targeted slices expanded well beyond this starting
-  point, but the generic full-suite runs still fail and crash; the production
-  plan is therefore still open. Neither backend is production-ready yet. The
-  measured blockers are in [`BACKEND_PRODUCTION_READINESS.md`](BACKEND_PRODUCTION_READINESS.md).
+- **Closed (2026-11-09, re-measured 2026-11-10):** both execute the generic
+  backend-selected suite to completion — 22,593 assertions / 824 cases each,
+  green, no abort and no segfault. The remaining named refusals are in
+  [`BACKEND_PRODUCTION_READINESS.md`](BACKEND_PRODUCTION_READINESS.md) §4/§5.
 - The original starting point refused `v128`/SIMD, references/GC, exceptions,
-  continuations, atomics or `f16`, and bulk memory on a memory64. SLJIT additionally caps generated functions at three
-  parameters and one result (SLJIT's four-argument call ABI).
-- Neither is a replacement for LibJIT.
+  continuations, atomics or `f16`, and bulk memory on a memory64. All of that
+  now executes; SLJIT's four-argument call ceiling is handled by the opt-in
+  frame form.
+- Neither is a *code-quality* replacement for LibJIT, but both are production
+  backends.
 
 ### 14.2 Why they ship together
 
@@ -607,7 +574,7 @@ that is borrowed there, a tuple offset that disagrees by four bytes. Therefore:
 | **P3 — floating point and conversions** | f32/f64 arithmetic, comparisons, conversions, canonical NaN policy, `v128` load/store and native SIMD where the toolkit exposes vector registers. | float/SIMD fixtures and `[profile-nan]` pass; scalar helper fallback is allowed only where documented. | relaxed SIMD may stay refused |
 | **P4 — references, GC and exceptions** | The §6 reference-ownership model, `refClone`/`refDrop`/`refStore`, GC barriers, `ref.test`/`ref.cast`, exception tags and `try_table`. | The initialiser-shape test from §6, `[gc]` reclaim, `[exceptions]` and the ASan leak gate pass. | continuations remain P5 |
 | **P5 — calls, tail calls, continuations** | `call_ref`, cross-instance imports, `return_call*` where applicable, the continuation invoker and the stack-switching fixtures. | `[continuation]`, tail-call fixtures, TSan narrowed runs and the unload/re-instantiate test pass. | tail-call elimination may be call+return if documented |
-| **P6 — hardening and performance** | ASan/TSan, unload/release, plugin ABI, W^X, benchmark parity, refusal inventory, documentation. | The full §12 definition-of-done table is green for both; every remaining refusal is named in the backend README and a test. | none |
+| **P6 — hardening and performance** | ASan/TSan, unload/release, plugin ABI, W^X, benchmark parity, refusal inventory, documentation. | The full §12 definition-of-done table is green for both; every remaining refusal is named in the backend page and a test. | none |
 
 Each slice is a **review gate**, not a calendar promise. P0–P3 (scalar) are
 green for both backends against the shared fixtures (2026-11-05 snapshot), with
@@ -637,9 +604,8 @@ merge the "complete" label for either until its row is green on both.
 
 At the end of each slice, and again when the backend is declared complete, the
 author writes a post-mortem **for both backends, in one document**, under
-`docs/backends/` (or as a section of the backend README until that directory is
-created). The post-mortem is part of the definition of done; a backend without
-it is still provisional. It must contain:
+`docs/backends/`. The post-mortem is part of the definition of done; a backend
+without it is not complete. It must contain:
 
 1. **What the shared ABI forced.** Which rules from §6 and [`ABI.md`](ABI.md)
    were ambiguous, and how the implementation resolved them. A rule that had to
@@ -676,15 +642,15 @@ the paragraph rather than appending a correction footnote. The thirteen so far a
 [`docs/backends/ASMJIT_SLJIT_P3_SIMD8.md`](backends/ASMJIT_SLJIT_P3_SIMD8.md),
 [`docs/backends/ASMJIT_SLJIT_P3_SIMD9.md`](backends/ASMJIT_SLJIT_P3_SIMD9.md) and
 [`docs/backends/ASMJIT_SLJIT_P3_REFS1.md`](backends/ASMJIT_SLJIT_P3_REFS1.md).
-The `v128` signature seam is analysed in
-[`docs/backends/V128_SIGNATURE_DECISION.md`](backends/V128_SIGNATURE_DECISION.md)
-and is deferred; it must be revisited before the AsmJit/SLJIT saga can close.
+The `v128` signature seam is recorded in
+[`docs/backends/V128_SIGNATURE_DECISION.md`](backends/V128_SIGNATURE_DECISION.md);
+it was decided on 2026-11-06 and implemented on all three backends.
 
 ### 14.6 Candidate backends for a fourth implementation
 
-These are candidates for **after** AsmJit and SLJIT reach the same P6 gate. The
-ordering is a recommendation, not a commitment; each candidate must first pass
-the §2 layering test and the §12 baseline.
+These are candidates for **after** the three existing code generators, all of
+which now reach the P6 gate. The ordering is a recommendation, not a commitment;
+each candidate must first pass the §2 layering test and the §12 baseline.
 
 | Candidate | Why it fits | Main risk | Suggested role |
 |---|---|---|---|
@@ -712,7 +678,7 @@ Before writing a line of code, read §3, §6 and §12; then produce:
 - the post-mortem template above, opened on day one rather than at the end.
 
 The measure of success is not "it runs the benchmark". It is that another
-author can read this note, the new backend's README and its post-mortem, and
+author can read this note, the new backend's page and its post-mortem, and
 write the next backend without rediscovering the same ABI or ownership failure.
 
 ## 15. What the second-and-third-backend arc taught a fourth author

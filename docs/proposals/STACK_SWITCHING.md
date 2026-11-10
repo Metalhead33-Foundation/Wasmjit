@@ -277,11 +277,11 @@ or claimed.
 > execution mechanisms are viable on the three designated backends, what does
 > each cost, and what must the core own before any of them can start.
 >
-> `LibJit/` is the only backend that executes today. `Asmjit/` and `Sljit/`
-> contain no backend sources (`Asmjit/Asmjit.pro`, `Sljit/Sljit.pro`; `Sljit/`
-> ships the upstream `libSljit.so*`), so their rows are **API-level**
-> assessments, not measurements. §10.11 states the minimal backend slice a
-> measurement needs.
+> `LibJit/` was the only backend that executed when this study was written.
+> `Asmjit/` and `Sljit/` contained no backend sources then (`Asmjit/Asmjit.pro`,
+> `Sljit/Sljit.pro`; `Sljit/` shipped the upstream `libSljit.so*`), so their rows
+> were **API-level** assessments, not measurements. §10.11 states the minimal
+> backend slice a measurement needed. **Both are executing backends today.**
 
 ### 10.1 The two boxes
 
@@ -339,11 +339,12 @@ SLJIT public header (`sljit_src/sljitLir.h`, read for `sljit_emit_enter`,
 `asmjit/core/func.h` (`FuncFrame`/`FuncDetail` and the prolog/epilog inserter);
 and the tree's own surveys in [`../TRAP_CLEANUP.md`](../TRAP_CLEANUP.md) §10.1
 and [`../SIMD_BACKENDS.md`](../SIMD_BACKENDS.md) §3. `Asmjit/` and `Sljit/`
-contain no backend sources, so only LibJIT's row is executable today.
+contained no backend sources when this study was written, so only LibJIT's row
+was executable then; both are executing backends today.
 
-| Capability | GNU LibJIT (installed, primary) | SLJIT (scaffold) | AsmJit (scaffold) |
+| Capability | GNU LibJIT (installed, primary) | SLJIT (scaffold at the time) | AsmJit (scaffold at the time) |
 |---|---|---|---|
-| State in the tree | `LibJit/`, the only executing backend | `Sljit/Sljit.pro` + upstream `libSljit.so*`; no sources | `Asmjit/Asmjit.pro`; no sources |
+| State in the tree | `LibJit/`, the only executing backend **at study time** | `Sljit/Sljit.pro` + upstream `libSljit.so*`; no sources **then** | `Asmjit/Asmjit.pro`; no sources **then** |
 | Value/frame model | typed `jit_value_t`, function-local slots, explicit signatures | portable register machine; `sljit_emit_enter` reserves a **fixed local area**; the caller owns the layout | assembler/IR; `Compiler` adds register allocation; `FuncFrame` describes the frame |
 | Stack-pointer control | none exposed; generated functions are ordinary C-ABI functions | `SLJIT_SP` is addressable only as `SLJIT_MEM1(SLJIT_SP)`; `sljit_get_local_base` materialises the real address of a local slot | `FuncFrame` exposes call/local/final stack size, stack alignment, red-zone and spill-zone sizes, and a preserved frame pointer (`has_preserved_fp`) |
 | Calls / entry | `jit_insn_call_native`, `jit_insn_call_indirect` + `jit_type_create_signature` | `sljit_emit_call` / `sljit_emit_icall`, `SLJIT_CALL` / `SLJIT_CALL_REG_ARG` | `invoke` with `FuncSignature`/`FuncDetail`; prolog/epilog via PEI |
@@ -367,8 +368,9 @@ emission cost*, not a blocker on any of them.
 Effort scale: **S** — one file plus tests; **M** — one subsystem plus tests;
 **L** — a design spanning the core and a provider or one backend; **XL** — a new
 engine or execution model. `◑` means *feasible with the stated precondition* —
-for SLJIT/AsmJit the backend itself. The SLJIT and AsmJit
-backends are scaffolds, so their measurements are deferred, not their verdicts.
+for SLJIT/AsmJit the backend itself. At the time of this study the SLJIT and
+AsmJit backends were scaffolds, so their measurements were deferred, not their
+verdicts.
 
 | Mechanism | LibJIT | SLJIT | AsmJit | Blocking fact / caveat |
 |---|---|---|---|---|
@@ -679,8 +681,9 @@ semantic tests an early oracle.
 
 **Spike 3 — SLJIT/AsmJit.** First implement the minimal backend slice: one
 Wasm function with a parameter, a local, a native call and a stack-check call;
-then repeat Spike 1. The slice is **L–XL** on either scaffold, which is why the
-study does not pretend the SLJIT/AsmJit rows are measured. For SLJIT the slice
+then repeat Spike 1. The slice was **L–XL** on either backend at that point,
+which is why the study did not pretend the SLJIT/AsmJit rows were measured. For
+SLJIT the slice
 must use `sljit_emit_enter` with a local area, a native call and
 `sljit_get_local_base` for the root array; for AsmJit, `FuncDetail`/`FuncFrame`
 with a PEI prologue and explicit frame slots.
@@ -810,7 +813,7 @@ effort rather than the semantics.
   `WasmBase/WasmModuleInstance.cpp`, `WasmBase/WasmVMContext.hpp`,
   `WasmBase/WasmContinuation.hpp`, `WasmBase/WasmContinuation.cpp`,
   `LibJit/LibjitModuleCompiler.cpp`, `LibJit/LibjitOpcodeDispatcher.cpp`;
-  scaffolds `Asmjit/Asmjit.pro`, `Sljit/Sljit.pro`.
+  backend build files `Asmjit/Asmjit.pro`, `Sljit/Sljit.pro`.
 
 ### 10.15 Decision record
 

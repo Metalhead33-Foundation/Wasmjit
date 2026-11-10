@@ -69,8 +69,8 @@ WASMJIT_BACKEND=libjit ./WasmJit
 ```
 
 All three backends are built and selectable by name; an unknown name is reported
-as a harness error rather than silently using a different backend. Only LibJIT's
-default suite is green; see the backend promotion gate below.
+as a harness error rather than silently using a different backend. All three
+complete the default suite green; see the backend promotion gate below.
 
 ### Diagnostics output
 
@@ -557,11 +557,11 @@ Targeted `[libjit]`/`[sljit]`/`[asmjit]` tags are not sufficient to call a
 backend production-ready. The promotion gate is the **generic suite selected
 for that backend**:
 
-| Backend | Command | Status at the 2026-11-09 snapshot |
+| Backend | Command | Status at the 2026-11-10 snapshot |
 |---|---|---|
-| LibJIT | `WASMJIT_BACKEND=libjit ./WasmJit` | **green** — 22,451 assertions / 821 cases, exit 0 |
-| SLJIT | `WASMJIT_BACKEND=sljit ./WasmJit` | **green** — 22,451 assertions / 821 cases, exit 0 |
-| AsmJIT | `WASMJIT_BACKEND=asmjit ./WasmJit` | **green** — 22,451 assertions / 821 cases, exit 0 |
+| LibJIT | `WASMJIT_BACKEND=libjit ./WasmJit` | **green** — 22,593 assertions / 824 cases, exit 0 |
+| SLJIT | `WASMJIT_BACKEND=sljit ./WasmJit` | **green** — 22,593 assertions / 824 cases, exit 0 |
+| AsmJIT | `WASMJIT_BACKEND=asmjit ./WasmJit` | **green** — 22,593 assertions / 824 cases, exit 0 |
 
 All three runs execute the same case set and report the same assertion count, so
 "green" now means the same thing on every backend. The promotion criteria and the

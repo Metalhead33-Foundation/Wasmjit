@@ -1,11 +1,14 @@
-# Production-readiness gaps, backend by backend
+# Backend production gaps {#backend_production_gaps}
 
-**Status:** living note, 2026-11-09 (`backendsMh33`). Companions:
+*The per-backend capability and readiness ledgers*
+
+**Status:** living note, revision 2 (2026-11-10). Companions:
 [`EXPORT_SIGNATURE.md`](EXPORT_SIGNATURE.md) (the ABI itself),
 [`STAGING_CALL_ABI.md`](STAGING_CALL_ABI.md) (its history). **Section 27 is the
 curated capability ledger, section 29 the production-readiness gap ledger as it
 stood on 2026-11-07, and section 30 the batch that closed it** — the generic
-suite is now green on all three backends; 23-26 are history.
+suite is green on all three backends (22,593 assertions / 824 cases each,
+measured 2026-11-10); 23-26 are history.
 
 This note exists because a survey of refusal strings (EXPORT_SIGNATURE §44) described
 "limits" that are **not limits**: the frame form exists precisely to remove them.
@@ -1062,10 +1065,12 @@ uses a rejected artifact and confirms the runtime remains usable.
 **Suite:** 22442 assertions in 821 cases, `--rng-seed 12345`, green; `[headerdoc]`,
 `[docs]`, `doxygen` and `abi-check` clean.
 
-## 29. Production-readiness gaps -- SLJIT and AsmJIT (2026-11-07)
+## 29. Production-readiness gaps -- SLJIT and AsmJIT (historical, 2026-11-07)
 
-**Snapshot (2026-11-08, working tree after the GC-array access batch):** the detailed note is
-[`PRODUCTION_READINESS.md`](../BACKEND_PRODUCTION_READINESS.md). The headline is:
+**Historical snapshot (2026-11-08, working tree after the GC-array access
+batch) — superseded by §30.** At that point the detailed note was
+[`BACKEND_PRODUCTION_READINESS.md`](../BACKEND_PRODUCTION_READINESS.md) and the
+headline was:
 
 | Backend | Verdict | Measured evidence |
 |---|---|---|
@@ -1103,7 +1108,7 @@ The blockers are not just “unimplemented opcodes”:
 
 Promotion requires the full backend-selected suite to finish green (no abort,
 no segfault), the strict negative sweep to pass, the sanitizer run to be recorded,
-and the status documents to agree. Until then LibJIT is the only production
+and the status documents to agree. At that point LibJIT was the only production
 backend.
 
 **Reproduce:** `WASMJIT_BACKEND=sljit ./Test/WasmJit --rng-seed 12345` and
@@ -1112,15 +1117,19 @@ backend.
 
 ## 30. The promotion gate is met on all three backends (2026-11-09)
 
-**Snapshot (2026-11-09, working tree after this batch):** the generic
-backend-selected suite is **green on all three code generators**, with the same
-assertion count on each:
+**Snapshot (re-measured 2026-11-10 on `2cce7b9`):** the generic backend-selected
+suite is **green on all three code generators**, with the same assertion count on
+each:
 
 | Backend | `WASMJIT_BACKEND=<name> ./WasmJit --rng-seed 12345` | Exit |
 |---|---|---|
-| LibJIT | **22,451 assertions in 821 cases, green** | 0 |
-| SLJIT | **22,451 assertions in 821 cases, green** | 0 |
-| AsmJIT | **22,451 assertions in 821 cases, green** | 0 |
+| LibJIT | **22,593 assertions in 824 cases, green** | 0 |
+| SLJIT | **22,593 assertions in 824 cases, green** | 0 |
+| AsmJIT | **22,593 assertions in 824 cases, green** | 0 |
+
+Run the three commands **one at a time**: the binding-schema cases share scratch
+paths, so concurrent runs report spurious failures that do not reproduce in
+sequence.
 
 Equal assertion counts are the point: every case now runs to completion on every
 backend, so the three runs are a conformance result rather than three different
@@ -1270,11 +1279,7 @@ Still open after this pass, and named so the next session does not have to
 rediscover them:
 
 1. **Per-signature call form** (the cost half above).
-2. **The frame form's cross-module path** (refused, not implemented).
-3. **`table.set`, `table.atomic.set` and the atomic `table.*.rmw` forms** do not
-   release their reference operands. No fixture covers a reference-typed table
-   yet, and that is the reason it is a list entry rather than a fix.
-4. **A `return_call_ref` above the register-form ceiling** is still a semantic
+2. **A `return_call_ref` above the register-form ceiling** is still a semantic
    call plus return on SLJIT (§2.1): the frame trampoline is missing.
-5. **Portability**: every sentence in this tree is scoped to x86-64 Linux / SysV
+3. **Portability**: every sentence in this tree is scoped to x86-64 Linux / SysV
    AMD64 because that is the only runner that exists.

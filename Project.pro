@@ -14,9 +14,8 @@ LibJit.depends   = WasmBase
 # Both alternative code generators live next to LibJit. `Sljit/` is an
 # executing backend: it links the shared core the same way LibJit does,
 # registers as `sljit`, and refuses what it does not lower
-# (docs/WRITING_A_BACKEND.md §11). `Asmjit/` is experimental: it owns its code
-# generator, executes the same P0-P3 scalar slice, and registers as `asmjit`
-# (Asmjit/README.md).
+# (docs/WRITING_A_BACKEND.md §11). `Asmjit/` owns its code generator, executes
+# the same generic suite, and registers as `asmjit` (Asmjit/Asmjit.md).
 Asmjit.depends   = WasmBase
 Sljit.depends    = WasmBase
 # The first-party binding schema/emitter tool (docs/EMBEDDING_SURFACE.md §12.8).

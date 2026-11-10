@@ -1,10 +1,13 @@
-# Plan: GC construction for the SLJIT and AsmJit backends
+# GC construction plan {#backend_gc_plan}
 
-**Snapshot (2026-11-05). Status: planned, not started.** This note is the
-counterpart of [`V128_SIGNATURE_DECISION.md`](V128_SIGNATURE_DECISION.md): it
-records what exists, what each backend must add, and the test that proves it — so
-the implementation is mechanical rather than exploratory. It is **not** a
-post-mortem, because no slice landed.
+*SLJIT and AsmJit: what existed, what each had to add, and the proof*
+
+Status: plan + implementation record (2026-11-10). The GC-construction slice has
+landed on both backends and runs in the generic suite on all three code
+generators. This note is kept as the plan that made the implementation
+mechanical; the measured outcome is in
+[`ASMJIT_SLJIT_P3_GC1.md`](ASMJIT_SLJIT_P3_GC1.md) and
+[`PRODUCTION_GAPS.md`](PRODUCTION_GAPS.md) §27.
 
 ## 1. What the core already provides
 
@@ -274,14 +277,16 @@ test that proves it.
 - **Tests:** none new — the `[gc]` trap-kind case already pins four kinds; add
   `NullExnReference`/`NullStructureReference` coverage as the wrappers retire.
 
-### Also still open (outside GC)
+### Also open at the time (outside GC)
 
-- The **`v128` signature seam** — deferred by decision, see
-  [`V128_SIGNATURE_DECISION.md`](V128_SIGNATURE_DECISION.md) §11; it blocks saga
-  closure and is the last item of the closure table in
-  [`ASMJIT_SLJIT_P3_REFS1.md`](ASMJIT_SLJIT_P3_REFS1.md) §2.
-- **Exceptions**, **`call_ref`/continuations**, **atomics**, **`f16`**, **relaxed
-  SIMD**, **bulk memory on memory64** — proposal-level, each refused by name.
+> The GC slice has since landed on both backends, and the other items below were
+> closed by later slices. This list is kept as the plan's starting state, not as
+> a current gap list.
+
+- The **`v128` signature seam** — then deferred; decided 2026-11-06 and
+  implemented (see [`V128_SIGNATURE_DECISION.md`](V128_SIGNATURE_DECISION.md) §28).
+- **Exceptions**, **`call_ref`/continuations**, **atomics** and **bulk memory on
+  memory64** — all execute today; **`f16`** still has no stable encoding.
 
 ### Suggested order
 
