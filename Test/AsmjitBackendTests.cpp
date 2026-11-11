@@ -163,10 +163,10 @@ TEST_CASE("AsmJIT returns a v128 through the caller's buffer", "[asmjit][v128][a
 TEST_CASE("the vector-result helper works on every buffered backend",
 "[v128][abi][buffered]")
 {
-	// Both AsmJIT and SLJIT return a v128 through the caller's buffer, so the same
-// fixture and the same helper must produce the same four lanes on each. LibJIT
-// returns the aggregate itself, so it is deliberately not part of this list
-// (docs/backends/HISTORY.md).
+	// A v128 result is frame-form on AsmJIT and SLJIT (`GR-8`), so the frame is
+// the caller buffer here; the register-form `callCallableVector` helper is
+// pinned by the LibJIT aggregate spelling instead. Either way the same four
+// lanes must come back.
 for (const char* backend : {"asmjit", "sljit"}) {
 auto runtime = WASM::Runtime::create(backend);
 REQUIRE(runtime != nullptr);
@@ -178,8 +178,14 @@ WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
 const std::optional<WASM::Callable> callable = instance.exportedFunction("vec_result");
 REQUIRE(callable.has_value());
 REQUIRE(callable->fnPtr != nullptr);
-const std::array<std::uint32_t, 4> lanes =
-WASM::callCallableVector(*callable);
+std::array<std::uint32_t, 4> lanes{};
+if (WASM::callableUsesFrameForm(*callable)) {
+alignas(16) std::uint8_t frame[16] = {};
+WASM::callCallableFrame(*callable, frame);
+std::memcpy(lanes.data(), frame, sizeof(lanes));
+} else {
+lanes = WASM::callCallableVector(*callable);
+}
 CHECK(lanes[0] == 7u);
 CHECK(lanes[1] == 8u);
 CHECK(lanes[2] == 9u);

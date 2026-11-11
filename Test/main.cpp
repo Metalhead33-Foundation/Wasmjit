@@ -6926,6 +6926,50 @@ TEST_CASE("call form: the opt-in makes a two-module graph consistent")
 	REQUIRE(cache.call<int32_t>("call_narrow", int32_t(14)) == 42);
 }
 
+// `GAP-16`: a register-form helper handed a frame-form export used to pass a
+// stale register as the frame pointer, so the callee's prologue wrote its
+// results through it -- a wild write that moved with the run. The helpers now
+// refuse the mismatch by name, in both directions.
+TEST_CASE("call form: a mismatched call helper refuses instead of writing through a stale frame")
+{
+	struct OptInScope {
+		OptInScope() { WASM::setFrameCallAbiOptIn(true); }
+		~OptInScope() { WASM::setFrameCallAbiOptIn(false); }
+	} optIn;
+
+	for (const char* backend : {"libjit", "asmjit", "sljit"}) {
+		auto runtime = WASM::Runtime::create(backend);
+		REQUIRE(runtime != nullptr);
+		auto module = runtime->loadFile(
+				std::filesystem::path(WASM_TEST_DIR) / "staging_call.wasm");
+		WASM::RegistryImportResolver imports;
+		WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+		REQUIRE(instance.frameCallAbi());
+		const auto callable = instance.exportedFunction("via_call");
+		REQUIRE(callable.has_value());
+		REQUIRE(WASM::callableUsesFrameForm(*callable));
+		// The register helper has no frame to pass; it must refuse, not call with
+		// an uninitialised second argument.
+		REQUIRE_THROWS_WITH(WASM::callCallable<void>(*callable),
+				Catch::Matchers::ContainsSubstring("staging-frame form"));
+	}
+
+	// The reverse mistake: the frame helper on a register-form export.
+	WASM::setFrameCallAbiOptIn(false);
+	auto runtime = WASM::Runtime::create("libjit");
+	REQUIRE(runtime != nullptr);
+	auto module = runtime->loadFile(
+			std::filesystem::path(WASM_TEST_DIR) / "loop_test.wasm");
+	WASM::RegistryImportResolver imports;
+	WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+	const auto callable = instance.exportedFunction("sumUpto");
+	REQUIRE(callable.has_value());
+	REQUIRE_FALSE(WASM::callableUsesFrameForm(*callable));
+	alignas(16) std::uint8_t frame[16] = {};
+	REQUIRE_THROWS_WITH(WASM::callCallableFrame(*callable, frame),
+			Catch::Matchers::ContainsSubstring("register form"));
+}
+
 TEST_CASE("GC reference ownership: the operand stack owns one count per reference")
 {
 	// RC-5, measured rather than reasoned (docs/WRITING_A_BACKEND.md §6,
@@ -8101,14 +8145,14 @@ TEST_CASE("simd: v128 globals run through the JIT")
 
 	// Lane 2 of `i8x16 0 1 … 15` is bytes 8..11, i.e. 0x0B0A0908 — the assertion
 	// that pins the byte order through the constant-expression path.
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("imm_lane2")) == 0x0B0A0908);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("imm_byte15")) == 15);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("mut_lane0")) == 1);
+	REQUIRE(callTestI32(i32Export("imm_lane2")) == 0x0B0A0908);
+	REQUIRE(callTestI32(i32Export("imm_byte15")) == 15);
+	REQUIRE(callTestI32(i32Export("mut_lane0")) == 1);
 	// 0x0F0E0D0C: bytes 12..15 of the constant, little-endian (hazard Y11).
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("copy_from_imm")) == 0x0F0E0D0C);
+	REQUIRE(callTestI32(i32Export("copy_from_imm")) == 0x0F0E0D0C);
 
 	// Order matters from here on: the global carries state between calls.
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("set_and_read")) == 10);
+	REQUIRE(callTestI32(i32Export("set_and_read")) == 10);
 	V128 ones{1, 1, 1, 1};
 	// A `v128` parameter makes AsmJIT compile the whole module frame-form.
 	// The generic `callCallable` helper speaks the register ABI, so marshal
@@ -8860,38 +8904,38 @@ TEST_CASE("simd: memory loads and stores run through the JIT")
 	};
 
 	// The data segment at 0 is the 16 bytes 01 02 .. 10.
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("load_lane0")) == 0x04030201);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("load_lane3")) == 0x100F0E0D);
+	REQUIRE(callTestI32(i32Export("load_lane0")) == 0x04030201);
+	REQUIRE(callTestI32(i32Export("load_lane3")) == 0x100F0E0D);
 	// Unaligned (memarg align=1, offset=1): bytes 02 03 04 05.
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("load_unaligned_lane0")) == 0x05040302);
+	REQUIRE(callTestI32(i32Export("load_unaligned_lane0")) == 0x05040302);
 
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("store_roundtrip")) == 0x11223344);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("store_roundtrip2")) == 0x55667788);
+	REQUIRE(callTestI32(i32Export("store_roundtrip")) == 0x11223344);
+	REQUIRE(callTestI32(i32Export("store_roundtrip2")) == 0x55667788);
 
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("load8x8_s_lane0")) == 1);
+	REQUIRE(callTestI32(i32Export("load8x8_s_lane0")) == 1);
 	// load8x8_s reads 8 bytes (indices 0..7), so lane 7 is byte 0x08 — the
 	// 16th byte (0x10) is *not* in this load.
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("load8x8_s_lane7")) == 8);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("load8x8_u_lane7")) == 8);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("load16x4_s_lane1")) == 0x0403);
+	REQUIRE(callTestI32(i32Export("load8x8_s_lane7")) == 8);
+	REQUIRE(callTestI32(i32Export("load8x8_u_lane7")) == 8);
+	REQUIRE(callTestI32(i32Export("load16x4_s_lane1")) == 0x0403);
 
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("load8_splat_lane3")) == 0x02);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("load32_splat_lane2")) == 0x04030201);
-	REQUIRE(WASM::callCallable<int64_t>(i32Export("load64_splat_lane1")) == 0x0807060504030201ll);
+	REQUIRE(callTestI32(i32Export("load8_splat_lane3")) == 0x02);
+	REQUIRE(callTestI32(i32Export("load32_splat_lane2")) == 0x04030201);
+	REQUIRE(callTestI64(i32Export("load64_splat_lane1")) == 0x0807060504030201ll);
 
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("load32_zero_lane0")) == 0x04030201);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("load32_zero_lane1")) == 0);
-	REQUIRE(WASM::callCallable<int64_t>(i32Export("load64_zero_lane1")) == 0);
+	REQUIRE(callTestI32(i32Export("load32_zero_lane0")) == 0x04030201);
+	REQUIRE(callTestI32(i32Export("load32_zero_lane1")) == 0);
+	REQUIRE(callTestI64(i32Export("load64_zero_lane1")) == 0);
 
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("load32_lane1")) == 0x08070605);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("load16_lane0")) == static_cast<int32_t>(0xFFFF0201u));
+	REQUIRE(callTestI32(i32Export("load32_lane1")) == 0x08070605);
+	REQUIRE(callTestI32(i32Export("load16_lane0")) == static_cast<int32_t>(0xFFFF0201u));
 	// ... and that value is the interesting one: `load16_lane 0` replaces the
 	// *i16* lane, i.e. only the low two bytes of i32 lane 0, so the base
 	// vector's high bytes (0xFFFF) have to survive alongside the loaded 0x0201.
 
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("store32_lane2")) == static_cast<int32_t>(0xAABBCCDDu));
+	REQUIRE(callTestI32(i32Export("store32_lane2")) == static_cast<int32_t>(0xAABBCCDDu));
 	// Only one byte reached memory: the neighbouring byte is still zero.
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("store8_lane0_neighbour")) == 0);
+	REQUIRE(callTestI32(i32Export("store8_lane0_neighbour")) == 0);
 }
 
 TEST_CASE("simd: bitwise ops run through the JIT")
@@ -8913,24 +8957,24 @@ TEST_CASE("simd: bitwise ops run through the JIT")
 	};
 
 	// ~0x0F0F0F0F and ~0x33333333 exceed INT32_MAX, so compare the bit pattern.
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("not_lane0")) == static_cast<int32_t>(0xF0F0F0F0u));
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("not_lane3")) == static_cast<int32_t>(0xCCCCCCCCu));
+	REQUIRE(callTestI32(i32Export("not_lane0")) == static_cast<int32_t>(0xF0F0F0F0u));
+	REQUIRE(callTestI32(i32Export("not_lane3")) == static_cast<int32_t>(0xCCCCCCCCu));
 
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("and_lane0")) == 0x000F000F);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("and_lane3")) == 0x00330033);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("or_lane0")) == 0x0FFF0FFF);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("xor_lane0")) == 0x0FF00FF0);
+	REQUIRE(callTestI32(i32Export("and_lane0")) == 0x000F000F);
+	REQUIRE(callTestI32(i32Export("and_lane3")) == 0x00330033);
+	REQUIRE(callTestI32(i32Export("or_lane0")) == 0x0FFF0FFF);
+	REQUIRE(callTestI32(i32Export("xor_lane0")) == 0x0FF00FF0);
 
 	// a AND NOT b, not the other way round.
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("andnot_lane0")) == 0x0F000F00);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("andnot_lane3")) == 0x33003300);
+	REQUIRE(callTestI32(i32Export("andnot_lane0")) == 0x0F000F00);
+	REQUIRE(callTestI32(i32Export("andnot_lane3")) == 0x33003300);
 
 	// c selects: (a & c) | (b & ~c).
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("bitselect_lane0")) == 0x0F0F00FF);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("bitselect_lane3")) == 0x333300FF);
+	REQUIRE(callTestI32(i32Export("bitselect_lane0")) == 0x0F0F00FF);
+	REQUIRE(callTestI32(i32Export("bitselect_lane3")) == 0x333300FF);
 
 	// A two-op chain, so an intermediate really crosses a slot boundary.
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("chain_lane0")) == static_cast<int32_t>(0xFFF0FFF0u));
+	REQUIRE(callTestI32(i32Export("chain_lane0")) == static_cast<int32_t>(0xFFF0FFF0u));
 }
 
 TEST_CASE("simd: integer arithmetic and comparisons run through the JIT")

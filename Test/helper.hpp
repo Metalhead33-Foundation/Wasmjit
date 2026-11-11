@@ -51,6 +51,19 @@ struct LoadedModule {
  */
 LoadedModule loadAndInstantiateTestModule(const char* moduleName, WASM::RegistryImportResolver& imports, TestBackend::Session& backend);
 
+//! Invokes a no-argument export in its own call form (`GAP-1`, `GR-8`).
+//! A register-form callable goes through `WASM::callCallable`; a frame-form one
+//! is marshalled into a canonical frame. Calling a frame-form export through
+//! the register helper leaves the callee's frame pointer uninitialised, which is
+//! the wild write `GAP-16` found, so tests must not assume one form.
+//! \param callable Exported callable to invoke.
+//! \return The `i32` result.
+std::int32_t callTestI32(const WASM::Callable& callable);
+//! Invokes a no-argument export in its own call form. See callTestI32().
+//! \param callable Exported callable to invoke.
+//! \return The `i64` result.
+std::int64_t callTestI64(const WASM::Callable& callable);
+
 /**
  * \brief Registers a native host function under a module/name import pair.
  * \tparam HostFunc Native function-pointer type accepted by the resolver ABI.
