@@ -643,6 +643,21 @@ void Validator::popExpect(ValueTypeCode code)
 		fail("type mismatch: unexpected operand type");
 }
 
+bool Validator::sharedReference(const ValueType& type) const
+{
+	// A concrete type's sharing is a property of its definition (SET-1): the
+	// binary form carries the `shared` prefix only for abstract heap types, so
+	// `(ref $t)` of a shared `$t` is a shared reference without the flag being
+	// set on the value type itself.
+	if (type.isShared)
+		return true;
+	if ((type.opcode == ValueTypeCode::Ref || type.opcode == ValueTypeCode::RefNull)
+			&& type.heapType >= 0
+			&& static_cast<uint32_t>(type.heapType) < module.typeCount())
+		return module.typeView(static_cast<uint32_t>(type.heapType)).isShared();
+	return false;
+}
+
 bool Validator::assignable(const ValueType& actual, const ValueType& expected) const
 {
 	// `Void` is the validator's bottom marker for a value produced after
@@ -651,7 +666,8 @@ bool Validator::assignable(const ValueType& actual, const ValueType& expected) c
 	if (actual.opcode == ValueTypeCode::Void)
 		return true;
 	if (actual.opcode == expected.opcode && actual.heapType == expected.heapType
-			&& actual.isExact == expected.isExact)
+			&& actual.isExact == expected.isExact
+			&& sharedReference(actual) == sharedReference(expected))
 		return true;
 	// An exact source may flow to the same non-exact target, but a non-exact
 	// source may not satisfy an exact target (Custom Descriptors).
@@ -741,7 +757,7 @@ bool Validator::refSubtype(const ValueType& actual, const ValueType& expected) c
 		case ValueTypeCode::RefNull: {
 			out.isRef = true;
 			out.nullable = (type.opcode == ValueTypeCode::RefNull);
-			out.shared = type.isShared;
+			out.shared = sharedReference(type);
 			if (type.heapType >= 0) {
 				const auto idx = static_cast<uint32_t>(type.heapType);
 				out.idx = idx;
@@ -1903,6 +1919,9 @@ void Validator::dispatchRefNull(const HeapType& heapType)
 			? static_cast<int32_t>(heapType.typeIndex)
 			: static_cast<int32_t>(heapType.abstract);
 	type.isExact = heapType.isExact;
+	// `(ref.null (shared ht))` names a shared reference; dropping the prefix here
+	// would let an unshared null satisfy a shared slot (SET-1).
+	type.isShared = heapType.isShared;
 	pushValue(type);
 }
 
@@ -2190,6 +2209,8 @@ ValueType Validator::refType(bool nullable, const HeapType& heapType) const
 			? static_cast<int32_t>(heapType.typeIndex)
 			: static_cast<int32_t>(heapType.abstract);
 	type.isExact = heapType.isExact;
+	// Keep the shared prefix of `(ref (shared ht))` (SET-1).
+	type.isShared = heapType.isShared;
 	return type;
 }
 

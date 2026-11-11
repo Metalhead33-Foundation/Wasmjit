@@ -136,9 +136,14 @@ private:
 	//! the expression is not constant).
 	std::optional<ValueType> validateConstExpr(const std::vector<uint8_t>& bytes,
 			const std::string& label, std::size_t globalLimit);
-	//! True when `type` is `eqref` or a subtype of it.
+	//! True when `type` is `eqref` or a subtype of it, in its own (shared or
+	//! unshared) hierarchy: `ref.eq` accepts `(ref null (shared eq))` operands
+	//! as well as `(ref null eq)` ones (SET-1).
 	bool isEqRef(const ValueType& type) const {
-		return refSubtype(type, ValueType{ValueTypeCode::EqRef, -1});
+		const ValueType expected{ValueTypeCode::RefNull,
+			static_cast<int32_t>(ValueTypeCode::EqRef), false,
+			sharedReference(type)};
+		return refSubtype(type, expected);
 	}
 	//! A typed reference's concrete heap type must name a declared type.
 	void requireWellFormedType(const ValueType& type, const std::string& where) const;
@@ -242,6 +247,10 @@ private:
 	void checkTailCallResults(const FuncType& callee);
 	//! True when `actual` is assignable to `expected` (subtyping + defaults).
 	bool assignable(const ValueType& actual, const ValueType& expected) const;
+	//! True when `type` names a shared reference: either the value type carries
+	//! the `shared` prefix (abstract heap types) or its concrete type definition
+	//! is shared (SET-1).
+	bool sharedReference(const ValueType& type) const;
 	//! True for `cont`, `nocont` and a concrete `cont $ft` type index. The
 	//! stack-switching proposal forbids casting to any continuation type.
 	bool isContinuationHeap(const HeapType& type) const;

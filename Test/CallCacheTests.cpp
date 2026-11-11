@@ -1797,7 +1797,9 @@ CHECK(false);
 }
 }
 
-// Shared table atomics: the parser/type-model boundary check.
+// Shared table atomics: set/get and the read-modify-write forms, with the old
+// value every RMW returns asserted inside the module (docs/API_ABI_STABILITY.md
+// GAP-10, GR-9).
 TEST_CASE("shared atomics: table slot round-trip", "[staging][atomics][table]")
 {
 for (const char* backend : {"libjit", "asmjit", "sljit"}) {
@@ -1824,8 +1826,7 @@ continue;
 const auto run = instance->exportedFunction("run");
 REQUIRE(run.has_value());
 try {
-const std::int32_t value = WASM::callCallable<std::int32_t>(*run, 0,
-static_cast<void*>(nullptr));
+const std::int32_t value = WASM::callCallable<std::int32_t>(*run);
 std::fprintf(stderr, "run()=%d\n", (int)value);
 CHECK(value == 1);
 } catch (const std::exception& error) {
