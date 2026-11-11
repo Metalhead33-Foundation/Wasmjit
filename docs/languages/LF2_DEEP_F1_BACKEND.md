@@ -24,7 +24,7 @@ diagnostics" is the next milestone.
 
 | Section | Question it answers |
 |---|---|
-| §2 | What was observed, and why it is worse than "yellow" |
+| §2 | What was observed, and why it is worse than "🟨 yellow" |
 | §3 | The diagnosis: result codes, IR, reduction, characterization, libjit probe |
 | §4 | The remedies, their cost, and what was chosen |
 | §5 | The contract question: compiler diagnostics vs execution diagnostics |
@@ -44,9 +44,9 @@ jit_function_compile failed 0 for func 2
 ```
 
 `-O1` and `-O0` of the same source load and run. The study recorded `T01`/`T04`
-as **yellow** with `-O1` as the workaround, and `F1` as a class-B backend gap.
+as 🟨 **yellow** with `-O1` as the workaround, and `F1` as a class-B backend gap.
 
-**Why it is worse than a yellow verdict.** The failing module is a
+**Why it is worse than a 🟨 yellow verdict.** The failing module is a
 one-function `main` plus Emscripten's exit path. Nothing about it is privileged:
 an untrusted `.wasm` can contain the same shape, and the engine's answer is
 `std::abort()`. [`SAFETY.md`](../SAFETY.md) §2.4 says a loader / instantiator /
@@ -279,7 +279,7 @@ Two details worth recording:
 | `WASMJIT_LIBJIT_OPT=1` on the same modules | a `runtime_error` with the diagnostic, **no** `SIGABRT`/`SIGSEGV` |
 | The full suite | the LibJIT fixtures, GC tests, EH tests and spec scripts stay green |
 
-The `-O2` Emscripten arms stop being "yellow with a workaround": at this engine
+The `-O2` Emscripten arms stop being "🟨 yellow with a workaround": at this engine
 commit they pass the bar with no embedder-side flag.
 
 ## 8. What this note does not claim

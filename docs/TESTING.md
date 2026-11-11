@@ -545,7 +545,7 @@ for a merge to `master` — so that "green" means the same thing to every review
 
 | Run | Command | Evidence it produces | Last measured |
 | --- | --- | --- | --- |
-| Strict validator sweep | `WASM_SPEC_VALIDATE=1 ./WasmJit` (curated) and `WASM_SPEC_VALIDATE=1 ./WasmJit '[spec]'` (all) | every curated binary negative module is rejected; the all-scripts sweep exercises the hidden decoder/validator/linker cases too | **LibJIT 2026-11-11: 22,558 assertions / 828 cases, exit 0.** **SLJIT 2026-11-03: curated 3,275 / 3,277** (`tag` is the two-entry known failure), **all-scripts 257 / 257**. **AsmJIT 2026-11-11: recorded.** Release is green (22,597 / 830); in **Debug**, `[spec]` fails `ref_test` (`GAP-15`) and the curated run ends in `SIGSEGV` (`GAP-16`) |
+| Strict validator sweep | `WASM_SPEC_VALIDATE=1 ./WasmJit` (curated) and `WASM_SPEC_VALIDATE=1 ./WasmJit '[spec]'` (all) | every curated binary negative module is rejected; the all-scripts sweep exercises the hidden decoder/validator/linker cases too | **LibJIT 2026-11-11: 22,558 assertions / 828 cases, exit 0.** **SLJIT 2026-11-03: curated 3,275 / 3,277** (`tag` is the two-entry known failure), **all-scripts 257 / 257**. **AsmJIT 2026-11-11: recorded.** Release is green (22,602 / 831); in **Debug**, `[spec]` fails `ref_test` (`GAP-15`) and the curated run ends in `SIGSEGV` (`GAP-16`) |
 | AddressSanitizer build + suite | configure a second shadow build (below), then run the default suite with `ASAN_OPTIONS=detect_leaks=1:abort_on_error=1` and `LSAN_OPTIONS=suppressions=Test/asan.supp` | no use-after-free, overflow or engine leak; only LibJIT's uninstrumented process-wide caches are suppressed | **LibJIT 2026-11-09: 613 cases / 22,088 assertions, no memory error, LeakSanitizer clean** (exit 0). **SLJIT 2026-11-11: no memory error, but 10,568 bytes leaked in 17 continuation allocations (`GAP-18`)**; the run also found and closed the `wasm_cont_suspend_ex` kind-count overflow (`GAP-14`). `[compilation-policy]` is excluded because LibJIT's CFG optimizer under ASan exceeds the runtime budget |
 | Execution-budget run | `./WasmJit '*per-agent step budget*'` (part of `[config]`) | a finite fuel budget stops a runaway loop with `TrapKind::OutOfFuel` and leaves `fuelRemaining()` at zero | **64-unit budget**, `[config]` green, 2026-11-03 |
 | ThreadSanitizer concurrency run | configure a third shadow build (below), then `./WasmJit '[multiagent]'` | no data race on the multi-agent path (waiter table, entry counter, GC queue/counters, shared-global atomics) | `[multiagent]` **51 assertions / 6 cases** and `[concurrency]` **80 / 13**, **no TSan report**, 2026-11-03 |
@@ -1079,6 +1079,16 @@ sanctioned variants:
 - the §1 map exists and is the contract: every `## N.` heading (N ≥ 2) appears
   in the map, and every `§N` the map names has a heading;
 - a References section exists.
+
+The third case enforces the **verdict colour code**
+([`LANGUAGE_FEASIBILITY.md`](LANGUAGE_FEASIBILITY.md) §5.1): GitHub-flavoured
+Markdown sanitises `<span style="color:…">`, so a verdict is written as a swatch
+*and* its name (`🟩 Green`, `🟨 Yellow`, `🟥 Red`, `⬛ Black`). The check reads
+`LANGUAGE_FEASIBILITY.md`, every `docs/languages/*.md` and `SCOPE.md` §7.1 — which
+quotes the same verdicts — and fails when a capitalised verdict word is not
+preceded by its swatch (inline code is skipped, so prose *about* the convention
+can quote the words). It also asserts the definition keeps all four pairs, so the
+convention cannot be deleted in a refactor.
 
 The second case in the same file enforces the **note tree**
 ([`DOCUMENTATION.md`](DOCUMENTATION.md) §9): every note in `docs/` and

@@ -9,11 +9,11 @@ the five-line repro is §4.
 
 | Row | Arm | Verdict |
 |---|---|---|
-| `T53` | Kotlin/Wasm 2.4.21, `wasmWasi` (`wasm-wasi` target) | **Green at this engine commit** — exports, a guest `try`/`catch` and `_start` all run |
-| `T53` | Kotlin/Wasm 2.4.21, `wasmJs` | **Red** — a JS-host contract by construction (696 imports) |
-| `T20` | Dart 3.13.7, `dart compile wasm --standalone` | **Yellow** — type section accepted; now blocked by its legacy EH (`F2`) |
-| `T86` | MoonBit 0.1.20261028, `moon build --target wasm-gc --release` | **Green at this commit** — loads, instantiates, `_start` prints through `spectest.print_char` |
-| `T86` | MoonBit | **Green at this commit** — 359-byte `wasm-gc` module, one import, `_start` runs |
+| `T53` | Kotlin/Wasm 2.4.21, `wasmWasi` (`wasm-wasi` target) | **🟩 Green at this engine commit** — exports, a guest `try`/`catch` and `_start` all run |
+| `T53` | Kotlin/Wasm 2.4.21, `wasmJs` | 🟥 **Red** — a JS-host contract by construction (696 imports) |
+| `T20` | Dart 3.13.7, `dart compile wasm --standalone` | 🟨 **Yellow** — type section accepted; now blocked by its legacy EH (`F2`) |
+| `T86` | MoonBit 0.1.20261028, `moon build --target wasm-gc --release` | **🟩 Green at this commit** — loads, instantiates, `_start` prints through `spectest.print_char` |
+| `T86` | MoonBit | **🟩 Green at this commit** — 359-byte `wasm-gc` module, one import, `_start` runs |
 | `T70` | Guile Hoot | **Not run** — no toolchain in the study environment |
 
 This is the cluster `LF-1` called the gold standard
@@ -120,7 +120,7 @@ the JS bridge:
 A module whose string constants arrive as imported `externref` globals cannot be
 instantiated without a JS engine to create them. This is the `K2` shape `LF-1`
 suspected for the *JavaScript-hosted* rows, and for the `wasmJs` target it is now
-measured. **Red for direct embedding**; the supported Kotlin target for this
+measured. **🟥 Red for direct embedding**; the supported Kotlin target for this
 engine is `wasmWasi`.
 
 ## 3. Dart, and MoonBit beside it
@@ -159,7 +159,7 @@ conclusions that stand are:
    implemented by `dart2wasm`'s JS runtime, and the string APIs take `externref`.
    An embedder can register native imports (the engine's reference ABI supports
    GC refs), but implementing Dart's string interop natively is a *substantial*
-   shim, not a small one. **Yellow**, and it stays yellow after `F3`.
+   shim, not a small one. 🟨 **Yellow**, and it stays 🟨 yellow after `F3`.
 
 ### 3.2 MoonBit — the arm that runs
 
@@ -185,7 +185,7 @@ works with a two-line embedder stub. There is no second memory, no thread and no
 start-up allocation before the first call. Cross-module linking (item 3) was not
 exercised; the mechanism is the engine's and is proven on `T02`.
 
-**Verdict: Green at this engine commit**, with the same caveat as `T01`/`T04`:
+**Verdict: 🟩 Green at this engine commit**, with the same caveat as `T01`/`T04`:
 it depends on the `F3` fixes, so it would have failed before them. The module is
 `t86_moonbit.wasm` (SHA-256 `0dd87c96…`), and the arm was built with the
 toolchain from `~/.moon/bin` that the owner installed for this study.
@@ -257,7 +257,7 @@ guess; reporting the *observations* as they are is the charter's rule.
 | WASI imports | 3 | 0 | 0 |
 | Heap owner | Kotlin's GC (guest-side, engine GC data structures) | same | Dart's GC |
 | Declared memory max | none (0-page initial, grows) | none | none |
-| Verdict | **Yellow** | **Red** | **Yellow** |
+| Verdict | 🟨 **Yellow** | 🟥 **Red** | 🟨 **Yellow** |
 
 ## 6. Memory layout and start-up
 
@@ -285,7 +285,7 @@ in the backend's lowering. Both are fixed, and `T53` moved from "refused at
 load" to a module that loads, validates, runs its exports and runs its own
 start-up.
 
-**What would make `wasmJs` green is not an engine change**: it would need a JS
+**What would make `wasmJs` 🟩 green is not an engine change**: it would need a JS
 engine on the host side, which is an explicit non-goal
 ([`proposals/JS_INTEGRATION.md`](../proposals/JS_INTEGRATION.md) JS3). Kotlin's
 `wasmWasi` target exists precisely to avoid that, and it is the arm this engine

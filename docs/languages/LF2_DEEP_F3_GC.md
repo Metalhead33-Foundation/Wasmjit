@@ -17,7 +17,7 @@ from a different field relation. One function, one rule, two toolchains blocked:
 that is engine-level, class **A**, and the fix is required before any WasmGC
 language can be studied at all.
 
-Audience: whoever owns the type registry, anyone relying on a green `L4` row,
+Audience: whoever owns the type registry, anyone relying on a 🟩 green `L4` row,
 and `LF-3` when it decides what to re-run.
 
 ## 1. Document map
@@ -248,9 +248,9 @@ does not rediscover it: [`WRITING_A_BACKEND.md`](../WRITING_A_BACKEND.md) §6
   `canonical type reference is not declared by this module` in the rewrite — a
   third, separate issue.
 - **`T53` (Kotlin/Wasm `wasmWasi`)** **runs**: exports, a guest `try`/`catch`,
-  and its own `_start` all behave (§7.1). Verdict: green at this engine commit.
+  and its own `_start` all behave (§7.1). Verdict: 🟩 green at this engine commit.
 - The minimal repro and the new unit tests are green, and the pre-existing
-  negative tests stayed red-as-expected.
+  negative tests stayed red-as-expected (rejected, not passed).
 
 ## 8. What remains open
 

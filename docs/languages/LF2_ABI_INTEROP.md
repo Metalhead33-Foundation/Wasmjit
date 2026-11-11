@@ -321,7 +321,7 @@ rule:
    `exportDescriptors()`, `ComponentFunction` and `ComponentValueType` are the
    schema; no language name or header parser belongs in `WasmBase/`.
 5. **Use the measured cluster reports as the evidence anchor.** Do not turn a
-   green scalar arm into a claim about GC, exceptions or resources. `LF2_S1`,
+   🟩 green scalar arm into a claim about GC, exceptions or resources. `LF2_S1`,
    `LF2_S2`, `LF2_S3`, `LF2_S4` and `LF2_S5` remain the source for what was
    actually built and run.
 
@@ -387,7 +387,7 @@ both real, they are separate rows; do not hide a `LANG` boundary inside a
 | **LF2-22** | Native string model versus `stringref` | §6, §7 | **LANG** | **Accepted** | Copy through the Store/canonical string ABI; no native string layout crosses. |
 | **LF2-23** | Two GC languages may share a Wasm type but not their class/runtime semantics | §6, §7 | **LANG** | **Accepted** | Export a function API over the common Wasm type; do not assume a shared class library. |
 
-This table does **not** promote any language: every green scalar arm is still
+This table does **not** promote any language: every 🟩 green scalar arm is still
 scalar; every `C` cell is still an adapter problem. It also does not turn
 WASI, JS or the scheduler into engine work — those are `EMB` by the rule in
 `EMBEDDING_SURFACE` §16.2 and are recorded in §16.4. They are not LF2 language

@@ -2,16 +2,18 @@
 
 *The `LF-1` Screen and the `LF-2` Studies*
 
-Status: study report set (revision 7 — 2026-11-04: adds the §11 ownership map
-and points the ABI amendment at `EMBEDDING_SURFACE.md` §12–16). The notes
-without an `LF2_` prefix are the **output of `LF-1`**, the pre-feasibility /
+Status: study report set (revision 8 — 2026-11-11: a verdict renders as its
+swatch plus its name, [`../LANGUAGE_FEASIBILITY.md`](../LANGUAGE_FEASIBILITY.md)
+§5.1; revision 7 added the §11 ownership map and pointed the ABI amendment at
+`EMBEDDING_SURFACE.md` §12–16).
+The notes without an `LF2_` prefix are the **output of `LF-1`**, the pre-feasibility /
 scoping study defined in [`LANGUAGE_FEASIBILITY.md`](../LANGUAGE_FEASIBILITY.md)
 §7: they screen the whole canonical candidate list on three axes, cluster the
 candidates by shared blocker, record trigger conditions, write one charter per
 recommended cluster, and list what is deliberately **not** studied. The `LF2_*`
 notes are the commissioned full studies of [`CHARTERS.md`](CHARTERS.md).
 
-**The `LF-1` notes carry no verdict.** No `LF-1` row is green, yellow or red, no
+**The `LF-1` notes carry no verdict.** No `LF-1` row is 🟩 green, 🟨 yellow or 🟥 red, no
 language is declared supported or unsupported, and nothing in the screen is a
 promise to an embedder. Colour is a full-study (`LF-2`) output, and it lives in
 the `LF2_*` notes now in this folder; support is a milestone decision (`LF-3`).
@@ -45,11 +47,11 @@ the next person who is tempted to answer the question from a blog post.
 | \subpage lf_evidence | **The receipts.** Every external source with its retrieval date and tier, the in-repo evidence it leans on, and — explicitly — what was *not* verified. |
 | \subpage lf2_index | **The `LF-2` set.** The commissioned full studies: the verdict table, the three engine findings, the budget, and the reading order for the reports below. |
 | \subpage lf2_abi | **Cross-language ABI amendment.** The two call directions, synthetic host modules, core `Callable` versus component Canonical ABI, the scalar-to-GC/reference difficulty matrix per language, and its §11 engine/embedder/tooling/language ownership map; it links to `EMBEDDING_SURFACE.md` §12–16 for host bindings, native objects, GC references and the shared register. |
-| \subpage lf2_s1 | `S1` — C/C++ toolchain and ABI: five arms, all green (the last one after the `LE-8` translation). |
-| \subpage lf2_s2 | `S2` — the LLVM-family languages: Rust (two targets), TinyGo and Zig, all green. |
-| \subpage lf2_s3 | `S3` — AssemblyScript (and TypeScript by inheritance): green, building on the harness evidence. |
+| \subpage lf2_s1 | `S1` — C/C++ toolchain and ABI: five arms, all 🟩 green (the last one after the `LE-8` translation). |
+| \subpage lf2_s2 | `S2` — the LLVM-family languages: Rust (two targets), TinyGo and Zig, all 🟩 green. |
+| \subpage lf2_s3 | `S3` — AssemblyScript (and TypeScript by inheritance): 🟩 green, building on the harness evidence. |
 | \subpage lf2_s4 | `S4` — the WasmGC languages: Kotlin/Wasm in two target forms, Dart and MoonBit; the `F3` engine finding and its fix. |
-| \subpage lf2_s5 | `S5` — a guest scripting VM: Lua 5.4.8 built with wasi-sdk, green. |
+| \subpage lf2_s5 | `S5` — a guest scripting VM: Lua 5.4.8 built with wasi-sdk, 🟩 green. |
 | \subpage lf2_l6_l12 | The coverage note: every untested non-killed row, with the reason and the condition that would start it (and the `T09` Go arm). |
 | \subpage lf2_toolchains | The acquisition map: for each of those rows, the producer that emits a module and the site it is obtained from — with the three module shapes (`wasip1`, `bare`, `js-host`) that decide whether an install can pass the bar at all. |
 | \subpage lf2_evidence | The `LF-2` evidence log: toolchains, module hashes, transcripts, and `F1`–`F3` with their reproductions. |
@@ -98,7 +100,7 @@ changes materially.
 ## 4. What this folder is not
 
 - **Not a support list.** An entry's presence, a cluster's charter, and even a
-  green `LF-2` verdict imply nothing about *support*. `LF-3` may reject every
+  🟩 green `LF-2` verdict imply nothing about *support*. `LF-3` may reject every
   verdict, and that is a successful outcome.
 - **The `LF-1` notes are not a study of any language.** No toolchain was
   installed, no module was compiled, and no PoC was run *for the screen*. Its

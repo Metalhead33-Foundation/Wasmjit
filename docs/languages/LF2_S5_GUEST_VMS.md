@@ -7,7 +7,7 @@ run**; the other four were not (`LF2_L6_L12.md` §5).
 
 | Row | Arm | Verdict |
 |---|---|---|
-| `T26` | Lua 5.4.8, wasi-sdk 34.0 (clang 23.1.0, libc) | **Green** |
+| `T26` | Lua 5.4.8, wasi-sdk 34.0 (clang 23.1.0, libc) | 🟩 **Green** |
 
 The cluster's shared question — *does a C-API-shaped VM boundary map onto the host
 ABI?* — has a direct answer: the VM is an ordinary guest library, and the

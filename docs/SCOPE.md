@@ -2,13 +2,15 @@
 
 *What Is an Engine Gap, and What Is a Boundary*
 
-Status: policy note, revision 4 (2026-11-11: adds §7.1, the guest-language set).
-It is the canonical record of the surfaces WasmJit deliberately does **not** own
-and of the deviations it has chosen, so that none of them is counted as an
-implementation gap. Open defects and limitations live in one register,
+Status: policy note, revision 5 (2026-11-11). It is the canonical record of the
+surfaces WasmJit deliberately does **not** own and of the deviations it has
+chosen, so that none of them is counted as an implementation gap. Open defects
+and limitations live in one register,
 [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §8; this note decides whether a
 missing thing is a gap or a boundary. The failed-instantiation retention closes
-the `linking*` boundary.
+the `linking*` boundary. Revision 4 added §7.1, the claimed guest-language set;
+revision 5 renders its verdict column with the swatch pair
+[`LANGUAGE_FEASIBILITY.md`](LANGUAGE_FEASIBILITY.md) §5.1 defines.
 Audience: anyone triaging a missing feature, filling in a completeness meter,
 writing a proposal note, asking "which languages do we actually serve?", or
 asking "is this engine mature yet?".
@@ -157,16 +159,16 @@ the version/flags behind it are in
 
 | Guest language | Toolchain and target claimed | `LF-2` row | Verdict | What its modules put on the ABI |
 |---|---|---|---|---|
-| **C** | clang 23.1.4 `--target=wasm32 -nostdlib`; wasi-sdk 34.0 reactor; Emscripten 6.0.13 `-O2` | `T01`–`T04` | green | linear memory, `env`/WASI imports, few and often **wide** signatures, indirect calls through tables |
-| **C++** | Emscripten 6.0.13 reactor; wasi-sdk 34.0 at default flags | `T04`, `T05` | green | the above plus legacy exception encoding (`LE-8`), `std::` runtime, vtables (indirect calls) |
-| **Rust** | rustc 1.99.1 `wasm32-unknown-unknown` and `wasm32-wasip1` | `T06`, `T07` | green | one-CGU modules, many small internal calls, `Vec`/`String` over `dlmalloc`, `bulk-memory` |
-| **Zig** | 0.15.2 `wasm32-freestanding` | `T33` | green | tiny freestanding modules, usually zero imports |
-| **TinyGo** | 0.40.1 `-target=wasi` | `T10` | green | runtime-heavy module, WASI imports, exported entry points |
-| **Go** | 1.27.3 `wasip1`, `-buildmode=c-shared` | `T09` | green | runtime-heavy module, 16 WASI imports, `_initialize`/`_start` |
-| **Kotlin/Wasm** | 2.4.21 `wasmWasi` | `T53` | green | **WasmGC**: structs/arrays, `call_ref`/`return_call_ref` closures, legacy EH |
-| **MoonBit** | 0.1.20261028, `wasm-gc`, release | `T86` | green | **WasmGC**: small modules, GC types, `spectest`-style scalar imports |
-| **AssemblyScript** | 0.28.19 `--runtime stub` | `T15` | green | linear memory plus its own managed runtime, indirect calls through a table |
-| **Dart** | 3.13.7 `dart compile wasm --standalone` | `T20` | **yellow** | **WasmGC**, exceptions; blocked on a canonical-type-reference load error |
+| **C** | clang 23.1.4 `--target=wasm32 -nostdlib`; wasi-sdk 34.0 reactor; Emscripten 6.0.13 `-O2` | `T01`–`T04` | 🟩 Green | linear memory, `env`/WASI imports, few and often **wide** signatures, indirect calls through tables |
+| **C++** | Emscripten 6.0.13 reactor; wasi-sdk 34.0 at default flags | `T04`, `T05` | 🟩 Green | the above plus legacy exception encoding (`LE-8`), `std::` runtime, vtables (indirect calls) |
+| **Rust** | rustc 1.99.1 `wasm32-unknown-unknown` and `wasm32-wasip1` | `T06`, `T07` | 🟩 Green | one-CGU modules, many small internal calls, `Vec`/`String` over `dlmalloc`, `bulk-memory` |
+| **Zig** | 0.15.2 `wasm32-freestanding` | `T33` | 🟩 Green | tiny freestanding modules, usually zero imports |
+| **TinyGo** | 0.40.1 `-target=wasi` | `T10` | 🟩 Green | runtime-heavy module, WASI imports, exported entry points |
+| **Go** | 1.27.3 `wasip1`, `-buildmode=c-shared` | `T09` | 🟩 Green | runtime-heavy module, 16 WASI imports, `_initialize`/`_start` |
+| **Kotlin/Wasm** | 2.4.21 `wasmWasi` | `T53` | 🟩 Green | **WasmGC**: structs/arrays, `call_ref`/`return_call_ref` closures, legacy EH |
+| **MoonBit** | 0.1.20261028, `wasm-gc`, release | `T86` | 🟩 Green | **WasmGC**: small modules, GC types, `spectest`-style scalar imports |
+| **AssemblyScript** | 0.28.19 `--runtime stub` | `T15` | 🟩 Green | linear memory plus its own managed runtime, indirect calls through a table |
+| **Dart** | 3.13.7 `dart compile wasm --standalone` | `T20` | 🟨 Yellow | **WasmGC**, exceptions; blocked on a canonical-type-reference load error |
 
 `Kotlin/Wasm` **`wasmJs`** is deliberately *not* a row: it fails the bar by
 construction (696 imports including `externref` globals — a JavaScript host

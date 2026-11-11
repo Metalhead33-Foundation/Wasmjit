@@ -3,6 +3,7 @@
 #include <cctype>
 #include <filesystem>
 #include <fstream>
+#include <regex>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -271,4 +272,75 @@ TEST_CASE("the documentation tree is hierarchical", "[docs]")
 			REQUIRE(declared.count(id) == 1);
 		}
 	}
+}
+
+// docs/LANGUAGE_FEASIBILITY.md §5.1 (and docs/SCOPE.md §7.1, which quotes it):
+// a verdict is written as a **swatch and its name** -- `🟩 Green` -- because
+// GitHub-flavoured Markdown sanitises `<span style="color:...">`, so the emoji is
+// the only portable way to *show* the colour while the word keeps it greppable,
+// readable in monochrome and announced by a screen reader. This guard keeps the
+// two halves together: a capitalised verdict word in the colour-coded notes must
+// be preceded by its swatch, and the definition must keep all four pairs. Inline
+// code is skipped, because a sentence about the convention necessarily quotes the
+// words (`grep 'Yellow'`).
+TEST_CASE("every verdict colour carries its swatch", "[docs][colour]")
+{
+	const std::filesystem::path root = std::filesystem::path(WASM_TESTSUITE_SOURCE_DIR)
+			/ "..";
+	const std::filesystem::path docs = root / "docs";
+	const std::filesystem::path languages = docs / "languages";
+	const std::filesystem::path feasibility = docs / "LANGUAGE_FEASIBILITY.md";
+
+	const std::string definition = readTextFile(feasibility);
+	for (const char* pair : { "🟩 **Green**", "🟨 **Yellow**", "🟥 **Red**", "⬛ **Black**" }) {
+		INFO("definition pair: " << pair);
+		REQUIRE(definition.find(pair) != std::string::npos);
+	}
+
+	// `SCOPE.md` §7.1 quotes the same verdicts for the claimed guest-language set,
+	// so it is held to the same rule; the verdict code has one home (§5.1 of the
+	// feasibility note) and no second dialect.
+	std::vector<std::filesystem::path> files{ feasibility, docs / "SCOPE.md" };
+	for (const std::filesystem::directory_entry& entry :
+			std::filesystem::directory_iterator(languages)) {
+		if (entry.is_regular_file() && entry.path().extension() == ".md")
+			files.push_back(entry.path());
+	}
+
+	const std::regex verdict("\\b(Green|Yellow|Red|Black)\\b");
+	const std::regex inlineCode("`[^`]*`");
+	std::vector<std::string> offenders;
+	for (const std::filesystem::path& file : files) {
+		std::istringstream stream(readTextFile(file));
+		std::string line;
+		unsigned number = 0;
+		while (std::getline(stream, line)) {
+			++number;
+			const std::string text = std::regex_replace(line, inlineCode, "``");
+			for (std::sregex_iterator it(text.begin(), text.end(), verdict), end;
+					it != end; ++it) {
+				const std::string word = (*it)[1].str();
+				// Strip the spacing and emphasis between the swatch and the word.
+				std::string prefix = text.substr(0, static_cast<std::size_t>(it->position()));
+				while (!prefix.empty()
+						&& (prefix.back() == ' ' || prefix.back() == '\t' || prefix.back() == '*'))
+					prefix.pop_back();
+				const char* swatch = word == "Green" ? "🟩"
+						: word == "Yellow" ? "🟨"
+						: word == "Red" ? "🟥" : "⬛";
+				const std::string marker(swatch);
+				const bool carries = prefix.size() >= marker.size()
+						&& prefix.compare(prefix.size() - marker.size(), marker.size(), marker) == 0;
+				if (!carries)
+					offenders.push_back(file.filename().string() + ":"
+							+ std::to_string(number) + ": " + word + " -> " + line);
+			}
+		}
+	}
+
+	std::string report;
+	for (const std::string& offender : offenders)
+		report += offender + "\n";
+	INFO("verdict words without their swatch:\n" << report);
+	REQUIRE(offenders.empty());
 }

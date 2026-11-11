@@ -84,7 +84,7 @@ target is a real AOT output, but it ships a JS launcher, so the arm would first
 have to answer "which imports does the module really need". `T48` **Bytecoder**
 is third (own class library, more surface). The three extras are all `js-host`
 or `wasm-gc`-with-JS: acquiring one would reproduce `wasmJs`, which is already
-red for a reason the engine cannot fix (§2).
+🟥 red for a reason the engine cannot fix (§2).
 
 ## 4. .NET (`T14`)
 
@@ -271,7 +271,7 @@ The row arithmetic reconciles as follows, and it exposes one gap in
 | − 15 | rows with a verdict (`T01`–`T07`, `T09`, `T10`, `T15`, `T20`, `T26`, `T33`, `T53`, `T86`) |
 | **82** | rows this note has to cover |
 | 81 | rows the coverage note lists in its §3 and §4 |
-| 1 | **`T30` (TypeScript)** — not a separate arm: `LF2_INDEX.md` §4 records it as inherited from `T15` (AssemblyScript), which is green |
+| 1 | **`T30` (TypeScript)** — not a separate arm: `LF2_INDEX.md` §4 records it as inherited from `T15` (AssemblyScript), which is 🟩 green |
 
 So `T30` is the missing row: it is not untested, it is *tested by inheritance*,
 and [`LF2_L6_L12.md`](LF2_L6_L12.md) §5's "82" is right while its lists add up

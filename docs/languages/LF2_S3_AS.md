@@ -6,8 +6,8 @@ Status: `LF-2` cluster report (revision 1 — 2026-10-30). Cluster `L3` of
 
 | Row | Arm | Verdict |
 |---|---|---|
-| `T15` | AssemblyScript 0.28.19, `asc --runtime stub --optimize` | **Green** |
-| `T30` | TypeScript via AssemblyScript | **Green**, by inheritance from `T15` — no separate arm exists |
+| `T15` | AssemblyScript 0.28.19, `asc --runtime stub --optimize` | 🟩 **Green** |
+| `T30` | TypeScript via AssemblyScript | 🟩 **Green**, by inheritance from `T15` — no separate arm exists |
 
 Audience: anyone embedding a TypeScript-shaped workload, and `LF-3` when it
 decides whether the cluster already counts as answered.
