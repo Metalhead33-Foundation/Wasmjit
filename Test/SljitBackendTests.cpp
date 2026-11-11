@@ -3117,35 +3117,25 @@ TEST_CASE("SLJIT carries a wide v128 indirect call beside a native import",
 	WASM::RegistryImportResolver imports;
 	imports.registerFunction("env", "host_add", WASM::nativeImport<&wideV128HostAdd>());
 	WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
-	// A defined function with a v128 parameter selects the frame form, so the
-	// exports are `void fn(VMContext*, void* frame)`.
-	REQUIRE(instance.frameCallAbi());
+	// The `$lane` callee is wide and therefore frame-form, but the *exported*
+	// wrappers are narrow: under the per-signature rule they keep the register
+	// form, and the module as a whole is mixed (`GAP-1`, `GR-8`). The call site
+	// still has to enter `$lane` through its own frame form.
+	CHECK_FALSE(instance.frameCallAbi());
 	const auto call = [&](const char* name) -> WASM::Callable {
 		const std::optional<WASM::Callable> callable = instance.exportedFunction(name);
 		INFO("export " << name);
 		REQUIRE(callable.has_value());
 		REQUIRE(callable->fnPtr != nullptr);
+		CHECK_FALSE(WASM::callableUsesFrameForm(*callable));
 		return *callable;
 	};
 
-	// The callee of the indirect call is compiled (not a host function), so this
-	// exercises the call site's runtime form branch with a vector signature.
-	alignas(16) std::uint8_t frame[64] = {};
-	WASM::callCallableFrame(call("indirect"), frame);
-	std::int32_t indirectResult = 0;
-	std::memcpy(&indirectResult, frame, sizeof(indirectResult));
-	CHECK(indirectResult == 30);
-
-	std::memset(frame, 0, sizeof(frame));
-	const std::int32_t value = 41;
-	std::memcpy(frame, &value, sizeof(value));
-	WASM::callCallableFrame(call("host"), frame);
-	std::int32_t hostResult = 0;
-	std::memcpy(&hostResult, frame + 8, sizeof(hostResult));
-	CHECK(hostResult == 42);
+	CHECK(WASM::callCallable<std::int32_t>(call("indirect")) == 30);
+	CHECK(WASM::callCallable<std::int32_t>(call("host"), std::int32_t(41)) == 42);
 }
 
-// The closure itself: a frame-form module routes every native import through the
+// The closure itself: a frame-form callee routes the native import through the
 // staged adapter, so a host function that takes a `v128` reaches the two-word
 // spelling added for GAP-11. The host reads lane 2 of `i32x4 10 20 30 40`.
 TEST_CASE("SLJIT stages a v128 native import through the adapter",
@@ -3158,16 +3148,12 @@ TEST_CASE("SLJIT stages a v128 native import through the adapter",
 	WASM::RegistryImportResolver imports;
 	imports.registerFunction("env", "lane_of", WASM::nativeImport<&wideV128LaneOf>());
 	WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
-	REQUIRE(instance.frameCallAbi());
+	// `$wideUser` selects the frame; the `staged` wrapper is narrow and keeps the
+	// register form, so the module is mixed and the export is called directly.
+	CHECK_FALSE(instance.frameCallAbi());
 	const std::optional<WASM::Callable> callable = instance.exportedFunction("staged");
 	REQUIRE(callable.has_value());
 	REQUIRE(callable->fnPtr != nullptr);
-
-	alignas(16) std::uint8_t frame[32] = {};
-	const std::int32_t lane = 2;
-	std::memcpy(frame, &lane, sizeof(lane));
-	WASM::callCallableFrame(*callable, frame);
-	std::int32_t result = 0;
-	std::memcpy(&result, frame + 8, sizeof(result));
-	CHECK(result == 30);
+	CHECK_FALSE(WASM::callableUsesFrameForm(*callable));
+	CHECK(WASM::callCallable<std::int32_t>(*callable, std::int32_t(2)) == 30);
 }

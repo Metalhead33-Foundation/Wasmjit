@@ -1856,14 +1856,13 @@ std::fprintf(stderr, "REFUSED: %s\n", error.what());
 CHECK(false);
 continue;
 }
-REQUIRE(instance->frameCallAbi());
+// The wide links select the frame; `run` is narrow and keeps the register form,
+// so the chain mixes both forms (`GAP-1`, `GR-8`).
+CHECK_FALSE(instance->frameCallAbi());
 const auto run = instance->exportedFunction("run");
 REQUIRE(run.has_value());
 try {
-alignas(16) std::uint8_t frame[16] = {};
-WASM::callCallableFrame(*run, frame);
-std::int32_t value = 0;
-std::memcpy(&value, frame, sizeof(value));
+const std::int32_t value = WASM::callCallable<std::int32_t>(*run);
 std::fprintf(stderr, "run()=%d\n", (int)value);
 CHECK(value == 1);
 } catch (const std::exception& error) {
@@ -1985,14 +1984,13 @@ std::fprintf(stderr, "REFUSED: %s\n", error.what());
 CHECK(false);
 continue;
 }
-REQUIRE(instance->frameCallAbi());
+// The multi-result links are frame-form; `run` is a single-result wrapper,
+// so the chain mixes both forms (`GAP-1`, `GR-8`).
+CHECK_FALSE(instance->frameCallAbi());
 const auto run = instance->exportedFunction("run");
 REQUIRE(run.has_value());
 try {
-alignas(16) std::uint8_t frame[16] = {};
-WASM::callCallableFrame(*run, frame);
-std::int32_t value = 0;
-std::memcpy(&value, frame, sizeof(value));
+const std::int32_t value = WASM::callCallable<std::int32_t>(*run);
 std::fprintf(stderr, "run()=%d\n", (int)value);
 CHECK(value == 11);
 } catch (const std::exception& error) {

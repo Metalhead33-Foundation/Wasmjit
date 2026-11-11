@@ -566,12 +566,11 @@ TEST_CASE("tail calls compute correct results")
 	REQUIRE(incRef.has_value());
 	REQUIRE(constViaRef.has_value());
 
-	// The multi-result `pair_via_tail` signature makes AsmJIT choose the
-	// staging-frame ABI for the whole module. Marshal through that form when the
-	// instance reports it; the register calls above remain the LibJIT path.
-	const bool frameAbi = loaded.instance->frameCallAbi();
+	// Each export is marshalled in **its own** call form: the multi-result and
+	// wide signatures are frame-form while the narrow ones keep the register
+	// form, so this module is mixed (`GAP-1`, `GR-8`).
 	const auto callI32_0 = [&](const WASM::Callable& callable) -> std::int32_t {
-		if (!frameAbi)
+		if (!WASM::callableUsesFrameForm(callable))
 			return WASM::callCallable<std::int32_t>(callable);
 		alignas(16) std::array<std::uint8_t, 8> frame{};
 		WASM::callCallableFrame(callable, frame.data());
@@ -580,7 +579,7 @@ TEST_CASE("tail calls compute correct results")
 		return result;
 	};
 	const auto callI32_1 = [&](const WASM::Callable& callable, std::int32_t arg) -> std::int32_t {
-		if (!frameAbi)
+		if (!WASM::callableUsesFrameForm(callable))
 			return WASM::callCallable<std::int32_t>(callable, arg);
 		alignas(16) std::array<std::uint8_t, 16> frame{};
 		std::memcpy(frame.data(), &arg, sizeof(arg));
@@ -590,7 +589,7 @@ TEST_CASE("tail calls compute correct results")
 		return result;
 	};
 	const auto callI64_1 = [&](const WASM::Callable& callable, std::int64_t arg) -> std::int64_t {
-		if (!frameAbi)
+		if (!WASM::callableUsesFrameForm(callable))
 			return WASM::callCallable<std::int64_t>(callable, arg);
 		alignas(16) std::array<std::uint8_t, 24> frame{};
 		std::memcpy(frame.data(), &arg, sizeof(arg));
@@ -601,7 +600,7 @@ TEST_CASE("tail calls compute correct results")
 	};
 	const auto callI64_2 = [&](const WASM::Callable& callable, std::int64_t first,
 			std::int64_t second) -> std::int64_t {
-		if (!frameAbi)
+		if (!WASM::callableUsesFrameForm(callable))
 			return WASM::callCallable<std::int64_t>(callable, first, second);
 		alignas(16) std::array<std::uint8_t, 32> frame{};
 		std::memcpy(frame.data(), &first, sizeof(first));
@@ -613,7 +612,7 @@ TEST_CASE("tail calls compute correct results")
 	};
 	const auto callPair = [&](const WASM::Callable& callable, std::int32_t arg,
 			std::array<std::uint8_t, 16>& results) {
-		if (!frameAbi) {
+		if (!WASM::callableUsesFrameForm(callable)) {
 			WASM::callCallableWithResults(callable, results.data(), arg);
 			return;
 		}
@@ -632,9 +631,7 @@ TEST_CASE("tail calls compute correct results")
 	REQUIRE(callI64_2(*facAcc, int64_t(1), int64_t(1)) == 1);
 	REQUIRE(callI64_2(*facAcc, int64_t(5), int64_t(1)) == 120);
 	REQUIRE(callI64_2(*facAcc, int64_t(25), int64_t(1)) == INT64_C(7034535277573963776));
-	REQUIRE((frameAbi
-			? callI64_2(*facAccI32, 5, 1) == 120
-			: WASM::callCallable<int64_t>(*facAccI32, int32_t(5), int32_t(1)) == 120));
+	REQUIRE(callI64_2(*facAccI32, 5, 1) == 120);
 
 	// Space guarantee for direct self-recursion: `return_call $count` is lowered
 	// to a native tail call, so 10^7 frames run in constant stack. Without that
@@ -2149,8 +2146,7 @@ TEST_CASE("component runtime lifts a canonical string")
 	REQUIRE(function->paramTypes.size() == 1);
 	REQUIRE(function->resultTypes.size() == 1);
 	const WASM::Callable coreEcho = runtime.coreFunction(0);
-	const bool coreFrameAbi = coreEcho.rawFnPtr != nullptr && coreEcho.context != nullptr
-			&& reinterpret_cast<const WASM::ModuleInstance*>(coreEcho.context)->frameCallAbi();
+	const bool coreFrameAbi = WASM::callableUsesFrameForm(coreEcho);
 	REQUIRE((coreFrameAbi
 			? [&] {
 				alignas(16) std::array<std::uint8_t, 24> frame{};
@@ -2343,8 +2339,7 @@ TEST_CASE("component runtime lowers and lifts a map")
 	REQUIRE(function.has_value());
 	REQUIRE(function->indirectResults);
 	const WASM::Callable coreEcho = runtime.coreFunction(0);
-	const bool coreFrameAbi = coreEcho.rawFnPtr != nullptr && coreEcho.context != nullptr
-			&& reinterpret_cast<const WASM::ModuleInstance*>(coreEcho.context)->frameCallAbi();
+	const bool coreFrameAbi = WASM::callableUsesFrameForm(coreEcho);
 	REQUIRE((coreFrameAbi
 			? [&] {
 				alignas(16) std::array<std::uint8_t, 24> frame{};
@@ -5132,7 +5127,7 @@ TEST_CASE("stringview encode returns the next position and bytes written")
 	auto w8 = instance->exportedFunction("w8");
 	REQUIRE(w8.has_value());
 	alignas(16) unsigned char tuple[16] = {};
-	if (instance->frameCallAbi()) {
+	if (WASM::callableUsesFrameForm(*w8)) {
 		alignas(16) unsigned char frame[32] = {};
 		WASM::callCallableFrame(*w8, frame);
 		// Frame results use one 8-byte slot each; the public tuple is packed.
@@ -5154,7 +5149,7 @@ TEST_CASE("stringview encode returns the next position and bytes written")
 	auto w16 = instance->exportedFunction("w16");
 	REQUIRE(w16.has_value());
 	int32_t written16 = 0;
-	if (instance->frameCallAbi()) {
+	if (WASM::callableUsesFrameForm(*w16)) {
 		alignas(16) unsigned char frame[16] = {};
 		WASM::callCallableFrame(*w16, frame);
 		std::memcpy(&written16, frame, sizeof(written16));
@@ -6860,6 +6855,45 @@ TEST_CASE("call form: a two-module graph must not mix the register and frame for
 	}
 }
 
+// Per-signature call forms across a module boundary: the provider compiles its
+// wide function in the frame form and its narrow one in the register form, and
+// an importer emits the *callee's* form for the wide import. Before `GR-8` the
+// provider was wholly frame-form and a frame import was refused by name; the
+// call now succeeds because the call site and the callee agree per type.
+TEST_CASE("call form: a narrow module calls a frame-form import")
+{
+	for (const char* backend : {"libjit", "asmjit", "sljit"}) {
+		std::fprintf(stderr, "CALLFORMWIDE %s: ", backend);
+		auto runtime = WASM::Runtime::create(backend);
+		REQUIRE(runtime != nullptr);
+		auto providerModule = runtime->loadFile(
+				std::filesystem::path(WASM_TEST_DIR) / "call_form_provider.wasm");
+		auto importerModule = runtime->loadFile(
+				std::filesystem::path(WASM_TEST_DIR) / "call_form_wide_importer.wasm");
+		WASM::RegistryImportResolver imports;
+		auto& provider = runtime->instantiate(*providerModule, imports);
+		CHECK_FALSE(provider.frameCallAbi());
+		const auto wide = provider.exportedFunction("wide");
+		const auto narrow = provider.exportedFunction("narrow");
+		REQUIRE(wide.has_value());
+		REQUIRE(narrow.has_value());
+		// LibJIT's register form has no ceiling, so only SLJIT and AsmJIT put the
+		// six-parameter signature on the frame path.
+		const bool wideIsFrame = WASM::callableUsesFrameForm(*wide);
+		CHECK(wideIsFrame == (std::string(backend) != "libjit"));
+		CHECK_FALSE(WASM::callableUsesFrameForm(*narrow));
+		provider.registerExports(imports, "provider");
+
+		auto& importer = runtime->instantiate(*importerModule, imports);
+		CHECK_FALSE(importer.frameCallAbi());
+		const auto call = importer.exportedFunction("call_wide");
+		REQUIRE(call.has_value());
+		CHECK_FALSE(WASM::callableUsesFrameForm(*call));
+		CHECK(WASM::callCallable<std::int32_t>(*call) == 42);
+		std::fprintf(stderr, "mixed=%d\n", wideIsFrame ? 1 : 0);
+	}
+}
+
 TEST_CASE("call form: the opt-in makes a two-module graph consistent")
 {
 	// With the frame form requested process-wide, both modules compile in it and
@@ -7246,6 +7280,18 @@ TEST_CASE("simd: a v128 parameter and result round-trip through the JIT")
 	// SIMD-0's done-when and SIMD-L1's exit criterion (docs/proposals/SIMD.md):
 	// this closes S4 (alignment) / S5 / S9 (calling convention) for the
 	// register-passing case. `V128` is the C++ mirror of the lowered struct.
+	//
+	// A `v128` *result* crosses the register form through the caller's 16-byte
+	// buffer, not as an aggregate return, so the typed `callCallable<V128>`
+	// helper cannot speak it; the frame form is the documented way to carry a
+	// vector both ways, and the per-signature rule would otherwise leave the
+	// one-parameter `identity` in the register form while `four` takes the frame.
+	// The opt-in makes the whole module frame-form, which is what this
+	// round-trip measures.
+	struct OptInScope {
+		OptInScope() { WASM::setFrameCallAbiOptIn(true); }
+		~OptInScope() { WASM::setFrameCallAbiOptIn(false); }
+	} optIn;
 	WASM::RegistryImportResolver imports;
 	auto backend = TestBackend::create();
 	auto loaded = loadAndInstantiateTestModule("simd_abi", imports, *backend);
@@ -7269,7 +7315,7 @@ TEST_CASE("simd: a v128 parameter and result round-trip through the JIT")
 	// these helpers marshal the same canonical frame the embedder uses.
 	const auto callVector = [&instance](const WASM::Callable& callable,
 			const V128& arg) -> V128 {
-		if (!instance.frameCallAbi())
+		if (!WASM::callableUsesFrameForm(callable))
 			return WASM::callCallable<V128>(callable, arg);
 		alignas(16) std::array<std::uint8_t, 32> frame{};
 		std::memcpy(frame.data(), &arg, sizeof(arg));
@@ -7280,7 +7326,7 @@ TEST_CASE("simd: a v128 parameter and result round-trip through the JIT")
 	};
 	const auto callVector4 = [&instance](const WASM::Callable& callable,
 			const V128& a, const V128& b, const V128& c, const V128& d) -> V128 {
-		if (!instance.frameCallAbi())
+		if (!WASM::callableUsesFrameForm(callable))
 			return WASM::callCallable<V128>(callable, a, b, c, d);
 		alignas(16) std::array<std::uint8_t, 80> frame{};
 		std::memcpy(frame.data(), &a, sizeof(a));
@@ -7294,7 +7340,7 @@ TEST_CASE("simd: a v128 parameter and result round-trip through the JIT")
 	};
 	const auto callLane = [&instance](const WASM::Callable& callable,
 			const V128& arg) -> std::int32_t {
-		if (!instance.frameCallAbi())
+		if (!WASM::callableUsesFrameForm(callable))
 			return WASM::callCallable<std::int32_t>(callable, arg);
 		alignas(16) std::array<std::uint8_t, 24> frame{};
 		std::memcpy(frame.data(), &arg, sizeof(arg));
@@ -7305,7 +7351,7 @@ TEST_CASE("simd: a v128 parameter and result round-trip through the JIT")
 	};
 	const auto callLane64 = [&instance](const WASM::Callable& callable,
 			const V128& arg) -> std::int64_t {
-		if (!instance.frameCallAbi())
+		if (!WASM::callableUsesFrameForm(callable))
 			return WASM::callCallable<std::int64_t>(callable, arg);
 		alignas(16) std::array<std::uint8_t, 24> frame{};
 		std::memcpy(frame.data(), &arg, sizeof(arg));
@@ -7315,7 +7361,7 @@ TEST_CASE("simd: a v128 parameter and result round-trip through the JIT")
 		return result;
 	};
 	const auto callZeroLane = [&instance](const WASM::Callable& callable) -> std::int32_t {
-		if (!instance.frameCallAbi())
+		if (!WASM::callableUsesFrameForm(callable))
 			return WASM::callCallable<std::int32_t>(callable);
 		alignas(16) std::array<std::uint8_t, 8> frame{};
 		WASM::callCallableFrame(callable, frame.data());
@@ -7668,7 +7714,7 @@ TEST_CASE("simd: shuffle and swizzle run through the JIT")
 	};
 	const auto callI32 = [&](const char* name) -> std::int32_t {
 		auto fn = i32Export(name);
-		if (!instance.frameCallAbi())
+		if (!WASM::callableUsesFrameForm(fn))
 			return WASM::callCallable<std::int32_t>(fn);
 		alignas(16) std::uint8_t frame[16] = {};
 		WASM::callCallableFrame(fn, frame);
@@ -8068,7 +8114,7 @@ TEST_CASE("simd: v128 globals run through the JIT")
 	// The generic `callCallable` helper speaks the register ABI, so marshal
 	// the frame explicitly when the instance asks for it.
 	const auto accumulate = i32Export("accumulate");
-	if (!instance.frameCallAbi()) {
+	if (!WASM::callableUsesFrameForm(accumulate)) {
 		REQUIRE(WASM::callCallable<int32_t>(accumulate, ones) == 8);
 	} else {
 		alignas(16) std::array<std::uint8_t, 24> frame{};
@@ -8567,7 +8613,7 @@ TEST_CASE("simd: float arithmetic and comparisons run through the JIT")
 	};
 	const auto callI32 = [&](const char* name) -> std::int32_t {
 		auto fn = i32Export(name);
-		if (!instance.frameCallAbi())
+		if (!WASM::callableUsesFrameForm(fn))
 			return WASM::callCallable<std::int32_t>(fn);
 		alignas(16) std::uint8_t frame[16] = {};
 		WASM::callCallableFrame(fn, frame);
@@ -8577,7 +8623,7 @@ TEST_CASE("simd: float arithmetic and comparisons run through the JIT")
 	};
 	const auto callI64 = [&](const char* name) -> std::int64_t {
 		auto fn = i32Export(name);
-		if (!instance.frameCallAbi())
+		if (!WASM::callableUsesFrameForm(fn))
 			return WASM::callCallable<std::int64_t>(fn);
 		alignas(16) std::uint8_t frame[16] = {};
 		WASM::callCallableFrame(fn, frame);
@@ -8723,7 +8769,7 @@ TEST_CASE("simd: three and four v128 parameters cross the boundary")
 	// the register-form coverage and add the frame form the backend actually uses.
 	const auto call3 = [&instance](const WASM::Callable& callable,
 			const V128& x, const V128& y, const V128& z) -> V128 {
-		if (!instance.frameCallAbi())
+		if (!WASM::callableUsesFrameForm(callable))
 			return WASM::callCallable<V128>(callable, x, y, z);
 		alignas(16) std::array<std::uint8_t, 64> frame{};
 		std::memcpy(frame.data(), &x, sizeof(x));
@@ -8736,7 +8782,7 @@ TEST_CASE("simd: three and four v128 parameters cross the boundary")
 	};
 	const auto call4 = [&instance](const WASM::Callable& callable,
 			const V128& x, const V128& y, const V128& z, const V128& w) -> V128 {
-		if (!instance.frameCallAbi())
+		if (!WASM::callableUsesFrameForm(callable))
 			return WASM::callCallable<V128>(callable, x, y, z, w);
 		alignas(16) std::array<std::uint8_t, 80> frame{};
 		std::memcpy(frame.data(), &x, sizeof(x));
@@ -8911,7 +8957,7 @@ TEST_CASE("simd: integer arithmetic and comparisons run through the JIT")
 	};
 	const auto callI32 = [&](const char* name) -> std::int32_t {
 		auto fn = i32Export(name);
-		if (!instance.frameCallAbi())
+		if (!WASM::callableUsesFrameForm(fn))
 			return WASM::callCallable<std::int32_t>(fn);
 		alignas(16) std::uint8_t frame[16] = {};
 		WASM::callCallableFrame(fn, frame);
@@ -8921,7 +8967,7 @@ TEST_CASE("simd: integer arithmetic and comparisons run through the JIT")
 	};
 	const auto callI64 = [&](const char* name) -> std::int64_t {
 		auto fn = i32Export(name);
-		if (!instance.frameCallAbi())
+		if (!WASM::callableUsesFrameForm(fn))
 			return WASM::callCallable<std::int64_t>(fn);
 		alignas(16) std::uint8_t frame[16] = {};
 		WASM::callCallableFrame(fn, frame);
@@ -9078,10 +9124,9 @@ TEST_CASE("multi-value: JIT-to-JIT calls marshal every result")
 	// Any multi-result signature puts the module in the staging-frame ABI. The
 	// generic `callCallable` helpers speak the register ABI, so marshal the
 	// frame explicitly when the instance selects it.
-	const bool frameAbi = instance.frameCallAbi();
 	const auto callI32x2 = [&](const WASM::Callable& callable,
 			int32_t a, int32_t b) -> int32_t {
-		if (!frameAbi)
+		if (!WASM::callableUsesFrameForm(callable))
 			return WASM::callCallable<int32_t>(callable, a, b);
 		alignas(16) std::array<std::uint8_t, 24> frame{};
 		std::memcpy(frame.data(), &a, sizeof(a));
@@ -9092,7 +9137,7 @@ TEST_CASE("multi-value: JIT-to-JIT calls marshal every result")
 		return result;
 	};
 	const auto callI32 = [&](const WASM::Callable& callable, int32_t a) -> int32_t {
-		if (!frameAbi)
+		if (!WASM::callableUsesFrameForm(callable))
 			return WASM::callCallable<int32_t>(callable, a);
 		alignas(16) std::array<std::uint8_t, 16> frame{};
 		std::memcpy(frame.data(), &a, sizeof(a));
@@ -9102,7 +9147,7 @@ TEST_CASE("multi-value: JIT-to-JIT calls marshal every result")
 		return result;
 	};
 	const auto callI32_0 = [&](const WASM::Callable& callable) -> int32_t {
-		if (!frameAbi)
+		if (!WASM::callableUsesFrameForm(callable))
 			return WASM::callCallable<int32_t>(callable);
 		alignas(16) std::array<std::uint8_t, 8> frame{};
 		WASM::callCallableFrame(callable, frame.data());
@@ -9112,7 +9157,7 @@ TEST_CASE("multi-value: JIT-to-JIT calls marshal every result")
 	};
 	const auto callI64x2 = [&](const WASM::Callable& callable,
 			int64_t a, int32_t b) -> int64_t {
-		if (!frameAbi)
+		if (!WASM::callableUsesFrameForm(callable))
 			return WASM::callCallable<int64_t>(callable, a, b);
 		alignas(16) std::array<std::uint8_t, 24> frame{};
 		std::memcpy(frame.data(), &a, sizeof(a));
@@ -9145,7 +9190,7 @@ TEST_CASE("multi-value: JIT-to-JIT calls marshal every result")
 	auto swapExport = instance.exportedFunction("swap_export");
 	REQUIRE(swapExport.has_value());
 	alignas(16) unsigned char tuple[16] = {};
-	if (frameAbi) {
+	if (WASM::callableUsesFrameForm(*swapExport)) {
 		alignas(16) std::array<std::uint8_t, 32> frame{};
 		const int32_t a = 3;
 		const int32_t b = 4;
@@ -9465,10 +9510,9 @@ TEST_CASE("wide arithmetic: add128, sub128 and mul_wide match reference values")
 	auto mulS = exported("mul_wide_s");
 	auto mulU = exported("mul_wide_u");
 
-	const bool frameAbi = instance.frameCallAbi();
 	const auto call2 = [&](const WASM::Callable& callable, auto... args) {
 		alignas(16) uint64_t out[2] = {};
-		if (!frameAbi) {
+		if (!WASM::callableUsesFrameForm(callable)) {
 			WASM::callCallableWithResults(callable, out, args...);
 			return std::array<uint64_t, 2>{out[0], out[1]};
 		}
@@ -13262,9 +13306,8 @@ TEST_CASE("the deterministic profile canonicalises observable NaNs")
 	REQUIRE(fullResult.has_value());
 	// `nan_pair` has two results, which switches the whole profile module to the
 	// staging-frame ABI in both alternative backends.
-	const bool fullFrame = fullInstance->frameCallAbi();
 	const auto fullI32 = [&](const WASM::Callable& callable, std::int32_t arg) {
-		if (!fullFrame)
+		if (!WASM::callableUsesFrameForm(callable))
 			return WASM::callCallable<std::int32_t>(callable, arg);
 		alignas(16) std::array<std::uint8_t, 16> frame{};
 		std::memcpy(frame.data(), &arg, sizeof(arg));
@@ -13274,7 +13317,7 @@ TEST_CASE("the deterministic profile canonicalises observable NaNs")
 		return result;
 	};
 	const auto fullF32 = [&](const WASM::Callable& callable, std::int32_t arg) {
-		if (!fullFrame)
+		if (!WASM::callableUsesFrameForm(callable))
 			return WASM::callCallable<float>(callable, arg);
 		alignas(16) std::array<std::uint8_t, 16> frame{};
 		std::memcpy(frame.data(), &arg, sizeof(arg));
@@ -13297,9 +13340,8 @@ TEST_CASE("the deterministic profile canonicalises observable NaNs")
 	REQUIRE(detInstance.get() != nullptr);
 
 	struct FloatPair { float first; float second; };
-	const bool detFrame = detInstance->frameCallAbi();
 	const auto detI32 = [&](const WASM::Callable& callable, std::int32_t arg) {
-		if (!detFrame)
+		if (!WASM::callableUsesFrameForm(callable))
 			return WASM::callCallable<std::int32_t>(callable, arg);
 		alignas(16) std::array<std::uint8_t, 16> frame{};
 		std::memcpy(frame.data(), &arg, sizeof(arg));
@@ -13309,7 +13351,7 @@ TEST_CASE("the deterministic profile canonicalises observable NaNs")
 		return result;
 	};
 	const auto detVoidI32 = [&](const WASM::Callable& callable, std::int32_t arg) {
-		if (!detFrame) {
+		if (!WASM::callableUsesFrameForm(callable)) {
 			WASM::callCallable<void>(callable, arg);
 			return;
 		}
@@ -13318,7 +13360,7 @@ TEST_CASE("the deterministic profile canonicalises observable NaNs")
 		WASM::callCallableFrame(callable, frame.data());
 	};
 	const auto detF32 = [&](const WASM::Callable& callable, std::int32_t arg) {
-		if (!detFrame)
+		if (!WASM::callableUsesFrameForm(callable))
 			return WASM::callCallable<float>(callable, arg);
 		alignas(16) std::array<std::uint8_t, 16> frame{};
 		std::memcpy(frame.data(), &arg, sizeof(arg));
@@ -13329,7 +13371,7 @@ TEST_CASE("the deterministic profile canonicalises observable NaNs")
 	};
 	const auto detPair = [&](const WASM::Callable& callable, std::int32_t arg,
 			FloatPair& pair) {
-		if (!detFrame) {
+		if (!WASM::callableUsesFrameForm(callable)) {
 			WASM::callCallableWithResults(callable, &pair, arg);
 			return;
 		}
@@ -13340,7 +13382,7 @@ TEST_CASE("the deterministic profile canonicalises observable NaNs")
 		std::memcpy(&pair.second, frame.data() + 16, sizeof(pair.second));
 	};
 	const auto detI64 = [&](const WASM::Callable& callable, std::int64_t arg) {
-		if (!detFrame)
+		if (!WASM::callableUsesFrameForm(callable))
 			return WASM::callCallable<std::int64_t>(callable, arg);
 		alignas(16) std::array<std::uint8_t, 16> frame{};
 		std::memcpy(frame.data(), &arg, sizeof(arg));
@@ -13350,7 +13392,7 @@ TEST_CASE("the deterministic profile canonicalises observable NaNs")
 		return result;
 	};
 	const auto detVoidI64 = [&](const WASM::Callable& callable, std::int64_t arg) {
-		if (!detFrame) {
+		if (!WASM::callableUsesFrameForm(callable)) {
 			WASM::callCallable<void>(callable, arg);
 			return;
 		}
@@ -14072,7 +14114,7 @@ TEST_CASE("stack-switching carries multi-value and reference payloads")
 	REQUIRE(multi.has_value());
 	REQUIRE(ref.has_value());
 	std::int32_t multiResult = 0;
-	if (instance->frameCallAbi()) {
+	if (WASM::callableUsesFrameForm(*multi)) {
 		alignas(16) unsigned char frame[16] = {};
 		WASM::callCallableFrame(*multi, frame);
 		std::memcpy(&multiResult, frame, sizeof(multiResult));
@@ -14083,7 +14125,7 @@ TEST_CASE("stack-switching carries multi-value and reference payloads")
 
 	int marker = 7;
 	void* returned = nullptr;
-	if (instance->frameCallAbi()) {
+	if (WASM::callableUsesFrameForm(*ref)) {
 		alignas(16) unsigned char frame[32] = {};
 		void* argument = &marker;
 		std::memcpy(frame, &argument, sizeof(argument));

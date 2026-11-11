@@ -492,26 +492,19 @@ std::filesystem::path(WASM_TEST_DIR) / "wide_v128_indirect_probe.wasm");
 	WASM::RegistryImportResolver imports;
 	imports.registerFunction("env", "host_add", WASM::nativeImport<&asmjitWideV128HostAdd>());
 	WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
-	REQUIRE(instance.frameCallAbi());
+	// The wide `$lane` callee is frame-form; the narrow exports keep the register
+	// form, so the module is mixed and the exports are called directly (`GAP-1`,
+	// `GR-8`). The indirect call site must still enter `$lane` through the frame.
+	CHECK_FALSE(instance.frameCallAbi());
 	const auto call = [&](const char* name) -> WASM::Callable {
 		const std::optional<WASM::Callable> callable = instance.exportedFunction(name);
 		INFO("export " << name);
 		REQUIRE(callable.has_value());
 		REQUIRE(callable->fnPtr != nullptr);
+		CHECK_FALSE(WASM::callableUsesFrameForm(*callable));
 		return *callable;
 	};
 
-	alignas(16) std::uint8_t frame[64] = {};
-	WASM::callCallableFrame(call("indirect"), frame);
-	std::int32_t indirectResult = 0;
-	std::memcpy(&indirectResult, frame, sizeof(indirectResult));
-	CHECK(indirectResult == 30);
-
-	std::memset(frame, 0, sizeof(frame));
-	const std::int32_t value = 41;
-	std::memcpy(frame, &value, sizeof(value));
-	WASM::callCallableFrame(call("host"), frame);
-	std::int32_t hostResult = 0;
-	std::memcpy(&hostResult, frame + 8, sizeof(hostResult));
-	CHECK(hostResult == 42);
+	CHECK(WASM::callCallable<std::int32_t>(call("indirect")) == 30);
+	CHECK(WASM::callCallable<std::int32_t>(call("host"), std::int32_t(41)) == 42);
 }
