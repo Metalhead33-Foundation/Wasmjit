@@ -1443,17 +1443,21 @@ struct StagedShape {
 	//! array has to outlive the prep call with the entry.
 	std::vector<ffi_type*> closureArgTypes = {&ffi_type_pointer,
 			&ffi_type_pointer, &ffi_type_pointer};
-	std::vector<ffi_type*> argTypes; //!< Context, then one entry per parameter.
+	std::vector<ffi_type*> argTypes; //!< Context, then two entries per `v128`
 	std::vector<WASM::ValueKind> paramKinds;
 	std::size_t paramCount = 0;
 	std::uint32_t resultOffset = 0; //!< Byte offset of the result block.
 	bool single = false; //!< One result, returned by value.
-	bool multi = false; //!< Several results, through a trailing buffer pointer.
+	//! Several results, or one `v128`, through a trailing buffer pointer.
+	//! A vector result is spooled by the callee into the result block, which is
+	//! the canonical spelling (docs/ABI.md "The C ABI Contract").
+	bool buffered = false;
 	ffi_type* resultType = &ffi_type_void;
 };
 
-//! Host C type of one Wasm value kind, or null for `v128`, whose C spelling is
-//! not a single `ffi_type` and which the staged form therefore refuses.
+//! Host C type of one Wasm value kind that maps to a single `ffi_type`.
+//! `v128` is deliberately absent: its canonical spelling is *two* `uint64_t`
+//! entries, so the caller appends two of them rather than one mapping.
 ffi_type* stagedFfiType(WASM::ValueKind kind) noexcept
 {
 	switch (kind) {
@@ -1489,21 +1493,46 @@ void stagedImportCall(ffi_cif*, void*, void** args, void* userData)
 	// A native import carries no context: it runs against the caller's.
 	void* context = target->context != nullptr
 			? static_cast<void*>(target->context) : static_cast<void*>(vm);
-	std::vector<void*> callArgs(entry->shape.argTypes.size(), nullptr);
+	// The argument cells live on the closure's own stack: this runs once per
+	// invocation, and a heap vector here was a per-call allocation on the import
+	// path (docs/API_ABI_STABILITY.md `GAP-12`). A signature with more than
+	// kInlineArguments cells (about ten scalar parameters) still works through
+	// the overflow path, which is the only case that allocates.
+	constexpr std::size_t kInlineArguments = 24;
+	void* inlineArgs[kInlineArguments] = {};
+	std::vector<void*> overflow;
+	void** callArgs = inlineArgs;
+	if (entry->shape.argTypes.size() > kInlineArguments) {
+		overflow.assign(entry->shape.argTypes.size(), nullptr);
+		callArgs = overflow.data();
+	}
 	callArgs[0] = &context;
-	for (std::size_t i = 0; i < entry->shape.paramCount; ++i)
-		callArgs[1 + i] = static_cast<std::uint8_t*>(frame)
+	// A parameter occupies one ffi entry, except a `v128`, which occupies two:
+	// its canonical spelling is `uint64_t lo, uint64_t hi` and the staging frame
+	// already holds the 16 bytes little-endian (docs/ABI.md).
+	std::size_t argumentIndex = 1;
+	for (std::size_t i = 0; i < entry->shape.paramCount; ++i) {
+		void* const slot = static_cast<std::uint8_t*>(frame)
 				+ WASM::frameArgumentOffset(entry->shape.paramKinds,
 						static_cast<std::uint32_t>(i));
+		if (entry->shape.paramKinds[i] == WASM::ValueKind::V128) {
+			callArgs[argumentIndex] = slot;
+			callArgs[argumentIndex + 1] = static_cast<std::uint8_t*>(slot) + 8;
+			argumentIndex += 2;
+		} else {
+			callArgs[argumentIndex] = slot;
+			argumentIndex += 1;
+		}
+	}
 	void* buffer = static_cast<std::uint8_t*>(frame) + entry->shape.resultOffset;
-	if (entry->shape.multi)
-		callArgs.back() = &buffer;
+	if (entry->shape.buffered)
+		callArgs[argumentIndex] = &buffer;
 	// libffi stores an `ffi_arg` word for a scalar result narrower than a word,
 	// so give it word-sized scratch and narrow into the frame slot ourselves.
 	ffi_arg word = 0;
 	ffi_call(&entry->shape.callCif, FFI_FN(target->fnPtr),
 			entry->shape.single ? static_cast<void*>(&word) : nullptr,
-			callArgs.data());
+			callArgs);
 	if (entry->shape.single)
 		std::memcpy(static_cast<std::uint8_t*>(frame) + entry->shape.resultOffset,
 				&word, entry->shape.resultType->size);
@@ -1528,8 +1557,12 @@ std::mutex& stagedMutex()
 	return mutex;
 }
 
-//! Returns the staged-import entry for @p type, or null when the signature has a
-//! `v128` (outside the uniform slot model).
+//! Returns the staged-import entry for @p type, creating it on first use.
+//!
+//! Every signature is expressible: a `v128` parameter becomes the canonical two
+//! `uint64_t` entries and a `v128` result is spooled through the trailing result
+//! buffer, so the adapter no longer refuses a vector at all
+//! (docs/API_ABI_STABILITY.md `GAP-11`).
 void* stagedImportEntry(const WASM::FuncType& type)
 {
 	StagedShape shape;
@@ -1538,16 +1571,23 @@ void* stagedImportEntry(const WASM::FuncType& type)
 	std::string key;
 	for (const WASM::StorageType& parameter : type.params) {
 		const WASM::ValueKind kind = WASM::valueKindOf(parameter.val.opcode);
+		shape.paramKinds.push_back(kind);
+		key.push_back(static_cast<char>(static_cast<unsigned>(kind)));
+		if (kind == WASM::ValueKind::V128) {
+			shape.argTypes.push_back(&ffi_type_uint64);
+			shape.argTypes.push_back(&ffi_type_uint64);
+			continue;
+		}
 		ffi_type* ffiType = stagedFfiType(kind);
 		if (ffiType == nullptr)
 			return nullptr;
-		shape.paramKinds.push_back(kind);
 		shape.argTypes.push_back(ffiType);
-		key.push_back(static_cast<char>(static_cast<unsigned>(kind)));
 	}
-	shape.single = type.results.size() == 1;
-	shape.multi = type.results.size() > 1;
-	if (shape.multi)
+	const bool vectorResult = type.results.size() == 1
+			&& WASM::valueKindOf(type.results.front().val.opcode) == WASM::ValueKind::V128;
+	shape.single = type.results.size() == 1 && !vectorResult;
+	shape.buffered = type.results.size() > 1 || vectorResult;
+	if (shape.buffered)
 		shape.argTypes.push_back(&ffi_type_pointer); // result buffer
 	if (shape.single) {
 		shape.resultType = stagedFfiType(
@@ -3750,8 +3790,9 @@ void OpcodeDispatcher::emitCall(WASM::FuncIdx index, bool isTail)
 		needsStagingCall_ = true;
 	// A signature wider than the register form travels through the staging frame:
 	// a Wasm callee is frame-form, and a native import is reached through the
-	// staged adapter (`stagedImportFor`). Only a shape the adapter cannot carry --
-	// a `v128` in a wide signature -- is refused.
+	// staged adapter (`stagedImportFor`), which now carries a `v128` as its
+	// canonical two-word spelling. A shape the adapter cannot build at all (a
+	// libffi prep failure) is the only refusal left.
 	const bool wideCall = calledType.params.size() > kMaxWasmParameters;
 	void* const stagedImport = stagedImportFor(calledType);
 	if (wideCall || stagedImport != nullptr)
@@ -3818,8 +3859,9 @@ void OpcodeDispatcher::emitCallIndirect(WASM::TypeIdx typeIndex, WASM::TableIdx 
 		needsStagingCall_ = true;
 	// A signature wider than the register form travels through the staging frame:
 	// a Wasm callee is frame-form, and a native import is reached through the
-	// staged adapter (`stagedImportFor`). Only a shape the adapter cannot carry --
-	// a `v128` in a wide signature -- is refused.
+	// staged adapter (`stagedImportFor`), which now carries a `v128` as its
+	// canonical two-word spelling. A shape the adapter cannot build at all (a
+	// libffi prep failure) is the only refusal left.
 	const bool wideCall = calledType.params.size() > kMaxWasmParameters;
 	void* const stagedImport = stagedImportFor(calledType);
 	if (wideCall || stagedImport != nullptr)

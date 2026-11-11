@@ -13,6 +13,7 @@
 #include "helper.hpp"
 #include "WasmBase/WasmBackendRegistry.hpp"
 #include "WasmBase/WasmModule.hpp"
+#include "WasmBase/WasmNativeImport.hpp"
 #include "WasmBase/WasmRegistryImportResolver.hpp"
 #include "WasmBase/WasmRuntime.hpp"
 #include "WasmBase/WasmStore.hpp"
@@ -2010,6 +2011,7 @@ TEST_CASE("asmjit and sljit agree on an imported function reference",
 		REQUIRE(sljitCallable.has_value());
 		INFO("export " << name);
 		CHECK(WASM::callCallable<std::int32_t>(*asmCallable) == expected);
+
 		CHECK(WASM::callCallable<std::int32_t>(*sljitCallable) == expected);
 	};
 
@@ -3022,4 +3024,96 @@ std::memcpy(&first, frame + 8, sizeof(first));
 std::memcpy(&second, frame + 16, sizeof(second));
 CHECK(first == 101);
 CHECK(second == 52);
+}
+// GAP-11: the staged-import adapter used to have no ffi_type for a v128, so a
+// module that imported a native function *and* performed an indirect call to a
+// wide vector signature was refused at instantiation. The vector now travels as
+// its canonical C spelling (two uint64 words, low first) and the module runs.
+//
+// A native import of `(param v128 i32)` is the shape that makes the closure
+// itself carry a vector, and it is reachable only because a frame-form module
+// routes every native import through the adapter.
+namespace {
+
+std::int32_t wideV128HostAdd(WASM::VMContext*, std::int32_t value)
+{
+	return value + 1;
+}
+
+std::int32_t wideV128LaneOf(WASM::VMContext*, std::uint64_t low, std::uint64_t high,
+		std::int32_t lane)
+{
+	if (lane < 0 || lane > 3)
+		return -1;
+	const std::uint64_t words[2] = {low, high};
+	const std::uint32_t word = lane < 2 ? 0u : 1u;
+	const unsigned shift = 32u * static_cast<unsigned>(lane - 2 * static_cast<std::int32_t>(word));
+	return static_cast<std::int32_t>(static_cast<std::uint32_t>(words[word] >> shift));
+}
+
+} // namespace
+
+TEST_CASE("SLJIT carries a wide v128 indirect call beside a native import",
+		"[staging][sljit][abi][simd][call]")
+{
+	auto runtime = WASM::Runtime::create("sljit");
+	REQUIRE(runtime != nullptr);
+	auto module = runtime->loadFile(
+			std::filesystem::path(WASM_TEST_DIR) / "wide_v128_indirect_probe.wasm");
+	WASM::RegistryImportResolver imports;
+	imports.registerFunction("env", "host_add", WASM::nativeImport<&wideV128HostAdd>());
+	WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+	// A defined function with a v128 parameter selects the frame form, so the
+	// exports are `void fn(VMContext*, void* frame)`.
+	REQUIRE(instance.frameCallAbi());
+	const auto call = [&](const char* name) -> WASM::Callable {
+		const std::optional<WASM::Callable> callable = instance.exportedFunction(name);
+		INFO("export " << name);
+		REQUIRE(callable.has_value());
+		REQUIRE(callable->fnPtr != nullptr);
+		return *callable;
+	};
+
+	// The callee of the indirect call is compiled (not a host function), so this
+	// exercises the call site's runtime form branch with a vector signature.
+	alignas(16) std::uint8_t frame[64] = {};
+	WASM::callCallableFrame(call("indirect"), frame);
+	std::int32_t indirectResult = 0;
+	std::memcpy(&indirectResult, frame, sizeof(indirectResult));
+	CHECK(indirectResult == 30);
+
+	std::memset(frame, 0, sizeof(frame));
+	const std::int32_t value = 41;
+	std::memcpy(frame, &value, sizeof(value));
+	WASM::callCallableFrame(call("host"), frame);
+	std::int32_t hostResult = 0;
+	std::memcpy(&hostResult, frame + 8, sizeof(hostResult));
+	CHECK(hostResult == 42);
+}
+
+// The closure itself: a frame-form module routes every native import through the
+// staged adapter, so a host function that takes a `v128` reaches the two-word
+// spelling added for GAP-11. The host reads lane 2 of `i32x4 10 20 30 40`.
+TEST_CASE("SLJIT stages a v128 native import through the adapter",
+		"[staging][sljit][abi][simd][call]")
+{
+	auto runtime = WASM::Runtime::create("sljit");
+	REQUIRE(runtime != nullptr);
+	auto module = runtime->loadFile(
+			std::filesystem::path(WASM_TEST_DIR) / "wide_v128_import_probe.wasm");
+	WASM::RegistryImportResolver imports;
+	imports.registerFunction("env", "lane_of", WASM::nativeImport<&wideV128LaneOf>());
+	WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+	REQUIRE(instance.frameCallAbi());
+	const std::optional<WASM::Callable> callable = instance.exportedFunction("staged");
+	REQUIRE(callable.has_value());
+	REQUIRE(callable->fnPtr != nullptr);
+
+	alignas(16) std::uint8_t frame[32] = {};
+	const std::int32_t lane = 2;
+	std::memcpy(frame, &lane, sizeof(lane));
+	WASM::callCallableFrame(*callable, frame);
+	std::int32_t result = 0;
+	std::memcpy(&result, frame + 8, sizeof(result));
+	CHECK(result == 30);
 }

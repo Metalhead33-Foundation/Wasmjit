@@ -6,6 +6,7 @@
 #include "WasmBase/WasmBackendRegistry.hpp"
 #include "WasmBase/WasmRegistryImportResolver.hpp"
 #include "WasmBase/WasmBackendAbi.hpp"
+#include "WasmBase/WasmNativeImport.hpp"
 #include "WasmBase/WasmRuntime.hpp"
 
 #include <algorithm>
@@ -465,4 +466,52 @@ std::memcpy(&first, frame, sizeof(first));
 std::memcpy(&second, frame + 8, sizeof(second));
 CHECK(first == 7);
 CHECK(second == 9);
+}
+
+// GAP-11: an indirect call to a wide vector signature in a module that also
+// imports a native function. The address side used to refuse the whole module
+// because the staged-import adapter had no ffi_type for a vector; the assertion
+// here is that the *module* instantiates and the call answers (docs/
+// API_ABI_STABILITY.md 8.5).
+namespace {
+
+std::int32_t asmjitWideV128HostAdd(WASM::VMContext*, std::int32_t value)
+{
+	return value + 1;
+}
+
+} // namespace
+
+TEST_CASE("AsmJIT carries a wide v128 indirect call beside a native import",
+"[staging][asmjit][abi][simd][call]")
+{
+	auto runtime = WASM::Runtime::create("asmjit");
+	REQUIRE(runtime != nullptr);
+	auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "wide_v128_indirect_probe.wasm");
+	WASM::RegistryImportResolver imports;
+	imports.registerFunction("env", "host_add", WASM::nativeImport<&asmjitWideV128HostAdd>());
+	WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+	REQUIRE(instance.frameCallAbi());
+	const auto call = [&](const char* name) -> WASM::Callable {
+		const std::optional<WASM::Callable> callable = instance.exportedFunction(name);
+		INFO("export " << name);
+		REQUIRE(callable.has_value());
+		REQUIRE(callable->fnPtr != nullptr);
+		return *callable;
+	};
+
+	alignas(16) std::uint8_t frame[64] = {};
+	WASM::callCallableFrame(call("indirect"), frame);
+	std::int32_t indirectResult = 0;
+	std::memcpy(&indirectResult, frame, sizeof(indirectResult));
+	CHECK(indirectResult == 30);
+
+	std::memset(frame, 0, sizeof(frame));
+	const std::int32_t value = 41;
+	std::memcpy(frame, &value, sizeof(value));
+	WASM::callCallableFrame(call("host"), frame);
+	std::int32_t hostResult = 0;
+	std::memcpy(&hostResult, frame + 8, sizeof(hostResult));
+	CHECK(hostResult == 42);
 }
