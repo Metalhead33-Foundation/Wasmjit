@@ -6014,6 +6014,26 @@ void OpcodeDispatcher::emitExternConversion(sljit_sw address)
 		loadContext(SLJIT_R0);
 		loadSlot(SLJIT_R1, depth, 8);
 		emitHelper(SLJIT_ARGS2(P, P, P), address);
+		// `extern.convert_any` of an internal reference allocates a fresh box,
+		// which starts unowned, and `any.convert_extern` can free the box it
+		// consumes -- and with it the inner reference that box held. So the
+		// result takes the stack's count *before* the operand gives its own up
+		// (docs/WRITING_A_BACKEND.md §6: the operand stack owns one count per
+		// reference it holds). The helper clobbers R0-R3, so the result waits in
+		// the scratch cell across both calls. The operand's slot already carries
+		// the reference marker, so replacing it in place keeps the stack's view.
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+				scratchSlotOffset(), SLJIT_R0, 0));
+		loadContext(SLJIT_R0);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R1, 0,
+				SLJIT_MEM1(SLJIT_SP), scratchSlotOffset()));
+		emitHelper(SLJIT_ARGS2(P, P, P), &WASM::wasm_ref_clone);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+				scratchSlotOffset(), SLJIT_R0, 0));
+		emitPendingTrapCheck();
+		emitDropStackRef(depth);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0,
+				SLJIT_MEM1(SLJIT_SP), scratchSlotOffset()));
 		storeSlot(SLJIT_R0, depth, 8);
 	}
 }

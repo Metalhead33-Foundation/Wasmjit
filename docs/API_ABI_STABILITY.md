@@ -545,8 +545,8 @@ otherwise.
 | `GAP-6` | limitation | Only **x86-64 Linux / SysV AMD64** is exercised. MS x64, AAPCS64, Windows ARM64, RISC-V and MIPS are specified but *provisional*; big-endian and ILP32 are unsupported by decision. **Excluded from the §10.1 closure plan by decision** — it needs a runner, not a patch. | all | [`ABI.md`](ABI.md) “The C ABI Contract” |
 | `GAP-8` | coverage/defect | The AddressSanitizer suite is recorded for LibJIT (clean) and, since 2026-11-11, for SLJIT — where it found and closed `GAP-14` and **still reports `GAP-18`**. No AsmJIT ASan run is recorded. | SLJIT, AsmJIT | [`TESTING.md`](TESTING.md) “Required runs” |
 | `GAP-10` | coverage | The atomic `table.*.rmw` forms (`xchg`, `cmpxchg`) have no fixture, because a shared reference-typed table is not constructible in the harness yet. | shared tables | [`TESTING.md`](TESTING.md) |
-| `GAP-15` | **defect (Debug build)** | The spec script `ref_test` fails on SLJIT and AsmJIT in the **Debug** build: `ref_test_extern` answers `0` where the spec expects `2`. LibJIT passes in both configurations, and **both backends pass in Release** (22,602 assertions / 831 cases, measured 2026-11-11), so this is a build-configuration divergence — most likely undefined behaviour in the lowering that optimises correctly — and it still matters because developers and the ASan run use Debug. | SLJIT, AsmJIT (Debug) | §13.4; reproduce with `WASMJIT_BACKEND=sljit ./WasmJit 'spec: ref_test'` in `build/Desktop-Debug` |
-| `GAP-16` | **defect (Debug build)** | The **Debug** AsmJIT suite ends in `SIGSEGV` inside the JSON lexer while parsing the `table_copy` script, at case 392 of 830 — with and without `WASM_SPEC_VALIDATE=1`, and with the 2026-11-11 tests excluded. `spec: table_copy` passes alone, and the **Release** suite is green, so the fault is order- or state-dependent and Debug-only; a corrupt pointer reaching the harness’s JSON parser suggests a heap overwrite rather than a parser bug. A module-triggered crash is a disqualifier (criteria 1 and 3) until that is established. | AsmJIT (Debug) | §13.4; reproduce with `WASMJIT_BACKEND=asmjit ./WasmJit --rng-seed 12345` in `build/Desktop-Debug` |
+| `GAP-15` | **defect, fixed 2026-11-11** | The spec script `ref_test` failed on SLJIT and AsmJIT: `ref_test_extern` answered `0` where the spec expects `2`, for an extern box built by `extern.convert_any`. **Root cause, one line in two backends:** a conversion replaces its operand in place, so both lowerings assumed the operand stack's count “moves” onto the result — but `extern.convert_any` returns a *fresh box that starts unowned* (count 0) and `any.convert_extern` can free the box it consumes, releasing the inner reference with it. Neither backend retained the result nor released the operand, so the box was reclaimed while the table still pointed at it: a wrong answer in a build whose poison-on-free or block reuse exposes it, silent corruption otherwise. LibJIT already cloned on push; it now drops the operand *after* the push, so releasing a box cannot free the inner reference before the result holds it. Fixed in `SljitOpcodeDispatcher::emitExternConversion`, `AsmjitModuleCompiler`'s `emitExternConversion` and both LibJIT conversions; the regression fixture `Test/wasm_wat/gc_extern_box.wat` recycles the box's size class so the defect shows in **every** configuration, not just Debug. | closed | §13.4; `Test/SljitBackendTests.cpp` “keep an extern box alive across a table store” |
+| `GAP-16` | **defect (build-configuration dependent)** | The AsmJIT suite ends in `SIGSEGV` at a case that moves with the run: `spec: table_copy` in one order, a decoder case in another, `simd: v128 globals` under ASan — always after ~9–15k assertions, and **every crashing case passes alone**. The fault is a *write* to a wild address; ASan reports `SEGV on unknown address` rather than an overflow, so the write comes from memory ASan does not instrument (JIT-emitted code, or the mmap-backed GC heap). **The boundary is not “Debug vs Release”:** the two Test binaries are built with identical flags (`-O2`), and the difference is the *libraries* — `WasmBase` at `-O0` crashes and `WasmBase` at `-O2` is green (22,668 assertions / 832 cases) while `Asmjit` is `-O2` in both. So a dependency of the generated code on uninitialised state is reading host stack that the unoptimised `WasmBase` lays out differently. Valgrind cannot run on this host (its `ld.so` uses instructions Valgrind rejects), and ASan cannot see the GC heap or JIT code, so the next instrument is a `-fsanitize=undefined` build of `WasmBase`. | AsmJIT, any unoptimised-`WasmBase` build | §13.4; reproduce with `WASMJIT_BACKEND=asmjit ./WasmJit --rng-seed 12345` in `build/Desktop-Debug` |
 | `GAP-18` | **defect** | The SLJIT AddressSanitizer run leaks continuation handle/value storage: **10,568 bytes in 17 allocations** from `wasm_cont_switch`, `wasm_cont_resume_ex` and `invokeFfiContinuation`. The same cases are LeakSanitizer-clean on LibJIT, so the release path differs per backend. A leak, never a wrong answer. | SLJIT | §13.4; reproduce with `ASAN_OPTIONS=detect_leaks=1:abort_on_error=1 LSAN_OPTIONS=suppressions=Test/asan.supp WASMJIT_BACKEND=sljit ./WasmJit '*continuation*'` |
 
 ### 8.2 Decisions that are not defects
@@ -899,8 +899,8 @@ milestone decision, and none changes a §2.2 surface.
 | **GR-7 — Constant-stack frame tails** | A frame trampoline/tail entry for SLJIT's wide `return_call_ref`, and the frame pointer carried through LibJIT's trampoline | `GAP-2`, `GAP-3` | a 10⁶-link frame-form tail chain completes on the default stack on both backends |
 | **GR-8 — Per-signature call form** | `usesFrameForm(signature, ceiling, optIn)` in the core; the instance's boolean becomes a per-type decision; the three backends read it | `GAP-1` | a module with one wide function keeps the register form for every other call; `[staging][abi][call]` and the mixed-graph fixtures stay green |
 | **GR-9 — Shared-table RMW fixture** | Construct a shared reference-typed table in the harness and cover `table.*.rmw` | `GAP-10` | the fixture runs on all three backends, or the row records precisely which proposal gate blocks it |
-| **GR-10 — `ref.test` on an `externref`** | Make `ref_test`'s `ref_test_extern` case answer the spec value **in the Debug build** on SLJIT and AsmJIT (LibJIT and the Release build already do) | `GAP-15` | `WASMJIT_BACKEND=sljit ./WasmJit 'spec: ref_test'` and the AsmJIT run are green in `build/Desktop-Debug` |
-| **GR-11 — The AsmJIT Debug-suite crash** | Diagnose the `SIGSEGV` that reaches the harness's JSON lexer at case 392 and fix the heap overwrite behind it | `GAP-16` | the full AsmJIT suite exits 0 in `build/Desktop-Debug`, with and without `WASM_SPEC_VALIDATE=1` |
+| **GR-10 — `ref.test` on an `externref`** ✅ | Take the stack's count on the conversion result **before** releasing the operand, in both the SLJIT and AsmJIT lowerings (LibJIT already retained on push; it now releases the operand afterwards), and add a fixture that recycles the box's size class so the defect is visible in every configuration | `GAP-15` | ✅ **Done 2026-11-11**: `spec: ref_test` is green on all three backends in `build/Desktop-Debug`, and `gc_extern_box` fails before the fix (12 assertions) and passes after it, in Debug *and* Release |
+| **GR-11 — The AsmJIT suite crash** ◐ | Find the uninitialised state the generated code reads: bisect the build configuration (done: `WasmBase` `-O0` crashes, `-O2` is green, `Asmjit` does not matter), then instrument (`-fsanitize=undefined`) to name the read | `GAP-16` | the full AsmJIT suite exits 0 in a `-O0`-library build, with and without `WASM_SPEC_VALIDATE=1` |
 | **GR-12 — The SLJIT continuation leak** | Find why a continuation handle/value allocated by `wasm_cont_switch`/`wasm_cont_resume_ex` is not released on SLJIT (LibJIT is clean) and release it | `GAP-18`, the SLJIT half of `GAP-8` | the SLJIT ASan run of `*continuation*` reports no unsuppressed leak |
 
 
@@ -1034,8 +1034,8 @@ measurement).
 > suite nor LibJIT shows: **`GAP-15`**, a wrong answer in `ref_test`’s
 > `ref_test_extern` case on **SLJIT and AsmJIT** (LibJIT answers it correctly), and
 > **`GAP-16`**, an order-dependent `SIGSEGV` in the **AsmJIT** Debug suite at case
-> 392. **The Release configuration is green for all three backends** (22,602
-> assertions / 831 cases, 2026-11-11), which is the configuration §13.7 measures, so
+> 392. **The Release configuration is green for all three backends** (22,668
+> assertions / 832 cases, 2026-11-11), which is the configuration §13.7 measures, so
 > the production verdict stands; the two Debug rows stay open because a
 > configuration that miscompiles or crashes is a defect even when the optimiser
 > hides it (`GR-10`, `GR-11`). The SLJIT AddressSanitizer run adds a third: a
@@ -1046,9 +1046,9 @@ measurement).
 
 | Backend | Verdict | Generic suite |
 |---|---|---|
-| **LibJIT** (`LibJit/`) | Production-ready within the envelope; the reference implementation and the semantic oracle | **Release: 22,602 assertions / 831 cases, green** (2026-11-11); Debug: same, green |
-| **SLJIT** (`Sljit/`) | Production-ready within the same envelope, with the documented refusals — **qualified by the 2026-11-11 amendment** (`GAP-15` is Debug-only; `GAP-16` is AsmJIT-only) | **Release: 22,602 assertions / 831 cases, green** (2026-11-11). Debug: `[spec]` fails `ref_test` (`GAP-15`) |
-| **AsmJIT** (`Asmjit/`) | Production-ready within the same envelope, with the documented refusals; needs the external AsmJit library at build time — **qualified by the 2026-11-11 amendment** (`GAP-15`, `GAP-16`, both Debug-only) | **Release: 22,602 assertions / 831 cases, green** (2026-11-11). Debug: suite stops at case 392 with `SIGSEGV` (`GAP-16`) and `[spec]` fails `ref_test` (`GAP-15`) |
+| **LibJIT** (`LibJit/`) | Production-ready within the envelope; the reference implementation and the semantic oracle | **Release: 22,668 assertions / 832 cases, green** (2026-11-11); Debug: same, green |
+| **SLJIT** (`Sljit/`) | Production-ready within the same envelope, with the documented refusals — **qualified by the 2026-11-11 amendment** (`GAP-15` is Debug-only; `GAP-16` is AsmJIT-only) | **Release: 22,668 assertions / 832 cases, green** (2026-11-11). Debug: `[spec]` fails `ref_test` (`GAP-15`) |
+| **AsmJIT** (`Asmjit/`) | Production-ready within the same envelope, with the documented refusals; needs the external AsmJit library at build time — **qualified by the 2026-11-11 amendment** (`GAP-15`, `GAP-16`, both Debug-only) | **Release: 22,668 assertions / 832 cases, green** (2026-11-11). Debug: suite stops at case 392 with `SIGSEGV` (`GAP-16`) and `[spec]` fails `ref_test` (`GAP-15`) |
 
 Equal assertion counts are the point: every case executes on every backend, so
 no case is skipped, refused early or cut short by a crash. The promotion gate is
@@ -1113,11 +1113,20 @@ The open register is §8.1. For the backends specifically:
   is fixed.
 - **The one design gap** is the per-module call form (`GAP-1`); its fix is a
   milestone because it changes the `frameCallAbi()` contract.
-- **Found by the 2026-11-11 runs** (§8.5): `GAP-15` — `ref.test` on an `externref`
-  answers `0` instead of `2` on SLJIT and AsmJIT (`ref_test` spec script; LibJIT
-  passes); `GAP-16` — the full AsmJIT strict sweep ends in `SIGSEGV` inside
-  `spec: table_copy`, which passes in isolation. Both are open; the corresponding
-  milestones are `GR-10` and `GR-11` in §10.1.
+- **Found by the 2026-11-11 runs** (§8.5), both now understood:
+  - `GAP-15` — `ref.test` on an extern **box** answered `0` instead of `2` on
+    SLJIT and AsmJIT (`ref_test` spec script; LibJIT passed). The conversion
+    replaced its operand in place without taking the stack's count on the result
+    and without releasing the operand, so a box created unowned was reclaimed
+    while the table still pointed at it. **Fixed in both backends** (`GR-10`),
+    with `gc_extern_box.wat` as the regression fixture: it recycles the box's
+    size class, so the same defect fails in Release too — the Debug-only reading
+    was the poison, not the bug.
+  - `GAP-16` — the AsmJIT suite ends in `SIGSEGV` at a case that moves with the
+    run, and every such case passes alone. The boundary is **`WasmBase` `-O0`
+    versus `-O2`**, not Debug versus Release: the Test binaries carry identical
+    flags, `Asmjit` at `-O2` still crashes, and `WasmBase` at `-O2` is green.
+    Open (`GR-11`).
 
 A refusal leaves that function’s `Callable::fnPtr` **null**; the core reports
 “no compiled body” at the call boundary. Nothing is miscompiled and nothing is
@@ -1127,9 +1136,9 @@ interpreted.
 
 | # | Criterion | Status |
 |---|---|---|
-| 1 | `WASMJIT_BACKEND=<name> ./Test/WasmJit` completes green, no abort, no segfault | **met for all three in Release** (22,602 assertions / 831 cases each, 2026-11-11). In **Debug** the AsmJIT run crashes at case 392 (`GAP-16`) and `[spec]` fails `ref_test` on SLJIT/AsmJIT (`GAP-15`) |
+| 1 | `WASMJIT_BACKEND=<name> ./Test/WasmJit` completes green, no abort, no segfault | **met for all three in Release** (22,668 assertions / 832 cases each, 2026-11-11). In **Debug** SLJIT and LibJIT are green (`GAP-15` closed) and the AsmJIT run still crashes (`GAP-16`) |
 | 2 | The spec suite and the strict `WASM_SPEC_VALIDATE=1` negative sweep pass on that backend | LibJIT: **met** (22,558 assertions / 828 cases). SLJIT/AsmJIT: met in Release; **Debug fails `ref_test`**, and AsmJIT additionally crashes (`GAP-15`, `GAP-16`). All three runs are now recorded (`GAP-9` closed) |
-| 3 | Every failure is fixed or an explicit, documented refusal; no wrong-result or crash path | **met for all three in Release.** Open in Debug for SLJIT/AsmJIT until `GR-10`/`GR-11`: `GAP-15` is a wrong answer and `GAP-16` is a crash there |
+| 3 | Every failure is fixed or an explicit, documented refusal; no wrong-result or crash path | **met for all three in Release**, and in Debug for LibJIT and SLJIT (`GAP-15` closed). Open: the AsmJIT crash (`GAP-16`, `GR-11`) |
 | 4 | The sanitizer run is recorded and clean for that backend | **LibJIT: met.** SLJIT: recorded, and **not clean** — the continuation leak `GAP-18` (`GR-12`); no memory error otherwise (`GAP-14` fixed). AsmJIT: not recorded (`GAP-8`) |
 | 5 | The target matrix is exercised beyond x86-64 Linux, or the claim is limited to SysV AMD64 | **limited to x86-64 Linux / SysV AMD64**, explicitly, for all three (`GAP-6`) |
 | 6 | README, backend pages, `VALIDATION.md`, this note and `TESTING.md` tell the same story | **met** |

@@ -7277,10 +7277,12 @@ void OpcodeDispatcher::dispatchAnyConvertExtern() {
 	jit_value_t args[] = {vmContextValue(), refAsVoidPtr(ref)};
 	jit_value_t unboxed = jit_insn_call_native(function, "wasm_extern_unbox_impl",
 			reinterpret_cast<void*>(wasm_extern_unbox_impl), sig, args, 2, 0);
-	// The box (if this was one) owns the inner reference; move that ownership
-	// to the result before dropping the input.
-	emitDropValue(ref);
+	// The box (if this was one) owns the inner reference. The result takes the
+	// stack's count *first*: dropping the box can release the inner reference
+	// when the stack held the last count, so releasing the input first would
+	// leave the pushed result dangling.
 	pushValue(unboxed);
+	emitDropValue(ref);
 }
 void OpcodeDispatcher::dispatchExternConvertAny() {
 	jit_value_t ref = popValue();
@@ -7289,10 +7291,12 @@ void OpcodeDispatcher::dispatchExternConvertAny() {
 	jit_value_t args[] = {vmContextValue(), refAsVoidPtr(ref)};
 	jit_value_t boxed = jit_insn_call_native(function, "wasm_extern_box_impl",
 			reinterpret_cast<void*>(wasm_extern_box_impl), sig, args, 2, 0);
-	// `externBox` retained the inner reference; the operand stack's count on
-	// the input is released here.
-	emitDropValue(ref);
+	// `externBox` retained the inner reference into a fresh, unowned box, and
+	// the operand stack's count on the input is released here. The stack's count
+	// on the box is taken before that release, so the box outlives the operand
+	// even when it was that operand's only owner.
 	pushValue(boxed);
+	emitDropValue(ref);
 }
 void OpcodeDispatcher::dispatchRefI31() {
 	jit_value_t value = popValue();

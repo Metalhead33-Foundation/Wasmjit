@@ -152,10 +152,14 @@ target-architecture check).
    matrix in [`docs/ABI.md`](../docs/ABI.md) keeps the
    other rows *provisional*.
 4. **A wide `v128` indirect call in a module with a native import** is *accepted*
-   since 2026-11-11 (`GAP-11`, `wide_v128_indirect_probe.wat`). What remains open
-   is the `[spec]` run: `ref_test`’s `ref_test_extern` case answers `0` where the
-   spec says `2` (`GAP-15`, shared with SLJIT), and the strict sweep ends in
-   `SIGSEGV` in `spec: table_copy` (`GAP-16`).
+   since 2026-11-11 (`GAP-11`, `wide_v128_indirect_probe.wat`). `ref_test`’s
+   `ref_test_extern` case answered `0` where the spec says `2`; that was the
+   extern-box conversion replacing its operand without taking the stack’s count,
+   and it is **fixed** here and in SLJIT (`GAP-15`, 2026-11-11), with
+   `gc_extern_box.wat` as the fixture. What remains open is the full-suite
+   `SIGSEGV` (`GAP-16`): a case that moves with the run, passes alone, and
+   disappears when `WasmBase` is built `-O2` — so it is a build-configuration
+   dependency on uninitialised state, not a refusal.
 5. Meet every applicable item in
    [`docs/WRITING_A_BACKEND.md`](../docs/WRITING_A_BACKEND.md) before calling the
    backend complete.

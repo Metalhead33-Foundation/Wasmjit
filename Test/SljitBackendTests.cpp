@@ -2241,6 +2241,60 @@ TEST_CASE("asmjit and sljit agree on array.new and array.len",
 }
 
 
+TEST_CASE("asmjit and sljit keep an extern box alive across a table store",
+"[sljit][asmjit][parity][gc]")
+{
+	// GAP-15 / GR-10. `extern.convert_any` allocates an extern box that starts
+	// unowned, and `any.convert_extern` can free the box it consumes (which
+	// releases the inner reference). The operand stack owns one count of every
+	// reference it holds (docs/WRITING_A_BACKEND.md section 6), so the conversion
+	// has to take that count on the result and give the operand's up. Doing
+	// neither left the table pointing at a box whose count was zero: the spec
+	// suite saw a wrong `ref.test` answer under the Debug build's poison-on-free,
+	// and `churn` makes the same corruption visible in Release by handing the
+	// reclaimed block back out as an empty struct.
+	WASM::Module module = loadTestModule("gc_extern_box");
+	AsmJitBackend::Context asmContext;
+	AsmJitBackend::ModuleCompiler asmCompiler(asmContext);
+	Sljit::ModuleCompiler sljitCompiler;
+	WASM::RegistryImportResolver asmImports;
+	WASM::RegistryImportResolver sljitImports;
+	std::unique_ptr<WASM::ModuleInstance> asmInstance =
+			asmCompiler.instantiate(module, asmImports);
+	std::unique_ptr<WASM::ModuleInstance> sljitInstance =
+			sljitCompiler.instantiate(module, sljitImports);
+	REQUIRE(asmInstance != nullptr);
+	REQUIRE(sljitInstance != nullptr);
+
+	const auto call = [](WASM::ModuleInstance& instance, const char* name) -> WASM::Callable {
+		const std::optional<WASM::Callable> callable = instance.exportedFunction(name);
+		INFO("export " << name);
+		REQUIRE(callable.has_value());
+		REQUIRE(callable->fnPtr != nullptr);
+		return *callable;
+	};
+	// Both instances take the same sequence: fill the table, recycle the box's
+	// size class, then ask what the table holds.
+	const auto exercise = [&](WASM::ModuleInstance& instance) {
+		WASM::callCallable<std::int32_t>(call(instance, "fill"));
+		CHECK(WASM::callCallable<std::int32_t>(call(instance, "churn"), 64) == 64);
+		CHECK(WASM::callCallable<std::int32_t>(call(instance, "test_boxed"), 0) == 1);
+		CHECK(WASM::callCallable<std::int32_t>(call(instance, "test_boxed"), 1) == 1);
+		CHECK(WASM::callCallable<std::int32_t>(call(instance, "test_boxed"), 2) == 1);
+		CHECK(WASM::callCallable<std::int32_t>(call(instance, "test_nonnull"), 0) == 1);
+		CHECK(WASM::callCallable<std::int32_t>(call(instance, "test_nonnull"), 1) == 1);
+		CHECK(WASM::callCallable<std::int32_t>(call(instance, "test_nonnull"), 2) == 0);
+		CHECK(WASM::callCallable<std::int32_t>(call(instance, "unbox_i31")) == 8);
+		CHECK(WASM::callCallable<std::int32_t>(call(instance, "unbox_field")) == 5);
+		CHECK(WASM::callCallable<std::int32_t>(call(instance, "unbox_null_is_null")) == 1);
+	};
+	INFO("asmjit");
+	exercise(*asmInstance);
+	INFO("sljit");
+	exercise(*sljitInstance);
+}
+
+
 TEST_CASE("sljit: ref.test compares the object type id", "[sljit][module][parity][gc]")
 {
 	auto session = Sljit::createSession();

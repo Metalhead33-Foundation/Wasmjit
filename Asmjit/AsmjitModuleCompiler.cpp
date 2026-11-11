@@ -5883,6 +5883,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 					+ " operand underflow");
 		auto reference = values.back();
 		values.pop_back();
+		const bool owned = referenceValues.erase(reference.id()) != 0;
 		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
 		signature.set_ret(asmjit::TypeId::kUIntPtr);
 		signature.add_arg(asmjit::TypeId::kUIntPtr);
@@ -5895,11 +5896,21 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		invoke->set_arg(1, reference);
 		auto result = compiler.new_gp64("externConversion");
 		invoke->set_ret(0, result);
-		// The conversion produces a reference in place of the operand it
-		// consumed, so the operand stack's one count moves onto the new value.
-		if (referenceValues.erase(reference.id()) != 0)
+		// The result replaces the operand on the stack, and the stack owns one
+		// count of every reference it holds -- but the count does not simply
+		// "move". `extern.convert_any` of an internal reference returns a fresh
+		// box, which starts unowned, and `any.convert_extern` may free the box it
+		// consumes, releasing the inner reference with it. So the result takes the
+		// count *before* the operand gives its own up.
+		if (owned) {
+			const asmjit::x86::Gp kept = emitRefClone(result);
+			checkError(compiler.mov(result, kept),
+					"AsmJit extern conversion retain failed");
 			markReference(result);
+		}
 		values.push_back(result);
+		if (owned)
+			emitRefDrop(reference);
 	}
 
 	void dispatchAnyConvertExtern() override
