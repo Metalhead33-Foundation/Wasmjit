@@ -276,9 +276,10 @@ Offsets come from [`WasmBackendAbi.hpp`](../WasmBase/WasmBackendAbi.hpp):
   two `uint64_t` arguments, low word first — and a vector result is spooled
   through the result block, which is what the SLJIT staged adapter now does for a
   native import (`GAP-11`, closed).
-- **Tail calls** need the frame pointer carried through the trampoline. LibJIT’s
-  frame tails are a frame call + frame return: correct, but not constant-stack
-  (`GAP-3`).
+- **Tail calls**: the frame pointer travels through the trampoline and
+  `TailCallState::frame` stages each link’s arguments, so a 1,000,000-link
+  frame-form chain runs in constant native stack. LibJIT installs the same
+  backend-neutral driver/thunk pair for the frame form, which closes `GAP-3`.
 - **The frame is not a GC-scanned root.** A reference held only in a live frame
   is invisible to a collection; keep it in scanned storage across a safepoint or
   register the frame.
