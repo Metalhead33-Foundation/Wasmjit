@@ -13,6 +13,7 @@
 
 WASMJIT_VISIBLE_BEGIN
 #include <cstdlib>
+#include <stdexcept>
 #include <type_traits>
 #include <utility>
 #include "WasmTrap.hpp"
@@ -196,45 +197,33 @@ inline bool needsResultBuffer(const FuncType& ft)
 	return false;
 }
 
-//! Invokes a callable whose single result is a `v128`, through the canonical
-//! caller-supplied buffer.
-//!
-//! A `v128` result cannot come back in one return register, so a backend that
-//! follows `docs/ABI.md` compiles such a function as
-//! `void(VMContext*, params..., void* out)` and writes the 16 bytes at `out`. This
-//! helper supplies that buffer and returns its contents, so an embedder or a test
-//! does not have to spell the trailing pointer itself. The trap check is the one
-//! `callCallable` performs.
-//!
-//! \tparam Args Argument types forwarded to the callable.
+namespace Detail {
+
+//! Rejects a frame-form callable at the register-form entry points.
+//! The two forms have different C signatures: calling a frame-form function
+//! through the register helper leaves its second argument (the frame pointer)
+//! uninitialised, and the callee writes its results through it. That is a wild
+//! write, not a wrong value (`GAP-16`), so the helper refuses it by name.
+//! \param callable The callable about to be invoked.
+//! \param helper The entry point's name, used in the message.
+//! \throws std::runtime_error when `callable` uses the staging-frame form.
+WASMJIT_API void requireRegisterForm(const Callable& callable, const char* helper);
+
+//! Rejects a register-form callable at the frame-form entry point.
+//! \param callable The callable about to be invoked.
+//! \param helper The entry point's name, used in the message.
+//! \throws std::runtime_error when `callable` does not use the staging-frame form.
+WASMJIT_API void requireFrameForm(const Callable& callable, const char* helper);
+
+//! The shared register-form body, after the form check.
+//! \tparam Ret Expected return type.
+//! \tparam Args Argument types forwarded to the function.
 //! \param callable Callable descriptor to invoke.
 //! \param args Arguments matching the callable's lowered signature.
-//! \return The sixteen bytes the callee wrote, as four 32-bit lanes in
-//!         little-endian order.
-//! \throws WASM::Trap when the call reports a pending trap at the host boundary.
-template<typename... Args>
-std::array<std::uint32_t, 4> callCallableVector(const Callable& callable, Args&&... args)
-{
-	alignas(16) std::array<std::uint32_t, 4> result {};
-	callCallable<void>(callable, std::forward<Args>(args)...,
-			static_cast<void*>(result.data()));
-	return result;
-}
-
-
-//! Address of the current execution state's tail-call state. Generated code
-//! calls this helper; it is the only supported way for a backend to reach the
-//! state, because a context's address is not portable across host threads.
-/** \brief Returns the current execution state's tail-call trampoline storage. \return Pointer to the current TailCallState. */
-TailCallState* currentTailCallState() noexcept;
-
+//! \return Function result as Ret.
 template<typename Ret, typename... Args>
-/** \brief Invokes a callable using the single-result native ABI and checks pending traps. \tparam Ret Expected return type. \tparam Args Argument types forwarded to the function. \param callable Callable descriptor to invoke. \param args Arguments matching the callable's lowered signature. \return Function result as Ret. \throws WASM::Trap when the call reports a pending trap at the host boundary. */
-Ret callCallable(const Callable& callable, Args&&... args)
+Ret invokeRegisterForm(const Callable& callable, Args&&... args)
 {
-	if (callable.fnPtr == nullptr)
-		std::abort();
-
 	using Fn = Ret (*)(VMContext*, std::decay_t<Args>...);
 	Fn fn = reinterpret_cast<Fn>(callable.fnPtr);
 	//! The scope tells `checkTrap()` whether this is the host boundary (throw) or
@@ -257,6 +246,55 @@ Ret callCallable(const Callable& callable, Args&&... args)
 	}
 }
 
+} // namespace Detail
+
+//! Invokes a callable whose single result is a `v128`, through the canonical
+//! caller-supplied buffer.
+//!
+//! A `v128` result cannot come back in one return register, so a backend that
+//! follows `docs/ABI.md` compiles such a function as
+//! `void(VMContext*, params..., void* out)` and writes the 16 bytes at `out`. This
+//! helper supplies that buffer and returns its contents, so an embedder or a test
+//! does not have to spell the trailing pointer itself. The trap check is the one
+//! `callCallable` performs.
+//!
+//! \tparam Args Argument types forwarded to the callable.
+//! \param callable Callable descriptor to invoke.
+//! \param args Arguments matching the callable's lowered signature.
+//! \return The sixteen bytes the callee wrote, as four 32-bit lanes in
+//!         little-endian order.
+//! \throws WASM::Trap when the call reports a pending trap at the host boundary.
+template<typename... Args>
+std::array<std::uint32_t, 4> callCallableVector(const Callable& callable, Args&&... args)
+{
+	if (callable.fnPtr == nullptr)
+		std::abort();
+	Detail::requireRegisterForm(callable, "callCallableVector");
+	alignas(16) std::array<std::uint32_t, 4> result {};
+	callCallable<void>(callable, std::forward<Args>(args)...,
+			static_cast<void*>(result.data()));
+	return result;
+}
+
+
+//! Address of the current execution state's tail-call state. Generated code
+//! calls this helper; it is the only supported way for a backend to reach the
+//! state, because a context's address is not portable across host threads.
+/** \brief Returns the current execution state's tail-call trampoline storage. \return Pointer to the current TailCallState. */
+TailCallState* currentTailCallState() noexcept;
+
+
+
+template<typename Ret, typename... Args>
+/** \brief Invokes a callable using the single-result native ABI and checks pending traps. \tparam Ret Expected return type. \tparam Args Argument types forwarded to the function. \param callable Callable descriptor to invoke; it must use the register form. \param args Arguments matching the callable's lowered signature. \return Function result as Ret. \throws WASM::Trap when the call reports a pending trap at the host boundary. \throws std::runtime_error when the callable uses the staging-frame form. */
+Ret callCallable(const Callable& callable, Args&&... args)
+{
+	if (callable.fnPtr == nullptr)
+		std::abort();
+	Detail::requireRegisterForm(callable, "callCallable");
+	return Detail::invokeRegisterForm<Ret>(callable, std::forward<Args>(args)...);
+}
+
 //! Calls a function with more than one result.
 //!
 //! A multi-result callee's lowered signature is
@@ -272,6 +310,7 @@ void callCallableWithResults(const Callable& callable, void* results, Args&&... 
 {
 	if (callable.fnPtr == nullptr)
 		std::abort();
+	Detail::requireRegisterForm(callable, "callCallableWithResults");
 
 	using Fn = void (*)(VMContext*, std::decay_t<Args>..., void*);
 	Fn fn = reinterpret_cast<Fn>(callable.fnPtr);
@@ -305,7 +344,10 @@ void callCallableWithResults(const Callable& callable, void* results, Args&&... 
 //! \throws WASM::Trap when the call reports a pending trap at the host boundary.
 inline void callCallableFrame(const Callable& callable, void* frame)
 {
-	callCallable<void>(callable, frame);
+	if (callable.fnPtr == nullptr)
+		std::abort();
+	Detail::requireFrameForm(callable, "callCallableFrame");
+	Detail::invokeRegisterForm<void>(callable, frame);
 }
 
 }

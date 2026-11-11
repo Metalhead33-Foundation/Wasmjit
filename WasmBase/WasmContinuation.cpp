@@ -205,6 +205,10 @@ void invokeScalarI32(void* target, void* context,
 		const ContinuationValue* args, std::uint32_t argCount,
 		ContinuationValue* results, std::uint32_t resultCount,
 		const std::uint8_t* paramKinds, const std::uint8_t* resultKinds);
+void invokeFfiContinuation(void* target, void* context,
+		const ContinuationValue* args, std::uint32_t argCount,
+		ContinuationValue* results, std::uint32_t resultCount,
+		const std::uint8_t* paramKinds, const std::uint8_t* resultKinds);
 
 struct Worker : std::enable_shared_from_this<Worker> {
 	const ContinuationProvider provider;
@@ -439,11 +443,16 @@ void invokeScalarI32(void* target, void* context,
 		ContinuationValue* results, std::uint32_t resultCount,
 		const std::uint8_t* paramKinds, const std::uint8_t* resultKinds)
 {
-	(void)paramKinds;
-	(void)resultKinds;
 	Callable copy = *static_cast<Callable*>(target);
 	if (copy.context == nullptr)
 		copy.context = static_cast<VMContext*>(context);
+	// A frame-form target needs the frame contract; the ffi invoker builds the
+	// frame from the same kind arrays this scalar path receives (`GR-8`).
+	if (WASM::callableUsesFrameForm(copy)) {
+		invokeFfiContinuation(&copy, context, args, argCount, results, resultCount,
+				paramKinds, resultKinds);
+		return;
+	}
 	switch (argCount) {
 	case 0:
 		if (resultCount != 0)

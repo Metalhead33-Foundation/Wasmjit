@@ -2664,6 +2664,28 @@ bool callableUsesFrameForm(const Callable& callable) noexcept
 	return instance->usesFrameForm(LocalTypeIdx{callable.localTypeIdx});
 }
 
+namespace Detail {
+
+void requireRegisterForm(const Callable& callable, const char* helper)
+{
+	if (!callableUsesFrameForm(callable))
+		return;
+	throw std::runtime_error(std::string(helper)
+			+ ": the callable uses the staging-frame form; pass a 16-byte-aligned"
+			  " frame with callCallableFrame instead (docs/ABI.md \"Call forms\")");
+}
+
+void requireFrameForm(const Callable& callable, const char* helper)
+{
+	if (callableUsesFrameForm(callable))
+		return;
+	throw std::runtime_error(std::string(helper)
+			+ ": the callable uses the register form, not the staging frame; call it"
+			  " with callCallable instead (docs/ABI.md \"Call forms\")");
+}
+
+} // namespace Detail
+
 void wasm_ref_store(VMContext* context, void** slot, void* value) noexcept
 {
 	try {

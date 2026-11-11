@@ -201,14 +201,19 @@ public:
 	//! The lookup happens once; the calling convention does not change
 	//! (docs/ABI.md). A missing export, or an export with no compiled body, is a
 	//! named error rather than a null call.
+	//!
+	//! A typed entry uses the **register form**: a callable compiled in the
+	//! staging-frame form is refused with a named error (`GAP-16`), because the
+	//! register signature carries no frame pointer. Use `ModuleCallCache` (which
+	//! marshals either form) or `callCallableFrame` with a frame for those.
 	template<typename Ret, typename... Args>
-	/** \brief Looks up and invokes an exported function with typed C++ arguments. \tparam Ret Expected C++ return type. \tparam Args C++ argument types matching the export's ABI. \param instance Instance owned by this runtime. \param name Exported function name. \param args Arguments forwarded to the callable. \return Export result as Ret. \throws std::runtime_error for a foreign instance, missing export, non-executable body, or rejected concurrent entry. */
+	/** \brief Looks up and invokes an exported function with typed C++ arguments. \tparam Ret Expected C++ return type. \tparam Args C++ argument types matching the export's ABI. \param instance Instance owned by this runtime. \param name Exported function name. \param args Arguments forwarded to the callable. \return Export result as Ret. \throws std::runtime_error for a foreign instance, missing export, non-executable body, rejected concurrent entry, or a staging-frame callable at this register-form entry. */
 	Ret callExport(ModuleInstance& instance, std::string_view name, Args&&... args);
 
 	//! Like `callExport`, but writes results into a caller-owned buffer instead of
 	//! returning them (multi-value and void results).
 	template<typename... Args>
-	/** \brief Invokes an export and writes its result tuple to caller-owned storage. \tparam Args C++ argument types matching the export's ABI. \param instance Instance owned by this runtime. \param name Exported function name. \param results Caller-owned result buffer with sufficient ABI capacity. \param args Arguments forwarded to the callable. \throws std::runtime_error for a foreign instance, missing export, non-executable body, or rejected concurrent entry. */
+	/** \brief Invokes an export and writes its result tuple to caller-owned storage. \tparam Args C++ argument types matching the export's ABI. \param instance Instance owned by this runtime. \param name Exported function name. \param results Caller-owned result buffer with sufficient ABI capacity. \param args Arguments forwarded to the callable. \throws std::runtime_error for a foreign instance, missing export, non-executable body, rejected concurrent entry, or a staging-frame callable at this register-form entry. */
 	void callExportWithResults(ModuleInstance& instance, std::string_view name,
 			void* results, Args&&... args);
 
