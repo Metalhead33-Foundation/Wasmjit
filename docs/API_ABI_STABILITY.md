@@ -654,13 +654,13 @@ that will not instantiate, which is a hard production blocker but never silent;
 | `GAP-15` | conditional | Kotlin/Wasm, MoonBit, Dart, AssemblyScript (`ref.test` on an `externref`) | **wrong answer** wherever poison-on-free or block reuse exposes a reclaimed box (`ref_test_extern` answered 0 where the spec says 2) | **closed 2026-11-11** — result retained before the operand is released, in both backends; `gc_extern_box.wat` fails before the fix in Debug *and* Release |
 | `GAP-16` | none — caller misuse of the helper | any row whose test called a frame-form export through the register-form helper | **crash** (`SIGSEGV`) from a wild frame pointer, order-dependent | **closed 2026-11-11** — the helpers refuse the form mismatch by name (`GAP-16` guard) and the harness marshals per callable (`callTestI32`/`callTestI64`); the frame-form prologue was correct all along |
 | `GAP-18` | conditional | any row using continuations (stack switching), on SLJIT | leak per abandoned handle | **closed 2026-11-11** — `cont.bind` releases its source handle; the SLJIT `*continuation*` ASan run is clean |
+
 **`GAP-1` — the call form is chosen per module.** A backend switched the *whole*
 module to `void fn(VMContext*, void* frame)` when any **defined** function needed
 more argument slots than its register form allowed — on SLJIT and AsmJIT that is
 more than three Wasm parameters, any `v128` parameter or result, or any
 multi-result signature. One such function put every call in that module on the
 frame path.
-
 - **Which rows did it reach: all ten.** A C, C++, Rust, Zig, Go or TinyGo module
   containing a single four-argument function — ordinary code, not a corner — was
   enough; Kotlin/Wasm, MoonBit and Dart added multi-result and vector-shaped
