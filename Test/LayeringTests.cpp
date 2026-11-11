@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <fstream>
 #include <regex>
+#include <cctype>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -110,4 +111,56 @@ TEST_CASE("WasmBase names no backend", "[layering]")
 			INFO(hit);
 		REQUIRE(hits.empty());
 	}
+}
+
+// docs/API_ABI_STABILITY.md `GAP-13` and docs/WRITING_A_BACKEND.md §15 lesson 5:
+// the trap ABI is *one* entry point per reporting layer, and the kind travels as
+// an argument. The historical shape was thirteen nullary per-kind wrappers per
+// backend, and a textual substitution across them once gave `array.len` the
+// structure kind. This scan keeps the collapsed shape collapsed: a new per-kind
+// C entry point fails here, rather than in a guest-visible trap kind later.
+TEST_CASE("the trap ABI stays one kind-carrying entry point", "[trapabi][layering]")
+{
+const std::filesystem::path root = std::filesystem::path(WASM_TESTSUITE_SOURCE_DIR)
+/ "..";
+const std::filesystem::path header = root / "WasmBase" / "WasmTrap.hpp";
+REQUIRE(std::filesystem::is_regular_file(header));
+
+std::istringstream stream(readTextFile(header));
+std::string line;
+unsigned number = 0;
+std::vector<std::string> names;
+while (std::getline(stream, line)) {
+++number;
+// Only the declarations: a doc comment that mentions an entry point must
+// not look like one.
+if (line.find("extern") == std::string::npos)
+continue;
+const std::size_t at = line.find("wasm_trap_");
+if (at == std::string::npos)
+continue;
+std::size_t end = at;
+while (end < line.size()) {
+const char c = line[end];
+if (!(std::isalnum(static_cast<unsigned char>(c)) || c == '_'))
+break;
+++end;
+}
+const std::string name = line.substr(at, end - at);
+names.push_back(name);
+// Every *reporting* entry point carries the kind; the accessors
+// (`wasm_trap_slot`, `wasm_trap_annotate`) do not report one.
+if (name == "wasm_trap_report" || name == "wasm_trap_report_at") {
+INFO("WasmTrap.hpp:" << number << ": " << line);
+REQUIRE(line.find("int kind") != std::string::npos);
+}
+}
+
+// Adding an entry point here is a deliberate act, not a drive-by edit: the
+// list is what a backend's generated code is allowed to call, and a name that
+	// encodes a kind (`wasm_trap_unreachable`, `wasm_trap_oob`, ...) breaks the
+	// list rather than the trap kind.
+	const std::vector<std::string> expected = {
+		"wasm_trap_slot", "wasm_trap_report", "wasm_trap_report_at", "wasm_trap_annotate"};
+	REQUIRE(names == expected);
 }

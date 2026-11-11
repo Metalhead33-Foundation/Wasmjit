@@ -57,6 +57,16 @@ struct alignas(16) Mixed {
 
 static_assert(offsetof(Mixed, vector) == 16, "v128 must be 16-byte aligned");
 
+// The literal C caller (Test/consumer/CanonicalCall.c, GAP-7): it is compiled as
+// C and calls the entry pointer with the canonical signature only.
+extern "C" {
+std::int32_t wasmjit_c_call_i32(void* entry, void* context);
+double wasmjit_c_call_f64(void* entry, void* context, double value);
+void wasmjit_c_call_pair(void* entry, void* context, std::int32_t first,
+		std::int32_t second, void* results);
+}
+
+
 int runAbiModule(WASM::Runtime& runtime, const char* path)
 {
 	auto module = runtime.loadFile(path);
@@ -90,6 +100,31 @@ int runAbiModule(WASM::Runtime& runtime, const char* path)
 	if (mixed.tag != 9 || mixed.vector.lane[0] != 0x01020304u
 			|| mixed.vector.lane[3] != 0x01020304u)
 		return 6;
+
+	// 5. The same entries called from **C** with the canonical signature only
+	//    (GAP-7). `fnPtr` is the C-linkage entry and `context` is the opaque
+	//    VMContext pointer; the C translation unit knows nothing else.
+	const auto entryOf = [&](const char* name, void*& entry, void*& context) {
+		const std::optional<WASM::Callable> callable = instance.exportedFunction(name);
+		if (!callable.has_value() || callable->fnPtr == nullptr
+				|| callable->context == nullptr)
+			return false;
+		entry = callable->fnPtr;
+		context = callable->context;
+		return true;
+	};
+	void* entry = nullptr;
+	void* context = nullptr;
+	if (!entryOf("half", entry, context))
+		return 7;
+	if (wasmjit_c_call_f64(entry, context, 7.0) != 3.5)
+		return 8;
+	if (!entryOf("divmod", entry, context))
+		return 9;
+	DivMod fromC{};
+	wasmjit_c_call_pair(entry, context, 17, 5, &fromC);
+	if (fromC.quotient != 3 || fromC.remainder != 2)
+		return 10;
 
 	return 0;
 }

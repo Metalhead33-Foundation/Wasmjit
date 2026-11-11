@@ -131,18 +131,21 @@ Nothing in `WasmBase/` had to change to add it. That is the point of the seam.
 * one executable mapping per function, because `SLJIT_WX_EXECUTABLE_ALLOCATOR=1`
   is defined so code never lives in a read-write-execute page;
 * a native import with more than three Wasm parameters, or any native import in a
-  frame-form module, is called through the staged adapter, i.e. one libffi call
-  per invocation. That is the price of SLJIT’s four-argument C-call ceiling;
-* an **indirect** call whose signature carries a `v128` *and* more than three
-  parameters is refused in a module that also imports a native function: the
-  adapter has no `ffi_type` for a vector. `return_call_ref` keeps the
-  register-form ceiling for the same reason;
-* the operand stack’s reference ownership is exact for the paths the suites
-  exercise (arguments, locals, created objects, returned references, the
-  descriptor family), but a reference read out of a struct field or array
-  element is still a *borrow*, and `drop` releases only continuations and
-  strings. That is a leak, never a wrong result
-  ([`docs/API_ABI_STABILITY.md`](../docs/API_ABI_STABILITY.md) §8, `GAP-4`);
+  frame-form module, is called through the staged adapter: one `ffi_call` per
+  invocation, with the closure and its argument cells prepared once. That call is
+  the price of SLJIT’s four-argument C-call ceiling (`GAP-12`, closed on the
+  allocation half);
+* a native import whose signature carries a `v128` travels as its canonical C
+  spelling — two `uint64_t` arguments — and a vector result through the result
+  block, so the old “wide vector indirect call is refused” limit is gone
+  (`GAP-11`, closed 2026-11-11); `return_call_ref` still keeps the register-form
+  ceiling, which is `GAP-2`;
+* the operand stack’s reference ownership is exact and **measured**: a reference
+  read out of a struct field or array element takes its own count, `drop`
+  releases the count the stack holds, `select` releases the arm it did not pick,
+  and a native import’s reference result is cloned. `gc_ownership.wat`
+  (73 assertions) and `native_ref_result_probe.wat` (13) assert the counts on
+  this backend, so `GAP-4` and `GAP-5` are closed;
 * the helper-call lowering of division, memory access and calls is deliberately
   correctness-first; a later slice can inline the checked paths where the
   post-mortem measures a benefit.

@@ -139,19 +139,23 @@ target-architecture check).
 
 ## Known limitations and next steps
 
-1. **Reference ownership is exact on the paths the suites exercise**, but a
-   reference read out of a struct field or array element, the unselected operand
-   of `select`, and `drop` of a GC reference are still *borrows*. Each is a leak,
-   never a wrong result; [`docs/API_ABI_STABILITY.md`](../docs/API_ABI_STABILITY.md)
-   §8 (`GAP-4`/`GAP-5`) names the sites.
+1. **Reference ownership is exact and measured** since 2026-11-11: a reference
+   read out of a struct field or array element takes its own count, `select`
+   releases the arm it did not pick, `drop` releases the stack’s count, and a
+   native import’s reference result is cloned. `gc_ownership.wat` (73 assertions)
+   and `native_ref_result_probe.wat` (13) assert the counts here, so `GAP-4` and
+   `GAP-5` are closed.
 2. **A frame-form tail trampoline.** `return_call_ref` above the register-form
    ceiling is a semantic call + return here
    ([`docs/API_ABI_STABILITY.md`](../docs/API_ABI_STABILITY.md) §8, `GAP-2`).
 3. **Portability.** Only x86-64 Linux / SysV AMD64 is exercised; the target
    matrix in [`docs/ABI.md`](../docs/ABI.md) keeps the
    other rows *provisional*.
-4. **A wide `v128` indirect call in a module with a native import** is refused,
-   because the staged-import adapter has no `ffi_type` for a vector.
+4. **A wide `v128` indirect call in a module with a native import** is *accepted*
+   since 2026-11-11 (`GAP-11`, `wide_v128_indirect_probe.wat`). What remains open
+   is the `[spec]` run: `ref_test`’s `ref_test_extern` case answers `0` where the
+   spec says `2` (`GAP-15`, shared with SLJIT), and the strict sweep ends in
+   `SIGSEGV` in `spec: table_copy` (`GAP-16`).
 5. Meet every applicable item in
    [`docs/WRITING_A_BACKEND.md`](../docs/WRITING_A_BACKEND.md) before calling the
    backend complete.

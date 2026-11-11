@@ -120,9 +120,13 @@ whether its entry is emitted C ABI or thunked. The old portability note is
 merged here; its historical analysis is in
 [`backends/HISTORY.md`](backends/HISTORY.md) §3.1.
 
-**Open C-ABI items** (`i31ref` as `void*`, the missing literal C-caller test, trap
-entry-point sprawl) are `GAP-7`/`GAP-13` in
-[`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §8.
+**Closed C-ABI items.** The three items that stood here on 2026-11-10 are all
+closed and their evidence lives in [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md)
+§8.4: `i31ref` at the boundary is a tagged token with a stated rule (below), a
+literal **C** caller exercises the canonical signature out of tree
+(`Test/consumer/CanonicalCall.c`, run by `Test/install-check.sh`), and the trap
+entry points collapsed to one kind-carrying function per reporting layer
+(`GAP-7`, `GAP-13`).
 
 ## VMContext Selection Rules
 
@@ -268,7 +272,10 @@ Offsets come from [`WasmBackendAbi.hpp`](../WasmBase/WasmBackendAbi.hpp):
 - **No arity limit, no register-class question, no result-buffer parameter, one
   marshaller.** SLJIT’s four-entry ceiling, LibJIT’s sixth-word loss and
   AsmJIT’s vector-result special case are properties of register passing, so
-  they disappear together.
+  they disappear together. A `v128` travels here as its canonical C spelling —
+  two `uint64_t` arguments, low word first — and a vector result is spooled
+  through the result block, which is what the SLJIT staged adapter now does for a
+  native import (`GAP-11`, closed).
 - **Tail calls** need the frame pointer carried through the trampoline. LibJIT’s
   frame tails are a frame call + frame return: correct, but not constant-stack
   (`GAP-3`).
@@ -328,6 +335,7 @@ boxing on the GC heap at `extern.convert_any` (GC-8/RT-1).
 | --- | --- | --- |
 | `funcref` | `Callable*`, recognised by `Store::callableAt()` | a callable from *another* module is still recognised (GC.md G2) |
 | `externref` | opaque `void*` | identity is pointer identity; a host pointer passes through every conversion unchanged |
+| `i31ref` | unboxed immediate, `(payload << 1) \| 1` | the low bit marks it, so it is a legal opaque token and **never** a pointer: a host may compare and round-trip it, and `refClone`/`refDrop` leave it uncounted. The payload is 31 bits (`i31.get_s` sign-extends), pinned by `i31_boundary_probe.wat` |
 | `exnref` | exception-object pointer | survives a table round-trip through the same generic slot (EX-6) |
 | GC ref | Store-owned object pointer, canonical type id in `GcHeader` | the type id is what `ref.test`/`ref.cast` read; a struct also carries the optional Custom Descriptors RTT reference at `GcHeader::kDescriptorOffset` |
 | `i31ref` | `(value << 1)` with the low bit set | also the reason a real pointer can never look like an i31 |

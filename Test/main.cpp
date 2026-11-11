@@ -14506,6 +14506,122 @@ TEST_CASE("stack-switching module routes a suspension to its handler")
 // The diagnostics flags are ours, not Catch2's: consume them before the session
 // sees the command line, install the sink, run the tests, then flush the
 // collected records to stdout or `--diagnostics-file`.
+// ── `i31ref` at the C boundary (GAP-7) ──────────────────────────────────────
+//
+// An `i31` is an *unboxed immediate*: `(value << 1) | 1`. That makes it a legal
+// opaque `void*` token for a C host -- it round-trips unchanged -- but not a
+// pointer, so the boundary rule is stated and pinned here rather than left to a
+// reader's assumption (docs/ABI.md "Reference and Global Representation").
+TEST_CASE("an i31 reaches a C host as an opaque tagged token, not a pointer")
+{
+	WASM::Module module = loadTestModule("i31_boundary_probe");
+	auto backend = TestBackend::create();
+	WASM::RegistryImportResolver imports;
+	auto instance = backend->instantiator().instantiate(module, imports);
+	REQUIRE(instance.get() != nullptr);
+
+	auto make = instance->exportedFunction("make");
+	auto unwrap = instance->exportedFunction("unwrap");
+	REQUIRE(make.has_value());
+	REQUIRE(unwrap.has_value());
+
+	const int32_t values[] = {0, 1, -1, -3, 123456, 1073741823, -1073741824};
+	for (const int32_t value : values) {
+		INFO("i31 value: " << value);
+		void* token = WASM::callCallable<void*>(*make, value);
+		REQUIRE(token != nullptr);
+		// The tag is the low bit; a host may compare and round-trip the token,
+		// never dereference it.
+		REQUIRE((reinterpret_cast<std::uintptr_t>(token) & 1u) == 1u);
+		REQUIRE(WASM::callCallable<int32_t>(*unwrap, token) == value);
+		// It has no header, so it carries no count and releasing it is a no-op.
+		instance->refDrop(token);
+	}
+
+	// The payload is 31 bits: `ref.i31` keeps the low 31 bits and `i31.get_s`
+	// sign-extends them, so 2^31 is not representable and reads back as zero.
+	// That is the spec's rule, not a truncation defect, and stating it here keeps
+	// the boundary contract honest about the range.
+	void* truncated = WASM::callCallable<void*>(*make, int32_t(-2147483647 - 1));
+	REQUIRE(truncated != nullptr);
+	REQUIRE(WASM::callCallable<int32_t>(*unwrap, truncated) == 0);
+}
+
+
+// ── A native import that returns a reference (GAP-5) ────────────────────────
+//
+// The host keeps its own count of the value it returns; the guest's operand
+// stack must therefore *clone* the result instead of taking the count over. The
+// failure direction is the dangerous one: taking it over releases a count the
+// host still owns, and the object is reclaimed while the host can still reach
+// it (docs/WRITING_A_BACKEND.md section 6, docs/API_ABI_STABILITY.md GAP-5).
+//
+// This is the GC-typed counterpart of the `stringref` case above; both run on
+// every backend through the harness selector.
+namespace {
+
+void* g_nativeHandedReference = nullptr;
+int g_nativeHandBackCalls = 0;
+
+void* nativeHandBackReference(WASM::VMContext*)
+{
+	++g_nativeHandBackCalls;
+	return g_nativeHandedReference;
+}
+
+} // namespace
+
+TEST_CASE("a native import's reference result is cloned, so the host keeps its count")
+{
+	WASM::Module module = loadTestModule("native_ref_result_probe");
+	g_nativeHandedReference = nullptr;
+	g_nativeHandBackCalls = 0;
+
+	WASM::RegistryImportResolver imports;
+	imports.registerFunction("env", "hand_back",
+WASM::nativeImport<&nativeHandBackReference>());
+	auto backend = TestBackend::create();
+	auto instance = backend->instantiator().instantiate(module, imports);
+	REQUIRE(instance.get() != nullptr);
+
+	auto make = instance->exportedFunction("make");
+	auto handBackAndDrop = instance->exportedFunction("hand_back_and_drop");
+	auto handBackAndReturn = instance->exportedFunction("hand_back_and_return");
+	REQUIRE(make.has_value());
+	REQUIRE(handBackAndDrop.has_value());
+	REQUIRE(handBackAndReturn.has_value());
+
+	// A reference *result* of a compiled callee is handed over owned.
+	void* object = WASM::callCallable<void*>(*make);
+	REQUIRE(object != nullptr);
+	REQUIRE(instance->gcRefCount(object) == 1);
+
+	// The host now holds its own count, which is what a host C function does when
+	// it keeps the value it returns.
+	REQUIRE(instance->refClone(object) == object);
+	REQUIRE(instance->gcRefCount(object) == 2);
+	g_nativeHandedReference = object;
+
+	// The guest takes the import's result, drops it, and the host's count must
+	// survive: the guest owned a clone, not the host's reference.
+	WASM::callCallable<void>(*handBackAndDrop);
+	REQUIRE(g_nativeHandBackCalls == 1);
+	REQUIRE(instance->gcRefCount(object) == 2);
+
+	// A guest that *returns* the import's result hands the clone on: the count it
+	// took for its operand stack is now the caller's.
+	void* returned = WASM::callCallable<void*>(*handBackAndReturn);
+	REQUIRE(returned == object);
+	REQUIRE(instance->gcRefCount(object) == 3);
+
+	// Give the two counts the test owns back -- its own and the returned clone --
+	// and the host's hold is what remains.
+	instance->refDrop(returned);
+	instance->refDrop(object);
+	REQUIRE(instance->gcRefCount(object) == 1);
+	g_nativeHandedReference = nullptr;
+}
+
 int main(int argc, char* argv[])
 {
 	DiagnosticsHarness diagnostics;

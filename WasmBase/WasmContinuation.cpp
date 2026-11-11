@@ -2011,10 +2011,19 @@ void wasm_cont_suspend_ops(VMContext* context, std::uint64_t packedTags,
 		for (const StorageType& result : tag.results)
 			resultKinds.push_back(continuationKindOf(result.val.opcode));
 		std::uint32_t count = 0;
+		// `resultCapacity` is the bound for the *output* array **and** the number
+		// of entries `resultKinds` carries (docs/API_ABI_STABILITY.md `GAP-14`):
+		// `AWorker::suspend` copies that many kind bytes. Passing the frame's raw
+		// capacity here read past a one-byte kind vector, which is a heap-buffer
+		// overflow under ASan. The tag's declared result list is the correct
+		// bound, and the frame cannot hold more than its own capacity.
+		const std::uint32_t resultCapacity = static_cast<std::uint32_t>(
+				std::min<std::size_t>(tag.results.size(),
+						static_cast<std::size_t>(ContinuationOpFrame::kCapacity)));
 		const std::int32_t resumed = wasm_cont_suspend_ex(static_cast<std::int32_t>(runtimeTag),
 				frame->args, static_cast<std::uint32_t>(tag.params.size()),
 				argKinds.empty() ? nullptr : argKinds.data(),
-				frame->results, ContinuationOpFrame::kCapacity, &count,
+				frame->results, resultCapacity, &count,
 				resultKinds.empty() ? nullptr : resultKinds.data());
 		frame->result.status = resumed;
 		frame->result.resultCount = count;

@@ -57,9 +57,12 @@ cp -a "$build"/extern/MhLib/Euphemy/libEuphemy.so* "$installed/lib/"
 # `wasmjit.pc` describes the core only. The consumer links no backend: the
 # `libjit` name is resolved at runtime from the installed plugin alias through
 # `WASMJIT_BACKEND_PATH`.
-PKG_CONFIG_PATH="$installed/lib/pkgconfig" \
-PKG_CONFIG_SYSROOT_DIR="$root" \
-    c++ -std=c++2a "$source_dir/Test/consumer/Consumer.cpp" \
+#
+# The second translation unit is **C**, not C++: it calls the compiled entries
+# with the canonical signature only (GAP-7, docs/ABI.md "The C ABI Contract").
+cc -std=c11 -c "$source_dir/Test/consumer/CanonicalCall.c" \
+    -o "$root/CanonicalCall.o"
+c++ -std=c++2a "$source_dir/Test/consumer/Consumer.cpp" "$root/CanonicalCall.o" \
     -o "$root/consumer" \
     $(PKG_CONFIG_PATH="$installed/lib/pkgconfig" PKG_CONFIG_SYSROOT_DIR="$root" \
         pkg-config --cflags --libs wasmjit) \

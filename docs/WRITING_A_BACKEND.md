@@ -274,11 +274,12 @@ When in doubt, *not* releasing is the safe mistake.
 **Reference results: a Wasm callee transfers, a native import borrows.** A
 compiled callee hands over the count its own operand stack held. A host C
 function returns a pointer and keeps its own `Value::ref`, so the caller must
-clone before the stack owns it. Only AsmJIT implements that distinction today
-(`retainNativeCallResult`); on SLJIT and LibJIT a *direct* call to a native
-import takes the count over, which over-releases if the host still holds the
-reference. Closing that is a fixture, not a redesign — see
-[`backends/HISTORY.md`](backends/HISTORY.md).
+clone before the stack owns it. **All three backends implement that distinction**
+— AsmJIT `retainNativeCallResult`, SLJIT `emitRetainNativeCallResult`, LibJIT’s
+`resolveCallReferences` — and each is measured: `native_ref_result_probe.wat`
+with the `a native import's reference result is cloned` case asserts the host’s
+count after a drop and after a return (13 assertions per backend), and the
+`stringref` counterpart does the same for the string store.`GAP-5` is closed.
 
 **How to test it.** `Test/wasm_wat/gc_ownership.wat` plus the
 `GC reference ownership: the operand stack owns one count per reference` case is
