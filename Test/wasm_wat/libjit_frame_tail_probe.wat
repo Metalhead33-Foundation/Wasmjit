@@ -1,5 +1,6 @@
-;; Frame-form tail recursion with a small depth: LibJIT's frame tail path is a
-;; frame call followed by a frame return, not the register trampoline.
+;; Frame-form tail recursion at 1,000,000 links: the stage-frame driver in
+;; WasmBase carries the frame across every link, so the chain must not grow the
+;; native stack (docs/API_ABI_STABILITY.md GAP-3, GR-7).
 (module
   (type $t (func (param i32 i32 i32 i32) (result i32)))
 
@@ -34,7 +35,7 @@
     end)
 
   (func (export "run") (result i32)
-    i32.const 100
+    i32.const 1000000
     i32.const 0
     i32.const 0
     i32.const 0

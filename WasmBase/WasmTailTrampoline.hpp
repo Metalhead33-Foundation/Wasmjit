@@ -40,8 +40,10 @@ bool tailCallTrampolinesEligible(const Module& module, bool frameAbi);
   The internal callables must already hold their raw compiled entry in
   `Callable::fnPtr`; on success this function moves that entry to
   `rawFnPtr`, installs a driver into `fnPtr`, and assigns one thunk per type
-  to `Callable::tailEntry`. A module without a tail-call opcode, or one using
-  the frame ABI, is left untouched.
+  to `Callable::tailEntry`. A module without a tail-call opcode, or one whose
+  chosen form is outside the slot model, is left untouched. In the frame form
+  the thunk stages each link’s arguments in `TailCallState::frame` and the
+  driver copies the final result block back to the caller’s frame.
 
   \param module Module whose internal functions have just been compiled.
   \param internals Instance state owning the internal and import callables.

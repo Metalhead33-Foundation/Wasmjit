@@ -5,6 +5,7 @@
 #include "../WasmBase/WasmStore.hpp"
 #include "../WasmBase/WasmTrap.hpp"
 #include "../WasmBase/WasmDiagnostics.hpp"
+#include "../WasmBase/WasmTailTrampoline.hpp"
 #include "../WasmBase/wasm_simd_scalar.hpp"
 #include <Euphemy/Io/EuphConstBufferDevice.hpp>
 #include <cassert>
@@ -386,6 +387,25 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM
 		if (entryResult != JIT_RESULT_OK || entryPoint == nullptr)
 			failCompilation("jit_function_compile_entry", importedFuncCount + i, entryResult);
 		internals.internalCallables[i].rawFnPtr = entryPoint;
+		// The backend-neutral tail-call installer wraps `fnPtr` and moves the
+		// compiled entry to `rawFnPtr`; this backend's own driver below
+		// overwrites it again for the register form.
+		internals.internalCallables[i].fnPtr = entryPoint;
+	}
+
+	// ── Frame-form tail trampolines ─────────────────
+	// The frame form already has a backend-neutral driver and thunk pair in
+	// WasmBase: the thunk stages each link's arguments into
+	// `TailCallState::frame` at the canonical offsets, and the driver copies
+	// the final result block back to the original caller's frame. Installing
+	// that pair is what makes a frame-form tail chain constant-stack, so the
+	// register-form machinery below is skipped for it. A module outside the
+	// frame model keeps the semantic call + frame return lowering.
+	if (instance.frameCallAbi() && WASM::tailCallTrampolinesEligible(module, true)) {
+		if (!WASM::installTailCallTrampolines(module, internals, true))
+			throw std::runtime_error("the LibJIT backend could not install "
+					"frame-form tail-call trampolines");
+		return;
 	}
 
 	// ── Tail-call thunks (one per function type) ─────────────────────

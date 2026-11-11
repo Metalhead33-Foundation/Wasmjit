@@ -315,6 +315,13 @@ private:
 	WASM::FuncType continuationSignature(WASM::TypeIdx contTypeIdx) const;
 	//! True when this module uses the opted-in staging-frame ABI.
 	bool frameAbi() const;
+	//! True when a frame-form tail call has the backend-neutral driver/thunk
+	//! pair (installed by the module compiler) available.
+	bool frameTailTrampoline() const;
+	//! Frame-form fallback for a tail call to a callable without a thunk:
+	//! calls its `fnPtr` as `(ctx, frame)` and returns the result block.
+	void emitFrameTailCallFallback(jit_value_t callablePtr, WASM::TypeIdx typeIdx,
+			const std::vector<jit_value_t>& stackArgs);
 	//! The ABI kinds of a parameter/result vector, in declaration order.
 	static std::vector<WASM::ValueKind> frameKinds(std::span<const WASM::StorageType> types);
 	//! Allocates an aligned local call frame for `callee`.

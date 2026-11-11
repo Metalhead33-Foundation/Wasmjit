@@ -11,6 +11,7 @@
 #include "../WasmBase/WasmGcHeader.hpp"
 #include "../WasmBase/WasmString.hpp"
 #include "../WasmBase/WasmTracing.hpp"
+#include "../WasmBase/WasmTailTrampoline.hpp"
 #include "../WasmBase/wasm_atomic.hpp"
 #include "../WasmBase/wasm_f16.hpp"
 #include "../WasmBase/wasm_simd_scalar.hpp"
@@ -2313,6 +2314,29 @@ void OpcodeDispatcher::packReturnValues(jit_type_t tupleType, jit_value_t out, s
 bool OpcodeDispatcher::frameAbi() const
 {
 	return instance.frameCallAbi();
+}
+
+bool OpcodeDispatcher::frameTailTrampoline() const
+{
+	// The module compiler installs the backend-neutral frame driver and thunks
+	// when the whole module fits the frame model (LibjitModuleCompiler.cpp), so
+	// the predicate here is the same one that gated the installation.
+	return frameAbi() && WASM::tailCallTrampolinesEligible(module, true);
+}
+
+void OpcodeDispatcher::emitFrameTailCallFallback(jit_value_t callablePtr,
+		WASM::TypeIdx typeIdx, const std::vector<jit_value_t>& stackArgs)
+{
+	// The target has no thunk (an embedder-registered callable): call it through
+	// its own `fnPtr` with the frame contract every frame-form target honours,
+	// then return the result block as this function's result.
+	const WASM::FuncType calleeSig = functionSignatureForType(typeIdx);
+	jit_value_t fnPtr = jit_insn_load_relative(function, callablePtr,
+			offsetof(WASM::Callable, fnPtr), jit_type_void_ptr);
+	jit_value_t calleeContext = jit_insn_load_relative(function, callablePtr,
+			offsetof(WASM::Callable, context), jit_type_void_ptr);
+	emitFrameInvocation(fnPtr, calleeContext, calleeSig, typeIdx, stackArgs);
+	emitFunctionReturn(true);
 }
 
 std::vector<WASM::ValueKind> OpcodeDispatcher::frameKinds(
@@ -4843,6 +4867,30 @@ void OpcodeDispatcher::emitTailCallViaPending(jit_value_t targetCallablePtr,
 void OpcodeDispatcher::dispatchReturnCall(WASM::FuncIdx arg)
 {
 	if (frameAbi()) {
+		// A frame-form module calls every target with `(ctx, frame)` -- a compiled
+		// callee and a native import alike (docs/ABI.md) -- so the shared driver
+		// re-enters both through the callee type's frame thunk.
+		const WASM::TypeIdx typeIdx = functionTypeIndexForFunc(arg);
+		const WASM::FuncType calleeSig = functionSignatureForType(typeIdx);
+		WASM::Callable* callable = nullptr;
+		if (arg < importedFuncCount) {
+			if (arg < internals.importStorage.size())
+				callable = &internals.importStorage[arg];
+		} else {
+			const uint32_t internalIdx = arg - importedFuncCount;
+			if (internalIdx < internals.internalCallables.size())
+				callable = &internals.internalCallables[internalIdx];
+		}
+		if (frameTailTrampoline() && callable != nullptr
+				&& WASM::tailCallFrameSupported(calleeSig)) {
+			std::vector<jit_value_t> stackArgs(calleeSig.params.size());
+			for (size_t i = calleeSig.params.size(); i--; )
+				stackArgs[i] = popValue();
+			jit_value_t target = jit_value_create_nint_constant(function,
+					jit_type_void_ptr, reinterpret_cast<jit_nint>(callable));
+			emitTailCallViaPending(target, stackArgs);
+			return;
+		}
 		dispatchCall(arg);
 		emitFunctionReturn(true);
 		return;
@@ -4886,18 +4934,17 @@ void OpcodeDispatcher::dispatchReturnCall(WASM::FuncIdx arg)
 
 void OpcodeDispatcher::dispatchReturnCallIndirect(WASM::TypeIdx arg1, WASM::TableIdx arg2)
 {
-	if (frameAbi()) {
-		dispatchCallIndirect(arg1, arg2);
-		emitFunctionReturn(true);
-		return;
-	}
 	// The declared type is the one the callee must have, so the trampoline can
 	// re-enter it through that type's thunk regardless of this function's own
 	// parameter list (docs/TAILCALLS.md TC-2/TC-3). A table slot may hold a
 	// callable the embedder registered without a thunk; that one keeps the
-	// semantic `call` + `return` path.
+	// semantic call path.
 	const WASM::FuncType ft = module.funcTypeAt(arg1);
-	if (WASM::tailCallSlotsSupported(ft)) {
+	const bool frame = frameAbi();
+	const bool supported = frame
+			? frameTailTrampoline() && WASM::tailCallFrameSupported(ft)
+			: WASM::tailCallSlotsSupported(ft);
+	if (supported) {
 		jit_value_t tableElemIdx = popValue();
 		std::vector<jit_value_t> stackArgs(ft.params.size());
 		for (size_t i = ft.params.size(); i--; )
@@ -4908,7 +4955,7 @@ void OpcodeDispatcher::dispatchReturnCallIndirect(WASM::TypeIdx arg1, WASM::Tabl
 			function, table, offsetof(WASM::TableInstance, base), jit_type_void_ptr);
 		jit_value_t checkedIndex = checkedTableIndex(table, tableElemIdx, "dispatchReturnCallIndirect");
 		jit_value_t callablePtr = jit_insn_load_elem(function, tablePtr, checkedIndex, jit_type_void_ptr);
-	emitTrapIfNull(WASM::TrapKind::UninitializedElement, callablePtr);
+		emitTrapIfNull(WASM::TrapKind::UninitializedElement, callablePtr);
 		emitCallableTypeCheck(callablePtr, arg1);
 
 		jit_value_t thunk = jit_insn_load_relative(function, callablePtr,
@@ -4916,7 +4963,10 @@ void OpcodeDispatcher::dispatchReturnCallIndirect(WASM::TypeIdx arg1, WASM::Tabl
 		jit_label_t trampolineLabel = jit_label_undefined;
 		jit_insn_branch_if(function, thunk, &trampolineLabel);
 
-		emitTailCallFallback(arg1, callablePtr, stackArgs);
+		if (frame)
+			emitFrameTailCallFallback(callablePtr, arg1, stackArgs);
+		else
+			emitTailCallFallback(arg1, callablePtr, stackArgs);
 		unreachableCode = false;
 		jit_insn_label(function, &trampolineLabel);
 
@@ -4924,7 +4974,10 @@ void OpcodeDispatcher::dispatchReturnCallIndirect(WASM::TypeIdx arg1, WASM::Tabl
 		return;
 	}
 	dispatchCallIndirect(arg1, arg2);
-	dispatchReturn();
+	if (frame)
+		emitFunctionReturn(true);
+	else
+		dispatchReturn();
 }
 
 void OpcodeDispatcher::dispatchCallRef(WASM::TypeIdx arg)
@@ -4935,22 +4988,21 @@ void OpcodeDispatcher::dispatchCallRef(WASM::TypeIdx arg)
 
 void OpcodeDispatcher::dispatchReturnCallRef(WASM::TypeIdx arg)
 {
-	if (frameAbi()) {
-		dispatchCallRef(arg);
-		emitFunctionReturn(true);
-		return;
-	}
 	// The referenced type is the callee's declared type, so the trampoline can
 	// re-enter it through that type's thunk (docs/TAILCALLS.md TC-2/TC-3). This
 	// keeps `return_call_ref`-based self-recursion constant-stack even when a
 	// link changes its parameter list.
 	const WASM::FuncType ft = module.funcTypeAt(arg);
-	if (WASM::tailCallSlotsSupported(ft)) {
+	const bool frame = frameAbi();
+	const bool supported = frame
+			? frameTailTrampoline() && WASM::tailCallFrameSupported(ft)
+			: WASM::tailCallSlotsSupported(ft);
+	if (supported) {
 		jit_value_t callablePtr = popValue();
 		std::vector<jit_value_t> stackArgs(ft.params.size());
 		for (size_t i = ft.params.size(); i--; )
 			stackArgs[i] = popValue();
-	emitTrapIfNull(WASM::TrapKind::NullFunctionReference, callablePtr);
+		emitTrapIfNull(WASM::TrapKind::NullFunctionReference, callablePtr);
 		emitCallableTypeCheck(callablePtr, arg);
 
 		jit_value_t thunk = jit_insn_load_relative(function, callablePtr,
@@ -4958,7 +5010,10 @@ void OpcodeDispatcher::dispatchReturnCallRef(WASM::TypeIdx arg)
 		jit_label_t trampolineLabel = jit_label_undefined;
 		jit_insn_branch_if(function, thunk, &trampolineLabel);
 
-		emitTailCallFallback(arg, callablePtr, stackArgs);
+		if (frame)
+			emitFrameTailCallFallback(callablePtr, arg, stackArgs);
+		else
+			emitTailCallFallback(arg, callablePtr, stackArgs);
 		unreachableCode = false;
 		jit_insn_label(function, &trampolineLabel);
 
@@ -4966,7 +5021,10 @@ void OpcodeDispatcher::dispatchReturnCallRef(WASM::TypeIdx arg)
 		return;
 	}
 	dispatchCallRef(arg);
-	dispatchReturn();
+	if (frame)
+		emitFunctionReturn(true);
+	else
+		dispatchReturn();
 }
 
 void OpcodeDispatcher::dispatchTryTable(const WASM::BlockType& arg1, std::vector<WASM::CatchClause>&& arg2)
