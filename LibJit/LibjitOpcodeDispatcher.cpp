@@ -3349,6 +3349,23 @@ WASM::GlobalType OpcodeDispatcher::globalTypeForIndex(WASM::GlobalIdx idx) const
 }
 
 OpcodeDispatcher::OpcodeDispatcher(jit_context_t context, jit_function_t function,
+					 LibJitTypeTranslator& typeTranslator,
+					 WASM::ModuleInstance& instance,
+					 WASM::ModuleInstanceInternals& internals,
+					 const WASM::Module& module, const WASM::FuncType& currentFunc,
+					 uint32_t importedFuncCount, uint32_t functionIndex,
+					 std::vector<WASM::BranchHint> branchHints,
+					 std::vector<jit_value_t>& locals,
+					 std::vector<jit_value_t>& valueStack,
+					 std::vector<ControlBlock>& controlStack,
+					 WASM::ProfileConfig profileConfig)
+	: OpcodeDispatcher(context, function, typeTranslator, instance, internals,
+			module, currentFunc, importedFuncCount, functionIndex, {},
+			std::move(branchHints), locals, valueStack, controlStack, profileConfig)
+{
+}
+
+OpcodeDispatcher::OpcodeDispatcher(jit_context_t context, jit_function_t function,
 								   LibJitTypeTranslator& typeTranslator,
 								   WASM::ModuleInstance& instance,
 								   WASM::ModuleInstanceInternals& internals,

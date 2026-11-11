@@ -521,6 +521,21 @@ private:
 	jit_value_t canonicalizeFloat(jit_value_t value, bool isDouble);
 
 public:
+	//! Binds the dispatcher with an empty per-type table: every type follows the
+	//! instance's uniform call form. Retained so the exported constructor symbol
+	//! stays available (docs/API_ABI_STABILITY.md G2, additive-only evolution).
+	OpcodeDispatcher(jit_context_t context, jit_function_t function,
+					 LibJitTypeTranslator& typeTranslator,
+					 WASM::ModuleInstance& instance,
+					 WASM::ModuleInstanceInternals& internals,
+					 const WASM::Module& module, const WASM::FuncType& currentFunc,
+					 uint32_t importedFuncCount, uint32_t functionIndex,
+					 std::vector<WASM::BranchHint> branchHints,
+					 std::vector<jit_value_t>& locals,
+					 std::vector<jit_value_t>& valueStack,
+					 std::vector<ControlBlock>& controlStack,
+					 WASM::ProfileConfig profileConfig);
+
 	//! Binds the dispatcher to one function being compiled.
 	OpcodeDispatcher(jit_context_t context, jit_function_t function,
 					 LibJitTypeTranslator& typeTranslator,
