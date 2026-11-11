@@ -338,7 +338,7 @@ SLJIT public header (`sljit_src/sljitLir.h`, read for `sljit_emit_enter`,
 `SLJIT_SP`, `sljit_get_local_base` and `SLJIT_CALL_RETURN`); the upstream AsmJit
 `asmjit/core/func.h` (`FuncFrame`/`FuncDetail` and the prolog/epilog inserter);
 and the tree's own surveys in [`../TRAP_CLEANUP.md`](../TRAP_CLEANUP.md) §10.1
-and [`../SIMD_BACKENDS.md`](../SIMD_BACKENDS.md) §3. `Asmjit/` and `Sljit/`
+and [`SIMD.md`](SIMD.md) §3. `Asmjit/` and `Sljit/`
 contained no backend sources when this study was written, so only LibJIT's row
 was executable then; both are executing backends today.
 
@@ -806,7 +806,7 @@ effort rather than the semantics.
   driver), [`../LAYERING.md`](../LAYERING.md) (what the core owns vs what a
   backend emits), [`../TRAP_CLEANUP.md`](../TRAP_CLEANUP.md) §8.5/§10/§12.1,
   [`../THREADSAFETY.md`](../THREADSAFETY.md) §10/§10.1, [`THREADS.md`](THREADS.md)
-  TH-5/T9, [`../SIMD_BACKENDS.md`](../SIMD_BACKENDS.md) §3,
+  TH-5/T9, [`SIMD.md`](SIMD.md) §3,
   [`../SAFETY.md`](../SAFETY.md) §2.3/§2.8; sources `WasmBase/WasmStack.hpp`,
   `WasmBase/WasmStack.cpp`, `WasmBase/WasmTrap.hpp`, `WasmBase/WasmTrap.cpp`,
   `WasmBase/WasmExn.cpp`, `WasmBase/WasmValue.hpp`,

@@ -158,7 +158,7 @@ TEST_CASE("GC layout: the JIT's struct field offsets match the shared layout hel
 // The backend's prologue has to turn two 64-bit boundary words into a 16-byte
 // aggregate, and libjit gives no `extract` and no byte-cast. This test pins the
 // only route the API supports: take the *address* of the aggregate and store
-// each word through it (docs/ABI_REFACTOR_STUDY.md §29/§31). Storing «relative
+// each word through it (docs/backends/HISTORY.md). Storing «relative
 // to the struct value» is what crashed attempt 4.
 TEST_CASE("libjit: two ulong words assemble a 4x i32 aggregate through an address",
 "[libjit][v128][ir]")
@@ -207,7 +207,7 @@ jit_context_destroy(context);
 // site holds an aggregate value, not an address, so the sequence is
 // store-into-a-temp, take its address, then two typed loads. This pins that the
 // copy and the address are sound before any call site uses them
-// (docs/ABI_REFACTOR_STUDY.md §32).
+// (docs/backends/HISTORY.md).
 TEST_CASE("libjit: an aggregate splits into two words through a temp's address",
 "[libjit][v128][ir]")
 {
@@ -259,7 +259,7 @@ jit_insn_ushr(function, hi, shift), jit_type_int, 0);
 // `dispatchV128Const` produces one (a frame slot written through its address)
 // then copied with a whole-aggregate `jit_insn_store` into another temp, and
 // split again. If this fails, the split helper's `store` is the culprit and the
-// helper must copy through addresses instead (docs/ABI_REFACTOR_STUDY.md §33).
+// helper must copy through addresses instead (docs/backends/HISTORY.md).
 TEST_CASE("libjit: a const-built aggregate survives a whole-struct store",
 "[libjit][v128][ir]")
 {
@@ -315,7 +315,7 @@ jit_insn_ushr(function, hi, shift), jit_type_int, 0);
 // Where does a seventh integer argument go? SysV gives six registers, so the
 // seventh crosses on the stack. This test contains no backend code at all: if it
 // fails, the damage is in libjit and no backend-side fix can recover it
-// (docs/ABI_REFACTOR_STUDY.md §50/§51).
+// (docs/backends/HISTORY.md).
 TEST_CASE("libjit: the seventh integer argument arrives intact", "[libjit][v128][ir]")
 {
 	jit_context_t context = jit_context_create();
@@ -384,7 +384,7 @@ std::uint64_t, std::uint64_t, std::uint64_t);
 // 16-byte aggregate through `address_of` + two `store_relative` calls. Lane 0 of
 // each aggregate is then read and summed. If this returns something other than
 // 6, the defect is libjit's handling of several frame temps alongside
-// stack-passed arguments (docs/ABI_REFACTOR_STUDY.md §53).
+// stack-passed arguments (docs/backends/HISTORY.md).
 TEST_CASE("libjit: three aggregates assembled from six argument words",
 "[libjit][v128][ir]")
 {
@@ -615,7 +615,7 @@ std::int32_t readLaneZero(void* vector)
 // address is handed to a *call* rather than an intrinsic load, which forces the
 // value into memory at a call boundary -- for the third aggregate that storage
 // came from a stack-passed argument word
-// (docs/ABI_REFACTOR_STUDY.md §55).
+// (docs/backends/HISTORY.md).
 TEST_CASE("libjit: three aggregates stored first, then called", "[libjit][v128][ir]")
 {
 	jit_context_t context = jit_context_create();
@@ -722,7 +722,7 @@ jit_context_destroy(context);
 // The LibJIT deviation, pinned at the type level so it needs no module and
 // cannot disturb another backend's fixtures: a v128 parameter is spelled as ONE
 // 16-byte aggregate, not the canonical two words
-// (docs/backends/LIBJIT_ARGUMENT_DEFECT.md section 8.1).
+// (docs/backends/HISTORY.md).
 TEST_CASE("LibJIT spells a v128 parameter as one aggregate", "[libjit][v128][abi]")
 {
 WASM::StorageType vector;
@@ -750,7 +750,7 @@ CHECK(jit_type_get_size(jit_type_get_param(signature, 1)) == 16u);
 
 // Step 4a diagnostic: the frame signature's shape in isolation, so the return
 // path defect is located by measurement rather than by inspection
-// (docs/backends/STAGING_CALL_ABI.md, "Step 4a, first attempt").
+// (docs/ABI.md, "Step 4a, first attempt").
 TEST_CASE("LibJIT spells a frame signature as (ctx, frame) -> void",
 		"[staging][libjit][abi][frame]")
 {
@@ -787,7 +787,7 @@ TEST_CASE("LibJIT keeps a wide vector signature on the register form",
 	// Step 4a's measurement, pinned: because a `v128` is one 16-byte aggregate
 	// here, three vectors cross the register form intact, so the module must
 	// NOT switch. Switching is a policy decision for step 6
-	// (docs/backends/STAGING_CALL_ABI.md).
+	// (docs/ABI.md).
 	auto runtime = WASM::Runtime::create("libjit");
 	REQUIRE(runtime != nullptr);
 	auto module = runtime->loadFile(
@@ -800,7 +800,7 @@ TEST_CASE("LibJIT keeps a wide vector signature on the register form",
 TEST_CASE("LibJIT takes a three-vector signature through an opted-in frame",
 		"[staging][libjit][abi][frame]")
 {
-	// The frame form is opt-in by design (docs/backends/STAGING_CALL_ABI.md):
+	// The frame form is opt-in by design (docs/ABI.md):
 	// the request switches the module, and then both directions of the frame
 	// must work -- the caller writes the argument block, the driver reads it and
 	// writes the result block back.
@@ -832,7 +832,7 @@ TEST_CASE("LibJIT takes a three-vector signature through an opted-in frame",
 
 // P0.1 probe: after a hook throws during instantiation, the runtime must still
 // work. Set WASMJIT_SAFETY_PROBES=1 to run it
-// (docs/backends/STAGING_CALL_ABI.md section 12).
+// (docs/ABI.md).
 TEST_CASE("LibJIT rejected module leaves the runtime usable",
 "[safety][instantiate][libjit]")
 {
@@ -860,7 +860,7 @@ REQUIRE(callable.has_value());
 }
 
 // A frame-mode body stages a local call frame and invokes the callee through
-// the same (ctx, frame) contract (STAGING_CALL_ABI.md step 4b).
+// the same (ctx, frame) contract (ABI.md step 4b).
 TEST_CASE("LibJIT calls another function through an opted-in frame",
 "[staging][libjit][abi][call]")
 {
@@ -1001,7 +1001,7 @@ std::memcpy(&result, frame, sizeof(result));
 CHECK(result == 10);
 }
 
-// EXPERIMENT (docs/backends/EXPORT_SIGNATURE.md section 37): does LibJIT's
+// EXPERIMENT (docs/ABI.md): does LibJIT's
 // register-form multi-result work for this fixture at all? MV5 makes the entry
 // `void(ctx, void* resultBuffer)`, so a two-result function takes one trailing
 // pointer. Env-gated so a crash cannot take the suite with it.
@@ -1046,7 +1046,7 @@ CHECK(first == 7);
 CHECK(second == 9);
 }
 
-// EXPERIMENT 2 (docs/backends/EXPORT_SIGNATURE.md section 38): is the failure the
+// EXPERIMENT 2 (docs/ABI.md): is the failure the
 // refusal, or the same-module-object caching documented in section 19?
 TEST_CASE("LibJIT frame-mode multi-result, instrumented",
 "[experiment2][libjit][abi][multi]")

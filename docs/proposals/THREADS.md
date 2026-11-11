@@ -124,7 +124,7 @@ engine must do", not "what 3.0 requires".
   `TH-5`. `Single` remains a conformant engine and the shipping default; the
   embedder selects `Agents` in `RuntimeConfig`. See `TD9` in §6, `TH-5` in §7,
   and
-  [`../MULTI_AGENT_FEASIBILITY.md`](../MULTI_AGENT_FEASIBILITY.md).
+  §4.3 above.
 - **No scheduling model.** No thread pool, fairness, work stealing, priority,
   or number of parallel agents is specified.
 - **`notify` may wake fewer waiters than asked** (including zero); it returns
@@ -206,7 +206,7 @@ engine must do", not "what 3.0 requires".
   `Agent` per thread (`Runtime::createAgent`), installs it with `AgentScope`,
   and calls exports through `Runtime::callExport`. The core spawns no thread —
   `HostAgentScheduler` is declared, embedder-owned and never called by the
-  engine ([`../MULTI_AGENT_FEASIBILITY.md`](../MULTI_AGENT_FEASIBILITY.md)
+  engine (§4.3 above
   §6.2).
 - **A real cross-agent waiter table** (`wasm_atomic.cpp`) keys waiters by the
   effective address generated code already computed. `wait` re-reads the cell
@@ -229,7 +229,7 @@ engine must do", not "what 3.0 requires".
   second agent is a second execution context on the same instance, not a
   second instance. The component runtime is the one sanctioned exception,
   because one `core instance` per declaration is the component model's own
-  semantics (see [`../MULTI_AGENT_FEASIBILITY.md`](../MULTI_AGENT_FEASIBILITY.md)
+  semantics (see §4.3 above
   §2.3.6).
 - **Guest-visible ordering is the guest's responsibility.** Shared globals,
   tables and memory are shared state; the guest uses `global.atomic.*`,
@@ -251,7 +251,45 @@ engine must do", not "what 3.0 requires".
 | MA-8 | JS/JSPI is adapter-only. | **Out of scope:** an embedder-supplied event loop remains the JS adapter's concern, not the core's. | `JS_INTEGRATION.md` |
 | MA-9 | No multi-agent test or memory model. | **Closed:** `[multiagent]` covers concurrent entry, acquire-release message passing, wait/notify, shared-global RMW, trap isolation, concurrent GC allocation/reclamation and the reference-slot barrier; the guest memory model is the atomic subset documented here. | `Test/ConcurrencyTests.cpp`, `Test/AgentFixture.hpp` |
 
-**Non-blockers that were already done.** Per-agent trap, exception, tail-call,
+### 4.3.2 Why the seam is agent-neutral
+
+The feasibility study behind TH-5 asked whether multi-agent execution could be
+demoted from a class-E blocker. Short answer: **yes / very little / yes**. The
+expensive part was the core (GC safepoint, per-instance bookkeeping, waiter
+table), not the code generators.
+
+- **A backend owns code generation only.** It produces translated types, function
+  handles, `Callable::fnPtr` entries, the start call and a continuation invoker;
+  none is per-agent state. The frontend chooses the `VMContext*` and the agent.
+- **Five ABI facts make it independent:** agent state is reached by helper
+  (`wasm_trap_slot()`, `wasm_exn_slot()`, `currentTailCallState()`), never by an
+  embedded address; a trap is a returned pending status, not an unwind; the stack
+  limit is a per-state integer; compiled functions are plain native functions
+  with `VMContext*` arg0; compilation is separable from execution.
+- **What a backend adds is membership, not structure:** a re-entrant invoker
+  (per-call scratch, already required by continuations) and the per-entry
+  `wasm_stack_check` it already emits. No thread, lock, scheduler or TLS belongs
+  in a backend.
+- **The opt-in follows five existing precedents** — `HostBridge`,
+  `HostContinuation`, `ProfileConfig`, tracing and diagnostics: embedder-owned,
+  function-pointer-shaped, default-off, zero-cost when off. The shape is
+  `ConcurrencyModel::{Single, Agents}` (default `Single`), a
+  `supportsConcurrency` query, `HostAgentScheduler` (borrowed, never owned), an
+  `Agent` handle per host thread, and the one-instance-per-module rule.
+- **Guarantees:** `Single` is bit-identical to the old behaviour; an unsupported
+  model is refused at `instantiate()`; the engine never spawns a thread;
+  guest-visible ordering stays the guest’s atomics; `gcCollect()` remains a
+  quiescent safepoint (advisory under `Agents`).
+- **Failure modes named by design:** a blocking `wait` with no other runnable
+  agent, a safepoint called while an agent is in a call, and a guest that omits
+  the atomic ordering. Each is documented rather than hidden.
+
+`MF-1…MF-8` are implemented and `Single` remains the default; the current model
+is §4.3 above. The test evidence is `[multiagent]` (51 assertions / 6 cases) and
+`[concurrency]` (80 / 13), including the TSan configuration in
+[`../TESTING.md`](../TESTING.md).
+
+
 defer, depth and stack-limit state (`TRAP-6`/SS-6), real seq-cst `__atomic_*`
 operations and the per-agent trampoline state. The multi-agent work above built
 on them; none needed a representation change.
@@ -429,7 +467,7 @@ the atomic helpers.
 | TD6 | **Enforce natural alignment for atomics at run time** (a cheap `addr % size == 0` check → `trap()`); the static memarg rule is not a runtime concern. | §2.3 requires the misaligned *effective address* to trap for atomics; `alignment ≤ natural` is a static property and `Module::validate()` enforces it ([`../VALIDATION.md`](../VALIDATION.md)), so the backend only needs the dynamic half. | Safe on non-x86; one compare on the atomic path only. |
 | TD7 | **Do not implement a thread pool or `Atomics.wait` host interop.** The embedder supplies threads; the core supplies agents and the waiter table. Thread-local storage belongs to the shared-everything proposal, which has no stable binary encoding yet. | §3: none of those is required. | The core stays free of a thread pool it would have to defend forever. |
 | TD8 | **Keep `SharedLinearMemory`'s reserve/commit base-stability** — it is what makes multi-agent a change of *scheduler* rather than a change of *representation*. | It is implemented and costs nothing when only one agent maps it. | The agent build needed no memory-representation change. |
-| TD9 | **`Single` remains the shipping default** — one `ModuleInstance` runs one call at a time; atomics are real `__atomic_*` operations and the waiter table is inert when no second agent exists. `Agents` is the opt-in model added by TH-5 ([`../MULTI_AGENT_FEASIBILITY.md`](../MULTI_AGENT_FEASIBILITY.md) §6.2). | §3 first bullet: one agent is conformant; every atomic is trivially sequentially consistent. | An embedder that never opts in sees the old behaviour; one that does gets real concurrency. |
+| TD9 | **`Single` remains the shipping default** — one `ModuleInstance` runs one call at a time; atomics are real `__atomic_*` operations and the waiter table is inert when no second agent exists. `Agents` is the opt-in model added by TH-5 (§4.3.2 above). | §3 first bullet: one agent is conformant; every atomic is trivially sequentially consistent. | An embedder that never opts in sees the old behaviour; one that does gets real concurrency. |
 
 **Guardrails.**
 

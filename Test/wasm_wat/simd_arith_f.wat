@@ -1,5 +1,5 @@
 ;; SIMD-L4 (float half): float arithmetic, comparisons and rounding, end to end
-;; through the JIT (docs/SIMD_LIBJIT.md §10).
+;; through the JIT (docs/proposals/SIMD.md).
 ;;
 ;; Every export projects a *bit pattern* (i32/i64) rather than a float, so nothing
 ;; has to cross the harness boundary as a float — and so that a NaN's payload and a

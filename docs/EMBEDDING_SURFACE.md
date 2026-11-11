@@ -185,7 +185,7 @@ Three consequences that resolve the ambiguity:
    called a runtime in ordinary speech; only row 2 is a WasmJit type. So
    `WASM::Runtime` must never grow an event loop, a scheduler or a time limit —
    those stay in row 1 (`SAFETY.md` `S1`,
-   [`MULTI_AGENT_FEASIBILITY.md`](MULTI_AGENT_FEASIBILITY.md) §6).
+   [`proposals/THREADS.md`](proposals/THREADS.md) §6).
 
 `WASM::Agent` is the ECMAScript *agent* — the spec term for a set of execution
 contexts that can share data — which is also the WebAssembly threads model's word
@@ -203,7 +203,7 @@ contexts that can share data — which is also the WebAssembly threads model's w
 | Backend session (`ModuleInstantiator&` / plugin handle) | constructed by the harness per test | Compilation belongs to the engine instance, not to a call site |
 | Default `HostBridge`, `DiagnosticSink`, `ProfileConfig` | passed per call / per instantiation | Policy belongs to the runtime; per-call overrides remain. `ValidationOptions` is derived from the profile and stays internal (§4.6). |
 | Limits: byte budget, stack limit policy, page cap | process-wide statics / `Store` | A game may want two runtimes with different budgets |
-| Concurrency model (`Single` today, see [`MULTI_AGENT_FEASIBILITY.md`](MULTI_AGENT_FEASIBILITY.md) §6) | — | Same reason |
+| Concurrency model (`Single` today, see [`proposals/THREADS.md`](proposals/THREADS.md) §6) | — | Same reason |
 | Name/version/capabilities | nowhere | The embedder and the plugin loader both need to ask |
 
 ### 4.2 What it must **not** own
@@ -213,7 +213,7 @@ contexts that can share data — which is also the WebAssembly threads model's w
 | Trap / exception / tail-call / defer / depth / stack-limit / diagnostics state | `Agent` / `ExecutionState` | Already per execution; a runtime-level copy would reintroduce `TRAP-6` |
 | Continuation stacks and the suspension state | the continuation provider | An agent may use a continuation; it does not become one |
 | Memory/table/global index spaces, element/data segments, exports | `ModuleInstance` | Per-realm state; this is the "context" half of §3 |
-| The scheduler (threads, park/wake) | the embedder | `MULTI_AGENT_FEASIBILITY.md` §6: the engine supplies the seam, not the policy |
+| The scheduler (threads, park/wake) | the embedder | `proposals/THREADS.md` §6: the engine supplies the seam, not the policy |
 | Generated code and function handles | the backend, reached through `ModuleInstantiator` | Backend-agnostic rule (`LAYERING.md` §2) |
 
 ### 4.3 The hard part: `Store::global()` — **solved**
@@ -738,7 +738,7 @@ want `ES-3`'s tier list; `ES-6` is pure documentation and can land first.
 | `Elvavena` in the public SDK | Deliberately accepted for the first freeze (§6.2), and the long-term direction is deeper MhLib integration, not removal (§6.2.1). |
 | A stable C++ ABI across compilers | Out of scope without a pimpl firewall; §7.2 promises soname discipline, not cross-vendor binary compatibility. |
 | Dynamic backend loading | Implemented (`WasmBackendRegistry` + `Runtime::create(name)`, [`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md) `BP-3`); a loaded plugin is deliberately never unloaded while code is live (§6 rule 8). |
-| Which thread may run which agent, and when | [`THREADSAFETY.md`](THREADSAFETY.md) §3.1 and [`MULTI_AGENT_FEASIBILITY.md`](MULTI_AGENT_FEASIBILITY.md) §6. `ES-1` hands the agent out; it does not schedule it. |
+| Which thread may run which agent, and when | [`THREADSAFETY.md`](THREADSAFETY.md) §3.1 and [`proposals/THREADS.md`](proposals/THREADS.md) §6. `ES-1` hands the agent out; it does not schedule it. |
 
 **Gap status 2026-10-29: none in scope.** `ES-1…ES-7` are `✅`; the only
 remaining items are the deliberate choices above (vendored MhLib in the public
@@ -756,7 +756,7 @@ changing a schema, emitter or this note's code paths.
 | Evidence | Result | Reading |
 |---|---|---|
 | Default suite (**2026-11-05**, `77506af`) | **18,572 assertions in 661 cases, green** | Supersedes the 2026-11-01 baseline (17,090 / 551); every earlier assertion still passes. The 2026-10-29 run (11,454 / 481) in the milestone notes remains the historical baseline. |
-| `[docs]` lint (**2026-11-05**, `77506af`) | **1017 assertions / 2 cases, green** | Note shape for `docs/proposals/` **and** the note tree for all three folders (§9 of `DOCUMENTATION.md`), so this note's index row is checked too |
+| `[docs]` lint (**2026-11-05**, `77506af`) | **1017 assertions / 2 cases, green** | Note shape for `docs/proposals/` **and** the note tree for all four folders (§9 of `DOCUMENTATION.md`), so this note's index row is checked too |
 | `[callcache]` (**2026-11-04**) | **18 assertions / 4 cases, green** | `ModuleCallCache` ffi calls, `v128` by value, multi-result calls and `ComponentCallCache` flat calls. |
 | `[bindings]` (**2026-11-05**, `77506af`) | **937 assertions / 43 cases, green** | The §12.8 tool: descriptor→schema, direction-specific module/component imports/exports (G2H/H2G/G2G), complete-schema export/re-import and editorial name/description fields, opaque reference spelling, `stringref` through every emitter, C header (compiled as C11 and C++23), Rust, TypeScript, AssemblyScript, Zig, Kotlin, MoonBit, Go, Dart, Java, C#, F#, Python, Ruby, Lua, Swift, D, Nim, Crystal, Ada, Pascal and Haskell emission, a compiled C++ adapter (call/trap/import/reference/multi-value/retain-drop), SWIG and Glue candidate validation, `VMContext*` candidate schemas, WIT JSON/text input and world projection, direction-aware C++ typedefs/source, non-function entry comments, producer toolchain evidence, defined-reference kind naming, exact-reference flags, GC struct/array definitions, Rust `#[link(wasm_import_module)]`/`#[link_name]` declarations and export skeletons, C `WASMJIT_WASM_IMPORT` annotations, per-toolchain compile checks, and a `wasm-opt --all-features -O2` signature comparison on five fixtures. |
 | `[runtime]` (**2026-11-05**) | 151 assertions / 19 cases, green | Load → instantiate → call, idempotence, named errors, the `MF-2` guard, agents, the store-scoping proof (two stores, two heaps, an artifact records its store), and the unloader (one instance destroyed, the module re-instantiated, a provisional backend's code freed twice over). |
@@ -779,7 +779,7 @@ changing a schema, emitter or this note's code paths.
   as an embedder-driven safepoint.
 - [`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md) — the loader that
   `Runtime::create(name)` is designed to make possible.
-- [`MULTI_AGENT_FEASIBILITY.md`](MULTI_AGENT_FEASIBILITY.md) §6 — the concurrency
+- [`proposals/THREADS.md`](proposals/THREADS.md) §6 — the concurrency
   mode a `RuntimeConfig` would eventually carry.
 - [`THREADSAFETY.md`](THREADSAFETY.md) §2 and §3.1–§3.2 — the agent/instance/
   host vocabulary behind the ladder in §3.2, and the instance-cardinality rule
@@ -2421,7 +2421,7 @@ do not name a host runtime or a source language.
 |---|---|---|---|---|
 | **EN-1** | Reference identity is Store-scoped; cross-Store references are not shareable | §4.4, §14.2 | **Accepted** | One `Store` per runtime; two runtimes reject cross-runtime modules/instances. Do not add a process-global type registry. |
 | **EN-2** | A bare `Callable` carries a numeric `typeId` but not its originating `Store` | §15.2 | **Open** | Decide whether to add provenance or require `ModuleInstance`-owned wrappers; a numeric id alone cannot reject a foreign Store. |
-| **EN-3** | Every reference must lower to one pointer-sized machine word across backends | §14.1 | **Verify** | LibJIT and AsmJit do; any future backend must. Add an ABI check when SLJIT or another backend is promoted. |
+| **EN-3** | Every reference must lower to one pointer-sized machine word across backends | §14.1 | **Verify** | LibJIT, SLJIT and AsmJIT do; any future backend must. Add an ABI check when a new backend is promoted. |
 | **EN-4** | `HostBridge` is the only host-reference lifetime primitive; it does not own C++ objects | §13.2, §13.6 | **Accepted** | Keep it as retain/release/equals + lifecycle callbacks. Do not move a C++ object model into it. |
 | **EN-5** | `GcHeap` is guest-Wasm-GC only; it is not a native C++ heap | §13.7.2 | **Accepted** | No `std::pmr`-based native GC. Host objects stay in a host table/arena or an `externref` box. |
 | **EN-6** | Component resource slots are not native C++ object storage | §13.2 | **Accepted** | A `uint64_t` representation is data, not a destructor contract for arbitrary `T`. |

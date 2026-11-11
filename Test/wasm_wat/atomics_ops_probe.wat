@@ -1,7 +1,7 @@
 ;; Item 4, probe 7, strengthened: atomic operations that OBSERVE their result.
 ;; The original `atomics_probe` only proved the module instantiated; these exports
 ;; return the memory state the operations produced, so a lowering that ignores the
-;; operation (or truncates it) is visible (docs/backends/CAPABILITY_PROBES.md
+;; operation (or truncates it) is visible (docs/TESTING.md
 ;; section 1).
 (module
   (memory 1 1 shared)

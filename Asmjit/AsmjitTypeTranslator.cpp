@@ -23,7 +23,7 @@ asmjit::TypeId TypeTranslator::translateValueType(const WASM::ValueType& type)
 		// native vector type, which is what lane operations and the result
 		// register use. It is deliberately **not** the argument boundary: a
 		// v128 parameter crosses as two scalar words, expanded in
-		// translateFunctionType (docs/ABI_REFACTOR_STUDY.md §27).
+		// translateFunctionType (docs/backends/HISTORY.md).
 		return asmjit::TypeId::kInt32x4;
 
 	// Every reference kind has the same machine representation in the
@@ -86,7 +86,7 @@ asmjit::FuncSignature TypeTranslator::translateFunctionType(const WASM::FuncType
 	signature.add_arg(asmjit::TypeId::kUIntPtr);
 
 	if (frameAbi) {
-		// Staging-frame ABI (docs/backends/EXPORT_SIGNATURE.md §10): the context
+		// Staging-frame ABI (docs/ABI.md “Call forms”): the context
 		// plus one opaque frame pointer, and a void return -- AsmJIT has no
 		// driver to collect a value, so a frame-mode function stores its own
 		// results into the frame. Step 5a: the *shape* only; nothing emits this
@@ -102,7 +102,7 @@ asmjit::FuncSignature TypeTranslator::translateFunctionType(const WASM::FuncType
 			// Canonical boundary: two scalar words, low first. Not the platform's
 			// native vector convention, which differs per target (SysV, MS x64,
 			// AAPCS64) and cannot be expressed by the other backends at all
-			// (docs/ABI_PORTABILITY.md; docs/ABI_REFACTOR_STUDY.md §27). Inside
+			// (docs/ABI.md; docs/backends/HISTORY.md). Inside
 			// the body a v128 stays a 16-byte buffer, so lane access does not
 			// move -- only the spelling at this boundary changes.
 			for (int word = 0; word < 2; ++word) {
@@ -126,7 +126,7 @@ asmjit::FuncSignature TypeTranslator::translateFunctionType(const WASM::FuncType
 			// through a caller-supplied 16-byte buffer as a trailing pointer
 			// parameter and the function returns void -- the canonical rule, and the
 			// same path multi-value tuples and SLJIT already use
-			// (docs/backends/V128_SIGNATURE_DECISION.md).
+			// (docs/ABI.md).
 			if (!signature.can_add_arg())
 				throw std::runtime_error("AsmJit ABI translation: no room for v128 result buffer");
 			signature.add_arg(asmjit::TypeId::kUIntPtr);

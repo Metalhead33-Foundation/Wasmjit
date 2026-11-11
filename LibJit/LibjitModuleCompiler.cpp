@@ -65,7 +65,7 @@ jit_value_t zeroStructValue(jit_function_t fn, jit_type_t t)
 {
 	// A struct-typed value is written through its *address*: in this LibJIT build
 	// `jit_insn_store_relative` does not write a `jit_value_create`d aggregate
-	// (verified; docs/SIMD_LIBJIT.md §6), so the field-by-field loop below would
+	// (verified; docs/proposals/SIMD.md), so the field-by-field loop below would
 	// hand back an uninitialised slot. `v128` is the only struct type that
 	// reaches here — a 16-byte slot zeroed by the SIMD helper — and it matters:
 	// a `v128` local read before its first `local.set` must be zero, not garbage.
@@ -183,7 +183,7 @@ void ModuleCompiler::compileFunction(jit_function_t fn, uint32_t funcTypeIdx, co
 	locals.reserve(stack.allLocals.size());
 
 	if (instance.frameCallAbi()) {
-		// Staging-frame ABI (docs/backends/STAGING_CALL_ABI.md, step 4a): the
+		// Staging-frame ABI (docs/ABI.md, step 4a): the
 		// arguments are already in the caller's frame, so each parameter is
 		// copied out of it into a local. A `v128` moves as two eight-byte words.
 		jit_value_t framePtr = jit_value_get_param(fn, 1);
@@ -257,7 +257,7 @@ void ModuleCompiler::translateTypes(WASM::ModuleInstance& instance, const WASM::
 	// We must do this before declaring any function, because each
 	// function's signature is expressed as a type index, and we need
 	// the jit_type_t for that index to create the jit_function_t.
-	// Staging-frame ABI (docs/backends/STAGING_CALL_ABI.md, step 4a): the frame
+	// Staging-frame ABI (docs/ABI.md, step 4a): the frame
 	// form is OPT-IN, never inferred. LibJIT spells a `v128` as one 16-byte
 	// aggregate, so a wide vector signature already crosses the register form
 	// intact and there is no local ceiling to lift; switching every such module
@@ -323,7 +323,7 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM
 {
 	// This backend spells every `v128` parameter as one 16-byte aggregate rather
 	// than the canonical two scalar words, because libjit loses the sixth
-	// integer argument (docs/backends/LIBJIT_ARGUMENT_DEFECT.md §8.1/§12). The
+	// integer argument (docs/backends/HISTORY.md). The
 	// call cache needs to know, so it describes the same shape to libffi; on
 	// SysV the two spellings are the same ABI, on MS x64 they are not.
 	instance.setV128ParameterIsAggregate(true);

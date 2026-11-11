@@ -1,5 +1,5 @@
 ;; Item 4, probe 15: funcref in a table plus call_indirect
-;; (docs/backends/CAPABILITY_PROBES.md section 9).
+;; (docs/TESTING.md section 9).
 (module
   (type $bin (func (param i32 i32) (result i32)))
   (func $add (type $bin) (param i32 i32) (result i32)

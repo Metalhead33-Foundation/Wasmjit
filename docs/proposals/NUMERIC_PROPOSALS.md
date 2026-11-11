@@ -228,7 +228,7 @@ WAT, for the same reason.
   https://github.com/WebAssembly/half-precision/blob/main/proposals/half-precision/Overview.md
 - Rounding-Mode Control:
   https://github.com/WebAssembly/rounding-mode-control/blob/main/proposals/rounding-mode-control/Overview.md
-- In-repo: [`SIMD.md`](SIMD.md), [`SIMD_LIBJIT.md`](../SIMD_LIBJIT.md),
+- In-repo: [`SIMD.md`](SIMD.md), [`proposals/SIMD.md`](SIMD.md),
   [`MULTI_VALUE.md`](MULTI_VALUE.md), [`GC.md`](GC.md),
   [`../ABI.md`](../ABI.md), [`../SAFETY.md`](../SAFETY.md); sources
   `WasmBase/WasmType.hpp` (`ValueTypeCode`), `WasmBase/WasmOpcode.hpp`

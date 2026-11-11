@@ -596,7 +596,7 @@ documented where their subsystem lives:
 | Variable | Effect | Owner |
 |---|---|---|
 | `WASMJIT_LEGACY_EH=1` | load a superseded Phase-3 exception encoding by rewriting unconditionally; `0` selects the strict policy (the named refusal), and unset is the default recovery policy, which rewrites only the bodies that need it and reports `WASM.DECODE.LEGACY_EXCEPTIONS_REWRITTEN` | [`proposals/LEGACY_EXCEPTIONS.md`](proposals/LEGACY_EXCEPTIONS.md) §4.6 |
-| `WASMJIT_JIT_DUMP=1` | dump each compiled function's libjit IR | [`SIMD_LIBJIT.md`](SIMD_LIBJIT.md) §6 |
+| `WASMJIT_JIT_DUMP=1` | dump each compiled function's libjit IR | [`proposals/SIMD.md`](proposals/SIMD.md) §4.6 |
 | `WASMJIT_LIBJIT_OPT=N` | the *process default* libjit optimization level for `OptimizationLevel::Basic`; default **0**, because level 1 rejects a valid block graph and a failed compile cannot be retried ([`languages/LF2_DEEP_F1_BACKEND.md`](languages/LF2_DEEP_F1_BACKEND.md)). A runtime's `RuntimeConfig::compilation.level` overrides it per instance, and `Full` does not consult it | backend |
 | `WASMJIT_MAX_TOTAL_BYTES=N` | the *process default* memory budget (default **4 GiB**; `0`/`unlimited` disables it). A runtime overrides it with `RuntimeConfig::memory.totalBytes` ([`proposals/CONFIGURATION.md`](proposals/CONFIGURATION.md) `CFG-1`) | [`SAFETY.md`](SAFETY.md) §2.3 |
 

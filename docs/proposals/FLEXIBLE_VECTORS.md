@@ -53,7 +53,7 @@ Flexible Vectors proposes length-agnostic vector operations beyond 128 bits.
 
 - Fixed-width **128-bit SIMD** is complete: all 236 handlers execute, all
   `simd_*` and relaxed scripts in the snapshot are green, and `SIMD.md` records
-  the lowering (`docs/SIMD.md`, `docs/SIMD_LIBJIT.md`).
+  the lowering (`docs/SIMD.md`, `docs/proposals/SIMD.md`).
 - The value type is `v128` with a fixed lane layout; there is no vector-length
   concept, no runtime vlen and no length-agnostic opcode.
 - The upstream binary draft was reviewed. Its **instruction prefixes are not
@@ -132,7 +132,7 @@ proposal. There is nothing to grade until FV1 resolves the encoding collision.
   https://github.com/WebAssembly/flexible-vectors/blob/main/proposals/flexible-vectors/BinaryFlexibleVectors.md
 - Spec — Vector instructions:
   https://webassembly.github.io/spec/core/exec/instructions.html
-- In-repo: [`SIMD.md`](SIMD.md), [`../SIMD_LIBJIT.md`](../SIMD_LIBJIT.md),
-  [`../SIMD_BACKENDS.md`](../SIMD_BACKENDS.md), [`../LAYERING.md`](../LAYERING.md);
+- In-repo: [`SIMD.md`](SIMD.md), [`SIMD.md`](SIMD.md),
+  [`SIMD.md`](SIMD.md), [`../LAYERING.md`](../LAYERING.md);
   sources `WasmBase/WasmType.hpp` (`v128`), `WasmBase/WasmOpcode.hpp`
   (`SIMDOpcode`), `LibJit/LibjitOpcodeDispatcher.cpp`.

@@ -758,7 +758,7 @@ void ModuleInstance::verifyImportCallForms() const
 			throw std::runtime_error("the module imports a function from an instance"
 					" compiled with the other call ABI; instantiate both modules with the"
 					" same WASM::setFrameCallAbiOptIn setting"
-					" (docs/backends/CALL_FORM_GRANULARITY.md)");
+					" (docs/ABI.md)");
 		// Both sides agree on the frame form, but the frame form has no
 		// cross-module path yet: the register form is the one the linking fixtures
 		// pin, and a frame-form import reaches the callee through the wrong
@@ -769,7 +769,7 @@ void ModuleInstance::verifyImportCallForms() const
 			throw std::runtime_error("the module imports a function from another"
 					" module in the staging-frame call form, which has no cross-module path"
 					" yet; instantiate the graph without WASM::setFrameCallAbiOptIn"
-					" (docs/backends/CALL_FORM_GRANULARITY.md)");
+					" (docs/ABI.md)");
 	}
 }
 
@@ -2929,10 +2929,10 @@ void ModuleInstance::gcCollect()
 	// MF-4: a safepoint requires quiescence — no call may be inside the instance.
 	// With one agent that is automatic; with several it is the embedder's rule,
 	// and this check turns a violation into a named error instead of a recycle of
-	// an object a live frame still borrows (docs/MULTI_AGENT_FEASIBILITY.md §7).
+	// an object a live frame still borrows (docs/proposals/THREADS.md).
 	if (inCall()) {
 		throw std::logic_error("gcCollect() requires a quiescent instance: a call is"
-				" executing in it (docs/MULTI_AGENT_FEASIBILITY.md MF-4)");
+				" executing in it (docs/proposals/THREADS.md MF-4)");
 	}
 	// MF-3: serialize against another agent's release path.
 	std::lock_guard<std::recursive_mutex> lock(internals.gcMutex);

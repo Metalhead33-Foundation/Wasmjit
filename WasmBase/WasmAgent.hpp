@@ -56,7 +56,7 @@ struct ExecutionLimits {
 //! two host-boundary depth counters and the stack limit. A continuation will
 //! own the same state, which is why it is a separate object from `Agent`.
 //!
-//! An *agent* is a WebAssembly execution context (proposals/THREADS.md §2.1);
+//! An *agent* is a WebAssembly execution context (proposals/THREADS.md);
 //! today the engine still runs one agent per host thread, but the state is no
 //! longer attached to the thread.
 //!

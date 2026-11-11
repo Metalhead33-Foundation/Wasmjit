@@ -2,25 +2,28 @@
 
 *The Milestone, and How Close We Are*
 
-Status: **milestone met 2026-10-29** (revision 4 — 2026-10-30). This note
-re-measures the suite at `5c3d194` and records the `G3` re-check performed by
-[`READINESS_AUDIT.md`](READINESS_AUDIT.md); `AAS1`, `AAS8`, `AAS9` and `AAS11`
+Status: **milestone met 2026-10-29** (revision 5 — 2026-11-10). This note re-measures
+the suite, records the `G3` re-check performed by
+[`READINESS_AUDIT.md`](READINESS_AUDIT.md), and now owns the **central defect,
+gap and limitation register** (§8) and the **per-backend production status**
+(§13) that were previously separate notes. `AAS1`, `AAS8`, `AAS9` and `AAS11`
 are closed, G1 and G3 are `✅`, and all four milestone gates pass.
 Audience: anyone planning work that changes an embedder-facing surface or the
 backend seam, anyone evaluating the `LibjitDispatcher` → `master` merge, and
-anyone who needs a defensible answer to "is it production ready yet?".
+anyone who needs a defensible answer to "is it production ready yet?" or
+"where is that limitation written down?".
 
-This note does two jobs. **§2 declares the milestone** and turns its four gates
-into pass/fail acceptance criteria. **§4–§8 are the study**: the vocabulary that
-makes the gates checkable, the measured evidence, the condition-by-condition
-verdicts, and the gap ledger that says which documented shortfalls are compatible
-with the milestone and which would sink it. It contains **no code**, changes no
-behaviour, and adds no test.
+This note does three jobs. **§2 declares the milestone** and turns its four gates
+into pass/fail acceptance criteria. **§4–§7 are the study**: the vocabulary that
+makes the gates checkable, the measured evidence, and the condition-by-condition
+verdicts. **§8 is the one register** for every open defect, gap and deliberate
+limitation, and **§13 is the backend production verdict** that used to live in a
+separate readiness note. It contains **no code**, changes no behaviour, and adds
+no test.
 
 **Scope of the production claim:** G1 was written for LibJIT. SLJIT and AsmJIT
-now pass the same generic gate and are production-ready within the same envelope
-(snapshot 2026-11-09); their measured status is in
-[`BACKEND_PRODUCTION_READINESS.md`](BACKEND_PRODUCTION_READINESS.md).
+now pass the same generic gate and are production-ready within the same envelope;
+their measured status and limitations are §13 and §8.
 
 ## 1. Document map
 
@@ -32,11 +35,12 @@ now pass the same generic gate and are production-ready within the same envelope
 | §5 | What does the "heavy refactoring" rule mean here, and does anything violate it? |
 | §6 | What is the measured state of the tree today? |
 | §7 | How close are we, gate by gate? |
-| §8 | Which open documented gaps matter, and which do not? |
+| §8 | Which defects, gaps and limitations are open, and which are decisions or scope? |
 | §9 | Where do we deliberately stay loose, and what keeps that safe? |
 | §10 | What is the plan that closes the remaining distance? |
 | §11 | What did the suite say on the day this was written? |
 | §12 | References |
+| §13 | Which backends are production-ready, within what envelope, and why? |
 
 ## 2. The milestone
 
@@ -66,13 +70,13 @@ without a deliberate version bump**. For this milestone the frozen set is:
 | S3 | GC object layout: header words, per-type size/alignment, array data offset | [`WasmGcHeader.hpp`](../WasmBase/WasmGcHeader.hpp); [`proposals/GC.md`](proposals/GC.md) invariant H1 |
 | S4 | The trap entry point and its kind/message convention (a pending status, not `longjmp`) | [`SAFETY.md`](SAFETY.md) §2.6; [`TRAP_CLEANUP.md`](TRAP_CLEANUP.md) §12 |
 | S5 | The continuation provider ABI (`wasm_cont_*`, status codes, one-shot, wide 16-byte slots) | [`ABI.md`](ABI.md) "Continuations"; [`proposals/STACK_SWITCHING.md`](proposals/STACK_SWITCHING.md) §10.6 |
-| S6 | The SIMD helper ABI (`const void*` / `void* out`, immediates as scalars) and the f16 helper ABI (`f32` scalars, binary16 lanes) | [`wasm_simd_scalar.hpp`](../WasmBase/wasm_simd_scalar.hpp) (including the four D5 `v128.load` fusion trampolines), [`wasm_f16.hpp`](../WasmBase/wasm_f16.hpp); [`SIMD_LIBJIT.md`](SIMD_LIBJIT.md) §5–§6 |
+| S6 | The SIMD helper ABI (`const void*` / `void* out`, immediates as scalars) and the f16 helper ABI (`f32` scalars, binary16 lanes) | [`wasm_simd_scalar.hpp`](../WasmBase/wasm_simd_scalar.hpp) (including the four D5 `v128.load` fusion trampolines), [`wasm_f16.hpp`](../WasmBase/wasm_f16.hpp); [`proposals/SIMD.md`](proposals/SIMD.md) §4.5–§4.9 |
 | S7 | The backend seam: `ModuleInstantiator` (the four hooks a code generator implements) and `BackendSession` (the façade an embedder drives without a backend header) | [`WasmModuleInstance.hpp`](../WasmBase/WasmModuleInstance.hpp); [`WasmBackendSession.hpp`](../WasmBase/WasmBackendSession.hpp); [`WRITING_A_BACKEND.md`](WRITING_A_BACKEND.md) |
 | S8 | The embedder's invocation path: `WASM::callCallable` / `callCallableWithResults`, `HostBridge`, `nativeImport<&fn>()` | [`ABI.md`](ABI.md) "Embedder Guide"; [`WasmValue.hpp`](../WasmBase/WasmValue.hpp) |
 | S9 | The diagnostic record/id/schema contract (`wasmjit.diagnostic.v1`) | [`DIAGNOSTICS.md`](DIAGNOSTICS.md) §1 |
 | S11 | The optional libffi export precache: `ModuleCallCache`, `ComponentCallCache`, their entry records, and `ComponentInstanceHandle::exportedFunctionNames()` | [`WasmCallCache.hpp`](../WasmBase/WasmCallCache.hpp); [`WasmComponentInstance.hpp`](../WasmBase/WasmComponentInstance.hpp) |
-| S12 | The C ABI contract: C linkage for every compiled function, the host C ABI as the convention, portability over performance, the target matrix (`tested` vs `provisional`), and the GC object layout plus allocator call shape | [`ABI_PORTABILITY.md`](ABI_PORTABILITY.md) §1–§8 |
-| **B1** | **Deliberate break, 2026-11-06, branch `AbiRefactor`:** `WASM::ModuleFfiEntry` (part of `S11`) gained a `paramKinds` member, so its size and layout change. Required by the `v128` two-word decision ([`ABI_PORTABILITY.md`](ABI_PORTABILITY.md) §3): the libffi cache must know which parameters occupy **two** argument slots. `abi-check.sh` is unaffected (0 symbols removed; 149 added, all of them inline helpers from `WasmBackendAbi.hpp`), but a struct layout is not a symbol, which is why the break is recorded here. Any embedder that constructs a `ModuleFfiEntry` by aggregate initialisation without designated fields must be rebuilt. |
+| S12 | The C ABI contract: C linkage for every compiled function, the host C ABI as the convention, portability over performance, the target matrix (`tested` vs `provisional`), and the GC object layout plus allocator call shape | [`ABI.md`](ABI.md) “The C ABI Contract” and “GC Object and Heap ABI” |
+| **B1** | **Deliberate break, 2026-11-06, branch `AbiRefactor`:** `WASM::ModuleFfiEntry` (part of `S11`) gained a `paramKinds` member, so its size and layout change. Required by the `v128` two-word decision ([`ABI.md`](ABI.md) “The C ABI Contract”): the libffi cache must know which parameters occupy **two** argument slots. `abi-check.sh` is unaffected (0 symbols removed; 149 added, all of them inline helpers from `WasmBackendAbi.hpp`), but a struct layout is not a symbol, which is why the break is recorded here. Any embedder that constructs a `ModuleFfiEntry` by aggregate initialisation without designated fields must be rebuilt. |
 
 Stability here means **source and ABI compatibility for those ten surfaces
 across one release series**, with three permitted changes: (a) additive fields
@@ -131,7 +135,7 @@ completing WebAssembly. In particular:
   `TD9`/`TH-5` still describe what ships: one agent at a time. Multi-agent
   execution on that one instance is the **accepted design direction** — opt-in,
   not built, and not a gate here
-  ([`MULTI_AGENT_FEASIBILITY.md`](MULTI_AGENT_FEASIBILITY.md) §2.3, §6). What the
+  ([`proposals/THREADS.md`](proposals/THREADS.md) §2.3, §6). What the
   milestone does require is the cardinality rule that makes it tractable: **at
   most one instance per module; multiple instances are ruled out**, and
   concurrent compilation is rejected as a feature. A QVM successor is a
@@ -161,7 +165,7 @@ completing WebAssembly. In particular:
 
 Every open gap in the tree — each note's §5 row, each §7 milestone without a
 `✅`, each policy limitation in `SAFETY.md` §3 / `THREADSAFETY.md` §8, each risk
-in `GC.md` §6 / `SIMD_LIBJIT.md` §11 — is put in exactly one class:
+in `GC.md` §6 / [`proposals/SIMD.md`](proposals/SIMD.md) §4.8 — is put in exactly one class:
 
 | Class | Meaning | Compatible with the milestone? |
 |---|---|---|
@@ -223,7 +227,7 @@ Three structural changes are visible in the tree's history. All three are
 The lesson for G2: the tree has already paid for its two structural taxes (type
 identity, per-agent state). Anything the roadmap currently asks for is a new
 record, a new opcode, a new rule — or a refusal.
-[`MULTI_AGENT_FEASIBILITY.md`](MULTI_AGENT_FEASIBILITY.md) tests that claim
+[`proposals/THREADS.md`](proposals/THREADS.md) tests that claim
 against the one family that looks like an exception (§5.3) and finds that the
 backend share of it is class B, not E.
 
@@ -235,7 +239,7 @@ entry into one mutable instance, a multi-mutator GC with a write barrier on
 reference-slot atomics, a waiter table, thread-local globals and shared tags
 ([`proposals/THREADS.md`](proposals/THREADS.md) §4.3.1, `T9`/`TH-5`;
 [`proposals/SHARED_EVERYTHING_THREADS.md`](proposals/SHARED_EVERYTHING_THREADS.md)
-`SET2`/`SET4`/`SET6`). [`MULTI_AGENT_FEASIBILITY.md`](MULTI_AGENT_FEASIBILITY.md)
+`SET2`/`SET4`/`SET6`). [`proposals/THREADS.md`](proposals/THREADS.md)
 split the family and found that no backend change is needed (§4); the class-E
 part is core-side and staged into B/A work. **`MF-1…MF-8` are now implemented
 (2026-10-29):** the entry counter, waiter table, GC guards/barrier and the
@@ -301,10 +305,8 @@ shape and the note tree — **1,013** on 2026-11-01). The documented negative-mo
 ### 6.3 The backend inventory
 
 **Snapshot (2026-10-30, at the milestone declaration — historical).** The current
-per-backend status is §13 and
-[`BACKEND_PRODUCTION_READINESS.md`](BACKEND_PRODUCTION_READINESS.md). This table
-records what the seam had when the milestone was declared; it is not a statement
-about today's tree.
+per-backend status is §13. This table records what the seam had when the
+milestone was declared; it is not a statement about today's tree.
 
 | Backend | State | Consequence for the milestone |
 |---|---|---|
@@ -362,7 +364,7 @@ feasibility/embedding notes written since
 ([`LANGUAGE_FEASIBILITY.md`](LANGUAGE_FEASIBILITY.md),
 [`EMBEDDING_SURFACE.md`](EMBEDDING_SURFACE.md),
 [`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md),
-[`MULTI_AGENT_FEASIBILITY.md`](MULTI_AGENT_FEASIBILITY.md)),
+[`proposals/THREADS.md`](proposals/THREADS.md)),
 [`WRITING_A_BACKEND.md`](WRITING_A_BACKEND.md), the header-comment policy
 [`DOCUMENTATION.md`](DOCUMENTATION.md), the note-freshness policy
 [`FRESHNESS.md`](FRESHNESS.md), and its consumer
@@ -459,7 +461,7 @@ recording that TM-6…TM-11 completed them.
 | AAS8 | **The backend façade is test-local.** `TestBackend::Session` is the interface a backend author would actually implement, and it lives in `Test/`. The product exposes only `ModuleInstantiator` plus conventions, so a second backend either writes product code inside the harness or re-derives the façade. **Closed 2026-10-29:** `WASM::BackendSession` (with `BackendAggregateLayout`, `BackendFieldLayout`, `BackendLaneWiseOp`) is a product type in [`WasmBackendSession.hpp`](../WasmBase/WasmBackendSession.hpp), classified in the backend tier, installed, and compiled standalone by its own TU; `TestBackend` now aliases it. The *selector* stays with the backend (`Test/TestBackend.cpp`), so the core still names no code generator. | `WasmBackendSession.hpp`; `Test/TestBackend.hpp` | A |
 | AAS9 | **There is no backend work order.** [`LAYERING.md`](LAYERING.md) §4 says what a backend *may not* violate; it does not enumerate what a backend *must provide*: `ContinuationInvokeFn`, the `currentTailCallState()` access path, `Callable::typeId` maintenance, aggregate layout for multi-result returns, the `v128` host ABI, the trap-slot protocol, the profile gate, the helper entry points it is expected to call. **Closed 2026-10-29:** [`WRITING_A_BACKEND.md`](WRITING_A_BACKEND.md) is that checklist — the two seams, the four hooks with what each must and must not do, the eight ABI obligations, memory/GC ownership, the call-versus-bring helper split, packaging, and a definition of done naming the test tags that evidence it. | `WRITING_A_BACKEND.md`; `LAYERING.md` §4 | A |
 | AAS10 *(historical; closure below)* | **The seam has never had a second implementation.** `Asmjit/` and `Sljit/` contain only a `.pro` that includes `WasmBase.pri`; `LibJIT::ModuleCompiler` is the only subclass of `ModuleInstantiator`, and `libjit` the only `WASMJIT_BACKEND`. Nothing in the build would notice if a hook grew a LibJIT-shaped assumption. **Closed 2026-10-29:** the seam has three implementations — the executing backend, the core's `NullInstantiator`, and `Test/ExampleBackend`, a loadable plugin built in its own directory — and `Runtime::create(name)` selects any of them (the plugin through `dlopen`). | `Asmjit/Asmjit.pro`, `Sljit/Sljit.pro`; `WasmBase/WasmNullInstantiator.*`; `Test/ExampleBackend/`; [`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md) §10 | A |
-| AAS11 | **The scaffolds do not enforce the seam.** Their `.pro` files define no sources and no compile-time assertion; a stray `libSljit.so.*` sits in `Sljit/` (git-ignored, so history is clean) and will confuse the first person who looks. **Closed 2026-10-29 (documented, deliberately kept):** the stray `libSljit.so*` files are gone; both directories stay reserved **because those backends are planned**, and each now carries a `README.md` that says what it is (a placeholder that emits nothing and installs nothing), what it is not, and how to start through [`WRITING_A_BACKEND.md`](WRITING_A_BACKEND.md). `Project.pro` comments the two subprojects as planned so the next reader does not mistake them for dead scaffolding. *(Both are executing production backends today — §13.)* | `Sljit/`, `Asmjit/`, `Project.pro` | A |
+| AAS11 | **The scaffolds do not enforce the seam.** Their `.pro` files define no sources and no compile-time assertion; a stray `libSljit.so.*` sits in `Sljit/` (git-ignored, so history is clean) and will confuse the first person who looks. **Closed 2026-10-29 (documented, deliberately kept):** the stray `libSljit.so*` files are gone; both directories stayed reserved **because those backends were planned**, and each carried a page that said what it was at the time (a placeholder that emitted nothing and installed nothing), what it was not, and how to start through [`WRITING_A_BACKEND.md`](WRITING_A_BACKEND.md). `Project.pro` comments the two subprojects as planned so the next reader does not mistake them for dead scaffolding. *(Both are executing production backends today — §13.)* | `Sljit/`, `Asmjit/`, `Project.pro` | A |
 | AAS7 | **The layering waiver.** Five `WasmBase/` sites cite `docs/UNMODELLED_VALUE_TYPES.md`, whose name contains "JIT". A citation is not a dependency, but it is the only reason the §6 check is not empty. **Closed 2026-10-29:** the note is renamed and the five sites re-pointed; §6 returns empty and the `[layering]` test enforces it. | `LAYERING.md` §8 | A |
 
 **Verdict.** Work can begin, and now it can begin *from the document alone*: the
@@ -522,51 +524,77 @@ the distance that was closed required a heavy refactor — which is precisely wh
 G2 exists to guarantee. What remains open is deliberately outside the milestone
 (§3) or gated on an upstream encoding.
 
-## 8. Gap ledger
+## 8. The defect, gap and limitation register
 
-Every gap that is still open somewhere in `docs/`, with the class it falls into
-and the gate it touches. Rows already marked `✅`/`~~closed~~` in their own note
-are omitted; this is deliberately not a second copy of those tables.
+This is the **one place to look** for anything still wrong or deliberately
+limited. It is an index, not a second copy of the owner notes: the linked note
+owns the evidence, the closure date and the fix. A row is **open** unless it says
+otherwise.
 
-| Source (ID) | What it is | Class | Gate | Effect on the milestone |
+### 8.1 Open items
+
+| ID | Kind | What it is | Where it bites | Owner / detail |
 |---|---|---|---|---|
-| `README.md` "Near-Term Expectations"; AAS1 | API shape not finalized; harness is not the embeddable API; no packaging | A | G1 | **Closed 2026-10-29:** umbrella + tiers + `ES-4` visibility + `ES-5` install + `ES-7` consumer coverage (`i32`, `f64`, multi-result, `v128`). |
-| AAS2 | `v128`-by-value and multi-result aggregate layout absent from the embedder ABI note | A | G1 | **Closed:** `ABI.md` states both, and `ES-7` exercises them from an out-of-tree consumer. |
-| `SAFETY.md` `S1`, `S3`, `S4`, `S7`, `S8` | No step budget; RC not a leak guarantee; per-store budgets; small-stack guard; serial continuation use | D | G1 | Legitimate QVM-style choices — but they must be *stated as the embedding contract*. |
-| `SAFETY.md` `S2`; AAS3 | Negative-module coverage is opt-in | A | G1 | Evidence, not behaviour. |
-| `SAFETY.md` (abort guards) | `std::abort()` remains for an unframed trap report, a completed-continuation resume and a null `Callable::fnPtr` | A | G1 | Invariant guards; document them as "programmer error", not runtime failure. |
-| `proposals/TYPE_MODEL.md` §7 `TM-0…TM-5`; AAS6 | Plan rows lack `✅` while §5/§7.11 say closed | A | G2 | Bookkeeping only — but an unmarked closed refactor reads like an open one. |
-| `proposals/GC.md` `H1` | Dual layout logic: runtime and backend layout must agree | B | G2/G3 | Already the contract row (S3); the risk is drift, not refactoring. |
-| `proposals/GC.md` `C7`, `H3`, `H4`, `H7` | Budget refusal, O(n) cast matching, `i31` reinterpretation, ad-hoc `Value::kind` | A/B | G2 | Contained follow-ups. |
-| `proposals/NUMERIC_PROPOSALS.md` `NUM3`, `NUM4`, `NUM7` | ~~No `f16` type, opcodes or fixtures~~ **Closed 2026-11-03 (NUM-3/NUM-4):** `f16x8` is modelled as a `v128` lane shape, every `0xFC 30/31` and `0xFD 120–14F` opcode decodes/validates/lowers, and both a helper suite and two binary modules cover the surface. | A (+B for the lane shape) | G2 | The textbook "new type + new opcodes" addition G2 permits, delivered without a `ValueTypeCode` change. |
-| `proposals/SHARED_EVERYTHING_THREADS.md` `SET3`, `SET4`, `SET5` | No managed waitqueue (`0x68` collides with `cont`), no thread-local globals, no lifecycle builtins | C | G2 | **Encoding-blocked:** the draft assigns no stable binary form. Not implementable without guessing, so tolerated by the completeness rule. |
-| `proposals/SHARED_EVERYTHING_THREADS.md` `SET1` | Shared-to-shared restriction checks incomplete | A | G2 | **Closed 2026-10-29:** a shared type/global/table must name a shared reference (`shared annotations are validated against every referenced type`); shared tags wait on an encoding. |
-| `proposals/SHARED_EVERYTHING_THREADS.md` `SET2`, `SET6`; `THREADS.md` `T9`; `ARA5` | Multi-mutator GC, agent API, two-agent tests | A (demoted) | G2 | **Closed 2026-10-29:** `Agents`, the write barrier, the waiter table and `[multiagent]`; `Single` stays the default. |
-| `proposals/THREADS.md` `T5` | `wait`/`notify` on unshared memory accepted | D | G2 | Documented deviation matching the curated suite. |
-| `proposals/STACK_SWITCHING.md` `SS4`, `SSD3` | Cross-provider switch rejected; wide A/B implementation | B | G2/G3 | A backend emits the documented calls; it never implements a provider. |
-| `proposals/TAILCALLS.md` `TC3` | Tail-call space guarantee limited to uniform signatures | A | G2 | **Closed 2026-10-29 (TC-5):** per-type thunks dispatch any parameter list; only `v128` falls back. |
-| `proposals/CALL_TAGS.md` `CTA1`, `CTA2`, `CTA4`, `CTA5` | No opcodes, tag heap type, `func_switch`, fallback path | C | G2 | Nothing correct to implement. |
-| `proposals/CONSTANT_TIME.md` `CT1`–`CT5` | No secret types, memory, ops, validation or timing guarantee | C (CT4 → B if unblocked) | G2 | Recorded refusal; the timing contract is the watch-list item (§5.4). |
-| `proposals/FLEXIBLE_VECTORS.md` `FV1`–`FV4` | Encoding collision; no vlen, mask/tail model or tests | C (FV2 → E if unblocked) | G2 | Recorded refusal; `vlen` is the watch-list item (§5.4). |
-| `proposals/STRINGREF.md` `STR1` | Proposal encodings collide with GC `ref`/`ref null` | C | G2 | Keeps reserved codes; renumbering is a wire change, not an ABI change. |
-| `proposals/GC_EXTENSIONS.md` `GX4`; `INSTRUMENT_TRACING.md` `IT1` | Frozen values; `i32.itt` opcode | C | G2 | Deferred by upstream, explicitly. |
-| `proposals/MEMORY_CONTROL.md` `MC4`, `MC5` | Protection/mappable/virtual; BYOB window | D | G2 | Design space / web API surface. |
-| `proposals/JS_INTEGRATION.md` `JS1`, `JS3`, `JS4`, `JS6`, `JS8` | No host identity contract, `wasm:` policy, JS binding, loader, JS tests | D | G2 | The embedder's side of the boundary. |
-| `proposals/JS_INTEGRATION.md` `JS7` | No type-erased host `invoke(args, results)` | A (E if it replaces `fnPtr`) | G2 | Optional addition; §5.4. |
-| `proposals/EXTENDED_NAME_SECTION.md` `ENS7` | Helper-raised traps lack the function label | A | G1 | **Closed 2026-10-29:** generated code annotates the pending trap with its own function/instruction on the way out (`wasm_trap_annotate`); the first (innermost) site wins. |
-| `proposals/MULTI_VALUE.md` `MV2` | No dedicated `multi-value.wast` in the snapshot | C | G1 | Upstream suite gap, covered indirectly. |
-| `TYPE_IDENTITY.md` §8 `M8` | Type-store footprint not measured | A | G2 | Measurement only. |
-| `SIMD_LIBJIT.md` `SIMD-L8`/`D4`; `proposals/SIMD.md` `SIMD-8` | Batched SIMD path deliberately unbuilt; native lowering is per backend | B | G2 | Performance, not a gate. |
-| `SIMD_BACKENDS.md` §7 | Per-layer laxness budget for SIMD conformance | D | G2 | Documented. |
-| `THREADSAFETY.md` §8 | One agent at a time; no instance lock; no concurrent compilation | D | G1 | `Single` remains the default contract; `Agents` is an additive opt-in. Concurrent compilation still rejected. |
-| `docs/LAYERING.md` §8; AAS7 | Five core citations of a note whose name contains "JIT" | A | G3 | Cosmetic; keeps the layering check honest. |
-| AAS8–AAS11 | Test-local façade; no backend work order; no second implementation; empty scaffolds | A | G3 | **All closed 2026-10-29:** `BackendSession` is a product type, `WRITING_A_BACKEND.md` exists, the seam has three implementations, and the two then-planned scaffolds were documented. Both are executing production backends today (§13). |
-| AAS12 | **The exported set is a superset of the frozen surface.** `nm -D` shows 1,804 strong exports in `libWasmBase`, including `[tiers]`-internal types (the component model, the validator) plus `GcHeap`/`Section`, which are reachable from embedder-tier declarations. `WASMJIT_VISIBLE_BEGIN` wraps each public header's *includes*, so an internal header pulled in from there inherits default visibility. Pinning the internals to hidden was attempted and reverted: the in-tree tests and `libLibJit` link against those types, and the type-translation surface (`WasmTypeStore`/`WasmCanonicalType`/`WasmTypeRegistry`) is genuinely needed by a plugin backend — so the fix is a tier decision, not a pragma. | `WasmBase/WasmApi.hpp`; `Test/abi/libWasmBase.exports`; `Test/abi/ABI_BASELINES.md` | A | G2 | `Test/abi-check.sh` baselines the whole linker-visible set, so additive-only is enforced over the superset (strictly safer). Tightening it needs one of: pin the internals and promote the type-translation headers to the backend tier, or accept the superset explicitly. |
+| `GAP-1` | design gap | The call form is chosen **per module**. One wide function puts every call in that module on the frame path, so all of them pay its stores/loads and lose the register-form tail-call trampoline. The fix is a per-signature form, which changes the `frameCallAbi()` contract and ~25 call sites. | all three | [`ABI.md`](ABI.md) “Call forms” |
+| `GAP-2` | limitation | `return_call_ref` above the register-form ceiling is a semantic call + return on SLJIT, not a constant-stack tail. A frame trampoline is missing. | SLJIT | §13.4; [`backends/HISTORY.md`](backends/HISTORY.md) |
+| `GAP-3` | limitation | LibJIT frame-form tails are a frame call + frame return: correct, but not constant-stack. | LibJIT | §13.4 |
+| `GAP-4` | limitation | A reference read out of a struct field or array element is a **borrow**; dropping it does not release a count. A leak, never a wrong result. | SLJIT, AsmJIT | [`WRITING_A_BACKEND.md`](WRITING_A_BACKEND.md) §6 |
+| `GAP-5` | defect | A **reference-returning native import** is cloned on AsmJIT but the count is taken over on LibJIT and SLJIT, which over-releases if the host still holds the reference. No fixture registers one yet. | LibJIT, SLJIT | [`backends/HISTORY.md`](backends/HISTORY.md) §5 |
+| `GAP-6` | limitation | Only **x86-64 Linux / SysV AMD64** is exercised. MS x64, AAPCS64, Windows ARM64, RISC-V and MIPS are specified but *provisional*; big-endian and ILP32 are unsupported by decision. | all | [`ABI.md`](ABI.md) “The C ABI Contract” |
+| `GAP-7` | limitation | `i31ref` at the C boundary and a literal C-caller conformance test remain open. | core / host ABI | [`ABI.md`](ABI.md) “The C ABI Contract”; `P2`/`P3` in the old portability note (git history) |
+| `GAP-8` | coverage | The AddressSanitizer suite is recorded for LibJIT only; no SLJIT/AsmJIT ASan run is recorded. | SLJIT, AsmJIT | [`TESTING.md`](TESTING.md) “Required runs” |
+| `GAP-9` | coverage | The strict `WASM_SPEC_VALIDATE=1` negative sweep is recorded on SLJIT; the other two backends do not have a recorded run of the same sweep. | LibJIT, AsmJIT | [`TESTING.md`](TESTING.md) “Required runs” |
+| `GAP-10` | coverage | The atomic `table.*.rmw` forms (`xchg`, `cmpxchg`) have no fixture, because a shared reference-typed table is not constructible in the harness yet. | shared tables | [`TESTING.md`](TESTING.md) |
+| `GAP-11` | documented refusal | An **indirect** call whose signature carries a `v128` *and* more than three parameters is refused in a module that also imports a native function (the staged-import adapter has no `ffi_type` for a vector). | SLJIT, AsmJIT | §13.4 |
+| `GAP-12` | cost | SLJIT stages a native import with more than three Wasm parameters through one libffi closure **per invocation**. Structural (SLJIT’s C-call form has four argument entries), not a missing optimisation. | SLJIT | §13.4 |
+| `GAP-13` | cleanup | Trap entry-point sprawl: thirteen per-kind wrappers per backend; a global substitution across them once picked the wrong kind. Collapse to one `ReportTrap(kind)` per backend. | core / all backends | [`ABI.md`](ABI.md) “GC Object and Heap ABI”; `[gc]` |
 
-Reading: **no Class E row is in scope.** The C rows cannot be closed by this
-project at all; the D rows are decisions with an owner; the A/B rows are the work
-the roadmap already describes.
+### 8.2 Decisions that are not defects
 
+These are deliberate choices. They are listed here so nobody re-files them as
+bugs; the linked note owns the reasoning.
+
+| Decision | Where |
+|---|---|
+| No bespoke interpreter; interpretation, if ever required, is LibJIT’s own compile/interpret configuration | [`proposals/STACK_SWITCHING.md`](proposals/STACK_SWITCHING.md) §10.15 (D-3) |
+| At most one instance per `Module`; concurrent compilation rejected | [`THREADSAFETY.md`](THREADSAFETY.md) §3.1–§3.2 |
+| Cross-backend calls are legal by ABI but forbidden in production until a cross-backend suite exists | [`ABI.md`](ABI.md) “Call forms” |
+| Reference counting is not a leak-free guarantee; `gcCollect()` is the cycle collector | [`SAFETY.md`](SAFETY.md) `S3` |
+| No step budget by default; budgets are process-wide; a small-stack thread runs unguarded; continuation use is serial | [`SAFETY.md`](SAFETY.md) §3.1, [`ABI.md`](ABI.md) “Limits an Embedder Must Know” |
+| The frame is **not** a GC-scanned root | [`ABI.md`](ABI.md) “Call forms” |
+| Trap **kind** and diagnostic **id** are stable; trap text is a hint | [`SAFETY.md`](SAFETY.md) `S5` |
+| Untested targets are *provisional*, not dropped; big-endian and ILP32 are unsupported by decision | [`ABI.md`](ABI.md) “The C ABI Contract” |
+| No WAT parser, WASI runtime, linker, scheduler or package format in the engine | [`SCOPE.md`](SCOPE.md) |
+
+### 8.3 Encoding-blocked and out of scope
+
+These are **not** engine defects. Upstream assigns no stable binary form, so
+there is nothing honest to decode yet: `f16` (no first-class value type),
+`SET4` (managed waitqueue / thread-local globals), `SET5` (component thread
+lifecycle), frozen values (`GX4`), flexible vectors (`FV1`–`FV4`) and
+`stringref`’s colliding encodings (`STR1`). The triage rule and the full tables
+are [`SCOPE.md`](SCOPE.md) §6.
+
+### 8.4 Recently closed, so a search finds them
+
+The root causes and the failing fixtures are in
+[`backends/HISTORY.md`](backends/HISTORY.md); this is the one-line index.
+
+| ID | Defect | Closed | Evidence |
+|---|---|---|---|
+| `D-L1` | LibJIT loses the sixth integer argument (`r9`) on the register path | framed by the opt-in ABI; aggregate spelling remains a recorded deviation | `[libjit][v128][order]`, `[libjit][v128][ir]` |
+| `D-1` | “LibJIT uncaught throw” was a **probe** bug: a trap was asserted where the contract is a normal return with a pending exception | 2026-11-07 | `[staging][abi][exceptions]` |
+| `D-2` | `array.fill` used the fill value as the offset on AsmJIT and SLJIT | 2026-11-07 | value-first parity fixture |
+| `D-3` | SLJIT `struct.get` loaded every field as 4 bytes | 2026-11-07 | `[parity][gc]` |
+| `V-1` | `Validator::dispatchTryTable` set `typeTainted` on any catch, hiding later stack mismatches | 2026-11-07 | `invalid_catch_stack.wat` |
+| AsmJIT `narrow` | Quarantined narrow-lane defect | SIMD slice 5 | `[asmjit][simd]` |
+| Trap leak | A trap abandoned the frame’s reference locals on all three backends | 2026-11-09 | `trap_after_alloc` |
+| Mixed-graph call | A register-form caller into a frame-form callee; the fixture and AsmJIT’s call lowering were both wrong | 2026-11-09 | `call_form_provider/importer.wat` |
+| SLJIT opt-in | SLJIT ignored `setFrameCallAbiOptIn` | 2026-11-09 | `[staging][sljit]` |
+| Reference sites | `ref.test`/`ref.is_null`/`ref.eq`, casts, packed reads, call arguments, `table.set` and traps now release/retain exactly | 2026-11-09 | `gc_ownership.wat` |
+| AsmJIT packed default | `struct.new_default` refused packed fields instead of writing them | 2026-11-09 | `[staging][abi][gc]` |
+
+## 9. Where we deliberately stay loose
 ## 9. Where we deliberately stay loose
 
 The milestone freezes ten surfaces (§2.2); it does not freeze behaviour choices.
@@ -577,7 +605,7 @@ These deviations are what make the frozen set small enough to keep.
 | AASD1 | **Baked `VMContext*` pointers and no cross-module trampolines.** | [`ABI.md`](ABI.md) "Design Philosophy": instances are `std::unique_ptr<ModuleInstance>` and never move; the embedder owns the lifetime rule. | One indirect load fewer per cross-module call, and no trampoline machinery in any backend. |
 | AASD2 | **One agent at a time *today*; at most one instance per module; the embedder schedules.** Many agents on that instance is the accepted direction, opt-in and not built. | [`THREADSAFETY.md`](THREADSAFETY.md) §3.1/§8–§9: this is the current contract, and a QVM successor needs exactly it; §5.3 pins it as the milestone's boundary. | No scheduler, no instance lock, no multi-mutator GC in this milestone — the largest class-E risk stays out until a deliberate decision reopens it. |
 | AASD3 | **`ModuleInstantiator` is the product seam, and the richer façade lives in the harness for now.** | [`LAYERING.md`](LAYERING.md) §2: the core states the contract; the harness may name the backend. `Test/LibJitBackendTests.cpp` is the one permitted leak and says so. | The core stays four hooks; a backend author gets a working façade before the product API is frozen. AAS8 is the debt this creates. |
-| AASD4 | **SIMD through a pointer-based `extern "C"` helper layer** instead of a `v128` value ABI in the core. | [`SIMD_LIBJIT.md`](SIMD_LIBJIT.md) D3: no aggregate-ABI risk; every backend can call the same entry points. | Portability plus a reference implementation; a vector-capable backend can still lower natively (§5.4). |
+| AASD4 | **SIMD through a pointer-based `extern "C"` helper layer** instead of a `v128` value ABI in the core. | [`proposals/SIMD.md`](proposals/SIMD.md) D3: no aggregate-ABI risk; every backend can call the same entry points. | Portability plus a reference implementation; a vector-capable backend can still lower natively (§5.4). |
 | AASD5 | **Provisional encodings** where upstream has none (`stringref` reserved codes, `array.new_array` `0xFB 0x20–0x22`, `i32.itt` `0xFC 0x100`). | Each is recorded in its note with the reason, and each is engine-reserved rather than colliding with a final opcode. | Working features today without guessing at a spec. Guardrail: renumbering is one deliberate change with its tests, announced in the owning note. |
 | AASD6 | **No text format, no interpreter, no JS engine, no WASI implementation.** | `ANN-0`, `AGENTS.md` "No bespoke interpreter fallback", `JS_INTEGRATION.md`, `COMPONENT_MODEL.md` `CM9` — all recorded decisions. | A small core and one execution path. |
 | AASD7 | **Process-wide allocation budgets, no default instruction/step budget.** | `SAFETY.md` `S1`/`S4`: the embedder owns time limits and process isolation by default; `CFG-8` adds an opt-in per-agent fuel budget lowered by LibJIT. | Simple, clean failure (`-1`/trap) instead of a scheduler in the core, with metering available when asked for. |
@@ -606,7 +634,7 @@ is already done — this document.
 | **AAS-0 — Declare and measure** ✅ | Write this note: the four gates, the frozen set, the classification, the audit and the ledger. No code. | — (the record) | This document is linked from [`README.md`](../README.md) and `AGENTS.md`. |
 | **AAS-1 — Declare the embedding surface** ✅ | **Done 2026-10-29.** `WasmBase/WasmJit.hpp` (umbrella), `WASM::Runtime` (`ES-1`), the version/soname identity (`ES-4`), the header tiers and 41 compile-only TUs (`ES-3`), the install/`pkg-config` path (`ES-5`) and the ABI note's missing sections (`ES-6`). The acceptance evidence is `ES-7`: an out-of-tree consumer builds against the installed headers only and calls an `i32`, an `f64`, a multi-result and a `v128` export using nothing but the docs (`Test/install-check.sh`). The optional `abidiff` run remains optional, not a gate. | AAS1 ✅, AAS2 ✅, AAS5 ✅ | Met ✅ |
 | **AAS-2 — Write the backend work order and promote the façade** ✅ | **Done 2026-10-29:** [`WRITING_A_BACKEND.md`](WRITING_A_BACKEND.md) is the checklist (two seams, four hooks, eight ABI obligations, memory/GC ownership, helper split, packaging, definition of done), and `WASM::BackendSession` lives in [`WasmBackendSession.hpp`](../WasmBase/WasmBackendSession.hpp) with `TestBackend` aliasing it. The POD views it builds on are `BP-1` ([`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md) §10). | AAS8 ✅, AAS9 ✅ | Met ✅ |
-| **AAS-3 — Prove the seam with a second implementation** ✅ | **Done 2026-10-29:** `NullInstantiator` is registered as `null`, selectable through `Runtime::create("null")` and the harness's `WASMJIT_BACKEND`; `Test/ExampleBackend` adds a loadable third implementation, so the seam is exercised by something the frontend was not compiled with. The scaffolds are **kept and documented, not removed** — those backends are planned: both subprojects stay in `Project.pro`, each directory has a `README.md` that states it emits and installs nothing today and points at the work order, and the stray libraries are gone. | AAS10 ✅, AAS11 ✅ | Met ✅ |
+| **AAS-3 — Prove the seam with a second implementation** ✅ | **Done 2026-10-29:** `NullInstantiator` is registered as `null`, selectable through `Runtime::create("null")` and the harness's `WASMJIT_BACKEND`; `Test/ExampleBackend` adds a loadable third implementation, so the seam is exercised by something the frontend was not compiled with. The two then-empty directories were **kept and documented, not removed** — those backends were planned: both subprojects stayed in `Project.pro`, each carried a page that stated it emitted and installed nothing then and pointed at the work order, and the stray libraries were gone. *(Both are production backends today.)* | AAS10 ✅, AAS11 ✅ | Met ✅ |
 | **AAS-4 — Gate the evidence** ✅ | Make the strict validator run (`WASM_SPEC_VALIDATE=1`) part of the documented gate, and document the ASan configuration in [`TESTING.md`](TESTING.md) as a row, not a local habit. **Done 2026-10-29:** `TESTING.md` "Required runs: the release / merge gate" names both, with the exact ASan `qmake` line and the `QMAKE=/usr/bin/qmake6` recursion note. | AAS3 ✅, AAS4 ✅ | `TESTING.md` names both runs as required, and a release check lists them. |
 | **AAS-5 — Bookkeeping pass** ✅ | Mark `TYPE_MODEL.md` §7 `TM-0…TM-5` closed (or re-open them honestly); resolve the `NULL_JIT_VALUE_DIAGNOSIS` waiver by renaming and re-pointing, or record it as permanent; keep the `README.md` status rows in step with their notes when the plan changes (§6.6 found no contradiction today). **Done 2026-10-29:** the six rows are `✅`, the note is `docs/UNMODELLED_VALUE_TYPES.md` with all sites re-pointed, and `Test/LayeringTests.cpp` enforces the empty check. | AAS6 ✅, AAS7 ✅ | No closed refactor reads as open, and the layering check's expected output is "empty". |
 | **AAS-6 — Merge** | `git merge --ff-only LibjitDispatcher` into `master`, landing all 148 commits and this note atomically; tag the declaration. | G4 (already green) | `master` contains `ea4fb30` and the tag; the suite is green on `master`. |
@@ -704,7 +732,7 @@ Re-measured on 2026-11-03 for the FP16/M8 slice (`4d52031`), from
 - [`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md) — the loaded-backend
   descriptor, the boundary rules and the risk register; the source of `AAS10`'s
   black-box second implementation and of the reserved surface S10.
-- [`MULTI_AGENT_FEASIBILITY.md`](MULTI_AGENT_FEASIBILITY.md) — the demotion study
+- [`proposals/THREADS.md`](proposals/THREADS.md) — the demotion study
   for the one class-E family this note pins out of scope (§5.3), and the
   per-backend threading findings behind G3.
 - [`LANGUAGE_FEASIBILITY.md`](LANGUAGE_FEASIBILITY.md) — the definitions of the
@@ -726,8 +754,7 @@ Re-measured on 2026-11-03 for the FP16/M8 slice (`4d52031`), from
 - [`TYPE_IDENTITY.md`](TYPE_IDENTITY.md) §10 and
   [`proposals/TYPE_MODEL.md`](proposals/TYPE_MODEL.md) §5/§7.11 — the type-model
   refactor, closed.
-- [`SIMD_LIBJIT.md`](SIMD_LIBJIT.md) §5/§10/§11, [`SIMD_BACKENDS.md`](SIMD_BACKENDS.md)
-  §4/§7 and [`proposals/SIMD.md`](proposals/SIMD.md) `SIMD-8` — the helper ABI,
+- [`proposals/SIMD.md`](proposals/SIMD.md) §4.5–§4.10 — the helper ABI,
   the per-backend native path and its risks.
 - [`TESTING.md`](TESTING.md) — the suite, the curated script list, the sanitizer
   gap and the benchmark tags.
@@ -737,16 +764,124 @@ Re-measured on 2026-11-03 for the FP16/M8 slice (`4d52031`), from
 
 ## 13. Backend production status (2026-11-10)
 
-This milestone was written for LibJIT and is met on all three code generators;
-the 2026-11-10 snapshot is a three-backend production claim within one envelope.
-The measured status is:
+**Status:** all three code generators are **production-ready within one declared
+envelope** — x86-64 Linux / SysV AMD64, single-agent, one instance per module.
+Measured on `2cce7b9` with `--rng-seed 12345`, **one backend at a time**
+(concurrent runs share binding-schema scratch paths and are not a valid
+measurement).
 
-| Backend | Status |
-|---|---|
-| LibJIT | Production-ready within the declared x86-64 Linux / single-agent envelope |
-| SLJIT | Production-ready within the same envelope — generic suite green (22,593 assertions / 824 cases) |
-| AsmJIT | Production-ready within the same envelope — generic suite green (22,593 assertions / 824 cases) |
+### 13.1 Verdict and measurement
 
-The evidence and promotion criteria are owned by
-[`BACKEND_PRODUCTION_READINESS.md`](BACKEND_PRODUCTION_READINESS.md); this note
-does not duplicate them.
+| Backend | Verdict | Generic suite |
+|---|---|---|
+| **LibJIT** (`LibJit/`) | Production-ready within the envelope; the reference implementation and the semantic oracle | **22,533 assertions / 824 cases, green** |
+| **SLJIT** (`Sljit/`) | Production-ready within the same envelope, with the documented refusals | **22,533 assertions / 824 cases, green** |
+| **AsmJIT** (`Asmjit/`) | Production-ready within the same envelope, with the documented refusals; needs the external AsmJit library at build time | **22,533 assertions / 824 cases, green** |
+
+Equal assertion counts are the point: every case executes on every backend, so
+no case is skipped, refused early or cut short by a crash. The promotion gate is
+§13.5.
+
+### 13.2 What each backend is
+
+| Backend | Implementation | Default call form | Packaging |
+|---|---|---|---|
+| **LibJIT** | GNU LibJIT IR; no vector value type, so SIMD goes through the shared helper ABI | register form; frame form on `setFrameCallAbiOptIn(true)` | `libLibJit.so` / `libwasmjit-backend-libjit.so` |
+| **SLJIT** | vendored `extern/sljit` register machine; frame slots, W^X mapping per function | register form up to three Wasm parameters; a wider defined signature switches the module to the frame form | `libSljit.so`, no external `-lsljit` |
+| **AsmJIT** | external AsmJit assembler/compiler; register allocator; one installed allocation per module | register form until a signature needs the frame; opt-in turns the frame on everywhere | `libAsmjit.so` plus the system `-lasmjit` |
+
+All three implement the four `ModuleInstantiator` hooks, register by name, emit
+the pending-trap protocol, release code on `Runtime::unload`, and execute the
+same shared lowering slice: integer/float scalar core, control flow, calls and
+imports, memory32/64, bulk memory, tables, references/GC, exceptions,
+continuations, atomics/threads, fixed/relaxed SIMD, tail calls and profiles.
+The probes and their outcomes are in [`TESTING.md`](TESTING.md) “Capability
+probes”; the slice-by-slice history is in
+[`backends/HISTORY.md`](backends/HISTORY.md).
+
+### 13.3 The capability ledger
+
+| Family | LibJIT | SLJIT | AsmJIT | Where it is tested |
+|---|---|---|---|---|
+| scalar `i32`/`i64`/`f32`/`f64`, control flow, `br_table`, block params/multi-value | ✅ | ✅ | ✅ | generic suite, `[spec]` |
+| calls: direct, indirect, `call_ref`, imports, cross-instance | ✅ | ✅ | ✅ | `[staging][abi][call]`, spec |
+| memory32/64, bulk memory, tables, multi-memory | ✅ | ✅ | ✅ | `[spec]`, `MEM64BULK` |
+| references/GC: structs, arrays, casts, descriptors, ownership | ✅ | ✅ | ✅ | `[staging][abi][gc]`, `gc_ownership.wat` |
+| exceptions, `catch_ref`, multi-value payloads, cross-instance | ✅ | ✅ | ✅ | `[staging][abi][exceptions]` |
+| continuations, stack switching | ✅ | ✅ | ✅ | `[staging][abi][cont]` |
+| atomics, shared-everything, agents | ✅ | ✅ | ✅ | `[multiagent]`, `ATOMICSOPS` |
+| fixed/relaxed SIMD, `v128` boundary | ✅ | ✅ | ✅ | `[spec]`, `simd_*.wat` |
+| tail calls: register, frame, `return_call_ref` | ✅ | ✅ (frame trampoline gap, §8) | ✅ | `TAIL*` pins |
+| profiles (`N`/`T`/`V`), compilation policy | ✅ | ✅ | ✅ | `[config]`, `[compilation-policy]` |
+
+“✅” means the engine-side obligation is implemented and the generic suite
+exercises it; it is not a claim that every upstream proposal has a binary
+encoding (see §8.3 and [`SCOPE.md`](SCOPE.md)).
+
+### 13.4 Documented limitations and refusals
+
+The open register is §8.1. For the backends specifically:
+
+- **SLJIT** refuses an indirect call whose signature carries a `v128` *and* more
+  than three parameters in a module that also imports a native function
+  (`GAP-11`); stages a wide native import through one libffi closure per
+  invocation (`GAP-12`); and lowers `return_call_ref` above the register-form
+  ceiling as a semantic call + return (`GAP-2`).
+- **AsmJIT** shares the wide-`v128` indirect-call refusal; its register form has
+  the same ceiling and switches the module to the frame form like SLJIT.
+- **LibJIT** keeps the frame form opt-in and its frame tails are call + return,
+  not constant-stack (`GAP-3`).
+- **All three**: a reference read from a field/element is a borrow (`GAP-4`); a
+  reference-returning native import is cloned only on AsmJIT (`GAP-5`); only
+  SysV AMD64 is exercised (`GAP-6`); ASan and the strict negative sweep are
+  recorded on LibJIT/SLJIT respectively, not on all three (`GAP-8`/`GAP-9`).
+- **The one design gap** is the per-module call form (`GAP-1`); its fix is a
+  milestone because it changes the `frameCallAbi()` contract.
+
+A refusal leaves that function’s `Callable::fnPtr` **null**; the core reports
+“no compiled body” at the call boundary. Nothing is miscompiled and nothing is
+interpreted.
+
+### 13.5 The promotion gate
+
+| # | Criterion | Status |
+|---|---|---|
+| 1 | `WASMJIT_BACKEND=<name> ./Test/WasmJit` completes green, no abort, no segfault | **met for all three** (§13.1) |
+| 2 | The spec suite and the strict `WASM_SPEC_VALIDATE=1` negative sweep pass on that backend | **met for SLJIT’s recorded runs**; LibJIT/AsmJIT strict runs are not recorded (`GAP-9`) |
+| 3 | Every failure is fixed or an explicit, documented refusal; no wrong-result or crash path | **met**; the backend rows are §13.4 and §8.1 |
+| 4 | The sanitizer run is recorded and clean for that backend | **LibJIT recorded**; SLJIT/AsmJIT not recorded (`GAP-8`) |
+| 5 | The target matrix is exercised beyond x86-64 Linux, or the claim is limited to SysV AMD64 | **limited to x86-64 Linux / SysV AMD64**, explicitly, for all three (`GAP-6`) |
+| 6 | README, backend pages, `VALIDATION.md`, this note and `TESTING.md` tell the same story | **met** |
+
+Until a non-SysV runner exists, the supported production configuration is **any
+of the three backends on x86-64 Linux**.
+
+### 13.6 What this note does not count as a gap
+
+- Proposals with no stable binary encoding, text-format support, WASI, a
+  linker/scheduler and a bespoke interpreter are scope boundaries, not backend
+  gaps ([`SCOPE.md`](SCOPE.md)).
+- A backend is allowed to **refuse** an unsupported shape; the disqualifiers are
+  a wrong result, a module-triggered abort/segfault, or a silent miscompile.
+- LibJIT’s opt-in frame form is a policy variant, not evidence against the
+  default register form.
+- A reference *leak* is a precision limit, not a wrong result (`GAP-4`/`GAP-5`).
+
+### 13.7 Reproduction
+
+```bash
+cd build/Desktop-Release
+
+# The gate, backend by backend — run these one at a time
+WASMJIT_BACKEND=libjit ./Test/WasmJit --rng-seed 12345
+WASMJIT_BACKEND=sljit  ./Test/WasmJit --rng-seed 12345
+WASMJIT_BACKEND=asmjit ./Test/WasmJit --rng-seed 12345
+
+# Targeted slices
+./Test/WasmJit '[sljit]'  --rng-seed 12345
+./Test/WasmJit '[asmjit]' --rng-seed 12345
+
+# The strict negative sweep, as recorded for SLJIT
+WASM_SPEC_VALIDATE=1 WASMJIT_BACKEND=sljit ./Test/WasmJit
+WASM_SPEC_VALIDATE=1 WASMJIT_BACKEND=sljit ./Test/WasmJit '[spec]'
+```

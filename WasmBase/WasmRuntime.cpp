@@ -41,7 +41,7 @@ void rejectUnsupportedConfig(const RuntimeConfig& config, const BackendInstance&
 		throw std::runtime_error(std::string("concurrency model '")
 				+ concurrencyModelName(config.concurrency)
 				+ "' is not implemented; this build supports 'single' and 'agents'"
-				  " (docs/MULTI_AGENT_FEASIBILITY.md MF-6)");
+				  " (docs/proposals/THREADS.md MF-6)");
 	}
 
 	// The compilation policy is a request; a backend that cannot honour it says
@@ -292,12 +292,12 @@ ModuleInstance& Runtime::instantiate(const Module& module, ImportResolver& impor
 		// Idempotent: one instance per Module. The call ABI is decided at the
 		// module's *first* compilation, so asking for the other one here would
 		// silently return an instance compiled the other way -- the trap that cost
-		// two diagnostic rounds (docs/backends/EXPORT_SIGNATURE.md section 19).
+		// two diagnostic rounds (docs/ABI.md).
 		// Refusing is the only honest answer: reload the module to change its ABI.
 		if (existing->second.instance->frameCallAbi() != WASM::frameCallAbiOptIn())
 			throw std::runtime_error("the module is already instantiated with the other"
 					" call ABI; load it again to instantiate it in this one"
-					" (docs/backends/EXPORT_SIGNATURE.md section 45)");
+					" (docs/ABI.md)");
 		return *existing->second.instance; // idempotent: one instance per Module
 	}
 

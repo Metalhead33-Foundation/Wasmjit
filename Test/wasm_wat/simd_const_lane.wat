@@ -1,5 +1,5 @@
 ;; SIMD-L1: `v128.const`, `*.splat`, extract/replace lane — lane semantics end to
-;; end through the JIT (docs/SIMD_LIBJIT.md §10).
+;; end through the JIT (docs/proposals/SIMD.md).
 ;;
 ;; The byte pattern used throughout is the one hazard Y11 is about:
 ;;   `v128.const i32x4 0x04030201 0x08070605 0x0c0b0a09 0x100f0e0d`

@@ -133,7 +133,7 @@ TEST_CASE("sljit: a v128 result arrives through the caller's buffer", "[sljit][v
 {
 	// The compiled signature is (VMContext*, void* out): 16 bytes cannot come
 	// back in one return register, so the caller supplies the out-buffer and the
-	// function returns void (docs/ABI_REFACTOR_STUDY.md §23/§25). The fixture's
+	// function returns void (docs/backends/HISTORY.md). The fixture's
 	// body is `v128.const i32x4 0 0 0 0`, so a pre-filled buffer must come back
 	// zeroed -- which is what distinguishes a real write from a no-op.
 	auto runtime = WASM::Runtime::create("sljit");
@@ -2945,7 +2945,7 @@ TEST_CASE("a refused allocation traps on both backends",
 
 // SLJIT's declared-argument ceiling is its saved-register count: an argument needs
 // a saved register and there is no way to name one that has none (measured
-// 2026-11-06; docs/ABI_REFACTOR_POST_MORTEM.md). The backend refuses at the same
+// 2026-11-06; docs/backends/HISTORY.md). The backend refuses at the same
 // threshold, so the two cannot drift apart.
 TEST_CASE("SLJIT: the argument-slot ceiling is its saved-register count",
 		"[sljit][args][abi]")
@@ -2954,7 +2954,7 @@ TEST_CASE("SLJIT: the argument-slot ceiling is its saved-register count",
 }
 
 // SLJIT's frame form with TWO results: arguments force the frame, so the result
-// block gets two slots (docs/backends/EXPORT_SIGNATURE.md section 42).
+// block gets two slots (docs/ABI.md).
 TEST_CASE("SLJIT stores two results in a frame for a wide signature",
 "[staging][sljit][abi][multi][frame]")
 {

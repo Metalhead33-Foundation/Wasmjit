@@ -200,7 +200,7 @@ bool parseDiagnosticsArgument(std::string_view argument, DiagnosticsHarness& opt
 // JIT's type is forced to 16-byte alignment (LibJitTypeTranslation), which
 // leaves the System V *register classification* of a four-lane aggregate
 // unchanged — verified against this backend build before the design was written
-// down (docs/SIMD_LIBJIT.md §9) — so this plain struct matches it on the wire.
+// down (docs/proposals/SIMD.md) — so this plain struct matches it on the wire.
 struct V128 { uint32_t a, b, c, d; };
 
 void nativeDebugMessage(const WASM::VMContext* context)
@@ -6824,7 +6824,7 @@ TEST_CASE("call form: a two-module graph must not mix the register and frame for
 	// is compiled in the same form as its wide sibling, so an importer that
 	// emits the register form would enter a frame-form entry -- corruption, not
 	// a trap. The engine refuses the link instead
-	// (docs/backends/CALL_FORM_GRANULARITY.md).
+	// (docs/ABI.md).
 	WASM::Module providerModule = loadTestModule("call_form_provider");
 	WASM::Module importerModule = loadTestModule("call_form_importer");
 	auto backend = TestBackend::create();
@@ -7088,7 +7088,7 @@ TEST_CASE("GC reference ownership: the operand stack owns one count per referenc
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// SIMD (docs/SIMD_LIBJIT.md §9, milestone SIMD-L1)
+// SIMD (docs/proposals/SIMD.md, milestone SIMD-L1)
 //
 // T1 — the differential/golden layer. These call the helpers directly, so a
 // failure here is a *helper* bug, never a JIT bug. The expected bytes are
@@ -7217,7 +7217,7 @@ TEST_CASE("simd helpers: the entry points and the scalar reference agree")
 	// At SIMD-L1 the entry points *are* the reference, so this case pins the
 	// seam rather than proving much: it is the shape SIMD-L2 makes interesting,
 	// when the Highway bodies must agree with the reference over the same
-	// inputs (docs/SIMD_LIBJIT.md §9, T1).
+	// inputs (docs/proposals/SIMD.md, T1).
 	for (uint32_t seed = 1; seed <= 8; ++seed) {
 		std::array<uint8_t, 16> a{};
 		for (size_t i = 0; i < a.size(); ++i)
@@ -7243,7 +7243,7 @@ TEST_CASE("simd helpers: the entry points and the scalar reference agree")
 
 TEST_CASE("simd: a v128 parameter and result round-trip through the JIT")
 {
-	// SIMD-0's done-when and SIMD-L1's exit criterion (docs/SIMD_LIBJIT.md §10):
+	// SIMD-0's done-when and SIMD-L1's exit criterion (docs/proposals/SIMD.md):
 	// this closes S4 (alignment) / S5 / S9 (calling convention) for the
 	// register-passing case. `V128` is the C++ mirror of the lowered struct.
 	WASM::RegistryImportResolver imports;
@@ -7383,7 +7383,7 @@ TEST_CASE("simd helpers: bitwise ops agree with the scalar reference")
 	// The first case where the two layers are genuinely different code: the
 	// entry points are compiled once per CPU target and dispatched at run time
 	// (`wasm_simd_vector.cpp`), the reference is a byte loop
-	// (`wasm_simd_scalar.cpp`). docs/SIMD_LIBJIT.md §9, T1.
+	// (`wasm_simd_scalar.cpp`). docs/proposals/SIMD.md, T1.
 	std::array<uint8_t, 16> a{};
 	std::array<uint8_t, 16> b{};
 	std::array<uint8_t, 16> c{};
@@ -7463,7 +7463,7 @@ TEST_CASE("simd helpers: memory loads and stores")
 	// The whole-vector moves and broadcasts are independently implemented, so
 	// this is a genuine differential; the byte-move ops delegate to the
 	// reference by design, so for those the golden vectors below carry the
-	// weight (docs/SIMD_LIBJIT.md §9).
+	// weight (docs/proposals/SIMD.md).
 	std::array<uint8_t, 32> src{};
 	for (size_t i = 0; i < src.size(); ++i)
 		src[i] = static_cast<uint8_t>(0x80u + i * 7u);   // high bit set: sign matters
@@ -8004,11 +8004,11 @@ TEST_CASE("simd relaxed: the hand-written ops match their reference")
 	}
 }
 
-// ── T4: the SIMD benchmark (docs/SIMD_LIBJIT.md §8.2, docs/TESTING.md T4) ───
+// ── T4: the SIMD benchmark (docs/proposals/SIMD.md, docs/TESTING.md T4) ───
 //
 // Diagnostic only. `[simdbench]` keeps it out of the default run, and nothing
 // here is a pass/fail gate: the numbers decide whether the batched helper (D4)
-// is ever built, and are recorded back into docs/SIMD_LIBJIT.md §8.
+// is ever built, and are recorded back into docs/proposals/SIMD.md
 namespace {
 
 // Best of seven: the fastest run is the least noisy estimate of the loop's cost
@@ -8241,7 +8241,7 @@ TEST_CASE("simd helpers: signedness corners are pinned")
 	// Golden vectors for what a differential *cannot* catch: if both layers
 	// agreed on the wrong signedness (or on the wrong corner behaviour), the
 	// test above would pass. These pin the values against the spec instead
-	// (docs/SIMD_LIBJIT.md §9, and R6 in §11).
+	// (docs/proposals/SIMD.md, and R6 in §11).
 	//
 	// -128 as a signed i8 is 0x80; as an unsigned byte it is 128.
 	std::array<uint8_t, 16> hi{};
@@ -8295,7 +8295,7 @@ TEST_CASE("simd helpers: the saturating, rounding and count corners")
 	// A differential test proves the two layers agree; it cannot prove they agree
 	// on the *spec*. These pin the values the spec names, at the inputs where a
 	// plausible-but-wrong implementation differs — the same reasoning as the
-	// signedness goldens above (R6 in docs/SIMD_LIBJIT.md §11).
+	// signedness goldens above (R6 in docs/proposals/SIMD.md).
 	std::array<uint8_t, 16> a{};
 	std::array<uint8_t, 16> b{};
 	std::array<uint8_t, 16> out{};
@@ -8344,7 +8344,7 @@ TEST_CASE("simd helpers: the saturating, rounding and count corners")
 	// 32768 — one past the maximum, the only product that needs the clamp — and
 	// the second case lands exactly on a half, which the *arithmetic* shift rounds
 	// down. Both values here were cross-checked against an independent engine
-	// rather than hand-computed (R6 in docs/SIMD_LIBJIT.md §11: the first drafts
+	// rather than hand-computed (R6 in docs/proposals/SIMD.md: the first drafts
 	// of the expectations were wrong, and the implementation was not).
 	std::array<uint8_t, 16> min16{};
 	std::array<uint8_t, 16> max16{};
@@ -8468,7 +8468,7 @@ TEST_CASE("simd helpers: shift masking, narrowing layout and the widening family
 TEST_CASE("simd helpers: the float corners the hardware gets wrong")
 {
 	// Hazard Y1, and two more the library hides. Every value here comes from an
-	// independent engine (V8, docs/SIMD_LIBJIT.md §11 R8), not from arithmetic on
+	// independent engine (V8, docs/proposals/SIMD.md R8), not from arithmetic on
 	// my side — the differential test cannot judge these, because it is exactly
 	// where the library and wasm disagree and a naive implementation would agree
 	// with the library.
@@ -8545,7 +8545,7 @@ TEST_CASE("simd helpers: the float corners the hardware gets wrong")
 
 TEST_CASE("simd: float arithmetic and comparisons run through the JIT")
 {
-	// T2 (docs/SIMD_LIBJIT.md §9): the float half of L4 through decoding, the slot
+	// T2 (docs/proposals/SIMD.md): the float half of L4 through decoding, the slot
 	// bank and the runtime-dispatched helpers. Every export projects a bit pattern,
 	// so the values below are exact — a NaN's *payload* is not asserted, only that
 	// it is a NaN (`min_nan_exponent` asks for the exponent field), because the
@@ -8633,7 +8633,7 @@ TEST_CASE("simd: float arithmetic and comparisons run through the JIT")
 
 TEST_CASE("simd: the float/int conversions run through the JIT")
 {
-	// T2 (docs/SIMD_LIBJIT.md §9): the conversion half of L4. The operands are the
+	// T2 (docs/proposals/SIMD.md): the conversion half of L4. The operands are the
 	// *ends* of the ranges rather than ordinary numbers, because that is where a
 	// conversion goes wrong: ±2^31 and 2^32 for the saturating forms, the largest
 	// value just below 2^32 (where an off-by-one would show), a NaN, and a
@@ -8850,7 +8850,7 @@ TEST_CASE("simd: memory loads and stores run through the JIT")
 
 TEST_CASE("simd: bitwise ops run through the JIT")
 {
-	// T2 (docs/SIMD_LIBJIT.md §9): the same semantics as the T1 vectors, but
+	// T2 (docs/proposals/SIMD.md): the same semantics as the T1 vectors, but
 	// reached through decoding, the operand stack, the slot bank and the
 	// runtime-dispatched helpers. `a` has four distinct lanes, so the values
 	// below also prove the lanes were not permuted.
@@ -8889,7 +8889,7 @@ TEST_CASE("simd: bitwise ops run through the JIT")
 
 TEST_CASE("simd: integer arithmetic and comparisons run through the JIT")
 {
-	// T2 (docs/SIMD_LIBJIT.md §9): the L3 op set reached through decoding, the
+	// T2 (docs/proposals/SIMD.md): the L3 op set reached through decoding, the
 	// operand stack, the slot bank, the scalar shift-count path and the
 	// runtime-dispatched helpers. The reductions are the cheapest coverage to
 	// grow, because they *produce* the i32 the harness can observe: no `v128`
@@ -9012,7 +9012,7 @@ TEST_CASE("simd: integer arithmetic and comparisons run through the JIT")
 
 TEST_CASE("simd: v128.const, splat and lane ops run through the JIT")
 {
-	// T2 (docs/SIMD_LIBJIT.md §9): the same lane semantics as the T1 vectors,
+	// T2 (docs/proposals/SIMD.md): the same lane semantics as the T1 vectors,
 	// but reached through decoding, the operand stack, the slot bank and the
 	// helpers. The byte pattern is the one hazard Y11 is about.
 	WASM::RegistryImportResolver imports;

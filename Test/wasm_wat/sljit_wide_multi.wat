@@ -1,6 +1,6 @@
 ;; Wide AND multi-result: three vectors in, an i32 and an i64 out. The shape that
 ;; reaches SLJIT's frame form with two results
-;; (docs/backends/EXPORT_SIGNATURE.md section 40).
+;; (docs/ABI.md).
 (module
   (func (export "wide_pair") (param v128 v128 v128) (result i32 i64)
     local.get 0

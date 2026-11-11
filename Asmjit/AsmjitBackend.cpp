@@ -7,7 +7,7 @@
 
 /*!
   \file AsmjitBackend.cpp
-  \brief The registry factory that makes the experimental backend selectable by name.
+  \brief The registry factory that makes the AsmJit backend selectable by name.
 
   This is an internal backend component, not an embedder-facing API.
 */

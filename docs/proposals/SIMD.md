@@ -5,7 +5,7 @@
 Status: design note / implementation reference (revision 5 — fixed-width and
 relaxed SIMD are implemented and validated; S6's relaxed ternary rules are
 typed, and the only remaining milestones are the optional SIMD-7 performance
-measurement and the future-backend SIMD-8 work).
+measurement and the optional SIMD-8 native path).
 Audience: anyone touching `WasmType`, `WasmValue`, `WasmOpcode`,
 `WasmOpcodeDispatcher`, `LibJitTypeTranslation`, `LibjitOpcodeDispatcher`, or
 the test harness.
@@ -174,7 +174,7 @@ None of them traps or has side effects; only the produced bits vary.
   (`WasmBase/wasm_simd_vector.*`, SD5); that layer's twin scalar implementation
   (`WasmBase/wasm_simd_scalar.*`) is the differential oracle in the tests, and a
   backend with its own vector registers may lower the same op natively instead
-  ([`../SIMD_BACKENDS.md`](../SIMD_BACKENDS.md) §4).
+  (§4.6 below).
 - The non-JIT `Stub::OpcodeDispatcher` implements the same handlers as textual
   pretty-printers (inspection only).
 
@@ -192,10 +192,119 @@ None of them traps or has side effects; only the produced bits vary.
   (`Test/wast_supported.txt`); the harness decodes `v128` arguments lane by lane
   and compares results with the `nan:canonical` / `nan:arithmetic` policies
   applied per lane (`Test/WastScript.cpp`).
-- Four layers carry the detail [`../SIMD_LIBJIT.md`](../SIMD_LIBJIT.md) §9: the
+- Four layers carry the detail §4.9 below: the
   differential oracle (T1), the `Test/wasm_wat/simd_*.wat` fixtures (T2), the
   spec scripts (T3) and the tagged benchmark (T4). See
   [`../TESTING.md`](../TESTING.md) Part 3.
+
+### 4.5 The helper ABI (the portable baseline)
+
+All SIMD helpers are `extern "C"`, take **pointers instead of values**, and never
+trap (memory helpers use the existing bounds check). Four shapes:
+
+| Shape | Signature | Examples |
+|---|---|---|
+| Unary | `void h(const void* a, void* out)` | `v128.not`, `i32x4.abs`, `f32x4.sqrt` |
+| Binary | `void h(const void* a, const void* b, void* out)` | `i32x4.add`, `v128.and`, `i8x16.swizzle` |
+| Ternary | `void h(const void* a, const void* b, const void* c, void* out)` | `v128.bitselect`, `*.relaxed_laneselect` |
+| Scalar result | `int32_t h(const void* a[, …])` | `*.extract_lane_s/u`, `i8x16.bitmask`, `v128.all_true` |
+
+- **Immediates are scalars.** A lane index is `uint32_t`; a 16-byte immediate
+  (`i8x16.shuffle`, `v128.const`) is two `uint64_t`.
+- **Memory helpers take the context, resolved address, then `out`**:
+  `void h(VMContext*, uint32_t memIdx, uint32_t addr, void* out)`.
+- **`v128` is 16 bytes, 16-aligned, little-endian** in storage
+  (`WasmGcHeader.hpp`); a helper result is written to a fresh 16-byte slot.
+- **Four fusion entry points** (`wasm_v128_load_unary`, `_load_binary`,
+  `_load_binary_rhs`, `_load2_binary`) copy an already-bounds-checked source into
+  a local 16-byte value and call the consumer. They remove a call boundary, not
+  semantics.
+- **The scalar layer** (`WasmBase/wasm_simd_scalar.*`) is the oracle: every op is
+  implemented there without a SIMD library and always compiled. The vector layer
+  (`WasmBase/wasm_simd_vector.*`) is the only place a SIMD library is visible.
+
+### 4.6 The LibJIT lowering: D3 + D5
+
+| # | Design | Verdict |
+|---|---|---|
+| **D1** | Inline scalar IR per lane | Rejected as general: cross-lane ops have no per-lane decomposition. Kept only for `v128.const`, written inline through `jit_insn_address_of` |
+| **D2** | Helper with `v128` by value | Rejected as primary: depends on LibJIT’s aggregate ABI matching the host. Benchmark challenger |
+| **D3** | Helper taking pointer arguments | **Chosen**: no aggregate-ABI risk; the signature is only `void*`/`uint32_t` |
+| **D4** | Batched/fused run helper | **Deferred, unbuilt**: only pays if boundary cost dominates; the measurement says it does not |
+| **D5** | D3 + producer/consumer fusion | **Chosen and shipped**: `v128.const` inline, `load` fused into the following unary/binary helper |
+
+Storage is LibJIT’s own frame slots (`jit_value_create(fn, v128Type)`), one per
+static definition site, not a dynamic `alloca` bank: a bank would grow per loop
+iteration and needs a stack-height pre-pass the compiler does not compute.
+`v128.load`/`store`, splat and lane access stay helper calls because a 16-byte
+aggregate `jit_insn_load_relative` is not supported by this build (tested:
+SIGSEGV).
+
+### 4.7 The SIMD library and the core files
+
+**Highway 1.4.0** is the vector implementation: Apache-2.0 (the project licence),
+runtime dispatch (`HWY_EXPORT`/`HWY_DYNAMIC_DISPATCH`), a portable
+`EMU128`/`SCALAR` fallback, `CappedTag<T, N>` to keep vectors exactly 128 bits,
+and coverage of the hard families (shuffle/swizzle, dot, extmul, q15mulr,
+saturating arithmetic, narrow/widen). **SIMDe** is the documented escape hatch
+(identical x86 code, header-only) but brings no dispatch. Raw intrinsics plus
+`__builtin_cpu_supports` is the reference implementation the oracle represents.
+
+| Path | Role |
+|---|---|
+| `WasmBase/wasm_simd_scalar.{hpp,cpp}` | scalar oracle and the `extern "C"` contract |
+| `WasmBase/wasm_simd_vector.{hpp,cpp}` | vectorised bodies, entry points and dispatch |
+| `WasmBase/wasm_simd_ops.inc` | one line per op; expanded once per layer |
+| `LibJit/LibjitOpcodeDispatcher.*` | helper-call emission for LibJIT |
+| `Sljit/`, `Asmjit/` | the same helper calls from their dispatchers |
+
+### 4.8 Relaxed SIMD and the laxness budget
+
+Only **L0** (fixed-width) is strict. `L1` (relaxed) is loose by construction, and
+`L2` (harness) / `L3` (launcher) are free. A scalar result is conformant, and the
+deterministic profile can be applied later.
+
+Correctness traps that are **not** loose:
+
+1. `f32x4.min`/`max` and `pmin`/`pmax` have different `±0` and NaN rules; Intel
+   and ARM differ, and wasm does not allow the hardware result unexamined.
+2. `i8x16.shuffle` indices 0–15 read the first operand, 16–31 the second.
+3. `swizzle` zeroes out-of-range lanes; `shuffle` cannot have them; relaxed
+   swizzle *is* loose.
+4. `trunc_sat_*` saturates; `trunc_f*` must trap.
+5. Float rounding is `roundTiesToEven`; NaN canonicalisation applies to vector
+   float ops exactly as to scalar.
+6. Lane immediates are validated at decode; it is the cheapest memory-safety
+   guard in the feature.
+
+Other measured hazards: `q15mulr_sat_s`’s `-32768 × -32768` corner (SSE2 and
+SSSE3 paths disagree), packing lane order (`narrow`/`widen`/`extmul`), 64-bit
+lane shifts/comparisons on baseline SSE2, and `bitmask`/`all_true` per-width
+reductions.
+
+### 4.9 Measured cost and the batched path
+
+- The D5 peepholes removed half the calls in the measured workload:
+  **4.10 → 3.47 ns/op**. The whole helper crossing is ~12 cycles and nearly all
+  of it is the call (two nested dispatches), not the arithmetic; the slot
+  round-trip is minor.
+- **D4 was left unbuilt** because removing a call wins more than making the
+  callee cheaper, and no measured case justified a batched ABI.
+- **A release build found a real relaxed-op defect:** `relaxed_madd`/`nmadd`
+  compiled to an FMA under GCC while the pinned reference stayed unfused, so debug
+  and release disagreed. The four ops now forward to the reference, making the
+  permitted choice structural.
+- The test layers are T1 differential oracle, T2 `Test/wasm_wat/simd_*.wat`, T3
+  spec scripts (all curated scripts pass with `failed=0`) and T4 the diagnostic
+  benchmark; see [`../TESTING.md`](../TESTING.md) Part 3.
+
+### 4.10 The engine survey, kept as history
+
+LibJIT has no vector type or vector opcode; SLJIT and AsmJIT have vector
+instructions but no Wasm-level value model. That survey is why the helper ABI is
+the portable baseline and why **SIMD-8** (native lowering) is optional rather
+than the baseline. The per-engine tables are in the git history of the former
+`SIMD_BACKENDS.md`; the decision is §4.6 above.
 
 ## 5. Gaps
 
@@ -204,12 +313,12 @@ None of them traps or has side effects; only the produced bits vary.
 | ✅ S1 | **Resolved (SIMD-L4).** All 236 fixed-width handlers execute: the 0xFD block in the backend has no `notImplemented` left, so a module using any fixed-width SIMD op now compiles and runs. What still cannot be *judged* is conformance, which is S7 rather than S1. | Verified by counting the handlers, and by `simd_arith_i.wat`, `simd_arith_f.wat` and `simd_convert.wat` all running green through the JIT. | — |
 | ✅ S2 | **Relaxed SIMD is enumerated, decoded, dispatched and implemented — all 20 sub-opcodes (0x100-0x113).** Nine of them are one line each in `wasm_simd_ops.inc`, because SD5 picks the strict instruction's result where the proposal permits it (the two `relaxed_trunc_f32x4`, the two `relaxed_trunc_f64x2_*_zero`, the four `relaxed_min`/`max`, `relaxed_q15mulr_s`). The other eleven need their own shape and are hand-written entry points next to `v128.bitselect`: `relaxed_swizzle` and the four `relaxed_laneselect` delegate to the strict helpers (zeroing swizzle, bitwise select — both permitted), while the four `relaxed_madd`/`nmadd` and the two dots get new helpers. `madd`/`nmadd` **forward to the reference**: the vector form contracts into an FMA at `-O2` while the reference cannot, so the two disagreed across builds; the dots take the unsigned reading of `b` and the saturating i16 pair sum on both sides — which makes the differential exact instead of "one of N permitted", and makes the vector dot literally `maddubs`. | `WasmOpcode.hpp`, `dispatchPrefixSIMD`, `wasm_simd_ops.inc`, `wasm_simd_scalar.*`, `wasm_simd_vector.*` | Medium |
 | ✅ S3 | **`v128` globals and `v128.const` initialisers work.** `evalConstantExpr` decodes the `0xFD`/`0x0C` arm into the `Value`'s 16 bytes, and `dispatchGlobalGet`/`Set` treat a `v128` global as what it is — 16 bytes at offset 0 of its `Value` — so they reuse the `v128.load`/`v128.store` helpers rather than inventing a struct load. The eight spec scripts that needed it (`simd_const`, `simd_splat`, `simd_lane`, `simd_linking`, the four `simd_store*_lane`) now pass with `failed=0`. | `evalConstantExpr`, `dispatchGlobalGet/Set`, `globalSlotAddress` | Medium |
-| ~~S4~~ | **Alignment disagreement.** The JIT lowers `v128` to a 4-byte-aligned `{i32,i32,i32,i32}` struct, and the GC struct layout uses `storageAlign = 4`, while `WASM::Value` is `alignas(16)`. A `v128` struct field or operand-stack value can therefore be under-aligned relative to 16. | `LibJitTypeTranslation.cpp`, `WasmModuleInstance.cpp`, `WasmValue.hpp` | **Done (SIMD-L1)** — `jit_type_set_size_and_alignment(v128, 16, 16)` plus `gcStorageAlign` → 16 (`../SIMD_LIBJIT.md` §6.1/§6.6); the H1 layout test tracks both. |
+| ~~S4~~ | **Alignment disagreement.** The JIT lowers `v128` to a 4-byte-aligned `{i32,i32,i32,i32}` struct, and the GC struct layout uses `storageAlign = 4`, while `WASM::Value` is `alignas(16)`. A `v128` struct field or operand-stack value can therefore be under-aligned relative to 16. | `LibJitTypeTranslation.cpp`, `WasmModuleInstance.cpp`, `WasmValue.hpp` | **Done (SIMD-L1)** — `jit_type_set_size_and_alignment(v128, 16, 16)` plus `gcStorageAlign` → 16 (§4.5 below); the H1 layout test tracks both. |
 | ~~S5~~ | **`zeroConstantForType` is wrong for `v128`.** It returns an integer 0 for the struct type, which cannot be a valid 16-byte zero. | `LibjitOpcodeDispatcher.cpp:467` comment | **Done (SIMD-L1)** — both 16-byte zero-value paths (`zeroConstantForType`, `zeroValueForType`) now zero through the aggregate's address via `wasm_v128_zero`; `local_zero_*` in `simd_abi.wat` covers it. |
 | ~~S6~~ | ~~**SIMD validation.**~~ **Done:** the validator checks lane/shuffle indices, alignment, and the type rules of all fixed-width shapes plus the relaxed ternary forms (`relaxed_madd`/`nmadd`, the four `relaxed_laneselect` forms and the relaxed dot-add). Strict `simd_*` runs green (59 cases, 118 assertions) and all relaxed scripts report 0 failures. | `WasmBase/WasmValidator.cpp` | Closed |
-| ✅ S7 | **The harness verifies SIMD in full: all 66 `simd_*` / relaxed scripts pass.** `WastScript.cpp` decodes `v128` arguments lane by lane and compares results lane-wise with the per-lane `nan:canonical`/`nan:arithmetic` policies; `either` result lists are checked against every allowed vector (all 32 across the six relaxed scripts). The last limit was *not* marshalling: libjit's `jit_apply` damages a third stack-passed 16-byte aggregate, so the harness now calls any signature that is one-to-four `v128` parameters (with at most one scalar or `v128` result) through the host C ABI directly — the ABI the generated code was built for (`../SIMD_LIBJIT.md` §6.6). The remaining skips are the module-validation gap, not SIMD. | `Test/WastScript.cpp`; `docs/TESTING.md` | Medium |
+| ✅ S7 | **The harness verifies SIMD in full: all 66 `simd_*` / relaxed scripts pass.** `WastScript.cpp` decodes `v128` arguments lane by lane and compares results lane-wise with the per-lane `nan:canonical`/`nan:arithmetic` policies; `either` result lists are checked against every allowed vector (all 32 across the six relaxed scripts). The last limit was *not* marshalling: libjit's `jit_apply` damages a third stack-passed 16-byte aggregate, so the harness now calls any signature that is one-to-four `v128` parameters (with at most one scalar or `v128` result) through the host C ABI directly — the ABI the generated code was built for (§4.5 below). The remaining skips are the module-validation gap, not SIMD. | `Test/WastScript.cpp`; `docs/TESTING.md` | Medium |
 | ✅ S8 | **No test coverage in the curated set** — resolved: 35 `simd_*.wast` scripts are curated, on top of the T1/T2 layers (20 cases, ~5.9k assertions). | `Test/wast_supported.txt` | — |
-| ~~S9~~ | **`v128` calling convention is unverified.** Multi-value/struct ABI for `v128` parameters and returns (and v128 in globals/tables) has never been exercised. | no test passes a `v128` | **Done (SIMD-L1)** for parameters/returns/locals — `simd_abi.wat` + the round-trip test measure it (`../SIMD_LIBJIT.md` §6.6). `v128` in globals/tables stays open until SIMD-4. |
+| ~~S9~~ | **`v128` calling convention is unverified.** Multi-value/struct ABI for `v128` parameters and returns (and v128 in globals/tables) has never been exercised. | no test passes a `v128` | **Done (SIMD-L1)** for parameters/returns/locals — `simd_abi.wat` + the round-trip test measure it (§4.5 below). `v128` in globals/tables stays open until SIMD-4. |
 
 ## 6. Where we can and should play fast and loose
 
@@ -221,7 +330,7 @@ The lowering these deviations assume **on LibJIT** — one native helper per op,
 with hardware fast paths added *inside* the helpers — is surveyed against the
 three planned backends (GNU LibJIT has no SIMD surface at all; SLJIT and AsmJit
 have vector instructions but no value model, and neither is wired up) in
-[`../SIMD_BACKENDS.md`](../SIMD_BACKENDS.md). That note reaches the same
+§4.6–§4.9 below. That section reaches the same
 conclusion SD1/SD2/SD7 assume and adds a per-layer "laxness budget" for how far
 conformance may be relaxed.
 
@@ -235,8 +344,8 @@ written once and separately from the lowering.
 
 **The first implementation path is LibJIT-only** — AsmJit and SLJIT are
 deferred, not cancelled, and are expected to be leveraged for SIMD when they land
-([`../SIMD_LIBJIT.md`](../SIMD_LIBJIT.md) §3) — and the specifics are decided in
-[`../SIMD_LIBJIT.md`](../SIMD_LIBJIT.md): `v128` stays
+(§4.10 below) — and the specifics are decided in
+§4.5 below: `v128` stays
 the `{i32×4}` struct but is forced to 16-byte alignment; a `v128` value lives in
 a LibJIT frame slot; helpers take **pointers** (`const void*` in, `void*` out) so
 no aggregate-ABI assumption is needed; and the helper bodies are written against
@@ -248,13 +357,13 @@ that no vector library provides.
 
 | # | Deviation | Why it is safe | What it buys |
 |---|---|---|---|
-| SD1 | **Scalar/helper lowering first.** Represent `v128` as four `u32` and implement every op as a native helper (or an inline loop over lanes), exactly like the GC native helpers; the helper ABI is pointer-in/pointer-out, so no aggregate-ABI assumption is required ([`../SIMD_LIBJIT.md`](../SIMD_LIBJIT.md) §6.3). | §3: no hardware SIMD is required; results are what matter. | A portable, testable baseline in far less code than intrinsics. |
-| SD2 | **Add hardware fast paths only behind runtime feature detection, keeping the helpers as fallback.** Start with the hottest shapes (memory, bitwise, i32x4/f32x4 arith). Realised by writing the helper bodies against Highway 1.4.0, whose dynamic dispatch *is* the runtime detection ([`../SIMD_LIBJIT.md`](../SIMD_LIBJIT.md) §5). | Any correct fallback is conformant. | Performance when it matters, without a porting matrix. |
+| SD1 | **Scalar/helper lowering first.** Represent `v128` as four `u32` and implement every op as a native helper (or an inline loop over lanes), exactly like the GC native helpers; the helper ABI is pointer-in/pointer-out, so no aggregate-ABI assumption is required (§4.5 below). | §3: no hardware SIMD is required; results are what matter. | A portable, testable baseline in far less code than intrinsics. |
+| SD2 | **Add hardware fast paths only behind runtime feature detection, keeping the helpers as fallback.** Start with the hottest shapes (memory, bitwise, i32x4/f32x4 arith). Realised by writing the helper bodies against Highway 1.4.0, whose dynamic dispatch *is* the runtime detection (§4.7 below). | Any correct fallback is conformant. | Performance when it matters, without a porting matrix. |
 | SD3 | **`v128.load`/`store` as a 16-byte `memcpy`; ignore the memarg alignment** (only enforce it if we ever add validation). | §3: unaligned access is legal when align < natural; x86 tolerates all alignments. | One `memcpy` per access, no alignment handling. |
 | SD4 | **`i8x16.shuffle` via a 16-iteration helper** (index < 16 → operand 0, else operand 1). | §2.2; any correct lowering is fine. | Correctness first; `pshufb` later. |
 | SD5 | **Relaxed SIMD: pick the plain scalar result for every op** — unfused (double-rounded) `relaxed_madd`, saturating `relaxed_trunc`, zeroing `relaxed_swizzle`, bitwise `relaxed_laneselect`, scalar-wasm NaN rules for `relaxed_min/max`, saturating `relaxed_q15mulr_s`, and for the dots the unsigned reading of the second operand plus the saturating i16 pair sum. | §2.4/§3: any allowed result is conformant; the deterministic profile is optional. | No hardware dependence, reproducible results, trivial code — and, because the *reference* is written to make the same choice, an exact differential rather than a "one of N" match. |
 | SD6 | **Optionally adopt the deterministic profile later** (spec prescribes every relaxed parameter to `0`) if we want byte-for-byte reproducibility across machines. | It is a refinement of SD5, never a requirement. | Cross-machine determinism for replays/networking — very much in the QVM spirit. |
-| SD7 | **One alignment everywhere — and it is 16.** Keep the 4×`u32` struct but force the lowered type to 16-byte alignment (`jit_type_set_size_and_alignment`) so frame slots, `WASM::Value`'s `alignas(16)` and the GC layout agree; all memory access stays unaligned-safe. Decided in [`../SIMD_LIBJIT.md`](../SIMD_LIBJIT.md) §6.1. | §3: no alignment guarantee is required of the representation, only of the memory-access rule. | Removes the S4 disagreement instead of papering over it. |
+| SD7 | **One alignment everywhere — and it is 16.** Keep the 4×`u32` struct but force the lowered type to 16-byte alignment (`jit_type_set_size_and_alignment`) so frame slots, `WASM::Value`'s `alignas(16)` and the GC layout agree; all memory access stays unaligned-safe. Decided in §4.5 below. | §3: no alignment guarantee is required of the representation, only of the memory-access rule. | Removes the S4 disagreement instead of papering over it. |
 | SD8 | **Do not implement a `v128` JS API.** | §3: web embedding only, and not required here. | Scope control. |
 | SD9 | **Order the work by what producers emit** (memory, bitwise, integer arith, splat/lane, float arith, conversions, then relaxed), not by the spec's table order. | Conformance is all-or-nothing only if we claim a 3.0 profile; the subset is still usable. | Fastest path to a usable engine. |
 
@@ -279,7 +388,7 @@ documents' milestone names.
 
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
-| ✅ **SIMD-0 — ABI** | Done (SIMD-L1): the decided layout is applied ([`../SIMD_LIBJIT.md`](../SIMD_LIBJIT.md) §6.1) — the `{i32×4}` type with 16-byte alignment forced, `gcStorageAlign` → 16 — plus `simd_abi.wat` and the round-trip test. | ~~S4~~, ~~S5~~, ~~S9~~ | ✅ A function `(param v128) (result v128)` round-trips through the JIT (measured). |
+| ✅ **SIMD-0 — ABI** | Done (SIMD-L1): the decided layout is applied (§4.5 below) — the `{i32×4}` type with 16-byte alignment forced, `gcStorageAlign` → 16 — plus `simd_abi.wat` and the round-trip test. | ~~S4~~, ~~S5~~, ~~S9~~ | ✅ A function `(param v128) (result v128)` round-trips through the JIT (measured). |
 | ✅ **SIMD-1 — Core scalar lowering** | ✅ **Done (SIMD-L1/L2).** `v128.const`, the 22 memory ops, all six `*.splat`, extract/replace lane, the six bitwise ops, `i8x16.shuffle` and `i8x16.swizzle` are implemented and tested, on a runtime-dispatched vector layer with the scalar reference as the oracle. | S1 (partly) | ✅ Hand-written modules compute byte shuffles, swizzles and bitselects correctly, incl. the hazard boundary vectors. |
 | ✅ **SIMD-2 — Integer ops** | **Done (SIMD-L3).** All 133 ops: the 36 comparisons, `add`/`sub`/`mul`, `min`/`max` (signed and unsigned), `neg`/`abs`, the 12 shifts, saturating `add`/`sub`, `avgr_u`, `popcnt`, `q15mulr_sat_s`, the reductions `all_true`/`any_true`/`bitmask`, and the width-changing family (`extend`/`extmul` `_low`/`_high`, `extadd_pairwise`, `dot`, `narrow`). | S1 | ✅ Differentially tested against the reference by construction; the corners a differential cannot see are pinned by goldens that were cross-checked against an independent engine; `simd_arith_i.wat` is green through the JIT (§9 T2). |
 | ✅ **SIMD-3 — Float ops** | ✅ **Done (SIMD-L4).** All 52 ops: comparisons (incl. the unordered `ne`), `add`/`sub`/`mul`/`div`, `abs`/`neg`/`sqrt`, `ceil`/`floor`/`trunc`/`nearest` (ties to even), `min`/`max`/`pmin`/`pmax` with wasm's NaN and `±0` rules, and the 10 conversions — `trunc_sat`, `convert`, `convert_low`, `demote`/`promote`. | S1 | ✅ `simd_arith_f.wat` and `simd_convert.wat` green (51 exports, all read off V8); T1 green for every float op. |
@@ -287,7 +396,7 @@ documents' milestone names.
 | ✅ **SIMD-5 - Relaxed SIMD** | ✅ **Done: all 20 sub-opcodes implemented.** Nine are op-list entries (strict-helper reuse per SD5); the other eleven are hand-written entry points — five of them delegating to the strict op (`relaxed_swizzle` → zeroing swizzle, four `relaxed_laneselect` → `v128.bitselect`), six with new helpers (`madd`/`nmadd` forwarding to the reference so the rounding choice is structural, the dots unsigned+saturating). Both shapes are proven by the `simd relaxed` differential and the `simd_relaxed.wat` JIT case. All 7 relaxed spec scripts are curated. | S2 | ✅ A module using any relaxed family decodes and produces an allowed result; the op-list differential plus the hand-written table cover all 20. |
 | ✅ **SIMD-6 — Harness** | ✅ **Done for every shape the engine compiles.** Marshals `v128` arguments/results (lane-wise decoding and comparison, per-lane NaN policies) and, for one-to-four-`v128` signatures, bypasses libjit's `jit_apply` by calling through the host C ABI. All 66 `simd_*` / relaxed scripts are curated with `failed=0`. | S7, S8 | ✅ `./WasmJit 'spec: *'` in tolerant mode reports the full survey, and the 66 curated scripts run in the default suite. |
 | ✅ **SIMD-7 — Hardware fast paths** | ✅ Measured and decided: helpers are on Highway 1.4.0 with run-time dispatch; SIMD-L8 measured the per-op helper boundary (pre-D5 4.10 ns/v128-op, 97.6 % call overhead) as the limit. The D5 `load`+op/const peepholes later reduced this to **3.47 ns** (97.2 %) without changing the helper granularity; D4 remains gated/unbuilt. | — | The benchmark and decision are recorded; a future D4/peephole change can revisit the denominator. |
-| ◑ **SIMD-8 — Native lowering per backend** | When a backend with vector registers lands (AsmJit, SLJIT), lower `v128` in *that backend*; the helper layer remains the portable fallback and oracle. **LibJIT is excluded permanently:** its IR has no vector type, vector opcode or vector register class (29 headers, 450 `JIT_OP_*`, five type constructors, zero vector tokens; `SIMD_LIBJIT.md` §2). | — (future backend) | Deferred by backend availability, not by a missing proposal surface; LibJIT's helper implementation is final. |
+| ◑ **SIMD-8 — Native lowering per backend** | A backend with vector registers (SLJIT, AsmJIT) may lower `v128` in *that backend*; the helper layer remains the portable fallback and oracle. **LibJIT is excluded permanently:** its IR has no vector type, vector opcode or vector register class (29 headers, 450 `JIT_OP_*`, five type constructors, zero vector tokens; §4.6/§4.10 below). | — (optional native path) | An optional performance path, not a missing proposal surface; all three currently use the helper lowering, and LibJIT’s is final. |
 
 Guardrails: keep the scalar helpers as the reference implementation and the
 fallback; a native per-backend lowering must match their semantics rather than
@@ -313,7 +422,7 @@ Reaching that took three separate causes, and the record of them is the point:
 a missing `0xFD` arm in `evalConstantExpr` and the `global.get`/`set` lowering),
 then libjit's `jit_apply` damaging a third stack-passed aggregate, which the
 harness now sidesteps by calling one-to-four-`v128` signatures through the host C
-ABI (`../SIMD_LIBJIT.md` §6.6). None of the three needed a change to the
+ABI (§4.5 below). None of the three needed a change to the
 generated code. Reproduce one row with:
 
 ```bash
@@ -346,13 +455,9 @@ Proposal documents:
 
 In-repo:
 
-- [`../SIMD_LIBJIT.md`](../SIMD_LIBJIT.md) — the LibJIT-only lowering decision:
-  the designs considered, the helper library verdicts, the normative `v128`
-  layout and helper ABI, the semantics-hazard list, the test plan and the
-  `SIMD-L0…SIMD-L8` milestones that implement this note's §7.
-- [`../SIMD_BACKENDS.md`](../SIMD_BACKENDS.md) — the backend-support survey: does
-  LibJIT / SLJIT / AsmJit have SIMD, what are the workarounds, which is the path
-  of least resistance (native helpers), and how loosely may we conform.
+- §4.5–§4.10 above — the helper ABI, the LibJIT lowering (D3+D5), the SIMD
+  library and core files, the relaxed-SIMD laxness budget, the measured cost and
+  the engine survey.
 - [`docs/GC.md`](GC.md) — the companion design note (and §4.4/SIMD-0 interplay
   for `v128` inside aggregates).
 - [`docs/THREADS.md`](THREADS.md) — the companion note for the other

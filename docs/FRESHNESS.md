@@ -146,6 +146,39 @@ needs to be true *of the day it names*.
 - **Not a rewrite of history.** §5's struck-through gaps, §11 tallies of a
   milestone note and the `LF-2` verdict tables keep their date and their numbers.
 
+### 3.1 Document sprawl: merge before you add
+
+Staleness is one failure mode; **sprawl** is the other. A note that is current
+must be maintained, so every new note buys a permanent obligation. The rule is:
+
+> **A note owns one question. If two notes answer it for different slices, the
+> older slice is history and belongs in the one historical record — not in a new
+> file.**
+
+A merge is due when any of these is true:
+
+- two notes answer the same question for different time slices (per-slice
+  post-mortems, migration logs, “current” plus “historical” versions);
+- a note’s only value is a dated log, a session handoff, or a plan whose work
+  has shipped;
+- a status note duplicates a fact already owned by a policy or ABI note.
+
+When merging, keep the **current contract** in the owner note, compress the
+**history** to root causes, dates and lessons, delete the sources, and update the
+index rows in the same change. The `[docs]` check fails on a missing row, so a
+half-merge cannot pass silently.
+
+The 2026-11-10 consolidation is the worked example: `PRODUCTION_GAPS.md`,
+`BACKEND_PRODUCTION_READINESS.md` and `ABI_PORTABILITY.md` became
+[`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §8/§13 and
+[`ABI.md`](ABI.md); the frame/`v128` design notes became `ABI.md` plus
+[`backends/HISTORY.md`](backends/HISTORY.md); the fifteen slice reports, the
+probes and the handoff became that one history note; the ABI refactor study and
+post-mortem became `backends/HISTORY.md` §3.3; the two SIMD notes became
+[`proposals/SIMD.md`](proposals/SIMD.md) §4.5–§4.10; and
+`MULTI_AGENT_FEASIBILITY.md` became [`proposals/THREADS.md`](proposals/THREADS.md)
+§4.3.2.
+
 ## 4. Where each fact lives, and how it is re-measured
 
 | Fact | Owner (the one place it is stated as current) | Re-measure with |
@@ -153,7 +186,7 @@ needs to be true *of the day it names*.
 | Default-suite assertions and cases | [`TESTING.md`](TESTING.md) ("Reading the output"); `API_ABI_STABILITY.md` §11 and every milestone note's §8 keep *dated* rows | `./Test/WasmJit` → the last line |
 | A per-tag tally | The note that owns the tag, in its §8, dated | `./Test/WasmJit '[tag]'` |
 | Proposal-note inventory and per-note shape | [`PROPOSALS.md`](PROPOSALS.md) §4 and §8 | §8 of this note |
-| The note tree (three folders, three index pages) | [`DOCUMENTATION.md`](DOCUMENTATION.md) §9 | `./Test/WasmJit '[docs]'`; §8 of this note |
+| The note tree (four folders, four index pages) | [`DOCUMENTATION.md`](DOCUMENTATION.md) §9 | `./Test/WasmJit '[docs]'`; §8 of this note |
 | Header count, and every header's tier | [`EMBEDDING_SURFACE.md`](EMBEDDING_SURFACE.md) §6.1.1, enforced by `[tiers]` | §8 of this note |
 | Undocumented declarations | [`DOCUMENTATION.md`](DOCUMENTATION.md) §8 | the strict pass in its §6 |
 | Exported and strong symbols | [`EMBEDDING_SURFACE.md`](EMBEDDING_SURFACE.md) §10; frozen baseline in `Test/abi/*.exports` | `nm -D --defined-only …`; `Test/abi-check.sh` |
@@ -163,6 +196,7 @@ needs to be true *of the day it names*.
 | Milestone status | Each note's own §7 plan table (`PROPOSALS.md` §2.3) | the note; `README.md` summarises, it does not own |
 | ABI/API break class | [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §4.1 | the class definitions in that section |
 | Gap-versus-boundary classification | [`SCOPE.md`](SCOPE.md) §2 and the boundary tables | the triage checklist in its §8; `./Test/WasmJit '[docs]'` keeps the note in the tree |
+| Open defects, gaps and limitations | [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §8 (the one register) | re-check the owner row; `GAP-*` ids are stable |
 
 Reading: **the document that defines a fact owns it; every other document links.**
 `README.md`'s completeness table is a summary of the per-note §7 plans, not a
@@ -220,7 +254,7 @@ this revision did about them:
 ### 5.3 Left as it is, deliberately
 
 - **Milestone notes keep their dated tallies.** `API_ABI_STABILITY.md` §11,
-  `BACKEND_PLUGIN_ABI.md` §10, `MULTI_AGENT_FEASIBILITY.md` §10 and the proposal
+  `BACKEND_PLUGIN_ABI.md` §10, `proposals/THREADS.md` §8 and the proposal
   notes' §8 recite the suite as it stood on 2026-10-29. Each row says so. They
   are kind 3 and re-running them would not make the milestone report truer; what
   changed since is recorded once, in `TESTING.md` and in the probe below.
@@ -258,11 +292,13 @@ clearly right and rejected where the section is evidence rather than a claim:
   [`VALIDATION.md`](VALIDATION.md) (its outcome is a validation rule; the
   backtrace stayed in git history). Both are recorded in
   [`index.md`](index.md) §2 so a reader does not go looking for them.
-- **Not merged, deliberately:** `SIMD_BACKENDS.md` + `SIMD_LIBJIT.md`. They are
-  one story, but merging is a ~1,200-line rewrite in which every measured number
-  must survive; a rushed pass would delete exactly the kind of evidence §2.3 says
-  to keep. `index.md` §2 names it as the next candidate instead of pretending it
-  is done.
+- **Merged away (2026-11-10):** `SIMD_BACKENDS.md` + `SIMD_LIBJIT.md` into
+  [`proposals/SIMD.md`](proposals/SIMD.md); the backend status and gap notes into
+  [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §8/§13; the fifteen slice
+  reports, probes and handoff into [`backends/HISTORY.md`](backends/HISTORY.md);
+  the ABI refactor study + post-mortem into [`backends/HISTORY.md`](backends/HISTORY.md).
+  [`index.md`](index.md) §2 records every merge so a reader does not go looking
+  for a deleted file.
 
 ### 5.5 The remaining structural risk
 
@@ -277,8 +313,8 @@ list is part of the review checklist and not advice.
   stamp. The rule applies to the sentences that describe the tree, not to the
   document.
 - **A study may quote a number without a command** when the command is the study
-  itself (the `LF-2` arms, the `SIMD_LIBJIT.md` benchmark). Those numbers are the
-  output of a recorded experiment, and the record is the evidence.
+  itself (the `LF-2` arms, the `proposals/SIMD.md` benchmark). Those numbers are
+  the output of a recorded experiment, and the record is the evidence.
 - **A proposal note's §8 may be "none yet".** `PROPOSALS.md` §3 already allows
   it; a dated "none" is a fact, not a gap.
 - **A summary may be less precise than its source.** `README.md` may say "100%"
@@ -443,13 +479,13 @@ upstream primitive/structured-return sweep, including JSON nested-value rows), `
 `[abi]` 24/6, `[surface]` 4/1, `[layering]` 4/1. Re-run the probe; these are
 a dated snapshot, not a promise.
 
-**Current (2026-11-10, working tree on `2cce7b9` — re-run the probe):** **22,593
-assertions in 824 test cases**, green on each of the three backends; **27 / 40 /
-18 / 25** `.md` files under `docs/`, `docs/proposals/`, `docs/languages/` and
-`docs/backends/` (26 / 39 / 17 / 24 notes); `[docs]` **1084/2** (the fourth index
-page and the backend pages added 59 assertions), `[headerdoc]` **6/3**. The per-tag and symbol counts
-above are an earlier snapshot; re-run the probe rather than trusting either
-block.
+**Current (2026-11-10, working tree on `2cce7b9` — re-run the probe):** **22,533
+assertions in 824 test cases**, green on each of the three backends; **20 / 40 /
+18 / 2** `.md` files under `docs/`, `docs/proposals/`, `docs/languages/` and
+`docs/backends/` (19 / 39 / 17 / 1 notes); `[docs]` **1024/2** after the
+consolidation, `[headerdoc]` **6/3**. The per-tag and symbol
+counts above are an earlier snapshot; re-run the probe rather than trusting
+either block.
 
 Three things moved those numbers while this note was being written, which is the
 whole problem in miniature:

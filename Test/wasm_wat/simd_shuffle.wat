@@ -1,5 +1,5 @@
 ;; SIMD-L2: `i8x16.shuffle` and `i8x16.swizzle` through the JIT
-;; (docs/SIMD_LIBJIT.md §10). These two carry the hazards the note calls out:
+;; (docs/proposals/SIMD.md). These two carry the hazards the note calls out:
 ;;   Y4 — shuffle indices 0-15 read the *first* operand, 16-31 the *second*;
 ;;   Y3 — swizzle zeroes every index >= 16, where pshufb would alias it to
 ;;        `index & 15` (index 127 in particular is the silent-failure case).

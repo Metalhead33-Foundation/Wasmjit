@@ -551,6 +551,73 @@ for a merge to `master` — so that "green" means the same thing to every review
 | ThreadSanitizer concurrency run | configure a third shadow build (below), then `./WasmJit '[multiagent]'` | no data race on the multi-agent path (waiter table, entry counter, GC queue/counters, shared-global atomics) | `[multiagent]` **51 assertions / 6 cases** and `[concurrency]` **80 / 13**, **no TSan report**, 2026-11-03 |
 | ABI check | `./Test/abi-check.sh build/<config>` | no exported symbol disappeared since the baseline (the additive-only rule of `API_ABI_STABILITY.md` G2); `--update` records an intentional addition | **3,093 dynamic / 1,992 strong symbols, 0 removed**, 2026-11-03 |
 
+### Capability probes
+
+A **probe** is a fixture plus one `TEST_CASE` that runs on every backend and
+records exactly one of three states. It is not a spec test: it establishes which
+state a backend is in, because the three have different consequences.
+
+| State | Consequence |
+|---|---|
+| works | the embedder can use it |
+| refuses with a reason | the embedder learns at instantiation, with a message |
+| **silent wrong answer** | the embedder finds out in production — **the only defect** |
+
+The rule that governs every probe: **a backend either does the thing, or refuses
+the module with a reason.** Refusal is a pass, not a skip.
+
+The core probes and their last recorded state:
+
+| # | Probe | Fixture | Assertion |
+|---|---|---|---|
+| 1 | exceptions | `exceptions_probe.wat` — a tag plus `throw` | uncaught `throw` returns normally with a pending exception; local catch returns its payload |
+| 2 | `externref` | `externref_probe.wat` — identity | if it instantiates, the reference round-trips identically |
+| 3 | `funcref` | `funcref_probe.wat` — `ref.func` plus a declarative elem | both exports exist when the module instantiates |
+| 4 | tail calls, register | `tailcall_probe.wat` — `(i32)->i32` via `return_call` | the call returns its argument |
+| 5 | tail calls, frame | `tailcall_frame_probe.wat` — three `v128` + `return_call` | returns lane 0 of the first vector |
+
+Copy this shape for a new probe:
+
+```cpp
+TEST_CASE("<feature>: refuse or answer correctly", "[staging][abi][<tag>]")
+{
+    for (const char* backend : {"libjit", "asmjit", "sljit"}) {
+        std::fprintf(stderr, "PROBE %s: ", backend);
+        auto runtime = WASM::Runtime::create(backend);
+        auto module = runtime->loadFile(path / "<fixture>.wasm");
+        WASM::ModuleInstance* instance = nullptr;
+        try {
+            instance = &runtime->instantiate(*module, imports);
+        } catch (const std::exception& error) {
+            std::fprintf(stderr, "REFUSED: %s\n", error.what());
+            continue;                      // refusal is a correct answer
+        }
+        /* ...call through the right form; assert the CORRECT answer... */
+    }
+}
+```
+
+Four rules, each paid for once: refusal is a pass (`continue`, never `SUCCEED`);
+assert the **property**, not the outcome; test data must be inert (`nullptr`, not
+a fabricated pointer — a fake `externref` broke an unrelated test); and run the
+whole suite with `--rng-seed 12345` before committing, because a filtered green
+run says the probe works, not that it is safe.
+
+The probe history and the outcomes of the 21 probes are in
+[`backends/HISTORY.md`](backends/HISTORY.md) §4/§7.
+
+Four rules that apply to every backend test, not only probes:
+
+- **No partial modules.** A backend that cannot compile a function throws at
+  module level, naming the function and the reason; an export is never one that
+  cannot be called.
+- **Assert the property, not the outcome.** A test that only says “it works”
+  cannot distinguish a correct backend from one that happens to return 0.
+- **Pin nothing.** A known wrong answer is recorded as a defect, never asserted
+  as the expected result.
+- **A filtered green run is not a green tree.** Build first, then run; a test
+  started in parallel with its `make` reads the old library.
+
 ### Backend promotion gate
 
 Targeted `[libjit]`/`[sljit]`/`[asmjit]` tags are not sufficient to call a
@@ -559,14 +626,14 @@ for that backend**:
 
 | Backend | Command | Status at the 2026-11-10 snapshot |
 |---|---|---|
-| LibJIT | `WASMJIT_BACKEND=libjit ./WasmJit` | **green** — 22,593 assertions / 824 cases, exit 0 |
-| SLJIT | `WASMJIT_BACKEND=sljit ./WasmJit` | **green** — 22,593 assertions / 824 cases, exit 0 |
-| AsmJIT | `WASMJIT_BACKEND=asmjit ./WasmJit` | **green** — 22,593 assertions / 824 cases, exit 0 |
+| LibJIT | `WASMJIT_BACKEND=libjit ./WasmJit` | **green** — 22,533 assertions / 824 cases, exit 0 |
+| SLJIT | `WASMJIT_BACKEND=sljit ./WasmJit` | **green** — 22,533 assertions / 824 cases, exit 0 |
+| AsmJIT | `WASMJIT_BACKEND=asmjit ./WasmJit` | **green** — 22,533 assertions / 824 cases, exit 0 |
 
 All three runs execute the same case set and report the same assertion count, so
 "green" now means the same thing on every backend. The promotion criteria and the
 documented refusals are owned by
-[`BACKEND_PRODUCTION_READINESS.md`](BACKEND_PRODUCTION_READINESS.md) §7.
+[`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §7.
 
 `Test/spec_known_failures.txt` is the only place a spec failure may be
 subtracted from the gate. It is not an exemption: the named line must still
@@ -615,7 +682,7 @@ builds above.
 The **ThreadSanitizer** configuration is the same idea, but use qmake's
 sanitizer feature (`CONFIG+=sanitizer` loads `sanitizer.prf`; `sanitize_thread`
 alone is parsed but applies no flags). The run is what makes the multi-agent
-claim evidence rather than a guess (`MULTI_AGENT_FEASIBILITY.md` `MF-1`):
+claim evidence rather than a guess (`proposals/THREADS.md` `MF-1`):
 
 ```bash
 mkdir -p build/Desktop-TSan && cd build/Desktop-TSan
@@ -771,7 +838,7 @@ things the spec suite cannot: exact lane semantics for every helper, and the
 float edge cases where a single `==` would pass for the wrong reason. The harness
 *does* marshal `v128` arguments and results now (`decodeV128` /
 `compareV128`), which is why all 66 `simd_*` / relaxed scripts are graded. The
-design behind these layers is [`docs/SIMD_LIBJIT.md`](SIMD_LIBJIT.md) §9; this
+design behind these layers is [`docs/proposals/SIMD.md`](proposals/SIMD.md) §4.9; this
 section is the practical guide. Four layers, four jobs:
 
 | Layer | Artefact | Job |
@@ -790,7 +857,7 @@ lane-by-lane comparison where lane position matters (narrow/widen/extmul).
 
 Two things make that coverage hold rather than merely claim to: the differential
 table is generated from the op list (`WasmBase/wasm_simd_ops.inc`, §6.5 of
-`SIMD_LIBJIT.md`), so an op cannot exist in the engine without being fed to it;
+`proposals/SIMD.md`), so an op cannot exist in the engine without being fed to it;
 and the cases a differential cannot judge — where both layers could agree on a
 wrong answer — are covered by golden vectors with values that the implementation
 does not get to define.
@@ -915,7 +982,7 @@ one fails confusingly at load time, and a wrong *expectation* is worse:
 wasm-tools validate --features all build/Desktop-Debug/Test/wasm_test_modules/<name>.wasm
 
 # and, to check what a module actually computes before its expectations are
-# written into C++ (docs/SIMD_LIBJIT.md §11 R8):
+# written into C++ (docs/proposals/SIMD.md §4.9):
 wat2wasm --enable-all Test/wasm_wat/<name>.wat -o /tmp/<name>.wasm
 node -e "WebAssembly.instantiate(require('fs').readFileSync('/tmp/<name>.wasm'))\
 .then(({instance}) => { for (const k in instance.exports) \
@@ -963,7 +1030,7 @@ A `SIMD-L8` diagnostic. It is tagged `[.simdbench]` — the leading dot makes th
 tag *hidden*, which is what keeps a benchmark out of the default run (a plain
 `[simdbench]` tag does **not**; it was in the default suite for one build before
 this was noticed). Pass the hidden tag to run it; it prints `ns/v128-op` for the
-variants of `docs/SIMD_LIBJIT.md` §8.2:
+variants of `docs/proposals/SIMD.md` §4.9:
 
 ```bash
 ./WasmJit '[.simdbench]'
@@ -997,7 +1064,7 @@ worth knowing before editing it:
 
 It is not a CI gate and must not be turned into one — the numbers decide whether
 the batched helper path (design `D4`) is ever built, and they are recorded back
-into `docs/SIMD_LIBJIT.md` §8.4.
+into `docs/proposals/SIMD.md` §4.9.
 
 ---
 

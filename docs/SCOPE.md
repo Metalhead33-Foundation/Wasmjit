@@ -2,10 +2,13 @@
 
 *What Is an Engine Gap, and What Is a Boundary*
 
-Status: policy note, revision 2 (2026-11-03). It is the canonical record of the
+Status: policy note, revision 3 (2026-11-10). It is the canonical record of the
 surfaces WasmJit deliberately does **not** own and of the deviations it has
-chosen, so that none of them is counted as an implementation gap. The
-failed-instantiation retention closes the `linking*` boundary.
+chosen, so that none of them is counted as an implementation gap. Open defects
+and limitations live in one register,
+[`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §8; this note decides whether a
+missing thing is a gap or a boundary. The failed-instantiation retention closes
+the `linking*` boundary.
 Audience: anyone triaging a missing feature, filling in a completeness meter,
 writing a proposal note, or asking "is this engine mature yet?".
 
@@ -18,7 +21,7 @@ writing a proposal note, or asking "is this engine mature yet?".
 | §4 | Which surfaces are build-time or text-format only? |
 | §5 | Which proposals are blocked on a binary encoding that does not exist yet? |
 | §6 | Which limitations are deliberate design deviations rather than gaps? |
-| §7 | Which backends and packaging surfaces are experimental and not claimed? |
+| §7 | Which surfaces are outside the current claim (targets, coverage, stub, languages)? |
 | §8 | How is this note used, and what re-opens a boundary? |
 | §9 | References |
 
@@ -51,7 +54,7 @@ embedder supplies the policy, engine or event loop.
 
 | Surface | Who owns it | What the engine provides | Evidence |
 |---|---|---|---|
-| Multi-agent scheduling and thread pools | The embedder | `ConcurrencyModel::Agents`, per-agent `ExecutionState`, the waiter table, the `ComponentExecutor` hook | `THREADSAFETY.md` §9–§10; `MULTI_AGENT_FEASIBILITY.md`; `COMPONENT_MODEL.md` `CMD3` |
+| Multi-agent scheduling and thread pools | The embedder | `ConcurrencyModel::Agents`, per-agent `ExecutionState`, the waiter table, the `ComponentExecutor` hook | `THREADSAFETY.md` §9–§10; `proposals/THREADS.md`; `COMPONENT_MODEL.md` `CMD3` |
 | JavaScript engine, JS API and JS object model | The embedder | `ImportResolver`, `Callable`, `HostBridge`, `Module::importDescriptors()` / `exportDescriptors()` | `JS_INTEGRATION.md` `JSD1`–`JSD6` |
 | Promise / event-loop integration, JSPI `WebAssembly.Suspending` / `promising` | The embedder | `HostContinuation`, `HostContinuationScheduler`, `submit*`/`onSuspended*`/`onCompleted*` | `JS_INTEGRATION.md` `JS5`; `STACK_SWITCHING.md` §4/§10.12 |
 | ESM loader, URL resolution and import maps | The embedder | Binary module loading and `(module, field)` import resolution | `JS_INTEGRATION.md` `JS6` |
@@ -120,14 +123,18 @@ note and must be revisited as a decision, not "fixed" as a bug.
 | Branch hints are non-semantic | A backend may use them or not; no block reordering is required | `SMALL_PROPOSALS.md` `SP-2` |
 | LibJIT interpreter fallback | `InterpreterFallback::Always` / `FallbackOnly` are refused because this LibJIT build has no interpreter | `COMPILER_POLICY.md` `CP-4` |
 
-## 7. Experimental or unclaimed surfaces
+## 7. Surfaces outside the current claim
 
-These are in the tree but are not part of the current maturity claim.
+These are in the tree but are not part of the current maturity claim. The
+**backend production claim itself** is [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md)
+§13: all three code generators, x86-64 Linux / SysV AMD64, single-agent, one
+instance per module. The open coverage limits are §8 there.
 
 | Surface | State |
 |---|---|
-| `Asmjit/` | Executing backend, selectable as `asmjit`; production-ready within the declared x86-64 Linux envelope (generic suite green) |
-| `Sljit/` | Executing backend, selectable as `sljit`; production-ready within the same envelope (generic suite green) |
+| Non-SysV targets (MS x64, AAPCS64, Windows ARM64, RISC-V, MIPS) | Specified but *provisional*; not exercised (`GAP-6`) |
+| SLJIT/AsmJIT AddressSanitizer runs | Not recorded (`GAP-8`) |
+| LibJIT/AsmJIT strict negative sweep | Not separately recorded (`GAP-9`) |
 | `WasmStub/` | A non-compiling pretty-printer, not an execution backend |
 | Language support | No language is supported; `LF-1`/`LF-2` are studies and `LF-3` has not started |
 | Packaging recipes | Optional; the install/`pkg-config` path is the supported one |
@@ -141,10 +148,11 @@ When a missing behaviour is reported, run this checklist in order:
 2. **Is there a binary encoding?** If the upstream proposal has no stable
    encoding, it is §5 — not a gap.
 3. **Is it text or WIT?** If so, it is §4 — not a gap.
-4. **Is it a recorded deviation or an experimental backend?** If so, it is §6
-   or §7 — not a gap.
-5. **Otherwise it is a gap.** Add it to the owning note's §5/§7, measure it with
-   the strict sweep, and fix it as ordinary additive work.
+4. **Is it a recorded deviation or an unclaimed surface?** If so, it is §6 or
+   §7 — not a gap.
+5. **Otherwise it is a gap.** Add a row to
+   [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §8 (the one register), measure
+   it with the strict sweep, and fix it as ordinary additive work.
 
 A boundary re-opens only when its condition in §5 changes (a stable encoding is
 published), or when a §6 decision is deliberately revisited. "It would be nice"

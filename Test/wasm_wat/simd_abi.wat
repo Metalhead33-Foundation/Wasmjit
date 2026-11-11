@@ -1,5 +1,5 @@
 ;; SIMD-L1: the `v128` calling convention and the local slot
-;; (docs/SIMD_LIBJIT.md §10, milestone SIMD-L1; gaps S4/S9).
+;; (docs/proposals/SIMD.md, milestone SIMD-L1; gaps S4/S9).
 ;;
 ;; The spec harness cannot marshal a `v128` yet (gap S7), so every export either
 ;; round-trips the value back to C++ or projects one lane to a scalar — which is

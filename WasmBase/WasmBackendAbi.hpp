@@ -200,7 +200,7 @@ static_assert(sizeof(FieldLayout) == 12, "the C plugin view pins the layout");
 \param kind The value kind.
 \return 2 for `v128`, 1 for every other kind.
 This is the single source of truth for the rule in
-[`docs/backends/V128_SIGNATURE_DECISION.md`](../docs/backends/V128_SIGNATURE_DECISION.md) §28: a vector
+[`docs/ABI.md`](../docs/ABI.md) §28: a vector
 crosses as **two scalar words, low first**, because MS x64 passes 16-byte aggregates by reference.
 */
 inline constexpr std::uint32_t argSlotCount(ValueKind kind) noexcept
@@ -235,7 +235,7 @@ inline std::vector<ArgSlot> mapArgSlots(std::span<const ValueKind> kinds)
 	return slots;
 }
 
-//! Staging-frame arithmetic (`docs/backends/STAGING_CALL_ABI.md`).
+//! Staging-frame arithmetic (`docs/ABI.md`).
 //! In the frame form a compiled function is `void fn(VMContext*, void* frame)` and
 //! every parameter and result lives in bytes. Both sides derive the offsets from
 //! the same FuncType, which is what makes the form canonical: it is defined by

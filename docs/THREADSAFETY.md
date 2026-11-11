@@ -126,7 +126,7 @@ distinct instances (separate memories, globals and tables), which is what
 instantiation means in the component model, and `ComponentRuntime` creates one per
 declaration. It is not available to an embedder, and the component runtime is
 therefore responsible for serializing entry into them. The full argument is in
-[`MULTI_AGENT_FEASIBILITY.md`](MULTI_AGENT_FEASIBILITY.md) §2.3.6.
+[`proposals/THREADS.md`](proposals/THREADS.md) §2.3.6.
 
 ### 3.2 The accepted concurrency scenarios
 
@@ -137,7 +137,7 @@ multithreading model.
 | # | Scenario | Status |
 |---|---|---|
 | **C1** | Two host threads execute code from two different instances | **Supported today** |
-| **C2** | **Many agents on one instance** — two host threads call into the same `ModuleInstance` (whether the same exported function or different ones) | **Accepted design direction**, not implemented; opt-in ([`MULTI_AGENT_FEASIBILITY.md`](MULTI_AGENT_FEASIBILITY.md) §6) |
+| **C2** | **Many agents on one instance** — two host threads call into the same `ModuleInstance` (whether the same exported function or different ones) | **Accepted design direction**, not implemented; opt-in ([`proposals/THREADS.md`](proposals/THREADS.md) §6) |
 | **C2a** | *GPU-style*: N workers, each given a thread index as an ordinary argument | Same as C2 — the index is just an `i32` |
 | **C2b** | *Classic style*: thread A runs export `f`, thread B runs export `g` | Same as C2 |
 | **C2c** | *One compiled function called from several host threads* | **Yes, this is C2** — an agent is an execution context, and a host thread always carries one |
@@ -154,7 +154,7 @@ What is **required** rather than merely allowed, once C2 is claimed:
 
 What "hardened" means for the instance itself (the GC reclamation queue, the
 drop flags, the safepoint rule, the waiter table) is listed in
-[`MULTI_AGENT_FEASIBILITY.md`](MULTI_AGENT_FEASIBILITY.md) §2.3.5 and §4.4;
+[`proposals/THREADS.md`](proposals/THREADS.md) §2.3.5 and §4.4;
 the security half is [`SAFETY.md`](SAFETY.md) §3.3.
 
 ## 4. Guest-side / intra-WASM thread safety
@@ -661,7 +661,7 @@ module: §3.1 rules it out, and the runtime will refuse it.
 ## 10. Multi-agent contract (implemented as `ConcurrencyModel::Agents`)
 
 Multi-agent execution is an **opt-in** feature (`THREADS.md` TH-5;
-[`MULTI_AGENT_FEASIBILITY.md`](MULTI_AGENT_FEASIBILITY.md) §7). `Single` remains
+[`proposals/THREADS.md`](proposals/THREADS.md) §7). `Single` remains
 the default; an embedder selects `Agents` in `RuntimeConfig`. The contract the
 implementation preserves:
 
@@ -752,7 +752,7 @@ multi-agent race freedom.
 ## 11. References
 
 - In-repo:
-  [`MULTI_AGENT_FEASIBILITY.md`](MULTI_AGENT_FEASIBILITY.md) (the design
+  [`proposals/THREADS.md`](proposals/THREADS.md) (the design
   direction, the C1–C4 / R1–R2 scenario table, the per-backend threading matrix
   and the opt-in staging plan),
   [`EMBEDDING_SURFACE.md`](EMBEDDING_SURFACE.md) (`WASM::Runtime`, which enforces

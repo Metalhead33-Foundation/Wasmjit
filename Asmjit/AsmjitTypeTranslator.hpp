@@ -54,7 +54,7 @@ public:
 	 *         more than one result, or more argument entries than the C ABI allows.
 	 *
 	 * Not yet consulted by the module compiler, so it changes no behaviour alone
-	 * (docs/backends/PRODUCTION_GAPS.md section 10).
+	 * (docs/API_ABI_STABILITY.md).
 	 */
 	static bool signatureNeedsFrame(const WASM::FuncType& function);
 
@@ -64,7 +64,7 @@ public:
 	 * \param optIn Whether the process-wide opt-in is set.
 	 * \return True when the module must use the frame form throughout.
 	 *
-	 * Option 1 of docs/backends/PRODUCTION_GAPS.md section 11: the mode is module-wide,
+	 * Option 1 of docs/API_ABI_STABILITY.md: the mode is module-wide,
 	 * so one signature the register form cannot deliver decides for all of them.
 	 */
 	static bool moduleNeedsFrame(const WASM::Module& module, bool optIn);

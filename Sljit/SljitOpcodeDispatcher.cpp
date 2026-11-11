@@ -1653,7 +1653,7 @@ OpcodeDispatcher::OpcodeDispatcher(const WASM::Module& module, const WASM::FuncT
 	// The three-parameter limit is a *register-form* limit: it is the point where
 	// SLJIT's argument entries run out. In frame form the parameters travel in the
 	// caller's frame, so any count is expressible -- that is the whole reason the
-	// frame form exists (docs/backends/STAGING_CALL_ABI.md).
+	// frame form exists (docs/ABI.md).
 	if (!frameAbi_ && parameterCount_ > kMaxWasmParameters) {
 		unsupportedReason_ = "the SLJIT backend supports at most three parameters";
 		return;
@@ -1670,7 +1670,7 @@ OpcodeDispatcher::OpcodeDispatcher(const WASM::Module& module, const WASM::FuncT
 	}
 	// The register form has nowhere to put a second result, so it keeps refusing. The
 	// frame form does: the result block is a sequence of slots
-	// (docs/backends/EXPORT_SIGNATURE.md section 40).
+	// (docs/ABI.md).
 	if (prepared.allReturns.size() > 1 && !frameAbi_) {
 		unsupportedReason_ = "the SLJIT backend does not support multiple results";
 		return;
@@ -1738,7 +1738,7 @@ bool OpcodeDispatcher::run(bool measure)
 	} catch (const UnsupportedBody&) {
 		return false;
 	}
-	// Fidelity guard (docs/backends/ASMJIT_SLJIT_P3_GC1.md §24): a valid body ends
+	// Fidelity guard (docs/backends/HISTORY.md): a valid body ends
 	// with exactly the results its signature declares. AsmJit enforces the same rule
 	// and SLJIT did not, so an invalid module was compiled instead of refused. Dead
 	// code after an `unreachable` is exempt: Wasm makes the stack polymorphic there.
@@ -1813,7 +1813,7 @@ bool OpcodeDispatcher::beginFunction()
 	} else {
 		// Frame form: two C arguments -- the context and the frame pointer. No
 		// parameter occupies a register, so no ceiling applies
-		// (docs/backends/STAGING_CALL_ABI.md).
+		// (docs/ABI.md).
 		argTypes = SLJIT_ARG_RETURN(SLJIT_ARG_TYPE_RET_VOID)
 				| SLJIT_ARG_VALUE(SLJIT_ARG_TYPE_P, 1)
 				| SLJIT_ARG_VALUE(SLJIT_ARG_TYPE_P, 2);
@@ -1823,7 +1823,7 @@ bool OpcodeDispatcher::beginFunction()
 
 	// A `v128` result cannot come back in one return register, so the caller
 	// supplies a 16-byte out-buffer as a trailing pointer argument -- the same
-	// path multi-value takes (docs/ABI_REFACTOR_STUDY.md §25). It must be added
+	// path multi-value takes (docs/backends/HISTORY.md). It must be added
 	// *before* `savedCount`, which is derived from the integer argument count.
 	const bool resultViaBuffer = !frameAbi_ && resultWidth_ == 16;
 	if (resultViaBuffer) {
@@ -1866,7 +1866,7 @@ bool OpcodeDispatcher::beginFunction()
 	// cannot be expressed. Refuse it here: letting `sljit_emit_enter` see the
 	// count would trip SLJIT's own assertion and abort the whole process, which
 	// would take down every other module in the run
-	// (docs/ABI_REFACTOR_STUDY.md §35, §36).
+	// (docs/backends/HISTORY.md).
 	if (!frameAbi_ && savedCount > static_cast<sljit_s32>(kRegisterArgumentCeiling)) {
 		unsupportedReason_ = "the SLJIT backend cannot pass "
 			+ std::to_string(static_cast<unsigned>(savedCount))
@@ -2462,7 +2462,7 @@ void OpcodeDispatcher::emitReturnValue()
 {
 	emitDropReferenceLocals();
 	if (frameAbi_ && resultKinds_.size() > 1) {
-		// Multi-result in frame form (docs/backends/EXPORT_SIGNATURE.md section 40):
+		// Multi-result in frame form (docs/ABI.md):
 		// every result is written into the caller's result block, in declaration
 		// order, 8 bytes per scalar slot and 16 per vector, then the function returns
 		// void. This must precede the `resultWidth_ == 0` test, which is 0 for a
@@ -2572,7 +2572,7 @@ void OpcodeDispatcher::emitPendingTrapCheck()
 	// The probe calls a helper, which clobbers R0-R3, and callers legitimately
 	// hold the value they just produced in R0 (a fresh allocation, typically).
 	// Park it in the reserved payload slot and restore it on the fallthrough
-	// path; the trap path never needs it (docs/backends/ASMJIT_SLJIT_P3_GC1.md §44).
+	// path; the trap path never needs it (docs/backends/HISTORY.md).
 	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP), payloadSlotOffset(),
 			SLJIT_R0, 0));
 	emitHelper(SLJIT_ARGS0(W), &sljitTrapPending);
@@ -2827,7 +2827,7 @@ void OpcodeDispatcher::emitTrap(WASM::TrapKind kind)
 {
 	// Reporting a kind needs a register, and the call that follows clobbers
 	// R0-R3. All four are parked, so a caller may hold anything across this
-	// primitive (docs/backends/ASMJIT_SLJIT_P3_GC1.md §48).
+	// primitive (docs/backends/HISTORY.md).
 	const sljit_s32 parked[4] = {SLJIT_R0, SLJIT_R1, SLJIT_R2, SLJIT_R3};
 	for (std::size_t i = 0; i < 4; ++i)
 		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
@@ -3529,7 +3529,7 @@ void OpcodeDispatcher::emitResolvedCall(const WASM::FuncType& type, int callable
 	// which is what a native import always is -- takes arguments. Using the
 	// *caller's* form here is what made a cross-module call between two
 	// differently compiled modules corrupt memory
-	// (docs/backends/CALL_FORM_GRANULARITY.md).
+	// (docs/ABI.md).
 	const bool calleeUsesFrame = calleeFrameForm || stagedImport != nullptr;
 	const bool wideRegisterCall = !calleeUsesFrame && type.params.size() > kMaxWasmParameters;
 	if (calleeUsesFrame || wideRegisterCall) {
@@ -6955,7 +6955,7 @@ void OpcodeDispatcher::dispatchArrayFill(WASM::TypeIdx arg)
 	const sljit_s32 storeOp = packed ? (packedI8 ? SLJIT_MOV_U8 : SLJIT_MOV_U16)
 			: (width == 4 ? SLJIT_MOV32 : SLJIT_MOV);
 	// Null check first, so a null array reports the array kind and not a
-	// bounds failure (§8.3 of docs/ABI_PORTABILITY.md).
+	// bounds failure (§8.3 of docs/ABI.md).
 	loadSlot(SLJIT_R0, arrayDepth, 8);
 	struct sljit_jump* notNull =
 			sljit_emit_cmp(compiler_, SLJIT_NOT_EQUAL, SLJIT_R0, 0, SLJIT_IMM, 0);

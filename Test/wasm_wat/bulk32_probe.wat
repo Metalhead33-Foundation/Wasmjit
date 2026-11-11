@@ -1,5 +1,5 @@
 ;; Item 4, probe 11: bulk memory on an ordinary 32-bit memory
-;; (docs/backends/CAPABILITY_PROBES.md section 7).
+;; (docs/TESTING.md section 7).
 (module
   (memory 1)
   (func (export "copy") (param i32 i32 i32)

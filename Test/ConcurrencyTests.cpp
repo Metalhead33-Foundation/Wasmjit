@@ -45,7 +45,7 @@ WASM::ModuleInstance& instantiateAgentFixture(WASM::Runtime& runtime,
 
 } // namespace
 
-// docs/MULTI_AGENT_FEASIBILITY.md §6: the execution model is an opt-in
+// docs/proposals/THREADS.md: the execution model is an opt-in
 // restriction the embedder selects and the engine validates, never a promise a
 // module can rely on.
 

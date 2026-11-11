@@ -1450,7 +1450,7 @@ TEST_CASE("host-side callable typedefs follow the engine ABI", "[bindings]")
 			!= std::string::npos);
 	REQUIRE(header.find("#include <cstdint>") != std::string::npos);
 	// A v128 is two scalar words, low first: a single 16-byte aggregate would be
-	// passed by reference on MS x64 (docs/backends/V128_SIGNATURE_DECISION.md §28).
+	// passed by reference on MS x64 (docs/ABI.md “v128 across the Boundary”).
 	REQUIRE(header.find("struct wasm_v128 { std::uint64_t lo; std::uint64_t hi; };")
 			!= std::string::npos);
 	REQUIRE(header.find("#ifdef __cplusplus") == std::string::npos);
@@ -2535,7 +2535,7 @@ TEST_CASE("bindings spell a v128 parameter", "[bindings][v128][abi]")
 {
 	// Pins how the emitters spell a vector today, so moving a family to its own side
 	// of the boundary becomes a visible, deliberate change rather than a silent one.
-	// Per docs/ABI_REFACTOR_STUDY.md §16 the guest-facing emitters must end up on the
+	// Per docs/backends/HISTORY.md the guest-facing emitters must end up on the
 	// wasm spelling; this case records where they are now.
 	const Json schema = WASM::Bindings::moduleSchema(loadTestModule("v128_param"),
 testStore().types(), WASM::Bindings::Direction::HostToGuest, "v128_param");

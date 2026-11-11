@@ -2,7 +2,7 @@
 ;; (a v128 takes two slots and the target has six saved registers), and a shape
 ;; LibJIT compiles fine. Kept out of v128_boundary_order.wat so that the shared
 ;; fixture never carries a shape one backend cannot compile
-;; (docs/ABI_REFACTOR_STUDY.md §35).
+;; (docs/backends/HISTORY.md).
 (module
   (func (export "three_lanes") (param v128 v128 v128) (result i32)
     local.get 0

@@ -264,7 +264,7 @@ TEST_CASE("the call cache follows the backend's v128 spelling", "[callcache][v12
 	// The call cache describes a `v128` parameter to libffi as two scalar words by
 	// default and as one 16-byte aggregate when the backend says so. The two are
 	// the same ABI on SysV and differ on MS x64, where an aggregate is passed by
-	// reference (docs/backends/LIBJIT_ARGUMENT_DEFECT.md §12). This pins the flag
+	// reference (docs/backends/HISTORY.md). This pins the flag
 	// the cache reads; the cif shape follows from it by construction.
 	auto libjit = WASM::Runtime::create("libjit");
 	REQUIRE(libjit != nullptr);
@@ -288,7 +288,7 @@ TEST_CASE("SLJIT compiles a three-vector signature through the staging frame",
 	// Three vector parameters are 48 argument bytes: two C arguments and a frame.
 	// This is the shape that used to trip SLJIT's four-argument ceiling, so passing
 	// it is the point of the whole staging-frame ABI
-	// (docs/backends/STAGING_CALL_ABI.md).
+	// (docs/ABI.md).
 	auto runtime = WASM::Runtime::create("sljit");
 	REQUIRE(runtime != nullptr);
 	auto module = runtime->loadFile(
@@ -317,7 +317,7 @@ TEST_CASE("the same three-vector signature compiles on LibJIT",
 {
 // LibJIT spells a v128 as one 16-byte aggregate, so three vectors are four C
 // arguments and never approach a register-budget limit
-// (docs/backends/LIBJIT_ARGUMENT_DEFECT.md §8.1).
+// (docs/backends/HISTORY.md).
 auto runtime = WASM::Runtime::create("libjit");
 REQUIRE(runtime != nullptr);
 auto module = runtime->loadFile(
@@ -339,7 +339,7 @@ TEST_CASE("the call cache follows the backend's v128 result spelling",
 {
 	// A backend that returns a v128 through a caller-supplied buffer describes the
 	// same shape as a multi-value tuple: a trailing pointer argument and a void
-	// return (docs/backends/V128_SIGNATURE_DECISION.md). AsmJIT does the buffered
+	// return (docs/ABI.md). AsmJIT does the buffered
 	// form; SLJIT and LibJIT still return the value themselves.
 	auto asmjit = WASM::Runtime::create("asmjit");
 	REQUIRE(asmjit != nullptr);
@@ -369,7 +369,7 @@ TEST_CASE("no backend uses the staging-frame ABI until it flips",
 "[abi][frame]")
 {
 	// The frame ABI is adopted one backend at a time, each behind its own pins
-	// (docs/backends/STAGING_CALL_ABI.md section 6). Until a backend flips, its
+	// (docs/ABI.md). Until a backend flips, its
 	// register spelling stays in force, so every existing pin keeps meaning what it
 	// meant. This test is the tripwire: the day a backend flips, this expectation
 	// changes deliberately rather than by accident.
@@ -392,7 +392,7 @@ TEST_CASE("SLJIT passes a frame between compiled functions",
 {
 	// Step 3b: the export calls a callee that also takes three vectors, so both
 	// argument packing and result unpacking cross the staging frame
-	// (docs/backends/STAGING_CALL_ABI.md).
+	// (docs/ABI.md).
 	auto runtime = WASM::Runtime::create("sljit");
 	REQUIRE(runtime != nullptr);
 	auto module = runtime->loadFile(
@@ -416,7 +416,7 @@ std::filesystem::path(WASM_TEST_DIR) / "staging_call.wasm");
 }
 
 // The mandatory deliverable: the embedder keeps the typed grammar and never learns
-// that the backend needed a frame (docs/backends/EXPORT_SIGNATURE.md section 21).
+// that the backend needed a frame (docs/ABI.md).
 TEST_CASE("The call cache hides a backend frame behind the typed grammar",
 "[staging][callcache][abi]")
 {
@@ -437,7 +437,7 @@ CHECK(sum == 6);
 }
 
 // A v128 result crosses the frame and the cache copies 16 bytes out of it
-// (docs/backends/EXPORT_SIGNATURE.md sections 20-22).
+// (docs/ABI.md sections 20-22).
 TEST_CASE("The call cache copies a v128 result out of a backend frame",
 "[staging][callcache][abi][v128]")
 {
@@ -467,7 +467,7 @@ CHECK(lanes[3] == 10u);
 
 // The third circle: LibJIT reaches the same typed call through the cache, on its
 // register form, with no frame involved at all
-// (docs/backends/EXPORT_SIGNATURE.md section 23).
+// (docs/ABI.md).
 TEST_CASE("The call cache reaches a LibJIT register-form export",
 "[staging][callcache][abi][libjit]")
 {
@@ -490,7 +490,7 @@ CHECK(sum == 6);
 
 // The heap branch: 65 scalar parameters are 520 bytes of arguments, past the
 // 512-byte inline block, so the packer sizes a frame from the signature
-// (docs/backends/EXPORT_SIGNATURE.md section 27).
+// (docs/ABI.md).
 TEST_CASE("The call cache sizes a frame past its inline block",
 "[staging][callcache][abi][wide]")
 {
@@ -518,7 +518,7 @@ CHECK(result == 6);
 
 // Two results through the cache on a frame-mode backend: the embedder supplies a
 // typed buffer and the frame stays internal
-// (docs/backends/EXPORT_SIGNATURE.md section 31).
+// (docs/ABI.md).
 TEST_CASE("The call cache returns two results without exposing the frame",
 "[staging][callcache][abi][multi]")
 {
@@ -550,7 +550,7 @@ CHECK(second == 9);
 }
 
 // A supported export reports no reason: the query must not invent one
-// (docs/backends/EXPORT_SIGNATURE.md section 39).
+// (docs/ABI.md).
 TEST_CASE("unsupportedReason is absent for an export that compiled",
 "[staging][abi][reason]")
 {
@@ -566,7 +566,7 @@ CHECK_FALSE(instance.unsupportedReason("no_such_export").has_value());
 
 // 3b: one instance per module is an invariant, so asking for the other call ABI on an
 // already-instantiated module must REFUSE rather than return a mismatch
-// (docs/backends/EXPORT_SIGNATURE.md section 45).
+// (docs/ABI.md).
 TEST_CASE("Re-instantiating a module in the other call ABI is refused",
 "[staging][abi][mode]")
 {
@@ -589,7 +589,7 @@ CHECK(&runtime->instantiate(*module, imports) == &instance);
 }
 
 // Item 4: exceptions on every backend, reported rather than assumed
-// (docs/backends/PRODUCTION_GAPS.md section 16 / section 25). A backend either
+// (docs/API_ABI_STABILITY.md). A backend either
 // refuses the module at instantiation or executes the throw; an uncaught throw
 // is the documented pending-exception protocol, not a trap (docs/ABI.md
 // "Exceptions", docs/proposals/EXCEPTIONS.md EXD1), so the property is "zero
@@ -633,7 +633,7 @@ std::fprintf(stderr, "returned=%d pending=%s\n", (int)returned,
 
 // Item 4, probe 2: reference types. The assertion is the property -- a backend either
 // refuses the module or round-trips the reference -- never a silent wrong answer
-// (docs/backends/PRODUCTION_GAPS.md section 17).
+// (docs/API_ABI_STABILITY.md).
 TEST_CASE("externref: every backend refuses or round-trips",
 "[staging][abi][refs]")
 {
@@ -675,7 +675,7 @@ CHECK(returned == token);
 
 // Item 4, probes 3 and 4: funcref and tail calls. A backend either refuses the module
 // or answers correctly -- never a silent wrong answer
-// (docs/backends/PRODUCTION_GAPS.md section 19).
+// (docs/API_ABI_STABILITY.md).
 TEST_CASE("funcref and tail calls: refuse or answer correctly",
 "[staging][abi][refs][tail]")
 {
@@ -716,7 +716,7 @@ CHECK(ref.has_value());
 
 // Item 4, probe 5: a tail call from a frame-form function. The interesting outcome is
 // not "works" -- it is what a backend does when the trampoline has no frame pointer
-// (docs/backends/PRODUCTION_GAPS.md section 22).
+// (docs/API_ABI_STABILITY.md).
 TEST_CASE("frame-form tail call: refuse or return the right value",
 "[staging][abi][tail][frame]")
 {
@@ -745,7 +745,7 @@ std::fprintf(stderr, "register form -- probe does not apply\n");
 continue;
 }
 // Three v128 arguments occupy 48 bytes; the result block follows them, so the
-// frame must be at least 64 bytes (docs/backends/EXPORT_SIGNATURE.md section 40).
+// frame must be at least 64 bytes (docs/ABI.md).
 alignas(16) std::uint8_t frame[64] = {};
 const std::uint32_t lanes[3][4] = {{1, 1, 1, 1}, {2, 2, 2, 2}, {3, 3, 3, 3}};
 for (int i = 0; i < 3; ++i)
@@ -759,7 +759,7 @@ CHECK(first == 1);
 }
 
 // Item 4, probes 6 and 7: GC struct types and atomics. Refusal is a pass; a silent
-// wrong answer is a defect (docs/backends/CAPABILITY_PROBES.md section 1).
+// wrong answer is a defect (docs/TESTING.md section 1).
 TEST_CASE("GC structs and atomics: refuse or answer correctly",
 "[staging][abi][gc][atomics]")
 {
@@ -834,7 +834,7 @@ CHECK(narrow16 == 0);
 }
 
 // Item 4, probe 6 strengthened: CALL struct.new and inspect the reference. The old row
-// only proved the module instantiated (docs/backends/CAPABILITY_PROBES.md section 5).
+// only proved the module instantiated (docs/TESTING.md section 5).
 TEST_CASE("GC struct: struct.new returns a reference",
 "[staging][abi][gc]")
 {
@@ -868,7 +868,7 @@ std::fprintf(stderr, "threw at call: %s\n", error.what());
 }
 
 // Item 4, probe 8: memory64. Refuse or answer correctly, never silently
-// (docs/backends/CAPABILITY_PROBES.md section 5).
+// (docs/TESTING.md section 5).
 TEST_CASE("memory64: refuse or answer correctly", "[staging][abi][m64]")
 {
 for (const char* backend : {"libjit", "asmjit", "sljit"}) {
@@ -898,7 +898,7 @@ CHECK(count == 1);
 
 // Item 4, probes 9 and 10: GC arrays, and memory64 WITH bulk memory (the row where
 // only SLJIT had been measured). Refuse or answer correctly, never silently
-// (docs/backends/CAPABILITY_PROBES.md section 6).
+// (docs/TESTING.md section 6).
 TEST_CASE("GC arrays and memory64 bulk memory: refuse or answer correctly",
 "[staging][abi][gc][m64]")
 {
@@ -945,7 +945,7 @@ std::fprintf(stderr, "REFUSED: %s\n", error.what());
 
 // Item 4, probes 11 and 12: bulk memory on memory32, and multi-memory. Both are
 // accepted-or-refused questions; a silent wrong answer is a defect
-// (docs/backends/CAPABILITY_PROBES.md section 7).
+// (docs/TESTING.md section 7).
 TEST_CASE("bulk memory on memory32, and multi-memory: refuse or export",
 "[staging][abi][bulk][mm]")
 {
@@ -986,7 +986,7 @@ std::fprintf(stderr, "REFUSED: %s\n", error.what());
 }
 
 // Item 4, probes 13 and 14: exception HANDLERS and GC array operations. Refusal is a
-// pass; a wrong answer is a defect (docs/backends/CAPABILITY_PROBES.md section 8).
+// pass; a wrong answer is a defect (docs/TESTING.md section 8).
 TEST_CASE("exception handlers and GC array ops: refuse or answer correctly",
 "[staging][abi][exceptions][gc]")
 {
@@ -1053,7 +1053,7 @@ std::fprintf(stderr, "REFUSED: %s\n", error.what());
 }
 
 // Item 4, probes 15 and 16: tables with call_indirect, and a reference stored in a
-// struct field (docs/backends/CAPABILITY_PROBES.md section 9).
+// struct field (docs/TESTING.md section 9).
 TEST_CASE("tables and reference fields: refuse or answer correctly",
 "[staging][abi][tables][gc]")
 {
@@ -1097,7 +1097,7 @@ std::fprintf(stderr, "roundtrip(null)=%s\n", value == nullptr ? "null" : "non-nu
 // The property: a reference that crosses a struct field comes back exactly
 // as it went in. D-3 was SLJIT returning a stale non-null pointer for a null
 // field; the assertion stays on the property, not on the old wrong answer
-// (docs/backends/CAPABILITY_PROBES.md section 9).
+// (docs/TESTING.md section 9).
 CHECK(value == nullptr);
 }
 } catch (const std::exception& error) {
@@ -1108,7 +1108,7 @@ std::fprintf(stderr, "REFUSED: %s\n", error.what());
 }
 
 // Item 4, probes 17 and 18: array.get via new_fixed, and atomics beyond one RMW
-// (docs/backends/CAPABILITY_PROBES.md section 11).
+// (docs/TESTING.md section 11).
 TEST_CASE("array.get and atomic store/load: refuse or answer correctly",
 "[staging][abi][gc][atomics]")
 {
@@ -1159,7 +1159,7 @@ std::fprintf(stderr, "REFUSED: %s\n", error.what());
 }
 
 // Item 4, probes 19 and 20: reference-element arrays, and tags across a module
-// boundary (docs/backends/CAPABILITY_PROBES.md section 13).
+// boundary (docs/TESTING.md section 13).
 TEST_CASE("reference arrays and tag boundaries: refuse or answer correctly",
 "[staging][abi][gc][exceptions]")
 {
@@ -1181,7 +1181,7 @@ const void* value = WASM::callCallable<const void*>(*call, nullptr);
 std::fprintf(stderr, "roundtrip(null)=%s\n", value == nullptr ? "null" : "non-null");
 // Measured: SLJIT round-trips a reference through an ARRAY correctly, so D-3 is
 // specific to STRUCT fields and must not be assumed here
-// (docs/backends/CAPABILITY_PROBES.md section 13).
+// (docs/TESTING.md section 13).
 CHECK(value == nullptr);
 }
 } catch (const std::exception& error) {
@@ -1220,7 +1220,7 @@ std::fprintf(stderr, "REFUSED: %s\n", error.what());
 }
 
 // Item 4, probe 21: a tag thrown in one INSTANCE and caught in another
-// (docs/backends/CAPABILITY_PROBES.md section 15).
+// (docs/TESTING.md section 15).
 TEST_CASE("cross-instance exception payloads: refuse or answer correctly",
 "[staging][abi][exceptions]")
 {
@@ -1260,7 +1260,7 @@ auto runtime = WASM::Runtime::create("libjit");
 REQUIRE(runtime != nullptr);
 // The fixture declares `try_table (result i32)` and then pushes another value
 // before its enclosing block ends. `wasm-tools validate` rejects it; the
-// validator must too (PRODUCTION_GAPS.md section 26, V-1).
+// validator must too (docs/API_ABI_STABILITY.md §8, V-1).
 REQUIRE_THROWS(runtime->loadFile(
 std::filesystem::path(WASM_TEST_DIR) / "invalid_catch_stack.wasm"));
 // The corrected handler fixture is still accepted and answers 42.
@@ -1609,7 +1609,7 @@ module = runtime->loadFile(
 std::filesystem::path(WASM_TEST_DIR) / "shared_ref_atomic_probe.wasm");
 } catch (const std::exception& error) {
 // The upstream fixture is valid, but the core type model does not yet carry
-// shared composite references (POST_MORTEM item 2). Record the refusal; when
+// shared composite references (docs/backends/HISTORY.md §5). Record the refusal; when
 // the parser accepts it, the round-trip assertion below starts running.
 std::fprintf(stderr, "REFUSED by the parser: %s\n", error.what());
 SUCCEED("shared-reference fixture refused by the parser");

@@ -359,7 +359,7 @@ is `Test/wasm_wat/stack_exhaustion.wat` plus the
 ### 3.3 What multi-agent execution adds to the threat model (design direction)
 
 Multi-agent execution is the accepted design direction
-([`MULTI_AGENT_FEASIBILITY.md`](MULTI_AGENT_FEASIBILITY.md) §2.3), and it changes
+([`proposals/THREADS.md`](proposals/THREADS.md) §2.3), and it changes
 the security arithmetic even though it is not implemented yet: N agents mean N
 concurrent trails through one instance, one GC heap entry point and one allocation
 budget. None of the rows below is a new *policy*; each is an existing limitation
@@ -369,7 +369,7 @@ that gets sharper.
 |---|---|---|---|
 | A1 | **No instruction/step budget** (`S1`) | One runaway agent becomes N; a game that trusted one call's latency now has N stalls | Embedder-owned wall-clock/watchdog (unchanged policy; the runtime should expose a per-agent park point so a watchdog can actually stop one) |
 | A2 | **Process-wide allocation budget** (`S4`) | One agent's GC pressure starves the others, and the failure is a trap in an unrelated agent | Per-runtime budgets once `WASM::Runtime` owns the `Store` ([`EMBEDDING_SURFACE.md`](EMBEDDING_SURFACE.md) §4.3) |
-| A3 | **GC reclamation is embedder-driven** (`S3`) | If nobody calls `gcCollect()` at a safepoint, the queue grows forever and the budget closes the world | The runtime must call the safepoint per frame; with agents, a documented quiescence rule (`MULTI_AGENT_FEASIBILITY.md` §2.3.5) |
+| A3 | **GC reclamation is embedder-driven** (`S3`) | If nobody calls `gcCollect()` at a safepoint, the queue grows forever and the budget closes the world | The runtime must call the safepoint per frame; with agents, a documented quiescence rule (`proposals/THREADS.md` §2.3.5) |
 | A4 | **Per-agent stack limits** (`S7`) | Each agent needs its own guarded stack; a small thread stack still runs unguarded | Already per `ExecutionState`; continuation stacks install their own limit |
 | A5 | **A blocking `wait` is degenerate today** (`S8` analogue) | A guest can park an agent forever, or spin if the waiter table lies | The waiter table plus join/cancel (`THREADS.md` MA-4, `MF-5`) |
 | A6 | **Host imports must be reentrant** | A non-reentrant import reached by two agents is a use-after-free, not a slowdown | `THREADSAFETY.md` §9 item 5; the engine cannot add an import lock without changing the contract |

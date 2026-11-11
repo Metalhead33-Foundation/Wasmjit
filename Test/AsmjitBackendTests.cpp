@@ -137,7 +137,7 @@ TEST_CASE("AsmJIT returns a v128 through the caller's buffer", "[asmjit][v128][a
 	// The canonical rule: a v128 result crosses through a caller-supplied 16-byte
 	// buffer, so the compiled signature is void(VMContext*, void* out). The buffer is
 	// pre-filled so a function that wrote nothing would fail
-	// (docs/ABI_REFACTOR_POST_MORTEM.md section 6, follow-up 1).
+	// (docs/backends/HISTORY.md, follow-up 1).
 	auto runtime = WASM::Runtime::create("asmjit");
 	REQUIRE(runtime != nullptr);
 	auto module = runtime->loadFile(
@@ -165,7 +165,7 @@ TEST_CASE("the vector-result helper works on every buffered backend",
 	// Both AsmJIT and SLJIT return a v128 through the caller's buffer, so the same
 // fixture and the same helper must produce the same four lanes on each. LibJIT
 // returns the aggregate itself, so it is deliberately not part of this list
-// (docs/backends/LIBJIT_ARGUMENT_DEFECT.md section 8.1).
+// (docs/backends/HISTORY.md).
 for (const char* backend : {"asmjit", "sljit"}) {
 auto runtime = WASM::Runtime::create(backend);
 REQUIRE(runtime != nullptr);
@@ -186,7 +186,7 @@ CHECK(lanes[3] == 10u);
 }
 }
 
-// ── Step 5 scaffolding (docs/backends/EXPORT_SIGNATURE.md §7-§10) ──────────
+// ── Step 5 scaffolding (docs/ABI.md “Call forms”) ──────────
 //
 // Two kinds of test live here. The untagged ones are green today and pin the
 // *baseline* step 5 must change: the canonical two-word spelling of a v128 at
@@ -289,7 +289,7 @@ TEST_CASE("AsmJIT takes three vectors through a frame and returns 6",
 
 // Step 5a gate: the frame *shape* in the translator, before anything emits it.
 // Green as soon as the shape is right, which is what makes 5a a self-contained
-// subtask (docs/backends/EXPORT_SIGNATURE.md section 11).
+// subtask (docs/ABI.md).
 TEST_CASE("AsmJIT translates a frame-mode signature as (ctx, frame) -> void",
 "[staging][asmjit][abi][sig]")
 {
@@ -387,7 +387,7 @@ extern "C" std::int32_t asmjitHostDoubler(void*, std::int32_t value) { return va
 
 // P0b gate: a frame-mode module that calls a native import must still work. The
 // import is called through the typed register ABI, while the guest function keeps
-// the staging frame for its own signature (docs/backends/EXPORT_SIGNATURE.md §18).
+// the staging frame for its own signature (docs/ABI.md “Call forms”).
 TEST_CASE("AsmJIT frames around a native import",
 "[staging][asmjit][abi][import]")
 {
@@ -433,7 +433,7 @@ std::memcpy(&framedResult, frame, sizeof(framedResult));
 CHECK(framedResult == 14);
 }
 
-// Multi-result through the frame (docs/backends/EXPORT_SIGNATURE.md section 29):
+// Multi-result through the frame (docs/ABI.md):
 // two results land in the frame in declaration order, and the signature returns void.
 TEST_CASE("AsmJIT stores two results in a frame",
 "[staging][asmjit][abi][multi]")

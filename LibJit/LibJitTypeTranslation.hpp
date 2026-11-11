@@ -49,7 +49,7 @@ private:
 	//! Mapping from this module's LocalTypeIdx values to canonical TypeIds.
 	std::vector<WASM::TypeId> localTypeIds;
 	//! Whether function signatures take the staging frame
-	//! (docs/backends/STAGING_CALL_ABI.md, step 4a).
+	//! (docs/ABI.md, step 4a).
 	bool frameAbi_ = false;
 	/*!
 	 * \brief Creates the LibJIT type used for an i31 reference.

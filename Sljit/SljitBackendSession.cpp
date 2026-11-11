@@ -212,7 +212,7 @@ bool Session::invoke(const WASM::ModuleInstance& instance,
 	// The register form accepts three Wasm parameters plus the context and one
 	// result. A `v128` parameter occupies two C argument slots; a `v128` result
 	// travels through a trailing out-buffer pointer, exactly as the ABI doc
-	// specifies (docs/backends/V128_SIGNATURE_DECISION.md).
+	// specifies (docs/ABI.md).
 	if (functionType.params.size() > 3 || functionType.results.size() > 1)
 		return false;
 	if (arguments.size() != functionType.params.size())

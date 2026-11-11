@@ -33,7 +33,7 @@ namespace WASM {
 
 //! \brief Component Model concurrency, executor-owned scheduling
 //!
-//! docs/proposals/THREADS.md §5.1: the engine ships a single-agent executor and
+//! docs/proposals/THREADS.md: the engine ships a single-agent executor and
 //! the public `ComponentExecutor` seam; a multi-agent embedder supplies the
 //! scheduling policy. This header is the async surface
 //! (docs/proposals/COMPONENT_MODEL.md CM-5/CM-8/CM-18): tasks, subtasks,

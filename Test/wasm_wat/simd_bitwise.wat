@@ -1,4 +1,4 @@
-;; SIMD-L2: the bitwise ops end to end through the JIT (docs/SIMD_LIBJIT.md §10).
+;; SIMD-L2: the bitwise ops end to end through the JIT (docs/proposals/SIMD.md).
 ;;
 ;; Observed one lane at a time, because the harness cannot marshal a `v128` yet
 ;; (gap S7). `a` deliberately has four *distinct* lanes so a lane-permuting bug

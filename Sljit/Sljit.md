@@ -4,13 +4,12 @@
 
 Status: **Snapshot (2026-11-10):** **production-ready within the declared
 envelope** — `WASMJIT_BACKEND=sljit ./Test/WasmJit --rng-seed 12345` reports
-**22,593 assertions in 824 cases, green**, the same case set and assertion count
+**22,533 assertions in 824 cases, green**, the same case set and assertion count
 as the reference backend. The envelope is x86-64 Linux / SysV AMD64, and the
 documented refusals are listed in "Known limitations" below. See
-[`docs/BACKEND_PRODUCTION_READINESS.md`](../docs/BACKEND_PRODUCTION_READINESS.md)
-for the measured evidence and
-[`docs/backends/PRODUCTION_GAPS.md`](../docs/backends/PRODUCTION_GAPS.md) §30 for
-the defect ledger that closed the last failures.
+[`docs/API_ABI_STABILITY.md`](../docs/API_ABI_STABILITY.md) §13 for the verdict
+and §8 for the open register and the defect ledger that closed the last
+failures.
 
 ## What executes today
 
@@ -72,7 +71,7 @@ checked against one fixture set rather than two drifting ones.
 
 ## Conformance
 
-The generic backend-selected run is the gate, and it is green: 22,593 assertions
+The generic backend-selected run is the gate, and it is green: 22,533 assertions
 in 824 cases. The last failures were four cases with two root causes:
 
 * the Custom Descriptors family (`struct.new_desc`, `struct.new_default_desc`,
@@ -143,7 +142,7 @@ Nothing in `WasmBase/` had to change to add it. That is the point of the seam.
   descriptor family), but a reference read out of a struct field or array
   element is still a *borrow*, and `drop` releases only continuations and
   strings. That is a leak, never a wrong result
-  ([`docs/backends/PRODUCTION_GAPS.md`](../docs/backends/PRODUCTION_GAPS.md) §30);
+  ([`docs/API_ABI_STABILITY.md`](../docs/API_ABI_STABILITY.md) §8, `GAP-4`);
 * the helper-call lowering of division, memory access and calls is deliberately
   correctness-first; a later slice can inline the checked paths where the
   post-mortem measures a benefit.
@@ -158,13 +157,13 @@ and shared, like the rest of the process-wide helper caches.
    exact, but a reference read out of a struct field or array element, the
    unselected operand of `select`, and `drop` of a GC reference are still
    borrows that nothing releases. Each is a leak, not a wrong result;
-   [`docs/backends/HANDOFF.md`](../docs/backends/HANDOFF.md) §7 names the sites.
+   [`docs/backends/HISTORY.md`](../docs/backends/HISTORY.md) §6 names the sites.
 2. **A frame-form tail trampoline.** `return_call_ref` above the register-form
    ceiling is a semantic call+return here
-   ([`docs/backends/PRODUCTION_GAPS.md`](../docs/backends/PRODUCTION_GAPS.md)
-   §2.1).
+   ([`docs/API_ABI_STABILITY.md`](../docs/API_ABI_STABILITY.md)
+   §8, `GAP-2`).
 3. **Portability.** One non-SysV runner would turn the `provisional` rows in
-   [`docs/ABI_PORTABILITY.md`](../docs/ABI_PORTABILITY.md) into evidence; the
+   [`docs/ABI.md`](../docs/ABI.md) into evidence; the
    backend has no SysV-specific code beyond what SLJIT itself abstracts.
 4. Once a slice lands, extend the shared `[sljit][module][parity]` fixtures
    before calling it done; the checklist stays in

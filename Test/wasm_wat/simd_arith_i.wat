@@ -1,5 +1,5 @@
 ;; SIMD-L3: integer arithmetic, comparisons, shifts, reductions and the
-;; width-changing family, end to end through the JIT (docs/SIMD_LIBJIT.md §10).
+;; width-changing family, end to end through the JIT (docs/proposals/SIMD.md).
 ;;
 ;; Observed one lane at a time — or as the reduction's own i32 result, which needs
 ;; no marshalling at all, because the harness still cannot move a `v128` (gap S7).

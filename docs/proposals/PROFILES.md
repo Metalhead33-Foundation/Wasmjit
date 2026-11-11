@@ -152,7 +152,7 @@ PR-3 by bit-exact payload comparison rather than a timing or cross-host test
   https://webassembly.github.io/spec/core/appendix/profiles.html
 - In-repo: [`SIMD.md`](SIMD.md) (relaxed SIMD and the deterministic appendix),
   [`THREADS.md`](THREADS.md) (the execution model a deterministic profile would
-  restrict), [`../SIMD_BACKENDS.md`](../SIMD_BACKENDS.md),
+  restrict), [`SIMD.md`](SIMD.md),
   [`../VALIDATION.md`](../VALIDATION.md); sources `WasmBase/WasmProfile.hpp`
   (`Profile`, `ProfileMarker`, `ProfileConfig`, `supportsProfileConfig`),
   `WasmBase/WasmValidation.hpp` (`ValidationOptions::profile`),

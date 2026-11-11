@@ -21,21 +21,20 @@ applies to `proposals/`, `languages/` and `backends/`.
 | ship a backend as a separate shared library | \subpage doc_backend_plugin_abi | the C descriptor, what may cross it, the twelve plugin rules, the nine hard problems |
 | touch the loader, the instantiator, the trap path or an allocation | \subpage doc_safety | artifact detection, input-derived bounds, the budget, traps vs `abort`, RAII for locks, the pitfalls that produced them |
 | reason about threads, locks or the host boundary | \subpage doc_threadsafety | guest-vs-host thread safety, the responsibilities of engine / module / embedder |
-| admit a second agent on one instance | \subpage doc_multi_agent_feasibility | the concurrency scenarios, per-agent state, the `MA-*` re-classification, the opt-in hooks |
+| admit a second agent on one instance | [proposals/THREADS.md](proposals/THREADS.md) §4.3 | the concurrency scenarios, per-agent state, the `MA-*` re-classification, the opt-in hooks |
 | change how a trap propagates | \subpage doc_trap_cleanup | why the trap path is a pending status, the option set, the per-backend feasibility study |
 | change what the front end rejects | \subpage doc_validation | the checking layers, the taint policy, the unmodelled-type rule, measured negative coverage |
 | change type identity, canonicalisation or `match` | \subpage doc_type_identity | module-local indices → store-scoped `TypeId`, interning, `rec` groups |
 | add or change a diagnostic | \subpage doc_diagnostics | the id/record/schema contract, the ring, the sink, the host flags |
 | emit, call or embed compiled code | \subpage doc_abi | `VMContext*` as arg0, `Callable`, result tuples, `v128`, references, the embedder guide |
 | audit or refresh the link-visible ABI | \subpage doc_abi_baselines | the `libWasmBase`/`libLibJit` export baselines and what `abi-check.sh` treats as a break |
-| change a signature, a function prolog, or a GC object layout | \subpage doc_abi_portability | C linkage and the host C ABI on every target, portability over performance, what a backend may not do, the target matrix, the GC object/allocator ABI |
-| plan the `v128` / register-and-stack ABI refactor | \subpage doc_abi_refactor_study | the blast radius by layer (L1-L9), the five change classes, the waterfall phases with an exit criterion each, and the portability-first two-tier rule |
-| learn how that refactor went after it merged | \subpage doc_abi_refactor_post_mortem | what shipped per backend, what went well, the seven failures with root causes, the numbers at merge, and the four follow-ups in recommended order |
+| change a signature, a function prolog, or a GC object layout | \subpage doc_abi | “The C ABI Contract” (C linkage, host C ABI, target matrix, non-degeneracy) and “GC Object and Heap ABI” |
+| review the `v128` / register-and-stack ABI refactor | [backends/HISTORY.md](backends/HISTORY.md) §3.3 | the historical study and post-mortem: blast radius, phases, what shipped, what failed, and the lessons (frozen record); the current contract is `ABI.md` |
 | embed the engine, or change its install/version story | \subpage doc_embedding_surface | `WASM::Runtime`, the three header tiers, soname/visibility, the install layout |
 | change an embedder-facing surface or the backend seam | \subpage doc_api_abi_stability | the milestone and its four gates, the frozen surfaces, the break classes, the merge readiness |
-| decide whether a backend is production-ready | \subpage doc_backend_production_readiness | the per-backend verdict, the measured full-suite runs, the documented refusals, and the promotion gate |
-| add or change SIMD support | \subpage doc_simd_backends | what each backend can do for vectors, and the helper-based lowering every backend starts from |
-| change the LibJIT SIMD path | \subpage doc_simd_libjit | the LibJIT decision, the measured cost, the milestone plan |
+| decide whether a backend is production-ready | \subpage doc_api_abi_stability | the per-backend verdict and measurement (§13), the promotion gate, and the one open register (§8) |
+| find a defect, gap or limitation | \subpage doc_api_abi_stability | **§8 is the one register**: open items, decisions that are not defects, encoding-blocked scope, and recently closed rows |
+| add or change SIMD support | [proposals/SIMD.md](proposals/SIMD.md) §4.5–§4.10 | the helper ABI, per-backend lowering, relaxed-SIMD rules, the oracle and the measured cost |
 | build, run or fix the test suite | \subpage doc_testing | the suite, the spec-suite conversion, the curated list, the refresh recipe |
 | write or edit a proposal note | \subpage doc_proposals | the note shape, the nine slots, the ID and status conventions, the folder survey |
 | add or edit a `.h`/`.hpp` file | \subpage doc_documentation | the Doxygen-comment policy, the note tree, the checks |
@@ -44,22 +43,29 @@ applies to `proposals/`, `languages/` and `backends/`.
 | check whether a second code generator may begin | \subpage doc_readiness_audit | `G3` and `LF-0a` in one sweep, the seam inventory, the pinned snapshot |
 | decide whether something is an engine gap or an out-of-scope boundary | \subpage doc_scope | the triage rule, the embedder/text/encoding-blocked tables, the recorded deviations |
 | find a per-proposal note | \subpage proposals_index | the per-proposal notes: spec demands → shipped state → gaps → deviations → plan → tests |
-| find a backend slice, defect or measurement | \subpage backends_index | the per-backend ledgers, the frame/v128 ABI notes, and the dated slice post-mortems |
+| find a backend slice, defect or measurement | \subpage backends_index | the current backend facts, the two backend pages, and the frozen `HISTORY.md` |
 | find a language study | \subpage languages_index | the `LF-1` triage, the `LF-2` arms, the verdicts and engine findings |
 
 ## 2. What is deliberately *not* a separate document
 
-Two notes were merged away in the 2026-11-01 consolidation. They are gone on
-purpose; please do not recreate them:
+Merged notes are gone on purpose; please do not recreate them.
 
 | Formerly | Now | Why |
 |---|---|---|
 | `BACKEND_WORK_ORDER.md` | [`WRITING_A_BACKEND.md`](WRITING_A_BACKEND.md) §2–§12 | the checklist and the walkthrough answered one question; a backend author had to read both |
-| `UNMODELLED_VALUE_TYPES.md` | [`VALIDATION.md`](VALIDATION.md) "Unmodelled value types are rejected at load" | the investigation's outcome is a validation rule; the 200-line backtrace lives in git history. **Debt:** ten code comments and one diagnostic string still cite the old filename — a comment-only follow-up, not a behaviour change |
+| `UNMODELLED_VALUE_TYPES.md` | [`VALIDATION.md`](VALIDATION.md) “Unmodelled value types are rejected at load” | the investigation’s outcome is a validation rule; the backtrace lives in git history |
+| `BACKEND_PRODUCTION_READINESS.md`, `PRODUCTION_GAPS.md` | [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §8 and §13 | a status page and a gap ledger are the same question as the milestone’s verdict; one register, one owner |
+| `ABI_PORTABILITY.md` | [`ABI.md`](ABI.md) “The C ABI Contract” + “GC Object and Heap ABI”; open rows are `GAP-6`/`GAP-7`/`GAP-13` in `API_ABI_STABILITY.md` §8 | the calling convention and the GC object layout are the ABI; they were split only by history |
+| `CAPABILITY_PROBES.md` | [`TESTING.md`](TESTING.md) “Capability probes” + [`backends/HISTORY.md`](backends/HISTORY.md) | the instruments belong with the suite; the results belong with the history |
+| `CALL_FORM_GRANULARITY.md` | [`ABI.md`](ABI.md) “Call forms” | it is a property of the calling convention, not a separate backend note |
+| `STAGING_CALL_ABI.md`, `EXPORT_SIGNATURE.md`, `V128_SIGNATURE_DECISION.md` | [`ABI.md`](ABI.md) + [`backends/HISTORY.md`](backends/HISTORY.md) | the contract belongs in the ABI; the migration log belongs in the history |
+| `HANDOFF.md` | [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §8, [`TESTING.md`](TESTING.md), [`backends/HISTORY.md`](backends/HISTORY.md) | a session handoff is not a durable document; its open items became register rows |
+| the 15 `ASMJIT_SLJIT_*` slice reports, `POST_MORTEM.md`, `GC_PLAN.md`, `LIBJIT_ARGUMENT_DEFECT.md` | [`backends/HISTORY.md`](backends/HISTORY.md) | one frozen historical record instead of fifteen dated siblings |
+| `ABI_REFACTOR_STUDY.md` + `ABI_REFACTOR_POST_MORTEM.md` | [`backends/HISTORY.md`](backends/HISTORY.md) §3.3 | the study and its post-mortem are one historical arc |
+| `SIMD_BACKENDS.md` + `SIMD_LIBJIT.md` | [`proposals/SIMD.md`](proposals/SIMD.md) §4.5–§4.10 | “what the engines can do → what we chose → what it costs” is one story |
+| `MULTI_AGENT_FEASIBILITY.md` | [`proposals/THREADS.md`](proposals/THREADS.md) §4.3.2 | the multi-agent study is a section of the threads proposal note now |
 
-**The next merge, and why it is not done yet:** `SIMD_BACKENDS.md` +
-`SIMD_LIBJIT.md` are one story (what each backend can do → what we chose → what it
-measurably costs). Merging them means rewriting ~1,200 lines into ~600 while
-preserving every measured number, and a half-done pass would lose exactly the
-numbers [`FRESHNESS.md`](FRESHNESS.md) forbids losing. It is the next candidate,
-not a completed merge.
+**The rule going forward:** a new note must own a question no existing note owns.
+If two notes answer the same question for different slices, the older slice is
+*history* and belongs in a historical record, not in a new file. See
+[`FRESHNESS.md`](FRESHNESS.md) §3.1.

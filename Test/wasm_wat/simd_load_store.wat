@@ -1,4 +1,4 @@
-;; SIMD-L2: memory ops end to end through the JIT (docs/SIMD_LIBJIT.md §10).
+;; SIMD-L2: memory ops end to end through the JIT (docs/proposals/SIMD.md).
 ;;
 ;; The harness cannot marshal a `v128` yet (gap S7), so every export returns a
 ;; scalar projection of the result. The data segment at offset 0 is the 16 bytes

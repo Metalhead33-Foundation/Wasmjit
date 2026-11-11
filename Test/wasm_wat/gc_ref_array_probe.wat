@@ -1,5 +1,5 @@
 ;; Item 4, probe 19: an array whose ELEMENT is a reference
-;; (docs/backends/CAPABILITY_PROBES.md section 13).
+;; (docs/TESTING.md section 13).
 (module
   (type $refs (array (mut externref)))
   (func (export "roundtrip") (param externref) (result externref)

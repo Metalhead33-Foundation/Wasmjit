@@ -1841,7 +1841,7 @@ jit_value_t OpcodeDispatcher::zeroConstantForType(jit_type_t t)
 	return jit_value_create_nint_constant(function, t, 0);
 }
 
-// ── SIMD lowering (docs/SIMD_LIBJIT.md §6) ──────────────────────────────────
+// ── SIMD lowering (docs/proposals/SIMD.md) ──────────────────────────────────
 
 jit_type_t OpcodeDispatcher::v128Type()
 {
@@ -1912,7 +1912,7 @@ jit_value_t OpcodeDispatcher::callSimdOutHelper(void* fptr, jit_value_t out,
 	return callSimdHelper(fptr, jit_type_void, params, args);
 }
 
-// The four `v128.load*` / `v128.store*` shapes (docs/SIMD_LIBJIT.md §6.3).
+// The four `v128.load*` / `v128.store*` shapes (docs/proposals/SIMD.md).
 
 void OpcodeDispatcher::emitSimdLoad(const WASM::MemArg& ma, jit_nint width, void* helper)
 {
@@ -2280,7 +2280,7 @@ jit_value_t OpcodeDispatcher::newResultBuffer(const WASM::FuncType& calleeSig)
 		return nullptr;
 	jit_value_t slot = jit_value_create(function, resultTupleType(calleeSig));
 	// A struct-typed `jit_value_create` is a real frame slot; pass its address
-	// rather than the aggregate (docs/SIMD_LIBJIT.md §6.1).
+	// rather than the aggregate (docs/proposals/SIMD.md).
 	return jit_insn_address_of(function, slot);
 }
 
@@ -8221,7 +8221,7 @@ void OpcodeDispatcher::dispatchTableFill(WASM::TableIdx arg) {
 	jit_insn_call_native(function, "wasm_table_fill_impl",
 						 reinterpret_cast<void*>(wasm_table_fill_impl), sig, args, 5, 0);
 }
-// ── memory (docs/SIMD_LIBJIT.md §6.3) ───────────────────────────────────────
+// ── memory (docs/proposals/SIMD.md) ───────────────────────────────────────
 // Each handler is one line: the shape lives in the emit helper above, and the
 // width is the number of bytes the instruction actually *reads* — that is what
 // the bounds check must cover, and the memarg's alignment plays no part in it.
@@ -8231,7 +8231,7 @@ void OpcodeDispatcher::dispatchV128Load(WASM::MemArg arg) {
 		return;
 	}
 	// Defer the helper call so a following unary/binary SIMD operation can fuse
-	// it (docs/SIMD_LIBJIT.md §8, D5). `popValue` materialises it for any
+	// it (docs/proposals/SIMD.md, D5). `popValue` materialises it for any
 	// consumer that cannot fuse, so the observable semantics are unchanged.
 	jit_value_t src = effectiveMemoryAddress(arg, 16);
 	jit_value_t out = newV128Slot();
@@ -8308,7 +8308,7 @@ void OpcodeDispatcher::dispatchV128Const(std::span<uint8_t> arg) {
 	// LibJIT frame value; write it through its address rather than calling a
 	// helper. `jit_insn_store_relative` cannot write a bare aggregate value,
 	// but it does write through `jit_insn_address_of` (verified; see
-	// docs/SIMD_LIBJIT.md §6.1/§6.3).
+	// docs/proposals/SIMD.md).
 	if (arg.size() < 16)
 		return;
 	uint64_t lo = 0;
@@ -8329,7 +8329,7 @@ void OpcodeDispatcher::dispatchV128Const(std::span<uint8_t> arg) {
 }
 // `i8x16.shuffle` and `i8x16.swizzle` are both one-vector table lookups. The
 // shuffle selectors are *immediates* (16 bytes), so they travel as two u64s like
-// every other 16-byte immediate (docs/SIMD_LIBJIT.md §6.3) rather than being
+// every other 16-byte immediate (docs/proposals/SIMD.md) rather than being
 // materialised in memory just to pass an address.
 void OpcodeDispatcher::dispatchI8x16Shuffle(std::span<uint8_t> arg) {
 	if (unreachableCode) {
@@ -8371,7 +8371,7 @@ void OpcodeDispatcher::dispatchI8x16Swizzle() {
 }
 // `*.splat`: pop the scalar, write 16 bytes of it into a fresh slot. The scalar
 // arrives with its wasm shape's LibJIT type (i32/i64/f32/f64), which is what the
-// helper's C signature expects (docs/SIMD_LIBJIT.md §6.3).
+// helper's C signature expects (docs/proposals/SIMD.md).
 void OpcodeDispatcher::dispatchI8x16Splat() {
 	if (unreachableCode) { popValue(); return; }
 	jit_value_t x = popValue();
@@ -8427,7 +8427,7 @@ void OpcodeDispatcher::dispatchF64x2Splat() {
 	pushValue(out);
 }
 // `*.extract_lane`: pop the vector, pass its address + the lane immediate, push
-// the scalar result (the scalar-result shape of docs/SIMD_LIBJIT.md §6.3).
+// the scalar result (the scalar-result shape of docs/proposals/SIMD.md).
 void OpcodeDispatcher::dispatchI8x16ExtractLaneS(uint8_t arg) {
 	if (unreachableCode) { popValue(); return; }
 	jit_value_t a = popValue();
@@ -8603,7 +8603,7 @@ void OpcodeDispatcher::dispatchF64x2Le() { emitSimdBinaryHelper(reinterpret_cast
 void OpcodeDispatcher::dispatchF64x2Ge() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_f64x2_ge)); }
 // Bitwise ops are whole-vector, so they are the shape `callSimdOutHelper` exists
 // for: pop the operands, pass their addresses, write into a fresh slot. The
-// helpers are pure and never trap (docs/SIMD_LIBJIT.md §6.3).
+// helpers are pure and never trap (docs/proposals/SIMD.md).
 void OpcodeDispatcher::dispatchV128Not() { emitSimdUnaryHelper(reinterpret_cast<void*>(wasm_v128_not)); }
 void OpcodeDispatcher::dispatchV128And() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_v128_and)); }
 void OpcodeDispatcher::dispatchV128AndNot() { emitSimdBinaryHelper(reinterpret_cast<void*>(wasm_v128_andnot)); }

@@ -174,7 +174,7 @@ private:
 	//! A zero (or null) constant of LibJIT type `t`, used as a placeholder or trap return.
 	jit_value_t zeroConstantForType(jit_type_t t);
 
-	//! \par SIMD lowering (docs/SIMD_LIBJIT.md §6)
+	//! \par SIMD lowering (docs/proposals/SIMD.md)
 	//!
 	//! A `v128` operand is a struct-typed LibJIT value whose 16 bytes live in a
 	//! frame slot; helpers never see the value, only its *address* (§6.3), and
@@ -203,7 +203,7 @@ private:
 	//! The `v128.load*` / `v128.store*` shapes. The effective address is computed
 	//! and bounds-checked by `effectiveMemoryAddress` — the same path the scalar
 	//! loads take, trap included — so the helpers themselves never trap and need
-	//! no context (docs/SIMD_LIBJIT.md §6.3). Operand order is wasm's: for a lane
+	//! no context (docs/proposals/SIMD.md). Operand order is wasm's: for a lane
 	//! or store form the vector is on top, the address below it.
 	void emitSimdLoad(const WASM::MemArg& ma, jit_nint width, void* helper);
 	//! `v128.load*_lane`: load `width` bytes into lane `lane` of the vector on top.

@@ -125,7 +125,7 @@ ModuleCallCache::ModuleCallCache(ModuleInstance& instance)
 			} else if (instance.v128ParameterIsAggregate()) {
 				// This backend spells a vector as one 16-byte aggregate, so the
 				// cif must describe that shape or the call is misclassified on
-				// MS x64 (docs/backends/LIBJIT_ARGUMENT_DEFECT.md §12).
+				// MS x64 (docs/backends/HISTORY.md).
 				entry.argTypes.push_back(v128Type());
 			} else {
 				// `argSlotCount` decides how many C arguments a kind occupies; a vector
@@ -152,7 +152,7 @@ ModuleCallCache::ModuleCallCache(ModuleInstance& instance)
 		}
 		// A backend that returns a v128 through a caller-supplied buffer describes the
 		// same shape as a multi-value tuple: a trailing pointer argument and a void
-		// return (docs/backends/V128_SIGNATURE_DECISION.md).
+		// return (docs/ABI.md).
 		const bool bufferedVectorResult = !entry.multiResult
 				&& view.funcResults().size() == 1u
 				&& view.funcResults().front().value.opcode
@@ -200,7 +200,7 @@ void ModuleCallCache::call(const ModuleFfiEntry& entry, void* result,
 		throw std::runtime_error("module call cache: entry is not from this cache");
 	const auto index = static_cast<std::size_t>(found - entries_.begin());
 	ffi_cif* cif = static_cast<ffi_cif*>(cifs_[index]);
-	// Staging-frame ABI (docs/backends/EXPORT_SIGNATURE.md sections 17 and 21): the
+	// Staging-frame ABI (docs/ABI.md sections 17 and 21): the
 	// embedder keeps the typed grammar and this cache is the only place that knows
 	// the callee wanted a frame. No backend changes, no per-signature thunk.
 	if (instance_->frameCallAbi()) {
@@ -219,7 +219,7 @@ void ModuleCallCache::call(const ModuleFfiEntry& entry, void* result,
 			// A signature wider than the inline block gets an exactly sized heap
 			// frame. `operator new[]` returns storage aligned for `max_align_t`,
 			// which is 16 on every target this project supports, so a `v128` slot
-			// stays aligned (docs/backends/EXPORT_SIGNATURE.md section 23).
+			// stays aligned (docs/ABI.md).
 			heapFrame = std::make_unique<std::uint8_t[]>(entry.frameBytes + 16);
 			frame = heapFrame.get();
 			std::memset(frame, 0, entry.frameBytes + 16);
@@ -243,7 +243,7 @@ void ModuleCallCache::call(const ModuleFfiEntry& entry, void* result,
 			// Results land in the caller's buffer as slots, in declaration order --
 			// the same layout the frame uses. That is the invariant: the embedder
 			// never learns which backend produced the values
-			// (docs/backends/EXPORT_SIGNATURE.md section 31).
+			// (docs/ABI.md).
 			std::size_t frameOffset = offset;
 			std::size_t bufferOffset = 0;
 			for (const WASM::ValueTypeCode code : entry.resultKinds) {
@@ -269,7 +269,7 @@ void ModuleCallCache::call(const ModuleFfiEntry& entry, void* result,
 			arguments[slot++] = args[i];
 		} else if (instance_->v128ParameterIsAggregate()) {
 			// This backend's cif describes the vector as ONE 16-byte aggregate
-			// (docs/backends/LIBJIT_ARGUMENT_DEFECT.md section 12), so it takes one
+			// (docs/backends/HISTORY.md), so it takes one
 			// pointer to 16 bytes -- not two word pointers, which is what the
 			// canonical two-word spelling wants and what the branch below does.
 			arguments[slot++] = args[i];

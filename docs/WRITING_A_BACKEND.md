@@ -278,7 +278,7 @@ clone before the stack owns it. Only AsmJIT implements that distinction today
 (`retainNativeCallResult`); on SLJIT and LibJIT a *direct* call to a native
 import takes the count over, which over-releases if the host still holds the
 reference. Closing that is a fixture, not a redesign — see
-[`backends/HANDOFF.md`](backends/HANDOFF.md).
+[`backends/HISTORY.md`](backends/HISTORY.md).
 
 **How to test it.** `Test/wasm_wat/gc_ownership.wat` plus the
 `GC reference ownership: the operand stack owns one count per reference` case is
@@ -415,10 +415,10 @@ layering violation with extra steps.
 
 `Sljit/` is the second executing backend, and the worked example this checklist
 was distilled from. It is **production-ready within the declared envelope**
-(22,593 assertions / 824 cases, the same case set as LibJIT and AsmJit). The
+(22,533 assertions / 824 cases, the same case set as LibJIT and AsmJit). The
 emitted surface, the refusals and the next steps are owned by
 [`Sljit/Sljit.md`](../Sljit/Sljit.md) and
-[`BACKEND_PRODUCTION_READINESS.md`](BACKEND_PRODUCTION_READINESS.md); this
+[`API_ABI_STABILITY.md`](API_ABI_STABILITY.md); this
 section keeps only the file map and the two design facts a new author needs.
 
 | File | Role |
@@ -495,12 +495,12 @@ shape — not a silent wrong answer (§11's limitations table is the worked exam
   §4's contract rows this note elaborates.
 - [`ABI.md`](ABI.md) — the calling convention, tuples, `v128`, traps, tail calls,
   continuations.
-- [`ABI_PORTABILITY.md`](ABI_PORTABILITY.md) — the C ABI contract: the host C
+- [`ABI.md`](ABI.md) — the C ABI contract: the host C
   convention with C linkage on every target, portability over performance, what a
   backend may **not** do while lowering it (§4), the target matrix you must declare
   (§7.2), and the GC object/allocator ABI (§8).
 - [`SAFETY.md`](SAFETY.md) — budgets, bounds, and traps versus `abort`.
-- [`SIMD_BACKENDS.md`](SIMD_BACKENDS.md) — what each toolkit can do for SIMD.
+- [`proposals/SIMD.md`](proposals/SIMD.md) §4.10 — what each toolkit can do for SIMD.
 - [`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md) — the dynamic form, its
   descriptor and the nine hard problems.
 - [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §7.3 — `AAS8`/`AAS9`/`AAS11`,
@@ -537,9 +537,9 @@ oracle for every semantic question unless a row below explicitly says otherwise.
   `releaseInstance`, and both pass `[backendabi]`, `[asmjit]`/`[sljit]` and the
   shared `[sljit][module][parity]` fixtures over the same `.wat` modules.
 - **Closed (2026-11-09, re-measured 2026-11-10):** both execute the generic
-  backend-selected suite to completion — 22,593 assertions / 824 cases each,
+  backend-selected suite to completion — 22,533 assertions / 824 cases each,
   green, no abort and no segfault. The remaining named refusals are in
-  [`BACKEND_PRODUCTION_READINESS.md`](BACKEND_PRODUCTION_READINESS.md) §4/§5.
+  [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §4/§5.
 - The original starting point refused `v128`/SIMD, references/GC, exceptions,
   continuations, atomics or `f16`, and bulk memory on a memory64. All of that
   now executes; SLJIT's four-argument call ceiling is handled by the opt-in
@@ -626,25 +626,9 @@ without it is not complete. It must contain:
    capability flag, the test and the user-visible error.
 8. **Sign-off.** The slice, the commit, the commands run and their counts.
 
-The post-mortem is written by the implementer, reviewed by the backend
-reviewer, and kept current: when a later slice invalidates a paragraph, update
-the paragraph rather than appending a correction footnote. The thirteen so far are
-[`docs/backends/ASMJIT_SLJIT_P0_P2.md`](backends/ASMJIT_SLJIT_P0_P2.md),
-[`docs/backends/ASMJIT_SLJIT_P3.md`](backends/ASMJIT_SLJIT_P3.md),
-[`docs/backends/ASMJIT_SLJIT_P2_MEMORY64.md`](backends/ASMJIT_SLJIT_P2_MEMORY64.md),
-[`docs/backends/ASMJIT_SLJIT_P3_SIMD1.md`](backends/ASMJIT_SLJIT_P3_SIMD1.md),
-[`docs/backends/ASMJIT_SLJIT_P3_SIMD2.md`](backends/ASMJIT_SLJIT_P3_SIMD2.md),
-[`docs/backends/ASMJIT_SLJIT_P3_SIMD3.md`](backends/ASMJIT_SLJIT_P3_SIMD3.md),
-[`docs/backends/ASMJIT_SLJIT_P3_SIMD4.md`](backends/ASMJIT_SLJIT_P3_SIMD4.md),
-[`docs/backends/ASMJIT_SLJIT_P3_SIMD5.md`](backends/ASMJIT_SLJIT_P3_SIMD5.md),
-[`docs/backends/ASMJIT_SLJIT_P3_SIMD6.md`](backends/ASMJIT_SLJIT_P3_SIMD6.md),
-[`docs/backends/ASMJIT_SLJIT_P3_SIMD7.md`](backends/ASMJIT_SLJIT_P3_SIMD7.md),
-[`docs/backends/ASMJIT_SLJIT_P3_SIMD8.md`](backends/ASMJIT_SLJIT_P3_SIMD8.md),
-[`docs/backends/ASMJIT_SLJIT_P3_SIMD9.md`](backends/ASMJIT_SLJIT_P3_SIMD9.md) and
-[`docs/backends/ASMJIT_SLJIT_P3_REFS1.md`](backends/ASMJIT_SLJIT_P3_REFS1.md).
-The `v128` signature seam is recorded in
-[`docs/backends/V128_SIGNATURE_DECISION.md`](backends/V128_SIGNATURE_DECISION.md);
-it was decided on 2026-11-06 and implemented on all three backends.
+The post-mortem is written by the implementer, reviewed by the backend reviewer, and kept current: when a later slice invalidates a paragraph, update the paragraph rather than appending a correction footnote. The records are consolidated in [`backends/HISTORY.md`](backends/HISTORY.md).
+
+The `v128` signature seam and the call forms are in [`ABI.md`](ABI.md); both were decided on 2026-11-06 and implemented on all three backends.
 
 ### 14.6 Candidate backends for a fourth implementation
 
@@ -684,7 +668,7 @@ write the next backend without rediscovering the same ABI or ownership failure.
 ## 15. What the second-and-third-backend arc taught a fourth author
 
 Distilled from the AsmJit/SLJIT parity arc
-([`backends/ASMJIT_SLJIT_P3.md`](backends/ASMJIT_SLJIT_P3.md) and its `SIMD*`,
+([`backends/HISTORY.md`](backends/HISTORY.md) and its `SIMD*`,
 `REFS1`, `GC1` companions). These are the things that cost real time once and
 would cost it again; each is cheaper to honour than to rediscover.
 
@@ -760,10 +744,41 @@ It is whether its **refusal inventory is explicit**, whether its **trap kinds ma
 the other backends, and whether its **post-mortem was opened on day one** — so that the
 next author inherits the failures instead of the debugging.
 
+### 15.1 Wiring a new backend from the historical defect log
+
+The merged record ([`backends/HISTORY.md`](backends/HISTORY.md) §5) is a
+checklist, not just a story. Each row below is one defect that a new backend can
+re-introduce, and the artefact that prevents it.
+
+| Historical defect | What to wire before the slice is “done” |
+|---|---|
+| `D-2`: `array.fill` used the fill value as the offset | A **value-first parity fixture** on every helper with two same-width operands; assert the second element, not only index 0 |
+| `D-3`: SLJIT loaded every struct field as 4 bytes | Derive the load/store width from the field type; pin one reference-typed field in a struct and one in an array |
+| AsmJIT `narrow` | A **golden lane vector** in addition to the differential test; a differential test can encode the same misreading |
+| Trap leak | Run the reference-local release on **every** trap path, including `unreachable`; fixture `trap_after_alloc` |
+| Mixed-graph call | Emit a direct call in the **callee’s** form, read from the resolved `Callable`; gate `call_form_provider/importer.wat` |
+| SLJIT ignored `setFrameCallAbiOptIn` | One test per backend that the opt-in changes the module form even when every signature fits the register form |
+| `table.set` / reference slots | A reference-typed table fixture; assert the slot’s count after set/atomic-set |
+| `moduleNeedsFrame` scanned all types | Scan only import and internal **function** signatures; a synthetic block type must not switch the module |
+| `dispatchUnreachable` returned a 32-bit zero | Follow `resultTypes`, frame mode and the vector-buffer case for the placeholder |
+| `D-L1` / sixth argument | Pin the register-form ceiling **and** the frame-form fallback; do not infer the form from a measurement |
+| V-1 validator taint | Never let a catch set a global “tainted” flag; assert a later stack mismatch still fails |
+| `sljit_get_local_base` argument order | Read the toolkit’s contract before the first call; one unit test per primitive whose signature has two integer arguments of the same type |
+
+The general rule from the record: **a limit written when there was one call form
+is a candidate for “is this still true in the other form?”** Every real defect in
+the arc — the four-entry ceiling, the sixth-argument loss, the three-parameter
+cap, the buffered vector result, the single-result epilogue — was one of those
+guards applied to both forms alike.
+
 ## 16. Post-mortem: the parity arc, and what it hands the ABI refactor
 
+*Section numbers below are the original post-mortem’s provenance; the merged
+content is in [`backends/HISTORY.md`](backends/HISTORY.md) §5 (defects) and §7
+(process lessons).*
+
 **Snapshot (2026-11-06, branch `AbiRefactor`, commit `d7b628e`):** 51 entries in
-[`backends/ASMJIT_SLJIT_P3_GC1.md`](backends/ASMJIT_SLJIT_P3_GC1.md), 14 commits on the refactor branch,
+[`backends/HISTORY.md`](backends/HISTORY.md), 14 commits on the refactor branch,
 **21591 assertions in 728 test cases**, `abi-check.sh` OK, Doxygen 0 warnings.
 
 ### The numbers that matter more than the opcode count
@@ -822,8 +837,8 @@ that the same discovery is cheap: **audit the records, prove the contract, then 
 
 ### The one open thread worth naming
 
-The emitter unification is a single commit (§14 of
-[`ABI_REFACTOR_STUDY.md`](ABI_REFACTOR_STUDY.md)) that could not be finished in this session. Every piece
+The emitter unification is a single commit ([`backends/HISTORY.md`](backends/HISTORY.md) §3.3)
+that could not be finished in this session. Every piece
 of it has now been shown to be *pinned by a test* — declarations moved alone; parameters did not — which is
 itself the evidence that the tests are doing their job. The next author inherits a line-numbered
 inventory, not a half-applied sweep.

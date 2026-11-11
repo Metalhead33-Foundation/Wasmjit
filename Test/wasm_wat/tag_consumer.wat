@@ -1,5 +1,5 @@
 ;; Item 4, probe 21b: a module that imports the tag and CATCHES a throw raised in the
-;; provider instance (docs/backends/CAPABILITY_PROBES.md section 15).
+;; provider instance (docs/TESTING.md section 15).
 ;;
 ;; The try_table carries the imported function's i32 result, so it is the block's
 ;; only result. An extra `i32.const 0` after it made the module invalid

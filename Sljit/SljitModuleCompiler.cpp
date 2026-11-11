@@ -19,7 +19,7 @@ namespace {
 //! always present, a `v128` parameter is two words, and a `v128` result adds a
 //! hidden trailing out-buffer pointer. The latter is easy to miss because the
 //! Wasm signature does not spell it, but the prologue and every caller both
-//! declare it (docs/backends/STAGING_CALL_ABI.md).
+//! declare it (docs/ABI.md).
 bool signatureNeedsFrame(const WASM::FuncType& type)
 {
 	std::uint32_t entries = 1; // VMContext*
@@ -118,7 +118,7 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM
 	// A module compiles entirely in one form: if any *defined* function's
 	// signature needs more C argument entries than SLJIT's register form allows,
 	// the whole module uses the staging frame
-	// (docs/backends/STAGING_CALL_ABI.md). Imported signatures deliberately do
+	// (docs/ABI.md). Imported signatures deliberately do
 	// not choose the module ABI: a host import is a native C function with its
 	// own register-form entry, and a frame-mode caller must not invoke it as if
 	// it took a staging frame. The import call path is chosen when the import is
@@ -126,7 +126,7 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM
 	// `setFrameCallAbiOptIn(true)` is a request for one form everywhere, so it
 	// decides the module's form on its own: a module compiled while it is set must
 	// be frame-form even when every signature would fit the register form
-	// (docs/backends/EXPORT_SIGNATURE.md section 4).
+	// (docs/ABI.md).
 	bool frameMode = WASM::frameCallAbiOptIn();
 	for (const std::uint32_t typeIdx : module.internalFunctionTypeIndices)
 		if (signatureNeedsFrame(module.funcTypeAt(typeIdx)))
@@ -148,7 +148,7 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM
 			// No partial modules: an instantiable module must have every function
 			// callable, or an exported function could be one that cannot be called.
 			// The first failure aborts the module with its reason
-			// (docs/backends/PRODUCTION_GAPS.md section 15).
+			// (docs/API_ABI_STABILITY.md).
 			throw std::runtime_error("the SLJIT backend could not compile function "
 					+ std::to_string(functionIndex) + ": "
 					+ dispatcher.unsupportedReason());

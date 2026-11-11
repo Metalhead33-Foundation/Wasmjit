@@ -1,6 +1,6 @@
 ;; Item 4, probe 17: array.new_fixed + array.get. Deliberately avoids array.new's
 ;; (value, length) order and both D-2 operations, so any failure is about array.get
-;; (docs/backends/CAPABILITY_PROBES.md section 11).
+;; (docs/TESTING.md section 11).
 (module
   (type $row (array (mut i32)))
   (func (export "probe") (result i32)

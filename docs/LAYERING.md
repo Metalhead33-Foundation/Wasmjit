@@ -57,7 +57,7 @@ whatever they like.
 
 1. **The backend set is deliberately plural and isn't closed.** `LibJit/`,
    `Sljit/` and `Asmjit/` are three executing code generators (see
-   [`BACKEND_PRODUCTION_READINESS.md`](BACKEND_PRODUCTION_READINESS.md)), and a
+   [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md)), and a
    fourth is expected to be able to join without editing the core. A core that
    names LibJIT is a core that has to be edited in many places — with no test
    able to catch a miss — the day another backend executes anything.
@@ -199,9 +199,8 @@ one through `WASMJIT_BACKEND_PATH`; the `[layering]` test also guards the core
 - [`SAFETY.md`](SAFETY.md) — the trap/abort policy every backend inherits.
 - [`proposals/GC.md`](proposals/GC.md) — invariant H1 (runtime layout ≡ backend
   layout), which is the clearest example of a core-owned contract.
-- [`SIMD_BACKENDS.md`](SIMD_BACKENDS.md), [`SIMD_LIBJIT.md`](SIMD_LIBJIT.md) —
-  what each backend can do for SIMD, and why the shared helper layer lives in
-  the core.
+- [`proposals/SIMD.md`](proposals/SIMD.md) — the spec note, and §4.5–§4.10 for the
+  helper ABI, the per-backend native path and its risks.
 - `AGENTS.md` — the rule in one line, for anyone (or any
   agent) starting work here.
 

@@ -1,5 +1,5 @@
 ;; Item 4, probe 4: a tail call. Accepted or refused, never silent
-;; (docs/backends/PRODUCTION_GAPS.md section 19).
+;; (docs/API_ABI_STABILITY.md).
 (module
   (func $callee (param i32) (result i32)
     local.get 0)

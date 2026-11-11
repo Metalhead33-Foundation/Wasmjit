@@ -59,7 +59,7 @@ static const std::vector<WASM::ValueType> DefaultValueTypes = {
 LibJitTypeTranslator::LibJitTypeTranslator()
 	: v128(jit_type_create_struct(v128_definition, 4, 0)),
 	i31Type(createi31Type()) {
-	// A `v128` is 16 bytes *and* 16-byte aligned (docs/SIMD_LIBJIT.md §6.1).
+	// A `v128` is 16 bytes *and* 16-byte aligned (docs/proposals/SIMD.md).
 	// Without this LibJIT would lay the `{i32,i32,i32,i32}` struct out at 4-byte
 	// alignment, disagreeing with `WASM::Value`'s `alignas(16)` and with the
 	// runtime's `gcStorageAlign` (gap S4). Verified to survive embedding in a
@@ -203,11 +203,11 @@ jit_type_t LibJitTypeTranslator::translateFunctionSignature(const WASM::FuncType
 	// Implicit leading `WASM::VMContext*`, lowered as an opaque pointer in LibJIT.
 	params.push_back(translateVMContextPointerType());
 	if (frameAbi_) {
-		// Staging-frame ABI (docs/backends/STAGING_CALL_ABI.md, step 4a): this
+		// Staging-frame ABI (docs/ABI.md, step 4a): this
 		// overload is the one `translateTypes` uses, so the frame form has to be
 		// spelled here as well as in the CoreTypeView overload. The context plus
 		// one opaque frame pointer replace the typed parameters, which lifts the
-		// sixth-argument defect (docs/backends/LIBJIT_ARGUMENT_DEFECT.md). The
+		// sixth-argument defect (docs/backends/HISTORY.md). The
 		// The canonical frame signature returns void; every result is written into
 		// the caller's result block by the callee.
 		params.push_back(jit_type_void_ptr);
@@ -313,16 +313,16 @@ jit_type_t LibJitTypeTranslator::translateFunctionSignature(WASM::CoreTypeView v
 
 	params.push_back(translateVMContextPointerType());
 	if (frameAbi_) {
-		// Staging-frame ABI (docs/backends/STAGING_CALL_ABI.md, step 4a): the
+		// Staging-frame ABI (docs/ABI.md, step 4a): the
 		// context plus one opaque frame pointer replace the typed parameters,
 		// which is what lifts the sixth-argument defect
-		// (docs/backends/LIBJIT_ARGUMENT_DEFECT.md). The return stays typed: the
+		// (docs/backends/HISTORY.md). The return stays typed: the
 		// compiled function hands its single scalar back in a register, and the
 		// driver -- the only entry an embedder sees -- stores it into the frame,
 		// so both halves honour one contract.
 		params.push_back(jit_type_void_ptr);
 		// The canonical staging-frame signature returns void; every result is
-		// written into the caller's result block (docs/EXPORT_SIGNATURE.md §40).
+		// written into the caller's result block (docs/ABI.md “Call forms”).
 		// Keeping a scalar return here would make a callee's result appear in a
 		// register while a frame caller expects it in the frame.
 		return jit_type_create_signature(jit_abi_cdecl, jit_type_void,

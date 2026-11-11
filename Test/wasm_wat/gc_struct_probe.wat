@@ -1,5 +1,5 @@
 ;; Item 4, probe 6: a GC struct type crosses the boundary. Accepted or refused, never
-;; silent (docs/backends/CAPABILITY_PROBES.md section 1).
+;; silent (docs/TESTING.md section 1).
 (module
   (type $pair (struct (field i32) (field i32)))
   (func (export "make") (result (ref $pair))

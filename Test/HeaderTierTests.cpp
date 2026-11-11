@@ -224,7 +224,7 @@ TEST_CASE("a v128 crosses the C boundary as two little-endian words",
 {
 	// The canonical signature passes a v128 as two `uint64_t`, low word first, with
 	// a result carried in the multi-value buffer as lo, hi
-	// (docs/backends/V128_SIGNATURE_DECISION.md §28). This test pins the half that
+	// (docs/ABI.md “v128 across the Boundary”). This test pins the half that
 	// needs no backend: the storage size/alignment the convention rests on, and the
 	// losslessness of the decomposition every backend must perform.
 	WASM::CanonFieldType vectorField {};
@@ -313,7 +313,7 @@ TEST_CASE("a v128 parameter occupies two C argument slots", "[v128][abi][layout]
 TEST_CASE("the staging frame layout is defined by bytes, not registers",
 "[abi][frame]")
 {
-	// docs/backends/STAGING_CALL_ABI.md: a compiled function is
+	// docs/ABI.md: a compiled function is
 	// void fn(VMContext*, void* frame), and both sides derive every offset from the
 	// same FuncType. These numbers are the contract.
 	using WASM::ValueKind;

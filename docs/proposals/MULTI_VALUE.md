@@ -97,7 +97,7 @@ limitation is the embedder API (MV4).
 
 | # | Deviation | Why it is safe | What it buys |
 |---|---|---|---|
-| MVD1 | **Result buffer as a trailing out-parameter.** The WebAssembly ABI is free (§3), and this backend never returns an aggregate by value. | Matches the backend-wide rule "write a struct-typed value through its address" (`docs/SIMD_LIBJIT.md` §6); single-result functions keep their scalar ABI (MVD2). | One lowering for 0/1/N results, and LibJIT's broken aggregate-return ABI is not used at all. |
+| MVD1 | **Result buffer as a trailing out-parameter.** The WebAssembly ABI is free (§3), and this backend never returns an aggregate by value. | Matches the backend-wide rule "write a struct-typed value through its address" (`docs/proposals/SIMD.md` §2); single-result functions keep their scalar ABI (MVD2). | One lowering for 0/1/N results, and LibJIT's broken aggregate-return ABI is not used at all. |
 | MVD2 | **Keep single-result functions returning scalars directly.** | §3: scalar conventions need not change. | Fast path for the common case. |
 | MVD3 | **Do not expose multi-result exports to the host.** | §3: the JS API forbids it anyway. | No host-side ABI work. |
 | MVD4 | **Extend the *harness*, not the engine, to close MV1** (marshal up to N scalar results into a small array). | The engine already computes the right values; only the test harness is blind. | Real verification without touching the JIT. |

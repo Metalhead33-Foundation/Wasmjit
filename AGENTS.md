@@ -30,11 +30,12 @@ the one-line check to run.
   `Asmjit/` are three code generators behind the same seam, and `WasmBase/` states the contracts
   they all must honour.
 
-- **[`docs/ABI_PORTABILITY.md`](docs/ABI_PORTABILITY.md) — read before changing a signature, a prolog, or a GC object layout.**
-  Every compiled function is C-linkage with the **host C ABI** of the target (SysV AMD64, MS x64,
-  AAPCS64, RISC-V, MIPS), and a backend may diverge in implementation only while the signature stays
-  canonical and the ABI non-degenerate. **Portability outranks performance.** It also owns the
-  canonical GC object/allocator ABI. Untested targets are labelled *provisional*, not dropped.
+- **[`docs/ABI.md`](docs/ABI.md) — read before changing a signature, a prolog, or a GC object layout.**
+  “The C ABI Contract” states that every compiled function is C-linkage with the **host C ABI**
+  of the target (SysV AMD64, MS x64, AAPCS64, RISC-V, MIPS), that a backend may diverge in
+  implementation only while the signature stays canonical and the ABI non-degenerate, and that
+  **portability outranks performance**. “GC Object and Heap ABI” owns the canonical object and
+  allocator ABI. Untested targets are labelled *provisional*, not dropped.
 
 - **No bespoke interpreter fallback.** WasmJit does not grow a Wasm interpreter: interpretation, if
   ever required, is the backend's own compile/interpret configuration (currently GNU LibJIT, which
@@ -53,7 +54,7 @@ the one-line check to run.
   Its follow-up studies carry the plans:
   [`EMBEDDING_SURFACE.md`](docs/EMBEDDING_SURFACE.md) (the `WASM::Runtime`, headers, versioning, install),
   [`BACKEND_PLUGIN_ABI.md`](docs/BACKEND_PLUGIN_ABI.md) (loading a backend behind a C descriptor) and
-  [`MULTI_AGENT_FEASIBILITY.md`](docs/MULTI_AGENT_FEASIBILITY.md) (demoting the multi-agent blocker).
+  [`proposals/THREADS.md`](docs/proposals/THREADS.md) (demoting the multi-agent blocker).
   The language-support studies are defined in [`docs/LANGUAGE_FEASIBILITY.md`](docs/LANGUAGE_FEASIBILITY.md).
   Both have been run: the pre-feasibility / scoping study (`LF-1`) produced
   [`docs/languages/`](docs/languages/index.md) — a triage of the whole canonical list,

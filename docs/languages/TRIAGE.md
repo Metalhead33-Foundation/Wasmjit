@@ -57,7 +57,7 @@ The engine is **not** re-derived. The screen cites the pinned snapshot:
 | [`READINESS_AUDIT.md`](../READINESS_AUDIT.md) §5 | `RG1`–`RG6` `Pinned` at `5c3d194`; the ABI, memory and proposal frictions a row may cite as known; `RA4` (the memory provider is core-chosen) |
 | [`ABI.md`](../ABI.md) "Native (host) function imports"/"Cross-module Wasm function imports"/"Limits an Embedder Must Know" | The import/export shape a PoC must use; the trap boundary (`nativeImport`); the limits: no step budget, process-wide allocation budget, one instance per module, serial continuations |
 | [`READINESS_AUDIT.md`](../READINESS_AUDIT.md) §5.2, [`proposals/EXCEPTIONS.md`](../proposals/EXCEPTIONS.md) §2 | GC, `v128`, reftypes, function references, multi-memory, memory64, tail calls are available; **only the final `exnref` exception shape exists** — the legacy `try`/`catch`/`catch_all`/`rethrow`/`delegate` instructions were removed from the proposal and are absent |
-| [`WasmBase/WasmConcurrency.hpp`](../../WasmBase/WasmConcurrency.hpp), [`MULTI_AGENT_FEASIBILITY.md`](../MULTI_AGENT_FEASIBILITY.md) | `ConcurrencyModel::Single` is the default and `Agents` is implemented and opt-in — so "needs threads" is a **configuration + shim** question, not a missing feature |
+| [`WasmBase/WasmConcurrency.hpp`](../../WasmBase/WasmConcurrency.hpp), [`proposals/THREADS.md`](../proposals/THREADS.md) | `ConcurrencyModel::Single` is the default and `Agents` is implemented and opt-in — so "needs threads" is a **configuration + shim** question, not a missing feature |
 | [`SAFETY.md`](../SAFETY.md) §2.3 | A 2 GiB default store budget (`WASMJIT_MAX_TOTAL_BYTES`), the GC-heap region allocator, and the absence of a step budget |
 
 The three frictions the audit says should not be rediscovered per candidate
@@ -453,7 +453,7 @@ before a charter is spent.
 ### 6.4 Threading is configuration, not a missing feature
 
 `ConcurrencyModel::Single` is the default; `Agents` is implemented and opt-in
-([`MULTI_AGENT_FEASIBILITY.md`](../MULTI_AGENT_FEASIBILITY.md) revision 2,
+([`proposals/THREADS.md`](../proposals/THREADS.md) revision 2,
 `WasmConcurrency.hpp`). A runtime that assumes parallelism is therefore not
 blocked by the engine — it is asked to run in a model where it cannot obtain a
 second host thread. Most runtimes have such a mode (a `GOMAXPROCS=1`-shaped

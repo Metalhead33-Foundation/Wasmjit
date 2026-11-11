@@ -1,5 +1,5 @@
 ;; SIMD-L4 (conversions): the float↔int conversions, end to end through
-;; the JIT (docs/SIMD_LIBJIT.md §10).
+;; the JIT (docs/proposals/SIMD.md).
 ;;
 ;; Every export projects a *bit pattern*, and the operands are the ends of the
 ;; ranges rather than ordinary numbers: ±2^31 and 2^32 for the saturating forms,

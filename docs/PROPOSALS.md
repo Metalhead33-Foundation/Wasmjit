@@ -82,6 +82,13 @@ gaps → where we deliberately deviate → plan → test survey → references.
   state claim, the one home of each measured fact, and the probe that
   re-measures them — is [`FRESHNESS.md`](FRESHNESS.md).
 
+- **History versus current.** A dated log (a migration section, a slice
+  narrative, a struck-through gap) is **history** and is not rewritten; only the
+  current §4 state and the §7 plan move. An open engine defect or limitation gets
+  a `GAP-*` row in [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §8; a boundary
+  belongs in [`SCOPE.md`](SCOPE.md). Do not add a new note for a slice that the
+  historical record already covers — see [`FRESHNESS.md`](FRESHNESS.md) §3.1.
+
 ## 3. What this document does not demand
 
 - **No fixed heading wording.** A slot must answer its question and be named in

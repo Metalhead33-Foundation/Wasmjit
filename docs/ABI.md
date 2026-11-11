@@ -2,17 +2,20 @@
 
 *`VMContext` passing, result tuples and call kinds*
 
-> **Read with [`ABI_PORTABILITY.md`](ABI_PORTABILITY.md).** This document says *what*
-> the canonical signature is (arg0 `VMContext*`, the multi-result buffer, the call-kind
-> context rules). That document says **which** calling convention realises it — the host
-> C ABI with C linkage, on every target — what a backend may and may not do while
-> lowering it, and what the canonical ABI for GC heap objects is.
+> **This document owns the whole ABI.** It states *what* the canonical signature
+> is (arg0 `VMContext*`, the multi-result buffer, the call-kind context rules),
+> **which** calling convention realises it — the host C ABI with C linkage on
+> every supported target — what a backend may and may not do while lowering it,
+> and the canonical ABI for GC heap objects. The former portability note is
+> merged into “The C ABI Contract” and “GC Object and Heap ABI” below.
 
 ## Overview
 
 Every JIT-compiled Wasm function takes a `VMContext*` as its first argument
 (arg0).  Which `VMContext*` gets passed depends on the call kind and on the
-value of `Callable::context`.
+value of `Callable::context`. The function itself has one of two C shapes — the
+**register form** or the **frame form** — described in “Call forms: register and
+frame” below; the rest of this document applies to both.
 
 > **Runtime model:** **at most one `ModuleInstance` per `Module`**, with one
 > `VMContext` per instance. Multiple instances of one module are ruled out by
@@ -20,9 +23,10 @@ value of `Callable::context`.
 > hatch, not the intended usage: a module is normally loaded once and lives like
 > a dynamically linked library, or is a short-lived script. Many *agents* (execution
 > contexts) may run that one instance's compiled code — that is the accepted
-> multithreading direction, opt-in and not built yet. This ABI description covers
-> the calling and context shapes, not a licence to use per-thread instances as a
-> concurrency model. The guest/host responsibility split is in
+> multithreading direction, opt-in and implemented as
+> `ConcurrencyModel::Agents` (the default stays `Single`). This ABI description
+> covers the calling and context shapes, not a licence to use per-thread
+> instances as a concurrency model. The guest/host responsibility split is in
 > [`THREADSAFETY.md`](THREADSAFETY.md); the scenario table is §3.1–§3.2 there.
 
 ## Design Philosophy
@@ -41,7 +45,87 @@ ensure correct lifetimes.
 **No trampolines are generated for cross-module direct calls.**  The callee's
 `VMContext*` is simply baked in as an immediate constant.
 
+## The C ABI Contract {#abi_c_contract}
+
+Every compiled Wasm function is an ordinary **C function with C linkage**, using
+the **host C ABI of the build target**. A C++ embedder declares it from the Wasm
+function type and calls it; nothing requires a Wasm-aware caller. This is the
+contract a backend must realise, not a suggestion.
+
+| Decision | Rule |
+|---|---|
+| **D-ABI-1** | C signature, C linkage. A C++ embedder declares and calls it with the ordinary call operator. |
+| **D-ABI-2** | The convention is the host C ABI — SysV AMD64, MS x64, AAPCS64, RISC-V, MIPS — never an invented one. |
+| **D-ABI-3** | **Portability outranks performance.** A faster lowering that holds on one ABI is either refused or an explicit opt-in fast path with the portable one retaining definition. |
+| **D-ABI-4** | Backends may diverge in implementation; they may not diverge in the **canonical signature** or in **non-degeneracy** (below). |
+| **D-ABI-5** | No x86-64-only assumptions. Untested targets are *provisional*, stated wherever the claim appears. |
+| **D-ABI-6** | Every value kind is expressed in terms C can express, or the C-callable export is refused. |
+| **D-ABI-7** | The GC object layout and allocation entry points are part of the ABI and are owned by `WasmBase/` (§“GC Object and Heap ABI”). |
+
+**Canonical signature.** One row per Wasm value kind:
+
+| Wasm kind | C type | Notes |
+|---|---|---|
+| arg 0 | `WASM::VMContext*` | always present, always first |
+| `i32` | `int32_t` | also the payload of `i31ref` before tagging |
+| `i64` | `int64_t` | two slots on ILP32 (unsupported by decision) |
+| `f32` / `f64` | `float` / `double` | floating-point class, never reinterpreted |
+| references (`funcref`, `externref`, …) | `void*` | opaque, GC-managed; ownership in the GC section |
+| `v128` | **two `uint64_t` parameters, low word first** | native boundary only; a result uses the multi-value buffer as `lo, hi` |
+| no result | `void` | — |
+| one result | that kind's C type | ABI return register |
+| two or more results | trailing `void* results` | never an aggregate return |
+
+The two-word `v128` spelling is the only one register-passed on SysV, MS x64,
+AAPCS64 and RISC-V alike; the alternatives are in
+[`backends/HISTORY.md`](backends/HISTORY.md) §3.1. It is the **native** C ABI,
+not the Wasm ABI: inside Wasm a `v128` is one 128-bit value, and the conversion
+happens at instantiation.
+
+**Non-degeneracy — what a backend may not do.** A degenerate ABI is one only its
+own emitter can call. Forbidden: hidden parameters; results in registers the C
+ABI does not use for returns; aggregate returns for multi-value; a stack
+alignment other than the target's; reliance on the SysV red zone on a target
+that has none; clobbering callee-saved registers; leaking a private convention
+into an export or import; and `longjmp`/`setjmp` across the C boundary. Register
+allocation, spill policy, instruction selection, inline-vs-helper accesses and
+direct-vs-resolved calls are the backend's business.
+
+**Target matrix.** Only x86-64 Linux / SysV AMD64 is exercised today.
+
+| Target | Status |
+|---|---|
+| x86-64 Linux (SysV AMD64) | **tested** |
+| x86-64 Windows (MS x64) | *provisional* — specified, untested |
+| AArch64 Linux/macOS (AAPCS64) | *provisional* |
+| AArch64 Windows | *provisional* |
+| RISC-V 64 (LP64D) | *provisional* |
+| MIPS n64/o32 | *provisional* |
+| 32-bit (ILP32) and big-endian hosts | **unsupported**, by decision |
+
+The four things that differ across ABIs are the integer/FP argument registers,
+aggregate/vector classification, and frame details (shadow space, red zone,
+stack alignment, callee-saved set). Everything except `v128` is portable without
+a per-target special case. Wasm linear memory and the GC heap are
+**little-endian** regardless of host; on big-endian a port would byte-swap at the
+boundary, which is why that target is unsupported rather than silently wrong.
+
+**Per-backend status.** SLJIT and AsmJIT emit the canonical signature directly.
+LibJIT owns both sides of its calls through its driver entry, so its
+`Callable::fnPtr` is a thunk and `rawFnPtr` is the raw entry; its aggregate
+`v128` spelling is the recorded deviation `D-L1`, and the opt-in frame form
+retires it. A new backend must state in its own page: its target matrix, which
+member of the canonical signature it cannot honour and how it refuses it, and
+whether its entry is emitted C ABI or thunked. The old portability note is
+merged here; its historical analysis is in
+[`backends/HISTORY.md`](backends/HISTORY.md) §3.1.
+
+**Open C-ABI items** (`i31ref` as `void*`, the missing literal C-caller test, trap
+entry-point sprawl) are `GAP-7`/`GAP-13` in
+[`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §8.
+
 ## VMContext Selection Rules
+
 
 | Call instruction     | How arg0 is determined                                       |
 |----------------------|--------------------------------------------------------------|
@@ -118,38 +202,108 @@ and `computeAggregateLayout()` (the rule above). They are standard-layout and
 layout-pinned by `static_assert`, so the same numbers cross the C plugin
 boundary ([`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md) `BP-1`).
 
-## `v128` by Value
+## `v128` across the Boundary
 
-A `v128` is a **16-byte value with 16-byte alignment** and appears in a compiled
-signature exactly like any other value type:
+A `v128` is **16 bytes with 16-byte alignment in memory**, but it does **not**
+cross the C boundary as an aggregate. The canonical spelling is:
 
-```
-v128 f(VMContext*, v128 a, v128 b);      // (param v128 v128) (result v128)
-```
-
-On the host side that is one aggregate argument — and, for a `v128` result, one
-aggregate return — not four `int32_t` parameters:
-
-| Property | Value |
+| Position | Spelling |
 |---|---|
-| size | 16 bytes |
-| alignment | 16 bytes |
-| payload | 4 × 32-bit lanes, lane 0 at the lowest address |
-| passing | by value in parameter/result position; the platform rules decide registers versus stack |
-| in a multi-result tuple | the field is aligned to 16 and the tuple size is rounded up to it (see "The result tuple layout") |
+| **parameter** | **two `uint64_t` parameters**, low word first, immediately after the previous parameter |
+| **result** | the existing multi-value result buffer, first word `lo`, second `hi` |
 
-```cpp
-struct alignas(16) V128 { uint32_t lane[4]; };
-using Exported = V128 (*)(WASM::VMContext*, V128, V128);
+So `(param v128 v128) (result v128)` is equivalent to
+`void f(VMContext*, uint64_t, uint64_t, uint64_t, uint64_t, void* results)`.
+This is the only shape that is register-passed on SysV, AAPCS64, RISC-V and
+MS x64 and has a portable C name; the rejected alternatives are in
+[`ABI.md`](ABI.md) §5.4 and the historical analysis in
+[`backends/HISTORY.md`](backends/HISTORY.md).
+
+- **Ordering is bit-position ordering**, not register numbering: low word first
+  on every target, including a future big-endian port.
+- **LibJIT is the one recorded deviation.** It spells a `v128` as one 16-byte
+  aggregate because libjit loses the sixth integer argument on the register path
+  (`D-L1`). On SysV that is the same ABI as two words; on MS x64 it is passed by
+  reference. The opt-in frame form retires the deviation, because every value is
+  bytes at an offset.
+- **The host harness** uses `alignas(16) struct { uint32_t lane[4]; }`; that
+  alignment is validity, not optimisation.
+- **In a multi-value tuple**, the `v128` field is 16-aligned and the tuple size
+  is rounded up to it (see “The result tuple layout”).
+- `Test/wasm_wat/simd_abi.wat` pins identity, through-local and four-vector
+  stack cases.
+
+## Call forms: register and frame
+
+A compiled function has one of two C shapes. The shape is an **ABI detail**, not
+an embedder API: `WASM::Runtime` and `ModuleCallCache` marshal typed arguments
+and hide it.
+
+### The register form (default)
+
+`Ret fn(VMContext*, A, B, …)`, with an optional trailing result buffer for
+multi-value or `v128` results. It is the fast path and the default on LibJIT. It
+has backend ceilings: SLJIT’s C-call form accepts four argument entries
+(`VMContext` counts as one), LibJIT loses the sixth integer argument, and
+AsmJIT’s vector result is special-cased.
+
+### The frame form (opt-in or wide signatures)
+
+```c
+void fn(VMContext*, void* frame);
 ```
 
-`alignas(16)` is the safe form, not an optimisation: the lowered type declares
-16-byte alignment, and over-aligned host mirrors are always valid while a
-lower-aligned one is not guaranteed. The fixture `Test/wasm_wat/simd_abi.wat`
-exercises both halves — `identity`/`via_local` for the register-passing case and
-`four` (four `v128` parameters, which forces a stack slot) for the stack-passing
-case; both pass with the harness's naturally-aligned mirror, so the stack layout
-happens to agree on this ABI, and an embedder must still not rely on it.
+`frame` is a caller-allocated, **16-byte-aligned** region. The first
+`argsBytes(ft)` bytes hold the parameters in declaration order — each `v128` as
+16 bytes little-endian, every other value as its natural width rounded up to 8.
+The next `resultsBytes(ft)` bytes receive the results in the same layout.
+Offsets come from [`WasmBackendAbi.hpp`](../WasmBase/WasmBackendAbi.hpp):
+`frameValueBytes`, `frameArgumentsBytes`, `frameResultsBytes`,
+`frameArgumentOffset`, `frameResultOffset`, `frameBytes`.
+
+- **Caller**: reserve `frameBytes(ft)`, write the arguments at their offsets,
+  call `fn(ctx, frame)`, read the results at `argsBytes(ft) + resultOffset(i)`.
+- **Callee**: the prologue loads each parameter from `frame + argumentOffset(i)`;
+  the epilogue stores each result at `frame + argsBytes + resultOffset(i)`.
+- **No arity limit, no register-class question, no result-buffer parameter, one
+  marshaller.** SLJIT’s four-entry ceiling, LibJIT’s sixth-word loss and
+  AsmJIT’s vector-result special case are properties of register passing, so
+  they disappear together.
+- **Tail calls** need the frame pointer carried through the trampoline. LibJIT’s
+  frame tails are a frame call + frame return: correct, but not constant-stack
+  (`GAP-3`).
+- **The frame is not a GC-scanned root.** A reference held only in a live frame
+  is invisible to a collection; keep it in scanned storage across a safepoint or
+  register the frame.
+
+**Selection.** `WASM::setFrameCallAbiOptIn(true)` is a process-wide request for
+one ABI; otherwise a backend switches a module when a **defined** signature needs
+more argument slots than its register form allows. A backend must never *infer*
+the form from measurements — measured on LibJIT, inference broke ten working
+modules.
+
+**Granularity.** The form is currently **module-wide**
+(`ModuleInstance::frameCallAbi()`). One wide function puts every call in that
+module on the frame path, so all of them pay its stores/loads and lose the
+register-form tail-call trampoline. The recommended fix is per signature —
+`usesFrameForm(signature, ceiling, optIn)`, with SLJIT/AsmJIT preferring the
+frame and LibJIT the register form — but it changes the `frameCallAbi()` contract
+and ~25 call sites, so it is `GAP-1` in
+[`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §8, not a drive-by edit.
+
+**Mixed graphs and cross-backend calls.** A direct call emits the *callee’s*
+form (read from the resolved callable), so a register-form module can call a
+frame-form import; a both-frame cross-module call works. A graph that genuinely
+mixes the two forms is refused by name rather than silently corrupted. Because
+the frame makes the ABI identical, a cross-backend call is legal in principle,
+but it remains **forbidden in production** until a cross-backend suite exists:
+one backend per process or per module graph, like mixing allocators. “Just
+because you can doesn’t mean you should.”
+
+**Imports do not change at all.** A native import keeps its typed
+`R native(VMContext*, A, B, …)` signature. Only the raw export seam changes; the
+public `WASM::Runtime` entry points stay typed
+([`EMBEDDING_SURFACE.md`](EMBEDDING_SURFACE.md)).
 
 ## Reference and Global Representation
 
@@ -252,7 +406,58 @@ also carries `f64`, so payloads would collide). Neither is worth it for a
 single-threaded engine whose table indirection is already the hot path — and a
 low-bit tag turned out not to be needed either.
 
+## GC Object and Heap ABI {#abi_gc}
+
+The layout and the allocation entry points are **ABI**, owned by
+`WasmBase/WasmGcHeader.hpp`; no backend may compute an offset itself.
+
+| Property | Rule |
+|---|---|
+| Header | `TypeId` at 0, refcount at 4, both `u32`; struct header 16 bytes with a descriptor slot at 8 |
+| Struct field *i* | natural alignment, no repacking (`gcStructFieldOffset`) |
+| Struct size | data end rounded to the strictest field alignment (`gcStructSize`) |
+| Array length | `u32` at offset 8 |
+| Array data | inline, element-aligned (`gcArrayDataOffset`) |
+| Element stride/alignment | packed `i8`=1, packed `i16`=2, `i32`/`f32`=4, `i64`/`f64`/reference=8, `v128`=16 |
+| Byte order | little-endian, regardless of host |
+| Identity | address of the header; a reference is a `void*` to it |
+
+**Allocator call shape.** Backends call the type-derived forms only:
+
+```c
+void* allocateStructObject(uint32_t size, uint32_t localTypeIdx, void* descriptor);
+void* allocateArrayObject(uint32_t localTypeIdx, uint32_t length);
+```
+
+The allocator derives the data offset and element size from `localTypeIdx` and
+writes the header, so a backend passes only what it knows. The four-argument
+primitive is internal. A backend that passes its own offset/size has forked the
+layout.
+
+**Trap kinds are part of the ABI.** `NullStructureReference`,
+`NullArrayReference`, `OutOfBoundsArrayAccess` and `CastFailure` are distinct;
+collapsing them into a generic null reference is an ABI change. The `[gc]`
+trap-kind test asserts all four per backend.
+
+**Reference ownership.** A reference stored into a heap field, global or table is
+retained by the store; overwriting releases the previous value. A reference held
+only in a Wasm local/operand slot is not automatically a GC root; the backend
+makes live references visible at collection points. A reference returned to the
+embedder is owned by the instance until released. Anything beyond this (extra
+retains, an ownership table) is an implementation detail that must not be
+observable at the call boundary.
+
+**What a backend may vary:** addressing mode, inline-vs-helper access, which
+register holds the object, hoisting, loop shape. **What it may not vary:** an
+offset, the header shape, the `TypeId` meaning, an element stride, the byte
+order, or a trap kind.
+
+The layout is pinned by `[gc][layout]`; A/B parity tests catch a backend that
+drifts from the canonical signature or layout; `callCallable` /
+`callCallableWithResults` perform the signature cast in one place.
+
 ## Embedder Guide
+
 
 ### Native (host) function imports
 
@@ -585,7 +790,7 @@ A safepoint requires a **quiescent** instance: `gcCollect()` refuses a call that
 is inside the instance (`ModuleInstance::inCall()`) with a named error, and
 `Runtime::safepoint()` skips an instance with a call in flight rather than
 collecting under it. With one agent that is automatic; the rule exists for the
-multi-agent direction (`docs/MULTI_AGENT_FEASIBILITY.md` `MF-3`/`MF-4`).
+multi-agent direction (`docs/proposals/THREADS.md` `MF-3`/`MF-4`).
 
 A GC **struct** header is now 16 bytes:
 `[u32 TypeId][u32 refcount][void* descriptor]` (`GcHeader::kHeaderBytes`); the

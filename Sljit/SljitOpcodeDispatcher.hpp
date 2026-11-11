@@ -34,7 +34,7 @@ inline constexpr std::uint32_t kMaxWasmParameters = 3;
 //! The count includes `VMContext*`, every parameter word (a `v128` is two) and
 //! the hidden out-buffer pointer a `v128` result needs. A signature above this
 //! ceiling must use the frame form; the module compiler makes that decision
-//! module-wide (docs/backends/STAGING_CALL_ABI.md).
+//! module-wide (docs/ABI.md).
 inline constexpr std::uint32_t kRegisterArgumentCeiling = 4;
 
 /*!
@@ -73,7 +73,7 @@ public:
 	 * \param funcType Declared signature of the function.
 	 * \param body Decoded body whose opcode stream is walked.
 	 * \param functionIndex Module function index, used for the trap-site annotation.
-	 * \param frameCallAbi True to emit the staging-frame ABI (`void fn(VMContext*, void* frame)`) instead of the register form; set module-wide by the compiler (docs/backends/STAGING_CALL_ABI.md).
+	 * \param frameCallAbi True to emit the staging-frame ABI (`void fn(VMContext*, void* frame)`) instead of the register form; set module-wide by the compiler (docs/ABI.md).
 	 * \param tagIds The instance's tag index space, imports first, so a `throw tagidx` folds to its canonical id (docs/proposals/EXCEPTIONS.md EX-2).
 	 * \param internals Instance callables, used to embed a direct tail-call target.
 	 * \param profileConfig The active profile; its `N` marker enables deterministic NaN canonicalisation at observable boundaries (docs/proposals/PROFILES.md PR-3).
@@ -910,7 +910,7 @@ private:
 	 */
 	sljit_sw scratchSlotOffset() const;
 	//! Reserved slot holding the caller-supplied out-buffer for a `v128` result
-	//! (docs/ABI_REFACTOR_STUDY.md §25).
+	//! (docs/backends/HISTORY.md).
 	/** \brief Offset of the reserved slot holding the caller-supplied result buffer. \return Frame offset in bytes. */
 	sljit_sw resultBufferSlotOffset() const;
 	//! Offset of the reserved slot holding the caller's staging-frame pointer.
@@ -919,7 +919,7 @@ private:
 	/** \brief Offset of the staging scratch area used to build a callee frame. \return Frame offset in bytes. */
 	sljit_sw callFrameOffset() const;
 	//! True when this module compiles to the staging-frame ABI
-	//! (`docs/backends/STAGING_CALL_ABI.md`): `void fn(VMContext*, void* frame)`,
+	//! (`docs/ABI.md`): `void fn(VMContext*, void* frame)`,
 	//! with every parameter and result in the caller's frame.
 	bool frameAbi_ = false;
 	//! True when the module has at least one native (context-less) function import.
@@ -1199,7 +1199,7 @@ private:
 	 *        form, read from the resolved callable; a cross-module callee may have
 	 *        been compiled by a module whose form differs from this one's, and the
 	 *        call has to follow the callee
-	 *        (docs/backends/CALL_FORM_GRANULARITY.md).
+	 *        (docs/ABI.md).
 	 */
 	void emitResolvedCall(const WASM::FuncType& type, int callableReg,
 			void* stagedImport, bool calleeFrameForm);
@@ -1643,7 +1643,7 @@ public:
 	WASM::ValueTypeCode resultKind_ = WASM::ValueTypeCode::Void; //!< Declared result kind.
 	//! Every result's kind and byte width, in declaration order. Populated whether or
 	//! not multiple results are supported, so the frame-form return site can use one
-	//! loop for one result or many (docs/backends/EXPORT_SIGNATURE.md section 40).
+	//! loop for one result or many (docs/ABI.md).
 	std::vector<WASM::ValueTypeCode> resultKinds_;
 	std::vector<int> resultWidths_;
 

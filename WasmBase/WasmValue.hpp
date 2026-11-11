@@ -179,7 +179,7 @@ inline bool tailCallFrameSupported(const FuncType& ft)
 //! **No backend consumes this yet.** Each backend states its own result spelling
 //! and the call cache follows it; the predicate records the rule that unifies
 //! them for the day one of them is converted
-//! (`docs/backends/V128_SIGNATURE_DECISION.md`, "Compliance registry").
+//! (`docs/ABI.md`, "Compliance registry").
 /** \brief Tests whether a result tuple must be returned through the caller-supplied out-buffer. \param ft Function signature to inspect. \return true when the tuple has more than one element or any element is v128. */
 inline bool needsResultBuffer(const FuncType& ft)
 {
@@ -196,7 +196,7 @@ inline bool needsResultBuffer(const FuncType& ft)
 //! caller-supplied buffer.
 //!
 //! A `v128` result cannot come back in one return register, so a backend that
-//! follows `docs/backends/V128_SIGNATURE_DECISION.md` compiles such a function as
+//! follows `docs/ABI.md` compiles such a function as
 //! `void(VMContext*, params..., void* out)` and writes the 16 bytes at `out`. This
 //! helper supplies that buffer and returns its contents, so an embedder or a test
 //! does not have to spell the trailing pointer itself. The trap check is the one
@@ -280,7 +280,7 @@ void callCallableWithResults(const Callable& callable, void* results, Args&&... 
 
 //! Invokes a callable through the **staging-frame** call ABI.
 //!
-//! Under that ABI (`docs/backends/STAGING_CALL_ABI.md`) a compiled function is
+//! Under that ABI (`docs/ABI.md`) a compiled function is
 //! `void fn(VMContext*, void* frame)` and every parameter and result lives in the
 //! caller's frame, whose layout both sides derive from the same `FuncType` via
 //! `frameArgumentsBytes` / `frameArgumentOffset` / `frameResultOffset`. The point

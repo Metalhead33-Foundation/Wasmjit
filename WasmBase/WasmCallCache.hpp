@@ -49,7 +49,7 @@ struct ModuleFfiEntry {
 	bool multiResult = false; //!< True when the ABI has a trailing result buffer.
 	//! Declared kind of the single result; `Void` when there is none. The frame
 	//! packer needs the *Wasm* kind to know the copy width, which an `ffi_type`
-	//! cannot express (docs/backends/EXPORT_SIGNATURE.md section 21).
+	//! cannot express (docs/ABI.md).
 	WASM::ValueTypeCode resultKind = WASM::ValueTypeCode::Void;
 	std::size_t resultCount = 0; //!< Number of declared results.
 	//! Declared kind of every result, in order. A multi-result frame block is a
@@ -57,7 +57,7 @@ struct ModuleFfiEntry {
 	std::vector<WASM::ValueTypeCode> resultKinds;
 	//! Bytes the staging frame needs for this signature (argument block plus result
 	//! block). The packer refuses a signature that does not fit its buffer rather
-	//! than overrunning it (docs/backends/EXPORT_SIGNATURE.md section 22).
+	//! than overrunning it (docs/ABI.md).
 	std::size_t frameBytes = 0;
 };
 

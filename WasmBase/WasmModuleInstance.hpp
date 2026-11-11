@@ -50,7 +50,7 @@ This is the one barrier a backend uses for a reference *local*: it retains \p va
 stores it, then releases the value the slot held. Splitting it into a clone, a store and a drop
 needs a scratch slot for the old value, and getting that order wrong either leaks the old value or
 frees the new one; the core does it in one place instead. Embedders and second backends use it for
-the same reason, and [`ABI_PORTABILITY.md`](../docs/ABI_PORTABILITY.md) owns the ownership rules it
+the same reason, and [`ABI.md`](../docs/ABI.md) owns the ownership rules it
 implements. */
 WASMJIT_API void wasm_ref_store(VMContext* context, void** slot, void* value) noexcept;
 
@@ -66,7 +66,7 @@ WASMJIT_API bool callableIsCompiled(const Callable& callable) noexcept;
 \param callable The callable to inspect; a host entry always answers false.
 \return True when the callable's owning instance compiled its functions into the staging frame.
 The embedder never sees this: it is the backend seam, and `ModuleCallCache` marshals typed
-arguments into a frame on the way in (docs/backends/EXPORT_SIGNATURE.md). */
+arguments into a frame on the way in (docs/ABI.md). */
 WASMJIT_API bool callableUsesFrameForm(const Callable& callable) noexcept;
 
 //! Forward declarations
@@ -113,7 +113,7 @@ struct ModuleInstanceInternals {
 	//! Empty for a function the backend compiled, and for a backend that reports
 	//! nothing. A null `fnPtr` alone cannot carry this: it also means this backend
 	//! provides no compiled entries, so support cannot be inferred from it
-	//! (docs/backends/EXPORT_SIGNATURE.md section 39).
+	//! (docs/ABI.md).
 	std::vector<std::string> internalUnsupportedReasons;
 	std::vector<Callable>  importStorage; //!< Owns the WasmCallable objects for imports
 	//! Tags are process-wide identities owned by the Store (`TagId`); this is the
@@ -141,11 +141,11 @@ struct ModuleInstanceInternals {
 	//! Reference-counting bookkeeping (docs/proposals/GC.md RC-1). Counts are
 	//! for tests/diagnostics; reclamation is deferred, see ModuleInstance.
 	//! MF-3: the queues and counters below are guarded by `gcMutex`, the
-	//! per-instance safepoint lock (docs/MULTI_AGENT_FEASIBILITY.md §7 MF-3). It is
+	//! per-instance safepoint lock (docs/proposals/THREADS.md MF-3). It is
 	//! recursive so the collect path can call the queueing helpers it owns.
 	mutable std::recursive_mutex gcMutex;
 	//! Counters are diagnostics only, but two agents allocate concurrently, so a
-	//! plain `uint64_t` would be a data race (docs/MULTI_AGENT_FEASIBILITY.md
+	//! plain `uint64_t` would be a data race (docs/proposals/THREADS.md
 	//! §2.3.5). They are read at safepoints and in tests.
 	std::atomic<uint64_t> gcAllocatedObjects{0};
 	//! Count of objects handed back for reuse (diagnostics only; atomic).
@@ -594,10 +594,10 @@ public:
 
 	//! How this module's backend spells a `v128` parameter at the C boundary.
 	//! `false` (the canonical default) means two 64-bit words, low first
-	//! (`docs/backends/V128_SIGNATURE_DECISION.md` §28). A backend that cannot
+	//! (`docs/ABI.md` “v128 across the Boundary”). A backend that cannot
 	//! implement that rule sets this to true and passes the value as one 16-byte
 	//! aggregate instead; the call cache then describes the same shape to libffi
-	//! (`docs/backends/LIBJIT_ARGUMENT_DEFECT.md` §12). The two spellings are the
+	//! (`docs/backends/HISTORY.md` §5). The two spellings are the
 	//! same ABI on SysV and differ on MS x64, where an aggregate is passed by
 	//! reference.
 	bool v128ParameterIsAggregate_ = false;
@@ -611,7 +611,7 @@ public:
 	//! the backend returns it itself -- in a register or an aggregate, as its own
 	//! convention says. `true` means the canonical rule: the caller passes a 16-byte
 	//! buffer as a trailing pointer parameter and the function returns void
-	//! (`docs/backends/V128_SIGNATURE_DECISION.md`). The call cache needs to know,
+	//! (`docs/ABI.md`). The call cache needs to know,
 	//! because the two describe different C signatures to libffi.
 	bool v128ResultIsBuffered_ = false;
 
@@ -621,7 +621,7 @@ public:
 	bool v128ResultIsBuffered() const noexcept { return v128ResultIsBuffered_; }
 
 	//! Whether this module's compiled functions use the **staging-frame** call ABI
-	//! (`docs/backends/STAGING_CALL_ABI.md`): the C signature is
+	//! (`docs/ABI.md`): the C signature is
 	//! `void fn(VMContext*, void* frame)`, with every parameter and result in a
 	//! caller-allocated, 16-byte-aligned frame whose layout both sides derive from
 	//! the same `FuncType`. Default `false`: the per-backend register spellings
@@ -640,7 +640,7 @@ public:
 	//! through a register-form call, which is memory corruption rather than a
 	//! trap. Both forms are known once the importing module is compiled, so the
 	//! check runs there (`ModuleInstantiator::instantiate`), once, for every
-	//! backend ([`docs/backends/CALL_FORM_GRANULARITY.md`](../docs/backends/CALL_FORM_GRANULARITY.md)).
+	//! backend ([`docs/ABI.md`](../docs/ABI.md)).
 	//! \throws std::runtime_error when an import's form differs from this module's.
 	void verifyImportCallForms() const;
 

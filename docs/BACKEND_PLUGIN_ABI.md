@@ -21,7 +21,7 @@ Verdict up front:
 |---|---|
 | Is loading a backend from a `.so` feasible? | **Yes, high.** The backend is already a shared library; the process already resolves `libjit.so.0` at load time. |
 | Is a **stable C ABI** feasible? | **Medium.** Only for *discovery, lifecycle, metadata and a POD signature/layout view*. The compilation seam itself consumes C++ types (`ModuleInstance&`, `ModuleInstanceInternals&`), so a fully C seam is a much larger, separately-versioned commitment (§4.3). |
-| Does it demote any class-E blocker? | **No.** It is orthogonal to [`MULTI_AGENT_FEASIBILITY.md`](MULTI_AGENT_FEASIBILITY.md); it does not change what a backend has to *do*. |
+| Does it demote any class-E blocker? | **No.** It is orthogonal to [`proposals/THREADS.md`](proposals/THREADS.md); it does not change what a backend has to *do*. |
 | Is it still worth doing? | **Yes — in two stages.** Freeze the descriptor shape now (even while loading at link time); add `dlopen` behind an opt-in later. That converts a future decision into a build change. |
 
 One observation reframes the whole problem: **the engine already has a C ABI — it
@@ -302,7 +302,7 @@ until someone proves a need for more.
 
 | Question | Answer |
 |---|---|
-| Does it demote a class-E blocker? | **No.** Orthogonal to [`MULTI_AGENT_FEASIBILITY.md`](MULTI_AGENT_FEASIBILITY.md): it changes *how* a backend is loaded, not what a backend must do. |
+| Does it demote a class-E blocker? | **No.** Orthogonal to [`proposals/THREADS.md`](proposals/THREADS.md): it changes *how* a backend is loaded, not what a backend must do. |
 | Does it strengthen G3? | **Yes.** A loaded plugin is a second implementation of the seam that can be tested as a black box — exactly the `AAS10` evidence G3 lacks. |
 | Does it add a frozen surface? | **Yes**, and that is the price: `wasmjit_backend.h` becomes surface **S10** of `API_ABI_STABILITY.md` §2.2, with its own `abi_version` (currently **3**: 2 added the build-kind field of §7.7, 3 added the `releaseInstance` slot of the unloader). |
 | Does it conflict with `ES-4` (hidden visibility)? | It *depends* on it: the helper ABI must be exported deliberately. Without `ES-4`, the plugin ABI is "23k symbols and hope". |
@@ -360,9 +360,9 @@ guarantees or explicit embedder responsibilities; none is an open code gap.
   rule 6.
 - [`THREADSAFETY.md`](THREADSAFETY.md) §3.1–§3.2 — the cardinality rule and the
   serialized-compilation / re-entrant-execution split behind rule 4.
-- [`MULTI_AGENT_FEASIBILITY.md`](MULTI_AGENT_FEASIBILITY.md) §5 — the per-backend
+- [`proposals/THREADS.md`](proposals/THREADS.md) §5 — the per-backend
   threading rules a plugin inherits.
-- [`SIMD_BACKENDS.md`](SIMD_BACKENDS.md) §3 — what each engine offers, which is
+- [`proposals/SIMD.md`](proposals/SIMD.md) §4.10 — what each engine offers, which is
   what a capability flag has to describe.
 - Source anchors: `Test/TestBackend.cpp` (`WASMJIT_BACKEND`), `Test/Test.pro`
   (rpath + link lines), `LibJit/LibJit.pro`, `WasmBase/*.hpp` (`extern "C"`

@@ -1,5 +1,5 @@
 ;; Item 4, probe 12: two memories, indexed access
-;; (docs/backends/CAPABILITY_PROBES.md section 7).
+;; (docs/TESTING.md section 7).
 (module
   (memory 1)
   (memory 1)

@@ -4,7 +4,7 @@
 ;; constant, so it could not tell a working lowering from one that traps or does
 ;; nothing: it measured the module's instantiation, not the feature. Each export
 ;; here now returns the value it read back, so the assertion is the round-trip
-;; (docs/backends/CAPABILITY_PROBES.md section 8).
+;; (docs/TESTING.md section 8).
 (module
   (type $row (array (mut i32)))
 

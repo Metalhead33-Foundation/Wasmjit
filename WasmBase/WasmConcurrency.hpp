@@ -17,7 +17,7 @@ WASMJIT_VISIBLE_BEGIN
 
 namespace WASM {
 
-//! \brief The opt-in execution model (docs/MULTI_AGENT_FEASIBILITY.md §6.2/MF-6)
+//! \brief The opt-in execution model (docs/proposals/THREADS.md/MF-6)
 //!
 //! `Single` is the default contract: one agent inside a call at a time. `Agents`
 //! lets several agents execute one *instance* concurrently — they share its

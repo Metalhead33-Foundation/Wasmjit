@@ -1,6 +1,6 @@
 ;; Item 4, probe 5: a tail call from a FRAME-FORM function. Three vectors force the
 ;; frame, so the tail call has to cross a trampoline that may not carry a frame
-;; pointer (docs/backends/PRODUCTION_GAPS.md section 22).
+;; pointer (docs/API_ABI_STABILITY.md).
 (module
   (func $callee (param v128 v128 v128) (result i32)
     local.get 0

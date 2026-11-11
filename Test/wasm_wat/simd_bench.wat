@@ -1,4 +1,4 @@
-;; The SIMD-L8 benchmark workload (docs/SIMD_LIBJIT.md §8.2). One fixed loop,
+;; The SIMD-L8 benchmark workload (docs/proposals/SIMD.md). One fixed loop,
 ;; six `v128` ops per iteration, mixing memory and arithmetic so that both the
 ;; helper calls and the producer/consumer slot traffic appear:
 ;;
@@ -16,7 +16,7 @@
 ;;
 ;; Kept deliberately small in ops-per-byte: the point is to measure the cost of
 ;; *crossing the helper boundary*, which dominates only when the loop body is
-;; short. A long body would hide it (docs/SIMD_LIBJIT.md §8.1).
+;; short. A long body would hide it (docs/proposals/SIMD.md).
 (module
   (memory (export "memory") 1)
   (data (i32.const 0)

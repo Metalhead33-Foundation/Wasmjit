@@ -50,7 +50,7 @@ struct RuntimeConfig {
 	//! (docs/proposals/PROFILES.md). The default is the full profile.
 	ProfileConfig     profile{};
 
-	//! The execution model (docs/MULTI_AGENT_FEASIBILITY.md §6.2). `Single` is
+	//! The execution model (docs/proposals/THREADS.md). `Single` is
 	//! the default; `Agents` lets several host threads enter the one instance
 	//! concurrently (docs/proposals/THREADS.md TH-5).
 	ConcurrencyModel  concurrency = ConcurrencyModel::Single;
@@ -111,7 +111,7 @@ struct RuntimeConfig {
 //! calls on *different* instances may run on different agents, and one
 //! instance's entry discipline follows `RuntimeConfig::concurrency`: `Single`
 //! refuses a second entrant, `Agents` admits several
-//! (docs/MULTI_AGENT_FEASIBILITY.md MF-2/MF-7).
+//! (docs/proposals/THREADS.md MF-2/MF-7).
 /** \brief Owns the runtime Store, loaded modules, module instances, and selected backend. */
 class WASMJIT_API Runtime
 {
@@ -331,7 +331,7 @@ Ret Runtime::callExport(ModuleInstance& instance, std::string_view name, Args&&.
 	if (!instance.enterCall(config_.concurrency == ConcurrencyModel::Agents))
 		throw std::runtime_error("the instance is already executing a call; concurrent"
 				" execution of one instance is not supported (ConcurrencyModel::Single,"
-				" docs/MULTI_AGENT_FEASIBILITY.md MF-2)");
+				" docs/proposals/THREADS.md MF-2)");
 	struct CallGuard {
 		ModuleInstance& instance; //!< The instance whose call slot this guard holds.
 		~CallGuard() { instance.leaveCall(); }
@@ -354,7 +354,7 @@ void Runtime::callExportWithResults(ModuleInstance& instance, std::string_view n
 	if (!instance.enterCall(config_.concurrency == ConcurrencyModel::Agents))
 		throw std::runtime_error("the instance is already executing a call; concurrent"
 				" execution of one instance is not supported (ConcurrencyModel::Single,"
-				" docs/MULTI_AGENT_FEASIBILITY.md MF-2)");
+				" docs/proposals/THREADS.md MF-2)");
 	struct CallGuard {
 		ModuleInstance& instance; //!< The instance whose call slot this guard holds.
 		~CallGuard() { instance.leaveCall(); }

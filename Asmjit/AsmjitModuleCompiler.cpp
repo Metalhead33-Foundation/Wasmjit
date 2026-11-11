@@ -1561,7 +1561,7 @@ public:
 			// result, exactly as an explicit `return` does.
 			emitDropReferenceLocals();
 			if (frameMode && resultCount > 1) {
-				// Multi-result (docs/backends/EXPORT_SIGNATURE.md section 29): every
+				// Multi-result (docs/ABI.md): every
 				// result goes into the frame in declaration order, 8 bytes per scalar
 				// slot and 16 for a `v128` taken from its local buffer.
 				asmjit::x86::Gp destination = compiler.new_gp_ptr("resultAddress");
@@ -2826,7 +2826,7 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 		// The translated signature table is spelled in *this module's* form. When
 		// the callee was compiled in the other one, its own spelling is translated
 		// on demand -- the mixed-graph path, which is rare enough that a cached
-		// second table would be wasted memory (docs/backends/CALL_FORM_GRANULARITY.md).
+		// second table would be wasted memory (docs/ABI.md).
 		bool calleeFrameForm = isInternal
 				? frameMode : WASM::callableUsesFrameForm(internals.importStorage[index]);
 		std::unique_ptr<asmjit::FuncSignature> foreignFormSignature;
@@ -2843,7 +2843,7 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 		// from another module may have been built in either form, and a native
 		// import is always the register form because it is a host C function. That
 		// is what lets two modules that disagree about the form call each other
-		// (docs/backends/CALL_FORM_GRANULARITY.md).
+		// (docs/ABI.md).
 		if (!isInternal && !WASM::callableIsCompiled(internals.importStorage[index]))
 			calleeFrameForm = false;
 		if (!calleeFrameForm && calledType.results.size() > 1)
@@ -11594,7 +11594,7 @@ private:
 	//! Loop target of a direct self tail call.
 	asmjit::Label bodyStart;
 	asmjit::x86::Gp vmContext;
-	//! The frame pointer in frame mode (docs/backends/EXPORT_SIGNATURE.md).
+	//! The frame pointer in frame mode (docs/ABI.md).
 	asmjit::x86::Gp framePointer;
 	//! Whether this function is compiled in the staging-frame form.
 	const bool frameMode = TypeTranslator::moduleNeedsFrame(module, WASM::frameCallAbiOptIn());
@@ -11675,7 +11675,7 @@ void ModuleCompiler::translateTypes(WASM::ModuleInstance& instance, const WASM::
 		WASM::ModuleInstanceInternals& internals)
 {
 	signatures.clear();
-	// Staging-frame ABI (docs/backends/EXPORT_SIGNATURE.md section 11): the mode
+	// Staging-frame ABI (docs/ABI.md): the mode
 	// is decided before translation, because the signature itself changes shape.
 	// Opt-in, never inferred -- see WasmBase/WasmBackendAbi.hpp.
 	const bool frameMode = TypeTranslator::moduleNeedsFrame(module, WASM::frameCallAbiOptIn());
@@ -11732,7 +11732,7 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance,
 	// A v128 result travels through the caller-supplied 16-byte buffer: the
 	// signature spells it as a trailing pointer and a void return, so the call
 	// cache must describe that shape rather than a returned aggregate
-	// (docs/backends/V128_SIGNATURE_DECISION.md).
+	// (docs/ABI.md).
 	instance.setV128ResultIsBuffered(true);
 
 	if (module.functionBodies.size() != functionRecords.size())

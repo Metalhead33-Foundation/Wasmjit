@@ -1,5 +1,5 @@
 ;; Item 4, probe 13: a `throw` that a handler CATCHES. This asks whether the
-;; handler path exists at all (docs/backends/CAPABILITY_PROBES.md section 8).
+;; handler path exists at all (docs/TESTING.md section 8).
 ;;
 ;; The try_table is void: its body ends in a throw, so it can only fall through
 ;; with a declared result if the module is invalid (wasm-tools validate caught

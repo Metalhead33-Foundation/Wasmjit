@@ -361,7 +361,7 @@ surface frozen?". Explicitly outside it are:
 | The actual host imports a module binds to | The screen needs the **hook/dispatch mechanism** pinned, not a frozen catalogue of `env.*` names. A module's import list is a per-language/per-toolchain finding. | `LF-1` triage, `LF-2` PoC |
 | Host exports and their contents | Same reason on the export side. | `LF-2` |
 | JS-integration specifics | An embedder responsibility on the far side of `ImportResolver`/`Callable`/`HostBridge`; the engine deliberately does not implement a JS engine. | [`proposals/JS_INTEGRATION.md`](proposals/JS_INTEGRATION.md) |
-| (Planned) multithreading | Supported through opt-in, embedder-owned hooks: `ConcurrencyModel::Agents` for core module execution and `ComponentExecutor` for component async. The single-agent mode remains the default; there is no in-engine scheduler. | [`MULTI_AGENT_FEASIBILITY.md`](MULTI_AGENT_FEASIBILITY.md) §6, [`THREADSAFETY.md`](THREADSAFETY.md) §3.1, [`proposals/THREADS.md`](proposals/THREADS.md) §4.3 |
+| (Planned) multithreading | Supported through opt-in, embedder-owned hooks: `ConcurrencyModel::Agents` for core module execution and `ComponentExecutor` for component async. The single-agent mode remains the default; there is no in-engine scheduler. | [`proposals/THREADS.md`](proposals/THREADS.md) §4.3.2, [`THREADSAFETY.md`](THREADSAFETY.md) §3.1 |
 | Language features, toolchains, colour verdicts | Not engine-owned surfaces. | `LF-1`/`LF-2` |
 | Performance | Not a readiness question. | — |
 
@@ -779,12 +779,12 @@ reviewable artefact is the study report itself, and its evidence rules are §8.4
 - [`EMBEDDING_SURFACE.md`](EMBEDDING_SURFACE.md) §2, §6.4 — the load/call recipe
   a PoC must use, and the umbrella-header plan that makes a PoC's build
   reproducible.
-- [`MULTI_AGENT_FEASIBILITY.md`](MULTI_AGENT_FEASIBILITY.md) §2.3 and
+- [`proposals/THREADS.md`](proposals/THREADS.md) §4.3 and
   [`THREADSAFETY.md`](THREADSAFETY.md) §3.1 — one instance per module, many
   agents as the accepted direction, and the single-agent contract a language
   runtime is evaluated against.
 - [`proposals/JS_INTEGRATION.md`](proposals/JS_INTEGRATION.md) and
-  [`MULTI_AGENT_FEASIBILITY.md`](MULTI_AGENT_FEASIBILITY.md) §6 — why JS
+  [`proposals/THREADS.md`](proposals/THREADS.md) §4.3.2 — why JS
   integration and planned multithreading are embedder-side opt-in hooks, and
   therefore out of scope for the audit (§6.3).
 - [`LAYERING.md`](LAYERING.md) §4 — the core ↔ backend contract whose change

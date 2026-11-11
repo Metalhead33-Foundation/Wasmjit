@@ -296,10 +296,10 @@ a flat tree is. The hierarchy is therefore built by four index pages:
 
 | Index page | Id | Children |
 |---|---|---|
-| [`index.md`](index.md) | `docs_index` | the 26 notes in `docs/`, plus the three child folders and the ABI-baseline page |
+| [`index.md`](index.md) | `docs_index` | the 19 notes in `docs/`, plus the three child folders and the ABI-baseline page |
 | [`proposals/index.md`](proposals/index.md) | `proposals_index` | the 39 proposal notes |
 | [`languages/index.md`](languages/index.md) | `languages_index` | the 17 language notes (the `LF-1` set and the `LF-2` reports) |
-| [`backends/index.md`](backends/index.md) | `backends_index` | the 24 backend notes, plus the two backend pages |
+| [`backends/index.md`](backends/index.md) | `backends_index` | the one frozen backend history note, plus the two backend pages |
 
 A note declares its own id on the title line, and its folder's index lists that
 id in a table row:
@@ -315,9 +315,9 @@ which produces:
 WasmJit            (README.md, the main page)
 ├── Direction, Feature completeness, …   (the README's own sections)
 └── docs                                 (docs/index.md)
-    ├── ABI, API/ABI stability, …        (26 notes, each with its own sections)
+    ├── ABI, API/ABI stability, …        (19 notes, each with its own sections)
     ├── backends                         (docs/backends/index.md)
-    │   └── Readiness, frame ABI, slice post-mortems …   (24 notes)
+    │   └── Backend history             (1 frozen record)
     ├── languages                        (docs/languages/index.md)
     │   └── Triage, Clustering, Charters, Evidence, LF-2 …   (17 study notes)
     └── proposals                        (docs/proposals/index.md)

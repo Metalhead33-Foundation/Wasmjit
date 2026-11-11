@@ -7,16 +7,14 @@ implements the four `ModuleInstantiator` hooks and executes the shared lowering
 slice with AsmJit’s register allocator.
 
 **Status (2026-11-10):** **production-ready within the declared envelope** —
-`WASMJIT_BACKEND=asmjit ./Test/WasmJit --rng-seed 12345` reports **22,593
+`WASMJIT_BACKEND=asmjit ./Test/WasmJit --rng-seed 12345` reports **22,533
 assertions in 824 cases, green**, the same case set and assertion count as the
 reference backend. The envelope is x86-64 Linux / SysV AMD64 with the external
 AsmJit library available at build time, and the documented refusals are the same
 three as SLJIT’s (see `Sljit/Sljit.md` "Known limitations"). See
-[`docs/BACKEND_PRODUCTION_READINESS.md`](../docs/BACKEND_PRODUCTION_READINESS.md)
-for the measured evidence and
-[`docs/backends/PRODUCTION_GAPS.md`](../docs/backends/PRODUCTION_GAPS.md) §30 for
-the defect ledger. It is still not a *code-quality* drop-in replacement for GNU
-LibJIT.
+[`docs/API_ABI_STABILITY.md`](../docs/API_ABI_STABILITY.md) §13 for the verdict
+and §8 for the open register and the defect ledger. It is still not a
+*code-quality* drop-in replacement for GNU LibJIT.
 
 ## What exists
 
@@ -75,7 +73,7 @@ direct calls. Each generated function emits the required
   SIMD surface, the reference family, GC construction and access, the Custom
   Descriptors family, exceptions and continuations all execute; `v128`
   signatures are implemented (two `uint64_t` words, per
-  [`docs/backends/V128_SIGNATURE_DECISION.md`](../docs/backends/V128_SIGNATURE_DECISION.md)),
+  [`docs/ABI.md`](../docs/ABI.md)),
   and the opt-in frame ABI is available on the same terms as the other two
   backends. What remains are the named refusals, not a missing instruction
   family; `f16` has no stable encoding.
@@ -121,7 +119,7 @@ direct calls. Each generated function emits the required
 
 The module compiler covers the same lowering slice as the other two backends and
 runs the generic suite to completion. The remaining precision limits are the
-ones recorded in [`docs/backends/PRODUCTION_GAPS.md`](../docs/backends/PRODUCTION_GAPS.md)
+ones recorded in [`docs/API_ABI_STABILITY.md`](../docs/API_ABI_STABILITY.md)
 §30 — notably reference ownership through a struct field or array element is a
 borrow, not an owned count — and they are leaks, never wrong results.
 
@@ -144,13 +142,13 @@ target-architecture check).
 1. **Reference ownership is exact on the paths the suites exercise**, but a
    reference read out of a struct field or array element, the unselected operand
    of `select`, and `drop` of a GC reference are still *borrows*. Each is a leak,
-   never a wrong result; [`docs/backends/PRODUCTION_GAPS.md`](../docs/backends/PRODUCTION_GAPS.md)
-   §30 names the sites.
+   never a wrong result; [`docs/API_ABI_STABILITY.md`](../docs/API_ABI_STABILITY.md)
+   §8 (`GAP-4`/`GAP-5`) names the sites.
 2. **A frame-form tail trampoline.** `return_call_ref` above the register-form
    ceiling is a semantic call + return here
-   ([`docs/backends/PRODUCTION_GAPS.md`](../docs/backends/PRODUCTION_GAPS.md) §2.1).
+   ([`docs/API_ABI_STABILITY.md`](../docs/API_ABI_STABILITY.md) §8, `GAP-2`).
 3. **Portability.** Only x86-64 Linux / SysV AMD64 is exercised; the target
-   matrix in [`docs/ABI_PORTABILITY.md`](../docs/ABI_PORTABILITY.md) keeps the
+   matrix in [`docs/ABI.md`](../docs/ABI.md) keeps the
    other rows *provisional*.
 4. **A wide `v128` indirect call in a module with a native import** is refused,
    because the staged-import adapter has no `ffi_type` for a vector.
