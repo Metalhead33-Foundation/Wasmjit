@@ -11480,6 +11480,179 @@ TEST_CASE("diagnostics: an unreadable or oversized guest string degrades safely"
 }
 
 
+TEST_CASE("diagnostics: the enum log form maps every kind and rejects an unknown selector")
+{
+	WASM::clearDiagnostics();
+	WASM::RegistryImportResolver imports;
+	WASM::registerToEnv(imports);
+
+	WASM::Module module = loadTestModule("diagnostics_log");
+	auto backend = TestBackend::create();
+	auto instance = backend->instantiator().instantiate(module, imports);
+	REQUIRE(instance.get() != nullptr);
+
+	auto all = instance->exportedFunction("log_enum_all");
+	REQUIRE(all.has_value());
+	WASM::callCallable<void>(*all);
+
+	// A zero length means a NUL-terminated C string, so the enum calls need no
+	// explicit lengths; kind 9 is the invalid-selector record, not a crash.
+	const auto records = WASM::recentDiagnostics();
+	REQUIRE(records.size() == 4);
+	REQUIRE(records[0].id == "WASM.EXECUTE.LOG.INFO");
+	REQUIRE(records[0].message == "info from guest");
+	REQUIRE(records[1].id == "WASM.EXECUTE.LOG.WARN");
+	REQUIRE(records[1].message == "warn from guest");
+	REQUIRE(records[2].id == "WASM.EXECUTE.LOG.ERROR");
+	REQUIRE(records[2].message == "error from guest");
+	REQUIRE(records[3].id == "WASM.EXECUTE.LOG.INVALID");
+	REQUIRE(records[3].severity == WASM::DiagnosticSeverity::Error);
+	REQUIRE(records[3].message == "info from guest");
+
+	// kind 3 is the panic: the Fatal record, then a trap with the same text.
+	WASM::clearDiagnostics();
+	auto panic = instance->exportedFunction("log_enum_panic");
+	REQUIRE(panic.has_value());
+	bool trapped = false;
+	std::string message;
+	try {
+		WASM::callCallable<void>(*panic);
+	} catch (const WASM::Trap& trap) {
+		trapped = true;
+		message = trap.message() != nullptr ? trap.message() : "";
+	}
+	REQUIRE(trapped);
+	REQUIRE(message == "panic from guest");
+	REQUIRE(WASM::recentDiagnostics().size() == 2);
+	REQUIRE(WASM::recentDiagnostics()[0].id == "WASM.EXECUTE.LOG.PANIC");
+	REQUIRE(WASM::recentDiagnostics()[0].severity == WASM::DiagnosticSeverity::Fatal);
+}
+
+TEST_CASE("diagnostics: an AssemblyScript String object is logged")
+{
+	WASM::clearDiagnostics();
+	WASM::RegistryImportResolver imports;
+	WASM::registerToEnv(imports);
+
+	WASM::Module module = loadTestModule("diagnostics_log");
+	auto backend = TestBackend::create();
+	auto instance = backend->instantiator().instantiate(module, imports);
+	REQUIRE(instance.get() != nullptr);
+
+	// The fixture stores a fake AS String: `rtSize` at 220, the UTF-16LE code
+	// units at 224. A pointer below the header degrades to a placeholder.
+	auto good = instance->exportedFunction("log_as_good");
+	REQUIRE(good.has_value());
+	WASM::callCallable<void>(*good);
+	REQUIRE(WASM::recentDiagnostics().size() == 1);
+	REQUIRE(WASM::recentDiagnostics()[0].id == "WASM.EXECUTE.LOG.INFO");
+	REQUIRE(WASM::recentDiagnostics()[0].message == "as from guest");
+
+	WASM::clearDiagnostics();
+	auto bad = instance->exportedFunction("log_as_bad");
+	REQUIRE(bad.has_value());
+	WASM::callCallable<void>(*bad);
+	REQUIRE(WASM::recentDiagnostics().size() == 1);
+	REQUIRE(WASM::recentDiagnostics()[0].message
+			== "<guest string: range outside linear memory>");
+
+	// `log_str` imported as `(i32, i32)` lets the guest pass a forged handle; the
+	// host validates it against the Store before dereferencing anything.
+	WASM::clearDiagnostics();
+	auto forged = instance->exportedFunction("log_str_forged");
+	REQUIRE(forged.has_value());
+	WASM::callCallable<void>(*forged);
+	REQUIRE(WASM::recentDiagnostics().size() == 1);
+	REQUIRE(WASM::recentDiagnostics()[0].message
+			== "<guest string: not a Store-owned string>");
+}
+
+TEST_CASE("diagnostics: an AssemblyScript String crosses the real AS layout")
+{
+	// `Test/wasm/diagnostics_interop.ts` calls `env.log_as` with a real AS
+	// `String` literal; the host reads the managed object header the AS 0.28
+	// runtime writes (`rtSize` at `pointer - 4`, UTF-16LE at `pointer`).
+	WASM::clearDiagnostics();
+	WASM::RegistryImportResolver imports;
+	WASM::registerToEnv(imports);
+
+	WASM::Module module = loadTestModule("diagnostics_interop");
+	auto backend = TestBackend::create();
+	auto instance = backend->instantiator().instantiate(module, imports);
+	REQUIRE(instance.get() != nullptr);
+
+	auto info = instance->exportedFunction("logInfoLiteral");
+	REQUIRE(info.has_value());
+	WASM::callCallable<void>(*info);
+	REQUIRE(WASM::recentDiagnostics().size() == 1);
+	REQUIRE(WASM::recentDiagnostics()[0].id == "WASM.EXECUTE.LOG.INFO");
+	REQUIRE(WASM::recentDiagnostics()[0].message == "h\xC3\xA9llo from AS");
+
+	WASM::clearDiagnostics();
+	auto warn = instance->exportedFunction("logWarnLiteral");
+	REQUIRE(warn.has_value());
+	WASM::callCallable<void>(*warn);
+	REQUIRE(WASM::recentDiagnostics().size() == 1);
+	REQUIRE(WASM::recentDiagnostics()[0].id == "WASM.EXECUTE.LOG.WARN");
+	REQUIRE(WASM::recentDiagnostics()[0].message == "warn from AS");
+
+	WASM::clearDiagnostics();
+	auto panic = instance->exportedFunction("logPanicLiteral");
+	REQUIRE(panic.has_value());
+	bool trapped = false;
+	try {
+		WASM::callCallable<void>(*panic);
+	} catch (const WASM::Trap&) {
+		trapped = true;
+	}
+	REQUIRE(trapped);
+	REQUIRE(WASM::recentDiagnostics().size() == 2);
+	REQUIRE(WASM::recentDiagnostics()[0].id == "WASM.EXECUTE.LOG.PANIC");
+	REQUIRE(WASM::recentDiagnostics()[0].message == "panic from AS");
+}
+
+TEST_CASE("diagnostics: a stringref argument is logged")
+{
+	// A host-built module with a `(i32, stringref) -> ()` import: the guest
+	// passes a `string.const` literal, and the host encodes the Store-owned
+	// StringObject to UTF-8.
+	StringFixtureBuilder module;
+	module.section(0x01, {0x02,
+		0x60, 0x02, 0x7f, 0x67, 0x00, // type 0: (i32, stringref) -> ()
+		0x60, 0x00, 0x01, 0x7f});     // type 1: () -> i32
+	module.section(0x02, {0x01,
+		0x03, 'e','n','v', 0x07, 'l','o','g','_','s','t','r', 0x00, 0x00});
+	module.functions(std::vector<std::uint8_t>{0x01});
+	module.section(0x0e, {0x00, 0x01, 0x0d,
+		'g','c',' ','f','r','o','m',' ','g','u','e','s','t'});
+	module.exports({{"run", 1}});
+	module.code({
+		// run: kind 0; string.const 0; call env.log_str; return 0.
+		{0x00, 0x41, 0x00, 0xfb, 0x82, 0x01, 0x00, 0x10, 0x00, 0x41, 0x00, 0x0b}});
+
+	std::span<const std::byte> span(
+			reinterpret_cast<const std::byte*>(module.bytes.data()), module.bytes.size());
+	Euph::Io::ConstBufferDevice device(span);
+	auto artifact = WASM::Artifact::parse(device, testStore());
+	REQUIRE(artifact != nullptr);
+	WASM::Module* parsed = artifact->asCoreModule();
+	REQUIRE(parsed != nullptr);
+
+	WASM::clearDiagnostics();
+	WASM::RegistryImportResolver imports;
+	WASM::registerToEnv(imports);
+	auto backend = TestBackend::create();
+	auto instance = backend->instantiator().instantiate(*parsed, imports);
+	REQUIRE(instance.get() != nullptr);
+
+	auto run = instance->exportedFunction("run");
+	REQUIRE(run.has_value());
+	REQUIRE(WASM::callCallable<std::int32_t>(*run) == 0);
+	REQUIRE(WASM::recentDiagnostics().size() == 1);
+	REQUIRE(WASM::recentDiagnostics()[0].id == "WASM.EXECUTE.LOG.INFO");
+	REQUIRE(WASM::recentDiagnostics()[0].message == "gc from guest");
+}
+
 TEST_CASE("diagnostics: a validation failure carries a stable id and a location")
 {
 	WASM::clearDiagnostics();

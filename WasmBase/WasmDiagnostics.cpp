@@ -3,12 +3,16 @@
 #include "WasmImport.hpp"
 #include "WasmMemory.hpp"
 #include "WasmNativeImport.hpp"
+#include "WasmString.hpp"
+#include "WasmStore.hpp"
+#include "WasmModule.hpp"
 #include "WasmVMContext.hpp"
 
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
 #include <utility>
 
 namespace WASM {
@@ -681,7 +685,8 @@ namespace {
 // Reads a UTF-8 message out of the module's memory 0. Everything that could
 // make the range unreadable degrades to a deterministic placeholder: a log
 // import must never trap on a bad pointer, because the module under test is
-// exactly the thing being diagnosed.
+// exactly the thing being diagnosed. A zero length means a NUL-terminated
+// C string, scanned only within the readable range and one byte past the cap.
 std::string guestMessage(VMContext* context, std::int32_t pointer, std::int32_t length)
 {
 	if (length < 0 || pointer < 0)
@@ -692,21 +697,168 @@ std::string guestMessage(VMContext* context, std::int32_t pointer, std::int32_t 
 
 	const LinearMemory* memory = context->memories[0];
 	const auto base = static_cast<std::uint64_t>(static_cast<std::uint32_t>(pointer));
-	const auto requested = static_cast<std::uint64_t>(static_cast<std::uint32_t>(length));
 	const std::uint64_t size = wasm_memory_size(memory);
-	if (memory->memoryBase == nullptr || base > size || requested > size - base)
+	if (memory->memoryBase == nullptr || base > size)
+		return "<guest string: range outside linear memory>";
+
+	const std::uint64_t available = size - base;
+	std::uint64_t requested = static_cast<std::uint64_t>(static_cast<std::uint32_t>(length));
+	bool terminated = true;
+	if (length == 0) {
+		// The C-string convenience: scan to the first NUL. The scan stops at the
+		// end of memory or one byte past the cap, so an overlong string is known
+		// to be overlong without reading it all.
+		const std::uint64_t scanLimit = std::min<std::uint64_t>(available,
+				static_cast<std::uint64_t>(kMaxDiagnosticMessageBytes) + 1u);
+		const auto* bytes = memory->memoryBase + base;
+		std::uint64_t scan = 0;
+		while (scan < scanLimit && bytes[scan] != 0)
+			++scan;
+		requested = scan;
+		terminated = scan < scanLimit;
+	}
+	if (requested > available)
 		return "<guest string: range outside linear memory>";
 
 	const std::uint64_t readable = std::min<std::uint64_t>(requested, kMaxDiagnosticMessageBytes);
 	std::string message(reinterpret_cast<const char*>(memory->memoryBase + base),
 			static_cast<std::size_t>(readable));
-	if (readable < requested)
+	if (readable < requested || !terminated)
 		message += "...";
 	return message;
 }
 
-void emitHostLog(DiagnosticSeverity severity, std::string_view id,
-		VMContext* context, std::int32_t pointer, std::int32_t length) noexcept
+// Appends one Unicode scalar value as UTF-8. The caller keeps the byte budget.
+void appendUtf8(std::string& out, std::uint32_t codePoint)
+{
+	if (codePoint <= 0x7Fu) {
+		out.push_back(static_cast<char>(codePoint));
+	} else if (codePoint <= 0x7FFu) {
+		out.push_back(static_cast<char>(0xC0u | (codePoint >> 6)));
+		out.push_back(static_cast<char>(0x80u | (codePoint & 0x3Fu)));
+	} else if (codePoint <= 0xFFFFu) {
+		out.push_back(static_cast<char>(0xE0u | (codePoint >> 12)));
+		out.push_back(static_cast<char>(0x80u | ((codePoint >> 6) & 0x3Fu)));
+		out.push_back(static_cast<char>(0x80u | (codePoint & 0x3Fu)));
+	} else {
+		out.push_back(static_cast<char>(0xF0u | (codePoint >> 18)));
+		out.push_back(static_cast<char>(0x80u | ((codePoint >> 12) & 0x3Fu)));
+		out.push_back(static_cast<char>(0x80u | ((codePoint >> 6) & 0x3Fu)));
+		out.push_back(static_cast<char>(0x80u | (codePoint & 0x3Fu)));
+	}
+}
+
+// Reads a Store-owned stringref (`StringObject`) and encodes it lossily to
+// UTF-8, bounded by the record cap. The argument is the caller's borrow; the
+// import must not release it. A handle the Store does not own is refused before
+// any dereference: a guest can misdeclare the import's type and pass an
+// arbitrary integer where a stringref is expected (docs/SAFETY.md).
+std::string stringRefMessage(VMContext* context, void* handle)
+{
+	if (handle == nullptr)
+		return "<guest string: null>";
+	if (context == nullptr || context->module == nullptr)
+		return "<guest string: no store>";
+	if (!context->module->store().strings().owns(handle))
+		return "<guest string: not a Store-owned string>";
+	const auto* string = static_cast<const StringObject*>(handle);
+	const std::size_t limit = std::min<std::size_t>(string->codePoints.size(),
+			kMaxDiagnosticMessageBytes);
+	std::vector<std::uint32_t> codePoints(string->codePoints.begin(),
+			string->codePoints.begin() + static_cast<std::ptrdiff_t>(limit));
+	std::uint32_t next = 0;
+	std::vector<std::uint8_t> bytes;
+	if (!wtf8Encode(codePoints, 0, -1, Wtf8Encoding::LossyUtf8, next, bytes))
+		return "<guest string: not representable>";
+	std::string message(bytes.begin(), bytes.end());
+	if (message.size() > kMaxDiagnosticMessageBytes) {
+		message.resize(kMaxDiagnosticMessageBytes);
+		message += "...";
+	} else if (limit < string->codePoints.size()) {
+		message += "...";
+	}
+	return message;
+}
+
+// Reads an AssemblyScript `String` object out of linear memory. The layout is
+// the documented AS 0.28 `std/assembly/rt/common.ts` one: a managed object's
+// `rtSize` (payload bytes) sits four bytes before the value, and a String's
+// payload is UTF-16LE code units starting at the value pointer. A null pointer
+// is AS's null string; any unreadable shape degrades to a placeholder.
+std::string assemblyScriptMessage(VMContext* context, std::int32_t pointer)
+{
+	if (pointer == 0)
+		return {}; // AssemblyScript's null string
+	if (pointer < 0)
+		return "<guest string: negative range>";
+	if (context == nullptr || context->memories == nullptr || context->memoryCount == 0
+			|| context->memories[0] == nullptr)
+		return "<guest string: module has no linear memory>";
+
+	const LinearMemory* memory = context->memories[0];
+	const auto base = static_cast<std::uint64_t>(static_cast<std::uint32_t>(pointer));
+	const std::uint64_t size = wasm_memory_size(memory);
+	if (memory->memoryBase == nullptr || base < 4 || base > size)
+		return "<guest string: range outside linear memory>";
+
+	std::uint32_t payloadBytes = 0;
+	std::memcpy(&payloadBytes, memory->memoryBase + base - 4, sizeof(payloadBytes));
+	if (payloadBytes > size - base)
+		return "<guest string: range outside linear memory>";
+
+	const std::uint32_t units = payloadBytes / 2; // an odd trailing byte is ignored
+	const std::uint8_t* data = memory->memoryBase + base;
+	std::string out;
+	out.reserve(std::min<std::uint64_t>(units, kMaxDiagnosticMessageBytes));
+	std::uint32_t index = 0;
+	while (index < units && out.size() < kMaxDiagnosticMessageBytes) {
+		std::uint16_t unit = 0;
+		std::memcpy(&unit, data + static_cast<std::uint64_t>(index) * 2, sizeof(unit));
+		++index;
+		std::uint32_t codePoint = unit;
+		if (unit >= 0xD800u && unit <= 0xDBFFu) {
+			std::uint16_t low = 0;
+			if (index < units)
+				std::memcpy(&low, data + static_cast<std::uint64_t>(index) * 2, sizeof(low));
+			if (low >= 0xDC00u && low <= 0xDFFFu) {
+				codePoint = 0x10000u
+						+ ((static_cast<std::uint32_t>(unit) - 0xD800u) << 10)
+						+ (static_cast<std::uint32_t>(low) - 0xDC00u);
+				++index;
+			} else {
+				codePoint = 0xFFFDu;
+			}
+		} else if (unit >= 0xDC00u && unit <= 0xDFFFu) {
+			codePoint = 0xFFFDu; // a lone low surrogate is not a scalar value
+		}
+		const std::size_t before = out.size();
+		appendUtf8(out, codePoint);
+		if (out.size() > kMaxDiagnosticMessageBytes) {
+			out.resize(before);
+			out += "...";
+			break;
+		}
+	}
+	if (index < units && out.size() <= kMaxDiagnosticMessageBytes)
+		out += "...";
+	return out;
+}
+
+//! Maps a guest kind to its record id and severity; false for an unknown one.
+bool guestLogRecord(std::int32_t kind, DiagnosticSeverity& severity,
+		std::string_view& id) noexcept
+{
+	switch (static_cast<GuestLogKind>(kind)) {
+	case GuestLogKind::Info:  severity = DiagnosticSeverity::Note;    id = DiagnosticId::kExecuteLogInfo;  return true;
+	case GuestLogKind::Warn:  severity = DiagnosticSeverity::Warning; id = DiagnosticId::kExecuteLogWarn;  return true;
+	case GuestLogKind::Error: severity = DiagnosticSeverity::Error;   id = DiagnosticId::kExecuteLogError; return true;
+	case GuestLogKind::Panic: severity = DiagnosticSeverity::Fatal;   id = DiagnosticId::kExecuteLogPanic; return true;
+	}
+	return false;
+}
+
+void emitGuestLogText(DiagnosticSeverity severity, std::string_view id,
+		std::string message) noexcept
 {
 	Diagnostic diagnostic;
 	diagnostic.id = id;
@@ -714,7 +866,7 @@ void emitHostLog(DiagnosticSeverity severity, std::string_view id,
 	diagnostic.phase = DiagnosticPhase::Execute;
 	diagnostic.remediation = "docs/DIAGNOSTICS.md#54-host-log-imports";
 	try {
-		diagnostic.message = guestMessage(context, pointer, length);
+		diagnostic.message = std::move(message);
 		emitDiagnostic(std::move(diagnostic));
 	} catch (...) {
 		// The logging facility is best-effort; an allocation failure must not
@@ -722,45 +874,87 @@ void emitHostLog(DiagnosticSeverity severity, std::string_view id,
 	}
 }
 
-} // namespace
-
-void diagnosticInfo(VMContext* context, std::int32_t pointer, std::int32_t length)
+//! Records a `Fatal` panic and then traps with the same text.
+void guestPanic(std::string message)
 {
-	emitHostLog(DiagnosticSeverity::Note, DiagnosticId::kExecuteLogInfo, context, pointer, length);
-}
-
-void diagnosticWarn(VMContext* context, std::int32_t pointer, std::int32_t length)
-{
-	emitHostLog(DiagnosticSeverity::Warning, DiagnosticId::kExecuteLogWarn, context, pointer, length);
-}
-
-void diagnosticError(VMContext* context, std::int32_t pointer, std::int32_t length)
-{
-	emitHostLog(DiagnosticSeverity::Error, DiagnosticId::kExecuteLogError, context, pointer, length);
-}
-
-void diagnosticPanic(VMContext* context, std::int32_t pointer, std::int32_t length)
-{
-	std::string message;
-	try {
-		message = guestMessage(context, pointer, length);
-	} catch (...) {
-		message = "<guest panic>";
-	}
-
-	Diagnostic diagnostic;
-	diagnostic.id = DiagnosticId::kExecuteLogPanic;
-	diagnostic.severity = DiagnosticSeverity::Fatal;
-	diagnostic.phase = DiagnosticPhase::Execute;
-	diagnostic.message = message;
-	diagnostic.remediation = "docs/DIAGNOSTICS.md#54-host-log-imports";
-	emitDiagnostic(std::move(diagnostic));
-
+	emitGuestLogText(DiagnosticSeverity::Fatal, DiagnosticId::kExecuteLogPanic, message);
 	// A guest panic is a deliberate host-defined failure, not a spec trap. It
 	// is reported through the trap slot like any other import failure so the
 	// generated caller returns instead of unwinding; `nativeImport` (the only
 	// supported way to register these bodies) gives `WASM::trap` a catch frame.
 	trap(TrapKind::Internal, message.c_str());
+}
+
+//! Records one guest message for a kind, or an invalid-kind error, or panics.
+void emitGuestLog(std::int32_t kind, std::string message)
+{
+	DiagnosticSeverity severity = DiagnosticSeverity::Error;
+	std::string_view id = DiagnosticId::kExecuteLogInvalid;
+	const bool known = guestLogRecord(kind, severity, id);
+	if (known && static_cast<GuestLogKind>(kind) == GuestLogKind::Panic) {
+		guestPanic(std::move(message));
+		return;
+	}
+	if (!known) {
+		severity = DiagnosticSeverity::Error;
+		id = DiagnosticId::kExecuteLogInvalid;
+	}
+	emitGuestLogText(severity, id, std::move(message));
+}
+
+} // namespace
+
+void diagnosticInfo(VMContext* context, std::int32_t pointer, std::int32_t length)
+{
+	emitGuestLog(static_cast<std::int32_t>(GuestLogKind::Info),
+			guestMessage(context, pointer, length));
+}
+
+void diagnosticWarn(VMContext* context, std::int32_t pointer, std::int32_t length)
+{
+	emitGuestLog(static_cast<std::int32_t>(GuestLogKind::Warn),
+			guestMessage(context, pointer, length));
+}
+
+void diagnosticError(VMContext* context, std::int32_t pointer, std::int32_t length)
+{
+	emitGuestLog(static_cast<std::int32_t>(GuestLogKind::Error),
+			guestMessage(context, pointer, length));
+}
+
+void diagnosticPanic(VMContext* context, std::int32_t pointer, std::int32_t length)
+{
+	emitGuestLog(static_cast<std::int32_t>(GuestLogKind::Panic),
+			guestMessage(context, pointer, length));
+}
+
+void diagnosticLog(VMContext* context, std::int32_t kind, std::int32_t pointer,
+		std::int32_t length)
+{
+	emitGuestLog(kind, guestMessage(context, pointer, length));
+}
+
+void diagnosticLogString(VMContext* context, std::int32_t kind, void* string)
+{
+	std::string message;
+	try {
+		message = stringRefMessage(context, string);
+	} catch (...) {
+		message = "<guest string: unreadable>";
+	}
+	emitGuestLog(kind, std::move(message));
+}
+
+void diagnosticLogAssemblyScript(VMContext* context, std::int32_t kind,
+		std::int32_t pointer)
+{
+	std::string message;
+	try {
+		message = assemblyScriptMessage(context, pointer);
+	} catch (...) {
+		message = "<guest string: unreadable>";
+	}
+	emitGuestLog(kind, std::move(message));
 }
 
 void registerDiagnosticImports(ImportRegistrar& registrar, std::string_view moduleName)
@@ -769,6 +963,9 @@ void registerDiagnosticImports(ImportRegistrar& registrar, std::string_view modu
 	registrar.registerFunction(moduleName, "warn", nativeImport<&diagnosticWarn>());
 	registrar.registerFunction(moduleName, "error", nativeImport<&diagnosticError>());
 	registrar.registerFunction(moduleName, "panic", nativeImport<&diagnosticPanic>());
+	registrar.registerFunction(moduleName, "log", nativeImport<&diagnosticLog>());
+	registrar.registerFunction(moduleName, "log_str", nativeImport<&diagnosticLogString>());
+	registrar.registerFunction(moduleName, "log_as", nativeImport<&diagnosticLogAssemblyScript>());
 }
 
 } // namespace WASM
