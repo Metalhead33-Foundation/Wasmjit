@@ -317,6 +317,62 @@ inline std::uint32_t frameBytes(std::span<const ValueKind> argumentKinds,
 	return frameArgumentsBytes(argumentKinds) + frameResultsBytes(resultKinds);
 }
 
+/** \brief One backend's register-form limits, as the call-form rule needs them. */
+struct RegisterFormCeiling {
+	//! C argument entries the register form accepts, `VMContext*` included.
+	std::uint32_t argumentSlots = 4;
+	//! True when a `v128` parameter can occupy its two register words; false
+	//! when the backend insists on the frame for a vector parameter.
+	bool vectorArgumentFits = false;
+	//! True when a `v128` result can cross through the hidden trailing
+	//! out-buffer entry; false when it forces the frame.
+	bool vectorResultFits = false;
+	//! True when a multi-result tuple crosses without a caller frame.
+	bool multiResult = false;
+};
+
+/*! \brief Decides one function type's call form (docs/ABI.md “Call forms”).
+\param signature The function type being compiled or called.
+\param ceiling The backend's register-form limits.
+\param optIn The process-wide `WASM::setFrameCallAbiOptIn` request.
+
+eturn true when this signature uses `void fn(VMContext*, void* frame)`.
+
+The decision is a pure function of the signature, the backend's ceiling and the
+opt-in, which is what lets two modules agree on the form of a shared type
+without sharing an instance. It replaces the module-wide switch: one wide
+function no longer moves every other call in its module onto the frame path
+(`GAP-1`, `GR-8`).
+*/
+inline bool usesFrameForm(const FuncType& signature,
+		const RegisterFormCeiling& ceiling, bool optIn) noexcept
+{
+	if (optIn)
+		return true;
+	if (!ceiling.multiResult && signature.results.size() > 1)
+		return true;
+	//! One C argument entry is always the `VMContext*`.
+	std::uint32_t entries = 1;
+	for (const StorageType& parameter : signature.params) {
+		if (parameter.isPacked)
+			continue;
+		const ValueKind kind = valueKindOf(parameter.val.opcode);
+		if (kind == ValueKind::V128 && !ceiling.vectorArgumentFits)
+			return true;
+		entries += argSlotCount(kind);
+	}
+	if (signature.results.size() == 1) {
+		const ValueKind kind = valueKindOf(signature.results.front().val.opcode);
+		if (kind == ValueKind::V128) {
+			if (!ceiling.vectorResultFits)
+				return true;
+			//! The hidden trailing out-buffer pointer a vector result needs.
+			++entries;
+		}
+	}
+	return entries > ceiling.argumentSlots;
+}
+
 /*! \brief The process-wide staging-frame preference, mutable for the opt-in.
 \return The flag a backend reads when it chooses a calling form.
 */

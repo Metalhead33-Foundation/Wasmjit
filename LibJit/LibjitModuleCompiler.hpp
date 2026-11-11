@@ -27,6 +27,10 @@ private:
 	//! Owner of `context`; told to leak it when a compile fails (LF-2 `F1`).
 	LibJIT::Context* contextOwner = nullptr;
 	LibJitTypeTranslator typeTranslator; //!< The Wasm-to-LibJIT type translator.
+	//! Call form per module-local type index (non-zero = staging frame), built
+	//! once in `translateTypes` and handed to every body and to the tail-call
+	//! installer (`GAP-1`, `GR-8`).
+	std::vector<std::uint8_t> frameForms_;
 	/*!
 	 * \brief Compiles one defined WebAssembly function.
 	 * \param fn LibJIT function being populated.

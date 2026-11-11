@@ -135,6 +135,10 @@ struct TailCallState {
 	alignas(16) std::uint8_t frame[kTailCallArgSlots * 2 * 16] = {};
 	//! Byte offset of the result block inside `frame`, set by the last thunk.
 	std::uint32_t frameResultOffset = 0;
+	//! Non-zero when the last dispatched link was frame-form, so the driver knows
+	//! whether the result is in `frame` or in `results`/`resultBuffer`. A tail
+	//! chain may cross between the two forms (`GAP-1`, `GR-8`).
+	std::uint8_t frameResult = 0;
 };
 
 //! True when `ft` fits the trampoline's uniform 16-byte slot representation.
@@ -294,7 +298,9 @@ void callCallableWithResults(const Callable& callable, void* results, Args&&... 
 //! call returns. The trap check is the one `callCallable` performs.
 //!
 //! \param callable Callable descriptor to invoke; it must have been compiled with
-//!                 the frame ABI (`ModuleInstance::frameCallAbi()`).
+//!                 that signature's frame form (`ModuleInstance::usesFrameForm`,
+//!                 or `WASM::callableUsesFrameForm` for a resolved callable):
+//!                 a mixed module may export both forms.
 //! \param frame Caller-allocated, 16-byte-aligned argument-and-result frame.
 //! \throws WASM::Trap when the call reports a pending trap at the host boundary.
 inline void callCallableFrame(const Callable& callable, void* frame)

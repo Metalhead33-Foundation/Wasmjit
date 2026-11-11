@@ -1849,8 +1849,8 @@ void invokeFfiContinuation(void* target, void* context,
 	if (callable == nullptr || callable->fnPtr == nullptr)
 		throw std::runtime_error("continuation invoker has no target");
 	void* calleeContext = callable->context != nullptr ? callable->context : context;
-	auto* instance = static_cast<WASM::ModuleInstance*>(context);
-	const bool frameAbi = instance != nullptr && instance->frameCallAbi();
+	// The continuation target's own type decides its form (`GAP-1`, `GR-8`).
+	const bool frameAbi = WASM::callableUsesFrameForm(*callable);
 	if (frameAbi) {
 		std::vector<WASM::ValueKind> params;
 		params.reserve(argCount);

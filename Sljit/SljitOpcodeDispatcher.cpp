@@ -1639,13 +1639,14 @@ void* stagedImportEntry(const WASM::FuncType& type)
 OpcodeDispatcher::OpcodeDispatcher(const WASM::Module& module, const WASM::FuncType& funcType,
 		const WASM::FunctionBody& body, std::uint32_t functionIndex, bool frameCallAbi,
 		const std::vector<WASM::TagId>& tagIds, WASM::ModuleInstanceInternals& internals,
-		WASM::ProfileConfig profileConfig)
+		std::span<const std::uint8_t> frameByType, WASM::ProfileConfig profileConfig)
 	: module_(module)
 	, funcType_(funcType)
 	, body_(body)
 	, tagIds_(tagIds)
 	, functionIndex_(functionIndex)
 	, internals_(internals)
+	, frameByType_(frameByType)
 	, frameAbi_(frameCallAbi)
 	, deterministicFloats_(profileConfig.deterministic())
 {
@@ -1800,7 +1801,7 @@ bool OpcodeDispatcher::beginFunction()
 	// Cross-function trampolines are register-form only: the driver's host
 	// signature is the function signature, and the frame ABI needs a frame
 	// pointer that TailCallState does not carry.
-	tailTrampoline_ = WASM::tailCallTrampolinesEligible(module_, frameAbi_);
+	tailTrampoline_ = WASM::tailCallTrampolinesEligible(module_, frameByType_);
 	compiler_ = sljit_create_compiler(nullptr);
 	if (compiler_ == nullptr) {
 		unsupportedReason_ = "SLJIT could not create a compiler";
@@ -3528,16 +3529,21 @@ void OpcodeDispatcher::dispatchThrowRef()
 	markUnreachable();
 }
 
-void* OpcodeDispatcher::stagedImportFor(const WASM::FuncType& type)
+bool OpcodeDispatcher::calleeUsesFrameForm(std::uint32_t typeIndex) const
+{
+	return typeIndex < frameByType_.size() && frameByType_[typeIndex] != 0;
+}
+
+void* OpcodeDispatcher::stagedImportFor(std::uint32_t typeIndex, const WASM::FuncType& type)
 {
 	// A module without native imports can never need the adapter, so it pays
 	// neither the closure nor the run-time branch on `Callable::context`.
 	if (!moduleHasNativeImports_)
 		return nullptr;
-	// Otherwise the adapter is needed whenever the register form cannot express
-	// the signature, or when the module is frame-form (where any callee may be a
-	// native import).
-	if (!frameAbi_ && type.params.size() <= kMaxWasmParameters)
+	// Otherwise the adapter is needed whenever the callee type's form is the
+	// frame, or the register form cannot express the signature: a native import
+	// is a host C function, so its arguments are staged from the frame.
+	if (!calleeUsesFrameForm(typeIndex) && type.params.size() <= kMaxWasmParameters)
 		return nullptr;
 	return stagedImportEntry(type);
 }
@@ -3785,7 +3791,7 @@ void OpcodeDispatcher::emitCall(WASM::FuncIdx index, bool isTail)
 	// A native import carries no context and is a host C function: register form.
 	const bool calleeFrameForm = index < importedCount
 			? WASM::callableUsesFrameForm(internals_.importStorage[index])
-			: frameAbi_;
+			: calleeUsesFrameForm(typeIndex);
 	if (calleeFrameForm)
 		needsStagingCall_ = true;
 	// A signature wider than the register form travels through the staging frame:
@@ -3794,7 +3800,7 @@ void OpcodeDispatcher::emitCall(WASM::FuncIdx index, bool isTail)
 	// canonical two-word spelling. A shape the adapter cannot build at all (a
 	// libffi prep failure) is the only refusal left.
 	const bool wideCall = calledType.params.size() > kMaxWasmParameters;
-	void* const stagedImport = stagedImportFor(calledType);
+	void* const stagedImport = stagedImportFor(typeIndex, calledType);
 	if (wideCall || stagedImport != nullptr)
 		needsStagingCall_ = true;
 	require(!(wideCall && stagedImport == nullptr && moduleHasNativeImports_),
@@ -3855,7 +3861,7 @@ void OpcodeDispatcher::emitCallIndirect(WASM::TypeIdx typeIndex, WASM::TableIdx 
 			: (module_.tables[tableIndex - module_.importTables.size()].limits.flags & 0x04) != 0;
 	const int selectorWidth = table64 ? 8 : 4;
 	const WASM::FuncType calledType = module_.funcTypeAt(typeIndex);
-	if (frameAbi_)
+	if (calleeUsesFrameForm(typeIndex))
 		needsStagingCall_ = true;
 	// A signature wider than the register form travels through the staging frame:
 	// a Wasm callee is frame-form, and a native import is reached through the
@@ -3863,13 +3869,13 @@ void OpcodeDispatcher::emitCallIndirect(WASM::TypeIdx typeIndex, WASM::TableIdx 
 	// canonical two-word spelling. A shape the adapter cannot build at all (a
 	// libffi prep failure) is the only refusal left.
 	const bool wideCall = calledType.params.size() > kMaxWasmParameters;
-	void* const stagedImport = stagedImportFor(calledType);
+	void* const stagedImport = stagedImportFor(typeIndex, calledType);
 	if (wideCall || stagedImport != nullptr)
 		needsStagingCall_ = true;
 	require(!(wideCall && stagedImport == nullptr && moduleHasNativeImports_),
 			"the SLJIT backend cannot pass a v128 in a signature with more than three "
 			"parameters when the module also imports a native function");
-	require(frameAbi_ || calledType.results.size() <= 1,
+	require(calleeUsesFrameForm(typeIndex) || calledType.results.size() <= 1,
 			"the SLJIT register form cannot call a multi-result function");
 	for (const WASM::StorageType& parameter : calledType.params)
 		require(widthOf(parameter.val) != 0, "the SLJIT backend only calls i32/i64 signatures");
@@ -3900,7 +3906,7 @@ void OpcodeDispatcher::emitCallIndirect(WASM::TypeIdx typeIndex, WASM::TableIdx 
 			ok_ = false;
 		else if (resolved != nullptr)
 			sljit_set_label(resolved, continueLabel);
-		emitResolvedCall(calledType, SLJIT_R0, stagedImport, frameAbi_);
+		emitResolvedCall(calledType, SLJIT_R0, stagedImport, calleeUsesFrameForm(typeIndex));
 	}
 
 	resizeStack(stackWidths_.size() - calledType.params.size());
@@ -3936,7 +3942,10 @@ void OpcodeDispatcher::dispatchReturnCall(WASM::FuncIdx arg)
 				? module_.importFunctions[arg].typeIdx
 				: module_.internalFunctionTypeIndices[arg - importedCount];
 		const WASM::FuncType calleeType = module_.funcTypeAt(typeIndex);
-		const bool supported = frameAbi_
+		const bool calleeFrameForm = arg < importedCount
+				? WASM::callableUsesFrameForm(internals_.importStorage[arg])
+				: calleeUsesFrameForm(typeIndex);
+		const bool supported = calleeFrameForm
 				? WASM::tailCallFrameSupported(calleeType)
 				: WASM::tailCallSlotsSupported(calleeType);
 		if (tailTrampoline_ && supported) {
@@ -4084,7 +4093,9 @@ void OpcodeDispatcher::emitTailCallIndirectState(WASM::TypeIdx typeIndex, WASM::
 			: (module_.tables[tableIndex - module_.importTables.size()].limits.flags & 0x04) != 0;
 	const int selectorWidth = table64 ? 8 : 4;
 	const WASM::FuncType calledType = module_.funcTypeAt(typeIndex);
-	require(frameAbi_ || calledType.results.size() <= 1,
+	if (calleeUsesFrameForm(typeIndex))
+		needsStagingCall_ = true;
+	require(calleeUsesFrameForm(typeIndex) || calledType.results.size() <= 1,
 			"the SLJIT register form cannot tail-call a multi-result function");
 	for (const WASM::StorageType& parameter : calledType.params)
 		require(widthOf(parameter.val) != 0, "the SLJIT backend only calls i32/i64 signatures");
@@ -4156,7 +4167,7 @@ void OpcodeDispatcher::emitTailCallIndirectState(WASM::TypeIdx typeIndex, WASM::
 		ok_ = false;
 	else if (fallback != nullptr)
 		sljit_set_label(fallback, fallbackLabel);
-	emitResolvedCall(calledType, SLJIT_R0, nullptr, frameAbi_);
+	emitResolvedCall(calledType, SLJIT_R0, nullptr, calleeUsesFrameForm(typeIndex));
 	// The semantic fallback must model the call's result before returning it:
 	// `emitResolvedCall` performs the call but does not update the compile-time
 	// operand stack. Without these pushes `emitReturnValue` sees an empty stack.
@@ -4231,12 +4242,14 @@ void OpcodeDispatcher::dispatchCallRef(WASM::TypeIdx typeIndex)
 	require(static_cast<std::uint32_t>(typeIndex) < module_.typeCount(),
 			"the call_ref type index is out of range");
 	const WASM::FuncType calledType = module_.funcTypeAt(typeIndex);
-	require(frameAbi_ || calledType.results.size() <= 1,
+	if (calleeUsesFrameForm(typeIndex))
+		needsStagingCall_ = true;
+	require(calleeUsesFrameForm(typeIndex) || calledType.results.size() <= 1,
 			"the SLJIT register form cannot call a multi-result function");
-	if (!frameAbi_)
+	if (!calleeUsesFrameForm(typeIndex))
 		require(calledType.params.size() <= kMaxWasmParameters,
 				"the SLJIT backend cannot call a reference-typed function with more than three parameters");
-	void* const stagedImport = stagedImportFor(calledType);
+	void* const stagedImport = stagedImportFor(typeIndex, calledType);
 	for (const WASM::StorageType& parameter : calledType.params)
 		require(widthOf(parameter.val) != 0, "the SLJIT backend only calls i32/i64 signatures");
 	for (const WASM::StorageType& result : calledType.results)
@@ -4247,7 +4260,7 @@ void OpcodeDispatcher::dispatchCallRef(WASM::TypeIdx typeIndex)
 	if (!measureOnly_) {
 		loadSlot(SLJIT_R0, callableDepth, 8);
 		emitNullRefCheck(SLJIT_R0);
-		emitResolvedCall(calledType, SLJIT_R0, stagedImport, frameAbi_);
+		emitResolvedCall(calledType, SLJIT_R0, stagedImport, calleeUsesFrameForm(typeIndex));
 	}
 	resizeStack(stackWidths_.size() - calledType.params.size());
 	for (const WASM::StorageType& result : calledType.results)
@@ -4263,12 +4276,14 @@ void OpcodeDispatcher::dispatchReturnCallRef(WASM::TypeIdx typeIndex)
 	require(static_cast<std::uint32_t>(typeIndex) < module_.typeCount(),
 			"the return_call_ref type index is out of range");
 	const WASM::FuncType calledType = module_.funcTypeAt(typeIndex);
-	require(frameAbi_ || calledType.results.size() <= 1,
+	require(calleeUsesFrameForm(typeIndex) || calledType.results.size() <= 1,
 			"the SLJIT register form cannot tail-call a multi-result function");
-	if (!frameAbi_)
+	if (!calleeUsesFrameForm(typeIndex))
 		require(calledType.params.size() <= kMaxWasmParameters,
 				"the SLJIT backend cannot tail-call a reference-typed function with more than three parameters");
-	void* const stagedImport = stagedImportFor(calledType);
+	if (calleeUsesFrameForm(typeIndex))
+		needsStagingCall_ = true;
+	void* const stagedImport = stagedImportFor(typeIndex, calledType);
 	for (const WASM::StorageType& parameter : calledType.params)
 		require(widthOf(parameter.val) != 0, "the SLJIT backend only calls i32/i64 signatures");
 	for (const WASM::StorageType& result : calledType.results)
@@ -4280,7 +4295,7 @@ void OpcodeDispatcher::dispatchReturnCallRef(WASM::TypeIdx typeIndex)
 	if (!measureOnly_) {
 		loadSlot(SLJIT_R0, callableDepth, 8);
 		emitNullRefCheck(SLJIT_R0);
-		const bool supported = frameAbi_
+		const bool supported = calleeUsesFrameForm(typeIndex)
 				? WASM::tailCallFrameSupported(calledType)
 				: WASM::tailCallSlotsSupported(calledType);
 		if (tailTrampoline_ && supported) {
@@ -4296,7 +4311,7 @@ void OpcodeDispatcher::dispatchReturnCallRef(WASM::TypeIdx typeIndex)
 				ok_ = false;
 			else if (fallback != nullptr)
 				sljit_set_label(fallback, fallbackLabel);
-			emitResolvedCall(calledType, SLJIT_R0, stagedImport, frameAbi_);
+			emitResolvedCall(calledType, SLJIT_R0, stagedImport, calleeUsesFrameForm(typeIndex));
 			// Model the call result before returning it; see the note in
 			// emitTailCallIndirectState.
 			resizeStack(stackWidths_.size() - calledType.params.size());
@@ -4305,7 +4320,7 @@ void OpcodeDispatcher::dispatchReturnCallRef(WASM::TypeIdx typeIndex)
 			finishCallResults(calledType);
 			emitReturnValue();
 		} else {
-			emitResolvedCall(calledType, SLJIT_R0, stagedImport, frameAbi_);
+			emitResolvedCall(calledType, SLJIT_R0, stagedImport, calleeUsesFrameForm(typeIndex));
 			resizeStack(stackWidths_.size() - calledType.params.size());
 			for (const WASM::StorageType& result : calledType.results)
 				push(widthOf(result.val));
@@ -4325,7 +4340,7 @@ void OpcodeDispatcher::dispatchReturnCallIndirect(WASM::TypeIdx arg1, WASM::Tabl
 		require(static_cast<std::uint32_t>(arg1) < module_.typeCount(),
 				"the return_call_indirect type index is out of range");
 		const WASM::FuncType calledType = module_.funcTypeAt(arg1);
-		const bool supported = frameAbi_
+		const bool supported = calleeUsesFrameForm(arg1)
 				? WASM::tailCallFrameSupported(calledType)
 				: WASM::tailCallSlotsSupported(calledType);
 		if (supported) {

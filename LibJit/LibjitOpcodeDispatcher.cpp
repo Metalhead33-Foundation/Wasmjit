@@ -2313,15 +2313,23 @@ void OpcodeDispatcher::packReturnValues(jit_type_t tupleType, jit_value_t out, s
 
 bool OpcodeDispatcher::frameAbi() const
 {
+	// The function's own type decides (`GAP-1`, `GR-8`). LibJIT's register form
+	// has no ceiling, so only the opt-in selects the frame and the table is
+	// uniform in practice -- the query stays per type so a future ceiling does
+	// not have to revisit every call site.
+	const std::uint32_t internalIndex = functionIndex - importedFuncCount;
+	if (internalIndex < module.internalFunctionTypeIndices.size())
+		return instance.usesFrameForm(WASM::LocalTypeIdx{
+				module.internalFunctionTypeIndices[internalIndex]});
 	return instance.frameCallAbi();
 }
 
 bool OpcodeDispatcher::frameTailTrampoline() const
 {
 	// The module compiler installs the backend-neutral frame driver and thunks
-	// when the whole module fits the frame model (LibjitModuleCompiler.cpp), so
-	// the predicate here is the same one that gated the installation.
-	return frameAbi() && WASM::tailCallTrampolinesEligible(module, true);
+	// when every type fits its chosen form's model (LibjitModuleCompiler.cpp),
+	// so the predicate here is the same one that gated the installation.
+	return WASM::tailCallTrampolinesEligible(module, frameByType);
 }
 
 void OpcodeDispatcher::emitFrameTailCallFallback(jit_value_t callablePtr,
@@ -3346,6 +3354,7 @@ OpcodeDispatcher::OpcodeDispatcher(jit_context_t context, jit_function_t functio
 								   WASM::ModuleInstanceInternals& internals,
 								   const WASM::Module& module, const WASM::FuncType& currentFunc,
 								   uint32_t importedFuncCount, uint32_t functionIndex,
+								   std::span<const std::uint8_t> frameByType,
 								   std::vector<WASM::BranchHint> branchHints,
 								   std::vector<jit_value_t>& locals,
 								   std::vector<jit_value_t>& valueStack,
@@ -3353,7 +3362,7 @@ OpcodeDispatcher::OpcodeDispatcher(jit_context_t context, jit_function_t functio
 								   WASM::ProfileConfig profileConfig)
 	: context(context), function(function), typeTranslator(typeTranslator), instance(instance),
 	  internals(internals), module(module), currentFunc(currentFunc), importedFuncCount(importedFuncCount),
-	  functionIndex(functionIndex),
+	  functionIndex(functionIndex), frameByType(frameByType),
 	  locals(locals), valueStack(valueStack), controlStack(controlStack), branchHints(std::move(branchHints)),
 	  deterministicFloats(profileConfig.deterministic())
 {

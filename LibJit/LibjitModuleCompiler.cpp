@@ -8,10 +8,12 @@
 #include "../WasmBase/WasmTailTrampoline.hpp"
 #include "../WasmBase/wasm_simd_scalar.hpp"
 #include <Euphemy/Io/EuphConstBufferDevice.hpp>
+#include <algorithm>
 #include <cassert>
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
+#include <limits>
 #include <span>
 #include <unordered_map>
 #include <vector>
@@ -183,7 +185,7 @@ void ModuleCompiler::compileFunction(jit_function_t fn, uint32_t funcTypeIdx, co
 	std::vector<jit_value_t> locals;
 	locals.reserve(stack.allLocals.size());
 
-	if (instance.frameCallAbi()) {
+	if (instance.usesFrameForm(WASM::LocalTypeIdx{funcTypeIdx})) {
 		// Staging-frame ABI (docs/ABI.md, step 4a): the
 		// arguments are already in the caller's frame, so each parameter is
 		// copied out of it into a local. A `v128` moves as two eight-byte words.
@@ -236,7 +238,7 @@ void ModuleCompiler::compileFunction(jit_function_t fn, uint32_t funcTypeIdx, co
 	WASM::WasmStream<Euph::Io::ConstBufferDevice> stream(device);
 
 	OpcodeDispatcher dispatcher(context, fn, typeTranslator, instance, internals, module, funcType,
-							  importedFuncCount, functionIndex, body.branchHints,
+							  importedFuncCount, functionIndex, frameForms_, body.branchHints,
 							  locals, valueStack, controlStack, profile());
 	// Prologue: guest stack guard + a pending check, then the body.
 	dispatcher.emitFunctionEntry();
@@ -272,6 +274,19 @@ void ModuleCompiler::translateTypes(WASM::ModuleInstance& instance, const WASM::
 		// The frame form is still opt-in, but once selected it is complete:
 		// calls, imports and multi-result signatures use the same frame contract.
 		typeTranslator.setFrameCallAbi(frame);
+		// LibJIT's register form has no ceiling, so the per-signature rule
+		// (`GAP-1`, `GR-8`) selects the frame only for the opt-in; the table is
+		// still built per type so every consumer asks the same question.
+		frameForms_.assign(module.typeCount(), 0);
+		constexpr WASM::RegisterFormCeiling ceiling{
+				std::numeric_limits<std::uint32_t>::max(), true, true, true};
+		for (std::uint32_t index = 0; index < module.typeCount(); ++index) {
+			if (module.typeView(index).kind() != WASM::CanonTypeKind::Func)
+				continue;
+			frameForms_[index] = WASM::usesFrameForm(module.funcTypeAt(index),
+					ceiling, frame) ? 1 : 0;
+		}
+		instance.setFrameCallForms(frameForms_);
 		instance.setFrameCallAbi(frame);
 	}
 	typeTranslator.translateTypes(module.typeIds, instance.store().types().store());
@@ -401,8 +416,13 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM
 	// that pair is what makes a frame-form tail chain constant-stack, so the
 	// register-form machinery below is skipped for it. A module outside the
 	// frame model keeps the semantic call + frame return lowering.
-	if (instance.frameCallAbi() && WASM::tailCallTrampolinesEligible(module, true)) {
-		if (!WASM::installTailCallTrampolines(module, internals, true))
+	// Only a module with at least one frame-form type needs the shared pair; a
+	// purely register-form module keeps LibJIT's own driver, which is the path
+	// its tail-call fixtures pin.
+	const bool anyFrameForm = std::find(frameForms_.begin(), frameForms_.end(), 1)
+			!= frameForms_.end();
+	if (anyFrameForm && WASM::tailCallTrampolinesEligible(module, frameForms_)) {
+		if (!WASM::installTailCallTrampolines(module, internals, frameForms_))
 			throw std::runtime_error("the LibJIT backend could not install "
 					"frame-form tail-call trampolines");
 		return;
@@ -428,10 +448,9 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM
 
 	std::unordered_map<uint32_t, void*> tailThunks;
 	const auto generateTailThunk = [&](uint32_t typeIdx) -> void* {
-		// Frame tails use a frame call followed by a frame return. A register-form
-		// thunk would stage typed arguments against the (ctx, frame) signature, so
-		// the frame mode deliberately has no tail thunks.
-		if (instance.frameCallAbi())
+		// A frame-form type is served by the backend-neutral thunk installed
+		// above; this generator only builds the register-form thunk.
+		if (instance.usesFrameForm(WASM::LocalTypeIdx{typeIdx}))
 			return nullptr;
 		const auto known = tailThunks.find(typeIdx);
 		if (known != tailThunks.end())
@@ -506,7 +525,7 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM
 	{
 		const uint32_t typeIdx = module.internalFunctionTypeIndices[i];
 		jit_type_t sig = static_cast<jit_type_t>(internals.translatedTypes[typeIdx]);
-		const bool frameAbi = instance.frameCallAbi();
+		const bool frameAbi = instance.usesFrameForm(WASM::LocalTypeIdx{typeIdx});
 		jit_type_t driverSigType = sig;
 		if (frameAbi) {
 			// Staging-frame ABI (step 4a): the embedder-visible entry takes
@@ -685,7 +704,10 @@ void ModuleCompiler::callStartFunction(WASM::ModuleInstance& instance, uint32_t 
 
 	using StartFn = void (*)(WASM::VMContext*);
 	using StartFrameFn = void (*)(WASM::VMContext*, void*);
-	if (instance.frameCallAbi()) {
+	const bool frameForm = callable->context != nullptr
+			? instance.usesFrameForm(WASM::LocalTypeIdx{callable->localTypeIdx})
+			: WASM::frameCallAbiOptIn();
+	if (frameForm) {
 		// A start function has no parameters or results, but in frame mode its
 		// signature is still (ctx, frame). The frame is never read.
 		alignas(16) std::uint8_t frame[16] = {};

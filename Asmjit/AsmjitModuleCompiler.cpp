@@ -1339,9 +1339,11 @@ public:
 			const WASM::Module& module, WASM::ModuleInstanceInternals& internals,
 			const std::vector<asmjit::FuncNode*>& functions,
 			const std::vector<std::unique_ptr<asmjit::FuncSignature>>& signatures,
-			uint32_t functionIndex, bool deterministicFloats)
+			uint32_t functionIndex, bool ownFrameForm,
+			std::span<const std::uint8_t> frameByType, bool deterministicFloats)
 		: compiler(compiler), module(module), internals(internals),
 		  functions(functions), signatures(signatures), functionIndex(functionIndex),
+		  frameMode(ownFrameForm), frameByType(frameByType),
 		  deterministicFloats(deterministicFloats)
 	{
 		// The diagnostic names the function; interning keeps the pointer valid
@@ -1356,7 +1358,7 @@ public:
 			throw std::runtime_error("AsmJit initial compiler does not support multi-value results");
 		// A vector parameter is exactly what the frame form exists to carry, so
 		// the entry refusal applies only to the register form.
-		const bool frameAbi = TypeTranslator::moduleNeedsFrame(module, WASM::frameCallAbiOptIn());
+		const bool frameAbi = frameMode;
 		for (const auto& parameter : type.params) {
 			if (!frameAbi)
 				requireScalar(parameter.val, "parameters");
@@ -2318,10 +2320,10 @@ protected:
 			emitUnreachablePlaceholders();
 			return;
 		}
-		const bool tailSupported = frameMode
-? WASM::tailCallFrameSupported(calledType)
-: WASM::tailCallSlotsSupported(calledType);
-if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
+		const bool tailSupported = calleeUsesFrameForm(typeIndex)
+				? WASM::tailCallFrameSupported(calledType)
+				: WASM::tailCallSlotsSupported(calledType);
+		if (WASM::tailCallTrampolinesEligible(module, frameByType) && tailSupported) {
 			// Cross-function trampoline: the driver wrapping this function observes
 			// the pending state and re-enters the target through its type thunk.
 			std::vector<asmjit::x86::Gp> tailArgs(calledType.params.size());
@@ -2360,7 +2362,6 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 			emitFrameReturnValue(values.back());
 			return;
 		}
-		validateTailCallType(typeIndex);
 		dispatchCall(index);
 		dispatchReturn();
 	}
@@ -2380,8 +2381,11 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 			for (std::size_t i = 0; i < resultCount; ++i)
 				if (calledType.results[i].val.opcode != resultTypes[i])
 					throw std::runtime_error("AsmJit frame tail-call result type differs from the caller");
-			if (WASM::tailCallTrampolinesEligible(module, true)
-					&& WASM::tailCallFrameSupported(calledType)) {
+			const bool calleeFrameForm = calleeUsesFrameForm(typeIndex);
+			const bool tailFits = calleeFrameForm
+					? WASM::tailCallFrameSupported(calledType)
+					: WASM::tailCallSlotsSupported(calledType);
+			if (WASM::tailCallTrampolinesEligible(module, frameByType) && tailFits) {
 				const ResolvedIndirect resolved = resolveIndirectTarget(typeIndex, tableIndex);
 				auto thunk = compiler.new_gp_ptr("tailThunk");
 				checkError(compiler.mov(thunk, asmjit::x86::ptr(resolved.callable,
@@ -2400,9 +2404,11 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 			dispatchReturn();
 			return;
 		}
-		validateTailCallType(typeIndex);
-		if (!frameMode && WASM::tailCallTrampolinesEligible(module, false)
-				&& WASM::tailCallSlotsSupported(calledType)) {
+		const bool calleeFrameForm = calleeUsesFrameForm(typeIndex);
+		const bool tailFits = calleeFrameForm
+				? WASM::tailCallFrameSupported(calledType)
+				: WASM::tailCallSlotsSupported(calledType);
+		if (WASM::tailCallTrampolinesEligible(module, frameByType) && tailFits) {
 			const ResolvedIndirect resolved = resolveIndirectTarget(typeIndex, tableIndex);
 			auto thunk = compiler.new_gp_ptr("tailThunk");
 			checkError(compiler.mov(thunk, asmjit::x86::ptr(resolved.callable,
@@ -2421,19 +2427,6 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 		dispatchReturn();
 	}
 
-	void validateTailCallType(uint32_t typeIndex) const
-	{
-		if (typeIndex >= signatures.size() || !signatures[typeIndex])
-			throw std::runtime_error("AsmJit tail call references an unavailable function signature");
-		const WASM::FuncType calledType = module.funcTypeAt(typeIndex);
-		if (calledType.results.size() != resultCount)
-			throw std::runtime_error("AsmJit tail-call result arity differs from the caller");
-		for (const auto& parameter : calledType.params)
-			requireI32(parameter.val, "tail-call parameters");
-		for (const auto& result : calledType.results)
-			requireI32(result.val, "tail-call results");
-	}
-
 	struct ResolvedIndirect {
 		asmjit::x86::Gp callable;
 		std::vector<asmjit::x86::Gp> arguments;
@@ -2449,12 +2442,13 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 		if (typeIndex >= signatures.size() || !signatures[typeIndex])
 			throw std::runtime_error("AsmJit call_indirect references an unavailable function type");
 		const WASM::FuncType calledType = module.funcTypeAt(typeIndex);
-		if (!frameMode && calledType.results.size() > 1)
+		if (!calleeUsesFrameForm(typeIndex) && calledType.results.size() > 1)
 			throw std::runtime_error("AsmJit register-form call_indirect supports at most one result");
 		// Frame mode handles a v128 parameter/result through the frame block; the
 		// register form has no aggregate spelling for it.
 		for (const auto& parameter : calledType.params)
-			if (!frameMode || parameter.val.opcode != WASM::ValueTypeCode::V128)
+			if (!calleeUsesFrameForm(typeIndex)
+					|| parameter.val.opcode != WASM::ValueTypeCode::V128)
 				requireScalar(parameter.val, "indirect-call parameters");
 		for (const auto& result : calledType.results)
 			if (!frameMode || result.val.opcode != WASM::ValueTypeCode::V128)
@@ -2518,7 +2512,7 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 		// own stack slot first and released from there afterwards.
 		const std::vector<asmjit::x86::Mem> keptArguments =
 				spillCallReferenceArguments(calledType, resolved.arguments);
-		if (frameMode) {
+		if (calleeUsesFrameForm(typeIndex)) {
 			uint32_t argBytes = 0;
 			for (const WASM::StorageType& parameter : calledType.params)
 				argBytes += parameter.val.opcode == WASM::ValueTypeCode::V128 ? 16u : 8u;
@@ -2637,7 +2631,7 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 		// own stack slot first and released from there afterwards.
 		const std::vector<asmjit::x86::Mem> keptArguments =
 				spillCallReferenceArguments(calledType, arguments);
-		if (frameMode) {
+		if (calleeUsesFrameForm(typeIndex)) {
 			// Staging-frame ABI: pack the arguments, invoke (ctx, frame), read the
 			// result block back into the value stack.
 			uint32_t argBytes = 0;
@@ -2725,9 +2719,9 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 		const WASM::FuncType calledType = module.funcTypeAt(typeIndex);
 		if (inDeadCode())
 			return;
-		if (!frameMode && calledType.results.size() > 1)
+		if (!calleeUsesFrameForm(typeIndex) && calledType.results.size() > 1)
 			throw std::runtime_error("AsmJit register-form call_ref supports at most one result");
-		if (!frameMode) {
+		if (!calleeUsesFrameForm(typeIndex)) {
 			for (const auto& parameter : calledType.params)
 				requireScalar(parameter.val, "call_ref parameters");
 			for (const auto& result : calledType.results)
@@ -2764,10 +2758,10 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 			values.pop_back();
 		}
 		emitNullRefCheck(callable);
-		const bool refTailSupported = frameMode
+		const bool refTailSupported = calleeUsesFrameForm(typeIndex)
 				? WASM::tailCallFrameSupported(calledType)
 				: WASM::tailCallSlotsSupported(calledType);
-		if (WASM::tailCallTrampolinesEligible(module, frameMode) && refTailSupported) {
+		if (WASM::tailCallTrampolinesEligible(module, frameByType) && refTailSupported) {
 			auto thunk = compiler.new_gp_ptr("tailThunk");
 			checkError(compiler.mov(thunk, asmjit::x86::ptr(callable,
 					static_cast<int32_t>(offsetof(WASM::Callable, tailEntry)))),
@@ -2828,9 +2822,20 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 		// on demand -- the mixed-graph path, which is rare enough that a cached
 		// second table would be wasted memory (docs/ABI.md).
 		bool calleeFrameForm = isInternal
-				? frameMode : WASM::callableUsesFrameForm(internals.importStorage[index]);
+				? calleeUsesFrameForm(typeIndex)
+				: WASM::callableUsesFrameForm(internals.importStorage[index]);
+		// A native import is a host C function and always takes the register form;
+		// resolve that **before** picking the signature, because the per-type table
+		// spells the import's declared type in *its* form, which may be the frame
+		// (`GAP-1`, `GR-8`). A wide native import is then refused by the register
+		// checks below rather than entered through the wrong signature.
+		if (!isInternal && !WASM::callableIsCompiled(internals.importStorage[index]))
+			calleeFrameForm = false;
 		std::unique_ptr<asmjit::FuncSignature> foreignFormSignature;
-		if (calleeFrameForm != frameMode)
+		// The table spells each type in *that type's* form, so compare the callee
+		// with the table entry -- not with this function's own form, which differs
+		// in a mixed module and would reuse a frame signature for a register call.
+		if (calleeFrameForm != calleeUsesFrameForm(typeIndex))
 			foreignFormSignature = std::make_unique<asmjit::FuncSignature>(
 					TypeTranslator::translateFunctionType(
 							module.funcTypeAt(typeIndex), calleeFrameForm));
@@ -2839,13 +2844,6 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 		const WASM::FuncType calledType = module.funcTypeAt(typeIndex);
 		if (inDeadCode())
 			return;
-		// The call shape follows the *callee*, not this module: a compiled callee
-		// from another module may have been built in either form, and a native
-		// import is always the register form because it is a host C function. That
-		// is what lets two modules that disagree about the form call each other
-		// (docs/ABI.md).
-		if (!isInternal && !WASM::callableIsCompiled(internals.importStorage[index]))
-			calleeFrameForm = false;
 		if (!calleeFrameForm && calledType.results.size() > 1)
 			throw std::runtime_error("AsmJit register-form calls support at most one result");
 		if (!calleeFrameForm) {
@@ -11612,8 +11610,16 @@ private:
 	asmjit::x86::Gp vmContext;
 	//! The frame pointer in frame mode (docs/ABI.md).
 	asmjit::x86::Gp framePointer;
-	//! Whether this function is compiled in the staging-frame form.
-	const bool frameMode = TypeTranslator::moduleNeedsFrame(module, WASM::frameCallAbiOptIn());
+	//! Whether *this* function is compiled in the staging-frame form.
+	const bool frameMode = false;
+	//! Call form per module-local type index: a call site emits the *callee
+	//! type's* form, so one wide function no longer decides every call.
+	std::span<const std::uint8_t> frameByType;
+	//! True when the function type at `typeIndex` uses the staging frame.
+	bool calleeUsesFrameForm(std::uint32_t typeIndex) const
+	{
+		return typeIndex < frameByType.size() && frameByType[typeIndex] != 0;
+	}
 	//! True when the active profile excludes the `N` marker: a scalar float that
 	//! becomes observable is replaced by the canonical NaN
 	//! (docs/proposals/PROFILES.md PR-3).
@@ -11691,15 +11697,13 @@ void ModuleCompiler::translateTypes(WASM::ModuleInstance& instance, const WASM::
 		WASM::ModuleInstanceInternals& internals)
 {
 	signatures.clear();
-	// Staging-frame ABI (docs/ABI.md): the mode
-	// is decided before translation, because the signature itself changes shape.
-	// Opt-in, never inferred -- see WasmBase/WasmBackendAbi.hpp.
-	const bool frameMode = TypeTranslator::moduleNeedsFrame(module, WASM::frameCallAbiOptIn());
-	// A frame-mode module may still import functions: a tail call to an import
-	// goes through the shared tail-call trampoline, which owns the ABI bridge.
-	// A direct call to a native import uses the register path in dispatchCall;
-	// the frame form is only used between functions compiled with this ABI.
-	instance.setFrameCallAbi(frameMode);
+	// Staging-frame ABI (docs/ABI.md): each type's form is decided before
+	// translation, because the signature itself changes shape. A module may mix
+	// the two forms (`GAP-1`, `GR-8`).
+	const std::vector<std::uint8_t> forms = TypeTranslator::frameForms(
+			module, WASM::frameCallAbiOptIn());
+	instance.setFrameCallForms(forms);
+	instance.setFrameCallAbi(TypeTranslator::uniformlyFrameForm(module, forms));
 	signatures.resize(module.typeIds.size());
 	internals.translatedTypes.assign(module.typeIds.size(), nullptr);
 
@@ -11707,8 +11711,9 @@ void ModuleCompiler::translateTypes(WASM::ModuleInstance& instance, const WASM::
 		if (module.typeView(i).kind() != WASM::CanonTypeKind::Func)
 			continue;
 		const WASM::FuncType type = module.funcTypeAt(i);
+		const bool frameForm = i < forms.size() && forms[i] != 0;
 		signatures[i] = std::make_unique<asmjit::FuncSignature>(
-				TypeTranslator::translateFunctionType(type, frameMode));
+				TypeTranslator::translateFunctionType(type, frameForm));
 		internals.translatedTypes[i] = signatures[i].get();
 	}
 }
@@ -11761,6 +11766,12 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance,
 		return;
 	}
 
+	// The per-type call form, read back from the instance so the emitter and the
+	// tail-call installer use exactly the table `translateTypes` recorded.
+	std::vector<std::uint8_t> forms(module.typeCount(), 0);
+	for (uint32_t i = 0; i < module.typeCount(); ++i)
+		forms[i] = instance.usesFrameForm(WASM::LocalTypeIdx{i}) ? 1 : 0;
+
 	const std::size_t allocationCheckpoint = context.allocationCheckpoint();
 	try {
 		asmjit::CodeHolder code;
@@ -11785,10 +11796,11 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance,
 				throw std::runtime_error("AsmJit failed to begin an internal function body");
 			const uint32_t typeIndex = module.internalFunctionTypeIndices[i];
 			const WASM::FuncType type = module.funcTypeAt(typeIndex);
+			const bool ownFrameForm = instance.usesFrameForm(WASM::LocalTypeIdx{typeIndex});
 			IntegerFunctionEmitter emitter(compiler, *function, type, module.functionBodies[i],
 					module, internals, functions, signatures,
 					static_cast<uint32_t>(module.importFunctions.size() + i),
-					profile().deterministic());
+					ownFrameForm, forms, profile().deterministic());
 			try {
 				emitter.compile(module.functionBodies[i], type);
 			} catch (const std::exception& error) {
@@ -11807,11 +11819,9 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance,
 			internals.internalCallables[i].fnPtr = functionRecords[i]->entry;
 			internals.compiledFunctions[i] = functionRecords[i]->entry;
 		}
-		if (WASM::tailCallTrampolinesEligible(module,
-TypeTranslator::moduleNeedsFrame(module, WASM::frameCallAbiOptIn()))
-&& !WASM::installTailCallTrampolines(module, internals,
-TypeTranslator::moduleNeedsFrame(module, WASM::frameCallAbiOptIn())))
-throw std::runtime_error("AsmJit could not install tail-call trampolines");
+		if (WASM::tailCallTrampolinesEligible(module, forms)
+				&& !WASM::installTailCallTrampolines(module, internals, forms))
+			throw std::runtime_error("AsmJit could not install tail-call trampolines");
 		// FuncNodes belong to the temporary CodeHolder. Runtime handles are the
 		// installed entry pointers above, so discard all compiler-side records.
 		functionRecords.clear();

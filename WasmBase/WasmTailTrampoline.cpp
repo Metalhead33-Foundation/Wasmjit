@@ -96,6 +96,8 @@ bool buildFrameShape(const FuncType& ft, CallShape& shape)
 		shape.paramKinds.push_back(valueKindOf(param.val.opcode));
 	for (const StorageType& result : ft.results)
 		shape.resultKinds.push_back(valueKindOf(result.val.opcode));
+	shape.single = ft.results.size() == 1;
+	shape.multi = ft.results.size() > 1;
 	shape.frameResultOffset = frameArgumentsBytes(shape.paramKinds);
 	shape.resultBytes = frameResultsBytes(shape.resultKinds);
 	return ffi_prep_cif(&shape.cif, FFI_DEFAULT_ABI, 2, &ffi_type_void,
@@ -155,8 +157,9 @@ void thunkHandler(ffi_cif*, void*, void** args, void* userData)
 	void* buffer = *static_cast<void**>(args[4]);
 	if (fn == nullptr)
 		return;
+	TailCallState* state = currentTailCallState();
 	if (thunk->shape.frame) {
-		TailCallState* state = currentTailCallState();
+		state->frameResult = 1;
 		for (std::size_t i = 0; i < thunk->shape.paramCount; ++i)
 			std::memcpy(state->frame + frameArgumentOffset(thunk->shape.paramKinds,
 					static_cast<std::uint32_t>(i)),
@@ -168,6 +171,7 @@ void thunkHandler(ffi_cif*, void*, void** args, void* userData)
 		ffi_call(&thunk->shape.cif, FFI_FN(fn), nullptr, frameArgs);
 		return;
 	}
+	state->frameResult = 0;
 	std::vector<void*> callArgs(thunk->shape.argTypes.size(), nullptr);
 	callArgs[0] = &ctx;
 	for (std::size_t i = 0; i < thunk->shape.paramCount; ++i)
@@ -176,6 +180,42 @@ void thunkHandler(ffi_cif*, void*, void** args, void* userData)
 		callArgs[1 + thunk->shape.paramCount] = &buffer;
 	void* result = thunk->shape.single ? results : nullptr;
 	ffi_call(&thunk->shape.cif, FFI_FN(fn), result, callArgs.data());
+}
+
+//! Copies the last dispatched link's result into the representation the
+//! original caller expects. A chain may cross between the two forms -- a
+//! register-form function can tail-call a frame-form one and the reverse -- so
+//! the *source* follows the last thunk (`state->frameResult`), not the driver.
+void copyChainResults(const CallShape& shape, const TailCallState* state,
+		void* ret, void* originalFrame)
+{
+	const std::uint8_t* const frameSource = state->frame + state->frameResultOffset;
+	if (shape.frame) {
+		if (shape.resultBytes == 0 || originalFrame == nullptr)
+			return;
+		auto* target = static_cast<std::uint8_t*>(originalFrame) + shape.frameResultOffset;
+		if (state->frameResult != 0) {
+			std::memcpy(target, frameSource, shape.resultBytes);
+		} else if (shape.multi) {
+			if (state->resultBuffer != nullptr)
+				std::memcpy(target, state->resultBuffer, shape.resultBytes);
+		} else if (shape.single) {
+			std::memcpy(target, state->results, shape.resultSize);
+		}
+		return;
+	}
+	if (state->frameResult != 0) {
+		if (shape.single)
+			std::memcpy(ret, frameSource, shape.resultSize);
+		else if (shape.multi && state->resultBuffer != nullptr)
+			std::memcpy(state->resultBuffer, frameSource,
+					frameResultsBytes(shape.resultKinds));
+		return;
+	}
+	if (shape.single)
+		std::memcpy(ret, state->results, shape.resultSize);
+	// A multi-result register chain wrote straight into `resultBuffer`; nothing
+	// to move.
 }
 
 //! The driver handler: calls the raw entry once, then re-dispatches every
@@ -188,8 +228,14 @@ void driverHandler(ffi_cif*, void* ret, void** args, void* userData)
 	void* originalFrame = driver->shape.frame
 			? *static_cast<void**>(args[1]) : nullptr;
 	state->pending = 0;
-	state->resultBuffer = driver->shape.multi && !driver->shape.frame
-			? *static_cast<void**>(args[1 + driver->shape.paramCount])
+	state->frameResult = 0;
+	// A multi-result chain shares one tuple buffer. A register-form driver gets
+	// the caller's; a frame-form driver writes into its own result block, so a
+	// register-form link later in the chain has somewhere to put the tuple.
+	state->resultBuffer = driver->shape.multi
+			? (driver->shape.frame
+					? state->frame + driver->shape.frameResultOffset
+					: *static_cast<void**>(args[1 + driver->shape.paramCount]))
 			: nullptr;
 	ffi_call(&driver->shape.cif, FFI_FN(driver->raw),
 			driver->shape.single && !driver->shape.frame ? ret : nullptr, args);
@@ -214,48 +260,56 @@ void driverHandler(ffi_cif*, void* ret, void** args, void* userData)
 		ffi_call(driver->thunkCif, FFI_FN(target->tailEntry), nullptr, thunkArgs);
 		dispatched = true;
 	}
-	if (dispatched && trap->pending == 0) {
-		if (driver->shape.frame && driver->shape.resultBytes != 0)
-			std::memcpy(static_cast<char*>(originalFrame) + driver->shape.frameResultOffset,
-					state->frame + state->frameResultOffset, driver->shape.resultBytes);
-		else if (driver->shape.single)
-			std::memcpy(ret, state->results, driver->shape.resultSize);
-	}
+	if (dispatched && trap->pending == 0)
+		copyChainResults(driver->shape, state, ret, originalFrame);
 }
 
 } // namespace
 
 
-bool tailCallTrampolinesEligible(const Module& module, bool frameAbi)
+namespace {
+
+//! True when `typeIndex` selected the staging frame for this module.
+bool frameFormOf(std::span<const std::uint8_t> frameByType, uint32_t typeIndex) noexcept
+{
+	return typeIndex < frameByType.size() && frameByType[typeIndex] != 0;
+}
+
+} // namespace
+
+bool tailCallTrampolinesEligible(const Module& module, std::span<const std::uint8_t> frameByType)
 {
 	if (!module.hasTailCalls())
 		return false;
-	const auto supported = [frameAbi](const FuncType& ft) {
-		return frameAbi ? tailCallFrameSupported(ft) : tailCallSlotsSupported(ft);
+	const auto supported = [frameByType](uint32_t typeIndex, const FuncType& ft) {
+		return frameFormOf(frameByType, typeIndex)
+				? tailCallFrameSupported(ft) : tailCallSlotsSupported(ft);
 	};
 	for (uint32_t typeIndex : module.internalFunctionTypeIndices)
-		if (!supported(module.funcTypeAt(typeIndex)))
+		if (!supported(typeIndex, module.funcTypeAt(typeIndex)))
 			return false;
 	for (const ImportFunction& import : module.importFunctions)
-		if (!supported(module.funcTypeAt(import.typeIdx)))
+		if (!supported(import.typeIdx, module.funcTypeAt(import.typeIdx)))
 			return false;
 	return true;
 }
 
 bool installTailCallTrampolines(const Module& module, ModuleInstanceInternals& internals,
-		bool frameAbi)
+		std::span<const std::uint8_t> frameByType)
 {
-	if (!tailCallTrampolinesEligible(module, frameAbi))
+	if (!tailCallTrampolinesEligible(module, frameByType))
 		return false;
 	if (internals.internalCallables.size() != module.internalFunctionTypeIndices.size())
 		return false;
 
 	auto table = std::make_unique<TrampolineTable>();
-	const auto supported = [frameAbi](const FuncType& ft) {
-		return frameAbi ? tailCallFrameSupported(ft) : tailCallSlotsSupported(ft);
+	const auto supported = [frameByType](uint32_t typeIndex, const FuncType& ft) {
+		return frameFormOf(frameByType, typeIndex)
+				? tailCallFrameSupported(ft) : tailCallSlotsSupported(ft);
 	};
-	const auto build = [frameAbi](const FuncType& ft, CallShape& shape) {
-		return frameAbi ? buildFrameShape(ft, shape) : buildCallShape(ft, shape);
+	const auto build = [frameByType](uint32_t typeIndex, const FuncType& ft, CallShape& shape) {
+		return frameFormOf(frameByType, typeIndex)
+				? buildFrameShape(ft, shape) : buildCallShape(ft, shape);
 	};
 	const auto thunkFor = [&](uint32_t typeIndex) -> TypeThunk* {
 		if (typeIndex >= table->thunks.size())
@@ -263,10 +317,10 @@ bool installTailCallTrampolines(const Module& module, ModuleInstanceInternals& i
 		if (table->thunks[typeIndex])
 			return table->thunks[typeIndex].get();
 		const FuncType ft = module.funcTypeAt(typeIndex);
-		if (!supported(ft))
+		if (!supported(typeIndex, ft))
 			return nullptr;
 		auto thunk = std::make_unique<TypeThunk>();
-		if (!build(ft, thunk->shape))
+		if (!build(typeIndex, ft, thunk->shape))
 			return nullptr;
 		void* code = nullptr;
 		thunk->closure = static_cast<ffi_closure*>(ffi_closure_alloc(sizeof(ffi_closure), &code));
@@ -284,7 +338,7 @@ bool installTailCallTrampolines(const Module& module, ModuleInstanceInternals& i
 	for (uint32_t i = 0; i < module.internalFunctionTypeIndices.size(); ++i) {
 		const uint32_t typeIndex = module.internalFunctionTypeIndices[i];
 		const FuncType ft = module.funcTypeAt(typeIndex);
-		if (!supported(ft))
+		if (!supported(typeIndex, ft))
 			return false;
 		TypeThunk* thunk = thunkFor(typeIndex);
 		if (thunk == nullptr || internals.internalCallables[i].fnPtr == nullptr)
@@ -292,7 +346,7 @@ bool installTailCallTrampolines(const Module& module, ModuleInstanceInternals& i
 		auto driver = std::make_unique<FunctionDriver>();
 		driver->raw = internals.internalCallables[i].fnPtr;
 		driver->thunkCif = &table->thunkCif;
-		if (!build(ft, driver->shape))
+		if (!build(typeIndex, ft, driver->shape))
 			return false;
 		void* code = nullptr;
 		driver->closure = static_cast<ffi_closure*>(ffi_closure_alloc(sizeof(ffi_closure), &code));
@@ -305,10 +359,10 @@ bool installTailCallTrampolines(const Module& module, ModuleInstanceInternals& i
 	}
 
 	for (uint32_t i = 0; i < module.importFunctions.size(); ++i) {
-		const FuncType ft = module.funcTypeAt(module.importFunctions[i].typeIdx);
-		if (!supported(ft))
+		const uint32_t typeIndex = module.importFunctions[i].typeIdx;
+		if (!supported(typeIndex, module.funcTypeAt(typeIndex)))
 			return false;
-		if (thunkFor(module.importFunctions[i].typeIdx) == nullptr)
+		if (thunkFor(typeIndex) == nullptr)
 			return false;
 	}
 

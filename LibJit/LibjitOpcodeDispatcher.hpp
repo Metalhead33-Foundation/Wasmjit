@@ -83,6 +83,8 @@ private:
 	//! a runtime failure names the function, not just the trap kind
 	//! (docs/proposals/EXTENDED_NAME_SECTION.md ENS-5).
 	uint32_t functionIndex;
+	//! Call form per module-local type index (non-zero = staging frame).
+	std::span<const std::uint8_t> frameByType;
 	std::string functionLabel; //!< Diagnostic label for `functionIndex` (`function N ($name)`).
 	//! The name-section spelling of `functionIndex`, interned in the instance for
 	//! the generated code's lifetime; null when the module has no name for it.
@@ -526,6 +528,7 @@ public:
 					 WASM::ModuleInstanceInternals& internals,
 					 const WASM::Module& module, const WASM::FuncType& currentFunc,
 					 uint32_t importedFuncCount, uint32_t functionIndex,
+					 std::span<const std::uint8_t> frameByType,
 					 std::vector<WASM::BranchHint> branchHints,
 					 std::vector<jit_value_t>& locals,
 					 std::vector<jit_value_t>& valueStack,

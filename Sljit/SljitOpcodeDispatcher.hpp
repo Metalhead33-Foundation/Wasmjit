@@ -73,15 +73,17 @@ public:
 	 * \param funcType Declared signature of the function.
 	 * \param body Decoded body whose opcode stream is walked.
 	 * \param functionIndex Module function index, used for the trap-site annotation.
-	 * \param frameCallAbi True to emit the staging-frame ABI (`void fn(VMContext*, void* frame)`) instead of the register form; set module-wide by the compiler (docs/ABI.md).
+	 * \param frameCallAbi True to emit the staging-frame ABI (`void fn(VMContext*, void* frame)`) for *this* function instead of the register form; the compiler derives it from the function's own signature (docs/ABI.md).
 	 * \param tagIds The instance's tag index space, imports first, so a `throw tagidx` folds to its canonical id (docs/proposals/EXCEPTIONS.md EX-2).
 	 * \param internals Instance callables, used to embed a direct tail-call target.
+	 * \param frameByType Call form per module-local type index, so a call site emits the callee type's form.
 	 * \param profileConfig The active profile; its `N` marker enables deterministic NaN canonicalisation at observable boundaries (docs/proposals/PROFILES.md PR-3).
 	 */
 	OpcodeDispatcher(const WASM::Module& module, const WASM::FuncType& funcType,
 			const WASM::FunctionBody& body, std::uint32_t functionIndex,
 			bool frameCallAbi, const std::vector<WASM::TagId>& tagIds,
 			WASM::ModuleInstanceInternals& internals,
+			std::span<const std::uint8_t> frameByType,
 			WASM::ProfileConfig profileConfig);
 
 	/*!
@@ -1203,6 +1205,8 @@ private:
 	 */
 	void emitResolvedCall(const WASM::FuncType& type, int callableReg,
 			void* stagedImport, bool calleeFrameForm);
+	//! True when the function type at `typeIndex` uses the staging frame.
+	bool calleeUsesFrameForm(std::uint32_t typeIndex) const;
 	/*!
 	 * \brief Returns the staged native-import entry a call of @p type needs.
 	 *
@@ -1210,10 +1214,11 @@ private:
 	 * not frame-form, and null when the shape carries a `v128` (outside the
 	 * uniform slot model the adapter marshals).
 	 *
+	 * \param typeIndex Callee type index (selects the call form).
 	 * \param type Callee signature.
 	 * \return A `void(VMContext*, Callable*, void* frame)` entry, or null.
 	 */
-	void* stagedImportFor(const WASM::FuncType& type);
+	void* stagedImportFor(std::uint32_t typeIndex, const WASM::FuncType& type);
 
 	/*!
 	 * \brief Validates a memory index and returns its type.
@@ -1630,6 +1635,9 @@ public:
 	const std::vector<WASM::TagId>& tagIds_; //!< Instance tag index space, imports first.
 	std::uint32_t functionIndex_; //!< Module function index (trap-site annotation).
 	WASM::ModuleInstanceInternals& internals_; //!< Instance callables for direct tail targets.
+	//! Call form per module-local type index (non-zero = staging frame), so a
+	//! call site emits the *callee type's* form instead of the caller module's.
+	std::span<const std::uint8_t> frameByType_;
 	bool tailTrampoline_ = false; //!< True when this body may write TailCallState.
 	const char* functionName_ = nullptr; //!< Name-section name, or null.
 

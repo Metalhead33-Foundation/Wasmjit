@@ -160,7 +160,11 @@ bool Session::invoke(const WASM::ModuleInstance& instance,
 	if (callable.fnPtr == nullptr)
 		return false;
 	trapped = false;
-	if (instance.frameCallAbi()) {
+	// The callable's own form, not the instance's aggregate (`GAP-1`, `GR-8`).
+	const bool frameForm = WASM::callableIsCompiled(callable)
+			? WASM::callableUsesFrameForm(callable)
+			: instance.frameCallAbi();
+	if (frameForm) {
 		// Frame form: PACK every argument at the canonical slot and unpack the
 		// result tuple through the aggregate layout the spec harness reads.
 		std::vector<WASM::ValueKind> paramKinds;

@@ -754,25 +754,23 @@ void ModuleInstance::resolveTypeImports(ImportResolver& resolver)
 
 void ModuleInstance::verifyImportCallForms() const
 {
-	for (const Callable& callable : internals.importStorage) {
+	for (std::size_t i = 0; i < internals.importStorage.size(); ++i) {
+		const Callable& callable = internals.importStorage[i];
 		if (!callableIsCompiled(callable))
-			continue; // a native import is a host C function: always the register form
+			continue; // a native import is a host C function: the module's uniform form
+		// The callee's own type decides its form; compare it with the form this
+		// module chose for the same declared type. Two instances compiled with the
+		// same backend and opt-in agree, so this refuses only a graph whose
+		// instances were built under different settings -- which would otherwise be
+		// entered through the wrong signature (`GAP-1`, `GR-8`).
 		const bool calleeFrameForm = callableUsesFrameForm(callable);
-		if (calleeFrameForm != frameCallAbi_)
+		const bool localFrameForm = i < module->importFunctions.size()
+				? usesFrameForm(LocalTypeIdx{module->importFunctions[i].typeIdx})
+				: calleeFrameForm;
+		if (calleeFrameForm != localFrameForm)
 			throw std::runtime_error("the module imports a function from an instance"
 					" compiled with the other call ABI; instantiate both modules with the"
 					" same WASM::setFrameCallAbiOptIn setting"
-					" (docs/ABI.md)");
-		// Both sides agree on the frame form, but the frame form has no
-		// cross-module path yet: the register form is the one the linking fixtures
-		// pin, and a frame-form import reaches the callee through the wrong
-		// signature on every backend (it crashed on all three before this check
-		// existed). Refusing is the honest answer until the frame path is
-		// implemented for imports as well.
-		if (calleeFrameForm)
-			throw std::runtime_error("the module imports a function from another"
-					" module in the staging-frame call form, which has no cross-module path"
-					" yet; instantiate the graph without WASM::setFrameCallAbiOptIn"
 					" (docs/ABI.md)");
 	}
 }
@@ -2660,7 +2658,10 @@ bool callableUsesFrameForm(const Callable& callable) noexcept
 		return false;
 	// A ModuleInstance keeps its VMContext first, so the context pointer is also
 	// the instance pointer (the same convention the reference helpers rely on).
-	return reinterpret_cast<const ModuleInstance*>(callable.context)->frameCallAbi();
+	// The callable's own type decides, not the defining module's aggregate: a
+	// module may mix the two forms (`GAP-1`, `GR-8`).
+	const auto* instance = reinterpret_cast<const ModuleInstance*>(callable.context);
+	return instance->usesFrameForm(LocalTypeIdx{callable.localTypeIdx});
 }
 
 void wasm_ref_store(VMContext* context, void** slot, void* value) noexcept
