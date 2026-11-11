@@ -23,7 +23,7 @@ the repository's documentation conventions but is not constrained by
 | Sink and ring | Per-`ExecutionState` bounded ring (32 records by default), `noexcept` sink, zero-capacity/zero-sink zero-cost configuration | `WasmBase/WasmDiagnostics.*`, `WasmBase/WasmAgent.hpp` |
 | Text and JSON | `formatDiagnostic`, `diagnosticToJson`, `diagnosticsToJson`; JSON schema `wasmjit.diagnostic.v1`, records carry a numeric `timestamp`, a collected run is an `{schema, startedAt, records}` envelope, serialized with nlohmann_json (included only in the `.cpp`) | `WasmBase/WasmDiagnostics.cpp` |
 | Pretty terminal | `formatDiagnosticPretty`: emoji (ℹ️/⚠️/⛔/🚨), ANSI white/yellow/red/magenta, `ctime` timestamp; emitted for `WASM.EXECUTE.LOG.*` records only | `WasmBase/WasmDiagnostics.cpp` |
-| Guest log imports | `env.info`/`warn`/`error`/`panic` read UTF-8 from memory 0; `panic` also traps; opt-in `WASM::registerToEnv(registrar)` | `WasmBase/WasmDiagnostics.*` |
+| Guest log (the one shipped synthetic module) | `info`/`warn`/`error`/`panic(ptr, len)` and `log(kind, ptr, len)` read UTF-8 from memory 0 (`len 0` = NUL-terminated); `log_str` takes a `stringref`; `log_as` takes an AssemblyScript `String`; `panic` also traps. Opt-in `registerToEnv`, on by default in the harness (`SCOPE.md` §3.1) | `WasmBase/WasmDiagnostics.*` |
 | Validation | `std::runtime_error` with a named rule and `Module::describeIndex`, plus a record with `WASM.VALIDATE.*` and function/instruction location; strictness is opt-in (`WASM_SPEC_VALIDATE=1`) | `WasmBase/WasmValidator.*`, `docs/VALIDATION.md` |
 | Decode | Named malformed/unsupported errors and bounded LEB/count reads; the load boundary records `WASM.DECODE.*` | `WasmBase/WasmModule.cpp`, `WasmBase/WasmOpcodeDispatcher.cpp`, `WasmBase/WasmSafety.hpp` |
 | Runtime traps | `TrapKind` plus a copied message in the per-agent `ExecutionState` trap slot; the host-boundary conversion records `WASM.EXECUTE.TRAP.*` | `WasmBase/WasmTrap.*`, `WasmBase/WasmAgent.hpp` |
@@ -652,33 +652,75 @@ emitted record simply has no bracket.
 
 ### 5.4 Host log imports (implemented)
 
-`WASM::registerToEnv(registrar)` (or `registerDiagnosticImports(registrar,
-moduleName)` for another module) publishes four native imports that a test
-module calls directly:
+WasmJit ships **one** synthetic module: the diagnostics namespace. It is the
+single deliberate exception to the rule that a `(module, field)` host namespace
+belongs to the embedder ([`SCOPE.md`](SCOPE.md) §3.1).
+`WASM::registerDiagnosticImports` publishes it under a caller-chosen module
+name; `WASM::registerToEnv` uses `env`. The engine never registers it
+implicitly — an embedder opts in, and the test harness registers it by default.
 
-| Import | Id | Severity | Effect |
-|---|---|---|---|
-| `info(ptr, len)` | `WASM.EXECUTE.LOG.INFO` | Note | record only |
-| `warn(ptr, len)` | `WASM.EXECUTE.LOG.WARN` | Warning | record only |
-| `error(ptr, len)` | `WASM.EXECUTE.LOG.ERROR` | Error | record only |
-| `panic(ptr, len)` | `WASM.EXECUTE.LOG.PANIC` | Fatal | record, then trap `TrapKind::Internal` with the same text |
+The module exposes the same record through three argument shapes and seven
+entry points:
 
-`ptr`/`len` address UTF-8 in the module's linear memory 0 — the shape an
-AssemblyScript `@external("env", "info") declare function info(ptr: usize, len:
-i32): void` produces, and the same shape a `.wat` fixture writes with
-`(call $info (i32.const 0) (i32.const 15))`. The bytes are copied; a range
-outside memory, a negative range or a module with no memory yields a
-deterministic placeholder such as `<guest string: range outside linear
-memory>` instead of a read, and a length beyond
-`kMaxDiagnosticMessageBytes` (4096) is truncated with `...` — the guest never
-chooses the host allocation size (`docs/SAFETY.md` §2.2).
+| Entry point | Shape | Kind |
+|---|---|---|
+| `info(ptr, len)` / `warn` / `error` / `panic` | C / linear memory | fixed by the name |
+| `log(kind, ptr, len)` | C / linear memory | 0 info, 1 warn, 2 error, 3 panic |
+| `log_str(kind, stringref)` | WasmGC `stringref` | same numbering |
+| `log_as(kind, string)` | AssemblyScript `String` | same numbering |
+
+The four aliases are the shape an AssemblyScript `@external("env", "info")
+declare function info(ptr: usize, len: i32)` produces and the one a `.wat`
+fixture writes; `log` is the single-function form for a language that prefers a
+selector over four names (one import and one code path instead of four).
+
+**Kind numbering is the guest ABI** and does not change: 0 `info` → `Note`
+`WASM.EXECUTE.LOG.INFO`; 1 `warn` → `Warning` `.WARN`; 2 `error` → `Error`
+`.ERROR`; 3 `panic` → `Fatal` `.PANIC`, then a trap `TrapKind::Internal` with
+the same text. That trap **is** the deliberate abort: the guest call stops and
+the host boundary raises `WASM::Trap` with the guest's text. It never calls
+`std::abort()`, because a guest-reachable path must not take the host down
+([`SAFETY.md`](SAFETY.md) §2.4). Any other selector records an `Error` with
+`WASM.EXECUTE.LOG.INVALID` and does **not** trap: a bad selector is the guest's
+bug, whereas `panic` is the explicit way to fail the call.
+
+**The C shape.** `ptr`/`len` address UTF-8 in the module's linear memory 0. A
+`len` of **0** means a NUL-terminated C string: the host scans to the first NUL,
+bounded by the end of linear memory and one byte past
+`kMaxDiagnosticMessageBytes`. The bytes are copied; a range outside memory, a
+negative range or a module with no memory yields a deterministic placeholder
+such as `<guest string: range outside linear memory>` instead of a read, and a
+length beyond the cap (4096) is truncated with `...` — the guest never chooses
+the host allocation size (`docs/SAFETY.md` §2.2).
+
+**The `stringref` shape.** The value is the engine's stringref ABI, a
+`StringObject*`; the host validates it against the Store's string arena before
+dereferencing, encodes its code points to UTF-8 lossily and caps the record. The
+validation matters because a guest can misdeclare the import as `(i32, i32)` and
+pass an arbitrary integer where a `stringref` is expected: such a handle records
+`<guest string: not a Store-owned string>` instead of taking the host down. The
+argument is a borrow: the import never releases it.
+
+**The AssemblyScript shape.** `string` is an AS `String` object pointer
+(`usize`, so an `i32` on wasm32). The host reads the managed-object header the
+AS 0.28 runtime writes (`std/assembly/rt/common.ts`): the payload byte length
+`rtSize` is a `u32` four bytes before the value, and a `String`'s payload is
+UTF-16LE code units starting at the value. A null pointer is AS's null string; a
+pointer below the header, an odd payload or a range past the memory end degrades
+to a placeholder. `Test/wasm/diagnostics_interop.ts` is the real-AS fixture;
+`diagnostics_log.wat` carries a hand-written object with the same layout.
+
+A component-model `string` is not a fourth shape. A component import is a
+different registration surface (`ComponentFunction` in `ComponentHostImports`)
+and its string is already UTF-8, so the same emitter can back a component
+helper when one is needed; no component-language guest is claimed today, so it
+stays a candidate rather than a shipped entry point.
 
 The bodies are registered through `WASM::nativeImport<&fn>()`; they must not be
 declared `noexcept`, because `panic` reaches `WASM::trap` through the
 trampoline's catch frame. `panic` is how a unit test fails loudly from inside
 the guest: the record is queryable with its id and message, and the trap makes
-the call fail even if the test does not inspect the ring. `Test/wasm_wat/diagnostics_log.wat`
-is the fixture; §7 lists the cases.
+the call fail even if the test does not inspect the ring.
 
 ## 6. Roadmap
 
@@ -707,9 +749,10 @@ Status: ✅ implemented, ◐ partial, ☐ open.
 
 ## 7. Test plan
 
-Implemented (19 non-hidden cases, 287 assertions; 20 / 296 with
-`./WasmJit 'diagnostics*'`, which also selects `[.diagbench]`; fixture
-`Test/wasm_wat/diagnostics_log.wat`):
+Implemented (23 non-hidden cases, 338 assertions; 24 / 347 with
+`./WasmJit 'diagnostics*'`, which also selects `[.diagbench]`; fixtures
+`Test/wasm_wat/diagnostics_log.wat` and `Test/wasm/diagnostics_interop.ts`,
+plus the hand-built `stringref` module in `Test/main.cpp`):
 
 | Gate | Catch2 case | What it pins |
 |---|---|---|
@@ -718,6 +761,11 @@ Implemented (19 non-hidden cases, 287 assertions; 20 / 296 with
 | Sink and ring | `diagnostics: a sink sees records without replacing the ring` | the sink observes every emission, the ring still holds them, capacity 0 disables the ring |
 | Panic | `diagnostics: env.panic records a fatal note and traps` | `Fatal` log record + `WASM.EXECUTE.TRAP.INTERNAL`, trap message preserved |
 | Safety | `diagnostics: an unreadable or oversized guest string degrades safely` | out-of-range placeholder, 4096-byte truncation with `...`, invalid UTF-8 replaced with U+FFFD |
+| Enum form | `diagnostics: the enum log form maps every kind and rejects an unknown selector` | `log(0..3)` maps to the four ids/severities; a zero length is a NUL-terminated C string; kind 9 is `WASM.EXECUTE.LOG.INVALID` and does not trap; `log(3, ...)` records `Fatal` then traps |
+| AS shape (hand-written) | `diagnostics: an AssemblyScript String object is logged` | a hand-written AS object (`rtSize` at 220) decodes to "as from guest"; a pointer below the header yields the range placeholder |
+| AS shape (real) | `diagnostics: an AssemblyScript String crosses the real AS layout` | the compiled `diagnostics_interop.ts` passes a real AS `String` (UTF-16LE, non-ASCII), and `panic` traps |
+| `stringref` shape | `diagnostics: a stringref argument is logged` | a host-built `(i32, stringref) -> ()` import receives `string.const` and records its UTF-8 text |
+| Forged handle | (same case) | `log_str` imported as `(i32, i32)` passes 8 as the handle; the Store-ownership check refuses it with `<guest string: not a Store-owned string>` |
 | Validation id | `diagnostics: a validation failure carries a stable id and a location` | `WASM.VALIDATE.OPERAND_STACK`, function index/name (DG-5), instruction offset, text/JSON location |
 | Validation leaf | `diagnostics: a mapped validator rule keeps its own id` | `WASM.VALIDATE.UNKNOWN_FUNCTION` |
 | Rule families | `diagnostics: validator messages classify into stable rule families` | 17 representative messages map to the §4.2 family ids; unclassified prose lands on `WASM.VALIDATE.RULE` |

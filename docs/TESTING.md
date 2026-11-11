@@ -90,10 +90,13 @@ last line. `--diagnostics-limit=N` caps the accumulator (default 1000, `0` =
 unlimited). The collector is a sink on the main thread's execution state:
 records from a continuation worker or a test-owned `Agent` are separate.
 
-The harness also enables the pretty host-log form by default: `env.info`,
-`warn`, `error` and `panic` print an emoji + ANSI-coloured `ctime` line to
-stderr. `--diagnostics=none` is a quiet run (no pretty lines, no dump); `text`
-and `json` re-enable them.
+The harness also registers the engine's one synthetic module, the diagnostics
+guest-log facility, by default: `env.info`/`warn`/`error`/`panic`, the enum
+`log`, the `stringref` `log_str` and the AssemblyScript `log_as`
+([`DIAGNOSTICS.md`](DIAGNOSTICS.md) §5.4; the boundary exception is
+[`SCOPE.md`](SCOPE.md) §3.1). The pretty host-log form prints an emoji +
+ANSI-coloured `ctime` line to stderr. `--diagnostics=none` is a quiet run (no
+pretty lines, no dump); `text` and `json` re-enable them.
 
 ### Diagnosing one module (no test case)
 
@@ -545,7 +548,7 @@ for a merge to `master` — so that "green" means the same thing to every review
 
 | Run | Command | Evidence it produces | Last measured |
 | --- | --- | --- | --- |
-| Strict validator sweep | `WASM_SPEC_VALIDATE=1 ./WasmJit` (curated) and `WASM_SPEC_VALIDATE=1 ./WasmJit '[spec]'` (all) | every curated binary negative module is rejected; the all-scripts sweep exercises the hidden decoder/validator/linker cases too | **LibJIT 2026-11-11: 22,558 assertions / 828 cases, exit 0.** **SLJIT 2026-11-03: curated 3,275 / 3,277** (`tag` is the two-entry known failure), **all-scripts 257 / 257**. **AsmJIT 2026-11-11: recorded.** Release is green (22,707 / 834, 2026-11-11), and so are Debug LibJIT and SLJIT: `ref_test` passes everywhere since the extern-box ownership fix (`GAP-15`, closed 2026-11-11). In **Debug** the AsmJIT curated run still ends in `SIGSEGV` (`GAP-16`) |
+| Strict validator sweep | `WASM_SPEC_VALIDATE=1 ./WasmJit` (curated) and `WASM_SPEC_VALIDATE=1 ./WasmJit '[spec]'` (all) | every curated binary negative module is rejected; the all-scripts sweep exercises the hidden decoder/validator/linker cases too | **LibJIT 2026-11-11: 22,558 assertions / 828 cases, exit 0.** **SLJIT 2026-11-03: curated 3,275 / 3,277** (`tag` is the two-entry known failure), **all-scripts 257 / 257**. **AsmJIT 2026-11-11: recorded.** Release is green (22,758 / 838, 2026-11-11), and so are Debug LibJIT and SLJIT: `ref_test` passes everywhere since the extern-box ownership fix (`GAP-15`, closed 2026-11-11). In **Debug** the AsmJIT curated run still ends in `SIGSEGV` (`GAP-16`) |
 | AddressSanitizer build + suite | configure a second shadow build (below), then run the default suite with `ASAN_OPTIONS=detect_leaks=1:abort_on_error=1` and `LSAN_OPTIONS=suppressions=Test/asan.supp` | no use-after-free, overflow or engine leak; only LibJIT's uninstrumented process-wide caches are suppressed | **LibJIT 2026-11-09: 613 cases / 22,088 assertions, no memory error, LeakSanitizer clean** (exit 0). **SLJIT 2026-11-11: clean** — the run found `GAP-14` (fixed) and the continuation-handle leak `GAP-18` (**closed 2026-11-11**): `*continuation*` is LeakSanitizer-clean (255 assertions / 21 cases, exit 0). **AsmJIT 2026-11-11: `[spec]` cell clean** (514 assertions / 257 cases, exit 0, `WASMJIT_BACKEND=asmjit`). The `GR-8` (per-signature call form) refresh adds two measured cells: `[tail],[staging][abi][call],*continuation*,shared atomics*,call form:*` on **LibJIT** (534 assertions / 49 cases, exit 0) and `[spec]` on **SLJIT** (514 / 257, exit 0), both clean. The **full-suite** cell is **blocked by `GAP-16`**, not by time: the 2026-11-11 attempt with a one-hour `timeout` reached **8,127 assertions / 274 cases** and then died in the same wild write (`simd: bitwise ops run through the JIT`, `SIGSEGV on unknown address`, a `WRITE` ASan cannot attribute), so no AsmJIT sanitizer run can be clean until that defect is fixed. An earlier unfiltered attempt had not finished after 57 minutes because the LibJIT compile inside the tail-call cases alone runs for tens of minutes under ASan at `-O0`, which is why every attempt is launched under `timeout`. `[compilation-policy]` is excluded because LibJIT's CFG optimizer under ASan exceeds the runtime budget |
 | Execution-budget run | `./WasmJit '*per-agent step budget*'` (part of `[config]`) | a finite fuel budget stops a runaway loop with `TrapKind::OutOfFuel` and leaves `fuelRemaining()` at zero | **64-unit budget**, `[config]` green, 2026-11-03 |
 | ThreadSanitizer concurrency run | configure a third shadow build (below), then `./WasmJit '[multiagent]'` | no data race on the multi-agent path (waiter table, entry counter, GC queue/counters, shared-global atomics) | `[multiagent]` **51 assertions / 6 cases** and `[concurrency]` **80 / 13**, **no TSan report**, 2026-11-03 |

@@ -2,7 +2,7 @@
 
 *What Is an Engine Gap, and What Is a Boundary*
 
-Status: policy note, revision 5 (2026-11-11). It is the canonical record of the
+Status: policy note, revision 6 (2026-11-11). It is the canonical record of the
 surfaces WasmJit deliberately does **not** own and of the deviations it has
 chosen, so that none of them is counted as an implementation gap. Open defects
 and limitations live in one register,
@@ -10,7 +10,9 @@ and limitations live in one register,
 missing thing is a gap or a boundary. The failed-instantiation retention closes
 the `linking*` boundary. Revision 4 added §7.1, the claimed guest-language set;
 revision 5 renders its verdict column with the swatch pair
-[`LANGUAGE_FEASIBILITY.md`](LANGUAGE_FEASIBILITY.md) §5.1 defines.
+[`LANGUAGE_FEASIBILITY.md`](LANGUAGE_FEASIBILITY.md) §5.1 defines. Revision 6
+records the synthetic-module boundary and its one deliberate exception, the
+diagnostics guest-log facility (§3.1).
 Audience: anyone triaging a missing feature, filling in a completeness meter,
 writing a proposal note, asking "which languages do we actually serve?", or
 asking "is this engine mature yet?".
@@ -63,11 +65,44 @@ embedder supplies the policy, engine or event loop.
 | ESM loader, URL resolution and import maps | The embedder | Binary module loading and `(module, field)` import resolution | `JS_INTEGRATION.md` `JS6` |
 | `js-prototypes` configuration | The embedder | The descriptor/RTT/JS-Types metadata surface | `JS_INTEGRATION.md` `JS8` |
 | WASI function exports and host imports | The embedder | `ImportResolver`, native imports, `VMContext::hostData` | `WasmImport.hpp`; `WasmNativeImport.hpp` |
+| Synthetic modules (`(module, field)` host namespaces of functions, memories, tables or globals) | The embedder | The seam only: `ImportRegistrar`/`ImportResolver`, `RegistryImportResolver`, `WASM::nativeImport`, `HostBridge`. **One deliberate exception**, the diagnostics guest-log facility (`info`/`warn`/`error`/`panic`, `log`, `log_str`, `log_as`), because its record format, stable ids and safety rules are engine-owned (§3.1) | `WasmImport.hpp`; `WasmNativeImport.hpp`; `WasmDiagnostics.hpp` “Guest log imports”; `DIAGNOSTICS.md` §5.4 |
 | Host reference lifetime and per-call arenas | The embedder | The optional `HostBridge` callbacks and opaque `externref` values | `JS_INTEGRATION.md` `JSD3`; `ABI.md` "Host boundary" |
 | Module lifetime across callers | The embedder | The `VMContext*`-as-arg0 ABI; a module must outlive every module that calls it | `ABI.md:26-34`, `:404-407` |
 | Linear-memory layout between modules | The embedder / build | Memory aliasing through imported memories; no partition or allocator policy | `SHARING_LINEAR_MEMORY.md` `SLM-1`…`SLM-4`; `L3` |
 | vcpkg/Conan recipes | The embedder / packager | Installed headers, soname and `wasmjit.pc` | `EMBEDDING_SURFACE.md` `ES-5` |
 | The Catch2 executable as an embedding API | The project | It is a development sandbox; the supported surface is installed `wasmjit/wasmjit.hpp` | `README.md` "Near-Term Expectations" |
+
+### 3.1 The synthetic-module boundary and its one exception
+
+A **synthetic module** is not a `Module`: it is a resolver convention, a
+`(module, field)` namespace of host-provided entities that the guest imports
+like any other module ([`COMPONENT_MODEL.md`](proposals/COMPONENT_MODEL.md)
+§4.6, [`languages/LF2_ABI_INTEROP.md`](languages/LF2_ABI_INTEROP.md) §2). The
+engine ships none of them by default. WASI, a JS adapter, a clock, a storage
+API, a game engine's own `env` — all are the embedder's policy, built on the
+seam above.
+
+**The exception is diagnostics.** `WASM::registerDiagnosticImports`
+(`registerToEnv` for the usual `env` namespace) publishes one module whose only
+job is to let the guest say *why* it failed: four named severity aliases and
+their enum/`stringref`/AssemblyScript shapes. It is the exception because every
+embedder would otherwise reinvent the same channel, and because the record
+format, ids and safety rules are engine contract
+([`DIAGNOSTICS.md`](DIAGNOSTICS.md) §5.4). The engine never registers it
+implicitly; the test harness does so by default, and an embedder opts in.
+
+#### Candidate exceptions not taken
+
+- **Engine internals.** A module exposing the backend name and version, the
+  active profile, the compilation policy and the ABI limits would let a guest or
+  a test adapt at run time. It is **not** shipped: it makes engine choices
+  observable to guest code and promises a compatibility surface the project has
+  not committed to. Recording it here keeps a future proposal from presenting it
+  as an oversight; taking it needs the same deliberate-exception decision, and a
+  study of which values are stable contract versus a debugging aid
+  ([`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §10 is the decision register).
+- **WASI and a JS/event-loop adapter.** Remain embedder-owned (the rows above),
+  because their policy is the host's and the engine's role is the seam.
 
 ## 4. Build-time and text-format surfaces — binary-only, permanently
 

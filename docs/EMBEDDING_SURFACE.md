@@ -1008,6 +1008,10 @@ The per-language application of this section is
 directions, synthetic host modules, and the scalar-to-GC/reference difficulty
 matrix for the studied languages.
 
+The one synthetic module the engine ships is the diagnostics guest-log facility
+([`SCOPE.md`](SCOPE.md) §3.1, [`DIAGNOSTICS.md`](DIAGNOSTICS.md) §5.4); every
+other host namespace is the embedder's, generated or hand-written.
+
 ### 12.8 Where the schema and the generator live
 
 The generator is **TOOL**, not engine: it must not be linked into `WasmBase/` or a
