@@ -11120,6 +11120,15 @@ void OpcodeDispatcher::dispatchContBind(WASM::TypeIdx from, WASM::TypeIdx to)
 			SLJIT_IMM, static_cast<sljit_sw>(from)));
 	loadContext(SLJIT_R0);
 	emitHelper(SLJIT_ARGS4(P, P, P, W, P), &WASM::wasm_cont_bind_ops);
+	// `cont.bind` consumes its continuation operand: the helper returns a new
+	// handle that shares the worker, so the source's count can only be given
+	// back once the result holds it. `wasm_ref_drop` clobbers R0-R3, so the
+	// result waits in the scratch cell across the release (the GR-10 lesson).
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+			scratchSlotOffset(), SLJIT_R0, 0));
+	emitDropStackRef(base + bound);
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0,
+			SLJIT_MEM1(SLJIT_SP), scratchSlotOffset()));
 	storeSlot(SLJIT_R0, base, 8);
 	emitPendingTrapCheck();
 	for (std::size_t i = 0; i < bound + 1; ++i)

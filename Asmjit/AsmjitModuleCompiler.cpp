@@ -9345,6 +9345,11 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		auto result = compiler.new_gp_ptr("boundContinuation");
 		invoke->set_ret(0, result);
 		values.push_back(result);
+		// `cont.bind` consumes its continuation operand, exactly as `resume`
+		// and `switch` do: the helper returns a new handle that shares the
+		// worker, so the source's count is only safe to give back once the
+		// result holds it.
+		emitRefDrop(continuation);
 		emitPendingTrapReturn();
 	}
 
