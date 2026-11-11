@@ -220,6 +220,13 @@ uniform shorthand. The contract is [`../ABI.md`](../ABI.md) “Call forms”.
 
 - **A probe records one of three states** — works, refuses with a reason, or
   silently answers wrong. Only the third is a defect; refusal is a pass.
+- **A call-form mismatch is a caller bug, and it looks like a JIT crash.**
+  `GAP-16`'s wild write came from a *frame-form* callee entered through the
+  *register-form* helper: the callee's prologue used the caller's stale second
+  argument as its frame pointer. The generated code was correct all along, and
+  the `-O0`/`-O2` boundary only changed which stale value that register held.
+  The public helpers now refuse the mismatch by name, and the tests marshal per
+  callable (`WASMJIT_FRAME_OPT_IN=1` reproduces the pre-`GR-8` shape on demand).
 - **Assert the property, not the outcome.** A probe that asserts “it works”
   cannot tell a working backend from one that happens to return 0.
 - **Test data must be inert.** A fabricated pointer as an `externref` was

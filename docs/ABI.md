@@ -323,6 +323,16 @@ doesn’t mean you should.”
 public `WASM::Runtime` entry points stay typed
 ([`EMBEDDING_SURFACE.md`](EMBEDDING_SURFACE.md)).
 
+**A mismatch is refused, not attempted.** `callCallable`,
+`callCallableWithResults` and `callCallableVector` refuse a frame-form callable,
+and `callCallableFrame` refuses a register-form one, by name. Entering a
+frame-form function through the register signature leaves its second argument
+(the frame pointer) to whatever the caller last stored in that register, and the
+callee then writes its results through it — the `GAP-16` wild write. It is a
+programming error at the host boundary, so the helpers make it a named exception
+rather than a crash; `WASM::callableUsesFrameForm(callable)` is the query that
+tells the two apart.
+
 ## Reference and Global Representation
 
 > **Status:** all three stages are in, but **R2 and R3 reached their goal by a

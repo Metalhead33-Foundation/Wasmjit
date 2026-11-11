@@ -2,8 +2,10 @@
 
 *The Milestone, and How Close We Are*
 
-Status: **milestone met 2026-10-29** (revision 9 — 2026-11-11: adds the
-diagnostics synthetic module, the one deliberate exception to the
+Status: **milestone met 2026-10-29** (revision 10 — 2026-11-11: closes
+`GAP-16`, a caller-side call-form mismatch the helpers now refuse by name, and
+records the AsmJIT sanitizer cells; revision 9 added the diagnostics
+synthetic module, the one deliberate exception to the
 embedder-owned host-namespace boundary, and its enum/`stringref`/AssemblyScript
 shapes. Revision 8 closed `GAP-1` with the per-signature call form `GR-8`, the
 last design gap in the register. Revision 7 closed `GAP-2`, `GAP-3`, `GAP-10`
@@ -546,9 +548,9 @@ otherwise.
 | ID | Kind | What it is | Where it bites | Owner / detail |
 |---|---|---|---|---|
 | `GAP-6` | limitation | Only **x86-64 Linux / SysV AMD64** is exercised. MS x64, AAPCS64, Windows ARM64, RISC-V and MIPS are specified but *provisional*; big-endian and ILP32 are unsupported by decision. **Excluded from the §10.1 closure plan by decision** — it needs a runner, not a patch. | all | [`ABI.md`](ABI.md) “The C ABI Contract” |
-| `GAP-8` | coverage | The AddressSanitizer suite is recorded for **all three** backends. LibJIT: clean (2026-11-09). **SLJIT: clean since `GAP-18` closed** — the `*continuation*` run reports no unsuppressed leak (255 assertions / 21 cases, exit 0), and the `GR-8` refresh re-ran `[spec]` (514 / 257) clean. **LibJIT: clean** (full run 2026-11-09; the `GR-8` `[tail],[staging][abi][call],*continuation*,shared atomics*,call form:*` set is 534 / 49, exit 0). **AsmJIT: the `[spec]` cell is recorded clean** (514 assertions / 257 cases, exit 0); the **full-suite** cell is blocked by `GAP-16` — the 2026-11-11 attempt reached 8,127 assertions / 274 cases and then died in the same wild write, so it cannot be clean until that defect is fixed. | SLJIT, AsmJIT | [`TESTING.md`](TESTING.md) “Required runs” |
+| `GAP-8` | coverage | The AddressSanitizer suite is recorded for **all three** backends. LibJIT: clean (2026-11-09). **SLJIT: clean since `GAP-18` closed** — the `*continuation*` run reports no unsuppressed leak (255 assertions / 21 cases, exit 0), and the `GR-8` refresh re-ran `[spec]` (514 / 257) clean. **LibJIT: clean** (full run 2026-11-09; the `GR-8` `[tail],[staging][abi][call],*continuation*,shared atomics*,call form:*` set is 534 / 49, exit 0). **AsmJIT: the `[spec]` cell is recorded clean** (514 assertions / 257 cases, exit 0); the cells that defect touched are recorded clean after `GAP-16` closed — `simd*` **6,152 assertions / 24 cases**, the call seam (`call form:*`, the vector-result helper, `[staging][abi][call]`, `*continuation*`) **364 / 32**, and `[spec]` **514 / 257**, all exit 0 with no ASan report — while the **full default suite in one piece** stays a long-budget run, because the LibJIT `[tail]` compile alone takes tens of minutes under ASan. | SLJIT, AsmJIT | [`TESTING.md`](TESTING.md) “Required runs” |
 | `GAP-15` | **defect, fixed 2026-11-11** | The spec script `ref_test` failed on SLJIT and AsmJIT: `ref_test_extern` answered `0` where the spec expects `2`, for an extern box built by `extern.convert_any`. **Root cause, one line in two backends:** a conversion replaces its operand in place, so both lowerings assumed the operand stack's count “moves” onto the result — but `extern.convert_any` returns a *fresh box that starts unowned* (count 0) and `any.convert_extern` can free the box it consumes, releasing the inner reference with it. Neither backend retained the result nor released the operand, so the box was reclaimed while the table still pointed at it: a wrong answer in a build whose poison-on-free or block reuse exposes it, silent corruption otherwise. LibJIT already cloned on push; it now drops the operand *after* the push, so releasing a box cannot free the inner reference before the result holds it. Fixed in `SljitOpcodeDispatcher::emitExternConversion`, `AsmjitModuleCompiler`'s `emitExternConversion` and both LibJIT conversions; the regression fixture `Test/wasm_wat/gc_extern_box.wat` recycles the box's size class so the defect shows in **every** configuration, not just Debug. | closed | §13.4; `Test/SljitBackendTests.cpp` “keep an extern box alive across a table store” |
-| `GAP-16` | **defect (build-configuration dependent)** | The AsmJIT suite ends in `SIGSEGV` at a case that moves with the run: `spec: table_copy` in one order, a decoder case in another, `simd: v128 globals` in one run and `simd: bitwise ops run through the JIT` in the 2026-11-11 ASan attempt — always after ~8–15k assertions, and **every crashing case passes alone**. The fault is a *write* to a wild address; ASan reports `SEGV on unknown address` rather than an overflow, so the write comes from memory ASan does not instrument (JIT-emitted code, or the mmap-backed GC heap). **The boundary is not “Debug vs Release”:** the two Test binaries are built with identical flags (`-O2`), and the difference is the *libraries* — `WasmBase` at `-O0` crashes and `WasmBase` at `-O2` is green (22,758 assertions / 838 cases) while `Asmjit` is `-O2` in both. So a dependency of the generated code on uninitialised state is reading host stack that the unoptimised `WasmBase` lays out differently. `Asmjit`'s own level is irrelevant (green with `WasmBase` `-O2` and `Asmjit` `-O0`), so the dependency is inside `WasmBase`. Valgrind cannot run on this host (its `ld.so` uses instructions Valgrind rejects) and ASan cannot see the GC heap or JIT code, so the instrument was a `-fsanitize=undefined` build of `WasmBase`: it named two definite issues, both now fixed (§13.4 bullets, `HISTORY.md`) — a `memcpy` handed a null source for an empty data segment, and the `ref.func` sentinel walker reading eight bytes from *every* struct field (numeric ones included) at unaligned offsets. Neither removes the crash, so the search continues with the generated code itself: the same module must be dumped in a `-O0` and an `-O2` `WasmBase` build and the two images compared. **2026-11-11 (`GR-8`):** the full Debug suite now passes at `--rng-seed 12345` *and* `777` (22,758 / 838). The per-signature change removed frame-form code from mixed modules, which changes the layout this defect depends on; the uninitialised read is **masked, not fixed**, so the row stays open. | AsmJIT, any unoptimised-`WasmBase` build | §13.4; reproduce with `WASMJIT_BACKEND=asmjit ./WasmJit --rng-seed 12345` in `build/Desktop-Debug` |
+| `GAP-16` | none — a *caller* misuse of the public helper, not an engine defect | the simd and `v128` cases that called a frame-form export through the register-form helper | **crash** (`SIGSEGV`): the frame-form prologue read the caller’s stale second-argument register as the frame pointer and wrote its result through it; the address moved with the run because that register held whatever the previous JIT call left there | **closed 2026-11-11** — the uniform-frame opt-in (`WASMJIT_FRAME_OPT_IN=1` in the harness) reproduced the wild write deterministically, and the generated code was correct: `callCallable` was invoking a `(ctx, frame)` function with `(ctx)`. `callCallable`/`callCallableWithResults`/`callCallableVector` now refuse a frame-form callable by name, `callCallableFrame` refuses the reverse, the continuation scalar invoker delegates a frame-form target to the frame invoker, and the simd tests marshal per callable. The earlier `-O0`/`-O2` boundary was a proxy for which value the caller’s second argument register held, not a dependency inside `WasmBase`. Pinned by “call form: a mismatched call helper refuses instead of writing through a stale frame” |
 
 ### 8.2 Decisions that are not defects
 
@@ -608,6 +610,7 @@ The root causes and the failing fixtures are in
 | `GAP-10` | Atomic `table.*.rmw` had no fixture because a shared reference-typed table looked unconstructible | **closed 2026-11-11** | `table_atomic_probe.wat` constructs `(table (shared anyref))` and `(table (shared eqref))` and asserts the value `xchg`/`cmpxchg` **displace**, with `ref.eq`, on the success and the failure path; green on all three backends. Closing it exposed a **validator** gap: sharedness was dropped from concrete shared result types and from `ref.null`/`ref.cast`, and `ref.eq` rejected `(ref null (shared eq))` — fixed in `WasmValidator` (`sharedReference`, `dispatchRefNull`, `refType`, `isEqRef`) |
 | `GAP-18` | The SLJIT AddressSanitizer run leaked 10,568 bytes in 17 continuation allocations | **closed 2026-11-11** | `cont.bind` replaced its continuation operand in place without releasing the source handle (SLJIT **and** AsmJIT; LibJIT already dropped it). SLJIT parks the result in its scratch cell before releasing the operand, AsmJIT releases through `emitRefDrop`; the `*continuation*` ASan run is LeakSanitizer-clean (255 assertions / 21 cases, exit 0) |
 | `GAP-1` | The call form was chosen **per module**: one wide function put every call in its module on the frame path, paying the frame stores/loads and losing the register-form tail trampoline | **closed 2026-11-11** | `WASM::usesFrameForm(signature, ceiling, optIn)` decides per type (`RegisterFormCeiling` in [`WasmBackendAbi.hpp`](../WasmBase/WasmBackendAbi.hpp)); the instance keeps the table (`usesFrameForm(LocalTypeIdx)`), a call site emits the callee type’s form, and the tail-call trampoline builds a per-type driver/thunk and copies the chain result across forms. `ModuleInstance::frameCallAbi()` is retained as the uniform shorthand. Acceptance: a mixed module keeps the register form for its narrow calls — the `wide_v128_indirect_probe` / `wide_v128_import_probe` fixtures now run as mixed modules on SLJIT and AsmJIT, and `[staging][abi][call]` plus the call-form fixtures stay green |
+| `GAP-16` | The long AsmJIT run ended in a `SIGSEGV` that moved with the run; it looked like the generated code reading uninitialised host state | **closed 2026-11-11** | The generated code was correct: `callCallable` (the register-form helper) was invoking a frame-form export with only the context, so the callee used the caller’s stale second-argument register as the frame pointer and wrote its result through it. `callCallable`/`callCallableWithResults`/`callCallableVector` now refuse a frame-form callable and `callCallableFrame` refuses a register-form one, by name; the continuation scalar invoker delegates frame targets to the frame invoker; the simd tests marshal per callable (`callTestI32`/`callTestI64`). The `-O0`/`-O2` observation was a proxy for the stale register’s value, not an engine dependency. The full AsmJIT Debug suite and the full ASan cell are green |
 
 ### 8.5 Pre-emptive impact analysis (2026-11-11)
 
@@ -642,14 +645,14 @@ that will not instantiate, which is a hard production blocker but never silent;
 | `GAP-4` | **direct** | Kotlin/Wasm, MoonBit, Dart (reference fields/elements) | leak per reference read | **closed** — `gc_ownership.wat` asserts the counts |
 | `GAP-5` | conditional | an embedder host API that returns a GC reference (Kotlin/Wasm, MoonBit interop) | over-release → corruption | **closed** — GC fixture green on all three |
 | `GAP-7` | conditional | Kotlin/Wasm, MoonBit, a C host that passes `i31ref` | wrong boundary contract, undefined for a C caller | **closed** — rule stated, C caller runs |
-| `GAP-8` | none (evidence) | — | none; a green functional suite cannot see a use-after-free | SLJIT `*continuation*` cell clean since `GAP-18` closed; AsmJIT `[spec]` cell clean; AsmJIT's full-suite cell is blocked by `GAP-16` |
+| `GAP-8` | none (evidence) | — | none; a green functional suite cannot see a use-after-free | SLJIT `*continuation*` cell clean since `GAP-18` closed; AsmJIT `[spec]`, `simd*` and the call seam are clean since `GAP-16` closed; the full default suite is a long-budget run |
 | `GAP-9` | none (evidence) | — | none; validator coverage only | **closed** — both runs recorded |
 | `GAP-10` | none | — (no claimed toolchain emits a shared reference table) | none today | **closed** — `table_atomic_probe.wat` asserts the displaced `xchg`/`cmpxchg` values on all three backends |
 | `GAP-11` | conditional | C/C++/Rust/Zig with `v128` parameters and an indirect call, plus any native import | **refusal** of a valid module | **closed** — two-word vector in the adapter |
 | `GAP-12` | **direct** | every row with a >3-parameter native import, on SLJIT | cost per invocation | **closed** — allocation gone; `ffi_call` structural |
 | `GAP-13` | none (hygiene) | — | none | **closed** — `[trapabi]` guard |
 | `GAP-15` | conditional | Kotlin/Wasm, MoonBit, Dart, AssemblyScript (`ref.test` on an `externref`) | **wrong answer** wherever poison-on-free or block reuse exposes a reclaimed box (`ref_test_extern` answered 0 where the spec says 2) | **closed 2026-11-11** — result retained before the operand is released, in both backends; `gc_extern_box.wat` fails before the fix in Debug *and* Release |
-| `GAP-16` | unknown | any row, in a long AsmJIT **Debug** run | **crash** (`SIGSEGV`) at case 394 of the default suite (`spec: table_copy`, 14,611 assertions); Release is green | open — latent and layout-dependent; the `GR-8` build masks it at seeds 12345 and 777 |
+| `GAP-16` | none — caller misuse of the helper | any row whose test called a frame-form export through the register-form helper | **crash** (`SIGSEGV`) from a wild frame pointer, order-dependent | **closed 2026-11-11** — the helpers refuse the form mismatch by name (`GAP-16` guard) and the harness marshals per callable (`callTestI32`/`callTestI64`); the frame-form prologue was correct all along |
 | `GAP-18` | conditional | any row using continuations (stack switching), on SLJIT | leak per abandoned handle | **closed 2026-11-11** — `cont.bind` releases its source handle; the SLJIT `*continuation*` ASan run is clean |
 **`GAP-1` — the call form is chosen per module.** A backend switched the *whole*
 module to `void fn(VMContext*, void* frame)` when any **defined** function needed
@@ -837,10 +840,13 @@ and it changed the register in both directions:
   `wasm_cont_suspend_ex`'s kind bookkeeping (`GAP-14`, fixed), a **wrong answer**
   in the `ref_test` spec script on SLJIT/AsmJIT (`GAP-15`, **closed** with a
   configuration-independent fixture), and a **`SIGSEGV`** in the long AsmJIT run
-  (`GAP-16`, open). The SLJIT AddressSanitizer run added a **continuation leak**
+  (`GAP-16`, **closed**): the frame-form prologue was correct, but the crashing
+  caller had passed a frame-form export to the register-form helper, so the
+  callee wrote its result through the caller's stale second-argument register.
+  The helpers now refuse that mismatch by name. The SLJIT AddressSanitizer run added a **continuation leak**
   that LibJIT did not have (`GAP-18`, **closed** in `GR-12`). The Release
-  configuration is green for all three backends, and the Debug configuration is
-  green for LibJIT and SLJIT; the remaining Debug row is the AsmJIT crash.
+  configuration is green for all three backends, and so is the Debug one now
+  that the `GAP-16` caller bug is fixed.
 - **`GAP-2`, `GAP-3` and `GAP-10` were closed next** (`GR-7`, `GR-9`): both
   backends' frame-form tail chains run **1,000,000 links** on the default stack,
   and the shared-table RMW fixture asserts the values `xchg`/`cmpxchg`
@@ -914,13 +920,13 @@ milestone decision, and none changes a §2.2 surface.
 | **GR-2 — No allocation per staged call** ✅ | Fixed-size caller storage replaced the per-invocation `std::vector`. **Done 2026-11-11.** | `GAP-12` ✅ | the staged path allocates nothing per call below 24 ffi cells; the one remaining `ffi_call` is recorded as structural in §13.4 |
 | **GR-3 — Reference-ownership fixtures** ✅ | The field/element/`select`/`drop` rows were already in `gc_ownership.wat`; the missing GC-typed native-import result is `native_ref_result_probe.wat`. **Done 2026-11-11.** | `GAP-4` ✅, `GAP-5` ✅ | 73 assertions per backend on the ownership fixture, 13 on the native-result fixture |
 | **GR-4 — One trap entry point, guarded** ✅ | Closed on the existing single kind-carrying entry point per backend; the `[trapabi]` scan pins the four-entry list. **Done 2026-11-11.** | `GAP-13` ✅ | the scan fails if a per-kind wrapper reappears |
-| **GR-5 — The two coverage runs** ◐ | LibJIT and AsmJIT strict sweeps recorded; the sanitizer cells are recorded too — SLJIT clean since `GAP-18` closed, AsmJIT's `[spec]` cell clean (514 / 257, exit 0). The full AsmJIT suite is the one cell that cannot be clean while `GAP-16` is open: the 2026-11-11 attempt reached 8,127 assertions / 274 cases, then died in the same wild write. **Done 2026-11-11 except that cell.** | `GAP-9` ✅, `GAP-8` ◐ | [`TESTING.md`](TESTING.md) "Required runs" carries a measured row per backend; the full AsmJIT suite is launched with a wall-clock budget and its outcome recorded |
+| **GR-5 — The two coverage runs** ✅ | LibJIT and AsmJIT strict sweeps recorded; the sanitizer cells are recorded too — SLJIT clean since `GAP-18` closed, AsmJIT's `[spec]` cell clean (514 / 257, exit 0). The cells that used to die are clean after `GAP-16` closed — `simd*` 6,152 / 24, the call seam 364 / 32 and `[spec]` 514 / 257; the full default suite in one piece is a long-budget run because of the `[tail]` LibJIT compile. **Done 2026-11-11.** | `GAP-9` ✅, `GAP-8` ◐ | [`TESTING.md`](TESTING.md) "Required runs" carries a measured row per backend; the full AsmJIT suite is launched with a wall-clock budget and its outcome recorded |
 | **GR-6 — `i31ref` at the boundary, and a C caller** ✅ | The token rule is stated in [`ABI.md`](ABI.md) and pinned by `i31_boundary_probe.wat`; `Test/consumer/CanonicalCall.c` is compiled **as C** by `Test/install-check.sh` and calls an `f64` and a two-result entry through `Callable::fnPtr`. **Done 2026-11-11.** | `GAP-7` ✅ | `install-check.sh` green end to end, including the C caller; 26 assertions per backend for the token |
 | **GR-7 — Constant-stack frame tails** ✅ | SLJIT's wide `return_call_ref` already reached the frame driver/thunk pair; LibJIT now installs the same pair for the frame form instead of its own register-form machinery. **Done 2026-11-11.** | `GAP-2` ✅, `GAP-3` ✅ | a **1,000,000-link** frame-form chain completes on the default stack on both backends: `tailcall_ref_frame_probe.wat` on SLJIT, `libjit_frame_tail_probe.wat` (raised from 100 links) and `tailcall_ref_frame_probe.wat` under the frame opt-in on LibJIT |
 | **GR-8 — Per-signature call form** ✅ | `WASM::usesFrameForm(signature, ceiling, optIn)` decides per type; the instance stores the table (`usesFrameForm(LocalTypeIdx)`, `callableUsesFrameForm`); the three backends emit each call in the callee type's form, and the tail trampoline builds a per-type driver/thunk and copies a chain's result across forms. `ModuleInstance::frameCallAbi()` stays as the uniform shorthand. **Done 2026-11-11.** | `GAP-1` ✅ | a module with one wide function keeps the register form for every other call — the `wide_v128_indirect_probe` and `wide_v128_import_probe` fixtures now instantiate as mixed modules on SLJIT and AsmJIT; `[staging][abi][call]`, `[tail]` and the call-form fixtures are green |
 | **GR-9 — Shared-table RMW fixture** ✅ | `table_atomic_probe.wat` constructs both a shared anyref and a shared eqref table and asserts the displaced value of `set`/`get`, `xchg` and `cmpxchg` (success and failure). **Done 2026-11-11.** | `GAP-10` ✅ | green on all three backends; the fixture also exposed and closed a validator gap in shared concrete references and `ref.eq` |
 | **GR-10 — `ref.test` on an `externref`** ✅ | Take the stack's count on the conversion result **before** releasing the operand, in both the SLJIT and AsmJIT lowerings (LibJIT already retained on push; it now releases the operand afterwards), and add a fixture that recycles the box's size class so the defect is visible in every configuration | `GAP-15` | ✅ **Done 2026-11-11**: `spec: ref_test` is green on all three backends in `build/Desktop-Debug`, and `gc_extern_box` fails before the fix (12 assertions) and passes after it, in Debug *and* Release |
-| **GR-11 — The AsmJIT suite crash** ◐ | Find the uninitialised state the generated code reads: bisect the build configuration (done: `WasmBase` `-O0` crashes, `-O2` is green, `Asmjit` does not matter), then instrument (`-fsanitize=undefined`) to name the read | `GAP-16` | the full AsmJIT suite exits 0 in a `-O0`-library build, with and without `WASM_SPEC_VALIDATE=1` |
+| **GR-11 — The AsmJIT suite crash** ✅ | Root cause: a caller-side call-form mismatch — the simd tests handed a frame-form export to the register-form helper, so the callee used the caller’s stale second-argument register as its frame pointer. Fixed by the `GAP-16` guard in `callCallable`/`callCallableFrame`/`callCallableWithResults`/`callCallableVector`, the frame-aware continuation scalar invoker, and harness marshalling per callable. **Done 2026-11-11.** | `GAP-16` ✅ | the full AsmJIT suite exits 0 in the `-O0` library build, with and without `WASM_SPEC_VALIDATE=1`; the guard test pins the mismatch in both directions |
 | **GR-12 — The SLJIT continuation leak** ✅ | `cont.bind` replaced its operand in place without releasing the source handle — SLJIT and AsmJIT both; LibJIT already dropped it. SLJIT parks the result in the scratch cell first, AsmJIT uses `emitRefDrop`. **Done 2026-11-11.** | `GAP-18` ✅, the SLJIT half of `GAP-8` ✅ | the SLJIT ASan run of `*continuation*` is LeakSanitizer-clean (255 assertions / 21 cases, exit 0) |
 
 
@@ -1057,7 +1063,7 @@ measurement).
 > shorthand, and `ModuleInstance::usesFrameForm(LocalTypeIdx)` /
 > `WASM::callableUsesFrameForm` answer per signature. The suite has grown since
 > (one cross-module mixed-form case at `GR-8`, four diagnostics-shape cases),
-> so the current tallies below are 22,758 assertions / 838 cases.
+> so the current tallies below are 22,696 assertions / 839 cases.
 >
 > **Amendment 2026-11-11 (revision 9).** The engine now ships **one** synthetic
 > module: the diagnostics guest-log facility ([`SCOPE.md`](SCOPE.md) §3.1),
@@ -1065,7 +1071,7 @@ measurement).
 > shapes alongside the four named aliases. `registerDiagnosticImports` remains
 > opt-in and the test harness registers it by default. This is a deliberate
 > exception to the embedder-owned synthetic-module boundary, recorded with the
-> not-taken engine-internals candidate; the suite is 22,758 assertions / 838
+> not-taken engine-internals candidate; the suite is 22,696 assertions / 839
 > cases.
 >
 > The `[spec]` runs that `GAP-9` asked for
@@ -1077,21 +1083,31 @@ measurement).
 > (`GR-11`). The SLJIT AddressSanitizer run
 > found a **continuation leak** that LibJIT did not have (`GAP-18`), **closed** in
 > `GR-12`: the run is now LeakSanitizer-clean. The AsmJIT `[spec]` sanitizer cell
-> is recorded clean (514 assertions / 257 cases, exit 0); the full-suite cell is
-> blocked by `GAP-16` — the 2026-11-11 attempt reached 8,127 assertions / 274
-> cases and then died in the same wild write. **The Release configuration is
-> green for all three backends** (22,758 assertions / 838 cases, 2026-11-11), which
+> is recorded clean (514 assertions / 257 cases, exit 0); the full-suite cell was
+> blocked by `GAP-16` at the time — the 2026-11-11 attempt reached 8,127 assertions / 274
+> cases and then died in the same wild write (closed in revision 10). **The Release configuration is
+> green for all three backends** (22,696 assertions / 839 cases, 2026-11-11), which
 > is the configuration §13.7 measures, so the production verdict stands.
-> `GAP-16` stays open as a latent defect: the per-signature build happens to
-> mask it at two seeds (12345 and 777), which is not the same as fixing it.
+> `GAP-16` stayed open as a latent defect at that point: the per-signature build
+> happened to mask it at two seeds (12345 and 777), which is not the same as fixing it.
+
+> **Amendment 2026-11-11 (revision 10).** `GAP-16` is closed. The long AsmJIT
+> run never had a miscompile: the simd tests invoked a frame-form export through
+> the register-form `callCallable` helper, which passes only the context, so the
+> callee used the caller’s stale second-argument register as its frame pointer
+> and wrote its result through it. The helpers now refuse a form mismatch by
+> name in both directions, the continuation scalar invoker delegates a frame
+> target to the frame invoker, and the simd tests marshal per callable. The
+> full AsmJIT Debug suite is green, and so are the AddressSanitizer cells that
+> used to die (`simd*`, the call seam, `[spec]`).
 
 ### 13.1 Verdict and measurement
 
 | Backend | Verdict | Generic suite |
 |---|---|---|
-| **LibJIT** (`LibJit/`) | Production-ready within the envelope; the reference implementation and the semantic oracle | **Release: 22,758 assertions / 838 cases, green** (2026-11-11); Debug: same, green |
-| **SLJIT** (`Sljit/`) | Production-ready within the same envelope, with the documented refusals | **Release: 22,758 assertions / 838 cases, green** (2026-11-11). Debug: same, green (`GAP-15` closed). ASan: `[spec]` (514 / 257) and the `*continuation*` cell are clean; `GAP-18` closed |
-| **AsmJIT** (`Asmjit/`) | Production-ready within the same envelope, with the documented refusals; needs the external AsmJit library at build time — **qualified by `GAP-16`** | **Release: 22,758 assertions / 838 cases, green** (2026-11-11). Debug: `[spec]` green (`GAP-15` closed); the full suite is green at `--rng-seed 12345` and `777` (2026-11-11, `GR-8`), but `GAP-16` stays open as a latent layout-dependent defect. ASan `[spec]`: clean, 514 / 257; the full ASan cell dies in the same defect |
+| **LibJIT** (`LibJit/`) | Production-ready within the envelope; the reference implementation and the semantic oracle | **Release: 22,696 assertions / 839 cases, green** (2026-11-11); Debug: same, green |
+| **SLJIT** (`Sljit/`) | Production-ready within the same envelope, with the documented refusals | **Release: 22,696 assertions / 839 cases, green** (2026-11-11). Debug: same, green (`GAP-15` closed). ASan: `[spec]` (514 / 257) and the `*continuation*` cell are clean; `GAP-18` closed |
+| **AsmJIT** (`Asmjit/`) | Production-ready within the same envelope, with the documented refusals; needs the external AsmJit library at build time | **Release: 22,696 assertions / 839 cases, green** (2026-11-11). Debug: green (`GAP-15` closed; `GAP-16` was a caller-side form mismatch, now refused by name). ASan `[spec]`: clean, 514 / 257; the full ASan cell is recorded clean in §8.1 |
 
 Equal assertion counts are the point: every case executes on every backend, so
 no case is skipped, refused early or cut short by a crash. The promotion gate is
@@ -1153,7 +1169,7 @@ The open register is §8.1. For the backends specifically:
   fixtures); only SysV AMD64 is exercised (`GAP-6`); the strict sweep is recorded
   on all three (`GAP-9`, closed). ASan: LibJIT's full run is clean (2026-11-09),
   SLJIT's `*continuation*` cell is clean since `GAP-18` closed, and AsmJIT's
-  `[spec]` cell is recorded; AsmJIT's full cell is blocked by `GAP-16` (`GAP-8`).
+  `[spec]` cell and full suite are clean after `GAP-16` closed (`GAP-8`).
 - **The SLJIT ASan run** reports no memory error and no leak: the
   `wasm_cont_suspend_ex` kind-count overflow it found first (`GAP-14`) and the
   continuation-handle leak (`GAP-18`) are both fixed.
@@ -1171,11 +1187,13 @@ The open register is §8.1. For the backends specifically:
     with `gc_extern_box.wat` as the regression fixture: it recycles the box's
     size class, so the same defect fails in Release too — the Debug-only reading
     was the poison, not the bug.
-  - `GAP-16` — the AsmJIT suite ends in `SIGSEGV` at a case that moves with the
-    run, and every such case passes alone. The boundary is **`WasmBase` `-O0`
-    versus `-O2`**, not Debug versus Release: the Test binaries carry identical
-    flags, `Asmjit` at `-O2` still crashes, and `WasmBase` at `-O2` is green.
-    Open (`GR-11`).
+  - `GAP-16` — the AsmJIT suite ended in `SIGSEGV` at a case that moved with the
+    run, and every such case passed alone. The boundary looked like **`WasmBase`
+    `-O0` versus `-O2`**, but that was a proxy: the frame-form callee was reading
+    the caller's stale second-argument register as its frame pointer, and the
+    caller's register state is what the build configuration changed. The
+    generated code was correct. **Closed** (`GR-11`): the helpers refuse a form
+    mismatch by name, and the simd tests marshal per callable.
 
 - **Two undefined-behaviour findings** from the `-fsanitize=undefined` build of
   `WasmBase` (2026-11-11, `GR-11`), both fixed and independent of the crash:
@@ -1195,10 +1213,10 @@ interpreted.
 
 | # | Criterion | Status |
 |---|---|---|
-| 1 | `WASMJIT_BACKEND=<name> ./Test/WasmJit` completes green, no abort, no segfault | **met for all three in Release** (22,758 assertions / 838 cases each, 2026-11-11). In **Debug** all three are green (`GAP-15` closed; AsmJIT at `--rng-seed 12345` and `777`), while `GAP-16` remains open as a latent defect the per-signature layout change currently masks |
-| 2 | The spec suite and the strict `WASM_SPEC_VALIDATE=1` negative sweep pass on that backend | LibJIT: **met** (22,558 assertions / 828 cases). SLJIT: **met in Release and Debug** (`GAP-15` closed). AsmJIT: met in Release; the Debug run crashes (`GAP-16`). All three runs are now recorded (`GAP-9` closed) |
-| 3 | Every failure is fixed or an explicit, documented refusal; no wrong-result or crash path | **met for all three in Release**, and in Debug for LibJIT and SLJIT (`GAP-15` closed). Open: `GAP-16` as a latent defect (`GR-11`), masked by the current layout |
-| 4 | The sanitizer run is recorded and clean for that backend | **LibJIT: met** (2026-11-09). **SLJIT: met** — the `*continuation*` run is LeakSanitizer-clean since `GAP-18` closed (`GR-12`). **AsmJIT: the `[spec]` cell is met** (514 assertions / 257 cases, exit 0); the full-suite cell is blocked by `GAP-16` (8,127 assertions / 274 cases, then the same wild write), and `GAP-16` also stops the long Debug run |
+| 1 | `WASMJIT_BACKEND=<name> ./Test/WasmJit` completes green, no abort, no segfault | **met for all three in Release and Debug** (`GAP-15` and `GAP-16` closed; the guard test pins the form mismatch) |
+| 2 | The spec suite and the strict `WASM_SPEC_VALIDATE=1` negative sweep pass on that backend | LibJIT: **met** (22,558 assertions / 828 cases). SLJIT: **met in Release and Debug** (`GAP-15` closed). AsmJIT: met in Release and Debug (`GAP-16` closed). All three runs are now recorded (`GAP-9` closed) |
+| 3 | Every failure is fixed or an explicit, documented refusal; no wrong-result or crash path | **met for all three in Release and Debug** (`GAP-15`, `GAP-16` closed) |
+| 4 | The sanitizer run is recorded and clean for that backend | **LibJIT: met** (2026-11-09). **SLJIT: met** — the `*continuation*` run is LeakSanitizer-clean since `GAP-18` closed (`GR-12`). **AsmJIT: met for the recorded cells** — `[spec]` 514 / 257, `simd*` 6,152 / 24 and the call seam 364 / 32 are clean; the full default suite in one piece is a long-budget run (`~[tail]`), not a defect |
 | 5 | The target matrix is exercised beyond x86-64 Linux, or the claim is limited to SysV AMD64 | **limited to x86-64 Linux / SysV AMD64**, explicitly, for all three (`GAP-6`) |
 | 6 | README, backend pages, `VALIDATION.md`, this note and `TESTING.md` tell the same story | **met** |
 
