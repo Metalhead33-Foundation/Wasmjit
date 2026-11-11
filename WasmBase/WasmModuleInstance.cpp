@@ -236,11 +236,15 @@ void ModuleInstantiator::applyActiveSegments(ModuleInstance& instance, const Mod
 			throw SegmentOutOfBoundsException(offset, seg.data.size(), memory->memorySize);
 
 		// The actual copy. memoryBase is already a uint8_t*, so this is
-		// just a pointer-offset write — no generated code involved.
-		std::memcpy(
-			memory->memoryBase + offset,
-			seg.data.data(),
-			seg.data.size());
+		// just a pointer-offset write — no generated code involved. An empty
+		// segment has no data() to point at, and passing a null source to
+		// memcpy is undefined even for a zero length.
+		if (!seg.data.empty()) {
+			std::memcpy(
+				memory->memoryBase + offset,
+				seg.data.data(),
+				seg.data.size());
+		}
 
 		// An applied active segment is dropped (see the loop comment above).
 		internals.dataSegmentDropped[dataIdx].store(true, std::memory_order_release);
@@ -1035,7 +1039,20 @@ void ModuleInstance::resolveRefFuncsInObject(void* ref, std::vector<void*>& visi
 	const uint32_t totalFuncs = importedFuncCount +
 		static_cast<uint32_t>(module->internalFunctionTypeIndices.size());
 	const auto rewriteSlot = [&](uint8_t* slot, const CanonStorageType* storage) {
-		void* child = *reinterpret_cast<void* const*>(slot);
+		// Only a reference slot holds a reference; a numeric field is neither, and
+		// reading eight bytes from (say) an `i32` field would load a neighbouring
+		// field's bytes as a pointer and read past the object. `nullptr` marks the
+		// struct's descriptor slot, which is a reference by construction (Custom
+		// Descriptors). The slot itself may sit at any field offset, so it is read
+		// and written through memcpy rather than through a reinterpret_cast.
+		const bool referenceStorage = storage == nullptr
+				|| (!storage->isPacked
+					&& (storage->value.opcode == ValueTypeCode::Ref
+						|| storage->value.opcode == ValueTypeCode::RefNull));
+		if (!referenceStorage)
+			return;
+		void* child = nullptr;
+		std::memcpy(&child, slot, sizeof(child));
 		if (child == nullptr)
 			return;
 		const bool functionStorage = storage != nullptr && !storage->isPacked
@@ -1057,7 +1074,7 @@ void ModuleInstance::resolveRefFuncsInObject(void* ref, std::vector<void*>& visi
 					child = &internals.importStorage[funcIdx];
 				else
 					child = &internals.internalCallables[funcIdx - importedFuncCount];
-				*reinterpret_cast<void**>(slot) = child;
+				std::memcpy(slot, &child, sizeof(child));
 			}
 		}
 		if (child != nullptr && store().gc().owns(child))
