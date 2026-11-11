@@ -285,28 +285,38 @@ Offsets come from [`WasmBackendAbi.hpp`](../WasmBase/WasmBackendAbi.hpp):
   register the frame.
 
 **Selection.** `WASM::setFrameCallAbiOptIn(true)` is a process-wide request for
-one ABI; otherwise a backend switches a module when a **defined** signature needs
-more argument slots than its register form allows. A backend must never *infer*
-the form from measurements — measured on LibJIT, inference broke ten working
-modules.
+one ABI everywhere. Otherwise the form is chosen **per function signature** by
+`WASM::usesFrameForm(signature, ceiling, optIn)`: a signature uses the frame
+when the backend’s `RegisterFormCeiling` cannot express it in registers —
+SLJIT’s four C argument entries (a `v128` counts two, a vector result adds the
+out-buffer entry), AsmJIT’s four entries with any vector or multi-result in the
+frame, and LibJIT’s “never infer; the opt-in is the only trigger”. A backend
+must never *infer* the form from measurements — measured on LibJIT, inference
+broke ten working modules; the ceiling is a static property of the backend’s
+register lowering.
 
-**Granularity.** The form is currently **module-wide**
-(`ModuleInstance::frameCallAbi()`). One wide function puts every call in that
-module on the frame path, so all of them pay its stores/loads and lose the
-register-form tail-call trampoline. The recommended fix is per signature —
-`usesFrameForm(signature, ceiling, optIn)`, with SLJIT/AsmJIT preferring the
-frame and LibJIT the register form — but it changes the `frameCallAbi()` contract
-and ~25 call sites, so it is `GAP-1` in
-[`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §8, not a drive-by edit.
+**Granularity: per signature.** One wide function no longer moves its
+module’s other calls onto the frame path (`GAP-1`, closed by `GR-8`). Each
+function is compiled in its own signature’s form, and a call site emits the
+**callee type’s** form. The instance records the decision per module-local type
+index: `ModuleInstance::usesFrameForm(LocalTypeIdx)` answers for a signature and
+`WASM::callableUsesFrameForm(callable)` for a resolved callable, including one
+from another instance. `ModuleInstance::frameCallAbi()` is retained as the
+**uniform shorthand** — true only when every defined function is frame-form —
+so an embedder that asks “is this a frame-only module?” keeps a truthful
+answer; a mixed module reports `false` and is marshalled per signature.
 
 **Mixed graphs and cross-backend calls.** A direct call emits the *callee’s*
-form (read from the resolved callable), so a register-form module can call a
-frame-form import; a both-frame cross-module call works. A graph that genuinely
-mixes the two forms is refused by name rather than silently corrupted. Because
-the frame makes the ABI identical, a cross-backend call is legal in principle,
-but it remains **forbidden in production** until a cross-backend suite exists:
-one backend per process or per module graph, like mixing allocators. “Just
-because you can doesn’t mean you should.”
+form (for an imported callee, read from its defining instance), so a
+register-form function can call a frame-form one and the reverse; a both-frame
+cross-module call works. A `call_indirect`/`call_ref` emits the form of its
+**declared type**, so both instances must agree on that type’s form — they do
+when compiled with the same backend and opt-in, and `verifyImportCallForms`
+refuses the link by name when they do not. Because the frame makes the ABI
+identical, a cross-backend call is legal in principle, but it remains
+**forbidden in production** until a cross-backend suite exists: one backend per
+process or per module graph, like mixing allocators. “Just because you can
+doesn’t mean you should.”
 
 **Imports do not change at all.** A native import keeps its typed
 `R native(VMContext*, A, B, …)` signature. Only the raw export seam changes; the

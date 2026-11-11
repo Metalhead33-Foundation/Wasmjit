@@ -543,8 +543,8 @@ oracle for every semantic question unless a row below explicitly says otherwise.
   [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §4/§5.
 - The original starting point refused `v128`/SIMD, references/GC, exceptions,
   continuations, atomics or `f16`, and bulk memory on a memory64. All of that
-  now executes; SLJIT's four-argument call ceiling is handled by the opt-in
-  frame form.
+  now executes; SLJIT's four-argument call ceiling is handled by the frame
+  form, chosen per signature since `GR-8`.
 - Neither is a *code-quality* replacement for LibJIT, but both are production
   backends.
 

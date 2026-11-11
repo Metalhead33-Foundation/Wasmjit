@@ -81,8 +81,9 @@ Migration order:
 1. **Core arithmetic** (`frameValueBytes`, `frameArgumentsBytes`,
    `frameResultsBytes`, `frameArgumentOffset`, `frameResultOffset`, `frameBytes`)
    derived from `argSlotCount`, so frame and register layouts cannot disagree.
-2. **Capability + primitive** (`ModuleInstance::frameCallAbi()`,
-   `callCallableFrame`), without adding a virtual to the frozen seam.
+2. **Capability + primitive** (`ModuleInstance::frameCallAbi()` and, since the
+   per-signature rule, `usesFrameForm(LocalTypeIdx)` / `callableUsesFrameForm`;
+   plus `callCallableFrame`), without adding a virtual to the frozen seam.
 3. **SLJIT**: frame signature, prologue from frame, call scratch area, result
    copy; the `sljit_get_local_base` crash was a transposed `dstw` argument.
 4. **AsmJIT**: signature translation, frame prologue, driver, call cache; the
@@ -206,11 +207,13 @@ Two limits remain and are registered, not hidden:
   dropping it does not release a count (`GAP-4`);
 - a reference-returning native import is cloned only on AsmJIT (`GAP-5`).
 
-The call-form work exposed that the form is **module-wide**. A mixed graph now
-works because a direct call emits the callee’s form, but one wide function still
-puts every call in its module on the frame path. That cost is `GAP-1`; the
-current contract and the recommendation are in [`../ABI.md`](../ABI.md) “Call
-forms”.
+The call-form work first shipped **module-wide**. One wide function put every
+call in its module on the frame path — `GAP-1`. `GR-8` replaced it with the
+per-signature rule: `WASM::usesFrameForm(signature, ceiling, optIn)` decides
+per type, the instance keeps the table, and call sites emit the callee type’s
+form. A direct call still emits the callee’s actual form, so a mixed graph
+works in both directions; `ModuleInstance::frameCallAbi()` survives as the
+uniform shorthand. The contract is [`../ABI.md`](../ABI.md) “Call forms”.
 ## 7. Process lessons worth carrying forward
 
 ### 7.1 Probes and tests
