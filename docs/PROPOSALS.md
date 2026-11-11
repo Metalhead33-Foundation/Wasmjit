@@ -110,7 +110,7 @@ gaps → where we deliberately deviate → plan → test survey → references.
 
 ## 4. What the folder holds today
 
-**Snapshot (2026-11-01, working tree on `39170be`):** `docs/proposals/` holds **thirty-nine**
+**Snapshot (2026-11-01, working tree on `39170be`):** `docs/proposals/` holds **forty**
 notes — 40 `.md` files, one of which is `index.md`, which is navigation rather
 than a note (it is what nests them in the generated site, and it is the one file
 exempt from the shape check below). Every note carries the §2.1 front matter and
@@ -128,6 +128,7 @@ throughout; the prefixes actually in the tree are:
 | `COMPONENT_MODEL.md` | `CM<n>` | `CMD<n>` | `CM-<n>` |
 | `CONFIGURATION.md` | `CFG<n>` | `CFGD<n>` | `CFG-<n>` |
 | `CONSTANT_TIME.md` | `CT<n>` | `CTD<n>` | `CT-<n>` |
+| `CONTINUATION_ABANDONMENT.md` | `CA<n>` | `CAD<n>` | `CA-<n>` |
 | `CUSTOM_PAGE_SIZES.md` | `CPS<n>` | `CPSD<n>` | `CPS-<n>` |
 | `EXCEPTIONS.md` | `EX<n>` | `EXD<n>` | `EX-<n>` |
 | `EXTENDED_CONST.md` | `EC<n>` | `ECD<n>` | `EC-<n>` |
@@ -229,6 +230,7 @@ headings:
 | `COMPILER_POLICY.md` | 10 | canonical + appendix | none | §10 "Appendix: the mapping, the plumbing, and the retry analysis" after §9 | conforms (appendix; an engine-seam study of the compilation knobs) |
 | `CONFIGURATION.md` | 10 | canonical + appendix | none | §10 "Appendix: the memory budget in full" after §9 | conforms (appendix; an engine-seam study of the resource knobs) |
 | `CONSTANT_TIME.md` | 9 | canonical | none | — | conforms exactly |
+| `CONTINUATION_ABANDONMENT.md` | 9 | canonical | none | — | conforms exactly |
 | `CUSTOM_PAGE_SIZES.md` | 9 | canonical | none | — | conforms exactly |
 | `EXCEPTIONS.md` | 9 | canonical | none | — | conforms exactly |
 | `EXTENDED_CONST.md` | 9 | canonical | none | — | conforms exactly |

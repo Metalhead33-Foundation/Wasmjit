@@ -19,6 +19,7 @@ and the `[docs]` check fails ([`DOCUMENTATION.md`](../DOCUMENTATION.md) §9).
 | \subpage prop_compiler_policy | Compilation policy: optimization degree, strictness and interpreter fallback |
 | \subpage prop_configuration | Engine configuration and budgets: the hardcoded knobs, the per-runtime memory budget, and the budget model |
 | \subpage prop_constant_time | Constant-time WebAssembly |
+| \subpage prop_continuation_abandonment | Continuation abandonment: what a parked fiber owns, and what the engine does not release |
 | \subpage prop_custom_page_sizes | Custom page sizes |
 | \subpage prop_exceptions | Exception handling with `exnref` |
 | \subpage prop_extended_const | Extended constant expressions |
