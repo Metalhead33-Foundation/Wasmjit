@@ -220,6 +220,18 @@ uniform shorthand. The contract is [`../ABI.md`](../ABI.md) “Call forms”.
 
 - **A probe records one of three states** — works, refuses with a reason, or
   silently answers wrong. Only the third is a defect; refusal is a pass.
+- **A suspended continuation is a live stack, and its owner is the instance, not the frame.**
+  `GAP-19`: a fiber parked at `switch`/`suspend` keeps the counts of its frame's reference
+  slots, so abandoning it pinned the handle, the worker and its 5,200-byte native stack.
+  Recording those slots on the worker, or moving the values out of them, cannot help -- a
+  move shuffles raw pointers and never touches a handle's count. Releasing at `Store::~Store`
+  is racy (a host-thread worker can still be alive during static teardown); the instance is
+  the right owner. Two details make it work: releasing the handles in `~ModuleInstance` while
+  the store is intact, and letting the parked-switch wait wake on *cancellation* -- it waited
+  for the caller to become `Running` again, so cancelling a parked switch hung the join for
+  ever. The lesson: a teardown path is only correct if every wait it trips has an exit for
+  cancellation, and a leak of live native stacks needs an owner, not a bookkeeper.
+
 - **A call-form mismatch is a caller bug, and it looks like a JIT crash.**
   `GAP-16`'s wild write came from a *frame-form* callee entered through the
   *register-form* helper: the callee's prologue used the caller's stale second

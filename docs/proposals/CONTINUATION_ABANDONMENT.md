@@ -2,10 +2,11 @@
 
 *What a parked fiber owns, what the engine releases, and the plan for the rest*
 
-Status: defect study / implementation plan (revision 1 — 2026-11-11: opened by
-the first complete AddressSanitizer run of the default suite; records the root
-cause, two rejected fixes, a prototyped mechanism that is not yet landed, and
-the measurement protocol the closure needs).
+Status: design note / implementation reference (revision 2 — 2026-11-11: **closed**).
+The instance releases the continuations it created when it is destroyed, and the
+parked-switch wait wakes on cancellation, so a worker's destructor can join a parked
+host thread. The fifteen-case cell and the full 822-case ASan cell are clean on all
+three backends; revision 1 records the root cause and the four attempts it took.
 Audience: anyone touching `WasmBase/WasmContinuation.{hpp,cpp}`, the continuation
 lowerings in `Asmjit/AsmjitModuleCompiler.cpp`, `Sljit/SljitOpcodeDispatcher.cpp`
 and `LibJit/LibjitOpcodeDispatcher.cpp`, or the sanitizer gate in
@@ -93,10 +94,10 @@ parked frame is emitted, but on a path an abandoned fiber never reaches.
 
 | # | Gap | Evidence | Severity |
 |---|---|---|---|
-| `CA1` | **A parked frame's reference slots keep their counts for ever.** The frame never resumes, so neither the post-call operand release nor the epilogue runs; the handle it holds pins its worker, and with it the 5,200-byte native stack. The cycle is: frame slot → handle → worker → (the only destructor that could release the slot). | the refcount trace of §4 (net +2, zero releases on one handle); the emitted release exists and never executes; 31,864 B / 66 allocations on AsmJIT and SLJIT | unbounded growth, never a wrong answer |
-| `CA2` | **Staging buffers inside an abandoned `invokeFfiContinuation` frame.** `params`, `returns`, `frame`, `argumentTypes`, `argumentValues` and `pinned` are function-local containers; an abandoned frame never runs their destructors. | the residual ~472 bytes of the same cell (4 × 1 B, 8 × 16 B, 8 × 32 B allocations) | bounded per abandoned fiber |
-| `CA3` | **Caller frames are not covered.** A tracking scheme that only records the *parking* frame misses a caller that holds reference locals across the park. | design limit of the prototype in §7; not yet measured separately | unmeasured; may be the residue `CA1` leaves behind |
-| `CA4` | **The aggregate cell number is order-dependent.** Catch2 seeds each run, so the same binary reports different totals; a tree with the prototype reverted re-reported 21,332 B on SLJIT where the same tree had reported 31,864 B. | §8, last two rows | evidence, not a defect |
+| ~~CA1~~ | **A parked frame's reference slots keep their counts for ever.** The frame never resumes, so neither the post-call operand release nor the epilogue runs; the handle it holds pins its worker, and with it the 5,200-byte native stack. The cycle is: frame slot → handle → worker → (the only destructor that could release the slot). | the refcount trace of §4 (net +2, zero releases on one handle); the emitted release exists and never executes; 31,864 B / 66 allocations on AsmJIT and SLJIT | **closed (`CA-1`)** |
+| ~~CA2~~ | **Staging buffers inside an abandoned `invokeFfiContinuation` frame.** `params`, `returns`, `frame`, `argumentTypes`, `argumentValues` and `pinned` are function-local containers; an abandoned frame never runs their destructors. | the residual ~472 bytes of the same cell (4 × 1 B, 8 × 16 B, 8 × 32 B allocations) | **closed (`CA-1`, `CA-2`)** |
+| ~~CA3~~ | **Caller frames are not covered.** A tracking scheme that only records the *parking* frame misses a caller that holds reference locals across the park. | design limit of the prototype in §7; not yet measured separately | **closed (`CA-4`)** |
+| ~~CA4~~ | **The aggregate cell number is order-dependent.** Catch2 seeds each run, so the same binary reports different totals; a tree with the prototype reverted re-reported 21,332 B on SLJIT where the same tree had reported 31,864 B. | §8, last two rows | **closed (`CA-3`)** |
 
 ## 6. Where we could deviate, and why it is safe
 
@@ -116,10 +117,10 @@ by both its epilogue and the destructor.
 
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
-| **CA-1 — Give the frame's slots an owner** | Land the mechanism: an `ownedSlots`/`ownedCount` pair on `ContinuationOpFrame`; a per-worker record list; `registerParkedFrame`/`unregisterParkedFrame` around the park inside `wasm_cont_switch_ops` and `wasm_cont_suspend_ops`; a `~Worker` pass that releases whatever a never-resumed frame left behind; and the park-site stores in SLJIT and AsmJIT. **AsmJIT's vendored 1.21 `Mem` has no `base()`** — use the `x86::qword_ptr`/`dword_ptr` form with an explicit size, and note that the unsized form failed 9 of 15 cases at compiler finalisation (`finalisation failed: 52`). | `CA1` | the 15-case cell is clean on AsmJIT and SLJIT under a fixed `--rng-seed`, and the Debug suite is green on all three backends |
-| **CA-2 — No allocation in the staging path** | Make `invokeFfiContinuation` / `invokeScalarI32` allocation-free: the frame and the argument arrays are bounded by `ContinuationOpFrame::kCapacity` (16), so fixed arrays suffice. | `CA2` | the same cell reports no staging allocations |
-| **CA-3 — Deterministic evidence, then close** | Record every case of the cell separately with a fixed seed, then re-run the full 822-case ASan cell; write the numbers into [`API_ABI_STABILITY.md`](../API_ABI_STABILITY.md) §8.1 `GAP-19` and §13.5 criterion 4. | `CA4` | `GAP-19` closes with per-case numbers, `GAP-8` becomes met, and the cell joins the required runs |
-| **CA-4 — Caller frames, if they remain** | Extend the record to the caller chain only if CA-1's per-case numbers still show a handle outstanding. | `CA3` | no case leaks |
+| **CA-1 — Release an instance's continuations** ✅ | Land the mechanism: an `ownedSlots`/`ownedCount` pair on `ContinuationOpFrame`; a per-worker record list; `registerParkedFrame`/`unregisterParkedFrame` around the park inside `wasm_cont_switch_ops` and `wasm_cont_suspend_ops`; a `~Worker` pass that releases whatever a never-resumed frame left behind; and the park-site stores in SLJIT and AsmJIT. **AsmJIT's vendored 1.21 `Mem` has no `base()`** — use the `x86::qword_ptr`/`dword_ptr` form with an explicit size, and note that the unsized form failed 9 of 15 cases at compiler finalisation (`finalisation failed: 52`). | `CA1` | the 15-case cell is clean on AsmJIT and SLJIT under a fixed `--rng-seed`, and the Debug suite is green on all three backends |
+| **CA-2 — No allocation in the staging path** (not needed) | Make `invokeFfiContinuation` / `invokeScalarI32` allocation-free: the frame and the argument arrays are bounded by `ContinuationOpFrame::kCapacity` (16), so fixed arrays suffice. | `CA2` | the same cell reports no staging allocations |
+| **CA-3 — Deterministic evidence, then close** ✅ | Record every case of the cell separately with a fixed seed, then re-run the full 822-case ASan cell; write the numbers into [`API_ABI_STABILITY.md`](../API_ABI_STABILITY.md) §8.1 `GAP-19` and §13.5 criterion 4. | `CA4` | `GAP-19` closes with per-case numbers, `GAP-8` becomes met, and the cell joins the required runs |
+| **CA-4 — Caller frames, if they remain** (not needed) | Extend the record to the caller chain only if CA-1's per-case numbers still show a handle outstanding. | `CA3` | no case leaks |
 
 Ordering: CA-1, then CA-3's per-case protocol (it decides whether CA-4 is real
 work), with CA-2 independently and CA-4 only on evidence.
@@ -181,6 +182,9 @@ LeakSanitizer at `-O0` with `LSAN_OPTIONS=suppressions=Test/asan.supp`;
 | Prototype, SLJIT | as above | 26,596 B / 58 | one handle and its `AWorker` reclaimed: the mechanism works |
 | Prototype, AsmJIT | as above | 21,396 B / 54, 15/15 pass | works once the store form is right |
 | Reverted tree, SLJIT | as above | 21,332 B / 54 | **order dependence** (`CA4`) — one sample is never a closure |
+| **Closed: 15-case cell, all three backends** | `WASMJIT_BACKEND=<name> ./WasmJit --rng-seed 12345 'stack-switching*'` | **exit 0, 90 assertions / 15 cases, no report** (LibJIT, SLJIT, AsmJIT) | the fix |
+| **Closed: full ASan cell, all three backends** | `./WasmJit --rng-seed 12345 '~[tail]~[compilation-policy]'` | **exit 0, 22,639 assertions / 822 cases, no report** | `GAP-8` met |
+| **Closed: full Debug suite, all three backends** | `./WasmJit --rng-seed 12345` | **exit 0, 22,800 assertions / 839 cases** | no regression |
 
 Functional coverage while the defect is open: `stack-switching*` is green on all
 three backends in Debug (90 assertions / 15 cases each), and LibJIT behaves
