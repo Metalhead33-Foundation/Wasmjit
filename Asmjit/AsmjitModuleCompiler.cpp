@@ -5331,7 +5331,13 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		case 14: return &wasm_i8x16_min_u;
 		case 15: return &wasm_i16x8_min_s;
 		case 16: return &wasm_i8x16_max_u;
-		default: return &wasm_i16x8_max_s;
+		case 17: return &wasm_i16x8_max_s;
+		case 18: return &wasm_i8x16_eq;
+		case 19: return &wasm_i16x8_eq;
+		case 20: return &wasm_i32x4_eq;
+		case 21: return &wasm_i8x16_ne;
+		case 22: return &wasm_i16x8_ne;
+		default: return &wasm_i32x4_ne;
 		}
 	}
 
@@ -5376,7 +5382,22 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		case 14: checkError(compiler.pminub(lhs, rhs), name); break;
 		case 15: checkError(compiler.pminsw(lhs, rhs), name); break;
 		case 16: checkError(compiler.pmaxub(lhs, rhs), name); break;
-		default: checkError(compiler.pmaxsw(lhs, rhs), name); break;
+		case 17: checkError(compiler.pmaxsw(lhs, rhs), name); break;
+		case 18: checkError(compiler.pcmpeqb(lhs, rhs), name); break;
+		case 19: checkError(compiler.pcmpeqw(lhs, rhs), name); break;
+		case 20: checkError(compiler.pcmpeqd(lhs, rhs), name); break;
+		default: {
+			// `ne` is the inverted equality mask: compare, then flip every bit with a
+			// register that holds all ones (`pcmpeqd r, r`).
+			if (kind == 21) { checkError(compiler.pcmpeqb(lhs, rhs), name); }
+			else if (kind == 22) { checkError(compiler.pcmpeqw(lhs, rhs), name); }
+			else { checkError(compiler.pcmpeqd(lhs, rhs), name); }
+			auto ones = compiler.new_xmm("v128AllOnes");
+			checkError(compiler.pcmpeqd(ones, ones), name);
+			checkError(compiler.pxor(lhs, ones), name);
+			break;
+		}
+		}
 		}
 		checkError(compiler.movdqu(asmjit::x86::xmmword_ptr(result), out),
 				"AsmJit v128 native store failed");
@@ -8108,8 +8129,8 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 	void dispatchI64x2Add() override { emitVectorBinaryNative("AsmJit i64x2.add failed", 7); }
 	void dispatchI64x2Sub() override { emitVectorBinaryNative("AsmJit i64x2.sub failed", 11); }
 	void dispatchI64x2Mul() override { emitVectorHelper2(&wasm_i64x2_mul); }
-	void dispatchI8x16Eq() override { emitVectorHelper2(&wasm_i8x16_eq); }
-	void dispatchI8x16Ne() override { emitVectorHelper2(&wasm_i8x16_ne); }
+	void dispatchI8x16Eq() override { emitVectorBinaryNative("AsmJit i8x16.eq failed", 18); }
+	void dispatchI8x16Ne() override { emitVectorBinaryNative("AsmJit i8x16.ne failed", 21); }
 	void dispatchI8x16LtS() override { emitVectorHelper2(&wasm_i8x16_lt_s); }
 	void dispatchI8x16LtU() override { emitVectorHelper2(&wasm_i8x16_lt_u); }
 	void dispatchI8x16GtS() override { emitVectorHelper2(&wasm_i8x16_gt_s); }
@@ -8118,8 +8139,8 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 	void dispatchI8x16LeU() override { emitVectorHelper2(&wasm_i8x16_le_u); }
 	void dispatchI8x16GeS() override { emitVectorHelper2(&wasm_i8x16_ge_s); }
 	void dispatchI8x16GeU() override { emitVectorHelper2(&wasm_i8x16_ge_u); }
-	void dispatchI16x8Eq() override { emitVectorHelper2(&wasm_i16x8_eq); }
-	void dispatchI16x8Ne() override { emitVectorHelper2(&wasm_i16x8_ne); }
+	void dispatchI16x8Eq() override { emitVectorBinaryNative("AsmJit i16x8.eq failed", 19); }
+	void dispatchI16x8Ne() override { emitVectorBinaryNative("AsmJit i16x8.ne failed", 22); }
 	void dispatchI16x8LtS() override { emitVectorHelper2(&wasm_i16x8_lt_s); }
 	void dispatchI16x8LtU() override { emitVectorHelper2(&wasm_i16x8_lt_u); }
 	void dispatchI16x8GtS() override { emitVectorHelper2(&wasm_i16x8_gt_s); }
@@ -8128,8 +8149,8 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 	void dispatchI16x8LeU() override { emitVectorHelper2(&wasm_i16x8_le_u); }
 	void dispatchI16x8GeS() override { emitVectorHelper2(&wasm_i16x8_ge_s); }
 	void dispatchI16x8GeU() override { emitVectorHelper2(&wasm_i16x8_ge_u); }
-	void dispatchI32x4Eq() override { emitVectorHelper2(&wasm_i32x4_eq); }
-	void dispatchI32x4Ne() override { emitVectorHelper2(&wasm_i32x4_ne); }
+	void dispatchI32x4Eq() override { emitVectorBinaryNative("AsmJit i32x4.eq failed", 20); }
+	void dispatchI32x4Ne() override { emitVectorBinaryNative("AsmJit i32x4.ne failed", 23); }
 	void dispatchI32x4LtS() override { emitVectorHelper2(&wasm_i32x4_lt_s); }
 	void dispatchI32x4LtU() override { emitVectorHelper2(&wasm_i32x4_lt_u); }
 	void dispatchI32x4GtS() override { emitVectorHelper2(&wasm_i32x4_gt_s); }
