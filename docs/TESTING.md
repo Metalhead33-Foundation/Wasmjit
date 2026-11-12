@@ -105,6 +105,10 @@ setting; the default is the per-signature form. The guard itself is pinned by
 `call form: a mismatched call helper refuses instead of writing through a stale
 frame` (`GAP-16`).
 
+`WASMJIT_SIMD_NATIVE=0` makes both vector backends take the portable helper path instead of their own "
+`v128` instructions for the ops they lower natively (`docs/proposals/SIMD.md` `SIMD-8`); it exists so a "
+native family can be measured A/B, and both paths must stay green.
+
 ### Diagnosing one module (no test case)
 
 `--diagnose=PATH` loads/instantiates a core module, prints imports/exports with

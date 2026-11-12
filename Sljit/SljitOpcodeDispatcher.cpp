@@ -1,4 +1,6 @@
 #include "SljitOpcodeDispatcher.hpp"
+#include <cstdlib>
+#include <string_view>
 
 #include "SljitModuleCompiler.hpp"
 
@@ -1917,7 +1919,8 @@ bool OpcodeDispatcher::beginFunction()
 		return false;
 	}
 	emit(sljit_emit_enter(compiler_, 0, argTypes,
-			4 | SLJIT_ENTER_FLOAT(static_cast<sljit_s32>(floatScratch)),
+			4 | SLJIT_ENTER_FLOAT(static_cast<sljit_s32>(floatScratch))
+					| SLJIT_ENTER_VECTOR(2), // `SIMD-8` scratch: SLJIT_VR0/VR1
 			savedCount, static_cast<sljit_s32>(frameSlots * kSlotBytes)));
 	if (!ok_) {
 		// A failed prologue leaves SLJIT in its error state; emitting more would
@@ -5541,6 +5544,17 @@ void OpcodeDispatcher::emitV128Shift(sljit_sw address)
 	pop();
 }
 
+//! Whether a backend may use its own vector instructions (`SIMD-8`).
+//! `WASMJIT_SIMD_NATIVE=0` forces the portable helper path, for A/B runs.
+static bool nativeSimdEnabled()
+{
+	static const bool enabled = [] {
+		const char* value = std::getenv("WASMJIT_SIMD_NATIVE");
+		return value == nullptr || std::string_view(value) != "0";
+	}();
+	return enabled;
+}
+
 void OpcodeDispatcher::emitV128Binary(sljit_sw address)
 {
 	if (!reachable_)
@@ -5644,10 +5658,58 @@ void OpcodeDispatcher::emitV128F16Ternary(uint32_t op)
 	pop();
 }
 
-void OpcodeDispatcher::dispatchV128And() { emitV128Binary(codeAddress(&wasm_v128_and)); }
+//! `SIMD-8`: 128-bit bitwise on vector registers, helper as the fallback.
+//! The operands are addressed through `slotAddress`, and the prologue allots
+//! `SLJIT_VR0`/`SLJIT_VR1` with `SLJIT_ENTER_VECTOR(2)` -- without that the
+//! vector registers are not part of the function's register set.
+bool OpcodeDispatcher::emitV128BitwiseNative(sljit_s32 operation)
+{
+	if (!nativeSimdEnabled() || !reachable_ || measureOnly_)
+		return false;
+	const sljit_s32 type = SLJIT_SIMD_REG_128 | SLJIT_SIMD_ELEM_8;
+	if (sljit_emit_simd_mov(compiler_, type | SLJIT_SIMD_TEST, SLJIT_VR0,
+			SLJIT_MEM1(SLJIT_SP), 0) == SLJIT_ERR_UNSUPPORTED)
+		return false;
+	const std::size_t depthB = stackWidths_.size() - 1;
+	const std::size_t depthA = stackWidths_.size() - 2;
+	slotAddress(SLJIT_R0, depthA);
+	slotAddress(SLJIT_R1, depthB);
+	emit(sljit_emit_simd_mov(compiler_, type, SLJIT_VR0, SLJIT_MEM1(SLJIT_R0), 0));
+	emit(sljit_emit_simd_mov(compiler_, type, SLJIT_VR1, SLJIT_MEM1(SLJIT_R1), 0));
+	emit(sljit_emit_simd_op2(compiler_, type | operation, SLJIT_VR0, SLJIT_VR0, SLJIT_VR1, 0));
+	emit(sljit_emit_simd_mov(compiler_, type | SLJIT_SIMD_STORE, SLJIT_VR0,
+			SLJIT_MEM1(SLJIT_R0), 0));
+	return true;
+}
+
+void OpcodeDispatcher::dispatchV128And()
+{
+	if (emitV128BitwiseNative(SLJIT_SIMD_OP2_AND))
+	{
+		pop();
+		return;
+	}
+	emitV128Binary(codeAddress(&wasm_v128_and));
+}
 void OpcodeDispatcher::dispatchV128AndNot() { emitV128Binary(codeAddress(&wasm_v128_andnot)); }
-void OpcodeDispatcher::dispatchV128Or() { emitV128Binary(codeAddress(&wasm_v128_or)); }
-void OpcodeDispatcher::dispatchV128Xor() { emitV128Binary(codeAddress(&wasm_v128_xor)); }
+void OpcodeDispatcher::dispatchV128Or()
+{
+	if (emitV128BitwiseNative(SLJIT_SIMD_OP2_OR))
+	{
+		pop();
+		return;
+	}
+	emitV128Binary(codeAddress(&wasm_v128_or));
+}
+void OpcodeDispatcher::dispatchV128Xor()
+{
+	if (emitV128BitwiseNative(SLJIT_SIMD_OP2_XOR))
+	{
+		pop();
+		return;
+	}
+	emitV128Binary(codeAddress(&wasm_v128_xor));
+}
 
 void OpcodeDispatcher::dispatchV128Bitselect()
 {

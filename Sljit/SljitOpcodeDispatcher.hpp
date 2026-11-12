@@ -1337,6 +1337,8 @@ private:
 	 * \param address Helper entry point.
 	 */
 	void emitV128Binary(sljit_sw address);
+	//! `SIMD-8`: native 128-bit bitwise, false when the target has no vectors.
+	bool emitV128BitwiseNative(sljit_s32 operation);
 	void emitV128F16Binary(uint32_t op, sljit_sw address); //!< Binary `f16x8` helper with its sub-opcode.
 	//! Emits a ternary v128 helper (`a`, `b`, `c`, `out`) over the top three slots.
 	void emitV128Ternary(sljit_sw address);
