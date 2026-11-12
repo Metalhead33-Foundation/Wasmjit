@@ -124,6 +124,15 @@ by both its epilogue and the destructor.
 Ordering: CA-1, then CA-3's per-case protocol (it decides whether CA-4 is real
 work), with CA-2 independently and CA-4 only on evidence.
 
+**What two attempts on 2026-11-11 established.** The first recorded the frame's slots with the
+worker and changed nothing: the slots still held the counts, so the handles stayed alive, the
+handles kept the worker alive, and the destructor that would release everything never ran. The
+second **moved** the values out of the slots for the duration of the park (slots zeroed, values on
+the worker, restored on resume). That made the host-thread case **clean** (32 B to 0) and moved
+the others only slightly (5,333 / 10,884 / 10,666), which is the `CA3` prediction: the owners that
+remain sit in *caller* frames and in nested parks that push their own record. CA-1 therefore means
+"move, not record", and CA-4 is not optional if those numbers are to reach zero.
+
 ## 8. Indicative test survey
 
 Every row is a recorded run, not an intention. `build/Desktop-ASan` is ASan +
