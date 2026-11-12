@@ -143,7 +143,12 @@ store owns its parked continuations**. At `Store::~Store`, force-release every `
 worker was created in that store and destroy the parked workers whose frames never returned, which
 releases the recorded slots as it goes. That is the `CAD3` release point moved one level up: a
 store's continuations cannot outlive the store, and no handle can pin a worker past it. It needs a
-live-worker registry (insert in the `Worker` constructor, erase in `~Worker`) beside the existing
+**Attempted and rejected (2026-11-11):** the release was wired into `Store::~Store`, which works for a
+store destroyed by a test but is racy for one destroyed during static teardown: ASan reports a
+cross-thread use-after-free inside `releaseContinuationsFor` (`freed by thread T0`, `allocated by
+thread T1`) on all three backends, because a host-thread provider's worker can still be alive when the
+store is torn down at process exit. The hook therefore belongs where the provider has been joined — the
+instance/agent teardown — not on the store. live-worker registry (insert in the `Worker` constructor, erase in `~Worker`) beside the existing
 handle registry, plus one call from `Store::~Store`; it is the `CA-4` milestone's real shape.
 
 **Build note for the next attempt.** The Asmjit subproject in a build tree can keep a stale
