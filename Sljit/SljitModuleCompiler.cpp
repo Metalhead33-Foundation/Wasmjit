@@ -10,27 +10,43 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace {
 
-//! Whether a signature cannot be expressed by the SLJIT register form.
-//!
-//! The count is of C argument entries, not Wasm parameters: `VMContext*` is
-//! always present, a `v128` parameter is two words, and a `v128` result adds a
-//! hidden trailing out-buffer pointer. The latter is easy to miss because the
-//! Wasm signature does not spell it, but the prologue and every caller both
-//! declare it (docs/ABI.md).
-bool signatureNeedsFrame(const WASM::FuncType& type)
+//! The SLJIT register form's limits (`WASM::RegisterFormCeiling`): four C
+//! argument entries with `VMContext*` included, no `v128` by value and no
+//! multi-result tuple in registers. A signature above either limit uses the
+//! staging frame.
+constexpr WASM::RegisterFormCeiling kRegisterFormCeiling{
+	Sljit::kRegisterArgumentCeiling, true, true, false};
+
+//! Call form per module-local type index, from the core per-signature rule.
+std::vector<std::uint8_t> frameForms(const WASM::Module& module)
 {
-	std::uint32_t entries = 1; // VMContext*
-	for (const WASM::StorageType& parameter : type.params)
-		entries += WASM::argSlotCount(WASM::valueKindOf(parameter.val.opcode));
-	if (type.results.size() > 1)
-		return true; // results travel in the caller's result block
-	if (!type.results.empty()
-			&& type.results.front().val.opcode == WASM::ValueTypeCode::V128)
-		++entries; // hidden result out-buffer
-	return entries > Sljit::kRegisterArgumentCeiling;
+	std::vector<std::uint8_t> forms(module.typeCount(), 0);
+	const bool optIn = WASM::frameCallAbiOptIn();
+	for (std::uint32_t index = 0; index < module.typeCount(); ++index) {
+		if (module.typeView(index).kind() != WASM::CanonTypeKind::Func)
+			continue;
+		forms[index] = WASM::usesFrameForm(module.funcTypeAt(index),
+				kRegisterFormCeiling, optIn) ? 1 : 0;
+	}
+	return forms;
+}
+
+//! True when every *defined* function is frame-form: the module-wide shorthand
+//! `ModuleInstance::frameCallAbi()` still reports (false for a mixed module).
+bool uniformlyFrameForm(const WASM::Module& module, const std::vector<std::uint8_t>& forms)
+{
+	if (WASM::frameCallAbiOptIn())
+		return true;
+	if (module.internalFunctionTypeIndices.empty())
+		return false;
+	for (const std::uint32_t typeIdx : module.internalFunctionTypeIndices)
+		if (typeIdx >= forms.size() || forms[typeIdx] == 0)
+			return false;
+	return true;
 }
 
 } // namespace
@@ -115,23 +131,15 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM
 {
 	unsupportedFunctions_.clear();
 
-	// A module compiles entirely in one form: if any *defined* function's
-	// signature needs more C argument entries than SLJIT's register form allows,
-	// the whole module uses the staging frame
-	// (docs/ABI.md). Imported signatures deliberately do
-	// not choose the module ABI: a host import is a native C function with its
-	// own register-form entry, and a frame-mode caller must not invoke it as if
-	// it took a staging frame. The import call path is chosen when the import is
-	// resolved, not by this module-wide flag.
-	// `setFrameCallAbiOptIn(true)` is a request for one form everywhere, so it
-	// decides the module's form on its own: a module compiled while it is set must
-	// be frame-form even when every signature would fit the register form
-	// (docs/ABI.md).
-	bool frameMode = WASM::frameCallAbiOptIn();
-	for (const std::uint32_t typeIdx : module.internalFunctionTypeIndices)
-		if (signatureNeedsFrame(module.funcTypeAt(typeIdx)))
-			frameMode = true;
-	instance.setFrameCallAbi(frameMode);
+	// Each function's call form follows its own signature (`GAP-1`, `GR-8`). A
+	// module may now mix the two: a wide function uses the staging frame while
+	// its narrow siblings keep the register form, so one wide signature no
+	// longer moves every call in the module onto the frame path. The instance
+	// keeps the per-type table for call sites and embedders, and
+	// `frameCallAbi()` remains the "everything is frame" shorthand.
+	const std::vector<std::uint8_t> forms = frameForms(module);
+	instance.setFrameCallForms(forms);
+	instance.setFrameCallAbi(uniformlyFrameForm(module, forms));
 
 	for (std::size_t i = 0; i < module.functionBodies.size(); ++i) {
 		const uint32_t typeIdx = module.internalFunctionTypeIndices[i];
@@ -140,9 +148,10 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM
 		const WASM::FuncType funcType = module.funcTypeAt(typeIdx);
 		const uint32_t functionIndex =
 				static_cast<uint32_t>(module.importFunctions.size() + i);
+		const bool ownFrameForm = typeIdx < forms.size() && forms[typeIdx] != 0;
 
 		OpcodeDispatcher dispatcher(module, funcType, module.functionBodies[i], functionIndex,
-				frameMode, internals.tagIds, internals, profile());
+				ownFrameForm, internals.tagIds, internals, forms, profile());
 		void* entry = nullptr;
 		if (!dispatcher.compile(entry)) {
 			// No partial modules: an instantiable module must have every function
@@ -161,8 +170,8 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM
 	// the native stack. A module without one is left exactly as compiled; if the
 	// table cannot be installed, refuse the module rather than emit state-writing
 	// tail calls whose driver does not exist.
-	if (WASM::tailCallTrampolinesEligible(module, frameMode)
-			&& !WASM::installTailCallTrampolines(module, internals, frameMode))
+	if (WASM::tailCallTrampolinesEligible(module, forms)
+			&& !WASM::installTailCallTrampolines(module, internals, forms))
 		throw std::runtime_error("the SLJIT backend could not install tail-call trampolines");
 }
 
@@ -207,14 +216,26 @@ void ModuleCompiler::callStartFunction(WASM::ModuleInstance& instance, uint32_t 
 				" the module's start function (docs/WRITING_A_BACKEND.md §9)");
 	}
 
-	using StartFn = void (*)(WASM::VMContext*);
-	StartFn fn = reinterpret_cast<StartFn>(callable->fnPtr);
+	// The start function's own type decides its form. A compiled start (internal
+	// or a Wasm import) carries its defining type index; a native import follows
+	// the process-wide opt-in, the only form its host entry can have been built
+	// for.
+	const bool frameForm = callable->context != nullptr
+			? instance.usesFrameForm(WASM::LocalTypeIdx{callable->localTypeIdx})
+			: WASM::frameCallAbiOptIn();
 	// The start function runs at the host boundary: a trap it reports comes back
 	// here as a `WASM::Trap` exception, so `instantiate` unwinds normally and the
 	// partially built instance is destroyed (docs/TRAP_CLEANUP.md §7, TRAP-1).
 	{
 		WASM::CallDepthScope depth;
-		fn(callable->context);
+		if (frameForm) {
+			alignas(16) std::uint8_t frame[16] = {};
+			auto fn = reinterpret_cast<void (*)(WASM::VMContext*, void*)>(callable->fnPtr);
+			fn(callable->context, frame);
+		} else {
+			auto fn = reinterpret_cast<void (*)(WASM::VMContext*)>(callable->fnPtr);
+			fn(callable->context);
+		}
 	}
 	WASM::checkTrap();
 }

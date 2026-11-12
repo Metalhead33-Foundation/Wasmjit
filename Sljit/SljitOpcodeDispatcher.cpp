@@ -1,4 +1,6 @@
 #include "SljitOpcodeDispatcher.hpp"
+#include <cstdlib>
+#include <string_view>
 
 #include "SljitModuleCompiler.hpp"
 
@@ -10,6 +12,7 @@
 #include "../WasmBase/WasmMemory.hpp"
 #include "../WasmBase/WasmContinuation.hpp"
 #include "../WasmBase/WasmStack.hpp"
+#include "../WasmBase/WasmSafety.hpp"
 #include "../WasmBase/WasmStore.hpp"
 #include "../WasmBase/WasmStringOps.hpp"
 #include "../WasmBase/WasmRoundingOps.hpp"
@@ -50,15 +53,12 @@ struct UnsupportedBody {
 //! (a `v128` is the whole cell, a scalar its first word).
 constexpr std::size_t kSlotBytes = 16;
 
-//! Staging slots reserved for a frame-form callee's argument and result block.
-//! The previous 16-slot (256-byte) area rejected `call.wast`'s 100-parameter
-//! fixture. 128 slots cover 2 KiB, enough for the largest Wasm signature the
-//! engine currently accepts; the call path still checks the exact byte count.
-constexpr std::size_t kStagingCallSlots = 128;
 //! Register-form calls place a v128 result in the first two slots of the call
-//! area, even when no frame-form staging area is reserved.
+//! area, and that is also the minimum when a frame-form call needs no more.
+//! The call area is sized from the module's largest staging request in the
+//! measurement pass, not from a fixed cap; the previous 2 KiB constant
+//! refused a legal signature the other backends compiled.
 constexpr std::size_t kRegisterCallOutSlots = 2;
-constexpr std::size_t kStagingCallBytes = kStagingCallSlots * kSlotBytes;
 //! Fixed scratch frame for one continuation operation. The core defines the
 //! layout; the backend only copies operand slots in and result slots out.
 constexpr std::size_t kContinuationFrameSlots =
@@ -1443,17 +1443,21 @@ struct StagedShape {
 	//! array has to outlive the prep call with the entry.
 	std::vector<ffi_type*> closureArgTypes = {&ffi_type_pointer,
 			&ffi_type_pointer, &ffi_type_pointer};
-	std::vector<ffi_type*> argTypes; //!< Context, then one entry per parameter.
+	std::vector<ffi_type*> argTypes; //!< Context, then two entries per `v128`
 	std::vector<WASM::ValueKind> paramKinds;
 	std::size_t paramCount = 0;
 	std::uint32_t resultOffset = 0; //!< Byte offset of the result block.
 	bool single = false; //!< One result, returned by value.
-	bool multi = false; //!< Several results, through a trailing buffer pointer.
+	//! Several results, or one `v128`, through a trailing buffer pointer.
+	//! A vector result is spooled by the callee into the result block, which is
+	//! the canonical spelling (docs/ABI.md "The C ABI Contract").
+	bool buffered = false;
 	ffi_type* resultType = &ffi_type_void;
 };
 
-//! Host C type of one Wasm value kind, or null for `v128`, whose C spelling is
-//! not a single `ffi_type` and which the staged form therefore refuses.
+//! Host C type of one Wasm value kind that maps to a single `ffi_type`.
+//! `v128` is deliberately absent: its canonical spelling is *two* `uint64_t`
+//! entries, so the caller appends two of them rather than one mapping.
 ffi_type* stagedFfiType(WASM::ValueKind kind) noexcept
 {
 	switch (kind) {
@@ -1489,21 +1493,46 @@ void stagedImportCall(ffi_cif*, void*, void** args, void* userData)
 	// A native import carries no context: it runs against the caller's.
 	void* context = target->context != nullptr
 			? static_cast<void*>(target->context) : static_cast<void*>(vm);
-	std::vector<void*> callArgs(entry->shape.argTypes.size(), nullptr);
+	// The argument cells live on the closure's own stack: this runs once per
+	// invocation, and a heap vector here was a per-call allocation on the import
+	// path (docs/API_ABI_STABILITY.md `GAP-12`). A signature with more than
+	// kInlineArguments cells (about ten scalar parameters) still works through
+	// the overflow path, which is the only case that allocates.
+	constexpr std::size_t kInlineArguments = 24;
+	void* inlineArgs[kInlineArguments] = {};
+	std::vector<void*> overflow;
+	void** callArgs = inlineArgs;
+	if (entry->shape.argTypes.size() > kInlineArguments) {
+		overflow.assign(entry->shape.argTypes.size(), nullptr);
+		callArgs = overflow.data();
+	}
 	callArgs[0] = &context;
-	for (std::size_t i = 0; i < entry->shape.paramCount; ++i)
-		callArgs[1 + i] = static_cast<std::uint8_t*>(frame)
+	// A parameter occupies one ffi entry, except a `v128`, which occupies two:
+	// its canonical spelling is `uint64_t lo, uint64_t hi` and the staging frame
+	// already holds the 16 bytes little-endian (docs/ABI.md).
+	std::size_t argumentIndex = 1;
+	for (std::size_t i = 0; i < entry->shape.paramCount; ++i) {
+		void* const slot = static_cast<std::uint8_t*>(frame)
 				+ WASM::frameArgumentOffset(entry->shape.paramKinds,
 						static_cast<std::uint32_t>(i));
+		if (entry->shape.paramKinds[i] == WASM::ValueKind::V128) {
+			callArgs[argumentIndex] = slot;
+			callArgs[argumentIndex + 1] = static_cast<std::uint8_t*>(slot) + 8;
+			argumentIndex += 2;
+		} else {
+			callArgs[argumentIndex] = slot;
+			argumentIndex += 1;
+		}
+	}
 	void* buffer = static_cast<std::uint8_t*>(frame) + entry->shape.resultOffset;
-	if (entry->shape.multi)
-		callArgs.back() = &buffer;
+	if (entry->shape.buffered)
+		callArgs[argumentIndex] = &buffer;
 	// libffi stores an `ffi_arg` word for a scalar result narrower than a word,
 	// so give it word-sized scratch and narrow into the frame slot ourselves.
 	ffi_arg word = 0;
 	ffi_call(&entry->shape.callCif, FFI_FN(target->fnPtr),
 			entry->shape.single ? static_cast<void*>(&word) : nullptr,
-			callArgs.data());
+			callArgs);
 	if (entry->shape.single)
 		std::memcpy(static_cast<std::uint8_t*>(frame) + entry->shape.resultOffset,
 				&word, entry->shape.resultType->size);
@@ -1528,8 +1557,12 @@ std::mutex& stagedMutex()
 	return mutex;
 }
 
-//! Returns the staged-import entry for @p type, or null when the signature has a
-//! `v128` (outside the uniform slot model).
+//! Returns the staged-import entry for @p type, creating it on first use.
+//!
+//! Every signature is expressible: a `v128` parameter becomes the canonical two
+//! `uint64_t` entries and a `v128` result is spooled through the trailing result
+//! buffer, so the adapter no longer refuses a vector at all
+//! (docs/API_ABI_STABILITY.md `GAP-11`).
 void* stagedImportEntry(const WASM::FuncType& type)
 {
 	StagedShape shape;
@@ -1538,16 +1571,23 @@ void* stagedImportEntry(const WASM::FuncType& type)
 	std::string key;
 	for (const WASM::StorageType& parameter : type.params) {
 		const WASM::ValueKind kind = WASM::valueKindOf(parameter.val.opcode);
+		shape.paramKinds.push_back(kind);
+		key.push_back(static_cast<char>(static_cast<unsigned>(kind)));
+		if (kind == WASM::ValueKind::V128) {
+			shape.argTypes.push_back(&ffi_type_uint64);
+			shape.argTypes.push_back(&ffi_type_uint64);
+			continue;
+		}
 		ffi_type* ffiType = stagedFfiType(kind);
 		if (ffiType == nullptr)
 			return nullptr;
-		shape.paramKinds.push_back(kind);
 		shape.argTypes.push_back(ffiType);
-		key.push_back(static_cast<char>(static_cast<unsigned>(kind)));
 	}
-	shape.single = type.results.size() == 1;
-	shape.multi = type.results.size() > 1;
-	if (shape.multi)
+	const bool vectorResult = type.results.size() == 1
+			&& WASM::valueKindOf(type.results.front().val.opcode) == WASM::ValueKind::V128;
+	shape.single = type.results.size() == 1 && !vectorResult;
+	shape.buffered = type.results.size() > 1 || vectorResult;
+	if (shape.buffered)
 		shape.argTypes.push_back(&ffi_type_pointer); // result buffer
 	if (shape.single) {
 		shape.resultType = stagedFfiType(
@@ -1599,13 +1639,14 @@ void* stagedImportEntry(const WASM::FuncType& type)
 OpcodeDispatcher::OpcodeDispatcher(const WASM::Module& module, const WASM::FuncType& funcType,
 		const WASM::FunctionBody& body, std::uint32_t functionIndex, bool frameCallAbi,
 		const std::vector<WASM::TagId>& tagIds, WASM::ModuleInstanceInternals& internals,
-		WASM::ProfileConfig profileConfig)
+		std::span<const std::uint8_t> frameByType, WASM::ProfileConfig profileConfig)
 	: module_(module)
 	, funcType_(funcType)
 	, body_(body)
 	, tagIds_(tagIds)
 	, functionIndex_(functionIndex)
 	, internals_(internals)
+	, frameByType_(frameByType)
 	, frameAbi_(frameCallAbi)
 	, deterministicFloats_(profileConfig.deterministic())
 {
@@ -1760,7 +1801,7 @@ bool OpcodeDispatcher::beginFunction()
 	// Cross-function trampolines are register-form only: the driver's host
 	// signature is the function signature, and the frame ABI needs a frame
 	// pointer that TailCallState does not carry.
-	tailTrampoline_ = WASM::tailCallTrampolinesEligible(module_, frameAbi_);
+	tailTrampoline_ = WASM::tailCallTrampolinesEligible(module_, frameByType_);
 	compiler_ = sljit_create_compiler(nullptr);
 	if (compiler_ == nullptr) {
 		unsupportedReason_ = "SLJIT could not create a compiler";
@@ -1771,11 +1812,24 @@ bool OpcodeDispatcher::beginFunction()
 	// callee's arguments and results there; register-form calls use the first
 	// two slots as the out-buffer for a v128 result.
 	const std::size_t frameSlots = localSlots_ + kReservedSlots + maxStackDepth_
-			+ kRegisterCallOutSlots
-			+ (needsStagingCall_ ? kStagingCallSlots : 0)
+			+ callAreaSlots()
 			+ (needsContinuationFrame_ ? kContinuationFrameSlots : 0);
-	if (frameSlots > SLJIT_MAX_LOCAL_SIZE / kSlotBytes) {
-		unsupportedReason_ = "the function frame exceeds SLJIT's local-area limit";
+	// The frame is allocated by `sljit_emit_enter` before `wasm_stack_check`
+	// runs, so it must stay below the guard's reserve or a single `sub rsp`
+	// could step over the guard page. `kMaxFunctionLocalBytes` is the core's
+	// existing bound for exactly that reason; SLJIT's own 1 MiB local-area
+	// limit is the second. The message carries all three numbers.
+	const std::size_t frameBytes = frameSlots * kSlotBytes;
+	const std::size_t frameLimit = std::min<std::size_t>(
+			static_cast<std::size_t>(WASM::kMaxFunctionLocalBytes),
+			static_cast<std::size_t>(SLJIT_MAX_LOCAL_SIZE));
+	if (frameBytes > frameLimit) {
+		unsupportedReason_ = "the function frame needs "
+			+ std::to_string(frameBytes) + " bytes but the frame limit is "
+			+ std::to_string(frameLimit) + " bytes (kMaxFunctionLocalBytes="
+			+ std::to_string(WASM::kMaxFunctionLocalBytes) + ", SLJIT_MAX_LOCAL_SIZE="
+			+ std::to_string(SLJIT_MAX_LOCAL_SIZE) + ", stack reserve="
+			+ std::to_string(WASM::kDefaultStackReserveBytes) + ")";
 		return false;
 	}
 
@@ -1876,7 +1930,8 @@ bool OpcodeDispatcher::beginFunction()
 		return false;
 	}
 	emit(sljit_emit_enter(compiler_, 0, argTypes,
-			4 | SLJIT_ENTER_FLOAT(static_cast<sljit_s32>(floatScratch)),
+			4 | SLJIT_ENTER_FLOAT(static_cast<sljit_s32>(floatScratch))
+					| SLJIT_ENTER_VECTOR(2), // `SIMD-8` scratch: SLJIT_VR0/VR1
 			savedCount, static_cast<sljit_s32>(frameSlots * kSlotBytes)));
 	if (!ok_) {
 		// A failed prologue leaves SLJIT in its error state; emitting more would
@@ -2278,10 +2333,9 @@ sljit_sw OpcodeDispatcher::frameSlotOffset() const
 void OpcodeDispatcher::continuationFrameAddress(int reg)
 {
 	needsContinuationFrame_ = true;
-	const std::size_t staging = needsStagingCall_ ? kStagingCallSlots
-			: kRegisterCallOutSlots;
 	const sljit_sw offset = static_cast<sljit_sw>(
-			(localSlots_ + kReservedSlots + maxStackDepth_ + staging) * kSlotBytes);
+			(localSlots_ + kReservedSlots + maxStackDepth_ + callAreaSlots())
+			* kSlotBytes);
 	emit(sljit_get_local_base(compiler_, reg, 0, offset));
 }
 
@@ -2307,6 +2361,48 @@ sljit_sw OpcodeDispatcher::callFrameOffset() const
 	// built without disturbing any live operand.
 	return static_cast<sljit_sw>(
 			(localSlots_ + kReservedSlots + maxStackDepth_) * kSlotBytes);
+}
+
+void OpcodeDispatcher::noteStagingFrame(std::size_t bytes)
+{
+	needsStagingCall_ = true;
+	if (measureOnly_) {
+		if (bytes > maxStagingCallBytes_)
+			maxStagingCallBytes_ = bytes;
+		return;
+	}
+	// The frame was fixed from the measurement pass. A larger request here means
+	// the two passes disagree, which would write past the call area; fail the
+	// compile rather than let it corrupt the frame.
+	if (bytes > maxStagingCallBytes_) {
+		unsupportedReason_ = "the SLJIT staging frame grew after the measurement pass ("
+			+ std::to_string(bytes) + " bytes requested while emitting, "
+			+ std::to_string(maxStagingCallBytes_) + " bytes measured)";
+		ok_ = false;
+	}
+}
+
+void OpcodeDispatcher::noteCallStaging(const WASM::FuncType& type)
+{
+	std::vector<WASM::ValueKind> kinds;
+	kinds.reserve(type.params.size());
+	for (const WASM::StorageType& parameter : type.params)
+		kinds.push_back(WASM::valueKindOf(parameter.val.opcode));
+	std::size_t bytes = WASM::frameArgumentsBytes(kinds);
+	kinds.clear();
+	for (const WASM::StorageType& result : type.results)
+		kinds.push_back(WASM::valueKindOf(result.val.opcode));
+	bytes += WASM::frameResultsBytes(kinds);
+	noteStagingFrame(bytes);
+}
+
+std::size_t OpcodeDispatcher::callAreaSlots() const
+{
+	if (!needsStagingCall_)
+		return kRegisterCallOutSlots;
+	const std::size_t staging =
+			(maxStagingCallBytes_ + kSlotBytes - 1) / kSlotBytes;
+	return kRegisterCallOutSlots + staging;
 }
 
 sljit_sw OpcodeDispatcher::exceptionPtrSlotOffset() const
@@ -3488,16 +3584,21 @@ void OpcodeDispatcher::dispatchThrowRef()
 	markUnreachable();
 }
 
-void* OpcodeDispatcher::stagedImportFor(const WASM::FuncType& type)
+bool OpcodeDispatcher::calleeUsesFrameForm(std::uint32_t typeIndex) const
+{
+	return typeIndex < frameByType_.size() && frameByType_[typeIndex] != 0;
+}
+
+void* OpcodeDispatcher::stagedImportFor(std::uint32_t typeIndex, const WASM::FuncType& type)
 {
 	// A module without native imports can never need the adapter, so it pays
 	// neither the closure nor the run-time branch on `Callable::context`.
 	if (!moduleHasNativeImports_)
 		return nullptr;
-	// Otherwise the adapter is needed whenever the register form cannot express
-	// the signature, or when the module is frame-form (where any callee may be a
-	// native import).
-	if (!frameAbi_ && type.params.size() <= kMaxWasmParameters)
+	// Otherwise the adapter is needed whenever the callee type's form is the
+	// frame, or the register form cannot express the signature: a native import
+	// is a host C function, so its arguments are staged from the frame.
+	if (!calleeUsesFrameForm(typeIndex) && type.params.size() <= kMaxWasmParameters)
 		return nullptr;
 	return stagedImportEntry(type);
 }
@@ -3539,11 +3640,25 @@ void OpcodeDispatcher::emitResolvedCall(const WASM::FuncType& type, int callable
 		for (const WASM::StorageType& parameter : type.params)
 			argumentKinds.push_back(WASM::valueKindOf(parameter.val.opcode));
 		const std::uint32_t argumentBytes = WASM::frameArgumentsBytes(argumentKinds);
-		const int resultWidth = type.results.empty() ? 0 : widthOf(type.results.front().val);
-		const std::uint32_t resultBytes = resultWidth == 0 ? 0u
-				: WASM::frameValueBytes(WASM::valueKindOf(type.results.front().val.opcode));
-		if (argumentBytes + resultBytes > kStagingCallBytes) {
-			onUnhandledOpcode("a frame-form call whose frame exceeds the staging scratch");
+		std::vector<WASM::ValueKind> resultKinds;
+		resultKinds.reserve(type.results.size());
+		for (const WASM::StorageType& result : type.results)
+			resultKinds.push_back(WASM::valueKindOf(result.val.opcode));
+		// The frame block holds *every* result, so the capacity must too. The
+		// previous check counted only the first result.
+		const std::uint32_t resultBytes = WASM::frameResultsBytes(resultKinds);
+		const std::size_t needed = std::size_t(argumentBytes) + resultBytes;
+		const std::size_t capacity = callAreaSlots() * kSlotBytes;
+		// Sized from the measurement pass, so this is an invariant assertion. It
+		// keeps the byte counts in the message: a bare "exceeds" tells the next
+		// reader nothing (docs/FRESHNESS.md).
+		if (needed > capacity) {
+			const std::string message =
+				"a frame-form call whose frame exceeds the staging scratch ("
+				+ std::to_string(needed) + " bytes needed, "
+				+ std::to_string(capacity) + " available; SLJIT's local-area limit is "
+				+ std::to_string(SLJIT_MAX_LOCAL_SIZE) + " bytes)";
+			onUnhandledOpcode(message.c_str());
 			return;
 		}
 
@@ -3745,17 +3860,16 @@ void OpcodeDispatcher::emitCall(WASM::FuncIdx index, bool isTail)
 	// A native import carries no context and is a host C function: register form.
 	const bool calleeFrameForm = index < importedCount
 			? WASM::callableUsesFrameForm(internals_.importStorage[index])
-			: frameAbi_;
-	if (calleeFrameForm)
-		needsStagingCall_ = true;
+			: calleeUsesFrameForm(typeIndex);
 	// A signature wider than the register form travels through the staging frame:
 	// a Wasm callee is frame-form, and a native import is reached through the
-	// staged adapter (`stagedImportFor`). Only a shape the adapter cannot carry --
-	// a `v128` in a wide signature -- is refused.
+	// staged adapter (`stagedImportFor`), which now carries a `v128` as its
+	// canonical two-word spelling. A shape the adapter cannot build at all (a
+	// libffi prep failure) is the only refusal left.
 	const bool wideCall = calledType.params.size() > kMaxWasmParameters;
-	void* const stagedImport = stagedImportFor(calledType);
-	if (wideCall || stagedImport != nullptr)
-		needsStagingCall_ = true;
+	void* const stagedImport = stagedImportFor(typeIndex, calledType);
+	if (calleeFrameForm || wideCall || stagedImport != nullptr)
+		noteCallStaging(calledType);
 	require(!(wideCall && stagedImport == nullptr && moduleHasNativeImports_),
 			"the SLJIT backend cannot pass a v128 in a signature with more than three "
 			"parameters when the module also imports a native function");
@@ -3814,20 +3928,19 @@ void OpcodeDispatcher::emitCallIndirect(WASM::TypeIdx typeIndex, WASM::TableIdx 
 			: (module_.tables[tableIndex - module_.importTables.size()].limits.flags & 0x04) != 0;
 	const int selectorWidth = table64 ? 8 : 4;
 	const WASM::FuncType calledType = module_.funcTypeAt(typeIndex);
-	if (frameAbi_)
-		needsStagingCall_ = true;
 	// A signature wider than the register form travels through the staging frame:
 	// a Wasm callee is frame-form, and a native import is reached through the
-	// staged adapter (`stagedImportFor`). Only a shape the adapter cannot carry --
-	// a `v128` in a wide signature -- is refused.
+	// staged adapter (`stagedImportFor`), which now carries a `v128` as its
+	// canonical two-word spelling. A shape the adapter cannot build at all (a
+	// libffi prep failure) is the only refusal left.
 	const bool wideCall = calledType.params.size() > kMaxWasmParameters;
-	void* const stagedImport = stagedImportFor(calledType);
-	if (wideCall || stagedImport != nullptr)
-		needsStagingCall_ = true;
+	void* const stagedImport = stagedImportFor(typeIndex, calledType);
+	if (calleeUsesFrameForm(typeIndex) || wideCall || stagedImport != nullptr)
+		noteCallStaging(calledType);
 	require(!(wideCall && stagedImport == nullptr && moduleHasNativeImports_),
 			"the SLJIT backend cannot pass a v128 in a signature with more than three "
 			"parameters when the module also imports a native function");
-	require(frameAbi_ || calledType.results.size() <= 1,
+	require(calleeUsesFrameForm(typeIndex) || calledType.results.size() <= 1,
 			"the SLJIT register form cannot call a multi-result function");
 	for (const WASM::StorageType& parameter : calledType.params)
 		require(widthOf(parameter.val) != 0, "the SLJIT backend only calls i32/i64 signatures");
@@ -3858,7 +3971,7 @@ void OpcodeDispatcher::emitCallIndirect(WASM::TypeIdx typeIndex, WASM::TableIdx 
 			ok_ = false;
 		else if (resolved != nullptr)
 			sljit_set_label(resolved, continueLabel);
-		emitResolvedCall(calledType, SLJIT_R0, stagedImport, frameAbi_);
+		emitResolvedCall(calledType, SLJIT_R0, stagedImport, calleeUsesFrameForm(typeIndex));
 	}
 
 	resizeStack(stackWidths_.size() - calledType.params.size());
@@ -3894,7 +4007,10 @@ void OpcodeDispatcher::dispatchReturnCall(WASM::FuncIdx arg)
 				? module_.importFunctions[arg].typeIdx
 				: module_.internalFunctionTypeIndices[arg - importedCount];
 		const WASM::FuncType calleeType = module_.funcTypeAt(typeIndex);
-		const bool supported = frameAbi_
+		const bool calleeFrameForm = arg < importedCount
+				? WASM::callableUsesFrameForm(internals_.importStorage[arg])
+				: calleeUsesFrameForm(typeIndex);
+		const bool supported = calleeFrameForm
 				? WASM::tailCallFrameSupported(calleeType)
 				: WASM::tailCallSlotsSupported(calleeType);
 		if (tailTrampoline_ && supported) {
@@ -4042,7 +4158,9 @@ void OpcodeDispatcher::emitTailCallIndirectState(WASM::TypeIdx typeIndex, WASM::
 			: (module_.tables[tableIndex - module_.importTables.size()].limits.flags & 0x04) != 0;
 	const int selectorWidth = table64 ? 8 : 4;
 	const WASM::FuncType calledType = module_.funcTypeAt(typeIndex);
-	require(frameAbi_ || calledType.results.size() <= 1,
+	if (calleeUsesFrameForm(typeIndex))
+		noteCallStaging(calledType);
+	require(calleeUsesFrameForm(typeIndex) || calledType.results.size() <= 1,
 			"the SLJIT register form cannot tail-call a multi-result function");
 	for (const WASM::StorageType& parameter : calledType.params)
 		require(widthOf(parameter.val) != 0, "the SLJIT backend only calls i32/i64 signatures");
@@ -4114,7 +4232,7 @@ void OpcodeDispatcher::emitTailCallIndirectState(WASM::TypeIdx typeIndex, WASM::
 		ok_ = false;
 	else if (fallback != nullptr)
 		sljit_set_label(fallback, fallbackLabel);
-	emitResolvedCall(calledType, SLJIT_R0, nullptr, frameAbi_);
+	emitResolvedCall(calledType, SLJIT_R0, nullptr, calleeUsesFrameForm(typeIndex));
 	// The semantic fallback must model the call's result before returning it:
 	// `emitResolvedCall` performs the call but does not update the compile-time
 	// operand stack. Without these pushes `emitReturnValue` sees an empty stack.
@@ -4189,12 +4307,14 @@ void OpcodeDispatcher::dispatchCallRef(WASM::TypeIdx typeIndex)
 	require(static_cast<std::uint32_t>(typeIndex) < module_.typeCount(),
 			"the call_ref type index is out of range");
 	const WASM::FuncType calledType = module_.funcTypeAt(typeIndex);
-	require(frameAbi_ || calledType.results.size() <= 1,
+	if (calleeUsesFrameForm(typeIndex))
+		noteCallStaging(calledType);
+	require(calleeUsesFrameForm(typeIndex) || calledType.results.size() <= 1,
 			"the SLJIT register form cannot call a multi-result function");
-	if (!frameAbi_)
+	if (!calleeUsesFrameForm(typeIndex))
 		require(calledType.params.size() <= kMaxWasmParameters,
 				"the SLJIT backend cannot call a reference-typed function with more than three parameters");
-	void* const stagedImport = stagedImportFor(calledType);
+	void* const stagedImport = stagedImportFor(typeIndex, calledType);
 	for (const WASM::StorageType& parameter : calledType.params)
 		require(widthOf(parameter.val) != 0, "the SLJIT backend only calls i32/i64 signatures");
 	for (const WASM::StorageType& result : calledType.results)
@@ -4205,7 +4325,7 @@ void OpcodeDispatcher::dispatchCallRef(WASM::TypeIdx typeIndex)
 	if (!measureOnly_) {
 		loadSlot(SLJIT_R0, callableDepth, 8);
 		emitNullRefCheck(SLJIT_R0);
-		emitResolvedCall(calledType, SLJIT_R0, stagedImport, frameAbi_);
+		emitResolvedCall(calledType, SLJIT_R0, stagedImport, calleeUsesFrameForm(typeIndex));
 	}
 	resizeStack(stackWidths_.size() - calledType.params.size());
 	for (const WASM::StorageType& result : calledType.results)
@@ -4221,12 +4341,14 @@ void OpcodeDispatcher::dispatchReturnCallRef(WASM::TypeIdx typeIndex)
 	require(static_cast<std::uint32_t>(typeIndex) < module_.typeCount(),
 			"the return_call_ref type index is out of range");
 	const WASM::FuncType calledType = module_.funcTypeAt(typeIndex);
-	require(frameAbi_ || calledType.results.size() <= 1,
+	require(calleeUsesFrameForm(typeIndex) || calledType.results.size() <= 1,
 			"the SLJIT register form cannot tail-call a multi-result function");
-	if (!frameAbi_)
+	if (!calleeUsesFrameForm(typeIndex))
 		require(calledType.params.size() <= kMaxWasmParameters,
 				"the SLJIT backend cannot tail-call a reference-typed function with more than three parameters");
-	void* const stagedImport = stagedImportFor(calledType);
+	if (calleeUsesFrameForm(typeIndex))
+		noteCallStaging(calledType);
+	void* const stagedImport = stagedImportFor(typeIndex, calledType);
 	for (const WASM::StorageType& parameter : calledType.params)
 		require(widthOf(parameter.val) != 0, "the SLJIT backend only calls i32/i64 signatures");
 	for (const WASM::StorageType& result : calledType.results)
@@ -4238,7 +4360,7 @@ void OpcodeDispatcher::dispatchReturnCallRef(WASM::TypeIdx typeIndex)
 	if (!measureOnly_) {
 		loadSlot(SLJIT_R0, callableDepth, 8);
 		emitNullRefCheck(SLJIT_R0);
-		const bool supported = frameAbi_
+		const bool supported = calleeUsesFrameForm(typeIndex)
 				? WASM::tailCallFrameSupported(calledType)
 				: WASM::tailCallSlotsSupported(calledType);
 		if (tailTrampoline_ && supported) {
@@ -4254,7 +4376,7 @@ void OpcodeDispatcher::dispatchReturnCallRef(WASM::TypeIdx typeIndex)
 				ok_ = false;
 			else if (fallback != nullptr)
 				sljit_set_label(fallback, fallbackLabel);
-			emitResolvedCall(calledType, SLJIT_R0, stagedImport, frameAbi_);
+			emitResolvedCall(calledType, SLJIT_R0, stagedImport, calleeUsesFrameForm(typeIndex));
 			// Model the call result before returning it; see the note in
 			// emitTailCallIndirectState.
 			resizeStack(stackWidths_.size() - calledType.params.size());
@@ -4263,7 +4385,7 @@ void OpcodeDispatcher::dispatchReturnCallRef(WASM::TypeIdx typeIndex)
 			finishCallResults(calledType);
 			emitReturnValue();
 		} else {
-			emitResolvedCall(calledType, SLJIT_R0, stagedImport, frameAbi_);
+			emitResolvedCall(calledType, SLJIT_R0, stagedImport, calleeUsesFrameForm(typeIndex));
 			resizeStack(stackWidths_.size() - calledType.params.size());
 			for (const WASM::StorageType& result : calledType.results)
 				push(widthOf(result.val));
@@ -4283,7 +4405,7 @@ void OpcodeDispatcher::dispatchReturnCallIndirect(WASM::TypeIdx arg1, WASM::Tabl
 		require(static_cast<std::uint32_t>(arg1) < module_.typeCount(),
 				"the return_call_indirect type index is out of range");
 		const WASM::FuncType calledType = module_.funcTypeAt(arg1);
-		const bool supported = frameAbi_
+		const bool supported = calleeUsesFrameForm(arg1)
 				? WASM::tailCallFrameSupported(calledType)
 				: WASM::tailCallSlotsSupported(calledType);
 		if (supported) {
@@ -5219,20 +5341,77 @@ void OpcodeDispatcher::emitV128SplatInteger(sljit_sw address, int scalarWidth)
 	emitHelper(scalarWidth == 8 ? SLJIT_ARGS2V(W, P) : SLJIT_ARGS2V(32, P), address);
 }
 
-void OpcodeDispatcher::dispatchI8x16Splat() { emitV128SplatInteger(codeAddress(&wasm_i8x16_splat), 4); }
-void OpcodeDispatcher::dispatchI16x8Splat() { emitV128SplatInteger(codeAddress(&wasm_i16x8_splat), 4); }
-void OpcodeDispatcher::dispatchI64x2Splat() { emitV128SplatInteger(codeAddress(&wasm_i64x2_splat), 8); }
-void OpcodeDispatcher::dispatchI8x16ExtractLaneS(uint8_t lane) { emitV128ExtractInteger(codeAddress(&wasm_i8x16_extract_lane_s), 4, lane); }
-void OpcodeDispatcher::dispatchI8x16ExtractLaneU(uint8_t lane) { emitV128ExtractInteger(codeAddress(&wasm_i8x16_extract_lane_u), 4, lane); }
-void OpcodeDispatcher::dispatchI16x8ExtractLaneS(uint8_t lane) { emitV128ExtractInteger(codeAddress(&wasm_i16x8_extract_lane_s), 4, lane); }
-void OpcodeDispatcher::dispatchI16x8ExtractLaneU(uint8_t lane) { emitV128ExtractInteger(codeAddress(&wasm_i16x8_extract_lane_u), 4, lane); }
-void OpcodeDispatcher::dispatchI64x2ExtractLane(uint8_t lane) { emitV128ExtractInteger(codeAddress(&wasm_i64x2_extract_lane), 8, lane); }
-void OpcodeDispatcher::dispatchI8x16ReplaceLane(uint8_t lane) { emitV128ReplaceInteger(codeAddress(&wasm_i8x16_replace_lane), 4, lane); }
-void OpcodeDispatcher::dispatchI16x8ReplaceLane(uint8_t lane) { emitV128ReplaceInteger(codeAddress(&wasm_i16x8_replace_lane), 4, lane); }
-void OpcodeDispatcher::dispatchI64x2ReplaceLane(uint8_t lane) { emitV128ReplaceInteger(codeAddress(&wasm_i64x2_replace_lane), 8, lane); }
+void OpcodeDispatcher::dispatchI8x16Splat()
+{
+	if (emitV128SplatNative(1))
+		return;
+	emitV128SplatInteger(codeAddress(&wasm_i8x16_splat), 4);
+}
+void OpcodeDispatcher::dispatchI16x8Splat()
+{
+	if (emitV128SplatNative(2))
+		return;
+	emitV128SplatInteger(codeAddress(&wasm_i16x8_splat), 4);
+}
+void OpcodeDispatcher::dispatchI64x2Splat()
+{
+	if (emitV128SplatNative(8))
+		return;
+	emitV128SplatInteger(codeAddress(&wasm_i64x2_splat), 8);
+}
+void OpcodeDispatcher::dispatchI8x16ExtractLaneS(uint8_t lane)
+{
+	if (emitV128ExtractNative(1, lane, true))
+		return;
+	emitV128ExtractInteger(codeAddress(&wasm_i8x16_extract_lane_s), 4, lane);
+}
+void OpcodeDispatcher::dispatchI8x16ExtractLaneU(uint8_t lane)
+{
+	if (emitV128ExtractNative(1, lane, false))
+		return;
+	emitV128ExtractInteger(codeAddress(&wasm_i8x16_extract_lane_u), 4, lane);
+}
+void OpcodeDispatcher::dispatchI16x8ExtractLaneS(uint8_t lane)
+{
+	if (emitV128ExtractNative(2, lane, true))
+		return;
+	emitV128ExtractInteger(codeAddress(&wasm_i16x8_extract_lane_s), 4, lane);
+}
+void OpcodeDispatcher::dispatchI16x8ExtractLaneU(uint8_t lane)
+{
+	if (emitV128ExtractNative(2, lane, false))
+		return;
+	emitV128ExtractInteger(codeAddress(&wasm_i16x8_extract_lane_u), 4, lane);
+}
+void OpcodeDispatcher::dispatchI64x2ExtractLane(uint8_t lane)
+{
+	if (emitV128ExtractNative(8, lane, false))
+		return;
+	emitV128ExtractInteger(codeAddress(&wasm_i64x2_extract_lane), 8, lane);
+}
+void OpcodeDispatcher::dispatchI8x16ReplaceLane(uint8_t lane)
+{
+	if (emitV128ReplaceNative(1, lane))
+		return;
+	emitV128ReplaceInteger(codeAddress(&wasm_i8x16_replace_lane), 4, lane);
+}
+void OpcodeDispatcher::dispatchI16x8ReplaceLane(uint8_t lane)
+{
+	if (emitV128ReplaceNative(2, lane))
+		return;
+	emitV128ReplaceInteger(codeAddress(&wasm_i16x8_replace_lane), 4, lane);
+}
+void OpcodeDispatcher::dispatchI64x2ReplaceLane(uint8_t lane)
+{
+	if (emitV128ReplaceNative(8, lane))
+		return;
+	emitV128ReplaceInteger(codeAddress(&wasm_i64x2_replace_lane), 8, lane);
+}
 
 void OpcodeDispatcher::dispatchI32x4Splat()
 {
+	if (emitV128SplatNative(4))
+		return;
 	if (!reachable_)
 		return;
 	requireStack(1);
@@ -5248,6 +5427,8 @@ void OpcodeDispatcher::dispatchI32x4Splat()
 
 void OpcodeDispatcher::dispatchI32x4ExtractLane(uint8_t lane)
 {
+	if (emitV128ExtractNative(4, lane, false))
+		return;
 	if (!reachable_)
 		return;
 	requireStack(1);
@@ -5262,6 +5443,8 @@ void OpcodeDispatcher::dispatchI32x4ExtractLane(uint8_t lane)
 
 void OpcodeDispatcher::dispatchI32x4ReplaceLane(uint8_t lane)
 {
+	if (emitV128ReplaceNative(4, lane))
+		return;
 	if (!reachable_)
 		return;
 	requireStack(2);
@@ -5484,6 +5667,17 @@ void OpcodeDispatcher::emitV128Shift(sljit_sw address)
 	pop();
 }
 
+//! Whether a backend may use its own vector instructions (`SIMD-8`).
+//! `WASMJIT_SIMD_NATIVE=0` forces the portable helper path, for A/B runs.
+static bool nativeSimdEnabled()
+{
+	static const bool enabled = [] {
+		const char* value = std::getenv("WASMJIT_SIMD_NATIVE");
+		return value == nullptr || std::string_view(value) != "0";
+	}();
+	return enabled;
+}
+
 void OpcodeDispatcher::emitV128Binary(sljit_sw address)
 {
 	if (!reachable_)
@@ -5587,10 +5781,142 @@ void OpcodeDispatcher::emitV128F16Ternary(uint32_t op)
 	pop();
 }
 
-void OpcodeDispatcher::dispatchV128And() { emitV128Binary(codeAddress(&wasm_v128_and)); }
+//! `SIMD-8`: 128-bit bitwise on vector registers, helper as the fallback.
+//! The operands are addressed through `slotAddress`, and the prologue allots
+//! `SLJIT_VR0`/`SLJIT_VR1` with `SLJIT_ENTER_VECTOR(2)` -- without that the
+//! vector registers are not part of the function's register set.
+bool OpcodeDispatcher::emitV128BitwiseNative(sljit_s32 operation)
+{
+	if (!nativeSimdEnabled() || !reachable_ || measureOnly_)
+		return false;
+	const sljit_s32 type = SLJIT_SIMD_REG_128 | SLJIT_SIMD_ELEM_8;
+	if (sljit_emit_simd_mov(compiler_, type | SLJIT_SIMD_TEST, SLJIT_VR0,
+			SLJIT_MEM1(SLJIT_SP), 0) == SLJIT_ERR_UNSUPPORTED)
+		return false;
+	const std::size_t depthB = stackWidths_.size() - 1;
+	const std::size_t depthA = stackWidths_.size() - 2;
+	slotAddress(SLJIT_R0, depthA);
+	slotAddress(SLJIT_R1, depthB);
+	emit(sljit_emit_simd_mov(compiler_, type, SLJIT_VR0, SLJIT_MEM1(SLJIT_R0), 0));
+	emit(sljit_emit_simd_mov(compiler_, type, SLJIT_VR1, SLJIT_MEM1(SLJIT_R1), 0));
+	emit(sljit_emit_simd_op2(compiler_, type | operation, SLJIT_VR0, SLJIT_VR0, SLJIT_VR1, 0));
+	emit(sljit_emit_simd_mov(compiler_, type | SLJIT_SIMD_STORE, SLJIT_VR0,
+			SLJIT_MEM1(SLJIT_R0), 0));
+	return true;
+}
+
+//! `SIMD-8`: the element-size constant for a lane width. The probe in
+//! `build/probe_sljit_simd.sh` pinned the mapping: replicate is exact, and
+//! `lane_mov`'s SIGNED flag is a lane_mov option (simd_mov rejects `SLJIT_32`).
+sljit_s32 OpcodeDispatcher::simdElementType(int width)
+{
+	switch (width) {
+	case 1: return SLJIT_SIMD_ELEM_8;
+	case 2: return SLJIT_SIMD_ELEM_16;
+	case 4: return SLJIT_SIMD_ELEM_32;
+	default: return SLJIT_SIMD_ELEM_64;
+	}
+}
+
+bool OpcodeDispatcher::emitV128SplatNative(int width)
+{
+	if (!nativeSimdEnabled() || !reachable_ || measureOnly_)
+		return false;
+	const sljit_s32 moveType = SLJIT_SIMD_REG_128 | simdElementType(width);
+	if (sljit_emit_simd_replicate(compiler_, moveType | SLJIT_SIMD_TEST,
+			SLJIT_VR0, SLJIT_R0, 0) == SLJIT_ERR_UNSUPPORTED)
+		return false;
+	requireStack(1);
+	const std::size_t depth = stackWidths_.size() - 1;
+	pop();
+	push(16);
+	slotAddress(SLJIT_R0, depth);
+	loadSlot(SLJIT_R1, depth, width == 8 ? 8 : 4);
+	emit(sljit_emit_simd_replicate(compiler_, moveType, SLJIT_VR0, SLJIT_R1, 0));
+	emit(sljit_emit_simd_mov(compiler_, moveType | SLJIT_SIMD_STORE, SLJIT_VR0,
+			SLJIT_MEM1(SLJIT_R0), 0));
+	return true;
+}
+
+bool OpcodeDispatcher::emitV128ExtractNative(int width, std::uint8_t lane,
+		bool signedLane)
+{
+	if (!nativeSimdEnabled() || !reachable_ || measureOnly_)
+		return false;
+	const sljit_s32 moveType = SLJIT_SIMD_REG_128 | simdElementType(width);
+	sljit_s32 laneType = moveType;
+	if (width == 4)
+		laneType |= SLJIT_32; // a 32-bit result, upper half zeroed
+	else if (width < 4 && signedLane)
+		laneType |= SLJIT_SIMD_LANE_SIGNED;
+	if (sljit_emit_simd_lane_mov(compiler_, laneType | SLJIT_SIMD_STORE | SLJIT_SIMD_TEST,
+			SLJIT_VR0, lane, SLJIT_R0, 0) == SLJIT_ERR_UNSUPPORTED)
+		return false;
+	requireStack(1);
+	const std::size_t depth = stackWidths_.size() - 1;
+	slotAddress(SLJIT_R0, depth);
+	emit(sljit_emit_simd_mov(compiler_, moveType, SLJIT_VR0, SLJIT_MEM1(SLJIT_R0), 0));
+	emit(sljit_emit_simd_lane_mov(compiler_, laneType | SLJIT_SIMD_STORE,
+			SLJIT_VR0, lane, SLJIT_R0, 0));
+	const int resultWidth = width == 8 ? 8 : 4;
+	storeSlot(SLJIT_R0, depth, resultWidth);
+	setTopOfStack(resultWidth, false);
+	return true;
+}
+
+bool OpcodeDispatcher::emitV128ReplaceNative(int width, std::uint8_t lane)
+{
+	if (!nativeSimdEnabled() || !reachable_ || measureOnly_)
+		return false;
+	const sljit_s32 moveType = SLJIT_SIMD_REG_128 | simdElementType(width);
+	sljit_s32 laneType = moveType;
+	if (width == 4)
+		laneType |= SLJIT_32;
+	if (sljit_emit_simd_lane_mov(compiler_, laneType | SLJIT_SIMD_TEST,
+			SLJIT_VR0, lane, SLJIT_R0, 0) == SLJIT_ERR_UNSUPPORTED)
+		return false;
+	requireStack(2);
+	const std::size_t vectorDepth = stackWidths_.size() - 2;
+	const std::size_t scalarDepth = stackWidths_.size() - 1;
+	slotAddress(SLJIT_R0, vectorDepth);
+	loadSlot(SLJIT_R1, scalarDepth, width == 8 ? 8 : 4);
+	emit(sljit_emit_simd_mov(compiler_, moveType, SLJIT_VR0, SLJIT_MEM1(SLJIT_R0), 0));
+	// No SLJIT_SIMD_LANE_ZERO: the other 15 bytes must survive the merge.
+	emit(sljit_emit_simd_lane_mov(compiler_, laneType, SLJIT_VR0, lane, SLJIT_R1, 0));
+	emit(sljit_emit_simd_mov(compiler_, moveType | SLJIT_SIMD_STORE, SLJIT_VR0,
+			SLJIT_MEM1(SLJIT_R0), 0));
+	pop();
+	return true;
+}
+
+void OpcodeDispatcher::dispatchV128And()
+{
+	if (emitV128BitwiseNative(SLJIT_SIMD_OP2_AND))
+	{
+		pop();
+		return;
+	}
+	emitV128Binary(codeAddress(&wasm_v128_and));
+}
 void OpcodeDispatcher::dispatchV128AndNot() { emitV128Binary(codeAddress(&wasm_v128_andnot)); }
-void OpcodeDispatcher::dispatchV128Or() { emitV128Binary(codeAddress(&wasm_v128_or)); }
-void OpcodeDispatcher::dispatchV128Xor() { emitV128Binary(codeAddress(&wasm_v128_xor)); }
+void OpcodeDispatcher::dispatchV128Or()
+{
+	if (emitV128BitwiseNative(SLJIT_SIMD_OP2_OR))
+	{
+		pop();
+		return;
+	}
+	emitV128Binary(codeAddress(&wasm_v128_or));
+}
+void OpcodeDispatcher::dispatchV128Xor()
+{
+	if (emitV128BitwiseNative(SLJIT_SIMD_OP2_XOR))
+	{
+		pop();
+		return;
+	}
+	emitV128Binary(codeAddress(&wasm_v128_xor));
+}
 
 void OpcodeDispatcher::dispatchV128Bitselect()
 {
@@ -5972,6 +6298,26 @@ void OpcodeDispatcher::emitExternConversion(sljit_sw address)
 		loadContext(SLJIT_R0);
 		loadSlot(SLJIT_R1, depth, 8);
 		emitHelper(SLJIT_ARGS2(P, P, P), address);
+		// `extern.convert_any` of an internal reference allocates a fresh box,
+		// which starts unowned, and `any.convert_extern` can free the box it
+		// consumes -- and with it the inner reference that box held. So the
+		// result takes the stack's count *before* the operand gives its own up
+		// (docs/WRITING_A_BACKEND.md §6: the operand stack owns one count per
+		// reference it holds). The helper clobbers R0-R3, so the result waits in
+		// the scratch cell across both calls. The operand's slot already carries
+		// the reference marker, so replacing it in place keeps the stack's view.
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+				scratchSlotOffset(), SLJIT_R0, 0));
+		loadContext(SLJIT_R0);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R1, 0,
+				SLJIT_MEM1(SLJIT_SP), scratchSlotOffset()));
+		emitHelper(SLJIT_ARGS2(P, P, P), &WASM::wasm_ref_clone);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+				scratchSlotOffset(), SLJIT_R0, 0));
+		emitPendingTrapCheck();
+		emitDropStackRef(depth);
+		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0,
+				SLJIT_MEM1(SLJIT_SP), scratchSlotOffset()));
 		storeSlot(SLJIT_R0, depth, 8);
 	}
 }
@@ -7191,7 +7537,8 @@ void OpcodeDispatcher::dispatchArrayNewElem(WASM::TypeIdx arg1, uint32_t arg2)
 
 void OpcodeDispatcher::dispatchArrayInitData(WASM::TypeIdx arg1, uint32_t arg2)
 {
-	needsStagingCall_ = true;
+	// Five 32-bit descriptor words at callFrameOffset (offsets 0..16).
+	noteStagingFrame(20);
 	if (!reachable_)
 		return;
 	requireStack(4);
@@ -7230,7 +7577,8 @@ void OpcodeDispatcher::dispatchArrayInitData(WASM::TypeIdx arg1, uint32_t arg2)
 
 void OpcodeDispatcher::dispatchArrayInitElem(WASM::TypeIdx arg1, uint32_t arg2)
 {
-	needsStagingCall_ = true;
+	// Five 32-bit descriptor words at callFrameOffset (offsets 0..16).
+	noteStagingFrame(20);
 	if (!reachable_)
 		return;
 	requireStack(4);
@@ -10179,7 +10527,8 @@ void OpcodeDispatcher::requireTableIndex(WASM::TableIdx index)
 
 void OpcodeDispatcher::dispatchTableFill(WASM::TableIdx arg)
 {
-	needsStagingCall_ = true;
+	// Three 16-byte slots at callFrameOffset (offsets 0, 16 and 32).
+	noteStagingFrame(48);
 	if (!reachable_)
 		return;
 	requireTableIndex(arg);
@@ -10212,7 +10561,9 @@ void OpcodeDispatcher::dispatchTableFill(WASM::TableIdx arg)
 
 void OpcodeDispatcher::dispatchTableInit(uint32_t arg1, WASM::TableIdx arg2)
 {
-	needsStagingCall_ = true;
+	// No staging bytes are written here; the flag is kept for the call-area
+	// reservation's other users.
+	noteStagingFrame(0);
 	if (!reachable_)
 		return;
 	requireTableIndex(arg2);
@@ -11058,6 +11409,15 @@ void OpcodeDispatcher::dispatchContBind(WASM::TypeIdx from, WASM::TypeIdx to)
 			SLJIT_IMM, static_cast<sljit_sw>(from)));
 	loadContext(SLJIT_R0);
 	emitHelper(SLJIT_ARGS4(P, P, P, W, P), &WASM::wasm_cont_bind_ops);
+	// `cont.bind` consumes its continuation operand: the helper returns a new
+	// handle that shares the worker, so the source's count can only be given
+	// back once the result holds it. `wasm_ref_drop` clobbers R0-R3, so the
+	// result waits in the scratch cell across the release (the GR-10 lesson).
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
+			scratchSlotOffset(), SLJIT_R0, 0));
+	emitDropStackRef(base + bound);
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_R0, 0,
+			SLJIT_MEM1(SLJIT_SP), scratchSlotOffset()));
 	storeSlot(SLJIT_R0, base, 8);
 	emitPendingTrapCheck();
 	for (std::size_t i = 0; i < bound + 1; ++i)

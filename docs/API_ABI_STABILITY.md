@@ -2,7 +2,24 @@
 
 *The Milestone, and How Close We Are*
 
-Status: **milestone met 2026-10-29** (revision 5 — 2026-11-10). This note re-measures
+Status: **milestone met 2026-10-29** (revision 12 — 2026-11-11: `GAP-19` closed and `GAP-8` met. An
+instance now releases the continuations it created when it is destroyed, and the parked-switch wait wakes on
+cancellation, so a worker's destructor can join a parked host thread; the fifteen-case cell and the full
+822-case ASan cell are clean on all three backends. Revision 11 — 2026-11-11: the full AddressSanitizer cell finally ran to 
+completion and found `GAP-19`, a continuation-handle leak that SLJIT and AsmJIT share and LibJIT does not; it also 
+exposed that the documented exclusion `~[tail],~[compilation-policy]` selected *everything* (Catch2 comma-separates 
+filters with OR), which is what every earlier attempt was measuring. Revision 10 closed
+`GAP-16`, a caller-side call-form mismatch the helpers now refuse by name, and
+records the AsmJIT sanitizer cells, moves `GAP-15`/`GAP-16` to the closed index (§8.4) so §8.1 lists only what is open, and adds the missing `S10` row to the frozen-surface table; revision 9 added the diagnostics
+synthetic module, the one deliberate exception to the
+embedder-owned host-namespace boundary, and its enum/`stringref`/AssemblyScript
+shapes. Revision 8 closed `GAP-1` with the per-signature call form `GR-8`, the
+last design gap in the register. Revision 7 closed `GAP-2`, `GAP-3`, `GAP-10`
+and `GAP-18`, recorded the AsmJIT `[spec]` sanitizer cell, and fixed the
+shared-reference validator gap the shared-table fixture exposed. Revision 6 added §8.5, the pre-emptive impact
+analysis of the open register against the claimed guest-language set of
+[`SCOPE.md`](SCOPE.md) §7.1, and §10.1, the closure plan that follows from it).
+This note re-measures
 the suite, records the `G3` re-check performed by
 [`READINESS_AUDIT.md`](READINESS_AUDIT.md), and now owns the **central defect,
 gap and limitation register** (§8) and the **per-backend production status**
@@ -36,6 +53,7 @@ their measured status and limitations are §13 and §8.
 | §6 | What is the measured state of the tree today? |
 | §7 | How close are we, gate by gate? |
 | §8 | Which defects, gaps and limitations are open, and which are decisions or scope? |
+| §8.5 | Which of those can a real module from a claimed guest language actually reach, and what does meeting it cost? |
 | §9 | Where do we deliberately stay loose, and what keeps that safe? |
 | §10 | What is the plan that closes the remaining distance? |
 | §11 | What did the suite say on the day this was written? |
@@ -74,11 +92,12 @@ without a deliberate version bump**. For this milestone the frozen set is:
 | S7 | The backend seam: `ModuleInstantiator` (the four hooks a code generator implements) and `BackendSession` (the façade an embedder drives without a backend header) | [`WasmModuleInstance.hpp`](../WasmBase/WasmModuleInstance.hpp); [`WasmBackendSession.hpp`](../WasmBase/WasmBackendSession.hpp); [`WRITING_A_BACKEND.md`](WRITING_A_BACKEND.md) |
 | S8 | The embedder's invocation path: `WASM::callCallable` / `callCallableWithResults`, `HostBridge`, `nativeImport<&fn>()` | [`ABI.md`](ABI.md) "Embedder Guide"; [`WasmValue.hpp`](../WasmBase/WasmValue.hpp) |
 | S9 | The diagnostic record/id/schema contract (`wasmjit.diagnostic.v1`) | [`DIAGNOSTICS.md`](DIAGNOSTICS.md) §1 |
+| S10 | The backend plugin descriptor (`wasmjit_backend.h`): its layout, `abi_version` and the load-time version check (the version and its bump rule are stated below) | [`wasmjit_backend.h`](../WasmBase/wasmjit_backend.h); [`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md) §10 |
 | S11 | The optional libffi export precache: `ModuleCallCache`, `ComponentCallCache`, their entry records, and `ComponentInstanceHandle::exportedFunctionNames()` | [`WasmCallCache.hpp`](../WasmBase/WasmCallCache.hpp); [`WasmComponentInstance.hpp`](../WasmBase/WasmComponentInstance.hpp) |
 | S12 | The C ABI contract: C linkage for every compiled function, the host C ABI as the convention, portability over performance, the target matrix (`tested` vs `provisional`), and the GC object layout plus allocator call shape | [`ABI.md`](ABI.md) “The C ABI Contract” and “GC Object and Heap ABI” |
-| **B1** | **Deliberate break, 2026-11-06, branch `AbiRefactor`:** `WASM::ModuleFfiEntry` (part of `S11`) gained a `paramKinds` member, so its size and layout change. Required by the `v128` two-word decision ([`ABI.md`](ABI.md) “The C ABI Contract”): the libffi cache must know which parameters occupy **two** argument slots. `abi-check.sh` is unaffected (0 symbols removed; 149 added, all of them inline helpers from `WasmBackendAbi.hpp`), but a struct layout is not a symbol, which is why the break is recorded here. Any embedder that constructs a `ModuleFfiEntry` by aggregate initialisation without designated fields must be rebuilt. |
+| **B1** | **Deliberate break, 2026-11-06, branch `AbiRefactor`:** `WASM::ModuleFfiEntry` (part of `S11`) gained a `paramKinds` member, so its size and layout change. Required by the `v128` two-word decision ([`ABI.md`](ABI.md) “The C ABI Contract”): the libffi cache must know which parameters occupy **two** argument slots. `abi-check.sh` is unaffected (0 symbols removed; 149 added, all of them inline helpers from `WasmBackendAbi.hpp`), but a struct layout is not a symbol, which is why the break is recorded here. Any embedder that constructs a `ModuleFfiEntry` by aggregate initialisation without designated fields must be rebuilt. | [`ABI.md`](ABI.md) “The C ABI Contract”; this note §9 |
 
-Stability here means **source and ABI compatibility for those ten surfaces
+Stability here means **source and ABI compatibility for those twelve surfaces
 across one release series**, with three permitted changes: (a) additive fields
 at the end of a POD only if the size is not baked into generated code, (b) a new
 optional hook, (c) a documented deviation recorded in §9 of this note or in the
@@ -535,19 +554,7 @@ otherwise.
 
 | ID | Kind | What it is | Where it bites | Owner / detail |
 |---|---|---|---|---|
-| `GAP-1` | design gap | The call form is chosen **per module**. One wide function puts every call in that module on the frame path, so all of them pay its stores/loads and lose the register-form tail-call trampoline. The fix is a per-signature form, which changes the `frameCallAbi()` contract and ~25 call sites. | all three | [`ABI.md`](ABI.md) “Call forms” |
-| `GAP-2` | limitation | `return_call_ref` above the register-form ceiling is a semantic call + return on SLJIT, not a constant-stack tail. A frame trampoline is missing. | SLJIT | §13.4; [`backends/HISTORY.md`](backends/HISTORY.md) |
-| `GAP-3` | limitation | LibJIT frame-form tails are a frame call + frame return: correct, but not constant-stack. | LibJIT | §13.4 |
-| `GAP-4` | limitation | A reference read out of a struct field or array element is a **borrow**; dropping it does not release a count. A leak, never a wrong result. | SLJIT, AsmJIT | [`WRITING_A_BACKEND.md`](WRITING_A_BACKEND.md) §6 |
-| `GAP-5` | defect | A **reference-returning native import** is cloned on AsmJIT but the count is taken over on LibJIT and SLJIT, which over-releases if the host still holds the reference. No fixture registers one yet. | LibJIT, SLJIT | [`backends/HISTORY.md`](backends/HISTORY.md) §5 |
-| `GAP-6` | limitation | Only **x86-64 Linux / SysV AMD64** is exercised. MS x64, AAPCS64, Windows ARM64, RISC-V and MIPS are specified but *provisional*; big-endian and ILP32 are unsupported by decision. | all | [`ABI.md`](ABI.md) “The C ABI Contract” |
-| `GAP-7` | limitation | `i31ref` at the C boundary and a literal C-caller conformance test remain open. | core / host ABI | [`ABI.md`](ABI.md) “The C ABI Contract”; `P2`/`P3` in the old portability note (git history) |
-| `GAP-8` | coverage | The AddressSanitizer suite is recorded for LibJIT only; no SLJIT/AsmJIT ASan run is recorded. | SLJIT, AsmJIT | [`TESTING.md`](TESTING.md) “Required runs” |
-| `GAP-9` | coverage | The strict `WASM_SPEC_VALIDATE=1` negative sweep is recorded on SLJIT; the other two backends do not have a recorded run of the same sweep. | LibJIT, AsmJIT | [`TESTING.md`](TESTING.md) “Required runs” |
-| `GAP-10` | coverage | The atomic `table.*.rmw` forms (`xchg`, `cmpxchg`) have no fixture, because a shared reference-typed table is not constructible in the harness yet. | shared tables | [`TESTING.md`](TESTING.md) |
-| `GAP-11` | documented refusal | An **indirect** call whose signature carries a `v128` *and* more than three parameters is refused in a module that also imports a native function (the staged-import adapter has no `ffi_type` for a vector). | SLJIT, AsmJIT | §13.4 |
-| `GAP-12` | cost | SLJIT stages a native import with more than three Wasm parameters through one libffi closure **per invocation**. Structural (SLJIT’s C-call form has four argument entries), not a missing optimisation. | SLJIT | §13.4 |
-| `GAP-13` | cleanup | Trap entry-point sprawl: thirteen per-kind wrappers per backend; a global substitution across them once picked the wrong kind. Collapse to one `ReportTrap(kind)` per backend. | core / all backends | [`ABI.md`](ABI.md) “GC Object and Heap ABI”; `[gc]` |
+| `GAP-6` | limitation | Only **x86-64 Linux / SysV AMD64** is exercised. MS x64, AAPCS64, Windows ARM64, RISC-V and MIPS are specified but *provisional*; big-endian and ILP32 are unsupported by decision. **Excluded from the §10.1 closure plan by decision** — it needs a runner, not a patch. | all | [`ABI.md`](ABI.md) “The C ABI Contract” |
 
 ### 8.2 Decisions that are not defects
 
@@ -593,11 +600,274 @@ The root causes and the failing fixtures are in
 | SLJIT opt-in | SLJIT ignored `setFrameCallAbiOptIn` | 2026-11-09 | `[staging][sljit]` |
 | Reference sites | `ref.test`/`ref.is_null`/`ref.eq`, casts, packed reads, call arguments, `table.set` and traps now release/retain exactly | 2026-11-09 | `gc_ownership.wat` |
 | AsmJIT packed default | `struct.new_default` refused packed fields instead of writing them | 2026-11-09 | `[staging][abi][gc]` |
+| `GAP-4` | A reference read out of a struct field or array element was filed as a *borrow* | **closed 2026-11-11** | every listed site takes its own count; `gc_ownership.wat` asserts it — **73 assertions, all three backends green** (`field_drop`, `elem`, `select_drop`, `drop_arg`, `local_overwrite`, loop) |
+| `GAP-5` | A reference-returning native import was cloned only on AsmJIT | **closed 2026-11-11** | `native_ref_result_probe.wat` + “a native import's reference result is cloned, so the host keeps its count” — **13 assertions on each backend**; the `stringref` counterpart already existed |
+| `GAP-7` | `i31ref` at the C boundary, and no literal C caller | **closed 2026-11-11** | the boundary rule is stated in [`ABI.md`](ABI.md) “Reference and Global Representation” and pinned by `i31_boundary_probe.wat` (**26 assertions per backend**); the C caller is `Test/consumer/CanonicalCall.c`, compiled as C and run by `Test/install-check.sh` |
+| `GAP-9` | The strict `WASM_SPEC_VALIDATE=1` sweep was recorded on SLJIT only | **closed 2026-11-11** | LibJIT: **22,558 assertions / 828 cases, exit 0** (2026-11-11, before the form-guard case). AsmJIT: **22,696 / 839, exit 0** (2026-11-11, Debug) — the sweep that used to die in `GAP-16`. SLJIT: green in Debug and Release (§13.1) |
+| `GAP-11` | A wide `v128` indirect call was refused beside a native import | **closed 2026-11-11** | the staged adapter carries the canonical two `uint64_t` words and spools a vector result; `wide_v128_indirect_probe.wat` green on SLJIT **and** AsmJIT, `wide_v128_import_probe.wat` on SLJIT. **Adjacent, closed 2026-11-12:** the fixed 2 KiB staging scratch is gone; the call area is sized from the module's largest request, and the 255/256/257-parameter sweep plus `spec: call` is green on all three backends (`Test/staging-probe.sh`) |
+| `GAP-12` | One libffi closure — and one heap vector — per staged invocation | **closed 2026-11-11** | the closure was already cached per signature; the per-call allocation is gone. One `ffi_call` remains and is the documented structural cost of SLJIT's four-entry C-call form (§13.4) |
+| `GAP-13` | Trap entry-point sprawl | **closed 2026-11-11** | the tree already reports through one kind-carrying entry point per backend (`wasm_trap_report_at`, `sljitReportTrap`); the `[trapabi]` scan in `Test/LayeringTests.cpp` keeps it that way |
+| `GAP-14` | `wasm_cont_suspend_ex` used the output *capacity* as the kind count, so `AWorker::suspend` copied past a one-byte kind vector — a heap-buffer-overflow | **closed 2026-11-11** | found by the first SLJIT AddressSanitizer run; the bound is now the tag's declared result list, capped by the frame capacity |
+| `GAP-15` | `ref.test` on an extern **box** answered `0` where the spec expects `2` on SLJIT and AsmJIT (`ref_test_extern`): the conversion replaced its operand in place, so `extern.convert_any`'s unowned box was reclaimed while the table still pointed at it | **closed 2026-11-11** | both lowerings take the stack's count on the result *before* releasing the operand (LibJIT already cloned on push; it now drops the operand after the push); `Test/wasm_wat/gc_extern_box.wat` recycles the box's size class, so the defect fails before the fix in Debug **and** Release — `spec: ref_test` is green on all three |
+| `GAP-17` | A regenerated `LibJit.pro`-derived Makefile silently dropped the plugin install rule, so `install-check.sh` failed at the ES-5 step | **closed 2026-11-11** | `plugin.CONFIG += no_check_exist` in [`LibJit.pro`](../LibJit/LibJit.pro); `Test/install-check.sh` green again |
+| `GAP-2` | A wide `return_call_ref` above the register-form ceiling was a semantic call + return on SLJIT, because a frame trampoline was missing | **closed 2026-11-11** | the frame driver/thunk pair is installed for a frame-form module and the 1,000,000-link `tailcall_ref_frame_probe.wat` chain completes on SLJIT (`[staging][abi][tail][frame][ref]`); in the register form such a call is a compile-time refusal, never a silent call + return |
+| `GAP-3` | LibJIT frame-form tails were a frame call + frame return, not constant-stack | **closed 2026-11-11** | LibJIT installs the backend-neutral frame driver/thunk pair; `libjit_frame_tail_probe.wat` was raised from 100 to **1,000,000 links**, and `tailcall_ref_frame_probe.wat` is now exercised under `setFrameCallAbiOptIn(true)` — both green on the default stack |
+| `GAP-10` | Atomic `table.*.rmw` had no fixture because a shared reference-typed table looked unconstructible | **closed 2026-11-11** | `table_atomic_probe.wat` constructs `(table (shared anyref))` and `(table (shared eqref))` and asserts the value `xchg`/`cmpxchg` **displace**, with `ref.eq`, on the success and the failure path; green on all three backends. Closing it exposed a **validator** gap: sharedness was dropped from concrete shared result types and from `ref.null`/`ref.cast`, and `ref.eq` rejected `(ref null (shared eq))` — fixed in `WasmValidator` (`sharedReference`, `dispatchRefNull`, `refType`, `isEqRef`) |
+| `GAP-18` | The SLJIT AddressSanitizer run leaked 10,568 bytes in 17 continuation allocations | **closed 2026-11-11** | `cont.bind` replaced its continuation operand in place without releasing the source handle (SLJIT **and** AsmJIT; LibJIT already dropped it). SLJIT parks the result in its scratch cell before releasing the operand, AsmJIT releases through `emitRefDrop`; the `*continuation*` ASan run is LeakSanitizer-clean (255 assertions / 21 cases, exit 0) |
+| `GAP-1` | The call form was chosen **per module**: one wide function put every call in its module on the frame path, paying the frame stores/loads and losing the register-form tail trampoline | **closed 2026-11-11** | `WASM::usesFrameForm(signature, ceiling, optIn)` decides per type (`RegisterFormCeiling` in [`WasmBackendAbi.hpp`](../WasmBase/WasmBackendAbi.hpp)); the instance keeps the table (`usesFrameForm(LocalTypeIdx)`), a call site emits the callee type’s form, and the tail-call trampoline builds a per-type driver/thunk and copies the chain result across forms. `ModuleInstance::frameCallAbi()` is retained as the uniform shorthand. Acceptance: a mixed module keeps the register form for its narrow calls — the `wide_v128_indirect_probe` / `wide_v128_import_probe` fixtures now run as mixed modules on SLJIT and AsmJIT, and `[staging][abi][call]` plus the call-form fixtures stay green |
+| `GAP-16` | The long AsmJIT run ended in a `SIGSEGV` that moved with the run; it looked like the generated code reading uninitialised host state | **closed 2026-11-11** | The generated code was correct: `callCallable` (the register-form helper) was invoking a frame-form export with only the context, so the callee used the caller’s stale second-argument register as the frame pointer and wrote its result through it. `callCallable`/`callCallableWithResults`/`callCallableVector` now refuse a frame-form callable and `callCallableFrame` refuses a register-form one, by name; the continuation scalar invoker delegates frame targets to the frame invoker; the simd tests marshal per callable (`callTestI32`/`callTestI64`). The `-O0`/`-O2` observation was a proxy for the stale register’s value, not an engine dependency. The full AsmJIT Debug suite is green, and so are the sanitizer cells `GAP-16` touched |
+| `GAP-19` | A parked continuation's frames kept their handles' counts, so an abandoned fiber pinned its worker and its native stack | **closed 2026-11-11** | an instance releases the continuations it created in `~ModuleInstance` (`releaseContinuationsFor`), and the parked-switch wait now wakes on cancellation so a worker's destructor can join a parked host thread; the `stack-switching*` cell and the full 822-case ASan cell are clean on all three backends ([`proposals/CONTINUATION_ABANDONMENT.md`](proposals/CONTINUATION_ABANDONMENT.md)) |
+| `GAP-8` | The sanitizer coverage was per-cell and the full default cell had never been run clean | **closed 2026-11-11** | `~[tail]~[compilation-policy]` on all three backends: 22,639 assertions / 822 cases, exit 0, no leak report; the earlier `~[tail],~[compilation-policy]` form selected all 839 cases because Catch2 comma-separates filters with OR |
+
+### 8.5 Pre-emptive impact analysis (2026-11-11)
+
+§8.1 says what is open. It does **not** say whether an embedder would ever meet
+it. Before any row is closed, each one is measured against the guest-language set
+this project claims — [`SCOPE.md`](SCOPE.md) §7.1, ten *(language, toolchain,
+target)* rows graded by `LF-2` arms that were built and run. The question per gap
+is not "is it wrong?" but **"which real module reaches it, how often, and what
+does that module lose?"**
+
+**Snapshot (2026-11-11, `27b61c7`):** measured by re-reading the three backends
+and the core at that commit, with `GAP-6` excluded by decision (only SysV AMD64
+is exercised, so a non-SysV row has no measured production cohort at all). The
+`state in the tree` columns below are what the code does today, which is
+sometimes ahead of what §8.1 filed.
+
+**The reach scale.** *Direct* — a mainstream toolchain in §7.1 emits the
+construct without a special flag; *conditional* — it needs a named flag, source
+pattern or embedder API; *none* — no claimed toolchain can emit it, so the row is
+a coverage or cleanup item, not a production risk.
+
+**The consequence scale.** *Wrong result* and *over-release* are disqualifying;
+*leak* is unbounded growth but never a wrong answer; *refusal* is a valid module
+that will not instantiate, which is a hard production blocker but never silent;
+*cost* is throughput only; *none* is evidence or hygiene.
+
+| Gap | Reach | Guest rows that can meet it | If met | State in the tree |
+|---|---|---|---|---|
+| `GAP-1` | **direct** | every row, on SLJIT and AsmJIT | cost (whole-module frame path, register tail trampoline lost) | **closed** — per-signature form; a mixed module keeps the register form for its narrow calls |
+| `GAP-2` | conditional | Kotlin/Wasm, MoonBit, Dart (`return_call_ref`), AssemblyScript only via `wasm-opt` | no reachable failure: the frame driver/thunk pair is installed and pinned at 1,000,000 links, and the register form refuses such a call rather than lowering it silently | **closed** — `GR-7` |
+| `GAP-3` | conditional | any row, **only** under the LibJIT frame opt-in | no reachable failure: LibJIT frame tails use the shared driver and complete 1,000,000 links on the default stack | **closed** — `GR-7` |
+| `GAP-4` | **direct** | Kotlin/Wasm, MoonBit, Dart (reference fields/elements) | leak per reference read | **closed** — `gc_ownership.wat` asserts the counts |
+| `GAP-5` | conditional | an embedder host API that returns a GC reference (Kotlin/Wasm, MoonBit interop) | over-release → corruption | **closed** — GC fixture green on all three |
+| `GAP-7` | conditional | Kotlin/Wasm, MoonBit, a C host that passes `i31ref` | wrong boundary contract, undefined for a C caller | **closed** — rule stated, C caller runs |
+| `GAP-8` | none (evidence) | — | none; a green functional suite cannot see a use-after-free | SLJIT `*continuation*` cell clean since `GAP-18` closed; AsmJIT `[spec]`, `simd*` and the call seam are clean since `GAP-16` closed; the full default suite is a long-budget run |
+| `GAP-9` | none (evidence) | — | none; validator coverage only | **closed** — both runs recorded |
+| `GAP-10` | none | — (no claimed toolchain emits a shared reference table) | none today | **closed** — `table_atomic_probe.wat` asserts the displaced `xchg`/`cmpxchg` values on all three backends |
+| `GAP-11` | conditional | C/C++/Rust/Zig with `v128` parameters and an indirect call, plus any native import | **refusal** of a valid module | **closed** — two-word vector in the adapter |
+| `GAP-12` | **direct** | every row with a >3-parameter native import, on SLJIT | cost per invocation | **closed** — allocation gone; `ffi_call` structural |
+| `GAP-13` | none (hygiene) | — | none | **closed** — `[trapabi]` guard |
+| `GAP-15` | conditional | Kotlin/Wasm, MoonBit, Dart, AssemblyScript (`ref.test` on an `externref`) | **wrong answer** wherever poison-on-free or block reuse exposes a reclaimed box (`ref_test_extern` answered 0 where the spec says 2) | **closed 2026-11-11** — result retained before the operand is released, in both backends; `gc_extern_box.wat` fails before the fix in Debug *and* Release |
+| `GAP-16` | none — caller misuse of the helper | any row whose test called a frame-form export through the register-form helper | **crash** (`SIGSEGV`) from a wild frame pointer, order-dependent | **closed 2026-11-11** — the helpers refuse the form mismatch by name (`GAP-16` guard) and the harness marshals per callable (`callTestI32`/`callTestI64`); the frame-form prologue was correct all along |
+| `GAP-18` | conditional | any row using continuations (stack switching), on SLJIT | leak per abandoned handle | **closed 2026-11-11** — `cont.bind` releases its source handle; the SLJIT `*continuation*` ASan run is clean |
+| `GAP-19` | direct | Kotlin/Wasm, MoonBit and Dart emit `cont.new`/`resume`/`switch` for coroutines and effect handlers; AssemblyScript through a hand-written stack-switching module | leak — a suspended chain pins its native stack, so a long-running coroutine loop grows without bound | **closed 2026-11-11** (`CA-1`): 31,864 B in 66 allocations on AsmJIT and SLJIT, clean on LibJIT; the owner is a handle the frame-form path never releases |
+
+**`GAP-1` — the call form is chosen per module.** A backend switched the *whole*
+module to `void fn(VMContext*, void* frame)` when any **defined** function needed
+more argument slots than its register form allowed — on SLJIT and AsmJIT that is
+more than three Wasm parameters, any `v128` parameter or result, or any
+multi-result signature. One such function put every call in that module on the
+frame path.
+- **Which rows did it reach: all ten.** A C, C++, Rust, Zig, Go or TinyGo module
+  containing a single four-argument function — ordinary code, not a corner — was
+  enough; Kotlin/Wasm, MoonBit and Dart added multi-result and vector-shaped
+  signatures; AssemblyScript needed only the arity. On SLJIT and AsmJIT most
+  non-trivial production modules were therefore wholly frame-form, and every call
+  in them paid the frame stores/loads and lost the register-form tail
+  trampoline. LibJIT's default is the register form and never inferred the
+  frame, so its exposure was the opt-in alone.
+- **Effect:** throughput, never a wrong answer.
+- **Re-read 2026-11-11:** **closed.** `usesFrameForm(signature, ceiling, optIn)`
+  now decides per type, the instance records the table, and every call site
+  emits the callee type’s form. The per-type decision also reaches the
+  tail-call trampoline (a chain may cross between forms) and the call cache.
+  A mixed module keeps the register form for every narrow call, which is what
+  the updated `wide_v128_*_probe` fixtures measure. The old recommendation
+  continues below as the record of what was done: a per-signature rule built on
+  the existing `argSlotCount`/`frame*` views in
+  [`WasmBackendAbi.hpp`](../WasmBase/WasmBackendAbi.hpp), with the instance's one
+  boolean replaced by a per-type decision. Direct calls already emit the
+  *callee's* form, so a module that ends up mixed keeps working. Class B — inside
+  the three backends plus one core predicate, no contract row changes.
+
+**`GAP-2` — SLJIT lowers a wide `return_call_ref` as call + return.**
+`return_call_ref` is a WasmGC construct, so the row is reachable from
+**Kotlin/Wasm** (`T53`, which emits `call_ref`/`return_call_ref` closures),
+**MoonBit** and **Dart**; AssemblyScript only through a `wasm-opt` pass. The
+target must also be above SLJIT's register ceiling (otherwise the existing
+trampoline handles it) and the program must recurse without bounded growth — an
+interpreter loop or a state machine, not a one-shot call.
+- **Re-read 2026-11-11:** **closed.** The frame driver/thunk pair is installed
+  for a frame-form module (the form a wide signature selects), and
+  `tailcall_ref_frame_probe.wat` completes a **1,000,000-link** chain on SLJIT on
+  the default stack. A register-form module that named such a type is refused at
+  compile time instead of falling back quietly, so “correct answers on a growing
+  stack” is no longer a reachable state.
+
+**`GAP-3` — LibJIT frame tails are call + return.** Reach was *conditional on
+the embedder*: LibJIT switches to the frame ABI only under
+`setFrameCallAbiOptIn(true)` and never by inference (inference broke ten working
+modules — [`ABI.md`](ABI.md) "Selection"). Every claimed row was affected
+**only** if the embedder asked for the frame ABI, typically to unify a mixed
+graph.
+
+- **Re-read 2026-11-11:** **closed.** LibJIT installs the backend-neutral frame
+  driver/thunk pair, `libjit_frame_tail_probe.wat` runs a **1,000,000-link**
+  chain on the default stack, and `tailcall_ref_frame_probe.wat` is exercised
+  under `setFrameCallAbiOptIn(true)`. The effect the row described — a growing
+  host stack ending in `CallStackExhausted` — is gone.
+
+**`GAP-4` — a reference read from a field or element is filed as a borrow.**
+On paper this is the highest-severity row: the claimed WasmGC rows (Kotlin/Wasm,
+MoonBit, Dart) read reference fields and elements in every allocation-heavy
+function, so one unretained read leaks an object per execution — unbounded growth
+in the long-lived loop a game engine runs.
+
+- **Re-read 2026-11-11:** every listed site now takes its own count on all three
+  backends — `struct.get`, `array.get`, `global.get`, `table.get`, `select`'s
+  losing arm, `drop`, `local.get`/`set`/`tee`, and call arguments/results. The
+  row is therefore **closed in code** and open only as a fixture.
+- **Work:** extend `gc_ownership.wat` so a reference read out of a field *and*
+  out of an element is followed by `drop`, and the object's count is asserted
+  afterwards on every backend. A fixture, not a redesign. Class A.
+
+**`GAP-5` — a native import that returns a reference.** Reach is *conditional*: no
+WASI or `spectest` import returns a reference, so the row needs an embedder host
+API that hands a GC object into Wasm — the shape Kotlin/Wasm and MoonBit interop
+uses, or a C host that authors an `anyref` import. Effect, if met unfixed, would
+be the disqualifying one: the caller releases a count the host still owns, and the
+corruption surfaces later as a failed cast or a crash in the type walker.
+
+- **Re-read 2026-11-11:** all three backends now clone a native import's reference
+  result (AsmJIT `retainNativeCallResult`, SLJIT `emitRetainNativeCallResult`,
+  LibJIT's `resolveCallReferences`), so the defect is **closed in code**; the row
+  is open only because no fixture registers such an import.
+- **Work:** one fixture — a native import returning a reference, registered in the
+  harness, with the host's own count asserted after the call. Class A.
+
+**`GAP-7` — `i31ref` at the C boundary, and no literal C caller.** An `i31` is an
+*unboxed immediate* whose low bit is set: a legal opaque token for an engine that
+never dereferences it, but not a pointer a C caller may dereference or hand to
+foreign code. Reach is conditional — an export or import whose signature mentions
+`i31ref`; the claimed WasmGC rows keep `i31` internal, so in practice the party
+that meets this is a **C host** that authors such a signature. The second half of
+the row is evidence, not risk: the canonical signature is claimed for every value
+kind but is exercised from C++ only.
+
+- **Effect:** a boundary contract that is under-specified for one value kind, plus
+  an unproven half of `D-ABI-1`/`D-ABI-6`.
+- **Work:** state and enforce the boundary value (an opaque token that must be
+  round-tripped unchanged, or a boxed object on the way out — the
+  `extern.convert_any` box already exists), and add one **C** translation unit that
+  declares the canonical signatures and calls an `i32`, an `f64`, a multi-result
+  and a `v128` export. Class A.
+
+
+
+
+**`GAP-8` / `GAP-9` — the two coverage runs.** Reach *none*: they are evidence, not
+behaviour. Their value is asymmetric — a functional suite cannot see a
+use-after-free that a green run hides, so an ASan pass over SLJIT/AsmJIT exercises
+the GC paths that free memory, and a strict `WASM_SPEC_VALIDATE=1` sweep over
+LibJIT/AsmJIT exercises a decoder that may be permissive on a backend nobody
+swept. Both are runs to record, not code to write.
+
+**`GAP-10` — atomic `table.*.rmw` has no fixture.** Reach *none*: a shared
+reference-typed table needs shared-everything-threads, which no claimed toolchain
+emits (AssemblyScript's thread support shares linear memory, not tables), so it
+was a coverage item, never a production risk.
+
+- **Re-read 2026-11-11:** **closed.** `table_atomic_probe.wat` constructs a
+  shared anyref table and a shared eqref table and asserts the displaced value of
+  `xchg`/`cmpxchg` on the success and failure paths; the fixture also exposed and
+  fixed a validator gap in shared reference subtyping.
+
+**`GAP-11` — a wide `v128` indirect call is refused in a module with a native
+import.** This is the row with the worst production consequence short of
+corruption: **refusal**. SLJIT and AsmJIT stage a native import through a libffi
+closure whose type table has no entry for a 16-byte vector, so a module that both
+imports a host function *and* performs an indirect call to a signature carrying a
+`v128` and more than three parameters is refused at instantiation.
+
+- **Which rows: C, C++, Rust and Zig** — SIMD code with vector parameters behind a
+  function pointer (an image codec, a physics or audio kernel table) plus any WASI
+  or `env` import. That is a plausible game-engine module, and it does not load.
+- **Work:** give the staged closure's cif the **canonical C spelling** of a `v128`
+  — two `uint64_t` argument entries, low word first
+  ([`ABI.md`](ABI.md) "The C ABI Contract") — and carry a vector result through
+  the existing result buffer. No seam change, no new contract row. Class B.
+
+**`GAP-12` — SLJIT stages a wide native import through libffi per invocation.**
+Reach *direct*: any SLJIT module with an import of more than three parameters —
+`fd_read`-shaped WASI calls and most embedder host APIs — pays a libffi dispatch
+per call. Re-read: the closure is already cached per signature for the process
+lifetime, so the remaining cost is one `ffi_call` **plus one heap `std::vector`
+per invocation**. The allocation is removable; the dispatch is structural
+(SLJIT's C-call form has four argument entries).
+
+- **Effect:** throughput on the import path, which for a WASI-heavy Go or TinyGo
+  module is the hot path.
+- **Work:** replace the per-call vector with fixed-size caller storage; keep the
+  `ffi_call` and keep saying so. Class B.
+
+**`GAP-13` — trap entry-point sprawl.** Reach *none*, and the row is **stale**:
+generated code reports through one entry point that takes the kind —
+`wasm_trap_report_at(kind, …)` on LibJIT and AsmJIT, `sljitReportTrap(kind)` on
+SLJIT — so the thirteen per-kind wrappers no longer exist and the substitution
+hazard they carried is gone. Only the register and a guard remain: close the row
+on that evidence and add a source-scan assertion that the trap ABI stays a single
+kind-carrying entry point per backend, so a future author cannot reintroduce a
+wall of per-kind functions.
+
+**What the analysis changes about the order.** Severity alone would start with the
+leaks; reach and consequence together say otherwise. **`GAP-11` first** — a
+refusal of a valid module is worse for an embedder than a slow call, and the fix is
+canonical, not clever. **Then `GAP-12`** (one allocation removed on a hot path),
+**then the two fixtures** (`GAP-4`, `GAP-5`) that turn the register's two
+disqualifying-looking rows into measured ones, **then `GAP-13`'s close-out and
+guard**, **then the two evidence runs** (`GAP-8`, `GAP-9`), **then `GAP-7`**, then
+the tail-call campaigns (`GAP-2`, `GAP-3` — correctness-adjacent but rare), then
+`GAP-1` (the largest change, throughput only), and `GAP-10` last, because it has no
+production cohort at all. §10.1 is that order as milestones.
+
+**Outcome (2026-11-11, the same day).** The analysis was executed in its own order,
+and it changed the register in both directions:
+
+- **`GAP-11` and `GAP-12` are closed in code** — the staged adapter carries the
+  canonical two-word `v128` and no longer allocates per invocation (`GR-1`,
+  `GR-2`).
+- **`GAP-4`, `GAP-5` and `GAP-7` are closed as measured claims** — the
+  ownership counts, the GC-typed native-import result and the `i31` boundary rule
+  each have a fixture, and the canonical signature now has a literal **C** caller
+  (`GR-3`, `GR-6`).
+- **`GAP-13` is closed with a guard** (`GR-4`), and **`GAP-9` is closed as an
+  evidence row** because both strict sweeps are recorded (`GR-5`).
+- **The runs found three defects that no functional pass could see**, which is the
+  reason `GAP-8`/`GAP-9` existed: a **heap-buffer-overflow** in
+  `wasm_cont_suspend_ex`'s kind bookkeeping (`GAP-14`, fixed), a **wrong answer**
+  in the `ref_test` spec script on SLJIT/AsmJIT (`GAP-15`, **closed** with a
+  configuration-independent fixture), and a **`SIGSEGV`** in the long AsmJIT run
+  (`GAP-16`, **closed**): the frame-form prologue was correct, but the crashing
+  caller had passed a frame-form export to the register-form helper, so the
+  callee wrote its result through the caller's stale second-argument register.
+  The helpers now refuse that mismatch by name. The SLJIT AddressSanitizer run added a **continuation leak**
+  that LibJIT did not have (`GAP-18`, **closed** in `GR-12`). The Release
+  configuration is green for all three backends, and so is the Debug one now
+  that the `GAP-16` caller bug is fixed.
+- **`GAP-2`, `GAP-3` and `GAP-10` were closed next** (`GR-7`, `GR-9`): both
+  backends' frame-form tail chains run **1,000,000 links** on the default stack,
+  and the shared-table RMW fixture asserts the values `xchg`/`cmpxchg`
+  displace. Closing the fixture also fixed a shared-reference validator gap.
+- **`GAP-1` is closed last** (`GR-8`): the per-signature call form. It changes
+  the `frameCallAbi()` contract as the milestone decision it was, and its
+  consequence was only ever cost; `ModuleInstance::frameCallAbi()` now reports
+  the uniform case and `usesFrameForm`/`callableUsesFrameForm` answer per
+  signature.
 
 ## 9. Where we deliberately stay loose
-## 9. Where we deliberately stay loose
 
-The milestone freezes ten surfaces (§2.2); it does not freeze behaviour choices.
+
 These deviations are what make the frozen set small enough to keep.
 
 | # | Deviation | Why it is safe | What it buys |
@@ -644,6 +914,29 @@ Ordering note: AAS-1 and AAS-2 are independent and can run in parallel; AAS-3
 wants AAS-2's work order; AAS-6 can happen at any point (it is a fast-forward
 today and stays one as long as nothing lands on `master`), and doing it early is
 the cheapest way to stop the branch from drifting.
+
+### 10.1 Closing the §8.1 register
+
+The order is the one §8.5 argues for: reach and consequence first, severity of
+the label second. Each milestone names its acceptance evidence, so "closed" means
+a run, not an opinion. `GR-` rows change code or record a run; none of them is a
+milestone decision, and none changes a §2.2 surface.
+
+| Milestone | Work | Closes | Done when |
+|---|---|---|---|
+| **GR-1 — Wide `v128` through the staged adapter** ✅ | The staged closure takes the canonical `v128` spelling (two `uint64_t` arguments) and spools a vector result through the result buffer. **Done 2026-11-11.** | `GAP-11` ✅ | `wide_v128_indirect_probe.wat` green on SLJIT **and** AsmJIT; `wide_v128_import_probe.wat` green on SLJIT |
+| **GR-2 — No allocation per staged call** ✅ | Fixed-size caller storage replaced the per-invocation `std::vector`. **Done 2026-11-11.** | `GAP-12` ✅ | the staged path allocates nothing per call below 24 ffi cells; the one remaining `ffi_call` is recorded as structural in §13.4 |
+| **GR-3 — Reference-ownership fixtures** ✅ | The field/element/`select`/`drop` rows were already in `gc_ownership.wat`; the missing GC-typed native-import result is `native_ref_result_probe.wat`. **Done 2026-11-11.** | `GAP-4` ✅, `GAP-5` ✅ | 73 assertions per backend on the ownership fixture, 13 on the native-result fixture |
+| **GR-4 — One trap entry point, guarded** ✅ | Closed on the existing single kind-carrying entry point per backend; the `[trapabi]` scan pins the four-entry list. **Done 2026-11-11.** | `GAP-13` ✅ | the scan fails if a per-kind wrapper reappears |
+| **GR-5 — The two coverage runs** ✅ | LibJIT and AsmJIT strict sweeps recorded; the sanitizer cells are recorded too — SLJIT clean since `GAP-18` closed, AsmJIT's `[spec]` cell clean (514 / 257, exit 0). The cells that used to die are clean after `GAP-16` closed — `simd*` 6,152 / 24, the call seam 364 / 32 and `[spec]` 514 / 257; the full default cell (822 cases) now runs to completion and reports `GAP-19`, a continuation leak the `_ops` path shares with SLJIT. **Done 2026-11-11.** | `GAP-9` ✅, `GAP-8` ◐ | [`TESTING.md`](TESTING.md) "Required runs" carries a measured row per backend; the full AsmJIT suite is launched with a wall-clock budget and its outcome recorded |
+| **GR-6 — `i31ref` at the boundary, and a C caller** ✅ | The token rule is stated in [`ABI.md`](ABI.md) and pinned by `i31_boundary_probe.wat`; `Test/consumer/CanonicalCall.c` is compiled **as C** by `Test/install-check.sh` and calls an `f64` and a two-result entry through `Callable::fnPtr`. **Done 2026-11-11.** | `GAP-7` ✅ | `install-check.sh` green end to end, including the C caller; 26 assertions per backend for the token |
+| **GR-7 — Constant-stack frame tails** ✅ | SLJIT's wide `return_call_ref` already reached the frame driver/thunk pair; LibJIT now installs the same pair for the frame form instead of its own register-form machinery. **Done 2026-11-11.** | `GAP-2` ✅, `GAP-3` ✅ | a **1,000,000-link** frame-form chain completes on the default stack on both backends: `tailcall_ref_frame_probe.wat` on SLJIT, `libjit_frame_tail_probe.wat` (raised from 100 links) and `tailcall_ref_frame_probe.wat` under the frame opt-in on LibJIT |
+| **GR-8 — Per-signature call form** ✅ | `WASM::usesFrameForm(signature, ceiling, optIn)` decides per type; the instance stores the table (`usesFrameForm(LocalTypeIdx)`, `callableUsesFrameForm`); the three backends emit each call in the callee type's form, and the tail trampoline builds a per-type driver/thunk and copies a chain's result across forms. `ModuleInstance::frameCallAbi()` stays as the uniform shorthand. **Done 2026-11-11.** | `GAP-1` ✅ | a module with one wide function keeps the register form for every other call — the `wide_v128_indirect_probe` and `wide_v128_import_probe` fixtures now instantiate as mixed modules on SLJIT and AsmJIT; `[staging][abi][call]`, `[tail]` and the call-form fixtures are green |
+| **GR-9 — Shared-table RMW fixture** ✅ | `table_atomic_probe.wat` constructs both a shared anyref and a shared eqref table and asserts the displaced value of `set`/`get`, `xchg` and `cmpxchg` (success and failure). **Done 2026-11-11.** | `GAP-10` ✅ | green on all three backends; the fixture also exposed and closed a validator gap in shared concrete references and `ref.eq` |
+| **GR-10 — `ref.test` on an `externref`** ✅ | Take the stack's count on the conversion result **before** releasing the operand, in both the SLJIT and AsmJIT lowerings (LibJIT already retained on push; it now releases the operand afterwards), and add a fixture that recycles the box's size class so the defect is visible in every configuration | `GAP-15` ✅ | **Done 2026-11-11**: `spec: ref_test` is green on all three backends in `build/Desktop-Debug`, and `gc_extern_box` fails before the fix (12 assertions) and passes after it, in Debug *and* Release |
+| **GR-11 — The AsmJIT suite crash** ✅ | Root cause: a caller-side call-form mismatch — the simd tests handed a frame-form export to the register-form helper, so the callee used the caller’s stale second-argument register as its frame pointer. Fixed by the `GAP-16` guard in `callCallable`/`callCallableFrame`/`callCallableWithResults`/`callCallableVector`, the frame-aware continuation scalar invoker, and harness marshalling per callable. **Done 2026-11-11.** | `GAP-16` ✅ | the full AsmJIT suite exits 0 in the `-O0` library build, with and without `WASM_SPEC_VALIDATE=1`; the guard test pins the mismatch in both directions |
+| **GR-12 — The SLJIT continuation leak** ✅ | `cont.bind` replaced its operand in place without releasing the source handle — SLJIT and AsmJIT both; LibJIT already dropped it. SLJIT parks the result in the scratch cell first, AsmJIT uses `emitRefDrop`. **Done 2026-11-11.** | `GAP-18` ✅, the SLJIT half of `GAP-8` ✅ | the SLJIT ASan run of `*continuation*` is LeakSanitizer-clean (255 assertions / 21 cases, exit 0) |
+
 
 ## 11. Test survey
 
@@ -770,13 +1063,59 @@ Measured on `2cce7b9` with `--rng-seed 12345`, **one backend at a time**
 (concurrent runs share binding-schema scratch paths and are not a valid
 measurement).
 
+> **Amendment 2026-11-11 (revision 8).** `GAP-1` is closed by `GR-8`: the call
+> form is chosen per function signature, so a wide function no longer moves its
+> module’s other calls onto the frame path. That change touches the
+> `frameCallAbi()` contract, which the register said needs a milestone decision —
+> it is taken here: `frameCallAbi()` keeps its meaning as the **uniform**
+> shorthand, and `ModuleInstance::usesFrameForm(LocalTypeIdx)` /
+> `WASM::callableUsesFrameForm` answer per signature. The suite has grown since
+> (one cross-module mixed-form case at `GR-8`, four diagnostics-shape cases),
+> so the current tallies below are 22,696 assertions / 839 cases.
+>
+> **Amendment 2026-11-11 (revision 9).** The engine now ships **one** synthetic
+> module: the diagnostics guest-log facility ([`SCOPE.md`](SCOPE.md) §3.1),
+> with the C enum `log`, the WasmGC `log_str` and the AssemblyScript `log_as`
+> shapes alongside the four named aliases. `registerDiagnosticImports` remains
+> opt-in and the test harness registers it by default. This is a deliberate
+> exception to the embedder-owned synthetic-module boundary, recorded with the
+> not-taken engine-internals candidate; the suite is 22,696 assertions / 839
+> cases.
+>
+> The `[spec]` runs that `GAP-9` asked for
+> found two defects that neither the default Release suite nor LibJIT showed:
+> **`GAP-15`**, a wrong answer in `ref_test`’s `ref_test_extern` case on **SLJIT
+> and AsmJIT** — **closed** with a fixture that fails in Debug *and* Release
+> (`GR-10`) — and **`GAP-16`**, an order-dependent `SIGSEGV` in the **AsmJIT**
+> Debug suite at case 394 (`spec: table_copy`, 14,611 assertions), still open
+> (`GR-11`). The SLJIT AddressSanitizer run
+> found a **continuation leak** that LibJIT did not have (`GAP-18`), **closed** in
+> `GR-12`: the run is now LeakSanitizer-clean. The AsmJIT `[spec]` sanitizer cell
+> is recorded clean (514 assertions / 257 cases, exit 0); the full-suite cell was
+> blocked by `GAP-16` at the time — the 2026-11-11 attempt reached 8,127 assertions / 274
+> cases and then died in the same wild write (closed in revision 10). **The Release configuration is
+> green for all three backends** (22,696 assertions / 839 cases, 2026-11-11), which
+> is the configuration §13.7 measures, so the production verdict stands.
+> `GAP-16` stayed open as a latent defect at that point: the per-signature build
+> happened to mask it at two seeds (12345 and 777), which is not the same as fixing it.
+
+> **Amendment 2026-11-11 (revision 10).** `GAP-16` is closed. The long AsmJIT
+> run never had a miscompile: the simd tests invoked a frame-form export through
+> the register-form `callCallable` helper, which passes only the context, so the
+> callee used the caller’s stale second-argument register as its frame pointer
+> and wrote its result through it. The helpers now refuse a form mismatch by
+> name in both directions, the continuation scalar invoker delegates a frame
+> target to the frame invoker, and the simd tests marshal per callable. The
+> full AsmJIT Debug suite is green, and so are the AddressSanitizer cells that
+> used to die (`simd*`, the call seam, `[spec]`).
+
 ### 13.1 Verdict and measurement
 
 | Backend | Verdict | Generic suite |
 |---|---|---|
-| **LibJIT** (`LibJit/`) | Production-ready within the envelope; the reference implementation and the semantic oracle | **22,533 assertions / 824 cases, green** |
-| **SLJIT** (`Sljit/`) | Production-ready within the same envelope, with the documented refusals | **22,533 assertions / 824 cases, green** |
-| **AsmJIT** (`Asmjit/`) | Production-ready within the same envelope, with the documented refusals; needs the external AsmJit library at build time | **22,533 assertions / 824 cases, green** |
+| **LibJIT** (`LibJit/`) | Production-ready within the envelope; the reference implementation and the semantic oracle | **Debug and Release: 22,800 assertions / 839 cases, green** (2026-11-11); the full ASan cell is clean too |
+| **SLJIT** (`Sljit/`) | Production-ready within the same envelope, with the documented refusals | **Debug and Release: 22,800 assertions / 839 cases, green** (2026-11-11). ASan: the full default cell is clean (22,639 assertions / 822 cases, exit 0, no report) since `GAP-18` and `GAP-19` closed |
+| **AsmJIT** (`Asmjit/`) | Production-ready within the same envelope, with the documented refusals; needs the external AsmJit library at build time | **Debug and Release: 22,800 assertions / 839 cases, green** (2026-11-11). ASan: the full default cell is clean (22,639 assertions / 822 cases, exit 0, no report) since `GAP-16` and `GAP-19` closed |
 
 Equal assertion counts are the point: every case executes on every backend, so
 no case is skipped, refused early or cut short by a crash. The promotion gate is
@@ -786,9 +1125,9 @@ no case is skipped, refused early or cut short by a crash. The promotion gate is
 
 | Backend | Implementation | Default call form | Packaging |
 |---|---|---|---|
-| **LibJIT** | GNU LibJIT IR; no vector value type, so SIMD goes through the shared helper ABI | register form; frame form on `setFrameCallAbiOptIn(true)` | `libLibJit.so` / `libwasmjit-backend-libjit.so` |
-| **SLJIT** | vendored `extern/sljit` register machine; frame slots, W^X mapping per function | register form up to three Wasm parameters; a wider defined signature switches the module to the frame form | `libSljit.so`, no external `-lsljit` |
-| **AsmJIT** | external AsmJit assembler/compiler; register allocator; one installed allocation per module | register form until a signature needs the frame; opt-in turns the frame on everywhere | `libAsmjit.so` plus the system `-lasmjit` |
+| **LibJIT** | GNU LibJIT IR; no vector value type, so SIMD goes through the shared helper ABI | register form for every signature; the frame form is opt-in (`setFrameCallAbiOptIn(true)`), because its register form has no ceiling | `libLibJit.so` / `libwasmjit-backend-libjit.so` |
+| **SLJIT** | vendored `extern/sljit` register machine; frame slots, W^X mapping per function | per signature: four C argument entries in the register form, and any signature that exceeds them (a fourth parameter, or a `v128` result) uses the frame | `libSljit.so`, no external `-lsljit` |
+| **AsmJIT** | external AsmJit assembler/compiler; register allocator; one installed allocation per module | per signature: any `v128` parameter/result or multi-result signature uses the frame; opt-in turns the frame on everywhere | `libAsmjit.so` plus the system `-lasmjit` |
 
 All three implement the four `ModuleInstantiator` hooks, register by name, emit
 the pending-trap protocol, release code on `Runtime::unload`, and execute the
@@ -811,7 +1150,7 @@ probes”; the slice-by-slice history is in
 | continuations, stack switching | ✅ | ✅ | ✅ | `[staging][abi][cont]` |
 | atomics, shared-everything, agents | ✅ | ✅ | ✅ | `[multiagent]`, `ATOMICSOPS` |
 | fixed/relaxed SIMD, `v128` boundary | ✅ | ✅ | ✅ | `[spec]`, `simd_*.wat` |
-| tail calls: register, frame, `return_call_ref` | ✅ | ✅ (frame trampoline gap, §8) | ✅ | `TAIL*` pins |
+| tail calls: register, frame, `return_call_ref` | ✅ | ✅ | ✅ | `TAIL*` pins |
 | profiles (`N`/`T`/`V`), compilation policy | ✅ | ✅ | ✅ | `[config]`, `[compilation-policy]` |
 
 “✅” means the engine-side obligation is implemented and the generic suite
@@ -822,21 +1161,68 @@ encoding (see §8.3 and [`SCOPE.md`](SCOPE.md)).
 
 The open register is §8.1. For the backends specifically:
 
-- **SLJIT** refuses an indirect call whose signature carries a `v128` *and* more
-  than three parameters in a module that also imports a native function
-  (`GAP-11`); stages a wide native import through one libffi closure per
-  invocation (`GAP-12`); and lowers `return_call_ref` above the register-form
-  ceiling as a semantic call + return (`GAP-2`).
+- **SLJIT** carries a wide `v128` indirect call beside a native import through the
+  staged adapter (`GAP-11`, **closed**: the adapter spells the vector as the
+  canonical two `uint64_t` words and spools a vector result, pinned by
+  `wide_v128_indirect_probe.wat` and `wide_v128_import_probe.wat`); its staged
+  path keeps one libffi `ffi_call` per invocation as the documented shape of its
+  four-entry C-call form (`GAP-12`, closed); and a wide `return_call_ref` reaches
+  the frame driver/thunk pair (`GAP-2`, closed). The staging area is now sized
+  from the module's largest frame-form request instead of a fixed 2 KiB scratch:
+  a 257-parameter frame (2,056 bytes) and a 256-parameter frame with a `v128`
+  result (2,064 bytes) compile and run, and the arity sweep
+  (`Test/staging-probe.sh`) is green on all three backends. Growth is bounded
+  deliberately: the whole frame is capped at the core's **64 KiB**
+  `kMaxFunctionLocalBytes` (`WasmBase/WasmSafety.hpp`), which exists so a frame
+  cannot step over the stack guard's 512 KiB reserve before `wasm_stack_check`
+  runs; SLJIT's own **1 MiB** `SLJIT_MAX_LOCAL_SIZE` is the second bound. A module
+  beyond the cap is refused with the needed bytes, the cap, and both limits in
+  the message. No stack switch is attempted on this path.
 - **AsmJIT** shares the wide-`v128` indirect-call refusal; its register form has
-  the same ceiling and switches the module to the frame form like SLJIT.
-- **LibJIT** keeps the frame form opt-in and its frame tails are call + return,
-  not constant-stack (`GAP-3`).
-- **All three**: a reference read from a field/element is a borrow (`GAP-4`); a
-  reference-returning native import is cloned only on AsmJIT (`GAP-5`); only
-  SysV AMD64 is exercised (`GAP-6`); ASan and the strict negative sweep are
-  recorded on LibJIT/SLJIT respectively, not on all three (`GAP-8`/`GAP-9`).
-- **The one design gap** is the per-module call form (`GAP-1`); its fix is a
-  milestone because it changes the `frameCallAbi()` contract.
+  the same four-entry ceiling, and a signature above it uses the frame form —
+  per signature, like SLJIT, since `GR-8`.
+- **LibJIT** keeps the frame form opt-in; once selected, its frame tails use the
+  backend-neutral driver/thunk pair and are constant-stack (`GAP-3`, closed).
+- **All three**: a reference read from a field/element takes its own count and a
+  reference-returning native import is cloned (`GAP-4`/`GAP-5`, closed with
+  fixtures); only SysV AMD64 is exercised (`GAP-6`); the strict sweep is recorded
+  on all three (`GAP-9`, closed). ASan: LibJIT's full run is clean (2026-11-09),
+  SLJIT's `*continuation*` cell is clean since `GAP-18` closed, and AsmJIT's
+  `[spec]` cell and the cells `GAP-16` touched are clean. **The full default cell is clean on all three backends** since `GAP-19` closed (`GAP-8`, closed).
+- **The SLJIT ASan run** reports no memory error and no leak: the
+  `wasm_cont_suspend_ex` kind-count overflow it found first (`GAP-14`) and the
+  continuation-handle leak (`GAP-18`) are both fixed.
+- **The design gap is closed** — the call form is per signature since `GR-8`.
+  The change to the `frameCallAbi()` contract is the milestone decision the
+  register said it would need; embedders that read the old flag keep the
+  truthful uniform answer, and `usesFrameForm`/`callableUsesFrameForm` give the
+  per-signature one.
+- **Found by the 2026-11-11 runs** (§8.5), both now understood:
+  - `GAP-15` — `ref.test` on an extern **box** answered `0` instead of `2` on
+    SLJIT and AsmJIT (`ref_test` spec script; LibJIT passed). The conversion
+    replaced its operand in place without taking the stack's count on the result
+    and without releasing the operand, so a box created unowned was reclaimed
+    while the table still pointed at it. **Fixed in both backends** (`GR-10`),
+    with `gc_extern_box.wat` as the regression fixture: it recycles the box's
+    size class, so the same defect fails in Release too — the Debug-only reading
+    was the poison, not the bug.
+  - `GAP-16` — the AsmJIT suite ended in `SIGSEGV` at a case that moved with the
+    run, and every such case passed alone. The boundary looked like **`WasmBase`
+    `-O0` versus `-O2`**, but that was a proxy: the frame-form callee was reading
+    the caller's stale second-argument register as its frame pointer, and the
+    caller's register state is what the build configuration changed. The
+    generated code was correct. **Closed** (`GR-11`): the helpers refuse a form
+    mismatch by name, and the simd tests marshal per callable.
+
+- **Two undefined-behaviour findings** from the `-fsanitize=undefined` build of
+  `WasmBase` (2026-11-11, `GR-11`), both fixed and independent of the crash:
+  `applyActiveSegments` called `memcpy` with a null source for an empty data
+  segment (undefined even for a zero length); and `resolveRefFuncsInObject`, the
+  `ref.func`-sentinel walker, read a `void*` out of *every* struct field —
+  including `i32`/`i64`/`f64` fields, where it loaded a neighbouring field’s bytes
+  as a pointer and read past the object — at whatever offset the field had, and
+  wrote the rewritten sentinel back through an unaligned store. It now reads only
+  reference-typed slots, through `memcpy`, and leaves numerics alone.
 
 A refusal leaves that function’s `Callable::fnPtr` **null**; the core reports
 “no compiled body” at the call boundary. Nothing is miscompiled and nothing is
@@ -846,10 +1232,10 @@ interpreted.
 
 | # | Criterion | Status |
 |---|---|---|
-| 1 | `WASMJIT_BACKEND=<name> ./Test/WasmJit` completes green, no abort, no segfault | **met for all three** (§13.1) |
-| 2 | The spec suite and the strict `WASM_SPEC_VALIDATE=1` negative sweep pass on that backend | **met for SLJIT’s recorded runs**; LibJIT/AsmJIT strict runs are not recorded (`GAP-9`) |
-| 3 | Every failure is fixed or an explicit, documented refusal; no wrong-result or crash path | **met**; the backend rows are §13.4 and §8.1 |
-| 4 | The sanitizer run is recorded and clean for that backend | **LibJIT recorded**; SLJIT/AsmJIT not recorded (`GAP-8`) |
+| 1 | `WASMJIT_BACKEND=<name> ./Test/WasmJit` completes green, no abort, no segfault | **met for all three in Release and Debug** (`GAP-15` and `GAP-16` closed; the guard test pins the form mismatch) |
+| 2 | The spec suite and the strict `WASM_SPEC_VALIDATE=1` negative sweep pass on that backend | LibJIT: **met** (strict sweep 22,558 / 828 on 2026-11-11, before the form-guard case; default suite 22,696 / 839). SLJIT: **met in Release and Debug** (`GAP-15` closed). AsmJIT: **met in Release and Debug** (22,696 / 839 in Debug with `WASM_SPEC_VALIDATE=1`; `GAP-16` closed). All three are recorded (`GAP-9` closed) |
+| 3 | Every failure is fixed or an explicit, documented refusal; no wrong-result or crash path | **met for all three in Release and Debug** (`GAP-15`, `GAP-16` closed) |
+| 4 | The sanitizer run is recorded and clean for that backend | **LibJIT: met** (2026-11-09). **SLJIT: met** — clean full cell and `*continuation*` cell since `GAP-18` closed. **AsmJIT: met** — the full default cell is clean after `GAP-16` and `GAP-19` closed: 22,639 assertions / 822 cases, exit 0, no leak report |
 | 5 | The target matrix is exercised beyond x86-64 Linux, or the claim is limited to SysV AMD64 | **limited to x86-64 Linux / SysV AMD64**, explicitly, for all three (`GAP-6`) |
 | 6 | README, backend pages, `VALIDATION.md`, this note and `TESTING.md` tell the same story | **met** |
 

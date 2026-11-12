@@ -2,15 +2,20 @@
 
 *What Is an Engine Gap, and What Is a Boundary*
 
-Status: policy note, revision 3 (2026-11-10). It is the canonical record of the
+Status: policy note, revision 6 (2026-11-11). It is the canonical record of the
 surfaces WasmJit deliberately does **not** own and of the deviations it has
 chosen, so that none of them is counted as an implementation gap. Open defects
 and limitations live in one register,
 [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §8; this note decides whether a
 missing thing is a gap or a boundary. The failed-instantiation retention closes
-the `linking*` boundary.
+the `linking*` boundary. Revision 4 added §7.1, the claimed guest-language set;
+revision 5 renders its verdict column with the swatch pair
+[`LANGUAGE_FEASIBILITY.md`](LANGUAGE_FEASIBILITY.md) §5.1 defines. Revision 6
+records the synthetic-module boundary and its one deliberate exception, the
+diagnostics guest-log facility (§3.1).
 Audience: anyone triaging a missing feature, filling in a completeness meter,
-writing a proposal note, or asking "is this engine mature yet?".
+writing a proposal note, asking "which languages do we actually serve?", or
+asking "is this engine mature yet?".
 
 ## 1. Document map
 
@@ -21,7 +26,7 @@ writing a proposal note, or asking "is this engine mature yet?".
 | §4 | Which surfaces are build-time or text-format only? |
 | §5 | Which proposals are blocked on a binary encoding that does not exist yet? |
 | §6 | Which limitations are deliberate design deviations rather than gaps? |
-| §7 | Which surfaces are outside the current claim (targets, coverage, stub, languages)? |
+| §7 | Which surfaces are outside the current claim (targets, coverage, stub), and which guest languages *are* claimed? |
 | §8 | How is this note used, and what re-opens a boundary? |
 | §9 | References |
 
@@ -60,11 +65,44 @@ embedder supplies the policy, engine or event loop.
 | ESM loader, URL resolution and import maps | The embedder | Binary module loading and `(module, field)` import resolution | `JS_INTEGRATION.md` `JS6` |
 | `js-prototypes` configuration | The embedder | The descriptor/RTT/JS-Types metadata surface | `JS_INTEGRATION.md` `JS8` |
 | WASI function exports and host imports | The embedder | `ImportResolver`, native imports, `VMContext::hostData` | `WasmImport.hpp`; `WasmNativeImport.hpp` |
+| Synthetic modules (`(module, field)` host namespaces of functions, memories, tables or globals) | The embedder | The seam only: `ImportRegistrar`/`ImportResolver`, `RegistryImportResolver`, `WASM::nativeImport`, `HostBridge`. **One deliberate exception**, the diagnostics guest-log facility (`info`/`warn`/`error`/`panic`, `log`, `log_str`, `log_as`), because its record format, stable ids and safety rules are engine-owned (§3.1) | `WasmImport.hpp`; `WasmNativeImport.hpp`; `WasmDiagnostics.hpp` “Guest log imports”; `DIAGNOSTICS.md` §5.4 |
 | Host reference lifetime and per-call arenas | The embedder | The optional `HostBridge` callbacks and opaque `externref` values | `JS_INTEGRATION.md` `JSD3`; `ABI.md` "Host boundary" |
 | Module lifetime across callers | The embedder | The `VMContext*`-as-arg0 ABI; a module must outlive every module that calls it | `ABI.md:26-34`, `:404-407` |
 | Linear-memory layout between modules | The embedder / build | Memory aliasing through imported memories; no partition or allocator policy | `SHARING_LINEAR_MEMORY.md` `SLM-1`…`SLM-4`; `L3` |
 | vcpkg/Conan recipes | The embedder / packager | Installed headers, soname and `wasmjit.pc` | `EMBEDDING_SURFACE.md` `ES-5` |
 | The Catch2 executable as an embedding API | The project | It is a development sandbox; the supported surface is installed `wasmjit/wasmjit.hpp` | `README.md` "Near-Term Expectations" |
+
+### 3.1 The synthetic-module boundary and its one exception
+
+A **synthetic module** is not a `Module`: it is a resolver convention, a
+`(module, field)` namespace of host-provided entities that the guest imports
+like any other module ([`COMPONENT_MODEL.md`](proposals/COMPONENT_MODEL.md)
+§4.6, [`languages/LF2_ABI_INTEROP.md`](languages/LF2_ABI_INTEROP.md) §2). The
+engine ships none of them by default. WASI, a JS adapter, a clock, a storage
+API, a game engine's own `env` — all are the embedder's policy, built on the
+seam above.
+
+**The exception is diagnostics.** `WASM::registerDiagnosticImports`
+(`registerToEnv` for the usual `env` namespace) publishes one module whose only
+job is to let the guest say *why* it failed: four named severity aliases and
+their enum/`stringref`/AssemblyScript shapes. It is the exception because every
+embedder would otherwise reinvent the same channel, and because the record
+format, ids and safety rules are engine contract
+([`DIAGNOSTICS.md`](DIAGNOSTICS.md) §5.4). The engine never registers it
+implicitly; the test harness does so by default, and an embedder opts in.
+
+#### Candidate exceptions not taken
+
+- **Engine internals.** A module exposing the backend name and version, the
+  active profile, the compilation policy and the ABI limits would let a guest or
+  a test adapt at run time. It is **not** shipped: it makes engine choices
+  observable to guest code and promises a compatibility surface the project has
+  not committed to. Recording it here keeps a future proposal from presenting it
+  as an oversight; taking it needs the same deliberate-exception decision, and a
+  study of which values are stable contract versus a debugging aid
+  ([`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §10 is the decision register).
+- **WASI and a JS/event-loop adapter.** Remain embedder-owned (the rows above),
+  because their policy is the host's and the engine's role is the seam.
 
 ## 4. Build-time and text-format surfaces — binary-only, permanently
 
@@ -136,8 +174,60 @@ instance per module. The open coverage limits are §8 there.
 | SLJIT/AsmJIT AddressSanitizer runs | Not recorded (`GAP-8`) |
 | LibJIT/AsmJIT strict negative sweep | Not separately recorded (`GAP-9`) |
 | `WasmStub/` | A non-compiling pretty-printer, not an execution backend |
-| Language support | No language is supported; `LF-1`/`LF-2` are studies and `LF-3` has not started |
+| Guest languages outside §7.1 | Not claimed; a module from any producer still loads |
 | Packaging recipes | Optional; the install/`pkg-config` path is the supported one |
+
+### 7.1 The guest-language set
+
+The engine executes a `.wasm` module and does not inspect who produced it. **This
+table is nevertheless the set WasmJit is engineered, measured and regression-tested
+against** — the guest languages it claims to serve for the time being. It is the
+yardstick the gap register is measured with
+([`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §8.5): a limitation matters to
+production when at least one row below can emit the construct, and rows that
+cannot are recorded as *no effect* rather than guessed at.
+
+Each row is evidence-backed by an `LF-2` arm that was **built and run** — the
+verdict column quotes [`languages/LF2_INDEX.md`](languages/LF2_INDEX.md) §4, and
+the version/flags behind it are in
+[`languages/LF2_EVIDENCE.md`](languages/LF2_EVIDENCE.md) §2.
+
+| Guest language | Toolchain and target claimed | `LF-2` row | Verdict | What its modules put on the ABI |
+|---|---|---|---|---|
+| **C** | clang 23.1.4 `--target=wasm32 -nostdlib`; wasi-sdk 34.0 reactor; Emscripten 6.0.13 `-O2` | `T01`–`T04` | 🟩 Green | linear memory, `env`/WASI imports, few and often **wide** signatures, indirect calls through tables |
+| **C++** | Emscripten 6.0.13 reactor; wasi-sdk 34.0 at default flags | `T04`, `T05` | 🟩 Green | the above plus legacy exception encoding (`LE-8`), `std::` runtime, vtables (indirect calls) |
+| **Rust** | rustc 1.99.1 `wasm32-unknown-unknown` and `wasm32-wasip1` | `T06`, `T07` | 🟩 Green | one-CGU modules, many small internal calls, `Vec`/`String` over `dlmalloc`, `bulk-memory` |
+| **Zig** | 0.15.2 `wasm32-freestanding` | `T33` | 🟩 Green | tiny freestanding modules, usually zero imports |
+| **TinyGo** | 0.40.1 `-target=wasi` | `T10` | 🟩 Green | runtime-heavy module, WASI imports, exported entry points |
+| **Go** | 1.27.3 `wasip1`, `-buildmode=c-shared` | `T09` | 🟩 Green | runtime-heavy module, 16 WASI imports, `_initialize`/`_start` |
+| **Kotlin/Wasm** | 2.4.21 `wasmWasi` | `T53` | 🟩 Green | **WasmGC**: structs/arrays, `call_ref`/`return_call_ref` closures, legacy EH |
+| **MoonBit** | 0.1.20261028, `wasm-gc`, release | `T86` | 🟩 Green | **WasmGC**: small modules, GC types, `spectest`-style scalar imports |
+| **AssemblyScript** | 0.28.19 `--runtime stub` | `T15` | 🟩 Green | linear memory plus its own managed runtime, indirect calls through a table |
+| **Dart** | 3.13.7 `dart compile wasm --standalone` | `T20` | 🟨 Yellow | **WasmGC**, exceptions; blocked on a canonical-type-reference load error |
+
+`Kotlin/Wasm` **`wasmJs`** is deliberately *not* a row: it fails the bar by
+construction (696 imports including `externref` globals — a JavaScript host
+contract, out of scope by §3, `LF-2` verdict red). TypeScript has no separate
+row: its documented path is AssemblyScript (`T15`).
+
+**What this table is, and is not.**
+
+- It is the **claim** an embedder may hold the project to, and the list every open
+  row of `API_ABI_STABILITY.md` §8 is measured against. A language on it is
+  served *as a `.wasm` producer*; nothing here promises a language runtime,
+  stdlib, WASI implementation or JS host — those stay in §3.
+- It is **not** the `LF-3` support decision, which is still open and may reject
+  any of these verdicts ([`LANGUAGE_FEASIBILITY.md`](LANGUAGE_FEASIBILITY.md) §8).
+  The green rows are "passed the charter bar at this version on this engine",
+  which is the strongest statement the studies make.
+- **Membership is a scope decision recorded here**, not a test change: adding or
+  removing a row, or bumping a pinned toolchain version, is an edit to this
+  section plus a re-run of the `LF-2` arm that grades it. A row whose arm has
+  not been run is not added.
+- A language outside the table is **unclaimed, not refused**: its module still
+  loads, and a defect it finds is a bug — it is simply not a regression the suite
+  promises to catch.
+
 
 ## 8. How to use this note
 
@@ -150,7 +240,10 @@ When a missing behaviour is reported, run this checklist in order:
 3. **Is it text or WIT?** If so, it is §4 — not a gap.
 4. **Is it a recorded deviation or an unclaimed surface?** If so, it is §6 or
    §7 — not a gap.
-5. **Otherwise it is a gap.** Add a row to
+5. **Is it about a guest language?** §7.1 records which producers are claimed,
+   with the `LF-2` verdict behind each. A language that is not a row there is
+   unclaimed, not refused; a row that *is* there and breaks is a bug.
+6. **Otherwise it is a gap.** Add a row to
    [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §8 (the one register), measure
    it with the strict sweep, and fix it as ordinary additive work.
 
@@ -178,6 +271,8 @@ is not a re-open condition.
   control-tag result signature and its conflict with `tag.wast`.
 - [`LANGUAGE_FEASIBILITY.md`](LANGUAGE_FEASIBILITY.md) and
   [`languages/index.md`](languages/index.md) — the study process; no language is
-  supported by it.
+  supported by it. [`languages/LF2_INDEX.md`](languages/LF2_INDEX.md) §4 is the
+  verdict table §7.1 quotes, and §7.1 is the only place that turns those verdicts
+  into a claim about which producers this engine serves.
 
 

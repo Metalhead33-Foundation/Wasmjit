@@ -123,9 +123,12 @@ public:
 			std::string& trapMessage) override
 	{
 		trapped = false;
+		(void)instance;
 		if (callable.fnPtr == nullptr)
 			return false;
-		if (instance.frameCallAbi()) {
+		// The callable's own signature decides the form (`GAP-1`, `GR-8`): a
+		// module may hold both a register-form and a frame-form export.
+		if (WASM::callableUsesFrameForm(callable)) {
 			std::vector<WASM::ValueKind> paramKinds;
 			std::vector<WASM::ValueKind> resultKinds;
 			for (const auto& p : type.params)

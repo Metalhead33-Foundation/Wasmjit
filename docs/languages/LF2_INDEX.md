@@ -2,9 +2,11 @@
 
 *Full Feasibility Studies*
 
-Status: full-study report set (revision 2 — 2026-11-03: adds the cross-language
-ABI/interop amendment `LF2_ABI_INTEROP.md`). This folder holds the `LF-2` studies
-that [`LANGUAGE_FEASIBILITY.md`](../LANGUAGE_FEASIBILITY.md) §8 defines, run
+Status: full-study report set (revision 3 — 2026-11-11: a verdict renders as its
+swatch plus its name, [`../LANGUAGE_FEASIBILITY.md`](../LANGUAGE_FEASIBILITY.md)
+§5.1; revision 2 added the cross-language ABI/interop amendment
+`LF2_ABI_INTEROP.md`).
+This folder holds the `LF-2` studies that [`LANGUAGE_FEASIBILITY.md`](../LANGUAGE_FEASIBILITY.md) §8 defines, run
 against the five charter clusters of [`CHARTERS.md`](CHARTERS.md) plus a
 documented-only sweep of the clusters that have no charter. It **does carry
 colour verdicts** — that is what separates it from [`TRIAGE.md`](TRIAGE.md) —
@@ -48,16 +50,16 @@ honest.
 
 | Report | Cluster | Arms run | Verdicts |
 |---|---|---|---|
-| \subpage lf2_s1 | `L1` — C/C++ toolchain and ABI | 5 (`T01`–`T05`) | 5 green |
-| \subpage lf2_s2 | `L2` — LLVM-family languages | 4 (`T06`, `T07`, `T10`, `T33`) | 4 green |
-| \subpage lf2_s3 | `L3` — AssemblyScript / TypeScript | 1 (`T15`, and `T30` by inheritance) | 1 green |
-| \subpage lf2_s4 | `L4` — WasmGC languages | 4 (`T20`, `T53` in two target forms, `T86`) | 2 green, 1 yellow, 1 red arm |
-| \subpage lf2_s5 | `L5` — guest scripting VMs | 1 (`T26`) | 1 green |
-| \subpage lf2_l6_l12 | `L6`–`L12` — everything else | 1 (`T09`, `L8`) | 1 green |
+| \subpage lf2_s1 | `L1` — C/C++ toolchain and ABI | 5 (`T01`–`T05`) | 5 🟩 green |
+| \subpage lf2_s2 | `L2` — LLVM-family languages | 4 (`T06`, `T07`, `T10`, `T33`) | 4 🟩 green |
+| \subpage lf2_s3 | `L3` — AssemblyScript / TypeScript | 1 (`T15`, and `T30` by inheritance) | 1 🟩 green |
+| \subpage lf2_s4 | `L4` — WasmGC languages | 4 (`T20`, `T53` in two target forms, `T86`) | 2 🟩 green, 1 🟨 yellow, 1 🟥 red arm |
+| \subpage lf2_s5 | `L5` — guest scripting VMs | 1 (`T26`) | 1 🟩 green |
+| \subpage lf2_l6_l12 | `L6`–`L12` — everything else | 1 (`T09`, `L8`) | 1 🟩 green |
 | \subpage lf2_toolchains | **Acquisition map** — for every row that was not run: the producer, its site, and the module shape it emits | — | 81 rows mapped (`T30` inherited) |
 | \subpage lf2_evidence | — | — | toolchains, hashes, commands, transcripts |
 | \subpage lf2_deep_f1 | **Deep study** — `F1`: why libjit refused the module, and the backend fix | — | `T01`/`T04` unblocked |
-| \subpage lf2_deep_f2 | **Deep study** — `F2` (`LE-8`): the workarounds, and the escape-block translation that made them optional | — | `T05` green |
+| \subpage lf2_deep_f2 | **Deep study** — `F2` (`LE-8`): the workarounds, and the escape-block translation that made them optional | — | `T05` 🟩 green |
 | \subpage lf2_deep_f3 | **Deep study + fix** — `F3`: the GC subtyping gap, its four sub-findings and what is still open | — | `T20`/`T53` unblocked to validation |
 | \subpage lf2_abi | **Cross-language ABI amendment** — the two call directions, synthetic modules, core versus component ABI and the scalar-to-GC/reference matrix | — | not a verdict; links to `EMBEDDING_SURFACE.md` §12 |
 
@@ -104,33 +106,33 @@ so a toolchain defect is never reported as an engine defect.
 The charter's minimum bar ([`CHARTERS.md`](CHARTERS.md) §2.1), unchanged:
 export through `Callable`, a native host import, a second module's export, the
 single-agent contract with a stated memory layout, and no engine patch. A verdict
-of **green** means the bar passed with a small embedder-side shim and no engine
-change; **yellow** means it passed only with named engine work, ABI work or a
-toolchain flag; **red** means the arm is incompatible with a non-goal or
+of 🟩 **green** means the bar passed with a small embedder-side shim and no engine
+change; 🟨 **yellow** means it passed only with named engine work, ABI work or a
+toolchain flag; 🟥 **red** means the arm is incompatible with a non-goal or
 disproportionately expensive ([`LANGUAGE_FEASIBILITY.md`](../LANGUAGE_FEASIBILITY.md) §5.1).
 
 ## 4. Verdicts
 
 | Row | Language / toolchain (version) | Bar | Verdict | What carries it |
 |---|---|---|---|---|
-| `T02` | C / clang 23.1.4, `--target=wasm32`, `-nostdlib` | all five | **Green** | exports, `env.host_add`, cross-module `dep.add`, one memory |
-| `T03` | C / wasi-sdk 34.0 reactor | all five | **Green** | + `fd_write`/`fd_seek`/`fd_fdstat_get` shim; `printf` works |
-| `T01` | C / Emscripten 6.0.13 `-O2` | all five | **Green** (after `F1`; was yellow at `-O1`) | `_start` compiles at level 0 and runs to `wasi_exit=0` |
-| `T04` | C++ / Emscripten 6.0.13 `-O2` reactor | all five | **Green** (after `F1`) | ctors, `std::vector`, `string`; `-O2` loads |
-| `T05` | C++ / wasi-sdk 34.0, default flags | all five | **Green at this commit** | default legacy EH loads: `F2`/`LE-8` translates the skipping `delegate`; ctors, `std::vector`, `std::string` and a guest `try`/`catch` all work |
-| `T06` | Rust / rustc 1.99.1 `wasm32-unknown-unknown` | all five | **Green** | no WASI, one `env` import, `Vec`/`String` over `dlmalloc` |
-| `T07` | Rust / rustc 1.99.1 `wasm32-wasip1` | all five | **Green** | 4 WASI imports; `println!` through the shim |
-| `T09` | Go / 1.27.3 `wasip1`, `-buildmode=c-shared` | all five | **Green at this engine commit** | `_initialize`, `env.host_add` = 42, `dep.add` cross-module = 43; 16 WASI imports are the embedder's shim |
-| `T10` | TinyGo 0.40.1 `-target=wasi` | all five | **Green** | exports before `_start`; 7 WASI imports |
-| `T33` | Zig 0.15.2 `wasm32-freestanding` | all five | **Green** | 108-byte module, zero imports |
-| `T15` | AssemblyScript 0.28.19 (`--runtime stub`) | all five | **Green** | + the existing `Test/wasm` harness evidence |
-| `T53` | Kotlin/Wasm 2.4.21 `wasmWasi` | all five | **Green at this commit** | exports, guest `try`/`catch`, `_start`; 3 WASI imports are the embedder's shim |
-| `T53` | Kotlin/Wasm 2.4.21 `wasmJs` | none | **Red** | 696 imports incl. externref globals: a JS-host contract by construction |
-| `T20` | Dart 3.13.7 `dart compile wasm --standalone` | 1–4 unproven, 5 no | **Yellow** | type section accepted after `F3a`, legacy EH translated after `F2`; now blocked by `canonical type reference is not declared by this module` (a third, unreproduced issue) |
-| `T86` | MoonBit 0.1.20261028, `wasm-gc`, release | all five except cross-module | **Green at this commit** | 359-byte module; `_start` prints `Hello` via `spectest.print_char` |
+| `T02` | C / clang 23.1.4, `--target=wasm32`, `-nostdlib` | all five | 🟩 **Green** | exports, `env.host_add`, cross-module `dep.add`, one memory |
+| `T03` | C / wasi-sdk 34.0 reactor | all five | 🟩 **Green** | + `fd_write`/`fd_seek`/`fd_fdstat_get` shim; `printf` works |
+| `T01` | C / Emscripten 6.0.13 `-O2` | all five | 🟩 **Green** (after `F1`; was 🟨 yellow at `-O1`) | `_start` compiles at level 0 and runs to `wasi_exit=0` |
+| `T04` | C++ / Emscripten 6.0.13 `-O2` reactor | all five | 🟩 **Green** (after `F1`) | ctors, `std::vector`, `string`; `-O2` loads |
+| `T05` | C++ / wasi-sdk 34.0, default flags | all five | **🟩 Green at this commit** | default legacy EH loads: `F2`/`LE-8` translates the skipping `delegate`; ctors, `std::vector`, `std::string` and a guest `try`/`catch` all work |
+| `T06` | Rust / rustc 1.99.1 `wasm32-unknown-unknown` | all five | 🟩 **Green** | no WASI, one `env` import, `Vec`/`String` over `dlmalloc` |
+| `T07` | Rust / rustc 1.99.1 `wasm32-wasip1` | all five | 🟩 **Green** | 4 WASI imports; `println!` through the shim |
+| `T09` | Go / 1.27.3 `wasip1`, `-buildmode=c-shared` | all five | **🟩 Green at this engine commit** | `_initialize`, `env.host_add` = 42, `dep.add` cross-module = 43; 16 WASI imports are the embedder's shim |
+| `T10` | TinyGo 0.40.1 `-target=wasi` | all five | 🟩 **Green** | exports before `_start`; 7 WASI imports |
+| `T33` | Zig 0.15.2 `wasm32-freestanding` | all five | 🟩 **Green** | 108-byte module, zero imports |
+| `T15` | AssemblyScript 0.28.19 (`--runtime stub`) | all five | 🟩 **Green** | + the existing `Test/wasm` harness evidence |
+| `T53` | Kotlin/Wasm 2.4.21 `wasmWasi` | all five | **🟩 Green at this commit** | exports, guest `try`/`catch`, `_start`; 3 WASI imports are the embedder's shim |
+| `T53` | Kotlin/Wasm 2.4.21 `wasmJs` | none | 🟥 **Red** | 696 imports incl. externref globals: a JS-host contract by construction |
+| `T20` | Dart 3.13.7 `dart compile wasm --standalone` | 1–4 unproven, 5 no | 🟨 **Yellow** | type section accepted after `F3a`, legacy EH translated after `F2`; now blocked by `canonical type reference is not declared by this module` (a third, unreproduced issue) |
+| `T86` | MoonBit 0.1.20261028, `wasm-gc`, release | all five except cross-module | **🟩 Green at this commit** | 359-byte module; `_start` prints `Hello` via `spectest.print_char` |
 
 `T30` (TypeScript) has no separate arm: its only documented path is
-AssemblyScript, whose row `T15` is green. `T36` (c4wa) and `T94` (xcc) are
+AssemblyScript, whose row `T15` is 🟩 green. `T36` (c4wa) and `T94` (xcc) are
 fixture generators for `S1`, not toolchains an embedder would use; they were not
 run ([`LF2_L6_L12.md`](LF2_L6_L12.md) §5).
 
@@ -180,13 +182,13 @@ analysis thought it impossible, and the measurements are in
 
 ## 6. What this set is not
 
-- **Not a support list.** A green verdict means "this arm passed the bar at this
+- **Not a support list.** A 🟩 green verdict means "this arm passed the bar at this
   version on this engine"; support is `LF-3`, which may accept none of them.
 - **Not exhaustive.** Fifteen arms of the ninety-seven non-killed rows were run.
   [`LF2_L6_L12.md`](LF2_L6_L12.md) says so row by row and names what would
   start each remaining arm. A missing row is neither "unsupported" nor "fine".
-- **Not a performance study.** Nothing here measures speed; a green row that is
-  slow is still green ([`LANGUAGE_FEASIBILITY.md`](../LANGUAGE_FEASIBILITY.md) §10).
+- **Not a performance study.** Nothing here measures speed; a 🟩 green row that is
+  slow is still 🟩 green ([`LANGUAGE_FEASIBILITY.md`](../LANGUAGE_FEASIBILITY.md) §10).
 - **Not an engine fix.** `F1`–`F3` are classified, not implemented, and no
   `WasmBase/`, backend or build file changed.
 - **Not the `LF-1` module census.** The import counts here are real module

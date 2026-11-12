@@ -1,4 +1,6 @@
 #include "AsmjitModuleCompiler.hpp"
+#include <cstdlib>
+#include <string_view>
 
 #include "../WasmBase/WasmOpcodeDispatcher.hpp"
 #include "../WasmBase/WasmSafety.hpp"
@@ -37,6 +39,7 @@
 namespace AsmJitBackend {
 
 namespace {
+
 
 void checkError(asmjit::Error error, const char* operation)
 {
@@ -1339,9 +1342,11 @@ public:
 			const WASM::Module& module, WASM::ModuleInstanceInternals& internals,
 			const std::vector<asmjit::FuncNode*>& functions,
 			const std::vector<std::unique_ptr<asmjit::FuncSignature>>& signatures,
-			uint32_t functionIndex, bool deterministicFloats)
+			uint32_t functionIndex, bool ownFrameForm,
+			std::span<const std::uint8_t> frameByType, bool deterministicFloats)
 		: compiler(compiler), module(module), internals(internals),
 		  functions(functions), signatures(signatures), functionIndex(functionIndex),
+		  frameMode(ownFrameForm), frameByType(frameByType),
 		  deterministicFloats(deterministicFloats)
 	{
 		// The diagnostic names the function; interning keeps the pointer valid
@@ -1356,7 +1361,7 @@ public:
 			throw std::runtime_error("AsmJit initial compiler does not support multi-value results");
 		// A vector parameter is exactly what the frame form exists to carry, so
 		// the entry refusal applies only to the register form.
-		const bool frameAbi = TypeTranslator::moduleNeedsFrame(module, WASM::frameCallAbiOptIn());
+		const bool frameAbi = frameMode;
 		for (const auto& parameter : type.params) {
 			if (!frameAbi)
 				requireScalar(parameter.val, "parameters");
@@ -2318,10 +2323,10 @@ protected:
 			emitUnreachablePlaceholders();
 			return;
 		}
-		const bool tailSupported = frameMode
-? WASM::tailCallFrameSupported(calledType)
-: WASM::tailCallSlotsSupported(calledType);
-if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
+		const bool tailSupported = calleeUsesFrameForm(typeIndex)
+				? WASM::tailCallFrameSupported(calledType)
+				: WASM::tailCallSlotsSupported(calledType);
+		if (WASM::tailCallTrampolinesEligible(module, frameByType) && tailSupported) {
 			// Cross-function trampoline: the driver wrapping this function observes
 			// the pending state and re-enters the target through its type thunk.
 			std::vector<asmjit::x86::Gp> tailArgs(calledType.params.size());
@@ -2360,7 +2365,6 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 			emitFrameReturnValue(values.back());
 			return;
 		}
-		validateTailCallType(typeIndex);
 		dispatchCall(index);
 		dispatchReturn();
 	}
@@ -2380,8 +2384,11 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 			for (std::size_t i = 0; i < resultCount; ++i)
 				if (calledType.results[i].val.opcode != resultTypes[i])
 					throw std::runtime_error("AsmJit frame tail-call result type differs from the caller");
-			if (WASM::tailCallTrampolinesEligible(module, true)
-					&& WASM::tailCallFrameSupported(calledType)) {
+			const bool calleeFrameForm = calleeUsesFrameForm(typeIndex);
+			const bool tailFits = calleeFrameForm
+					? WASM::tailCallFrameSupported(calledType)
+					: WASM::tailCallSlotsSupported(calledType);
+			if (WASM::tailCallTrampolinesEligible(module, frameByType) && tailFits) {
 				const ResolvedIndirect resolved = resolveIndirectTarget(typeIndex, tableIndex);
 				auto thunk = compiler.new_gp_ptr("tailThunk");
 				checkError(compiler.mov(thunk, asmjit::x86::ptr(resolved.callable,
@@ -2400,9 +2407,11 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 			dispatchReturn();
 			return;
 		}
-		validateTailCallType(typeIndex);
-		if (!frameMode && WASM::tailCallTrampolinesEligible(module, false)
-				&& WASM::tailCallSlotsSupported(calledType)) {
+		const bool calleeFrameForm = calleeUsesFrameForm(typeIndex);
+		const bool tailFits = calleeFrameForm
+				? WASM::tailCallFrameSupported(calledType)
+				: WASM::tailCallSlotsSupported(calledType);
+		if (WASM::tailCallTrampolinesEligible(module, frameByType) && tailFits) {
 			const ResolvedIndirect resolved = resolveIndirectTarget(typeIndex, tableIndex);
 			auto thunk = compiler.new_gp_ptr("tailThunk");
 			checkError(compiler.mov(thunk, asmjit::x86::ptr(resolved.callable,
@@ -2421,19 +2430,6 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 		dispatchReturn();
 	}
 
-	void validateTailCallType(uint32_t typeIndex) const
-	{
-		if (typeIndex >= signatures.size() || !signatures[typeIndex])
-			throw std::runtime_error("AsmJit tail call references an unavailable function signature");
-		const WASM::FuncType calledType = module.funcTypeAt(typeIndex);
-		if (calledType.results.size() != resultCount)
-			throw std::runtime_error("AsmJit tail-call result arity differs from the caller");
-		for (const auto& parameter : calledType.params)
-			requireI32(parameter.val, "tail-call parameters");
-		for (const auto& result : calledType.results)
-			requireI32(result.val, "tail-call results");
-	}
-
 	struct ResolvedIndirect {
 		asmjit::x86::Gp callable;
 		std::vector<asmjit::x86::Gp> arguments;
@@ -2449,12 +2445,13 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 		if (typeIndex >= signatures.size() || !signatures[typeIndex])
 			throw std::runtime_error("AsmJit call_indirect references an unavailable function type");
 		const WASM::FuncType calledType = module.funcTypeAt(typeIndex);
-		if (!frameMode && calledType.results.size() > 1)
+		if (!calleeUsesFrameForm(typeIndex) && calledType.results.size() > 1)
 			throw std::runtime_error("AsmJit register-form call_indirect supports at most one result");
 		// Frame mode handles a v128 parameter/result through the frame block; the
 		// register form has no aggregate spelling for it.
 		for (const auto& parameter : calledType.params)
-			if (!frameMode || parameter.val.opcode != WASM::ValueTypeCode::V128)
+			if (!calleeUsesFrameForm(typeIndex)
+					|| parameter.val.opcode != WASM::ValueTypeCode::V128)
 				requireScalar(parameter.val, "indirect-call parameters");
 		for (const auto& result : calledType.results)
 			if (!frameMode || result.val.opcode != WASM::ValueTypeCode::V128)
@@ -2518,7 +2515,7 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 		// own stack slot first and released from there afterwards.
 		const std::vector<asmjit::x86::Mem> keptArguments =
 				spillCallReferenceArguments(calledType, resolved.arguments);
-		if (frameMode) {
+		if (calleeUsesFrameForm(typeIndex)) {
 			uint32_t argBytes = 0;
 			for (const WASM::StorageType& parameter : calledType.params)
 				argBytes += parameter.val.opcode == WASM::ValueTypeCode::V128 ? 16u : 8u;
@@ -2637,7 +2634,7 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 		// own stack slot first and released from there afterwards.
 		const std::vector<asmjit::x86::Mem> keptArguments =
 				spillCallReferenceArguments(calledType, arguments);
-		if (frameMode) {
+		if (calleeUsesFrameForm(typeIndex)) {
 			// Staging-frame ABI: pack the arguments, invoke (ctx, frame), read the
 			// result block back into the value stack.
 			uint32_t argBytes = 0;
@@ -2725,9 +2722,9 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 		const WASM::FuncType calledType = module.funcTypeAt(typeIndex);
 		if (inDeadCode())
 			return;
-		if (!frameMode && calledType.results.size() > 1)
+		if (!calleeUsesFrameForm(typeIndex) && calledType.results.size() > 1)
 			throw std::runtime_error("AsmJit register-form call_ref supports at most one result");
-		if (!frameMode) {
+		if (!calleeUsesFrameForm(typeIndex)) {
 			for (const auto& parameter : calledType.params)
 				requireScalar(parameter.val, "call_ref parameters");
 			for (const auto& result : calledType.results)
@@ -2764,10 +2761,10 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 			values.pop_back();
 		}
 		emitNullRefCheck(callable);
-		const bool refTailSupported = frameMode
+		const bool refTailSupported = calleeUsesFrameForm(typeIndex)
 				? WASM::tailCallFrameSupported(calledType)
 				: WASM::tailCallSlotsSupported(calledType);
-		if (WASM::tailCallTrampolinesEligible(module, frameMode) && refTailSupported) {
+		if (WASM::tailCallTrampolinesEligible(module, frameByType) && refTailSupported) {
 			auto thunk = compiler.new_gp_ptr("tailThunk");
 			checkError(compiler.mov(thunk, asmjit::x86::ptr(callable,
 					static_cast<int32_t>(offsetof(WASM::Callable, tailEntry)))),
@@ -2828,9 +2825,20 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 		// on demand -- the mixed-graph path, which is rare enough that a cached
 		// second table would be wasted memory (docs/ABI.md).
 		bool calleeFrameForm = isInternal
-				? frameMode : WASM::callableUsesFrameForm(internals.importStorage[index]);
+				? calleeUsesFrameForm(typeIndex)
+				: WASM::callableUsesFrameForm(internals.importStorage[index]);
+		// A native import is a host C function and always takes the register form;
+		// resolve that **before** picking the signature, because the per-type table
+		// spells the import's declared type in *its* form, which may be the frame
+		// (`GAP-1`, `GR-8`). A wide native import is then refused by the register
+		// checks below rather than entered through the wrong signature.
+		if (!isInternal && !WASM::callableIsCompiled(internals.importStorage[index]))
+			calleeFrameForm = false;
 		std::unique_ptr<asmjit::FuncSignature> foreignFormSignature;
-		if (calleeFrameForm != frameMode)
+		// The table spells each type in *that type's* form, so compare the callee
+		// with the table entry -- not with this function's own form, which differs
+		// in a mixed module and would reuse a frame signature for a register call.
+		if (calleeFrameForm != calleeUsesFrameForm(typeIndex))
 			foreignFormSignature = std::make_unique<asmjit::FuncSignature>(
 					TypeTranslator::translateFunctionType(
 							module.funcTypeAt(typeIndex), calleeFrameForm));
@@ -2839,13 +2847,6 @@ if (WASM::tailCallTrampolinesEligible(module, frameMode) && tailSupported) {
 		const WASM::FuncType calledType = module.funcTypeAt(typeIndex);
 		if (inDeadCode())
 			return;
-		// The call shape follows the *callee*, not this module: a compiled callee
-		// from another module may have been built in either form, and a native
-		// import is always the register form because it is a host C function. That
-		// is what lets two modules that disagree about the form call each other
-		// (docs/ABI.md).
-		if (!isInternal && !WASM::callableIsCompiled(internals.importStorage[index]))
-			calleeFrameForm = false;
 		if (!calleeFrameForm && calledType.results.size() > 1)
 			throw std::runtime_error("AsmJit register-form calls support at most one result");
 		if (!calleeFrameForm) {
@@ -5194,10 +5195,10 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 	}
 
 	void dispatchV128Not() override { emitVectorHelper1(&wasm_v128_not); }
-	void dispatchV128And() override { emitVectorHelper2(&wasm_v128_and); }
-	void dispatchV128AndNot() override { emitVectorHelper2(&wasm_v128_andnot); }
-	void dispatchV128Or() override { emitVectorHelper2(&wasm_v128_or); }
-	void dispatchV128Xor() override { emitVectorHelper2(&wasm_v128_xor); }
+	void dispatchV128And() override { emitVectorBinaryNative("AsmJit v128.and failed", 0); }
+	void dispatchV128AndNot() override { emitVectorBinaryNative("AsmJit v128.andnot failed", 1); }
+	void dispatchV128Or() override { emitVectorBinaryNative("AsmJit v128.or failed", 2); }
+	void dispatchV128Xor() override { emitVectorBinaryNative("AsmJit v128.xor failed", 3); }
 
 	void dispatchV128Bitselect() override
 	{
@@ -5294,6 +5295,148 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 	}
 
 	//! Calls a binary v128 helper (`a`, `b`, `out`) and pushes `out`.
+	//! Native 16-byte binary op on two buffers, no helper call.
+	//! Kinds: 0 and, 1 andnot (a & ~b), 2 or, 3 xor, 4..7 `paddb/w/d/q`,
+	//! 8..11 `psubb/w/d/q`. The result lands in a fresh buffer, exactly as
+	//! `emitVectorHelper2` leaves it (`SIMD-8`).
+	//! The portable helper each native kind falls back to (`WASMJIT_SIMD_NATIVE=0`).
+	//! Whether the backend may use its own vector instructions (`SIMD-8`).
+	//! `WASMJIT_SIMD_NATIVE=0` forces the portable helper path, for A/B runs.
+	static bool nativeSimdEnabled()
+	{
+		static const bool enabled = [] {
+			const char* value = std::getenv("WASMJIT_SIMD_NATIVE");
+			return value == nullptr || std::string_view(value) != "0";
+		}();
+		return enabled;
+	}
+
+	static void (*helperForNativeKind(int kind))(const void*, const void*, void*)
+	{
+		// Every kind is listed explicitly and an unknown one returns null. A
+		// `default:` that named *a* helper is how the second `SIMD-8` draft made
+		// `i8x16.max_u` answer zero: a new kind silently fell through to the
+		// wrong fallback. The caller refuses a null mapping instead.
+		switch (kind) {
+		case 0: return &wasm_v128_and;
+		case 1: return &wasm_v128_andnot;
+		case 2: return &wasm_v128_or;
+		case 3: return &wasm_v128_xor;
+		case 4: return &wasm_i8x16_add;
+		case 5: return &wasm_i16x8_add;
+		case 6: return &wasm_i32x4_add;
+		case 7: return &wasm_i64x2_add;
+		case 8: return &wasm_i8x16_sub;
+		case 9: return &wasm_i16x8_sub;
+		case 10: return &wasm_i32x4_sub;
+		case 11: return &wasm_i64x2_sub;
+		case 12: return &wasm_i8x16_avgr_u;
+		case 13: return &wasm_i16x8_avgr_u;
+		case 14: return &wasm_i8x16_min_u;
+		case 15: return &wasm_i16x8_min_s;
+		case 16: return &wasm_i8x16_max_u;
+		case 17: return &wasm_i16x8_max_s;
+		case 18: return &wasm_i8x16_eq;
+		case 19: return &wasm_i16x8_eq;
+		case 20: return &wasm_i32x4_eq;
+		case 21: return &wasm_i8x16_ne;
+		case 22: return &wasm_i16x8_ne;
+		case 23: return &wasm_i32x4_ne;
+		case 24: return &wasm_i8x16_lt_s;
+		case 25: return &wasm_i16x8_lt_s;
+		case 26: return &wasm_i32x4_lt_s;
+		case 27: return &wasm_i8x16_gt_s;
+		case 28: return &wasm_i16x8_gt_s;
+		case 29: return &wasm_i32x4_gt_s;
+		case 30: return &wasm_i8x16_le_s;
+		case 31: return &wasm_i16x8_le_s;
+		case 32: return &wasm_i32x4_le_s;
+		case 33: return &wasm_i8x16_ge_s;
+		case 34: return &wasm_i16x8_ge_s;
+		case 35: return &wasm_i32x4_ge_s;
+		default: return nullptr;
+		}
+	}
+
+	void emitVectorBinaryNative(const char* name, int kind)
+	{
+		if (!nativeSimdEnabled())
+		{
+			auto fallback = helperForNativeKind(kind);
+			if (fallback == nullptr)
+				throw std::runtime_error("AsmJit v128 native kind has no fallback helper");
+			emitVectorHelper2(fallback);
+			return;
+		}
+		if (values.size() < 2)
+			throw std::runtime_error("AsmJit v128 binary operand underflow");
+		auto b = values.back();
+		values.pop_back();
+		auto a = values.back();
+		values.pop_back();
+		auto result = newVectorBuffer("v128Result");
+		auto lhs = compiler.new_xmm("v128NativeA");
+		auto rhs = compiler.new_xmm("v128NativeB");
+		checkError(compiler.movdqu(lhs, asmjit::x86::xmmword_ptr(a)),
+				"AsmJit v128 native load failed");
+		checkError(compiler.movdqu(rhs, asmjit::x86::xmmword_ptr(b)),
+				"AsmJit v128 native load failed");
+		// `pandn` writes `~dst & src`, so `a & ~b` is `pandn(b, a)` and the
+		// result lives in the operand that played the destination.
+		asmjit::x86::Vec out = lhs;
+		// Every comparison result is a per-lane all-ones mask, exactly wasm's.
+		// `ne`/`le_s`/`ge_s` invert one with a register of all ones (`pcmpeqd
+		// r, r`), and `lt_s`/`le_s` swap the `pcmpgt*` operands: `pcmpgt dst,
+		// src` is `dst > src`, so `b > a` is `a < b`.
+		auto invert = [&](const asmjit::x86::Vec& mask) {
+			auto ones = compiler.new_xmm("v128AllOnes");
+			checkError(compiler.pcmpeqd(ones, ones), name);
+			checkError(compiler.pxor(mask, ones), name);
+		};
+		switch (kind) {
+		case 0: checkError(compiler.pand(lhs, rhs), name); break;
+		case 1: checkError(compiler.pandn(rhs, lhs), name); out = rhs; break;
+		case 2: checkError(compiler.por(lhs, rhs), name); break;
+		case 3: checkError(compiler.pxor(lhs, rhs), name); break;
+		case 4: checkError(compiler.paddb(lhs, rhs), name); break;
+		case 5: checkError(compiler.paddw(lhs, rhs), name); break;
+		case 6: checkError(compiler.paddd(lhs, rhs), name); break;
+		case 7: checkError(compiler.paddq(lhs, rhs), name); break;
+		case 8: checkError(compiler.psubb(lhs, rhs), name); break;
+		case 9: checkError(compiler.psubw(lhs, rhs), name); break;
+		case 10: checkError(compiler.psubd(lhs, rhs), name); break;
+		case 11: checkError(compiler.psubq(lhs, rhs), name); break;
+		case 12: checkError(compiler.pavgb(lhs, rhs), name); break;
+		case 13: checkError(compiler.pavgw(lhs, rhs), name); break;
+		case 14: checkError(compiler.pminub(lhs, rhs), name); break;
+		case 15: checkError(compiler.pminsw(lhs, rhs), name); break;
+		case 16: checkError(compiler.pmaxub(lhs, rhs), name); break;
+		case 17: checkError(compiler.pmaxsw(lhs, rhs), name); break;
+		case 18: checkError(compiler.pcmpeqb(lhs, rhs), name); break;
+		case 19: checkError(compiler.pcmpeqw(lhs, rhs), name); break;
+		case 20: checkError(compiler.pcmpeqd(lhs, rhs), name); break;
+		case 21: checkError(compiler.pcmpeqb(lhs, rhs), name); invert(lhs); break;
+		case 22: checkError(compiler.pcmpeqw(lhs, rhs), name); invert(lhs); break;
+		case 23: checkError(compiler.pcmpeqd(lhs, rhs), name); invert(lhs); break;
+		case 24: checkError(compiler.pcmpgtb(rhs, lhs), name); out = rhs; break;
+		case 25: checkError(compiler.pcmpgtw(rhs, lhs), name); out = rhs; break;
+		case 26: checkError(compiler.pcmpgtd(rhs, lhs), name); out = rhs; break;
+		case 27: checkError(compiler.pcmpgtb(lhs, rhs), name); break;
+		case 28: checkError(compiler.pcmpgtw(lhs, rhs), name); break;
+		case 29: checkError(compiler.pcmpgtd(lhs, rhs), name); break;
+		case 30: checkError(compiler.pcmpgtb(lhs, rhs), name); invert(lhs); break;
+		case 31: checkError(compiler.pcmpgtw(lhs, rhs), name); invert(lhs); break;
+		case 32: checkError(compiler.pcmpgtd(lhs, rhs), name); invert(lhs); break;
+		case 33: checkError(compiler.pcmpgtb(rhs, lhs), name); invert(rhs); out = rhs; break;
+		case 34: checkError(compiler.pcmpgtw(rhs, lhs), name); invert(rhs); out = rhs; break;
+		case 35: checkError(compiler.pcmpgtd(rhs, lhs), name); invert(rhs); out = rhs; break;
+		default: throw std::runtime_error("unknown AsmJit v128 native kind");
+		}
+		checkError(compiler.movdqu(asmjit::x86::xmmword_ptr(result), out),
+				"AsmJit v128 native store failed");
+		values.push_back(result);
+	}
+
 	void emitVectorHelper2(void (*helper)(const void*, const void*, void*))
 	{
 		if (values.size() < 2)
@@ -5390,26 +5533,97 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		values.push_back(buffer);
 	}
 
+	//! The portable helper each native shift kind falls back to
+	//! (`WASMJIT_SIMD_NATIVE=0`).
+	static void (*helperForNativeShiftKind(int kind))(const void*, int32_t, void*)
+	{
+		switch (kind) {
+		case 0: return &wasm_i16x8_shl;
+		case 1: return &wasm_i16x8_shr_s;
+		case 2: return &wasm_i16x8_shr_u;
+		case 3: return &wasm_i32x4_shl;
+		case 4: return &wasm_i32x4_shr_s;
+		default: return &wasm_i32x4_shr_u;
+		}
+	}
+
+	//! Native 16-byte shift on two buffers, no helper call (`SIMD-8`).
+	//! Kinds: 0..2 `i16x8` `shl`/`shr_s`/`shr_u`, 3..5 the `i32x4` trio.
+	//! SSE2's packed shift by a vector reads a per-lane count from the low 64
+	//! bits and zeroes lanes when the count exceeds the lane width, so the count
+	//! is masked to `laneBits - 1` first -- wasm's `count mod laneBits`.
+	void emitVectorShiftNative(const char* name, int kind)
+	{
+		if (!nativeSimdEnabled())
+		{
+			emitVectorShift(helperForNativeShiftKind(kind));
+			return;
+		}
+		if (values.size() < 2)
+			throw std::runtime_error("AsmJit v128 shift operand underflow");
+		auto count = values.back();
+		values.pop_back();
+		auto a = values.back();
+		values.pop_back();
+		auto result = newVectorBuffer("v128Shift");
+		auto vector = compiler.new_xmm("v128ShiftValue");
+		auto laneCount = compiler.new_xmm("v128ShiftCount");
+		auto mask = compiler.new_xmm("v128ShiftMask");
+		checkError(compiler.movdqu(vector, asmjit::x86::xmmword_ptr(a)),
+				"AsmJit v128 shift load failed");
+		// `movd` zeroes the rest of the Xmm, and `pand` with the lane mask
+		// leaves `count % laneBits` in every lane -- what `psllw`/`psraw`/...
+		// expect. The mask itself is 15 (words) or 31 (dwords) in every lane.
+		checkError(compiler.movd(laneCount, count.r32()),
+				"AsmJit v128 shift count materialisation failed");
+		const bool words = kind < 3;
+		const uint64_t maskBits = words ? 0x000F000F000F000Full
+				: 0x0000001F0000001Full;
+		auto maskBuffer = newVectorBuffer("v128ShiftMaskBits");
+		auto maskValue = compiler.new_gp64("v128ShiftMaskValue");
+		checkError(compiler.mov(maskValue, maskBits),
+				"AsmJit v128 shift mask materialisation failed");
+		checkError(compiler.mov(asmjit::x86::qword_ptr(maskBuffer, 0), maskValue),
+				"AsmJit v128 shift mask store failed");
+		checkError(compiler.mov(asmjit::x86::qword_ptr(maskBuffer, 8), maskValue),
+				"AsmJit v128 shift mask store failed");
+		checkError(compiler.movdqu(mask, asmjit::x86::xmmword_ptr(maskBuffer)),
+				"AsmJit v128 shift mask load failed");
+		checkError(compiler.pand(laneCount, mask),
+				"AsmJit v128 shift count masking failed");
+		switch (kind) {
+		case 0: checkError(compiler.psllw(vector, laneCount), name); break;
+		case 1: checkError(compiler.psraw(vector, laneCount), name); break;
+		case 2: checkError(compiler.psrlw(vector, laneCount), name); break;
+		case 3: checkError(compiler.pslld(vector, laneCount), name); break;
+		case 4: checkError(compiler.psrad(vector, laneCount), name); break;
+		default: checkError(compiler.psrld(vector, laneCount), name); break;
+		}
+		checkError(compiler.movdqu(asmjit::x86::xmmword_ptr(result), vector),
+				"AsmJit v128 shift store failed");
+		values.push_back(result);
+	}
+
 	void dispatchI8x16Shl() override { emitVectorShift(&wasm_i8x16_shl); }
 	void dispatchI8x16ShrS() override { emitVectorShift(&wasm_i8x16_shr_s); }
 	void dispatchI8x16ShrU() override { emitVectorShift(&wasm_i8x16_shr_u); }
-	void dispatchI16x8Shl() override { emitVectorShift(&wasm_i16x8_shl); }
-	void dispatchI16x8ShrS() override { emitVectorShift(&wasm_i16x8_shr_s); }
-	void dispatchI16x8ShrU() override { emitVectorShift(&wasm_i16x8_shr_u); }
-	void dispatchI32x4Shl() override { emitVectorShift(&wasm_i32x4_shl); }
-	void dispatchI32x4ShrS() override { emitVectorShift(&wasm_i32x4_shr_s); }
-	void dispatchI32x4ShrU() override { emitVectorShift(&wasm_i32x4_shr_u); }
+	void dispatchI16x8Shl() override { emitVectorShiftNative("AsmJit i16x8.shl failed", 0); }
+	void dispatchI16x8ShrS() override { emitVectorShiftNative("AsmJit i16x8.shr_s failed", 1); }
+	void dispatchI16x8ShrU() override { emitVectorShiftNative("AsmJit i16x8.shr_u failed", 2); }
+	void dispatchI32x4Shl() override { emitVectorShiftNative("AsmJit i32x4.shl failed", 3); }
+	void dispatchI32x4ShrS() override { emitVectorShiftNative("AsmJit i32x4.shr_s failed", 4); }
+	void dispatchI32x4ShrU() override { emitVectorShiftNative("AsmJit i32x4.shr_u failed", 5); }
 	void dispatchI64x2Shl() override { emitVectorShift(&wasm_i64x2_shl); }
 	void dispatchI64x2ShrS() override { emitVectorShift(&wasm_i64x2_shr_s); }
 	void dispatchI64x2ShrU() override { emitVectorShift(&wasm_i64x2_shr_u); }
 
 	void dispatchI8x16MinS() override { emitVectorHelper2(&wasm_i8x16_min_s); }
-	void dispatchI8x16MinU() override { emitVectorHelper2(&wasm_i8x16_min_u); }
+	void dispatchI8x16MinU() override { emitVectorBinaryNative("AsmJit i8x16.min_u failed", 14); }
 	void dispatchI8x16MaxS() override { emitVectorHelper2(&wasm_i8x16_max_s); }
-	void dispatchI8x16MaxU() override { emitVectorHelper2(&wasm_i8x16_max_u); }
-	void dispatchI16x8MinS() override { emitVectorHelper2(&wasm_i16x8_min_s); }
+	void dispatchI8x16MaxU() override { emitVectorBinaryNative("AsmJit i8x16.max_u failed", 16); }
+	void dispatchI16x8MinS() override { emitVectorBinaryNative("AsmJit i16x8.min_s failed", 15); }
 	void dispatchI16x8MinU() override { emitVectorHelper2(&wasm_i16x8_min_u); }
-	void dispatchI16x8MaxS() override { emitVectorHelper2(&wasm_i16x8_max_s); }
+	void dispatchI16x8MaxS() override { emitVectorBinaryNative("AsmJit i16x8.max_s failed", 17); }
 	void dispatchI16x8MaxU() override { emitVectorHelper2(&wasm_i16x8_max_u); }
 	void dispatchI32x4MinS() override { emitVectorHelper2(&wasm_i32x4_min_s); }
 	void dispatchI32x4MinU() override { emitVectorHelper2(&wasm_i32x4_min_u); }
@@ -5424,8 +5638,8 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 	void dispatchI16x8SubSatS() override { emitVectorHelper2(&wasm_i16x8_sub_sat_s); }
 	void dispatchI16x8SubSatU() override { emitVectorHelper2(&wasm_i16x8_sub_sat_u); }
 	void dispatchI16x8Q15MulRSatS() override { emitVectorHelper2(&wasm_i16x8_q15mulr_sat_s); }
-	void dispatchI8x16AvgrU() override { emitVectorHelper2(&wasm_i8x16_avgr_u); }
-	void dispatchI16x8AvgrU() override { emitVectorHelper2(&wasm_i16x8_avgr_u); }
+	void dispatchI8x16AvgrU() override { emitVectorBinaryNative("AsmJit i8x16.avgr_u failed", 12); }
+	void dispatchI16x8AvgrU() override { emitVectorBinaryNative("AsmJit i16x8.avgr_u failed", 13); }
 
 	void dispatchI8x16Abs() override { emitVectorHelper1(&wasm_i8x16_abs); }
 	void dispatchI16x8Abs() override { emitVectorHelper1(&wasm_i16x8_abs); }
@@ -5883,6 +6097,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 					+ " operand underflow");
 		auto reference = values.back();
 		values.pop_back();
+		const bool owned = referenceValues.erase(reference.id()) != 0;
 		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
 		signature.set_ret(asmjit::TypeId::kUIntPtr);
 		signature.add_arg(asmjit::TypeId::kUIntPtr);
@@ -5895,11 +6110,21 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		invoke->set_arg(1, reference);
 		auto result = compiler.new_gp64("externConversion");
 		invoke->set_ret(0, result);
-		// The conversion produces a reference in place of the operand it
-		// consumed, so the operand stack's one count moves onto the new value.
-		if (referenceValues.erase(reference.id()) != 0)
+		// The result replaces the operand on the stack, and the stack owns one
+		// count of every reference it holds -- but the count does not simply
+		// "move". `extern.convert_any` of an internal reference returns a fresh
+		// box, which starts unowned, and `any.convert_extern` may free the box it
+		// consumes, releasing the inner reference with it. So the result takes the
+		// count *before* the operand gives its own up.
+		if (owned) {
+			const asmjit::x86::Gp kept = emitRefClone(result);
+			checkError(compiler.mov(result, kept),
+					"AsmJit extern conversion retain failed");
 			markReference(result);
+		}
 		values.push_back(result);
+		if (owned)
+			emitRefDrop(reference);
 	}
 
 	void dispatchAnyConvertExtern() override
@@ -7997,46 +8222,46 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		values.push_back(buffer);
 	}
 
-	void dispatchI8x16Add() override { emitVectorHelper2(&wasm_i8x16_add); }
-	void dispatchI8x16Sub() override { emitVectorHelper2(&wasm_i8x16_sub); }
-	void dispatchI16x8Add() override { emitVectorHelper2(&wasm_i16x8_add); }
-	void dispatchI16x8Sub() override { emitVectorHelper2(&wasm_i16x8_sub); }
+	void dispatchI8x16Add() override { emitVectorBinaryNative("AsmJit i8x16.add failed", 4); }
+	void dispatchI8x16Sub() override { emitVectorBinaryNative("AsmJit i8x16.sub failed", 8); }
+	void dispatchI16x8Add() override { emitVectorBinaryNative("AsmJit i16x8.add failed", 5); }
+	void dispatchI16x8Sub() override { emitVectorBinaryNative("AsmJit i16x8.sub failed", 9); }
 	void dispatchI16x8Mul() override { emitVectorHelper2(&wasm_i16x8_mul); }
-	void dispatchI32x4Add() override { emitVectorHelper2(&wasm_i32x4_add); }
-	void dispatchI32x4Sub() override { emitVectorHelper2(&wasm_i32x4_sub); }
+	void dispatchI32x4Add() override { emitVectorBinaryNative("AsmJit i32x4.add failed", 6); }
+	void dispatchI32x4Sub() override { emitVectorBinaryNative("AsmJit i32x4.sub failed", 10); }
 	void dispatchI32x4Mul() override { emitVectorHelper2(&wasm_i32x4_mul); }
-	void dispatchI64x2Add() override { emitVectorHelper2(&wasm_i64x2_add); }
-	void dispatchI64x2Sub() override { emitVectorHelper2(&wasm_i64x2_sub); }
+	void dispatchI64x2Add() override { emitVectorBinaryNative("AsmJit i64x2.add failed", 7); }
+	void dispatchI64x2Sub() override { emitVectorBinaryNative("AsmJit i64x2.sub failed", 11); }
 	void dispatchI64x2Mul() override { emitVectorHelper2(&wasm_i64x2_mul); }
-	void dispatchI8x16Eq() override { emitVectorHelper2(&wasm_i8x16_eq); }
-	void dispatchI8x16Ne() override { emitVectorHelper2(&wasm_i8x16_ne); }
-	void dispatchI8x16LtS() override { emitVectorHelper2(&wasm_i8x16_lt_s); }
+	void dispatchI8x16Eq() override { emitVectorBinaryNative("AsmJit i8x16.eq failed", 18); }
+	void dispatchI8x16Ne() override { emitVectorBinaryNative("AsmJit i8x16.ne failed", 21); }
+	void dispatchI8x16LtS() override { emitVectorBinaryNative("AsmJit i8x16.lt_s failed", 24); }
 	void dispatchI8x16LtU() override { emitVectorHelper2(&wasm_i8x16_lt_u); }
-	void dispatchI8x16GtS() override { emitVectorHelper2(&wasm_i8x16_gt_s); }
+	void dispatchI8x16GtS() override { emitVectorBinaryNative("AsmJit i8x16.gt_s failed", 27); }
 	void dispatchI8x16GtU() override { emitVectorHelper2(&wasm_i8x16_gt_u); }
-	void dispatchI8x16LeS() override { emitVectorHelper2(&wasm_i8x16_le_s); }
+	void dispatchI8x16LeS() override { emitVectorBinaryNative("AsmJit i8x16.le_s failed", 30); }
 	void dispatchI8x16LeU() override { emitVectorHelper2(&wasm_i8x16_le_u); }
-	void dispatchI8x16GeS() override { emitVectorHelper2(&wasm_i8x16_ge_s); }
+	void dispatchI8x16GeS() override { emitVectorBinaryNative("AsmJit i8x16.ge_s failed", 33); }
 	void dispatchI8x16GeU() override { emitVectorHelper2(&wasm_i8x16_ge_u); }
-	void dispatchI16x8Eq() override { emitVectorHelper2(&wasm_i16x8_eq); }
-	void dispatchI16x8Ne() override { emitVectorHelper2(&wasm_i16x8_ne); }
-	void dispatchI16x8LtS() override { emitVectorHelper2(&wasm_i16x8_lt_s); }
+	void dispatchI16x8Eq() override { emitVectorBinaryNative("AsmJit i16x8.eq failed", 19); }
+	void dispatchI16x8Ne() override { emitVectorBinaryNative("AsmJit i16x8.ne failed", 22); }
+	void dispatchI16x8LtS() override { emitVectorBinaryNative("AsmJit i16x8.lt_s failed", 25); }
 	void dispatchI16x8LtU() override { emitVectorHelper2(&wasm_i16x8_lt_u); }
-	void dispatchI16x8GtS() override { emitVectorHelper2(&wasm_i16x8_gt_s); }
+	void dispatchI16x8GtS() override { emitVectorBinaryNative("AsmJit i16x8.gt_s failed", 28); }
 	void dispatchI16x8GtU() override { emitVectorHelper2(&wasm_i16x8_gt_u); }
-	void dispatchI16x8LeS() override { emitVectorHelper2(&wasm_i16x8_le_s); }
+	void dispatchI16x8LeS() override { emitVectorBinaryNative("AsmJit i16x8.le_s failed", 31); }
 	void dispatchI16x8LeU() override { emitVectorHelper2(&wasm_i16x8_le_u); }
-	void dispatchI16x8GeS() override { emitVectorHelper2(&wasm_i16x8_ge_s); }
+	void dispatchI16x8GeS() override { emitVectorBinaryNative("AsmJit i16x8.ge_s failed", 34); }
 	void dispatchI16x8GeU() override { emitVectorHelper2(&wasm_i16x8_ge_u); }
-	void dispatchI32x4Eq() override { emitVectorHelper2(&wasm_i32x4_eq); }
-	void dispatchI32x4Ne() override { emitVectorHelper2(&wasm_i32x4_ne); }
-	void dispatchI32x4LtS() override { emitVectorHelper2(&wasm_i32x4_lt_s); }
+	void dispatchI32x4Eq() override { emitVectorBinaryNative("AsmJit i32x4.eq failed", 20); }
+	void dispatchI32x4Ne() override { emitVectorBinaryNative("AsmJit i32x4.ne failed", 23); }
+	void dispatchI32x4LtS() override { emitVectorBinaryNative("AsmJit i32x4.lt_s failed", 26); }
 	void dispatchI32x4LtU() override { emitVectorHelper2(&wasm_i32x4_lt_u); }
-	void dispatchI32x4GtS() override { emitVectorHelper2(&wasm_i32x4_gt_s); }
+	void dispatchI32x4GtS() override { emitVectorBinaryNative("AsmJit i32x4.gt_s failed", 29); }
 	void dispatchI32x4GtU() override { emitVectorHelper2(&wasm_i32x4_gt_u); }
-	void dispatchI32x4LeS() override { emitVectorHelper2(&wasm_i32x4_le_s); }
+	void dispatchI32x4LeS() override { emitVectorBinaryNative("AsmJit i32x4.le_s failed", 32); }
 	void dispatchI32x4LeU() override { emitVectorHelper2(&wasm_i32x4_le_u); }
-	void dispatchI32x4GeS() override { emitVectorHelper2(&wasm_i32x4_ge_s); }
+	void dispatchI32x4GeS() override { emitVectorBinaryNative("AsmJit i32x4.ge_s failed", 35); }
 	void dispatchI32x4GeU() override { emitVectorHelper2(&wasm_i32x4_ge_u); }
 	void dispatchI64x2Eq() override { emitVectorHelper2(&wasm_i64x2_eq); }
 	void dispatchI64x2Ne() override { emitVectorHelper2(&wasm_i64x2_ne); }
@@ -9334,6 +9559,11 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		auto result = compiler.new_gp_ptr("boundContinuation");
 		invoke->set_ret(0, result);
 		values.push_back(result);
+		// `cont.bind` consumes its continuation operand, exactly as `resume`
+		// and `switch` do: the helper returns a new handle that shares the
+		// worker, so the source's count is only safe to give back once the
+		// result holds it.
+		emitRefDrop(continuation);
 		emitPendingTrapReturn();
 	}
 
@@ -11596,8 +11826,16 @@ private:
 	asmjit::x86::Gp vmContext;
 	//! The frame pointer in frame mode (docs/ABI.md).
 	asmjit::x86::Gp framePointer;
-	//! Whether this function is compiled in the staging-frame form.
-	const bool frameMode = TypeTranslator::moduleNeedsFrame(module, WASM::frameCallAbiOptIn());
+	//! Whether *this* function is compiled in the staging-frame form.
+	const bool frameMode = false;
+	//! Call form per module-local type index: a call site emits the *callee
+	//! type's* form, so one wide function no longer decides every call.
+	std::span<const std::uint8_t> frameByType;
+	//! True when the function type at `typeIndex` uses the staging frame.
+	bool calleeUsesFrameForm(std::uint32_t typeIndex) const
+	{
+		return typeIndex < frameByType.size() && frameByType[typeIndex] != 0;
+	}
 	//! True when the active profile excludes the `N` marker: a scalar float that
 	//! becomes observable is replaced by the canonical NaN
 	//! (docs/proposals/PROFILES.md PR-3).
@@ -11675,15 +11913,13 @@ void ModuleCompiler::translateTypes(WASM::ModuleInstance& instance, const WASM::
 		WASM::ModuleInstanceInternals& internals)
 {
 	signatures.clear();
-	// Staging-frame ABI (docs/ABI.md): the mode
-	// is decided before translation, because the signature itself changes shape.
-	// Opt-in, never inferred -- see WasmBase/WasmBackendAbi.hpp.
-	const bool frameMode = TypeTranslator::moduleNeedsFrame(module, WASM::frameCallAbiOptIn());
-	// A frame-mode module may still import functions: a tail call to an import
-	// goes through the shared tail-call trampoline, which owns the ABI bridge.
-	// A direct call to a native import uses the register path in dispatchCall;
-	// the frame form is only used between functions compiled with this ABI.
-	instance.setFrameCallAbi(frameMode);
+	// Staging-frame ABI (docs/ABI.md): each type's form is decided before
+	// translation, because the signature itself changes shape. A module may mix
+	// the two forms (`GAP-1`, `GR-8`).
+	const std::vector<std::uint8_t> forms = TypeTranslator::frameForms(
+			module, WASM::frameCallAbiOptIn());
+	instance.setFrameCallForms(forms);
+	instance.setFrameCallAbi(TypeTranslator::uniformlyFrameForm(module, forms));
 	signatures.resize(module.typeIds.size());
 	internals.translatedTypes.assign(module.typeIds.size(), nullptr);
 
@@ -11691,8 +11927,9 @@ void ModuleCompiler::translateTypes(WASM::ModuleInstance& instance, const WASM::
 		if (module.typeView(i).kind() != WASM::CanonTypeKind::Func)
 			continue;
 		const WASM::FuncType type = module.funcTypeAt(i);
+		const bool frameForm = i < forms.size() && forms[i] != 0;
 		signatures[i] = std::make_unique<asmjit::FuncSignature>(
-				TypeTranslator::translateFunctionType(type, frameMode));
+				TypeTranslator::translateFunctionType(type, frameForm));
 		internals.translatedTypes[i] = signatures[i].get();
 	}
 }
@@ -11745,6 +11982,12 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance,
 		return;
 	}
 
+	// The per-type call form, read back from the instance so the emitter and the
+	// tail-call installer use exactly the table `translateTypes` recorded.
+	std::vector<std::uint8_t> forms(module.typeCount(), 0);
+	for (uint32_t i = 0; i < module.typeCount(); ++i)
+		forms[i] = instance.usesFrameForm(WASM::LocalTypeIdx{i}) ? 1 : 0;
+
 	const std::size_t allocationCheckpoint = context.allocationCheckpoint();
 	try {
 		asmjit::CodeHolder code;
@@ -11769,10 +12012,11 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance,
 				throw std::runtime_error("AsmJit failed to begin an internal function body");
 			const uint32_t typeIndex = module.internalFunctionTypeIndices[i];
 			const WASM::FuncType type = module.funcTypeAt(typeIndex);
+			const bool ownFrameForm = instance.usesFrameForm(WASM::LocalTypeIdx{typeIndex});
 			IntegerFunctionEmitter emitter(compiler, *function, type, module.functionBodies[i],
 					module, internals, functions, signatures,
 					static_cast<uint32_t>(module.importFunctions.size() + i),
-					profile().deterministic());
+					ownFrameForm, forms, profile().deterministic());
 			try {
 				emitter.compile(module.functionBodies[i], type);
 			} catch (const std::exception& error) {
@@ -11791,11 +12035,9 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance,
 			internals.internalCallables[i].fnPtr = functionRecords[i]->entry;
 			internals.compiledFunctions[i] = functionRecords[i]->entry;
 		}
-		if (WASM::tailCallTrampolinesEligible(module,
-TypeTranslator::moduleNeedsFrame(module, WASM::frameCallAbiOptIn()))
-&& !WASM::installTailCallTrampolines(module, internals,
-TypeTranslator::moduleNeedsFrame(module, WASM::frameCallAbiOptIn())))
-throw std::runtime_error("AsmJit could not install tail-call trampolines");
+		if (WASM::tailCallTrampolinesEligible(module, forms)
+				&& !WASM::installTailCallTrampolines(module, internals, forms))
+			throw std::runtime_error("AsmJit could not install tail-call trampolines");
 		// FuncNodes belong to the temporary CodeHolder. Runtime handles are the
 		// installed entry pointers above, so discard all compiler-side records.
 		functionRecords.clear();

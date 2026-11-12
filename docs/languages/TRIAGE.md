@@ -6,7 +6,7 @@ Status: pre-feasibility / scoping study (revision 3 — 2026-10-30). This is the
 screen `LANGUAGE_FEASIBILITY.md` §7 defines: every entry of the canonical
 candidate list, one row per *(language, toolchain)* pair, three quick-triage
 axes, an evidence tier, a study cost, a cluster and a trigger. It attempts no
-green/yellow/red verdict; colour is a full-study output. Only the `K` kill
+🟩 green/🟨 yellow/🟥 red verdict; colour is a full-study output. Only the `K` kill
 signals of a candidate study are used, sparingly and with a tier.
 Audience: anyone asking "can I write this in language X?", anyone about to
 commission an `LF-2` study, and anyone reviewing whether the screen was honest.
@@ -178,8 +178,8 @@ is the study's most important single number:
 
 Three consequences, stated so they cannot be skipped:
 
-1. **No row could carry a colour even if the author were careless.** Green and
-   yellow need an inspected artifact ([`LANGUAGE_FEASIBILITY.md`](../LANGUAGE_FEASIBILITY.md)
+1. **No row could carry a colour even if the author were careless.** 🟩 Green and
+   🟨 yellow need an inspected artifact ([`LANGUAGE_FEASIBILITY.md`](../LANGUAGE_FEASIBILITY.md)
    §7.4, §8.4); no artifact was inspected ([`EVIDENCE.md`](EVIDENCE.md) §5).
 2. **The shortlist is allowed to rest on `E1`/`E2`**, which is why the five
    chartered clusters (`L1`–`L5`) are exactly the ones whose load-bearing facts
@@ -388,13 +388,13 @@ Sort the rows by `F` code and the same two keep appearing: something needs a
 are *embedder* responsibilities ([`READINESS_AUDIT.md`](../READINESS_AUDIT.md)
 §6.4): the engine owns the mechanism, the embedder owns the imports. So "blocked
 by imports" almost never means "cannot run here"; it means "runs here once
-someone writes the shim", and a green verdict already permits a small shim
+someone writes the shim", and a 🟩 green verdict already permits a small shim
 ([`LANGUAGE_FEASIBILITY.md`](../LANGUAGE_FEASIBILITY.md) §5.1).
 
 The consequence for the shortlist: **one** WASI shim and **one** small JS-import
 façade would move rows in `L1`, `L2`, `L5`, `L6`, `L7` and `L9` at once. Neither
 exists, and the engine ships neither by decision (`AASD6`), so no cluster starts
-green — but that cost is paid once, by the embedder, instead of once per
+🟩 green — but that cost is paid once, by the embedder, instead of once per
 language.
 
 ### 6.2 Exception lowering was the sharpest toolchain-level edge — and it is now a switch

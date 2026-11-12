@@ -8,11 +8,11 @@ built and run through the documented recipe. Verdicts, with the engine at
 
 | Row | Arm | Verdict |
 |---|---|---|
-| `T02` | C, clang 23.1.4, `--target=wasm32`, `-nostdlib` | **Green** |
-| `T03` | C, wasi-sdk 34.0, `-mexec-model=reactor` | **Green** |
-| `T01` | C, Emscripten 6.0.13, `-sSTANDALONE_WASM=1`, `-O2` | **Green** (after `F1`; it was yellow at `-O1`) |
-| `T04` | C++, Emscripten 6.0.13, reactor, `-O2` | **Green** (after `F1`) |
-| `T05` | C++, wasi-sdk 34.0 with libc++ | **Green** (after `F2`/`LE-8`: the default legacy encoding loads and its exceptions work) |
+| `T02` | C, clang 23.1.4, `--target=wasm32`, `-nostdlib` | 🟩 **Green** |
+| `T03` | C, wasi-sdk 34.0, `-mexec-model=reactor` | 🟩 **Green** |
+| `T01` | C, Emscripten 6.0.13, `-sSTANDALONE_WASM=1`, `-O2` | 🟩 **Green** (after `F1`; it was 🟨 yellow at `-O1`) |
+| `T04` | C++, Emscripten 6.0.13, reactor, `-O2` | 🟩 **Green** (after `F1`) |
+| `T05` | C++, wasi-sdk 34.0 with libc++ | 🟩 **Green** (after `F2`/`LE-8`: the default legacy encoding loads and its exceptions work) |
 
 Audience: an embedder choosing a C/C++ toolchain today, and whoever sequences
 `LF-3`.
@@ -43,7 +43,7 @@ answer one question each; they do not compete.
 
 ## 3. The arms
 
-### 3.1 `T02` — C, clang, no libc (Green)
+### 3.1 `T02` — C, clang, no libc (🟩 Green)
 
 ```
 clang --target=wasm32 -O2 -nostdlib -Wl,--no-entry -Wl,--allow-undefined answer.c
@@ -64,7 +64,7 @@ Everything the bar asks for is in one 468-byte module: an export reached through
 `Callable`, a native import, a guest-owned heap, and a declared maximum. There is
 no runtime to initialise and no start function.
 
-### 3.2 `T03` — C, wasi-sdk, libc (Green)
+### 3.2 `T03` — C, wasi-sdk, libc (🟩 Green)
 
 ```
 clang --target=wasm32-wasip1 -O2 -mexec-model=reactor wasi_hello.c
@@ -88,7 +88,7 @@ embedder: `_initialize` runs libc's constructors, then exports are ordinary
 calls. `max=4294967296` is the memory's declared maximum, so
 `MemoryAllocationPolicy::Reserved` is usable (`MP-1`).
 
-### 3.3 `T01` — C, Emscripten standalone (Yellow)
+### 3.3 `T01` — C, Emscripten standalone (🟨 Yellow)
 
 ```
 emcc em_main.c -O2 -sSTANDALONE_WASM=1 -sEXPORTED_FUNCTIONS=_answer,_add,_via_host
@@ -101,7 +101,7 @@ than the triage predicted, and there is no JS glue in it.
 
 It does not instantiate: `jit_function_compile failed 0 for func 2`, then
 `std::abort()` from `LibjitModuleCompiler.cpp:234`, while compiling `_start`
-(the fifth defined body). `-O0` and `-O1` of the same source are green:
+(the fifth defined body). `-O0` and `-O1` of the same source are 🟩 green:
 
 ```
 $ probe t01_emcc_o1.wasm --wasi --env --call answer/i32 --call _start/void
@@ -118,7 +118,7 @@ defaults to level 0 with `WASMJIT_LIBJIT_OPT` as the opt-in
 `-O2` module loads, runs and exits 0; the transcript above is the `-O1` one that
 proved the module shape before the fix.
 
-### 3.4 `T04` — C++, Emscripten standalone (Green after `F1`)
+### 3.4 `T04` — C++, Emscripten standalone (🟩 Green after `F1`)
 
 ```
 em++ em_main.cpp -O1 -sSTANDALONE_WASM=1 --no-entry \
@@ -138,9 +138,9 @@ memory memory: 16908288 bytes (258 pages) max=16908288 shared=0
 `--no-entry` produces the reactor shape (`_initialize`, no `_start`), which is
 what an embedder wants: constructors run once, then the exports are callable.
 At `-O2` the same `F1` failure occurred before the fix; it is now fixed in the
-backend. **Green at this engine commit.**
+backend. **🟩 Green at this engine commit.**
 
-### 3.5 `T05` — C++, wasi-sdk with libc++ (Green after `F2`/`LE-8`)
+### 3.5 `T05` — C++, wasi-sdk with libc++ (🟩 Green after `F2`/`LE-8`)
 
 Two builds of the same source. The default one — `clang++ -fwasm-exceptions`,
 which is what a user gets without knowing about LLVM's wasm flag — contains a

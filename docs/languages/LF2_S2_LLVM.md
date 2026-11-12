@@ -7,10 +7,10 @@ Status: `LF-2` cluster report (revision 1 — 2026-10-30). Cluster `L2` of
 
 | Row | Arm | Verdict |
 |---|---|---|
-| `T06` | Rust 1.99.1, `wasm32-unknown-unknown` | **Green** |
-| `T07` | Rust 1.99.1, `wasm32-wasip1` | **Green** |
-| `T10` | TinyGo 0.40.1, `-target=wasi` | **Green** |
-| `T33` | Zig 0.15.2, `wasm32-freestanding` | **Green** |
+| `T06` | Rust 1.99.1, `wasm32-unknown-unknown` | 🟩 **Green** |
+| `T07` | Rust 1.99.1, `wasm32-wasip1` | 🟩 **Green** |
+| `T10` | TinyGo 0.40.1, `-target=wasi` | 🟩 **Green** |
+| `T33` | Zig 0.15.2, `wasm32-freestanding` | 🟩 **Green** |
 
 The cluster's prediction held: once the toolchain emits a standard module, the
 only question is which host imports it declares. None of the four needed an

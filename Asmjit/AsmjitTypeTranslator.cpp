@@ -146,44 +146,37 @@ asmjit::FuncSignature TypeTranslator::translateFunctionType(const WASM::FuncType
 }
 
 
-bool TypeTranslator::signatureNeedsFrame(const WASM::FuncType& function)
+WASM::RegisterFormCeiling TypeTranslator::registerFormCeiling() noexcept
 {
-	int entries = 1; // the VMContext*
-	for (const WASM::StorageType& parameter : function.params) {
-		if (parameter.isPacked)
-			continue;
-		if (parameter.val.opcode == WASM::ValueTypeCode::V128)
-			return true; // two words, and the register form spells it as an aggregate
-		entries += 1;
-	}
-	if (function.results.size() > 1)
-		return true;
-	if (!function.results.empty()
-			&& function.results.front().val.opcode == WASM::ValueTypeCode::V128)
-		return true; // a vector result needs the caller buffer today
-	return entries > 4;
+	// Four C argument entries (VMContext* included); a v128 parameter or result
+	// forces the frame, because the register form spells a vector as an
+	// aggregate and the backend has never guaranteed that crossing.
+	return WASM::RegisterFormCeiling{4, false, false, false};
 }
 
-
-bool TypeTranslator::moduleNeedsFrame(const WASM::Module& module, bool optIn)
+std::vector<std::uint8_t> TypeTranslator::frameForms(const WASM::Module& module, bool optIn)
 {
-	if (optIn)
+	std::vector<std::uint8_t> forms(module.typeCount(), 0);
+	const WASM::RegisterFormCeiling ceiling = registerFormCeiling();
+	for (uint32_t index = 0; index < module.typeCount(); ++index) {
+		if (module.typeView(index).kind() != WASM::CanonTypeKind::Func)
+			continue;
+		forms[index] = WASM::usesFrameForm(module.funcTypeAt(index), ceiling, optIn) ? 1 : 0;
+	}
+	return forms;
+}
+
+bool TypeTranslator::uniformlyFrameForm(const WASM::Module& module,
+		const std::vector<std::uint8_t>& forms)
+{
+	if (WASM::frameCallAbiOptIn())
 		return true;
-	// Only the signatures of defined functions choose the module's call ABI.
-	// An import is called through its own entry (a native host function through
-	// the register form, a Wasm export through the exporting instance's form),
-	// so its arity must not switch every function in this module into frame mode.
-	// A synthetic multi-result block type lives in the same type section; treating
-	// it as a call signature caused the same kind of silent module-wide switch.
-	const auto needs = [&](uint32_t typeIdx) {
-		return typeIdx < module.typeCount()
-				&& module.typeView(typeIdx).kind() == WASM::CanonTypeKind::Func
-				&& signatureNeedsFrame(module.funcTypeAt(typeIdx));
-	};
+	if (module.internalFunctionTypeIndices.empty())
+		return false;
 	for (const uint32_t typeIdx : module.internalFunctionTypeIndices)
-		if (needs(typeIdx))
-			return true;
-	return false;
+		if (typeIdx >= forms.size() || forms[typeIdx] == 0)
+			return false;
+	return true;
 }
 
 } // namespace AsmJitBackend

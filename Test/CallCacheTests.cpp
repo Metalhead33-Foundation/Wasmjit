@@ -1797,7 +1797,9 @@ CHECK(false);
 }
 }
 
-// Shared table atomics: the parser/type-model boundary check.
+// Shared table atomics: set/get and the read-modify-write forms, with the old
+// value every RMW returns asserted inside the module (docs/API_ABI_STABILITY.md
+// GAP-10, GR-9).
 TEST_CASE("shared atomics: table slot round-trip", "[staging][atomics][table]")
 {
 for (const char* backend : {"libjit", "asmjit", "sljit"}) {
@@ -1824,8 +1826,7 @@ continue;
 const auto run = instance->exportedFunction("run");
 REQUIRE(run.has_value());
 try {
-const std::int32_t value = WASM::callCallable<std::int32_t>(*run, 0,
-static_cast<void*>(nullptr));
+const std::int32_t value = WASM::callCallable<std::int32_t>(*run);
 std::fprintf(stderr, "run()=%d\n", (int)value);
 CHECK(value == 1);
 } catch (const std::exception& error) {
@@ -1855,14 +1856,13 @@ std::fprintf(stderr, "REFUSED: %s\n", error.what());
 CHECK(false);
 continue;
 }
-REQUIRE(instance->frameCallAbi());
+// The wide links select the frame; `run` is narrow and keeps the register form,
+// so the chain mixes both forms (`GAP-1`, `GR-8`).
+CHECK_FALSE(instance->frameCallAbi());
 const auto run = instance->exportedFunction("run");
 REQUIRE(run.has_value());
 try {
-alignas(16) std::uint8_t frame[16] = {};
-WASM::callCallableFrame(*run, frame);
-std::int32_t value = 0;
-std::memcpy(&value, frame, sizeof(value));
+const std::int32_t value = WASM::callCallable<std::int32_t>(*run);
 std::fprintf(stderr, "run()=%d\n", (int)value);
 CHECK(value == 1);
 } catch (const std::exception& error) {
@@ -1984,14 +1984,13 @@ std::fprintf(stderr, "REFUSED: %s\n", error.what());
 CHECK(false);
 continue;
 }
-REQUIRE(instance->frameCallAbi());
+// The multi-result links are frame-form; `run` is a single-result wrapper,
+// so the chain mixes both forms (`GAP-1`, `GR-8`).
+CHECK_FALSE(instance->frameCallAbi());
 const auto run = instance->exportedFunction("run");
 REQUIRE(run.has_value());
 try {
-alignas(16) std::uint8_t frame[16] = {};
-WASM::callCallableFrame(*run, frame);
-std::int32_t value = 0;
-std::memcpy(&value, frame, sizeof(value));
+const std::int32_t value = WASM::callCallable<std::int32_t>(*run);
 std::fprintf(stderr, "run()=%d\n", (int)value);
 CHECK(value == 11);
 } catch (const std::exception& error) {

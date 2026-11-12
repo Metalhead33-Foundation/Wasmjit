@@ -35,6 +35,11 @@ target.path = $$PREFIX/lib
 # the name the dynamic loader searches for.
 QMAKE_POST_LINK += ln -f -s $(TARGET) $$OUT_PWD/libwasmjit-backend-libjit.so
 plugin.files = $$OUT_PWD/libwasmjit-backend-libjit.so
+# The alias is created by the post-link, i.e. *after* qmake has evaluated this
+# file, so qmake would drop an install rule whose source does not exist yet.
+# `no_check_exist` keeps the rule; without it a regenerated Makefile silently
+# stops installing the plugin and Test/install-check.sh fails at step ES-5.
+plugin.CONFIG += no_check_exist
 plugin.path = $$PREFIX/lib
 INSTALLS += target plugin
 

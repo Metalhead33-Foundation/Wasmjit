@@ -6,10 +6,10 @@ This directory contains a native WebAssembly backend built on AsmJit. It
 implements the four `ModuleInstantiator` hooks and executes the shared lowering
 slice with AsmJit’s register allocator.
 
-**Status (2026-11-10):** **production-ready within the declared envelope** —
-`WASMJIT_BACKEND=asmjit ./Test/WasmJit --rng-seed 12345` reports **22,533
-assertions in 824 cases, green**, the same case set and assertion count as the
-reference backend. The envelope is x86-64 Linux / SysV AMD64 with the external
+**Status (2026-11-12, working tree on `2a892f3`):** **production-ready within
+the declared envelope** — `WASMJIT_BACKEND=asmjit ./Test/WasmJit --rng-seed
+12345 '~[tail]~[compilation-policy]'` reports **22,667 assertions in 822 cases,
+green**, the same case set and assertion count as the reference backend. The envelope is x86-64 Linux / SysV AMD64 with the external
 AsmJit library available at build time, and the documented refusals are the same
 three as SLJIT’s (see `Sljit/Sljit.md` "Known limitations"). See
 [`docs/API_ABI_STABILITY.md`](../docs/API_ABI_STABILITY.md) §13 for the verdict
@@ -139,19 +139,27 @@ target-architecture check).
 
 ## Known limitations and next steps
 
-1. **Reference ownership is exact on the paths the suites exercise**, but a
-   reference read out of a struct field or array element, the unselected operand
-   of `select`, and `drop` of a GC reference are still *borrows*. Each is a leak,
-   never a wrong result; [`docs/API_ABI_STABILITY.md`](../docs/API_ABI_STABILITY.md)
-   §8 (`GAP-4`/`GAP-5`) names the sites.
+1. **Reference ownership is exact and measured** since 2026-11-11: a reference
+   read out of a struct field or array element takes its own count, `select`
+   releases the arm it did not pick, `drop` releases the stack’s count, and a
+   native import’s reference result is cloned. `gc_ownership.wat` (73 assertions)
+   and `native_ref_result_probe.wat` (13) assert the counts here, so `GAP-4` and
+   `GAP-5` are closed.
 2. **A frame-form tail trampoline.** `return_call_ref` above the register-form
    ceiling is a semantic call + return here
    ([`docs/API_ABI_STABILITY.md`](../docs/API_ABI_STABILITY.md) §8, `GAP-2`).
 3. **Portability.** Only x86-64 Linux / SysV AMD64 is exercised; the target
    matrix in [`docs/ABI.md`](../docs/ABI.md) keeps the
    other rows *provisional*.
-4. **A wide `v128` indirect call in a module with a native import** is refused,
-   because the staged-import adapter has no `ffi_type` for a vector.
+4. **A wide `v128` indirect call in a module with a native import** is *accepted*
+   since 2026-11-11 (`GAP-11`, `wide_v128_indirect_probe.wat`). `ref_test`’s
+   `ref_test_extern` case answered `0` where the spec says `2`; that was the
+   extern-box conversion replacing its operand without taking the stack’s count,
+   and it is **fixed** here and in SLJIT (`GAP-15`, 2026-11-11), with
+   `gc_extern_box.wat` as the fixture. What remains open is the full-suite
+   `SIGSEGV` (`GAP-16`): a case that moves with the run, passes alone, and
+   disappears when `WasmBase` is built `-O2` — so it is a build-configuration
+   dependency on uninitialised state, not a refusal.
 5. Meet every applicable item in
    [`docs/WRITING_A_BACKEND.md`](../docs/WRITING_A_BACKEND.md) before calling the
    backend complete.

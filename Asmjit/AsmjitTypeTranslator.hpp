@@ -2,6 +2,7 @@
 #define WASMJIT_ASMJIT_TYPE_TRANSLATOR_HPP
 
 #include "../WasmBase/WasmType.hpp"
+#include "../WasmBase/WasmBackendAbi.hpp"
 #include <asmjit/core.h>
 
 /*!
@@ -48,26 +49,26 @@ public:
 	static asmjit::TypeId translateStorageType(const WASM::StorageType& type);
 
 	/*!
-	 * \brief Reports whether a signature cannot be delivered by the register form.
-	 * \param function Wasm function type.
-	 * \return True when the signature needs the staging frame: a `v128` anywhere,
-	 *         more than one result, or more argument entries than the C ABI allows.
-	 *
-	 * Not yet consulted by the module compiler, so it changes no behaviour alone
-	 * (docs/API_ABI_STABILITY.md).
+	 * \brief Returns this backend's register-form limits.
+	 * \return The four-entry ceiling; a `v128` or multi-result signature takes the frame.
 	 */
-	static bool signatureNeedsFrame(const WASM::FuncType& function);
-
+	static WASM::RegisterFormCeiling registerFormCeiling() noexcept;
 	/*!
-	 * \brief Reports whether any signature in a module needs the frame form.
+	 * \brief Decides the call form per module-local type index.
 	 * \param module Module whose function types are examined.
-	 * \param optIn Whether the process-wide opt-in is set.
-	 * \return True when the module must use the frame form throughout.
-	 *
-	 * Option 1 of docs/API_ABI_STABILITY.md: the mode is module-wide,
-	 * so one signature the register form cannot deliver decides for all of them.
+	 * \param optIn Whether the process-wide frame opt-in is set.
+	 * \return One entry per module type: non-zero for the staging frame.
 	 */
-	static bool moduleNeedsFrame(const WASM::Module& module, bool optIn);
+	static std::vector<std::uint8_t> frameForms(const WASM::Module& module, bool optIn);
+	/*!
+	 * \brief Reports whether every defined function uses the frame form.
+	 * \param module Module whose internal function types are examined.
+	 * \param forms The per-type table from `frameForms`.
+	 * \return True when `ModuleInstance::frameCallAbi()` should report the uniform form.
+	 */
+	static bool uniformlyFrameForm(const WASM::Module& module,
+			const std::vector<std::uint8_t>& forms);
+
 /*!
 	 * \brief Builds the native function signature used by generated code.
 	 * \param function Wasm function type.

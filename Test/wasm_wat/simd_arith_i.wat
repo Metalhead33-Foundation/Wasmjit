@@ -45,6 +45,33 @@
   (func (export "i64_lt_s_lane0") (result i64)
     (i64x2.extract_lane 0
       (i64x2.lt_s (v128.const i64x2 -1 -1) (v128.const i64x2 1 1))))     ;; -1
+  ;; i32x4's four signed orders, both outcomes: the spec suite has i8x16 and
+  ;; i16x8 comparison scripts but no i32x4 one, and AsmJIT lowers all twelve
+  ;; natively (SIMD-8). `-1 < 1` is where the signedness shows.
+  (func (export "i32_lt_s_true") (result i32)
+    (i32x4.extract_lane 0
+      (i32x4.lt_s (v128.const i32x4 -1 -1 -1 -1) (v128.const i32x4 1 1 1 1)))) ;; -1
+  (func (export "i32_lt_s_false") (result i32)
+    (i32x4.extract_lane 0
+      (i32x4.lt_s (v128.const i32x4 1 1 1 1) (v128.const i32x4 -1 -1 -1 -1)))) ;; 0
+  (func (export "i32_gt_s_true") (result i32)
+    (i32x4.extract_lane 0
+      (i32x4.gt_s (v128.const i32x4 1 1 1 1) (v128.const i32x4 -1 -1 -1 -1)))) ;; -1
+  (func (export "i32_gt_s_false") (result i32)
+    (i32x4.extract_lane 0
+      (i32x4.gt_s (v128.const i32x4 -1 -1 -1 -1) (v128.const i32x4 1 1 1 1)))) ;; 0
+  (func (export "i32_le_s_true") (result i32)
+    (i32x4.extract_lane 0
+      (i32x4.le_s (v128.const i32x4 -1 -1 -1 -1) (v128.const i32x4 1 1 1 1)))) ;; -1
+  (func (export "i32_le_s_false") (result i32)
+    (i32x4.extract_lane 0
+      (i32x4.le_s (v128.const i32x4 1 1 1 1) (v128.const i32x4 -1 -1 -1 -1)))) ;; 0
+  (func (export "i32_ge_s_true") (result i32)
+    (i32x4.extract_lane 0
+      (i32x4.ge_s (v128.const i32x4 1 1 1 1) (v128.const i32x4 -1 -1 -1 -1)))) ;; -1
+  (func (export "i32_ge_s_false") (result i32)
+    (i32x4.extract_lane 0
+      (i32x4.ge_s (v128.const i32x4 -1 -1 -1 -1) (v128.const i32x4 1 1 1 1)))) ;; 0
 
   ;; ── min/max: the same distinction ───────────────────────────────────────
   (func (export "min_s_lane0") (result i32)
@@ -91,6 +118,24 @@
     (i8x16.extract_lane_u 0 (i8x16.shr_u (call $min8) (i32.const 1))))   ;; 0x40
   (func (export "shl_i16_lane7") (result i32)
     (i16x8.extract_lane_u 7 (i16x8.shl (call $one8) (i32.const 15))))    ;; 0x8000
+  ;; One count beyond each native lane width for the six ops AsmJIT lowers
+  ;; itself (SIMD-8): 16 for i16x8 and 32 for i32x4 must mask to 0, and a
+  ;; count one past that must behave as 1.
+  (func (export "shl_i16_masked_lane0") (result i32)
+    (i16x8.extract_lane_u 0 (i16x8.shl (call $one8) (i32.const 16))))     ;; 16 mod 16 == 0 -> 0x0101
+  (func (export "shr_s_i16_masked_lane0") (result i32)
+    (i16x8.extract_lane_s 0 (i16x8.shr_s (call $min16) (i32.const 31))))  ;; 31 mod 16 == 15 -> -1
+  (func (export "shr_u_i16_masked_lane0") (result i32)
+    (i16x8.extract_lane_u 0 (i16x8.shr_u (call $min16) (i32.const 17))))  ;; 17 mod 16 == 1 -> 0x4000
+  (func (export "shl_i32_zero_lane0") (result i32)
+    (i32x4.extract_lane 0
+      (i32x4.shl (v128.const i32x4 7 7 7 7) (i32.const 32))))             ;; 32 mod 32 == 0 -> 7
+  (func (export "shr_s_i32_masked_lane0") (result i32)
+    (i32x4.extract_lane 0
+      (i32x4.shr_s (v128.const i32x4 -8 -8 -8 -8) (i32.const 65))))       ;; 65 mod 32 == 1 -> -4
+  (func (export "shr_u_i32_masked_lane0") (result i32)
+    (i32x4.extract_lane 0
+      (i32x4.shr_u (v128.const i32x4 4 4 4 4) (i32.const 33))))           ;; 33 mod 32 == 1 -> 2
 
   ;; ── saturating add/sub, and the rounding average ────────────────────────
   (func (export "add_sat_s_lane0") (result i32)

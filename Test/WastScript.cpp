@@ -756,6 +756,11 @@ void ScriptRunner::installSpectest()
 	register_("print_i32_f32", reinterpret_cast<void*>(&spectestPrintI32F32));
 	register_("print_f64_f64", reinterpret_cast<void*>(&spectestPrintF64F64));
 
+	// The one synthetic module the engine ships, registered by default in the
+	// harness: a script that imports `env.info` (or the enum/stringref/AS
+	// shapes) resolves against the diagnostics facility.
+	WASM::registerToEnv(registry);
+
 	// The spec's `spectest` host module also exports a table and a memory, and
 	// test scripts import them. Provide the same shapes the reference interpreter
 	// uses (table 10..20 funcref, memory 1..2 pages). Both are owned by the

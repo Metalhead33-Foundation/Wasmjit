@@ -81,8 +81,9 @@ Migration order:
 1. **Core arithmetic** (`frameValueBytes`, `frameArgumentsBytes`,
    `frameResultsBytes`, `frameArgumentOffset`, `frameResultOffset`, `frameBytes`)
    derived from `argSlotCount`, so frame and register layouts cannot disagree.
-2. **Capability + primitive** (`ModuleInstance::frameCallAbi()`,
-   `callCallableFrame`), without adding a virtual to the frozen seam.
+2. **Capability + primitive** (`ModuleInstance::frameCallAbi()` and, since the
+   per-signature rule, `usesFrameForm(LocalTypeIdx)` / `callableUsesFrameForm`;
+   plus `callCallableFrame`), without adding a virtual to the frozen seam.
 3. **SLJIT**: frame signature, prologue from frame, call scratch area, result
    copy; the `sljit_get_local_base` crash was a transposed `dstw` argument.
 4. **AsmJIT**: signature translation, frame prologue, driver, call cache; the
@@ -178,7 +179,16 @@ Root causes, not just symptoms. A defect marked **open** is in
 | `throw_ref` | the operand was typed as the bare `ExnRef` code | a `(ref null exn)` is a `Ref`/`RefNull` with the exn heap type | validator uses `refSubtype(..., ExnRef)` |
 | `moduleNeedsFrame` | a synthetic multi-result **block** type switched the whole AsmJIT module to the frame ABI | it scanned the whole type section | scan only import and internal function signatures |
 | `dispatchUnreachable` | returned a 32-bit zero for an i64 function | the placeholder ignored `resultTypes` and the frame/vector buffer | follows the result kind, frame mode and vector-buffer case |
-| Native-import reference result | the caller takes over a count the host still owns | only AsmJIT clones a native import’s reference result | **open** as `GAP-5`; fixture first, then LibJIT/SLJIT |
+| Native-import reference result | the caller takes over a count the host still owns | only AsmJIT clones a native import’s reference result | all three clone it — AsmJIT `retainNativeCallResult`, SLJIT `emitRetainNativeCallResult`, LibJIT `resolveCallReferences` — and `native_ref_result_probe.wat` asserts the host’s count; `GAP-5` **closed 2026-11-11** |
+| Continuation kind count | `wasm_cont_suspend_ex` passed the *output capacity* where `AWorker::suspend` copies that many *kind* bytes, so a one-byte kind vector was read sixteen bytes deep | the caller confused “how many results may I write” with “how many kinds do I carry” | bound by the tag’s declared result list, capped by the frame capacity — found by the first SLJIT ASan run (`GAP-14`, closed 2026-11-11) |
+| SLJIT continuation leak | 10,568 bytes in 17 allocations from `wasm_cont_switch` / `wasm_cont_resume_ex` / `invokeFfiContinuation`; the same cases are clean on LibJIT | `cont.bind` replaced its continuation operand in place without releasing the source handle — in SLJIT **and** AsmJIT; LibJIT already dropped it. The new handle shares the worker, so the source’s count can only go after the result holds it | SLJIT parks the result in its scratch cell, drops the operand, then stores it; AsmJIT drops through `emitRefDrop`. `GAP-18` **closed 2026-11-11**; `*continuation*` ASan run clean |
+| LibJIT frame tails | a frame-form tail call was a frame call + frame return, so a long chain grew the host stack | the frame mode deliberately had no thunks and `dispatchReturnCall*` never wrote `TailCallState` | LibJIT installs the backend-neutral frame driver/thunk pair (`WasmTailTrampoline`) and its `return_call*` sites write the pending state. `GAP-3` **closed 2026-11-11**; 1,000,000 links on the default stack |
+| Shared-reference validation | `struct.new_default $shared` could not flow into `(ref null (shared any))`, `ref.null (shared any)` lost its sharedness, and `ref.eq` rejected `(ref null (shared eq))` operands | sharedness was read only from the value type’s prefix, never from the concrete type definition, and `dispatchRefNull`/`refType` dropped the prefix | `Validator::sharedReference` infers it from the type definition and is used by `assignable`, `refSubtype` and `isEqRef`; the null/cast result types carry the prefix. Found by the `table_atomic_probe.wat` fixture (`GAP-10`, closed 2026-11-11) |
+| `ref_test` on an extern box | `ref_test_extern` answered `0` where the spec says `2` on SLJIT and AsmJIT; LibJIT passed | `extern.convert_any` returns a *fresh, unowned* box and `any.convert_extern` can free the box it consumes, but both lowerings replaced the operand in place on the assumption that the stack's count “moves” — so the table kept a pointer to a reclaimed box, and the wrong answer appeared wherever poison-on-free or block reuse exposed it | retain the result, then release the operand (`SljitOpcodeDispatcher::emitExternConversion`, AsmJIT's `emitExternConversion`); LibJIT clones on push and now drops after it. `GAP-15` **closed 2026-11-11**; `gc_extern_box.wat` recycles the box's size class so the fixture fails in Release too |
+| AsmJIT suite crash | the full run ends in `SIGSEGV` at a case that moves with the run (`spec: table_copy`, a decoder case, `simd: v128 globals`), and every such case passes alone | the boundary is the *libraries*: `WasmBase` at `-O0` crashes and at `-O2` is green, while `Asmjit`'s own optimisation level changes nothing and both Test binaries are `-O2` — so the generated code depends on uninitialised state that the unoptimised host lays out differently | **open** as `GAP-16`; ASan reports a wild write it cannot attribute (JIT code and the GC heap are invisible to it) and Valgrind will not run on this host (its `ld.so` uses instructions Valgrind rejects) — next instrument is `-fsanitize=undefined` |
+| Plugin install rule | a regenerated `LibJit.pro`-derived Makefile installed no `libwasmjit-backend-libjit.so`, so `install-check.sh` failed at ES-5 | `plugin.files` pointed at a symlink the *post-link* creates, which qmake does not have at evaluation time | `plugin.CONFIG += no_check_exist` (`GAP-17`, closed 2026-11-11) |
+| Empty data segment | `applyActiveSegments` handed `memcpy` a null source for an empty segment — undefined behaviour even with a zero length, and the kind of thing an optimiser may assume never happens | the copy was unconditional | copy only when the segment has data. Found by the `-fsanitize=undefined` build of `WasmBase` (2026-11-11) |
+| `ref.func` sentinel walker | `resolveRefFuncsInObject` read a `void*` out of **every** struct field, numeric ones included: it loaded a neighbouring field's bytes as a pointer, read past the end of an `i32`-ending object, and wrote a rewritten sentinel back through an unaligned store | the walker treated “a field slot” as “a reference slot”, and went through `reinterpret_cast` instead of `memcpy` | walk only reference-typed slots (and the descriptor slot, which is one by construction), read and write through `memcpy`. Found by the same UBSan run (`GAP-16`'s instrument) |
 | `sljit_get_local_base` | the frame migration asserted inside SLJIT | `dstw` must be zero; the offset was passed in that position | one transposed argument, fixed |
 | AsmJIT frame epilogue | a frame function stored a vector result on the trap path | `bufferedVectorResult` won over `frameMode` in a branch-order bug | explicit frame branch; results undefined on a trap |
 
@@ -197,17 +207,38 @@ Two limits remain and are registered, not hidden:
   dropping it does not release a count (`GAP-4`);
 - a reference-returning native import is cloned only on AsmJIT (`GAP-5`).
 
-The call-form work exposed that the form is **module-wide**. A mixed graph now
-works because a direct call emits the callee’s form, but one wide function still
-puts every call in its module on the frame path. That cost is `GAP-1`; the
-current contract and the recommendation are in [`../ABI.md`](../ABI.md) “Call
-forms”.
+The call-form work first shipped **module-wide**. One wide function put every
+call in its module on the frame path — `GAP-1`. `GR-8` replaced it with the
+per-signature rule: `WASM::usesFrameForm(signature, ceiling, optIn)` decides
+per type, the instance keeps the table, and call sites emit the callee type’s
+form. A direct call still emits the callee’s actual form, so a mixed graph
+works in both directions; `ModuleInstance::frameCallAbi()` survives as the
+uniform shorthand. The contract is [`../ABI.md`](../ABI.md) “Call forms”.
 ## 7. Process lessons worth carrying forward
 
 ### 7.1 Probes and tests
 
 - **A probe records one of three states** — works, refuses with a reason, or
   silently answers wrong. Only the third is a defect; refusal is a pass.
+- **A suspended continuation is a live stack, and its owner is the instance, not the frame.**
+  `GAP-19`: a fiber parked at `switch`/`suspend` keeps the counts of its frame's reference
+  slots, so abandoning it pinned the handle, the worker and its 5,200-byte native stack.
+  Recording those slots on the worker, or moving the values out of them, cannot help -- a
+  move shuffles raw pointers and never touches a handle's count. Releasing at `Store::~Store`
+  is racy (a host-thread worker can still be alive during static teardown); the instance is
+  the right owner. Two details make it work: releasing the handles in `~ModuleInstance` while
+  the store is intact, and letting the parked-switch wait wake on *cancellation* -- it waited
+  for the caller to become `Running` again, so cancelling a parked switch hung the join for
+  ever. The lesson: a teardown path is only correct if every wait it trips has an exit for
+  cancellation, and a leak of live native stacks needs an owner, not a bookkeeper.
+
+- **A call-form mismatch is a caller bug, and it looks like a JIT crash.**
+  `GAP-16`'s wild write came from a *frame-form* callee entered through the
+  *register-form* helper: the callee's prologue used the caller's stale second
+  argument as its frame pointer. The generated code was correct all along, and
+  the `-O0`/`-O2` boundary only changed which stale value that register held.
+  The public helpers now refuse the mismatch by name, and the tests marshal per
+  callable (`WASMJIT_FRAME_OPT_IN=1` reproduces the pre-`GR-8` shape on demand).
 - **Assert the property, not the outcome.** A probe that asserts “it works”
   cannot tell a working backend from one that happens to return 0.
 - **Test data must be inert.** A fabricated pointer as an `externref` was

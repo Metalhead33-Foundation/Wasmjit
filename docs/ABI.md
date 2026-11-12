@@ -120,9 +120,13 @@ whether its entry is emitted C ABI or thunked. The old portability note is
 merged here; its historical analysis is in
 [`backends/HISTORY.md`](backends/HISTORY.md) §3.1.
 
-**Open C-ABI items** (`i31ref` as `void*`, the missing literal C-caller test, trap
-entry-point sprawl) are `GAP-7`/`GAP-13` in
-[`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §8.
+**Closed C-ABI items.** The three items that stood here on 2026-11-10 are all
+closed and their evidence lives in [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md)
+§8.4: `i31ref` at the boundary is a tagged token with a stated rule (below), a
+literal **C** caller exercises the canonical signature out of tree
+(`Test/consumer/CanonicalCall.c`, run by `Test/install-check.sh`), and the trap
+entry points collapsed to one kind-carrying function per reporting layer
+(`GAP-7`, `GAP-13`).
 
 ## VMContext Selection Rules
 
@@ -268,42 +272,66 @@ Offsets come from [`WasmBackendAbi.hpp`](../WasmBase/WasmBackendAbi.hpp):
 - **No arity limit, no register-class question, no result-buffer parameter, one
   marshaller.** SLJIT’s four-entry ceiling, LibJIT’s sixth-word loss and
   AsmJIT’s vector-result special case are properties of register passing, so
-  they disappear together.
-- **Tail calls** need the frame pointer carried through the trampoline. LibJIT’s
-  frame tails are a frame call + frame return: correct, but not constant-stack
-  (`GAP-3`).
+  they disappear together. A `v128` travels here as its canonical C spelling —
+  two `uint64_t` arguments, low word first — and a vector result is spooled
+  through the result block, which is what the SLJIT staged adapter now does for a
+  native import (`GAP-11`, closed).
+- **Tail calls**: the frame pointer travels through the trampoline and
+  `TailCallState::frame` stages each link’s arguments, so a 1,000,000-link
+  frame-form chain runs in constant native stack. LibJIT installs the same
+  backend-neutral driver/thunk pair for the frame form, which closes `GAP-3`.
 - **The frame is not a GC-scanned root.** A reference held only in a live frame
   is invisible to a collection; keep it in scanned storage across a safepoint or
   register the frame.
 
 **Selection.** `WASM::setFrameCallAbiOptIn(true)` is a process-wide request for
-one ABI; otherwise a backend switches a module when a **defined** signature needs
-more argument slots than its register form allows. A backend must never *infer*
-the form from measurements — measured on LibJIT, inference broke ten working
-modules.
+one ABI everywhere. Otherwise the form is chosen **per function signature** by
+`WASM::usesFrameForm(signature, ceiling, optIn)`: a signature uses the frame
+when the backend’s `RegisterFormCeiling` cannot express it in registers —
+SLJIT’s four C argument entries (a `v128` counts two, a vector result adds the
+out-buffer entry), AsmJIT’s four entries with any vector or multi-result in the
+frame, and LibJIT’s “never infer; the opt-in is the only trigger”. A backend
+must never *infer* the form from measurements — measured on LibJIT, inference
+broke ten working modules; the ceiling is a static property of the backend’s
+register lowering.
 
-**Granularity.** The form is currently **module-wide**
-(`ModuleInstance::frameCallAbi()`). One wide function puts every call in that
-module on the frame path, so all of them pay its stores/loads and lose the
-register-form tail-call trampoline. The recommended fix is per signature —
-`usesFrameForm(signature, ceiling, optIn)`, with SLJIT/AsmJIT preferring the
-frame and LibJIT the register form — but it changes the `frameCallAbi()` contract
-and ~25 call sites, so it is `GAP-1` in
-[`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §8, not a drive-by edit.
+**Granularity: per signature.** One wide function no longer moves its
+module’s other calls onto the frame path (`GAP-1`, closed by `GR-8`). Each
+function is compiled in its own signature’s form, and a call site emits the
+**callee type’s** form. The instance records the decision per module-local type
+index: `ModuleInstance::usesFrameForm(LocalTypeIdx)` answers for a signature and
+`WASM::callableUsesFrameForm(callable)` for a resolved callable, including one
+from another instance. `ModuleInstance::frameCallAbi()` is retained as the
+**uniform shorthand** — true only when every defined function is frame-form —
+so an embedder that asks “is this a frame-only module?” keeps a truthful
+answer; a mixed module reports `false` and is marshalled per signature.
 
 **Mixed graphs and cross-backend calls.** A direct call emits the *callee’s*
-form (read from the resolved callable), so a register-form module can call a
-frame-form import; a both-frame cross-module call works. A graph that genuinely
-mixes the two forms is refused by name rather than silently corrupted. Because
-the frame makes the ABI identical, a cross-backend call is legal in principle,
-but it remains **forbidden in production** until a cross-backend suite exists:
-one backend per process or per module graph, like mixing allocators. “Just
-because you can doesn’t mean you should.”
+form (for an imported callee, read from its defining instance), so a
+register-form function can call a frame-form one and the reverse; a both-frame
+cross-module call works. A `call_indirect`/`call_ref` emits the form of its
+**declared type**, so both instances must agree on that type’s form — they do
+when compiled with the same backend and opt-in, and `verifyImportCallForms`
+refuses the link by name when they do not. Because the frame makes the ABI
+identical, a cross-backend call is legal in principle, but it remains
+**forbidden in production** until a cross-backend suite exists: one backend per
+process or per module graph, like mixing allocators. “Just because you can
+doesn’t mean you should.”
 
 **Imports do not change at all.** A native import keeps its typed
 `R native(VMContext*, A, B, …)` signature. Only the raw export seam changes; the
 public `WASM::Runtime` entry points stay typed
 ([`EMBEDDING_SURFACE.md`](EMBEDDING_SURFACE.md)).
+
+**A mismatch is refused, not attempted.** `callCallable`,
+`callCallableWithResults` and `callCallableVector` refuse a frame-form callable,
+and `callCallableFrame` refuses a register-form one, by name. Entering a
+frame-form function through the register signature leaves its second argument
+(the frame pointer) to whatever the caller last stored in that register, and the
+callee then writes its results through it — the `GAP-16` wild write. It is a
+programming error at the host boundary, so the helpers make it a named exception
+rather than a crash; `WASM::callableUsesFrameForm(callable)` is the query that
+tells the two apart.
 
 ## Reference and Global Representation
 
@@ -328,6 +356,7 @@ boxing on the GC heap at `extern.convert_any` (GC-8/RT-1).
 | --- | --- | --- |
 | `funcref` | `Callable*`, recognised by `Store::callableAt()` | a callable from *another* module is still recognised (GC.md G2) |
 | `externref` | opaque `void*` | identity is pointer identity; a host pointer passes through every conversion unchanged |
+| `i31ref` | unboxed immediate, `(payload << 1) \| 1` | the low bit marks it, so it is a legal opaque token and **never** a pointer: a host may compare and round-trip it, and `refClone`/`refDrop` leave it uncounted. The payload is 31 bits (`i31.get_s` sign-extends), pinned by `i31_boundary_probe.wat` |
 | `exnref` | exception-object pointer | survives a table round-trip through the same generic slot (EX-6) |
 | GC ref | Store-owned object pointer, canonical type id in `GcHeader` | the type id is what `ref.test`/`ref.cast` read; a struct also carries the optional Custom Descriptors RTT reference at `GcHeader::kDescriptorOffset` |
 | `i31ref` | `(value << 1)` with the low bit set | also the reason a real pointer can never look like an i31 |
@@ -1015,7 +1044,7 @@ Universal function reference stored in tables and import storage.
 | `WasmBase/WasmHostBridge.hpp` | Optional host boundary (reference + lifecycle callbacks) |
 | `WasmBase/WasmTrap.hpp` / `WasmBase/WasmTrap.cpp` | The pending-trap protocol (`reportTrap`, `wasm_trap_slot`, `WASM::Trap`) and the deferred-cleanup stack; the design and its limits are in [`TRAP_CLEANUP.md`](TRAP_CLEANUP.md) |
 | `WasmBase/WasmNativeImport.hpp` | `WASM::nativeImport<&fn>()`: the typed trampoline that makes `throw`/`WASM::trap()` safe inside a host import ("Writing an import" above) |
-| `WasmBase/WasmDiagnostics.hpp` / `.cpp` | Structured diagnostics: the record, bounded per-agent ring/sink, text/JSON forms, and the `env.info`/`warn`/`error`/`panic` log imports ([`DIAGNOSTICS.md`](DIAGNOSTICS.md)) |
+| `WasmBase/WasmDiagnostics.hpp` / `.cpp` | Structured diagnostics: the record, bounded per-agent ring/sink, text/JSON forms, and the `env` diagnostics module (`info`/`warn`/`error`/`panic`, `log`, `log_str`, `log_as`) ([`DIAGNOSTICS.md`](DIAGNOSTICS.md)) |
 | `WasmBase/WasmValue.hpp` | Callable struct and `callCallable` helper |
 | `WasmBase/WasmExn.hpp` | Exception objects, the pending-exception slot and the tag-id accessor |
 | `LibJit/LibjitOpcodeDispatcher.cpp` | `dispatchCall` (line ~1027), `dispatchCallIndirect` (~1061), `dispatchCallThroughCallable` (~612) |

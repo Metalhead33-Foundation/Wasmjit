@@ -265,6 +265,7 @@ inline constexpr std::string_view kExecuteLogInfo = "WASM.EXECUTE.LOG.INFO"; //!
 inline constexpr std::string_view kExecuteLogWarn = "WASM.EXECUTE.LOG.WARN"; //!< An `env.warn` host-log record.
 inline constexpr std::string_view kExecuteLogError = "WASM.EXECUTE.LOG.ERROR"; //!< An `env.error` host-log record.
 inline constexpr std::string_view kExecuteLogPanic = "WASM.EXECUTE.LOG.PANIC"; //!< An `env.panic` host-log record.
+inline constexpr std::string_view kExecuteLogInvalid = "WASM.EXECUTE.LOG.INVALID"; //!< A log import with an unknown kind selector.
 
 //! Continuation failures (DG-4). These are reasons, not the five resume
 //! statuses: `WASM.CONTINUATION.INVALID` says the resume failed, while
@@ -455,31 +456,65 @@ void emitContinuationDiagnostic(std::string_view id, DiagnosticSeverity severity
 		std::string message, DiagnosticContinuation continuation,
 		std::string_view remediation = "docs/proposals/STACK_SWITCHING.md") noexcept;
 
-//! \par Guest log imports (unit-test facility)
+//! \par Guest log imports (the one shipped synthetic module)
 //!
-//! Four native imports a Wasm module may import from a module named by the
-//! caller (normally `env`). Each takes a pointer and a byte length into the
-//! module's memory 0 and reads UTF-8 — the same shape AssemblyScript's
-//! `@external("env", "info") declare function info(ptr: usize, len: i32)`
-//! produces. The bytes are copied into the record; a range outside linear
-//! memory yields a deterministic placeholder instead of reading anything.
+//! WasmJit does not ship synthetic modules: a `(module, field)` host namespace
+//! is the embedder's job (`docs/SCOPE.md` §3). The diagnostics facility is the
+//! **single deliberate exception**, because every embedder would otherwise
+//! reinvent the same guest→host channel and the record format, ids and safety
+//! rules are engine-owned. `registerDiagnosticImports` is still opt-in for an
+//! embedder; the test harness registers it by default.
 //!
-//!   info   → Note    WASM.EXECUTE.LOG.INFO
-//!   warn   → Warning WASM.EXECUTE.LOG.WARN
-//!   error  → Error   WASM.EXECUTE.LOG.ERROR
-//!   panic  → Fatal   WASM.EXECUTE.LOG.PANIC, then a trap (TrapKind::Internal)
-//!                    carrying the same text
+//! The facility has three shapes, all of which emit the same record and map the
+//! kind to the same id:
 //!
-//! `panic` is what a unit test uses to fail loudly from inside the guest: the
-//! record makes the reason queryable and the trap fails the call. The bodies
-//! are ordinary native imports and must be registered through
-//! `WASM::nativeImport` (the trampoline), exactly like any host import.
+//!   1. **C / memory** — `(kind, ptr, len)` in the one-function `log`, or the
+//!      four named aliases `info`/`warn`/`error`/`panic` with `(ptr, len)`.
+//!      `ptr`/`len` address UTF-8 in memory 0. A `len` of **0** means a
+//!      NUL-terminated C string: the host scans to the first NUL, bounded by
+//!      the memory end and `kMaxDiagnosticMessageBytes`. This is the shape a
+//!      C/C++/Rust `extern "C"` guest and a `.wat` fixture use.
+//!   2. **WasmGC** — `log_str(kind, stringref)`: the value is a Store-owned
+//!      `StringObject*` (the engine's stringref ABI), encoded lossily to UTF-8.
+//!   3. **AssemblyScript** — `log_as(kind, string)`: `string` is an AS `String`
+//!      object pointer (`usize`) in linear memory. The host reads the AS object
+//!      header's `rtSize` (UTF-16LE payload length) at `pointer - 4` and decodes
+//!      UTF-16LE to UTF-8. This is the documented AS 0.28 `rt/common.ts`
+//!      layout; a null pointer is an empty message.
+//!
+//! Kind numbering is the guest ABI and is fixed:
+//!
+//!    0 info  → Note    WASM.EXECUTE.LOG.INFO
+//!    1 warn  → Warning WASM.EXECUTE.LOG.WARN
+//!    2 error → Error   WASM.EXECUTE.LOG.ERROR
+//!    3 panic → Fatal   WASM.EXECUTE.LOG.PANIC, then a trap (TrapKind::Internal)
+//!                      carrying the same text
+//!
+//! An out-of-range kind records an `Error` with `WASM.EXECUTE.LOG.INVALID`
+//! instead of trapping: a bad selector is the guest's bug, while `panic` is the
+//! explicit way to fail the call. `panic` is what a unit test uses to fail
+//! loudly from inside the guest: the record makes the reason queryable and the
+//! trap fails the call. The bodies are ordinary native imports and must be
+//! registered through `WASM::nativeImport` (the trampoline), exactly like any
+//! host import.
 //!
 //! A message longer than `kMaxDiagnosticMessageBytes` is truncated, so a hostile
-//! module cannot make the host allocate a size it chose (docs/SAFETY.md §2.2).
+//! module cannot make the host allocate a size it chose (`docs/SAFETY.md`
+//! §2.2). An unreadable range yields a deterministic placeholder instead of a
+//! read, and the `stringref`/AS shapes decode at most the cap.
 inline constexpr std::uint32_t kMaxDiagnosticMessageBytes = 4096;
 
+//! The guest-facing severity selector of the one-function `log` import. The
+//! numeric values are the guest ABI: do not renumber them.
+enum class GuestLogKind : std::int32_t {
+	Info = 0, //!< `Note`, `WASM.EXECUTE.LOG.INFO`.
+	Warn = 1, //!< `Warning`, `WASM.EXECUTE.LOG.WARN`.
+	Error = 2, //!< `Error`, `WASM.EXECUTE.LOG.ERROR`.
+	Panic = 3 //!< `Fatal`, then a trap with the same text.
+};
+
 struct VMContext;
+struct StringObject;
 class ImportRegistrar;
 
 //! The bodies are ordinary host functions. They must not be `noexcept`:
@@ -492,8 +527,17 @@ void diagnosticWarn(VMContext* context, std::int32_t pointer, std::int32_t lengt
 void diagnosticError(VMContext* context, std::int32_t pointer, std::int32_t length);
 //! `env.panic`: records a `Fatal` and then traps with the same text.
 void diagnosticPanic(VMContext* context, std::int32_t pointer, std::int32_t length);
+//! `log(kind, ptr, len)`: the enum form of the four aliases.
+void diagnosticLog(VMContext* context, std::int32_t kind, std::int32_t pointer,
+		std::int32_t length);
+//! `log_str(kind, stringref)`: the WasmGC string shape.
+void diagnosticLogString(VMContext* context, std::int32_t kind, void* string);
+//! `log_as(kind, string)`: the AssemblyScript `String` shape (`pointer - 4` is
+//! the AS object header's `rtSize`, the data at `pointer` is UTF-16LE).
+void diagnosticLogAssemblyScript(VMContext* context, std::int32_t kind,
+		std::int32_t pointer);
 
-//! Registers `info`, `warn`, `error` and `panic` under `moduleName`.
+//! Registers `log`, `log_str`, `log_as` and the four aliases under `moduleName`.
 void registerDiagnosticImports(ImportRegistrar& registrar, std::string_view moduleName);
 //! The opt-in shortcut: registers them under `env`.
 inline void registerToEnv(ImportRegistrar& registrar)

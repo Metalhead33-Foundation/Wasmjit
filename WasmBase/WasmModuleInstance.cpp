@@ -236,11 +236,15 @@ void ModuleInstantiator::applyActiveSegments(ModuleInstance& instance, const Mod
 			throw SegmentOutOfBoundsException(offset, seg.data.size(), memory->memorySize);
 
 		// The actual copy. memoryBase is already a uint8_t*, so this is
-		// just a pointer-offset write — no generated code involved.
-		std::memcpy(
-			memory->memoryBase + offset,
-			seg.data.data(),
-			seg.data.size());
+		// just a pointer-offset write — no generated code involved. An empty
+		// segment has no data() to point at, and passing a null source to
+		// memcpy is undefined even for a zero length.
+		if (!seg.data.empty()) {
+			std::memcpy(
+				memory->memoryBase + offset,
+				seg.data.data(),
+				seg.data.size());
+		}
 
 		// An applied active segment is dropped (see the loop comment above).
 		internals.dataSegmentDropped[dataIdx].store(true, std::memory_order_release);
@@ -465,6 +469,11 @@ ModuleInstance::~ModuleInstance()
 	if (internals.hostBridgeActive && ctx.hostBridge != nullptr
 			&& ctx.hostBridge->instanceDestroying != nullptr)
 		ctx.hostBridge->instanceDestroying(ctx.hostBridge->userData, &ctx);
+
+	// Continuations are live native stacks: with this instance going away nothing can
+	// resume or drop what is left, so release the handles it created while its storage
+	// is still intact (docs/proposals/CONTINUATION_ABANDONMENT.md).
+	releaseContinuationsFor(&ctx);
 
 	// Withdraw the range before the storage is freed (embedders may destroy
 	// instances while the process-wide Store lives on). Both arrays are
@@ -750,25 +759,23 @@ void ModuleInstance::resolveTypeImports(ImportResolver& resolver)
 
 void ModuleInstance::verifyImportCallForms() const
 {
-	for (const Callable& callable : internals.importStorage) {
+	for (std::size_t i = 0; i < internals.importStorage.size(); ++i) {
+		const Callable& callable = internals.importStorage[i];
 		if (!callableIsCompiled(callable))
-			continue; // a native import is a host C function: always the register form
+			continue; // a native import is a host C function: the module's uniform form
+		// The callee's own type decides its form; compare it with the form this
+		// module chose for the same declared type. Two instances compiled with the
+		// same backend and opt-in agree, so this refuses only a graph whose
+		// instances were built under different settings -- which would otherwise be
+		// entered through the wrong signature (`GAP-1`, `GR-8`).
 		const bool calleeFrameForm = callableUsesFrameForm(callable);
-		if (calleeFrameForm != frameCallAbi_)
+		const bool localFrameForm = i < module->importFunctions.size()
+				? usesFrameForm(LocalTypeIdx{module->importFunctions[i].typeIdx})
+				: calleeFrameForm;
+		if (calleeFrameForm != localFrameForm)
 			throw std::runtime_error("the module imports a function from an instance"
 					" compiled with the other call ABI; instantiate both modules with the"
 					" same WASM::setFrameCallAbiOptIn setting"
-					" (docs/ABI.md)");
-		// Both sides agree on the frame form, but the frame form has no
-		// cross-module path yet: the register form is the one the linking fixtures
-		// pin, and a frame-form import reaches the callee through the wrong
-		// signature on every backend (it crashed on all three before this check
-		// existed). Refusing is the honest answer until the frame path is
-		// implemented for imports as well.
-		if (calleeFrameForm)
-			throw std::runtime_error("the module imports a function from another"
-					" module in the staging-frame call form, which has no cross-module path"
-					" yet; instantiate the graph without WASM::setFrameCallAbiOptIn"
 					" (docs/ABI.md)");
 	}
 }
@@ -1035,7 +1042,20 @@ void ModuleInstance::resolveRefFuncsInObject(void* ref, std::vector<void*>& visi
 	const uint32_t totalFuncs = importedFuncCount +
 		static_cast<uint32_t>(module->internalFunctionTypeIndices.size());
 	const auto rewriteSlot = [&](uint8_t* slot, const CanonStorageType* storage) {
-		void* child = *reinterpret_cast<void* const*>(slot);
+		// Only a reference slot holds a reference; a numeric field is neither, and
+		// reading eight bytes from (say) an `i32` field would load a neighbouring
+		// field's bytes as a pointer and read past the object. `nullptr` marks the
+		// struct's descriptor slot, which is a reference by construction (Custom
+		// Descriptors). The slot itself may sit at any field offset, so it is read
+		// and written through memcpy rather than through a reinterpret_cast.
+		const bool referenceStorage = storage == nullptr
+				|| (!storage->isPacked
+					&& (storage->value.opcode == ValueTypeCode::Ref
+						|| storage->value.opcode == ValueTypeCode::RefNull));
+		if (!referenceStorage)
+			return;
+		void* child = nullptr;
+		std::memcpy(&child, slot, sizeof(child));
 		if (child == nullptr)
 			return;
 		const bool functionStorage = storage != nullptr && !storage->isPacked
@@ -1057,7 +1077,7 @@ void ModuleInstance::resolveRefFuncsInObject(void* ref, std::vector<void*>& visi
 					child = &internals.importStorage[funcIdx];
 				else
 					child = &internals.internalCallables[funcIdx - importedFuncCount];
-				*reinterpret_cast<void**>(slot) = child;
+				std::memcpy(slot, &child, sizeof(child));
 			}
 		}
 		if (child != nullptr && store().gc().owns(child))
@@ -2643,8 +2663,33 @@ bool callableUsesFrameForm(const Callable& callable) noexcept
 		return false;
 	// A ModuleInstance keeps its VMContext first, so the context pointer is also
 	// the instance pointer (the same convention the reference helpers rely on).
-	return reinterpret_cast<const ModuleInstance*>(callable.context)->frameCallAbi();
+	// The callable's own type decides, not the defining module's aggregate: a
+	// module may mix the two forms (`GAP-1`, `GR-8`).
+	const auto* instance = reinterpret_cast<const ModuleInstance*>(callable.context);
+	return instance->usesFrameForm(LocalTypeIdx{callable.localTypeIdx});
 }
+
+namespace Detail {
+
+void requireRegisterForm(const Callable& callable, const char* helper)
+{
+	if (!callableUsesFrameForm(callable))
+		return;
+	throw std::runtime_error(std::string(helper)
+			+ ": the callable uses the staging-frame form; pass a 16-byte-aligned"
+			  " frame with callCallableFrame instead (docs/ABI.md \"Call forms\")");
+}
+
+void requireFrameForm(const Callable& callable, const char* helper)
+{
+	if (callableUsesFrameForm(callable))
+		return;
+	throw std::runtime_error(std::string(helper)
+			+ ": the callable uses the register form, not the staging frame; call it"
+			  " with callCallable instead (docs/ABI.md \"Call forms\")");
+}
+
+} // namespace Detail
 
 void wasm_ref_store(VMContext* context, void** slot, void* value) noexcept
 {

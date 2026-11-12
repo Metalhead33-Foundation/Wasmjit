@@ -13,6 +13,7 @@
 #include "helper.hpp"
 #include "WasmBase/WasmBackendRegistry.hpp"
 #include "WasmBase/WasmModule.hpp"
+#include "WasmBase/WasmNativeImport.hpp"
 #include "WasmBase/WasmRegistryImportResolver.hpp"
 #include "WasmBase/WasmRuntime.hpp"
 #include "WasmBase/WasmStore.hpp"
@@ -2010,6 +2011,7 @@ TEST_CASE("asmjit and sljit agree on an imported function reference",
 		REQUIRE(sljitCallable.has_value());
 		INFO("export " << name);
 		CHECK(WASM::callCallable<std::int32_t>(*asmCallable) == expected);
+
 		CHECK(WASM::callCallable<std::int32_t>(*sljitCallable) == expected);
 	};
 
@@ -2236,6 +2238,60 @@ TEST_CASE("asmjit and sljit agree on array.new and array.len",
 		CHECK_THROWS(WASM::callCallable<std::int32_t>(*asmFn));
 		CHECK_THROWS(WASM::callCallable<std::int32_t>(*sljitFn));
 	}
+}
+
+
+TEST_CASE("asmjit and sljit keep an extern box alive across a table store",
+"[sljit][asmjit][parity][gc]")
+{
+	// GAP-15 / GR-10. `extern.convert_any` allocates an extern box that starts
+	// unowned, and `any.convert_extern` can free the box it consumes (which
+	// releases the inner reference). The operand stack owns one count of every
+	// reference it holds (docs/WRITING_A_BACKEND.md section 6), so the conversion
+	// has to take that count on the result and give the operand's up. Doing
+	// neither left the table pointing at a box whose count was zero: the spec
+	// suite saw a wrong `ref.test` answer under the Debug build's poison-on-free,
+	// and `churn` makes the same corruption visible in Release by handing the
+	// reclaimed block back out as an empty struct.
+	WASM::Module module = loadTestModule("gc_extern_box");
+	AsmJitBackend::Context asmContext;
+	AsmJitBackend::ModuleCompiler asmCompiler(asmContext);
+	Sljit::ModuleCompiler sljitCompiler;
+	WASM::RegistryImportResolver asmImports;
+	WASM::RegistryImportResolver sljitImports;
+	std::unique_ptr<WASM::ModuleInstance> asmInstance =
+			asmCompiler.instantiate(module, asmImports);
+	std::unique_ptr<WASM::ModuleInstance> sljitInstance =
+			sljitCompiler.instantiate(module, sljitImports);
+	REQUIRE(asmInstance != nullptr);
+	REQUIRE(sljitInstance != nullptr);
+
+	const auto call = [](WASM::ModuleInstance& instance, const char* name) -> WASM::Callable {
+		const std::optional<WASM::Callable> callable = instance.exportedFunction(name);
+		INFO("export " << name);
+		REQUIRE(callable.has_value());
+		REQUIRE(callable->fnPtr != nullptr);
+		return *callable;
+	};
+	// Both instances take the same sequence: fill the table, recycle the box's
+	// size class, then ask what the table holds.
+	const auto exercise = [&](WASM::ModuleInstance& instance) {
+		WASM::callCallable<std::int32_t>(call(instance, "fill"));
+		CHECK(WASM::callCallable<std::int32_t>(call(instance, "churn"), 64) == 64);
+		CHECK(WASM::callCallable<std::int32_t>(call(instance, "test_boxed"), 0) == 1);
+		CHECK(WASM::callCallable<std::int32_t>(call(instance, "test_boxed"), 1) == 1);
+		CHECK(WASM::callCallable<std::int32_t>(call(instance, "test_boxed"), 2) == 1);
+		CHECK(WASM::callCallable<std::int32_t>(call(instance, "test_nonnull"), 0) == 1);
+		CHECK(WASM::callCallable<std::int32_t>(call(instance, "test_nonnull"), 1) == 1);
+		CHECK(WASM::callCallable<std::int32_t>(call(instance, "test_nonnull"), 2) == 0);
+		CHECK(WASM::callCallable<std::int32_t>(call(instance, "unbox_i31")) == 8);
+		CHECK(WASM::callCallable<std::int32_t>(call(instance, "unbox_field")) == 5);
+		CHECK(WASM::callCallable<std::int32_t>(call(instance, "unbox_null_is_null")) == 1);
+	};
+	INFO("asmjit");
+	exercise(*asmInstance);
+	INFO("sljit");
+	exercise(*sljitInstance);
 }
 
 
@@ -3022,4 +3078,82 @@ std::memcpy(&first, frame + 8, sizeof(first));
 std::memcpy(&second, frame + 16, sizeof(second));
 CHECK(first == 101);
 CHECK(second == 52);
+}
+// GAP-11: the staged-import adapter used to have no ffi_type for a v128, so a
+// module that imported a native function *and* performed an indirect call to a
+// wide vector signature was refused at instantiation. The vector now travels as
+// its canonical C spelling (two uint64 words, low first) and the module runs.
+//
+// A native import of `(param v128 i32)` is the shape that makes the closure
+// itself carry a vector, and it is reachable only because a frame-form module
+// routes every native import through the adapter.
+namespace {
+
+std::int32_t wideV128HostAdd(WASM::VMContext*, std::int32_t value)
+{
+	return value + 1;
+}
+
+std::int32_t wideV128LaneOf(WASM::VMContext*, std::uint64_t low, std::uint64_t high,
+		std::int32_t lane)
+{
+	if (lane < 0 || lane > 3)
+		return -1;
+	const std::uint64_t words[2] = {low, high};
+	const std::uint32_t word = lane < 2 ? 0u : 1u;
+	const unsigned shift = 32u * static_cast<unsigned>(lane - 2 * static_cast<std::int32_t>(word));
+	return static_cast<std::int32_t>(static_cast<std::uint32_t>(words[word] >> shift));
+}
+
+} // namespace
+
+TEST_CASE("SLJIT carries a wide v128 indirect call beside a native import",
+		"[staging][sljit][abi][simd][call]")
+{
+	auto runtime = WASM::Runtime::create("sljit");
+	REQUIRE(runtime != nullptr);
+	auto module = runtime->loadFile(
+			std::filesystem::path(WASM_TEST_DIR) / "wide_v128_indirect_probe.wasm");
+	WASM::RegistryImportResolver imports;
+	imports.registerFunction("env", "host_add", WASM::nativeImport<&wideV128HostAdd>());
+	WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+	// The `$lane` callee is wide and therefore frame-form, but the *exported*
+	// wrappers are narrow: under the per-signature rule they keep the register
+	// form, and the module as a whole is mixed (`GAP-1`, `GR-8`). The call site
+	// still has to enter `$lane` through its own frame form.
+	CHECK_FALSE(instance.frameCallAbi());
+	const auto call = [&](const char* name) -> WASM::Callable {
+		const std::optional<WASM::Callable> callable = instance.exportedFunction(name);
+		INFO("export " << name);
+		REQUIRE(callable.has_value());
+		REQUIRE(callable->fnPtr != nullptr);
+		CHECK_FALSE(WASM::callableUsesFrameForm(*callable));
+		return *callable;
+	};
+
+	CHECK(WASM::callCallable<std::int32_t>(call("indirect")) == 30);
+	CHECK(WASM::callCallable<std::int32_t>(call("host"), std::int32_t(41)) == 42);
+}
+
+// The closure itself: a frame-form callee routes the native import through the
+// staged adapter, so a host function that takes a `v128` reaches the two-word
+// spelling added for GAP-11. The host reads lane 2 of `i32x4 10 20 30 40`.
+TEST_CASE("SLJIT stages a v128 native import through the adapter",
+		"[staging][sljit][abi][simd][call]")
+{
+	auto runtime = WASM::Runtime::create("sljit");
+	REQUIRE(runtime != nullptr);
+	auto module = runtime->loadFile(
+			std::filesystem::path(WASM_TEST_DIR) / "wide_v128_import_probe.wasm");
+	WASM::RegistryImportResolver imports;
+	imports.registerFunction("env", "lane_of", WASM::nativeImport<&wideV128LaneOf>());
+	WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+	// `$wideUser` selects the frame; the `staged` wrapper is narrow and keeps the
+	// register form, so the module is mixed and the export is called directly.
+	CHECK_FALSE(instance.frameCallAbi());
+	const std::optional<WASM::Callable> callable = instance.exportedFunction("staged");
+	REQUIRE(callable.has_value());
+	REQUIRE(callable->fnPtr != nullptr);
+	CHECK_FALSE(WASM::callableUsesFrameForm(*callable));
+	CHECK(WASM::callCallable<std::int32_t>(*callable, std::int32_t(2)) == 30);
 }

@@ -73,15 +73,17 @@ public:
 	 * \param funcType Declared signature of the function.
 	 * \param body Decoded body whose opcode stream is walked.
 	 * \param functionIndex Module function index, used for the trap-site annotation.
-	 * \param frameCallAbi True to emit the staging-frame ABI (`void fn(VMContext*, void* frame)`) instead of the register form; set module-wide by the compiler (docs/ABI.md).
+	 * \param frameCallAbi True to emit the staging-frame ABI (`void fn(VMContext*, void* frame)`) for *this* function instead of the register form; the compiler derives it from the function's own signature (docs/ABI.md).
 	 * \param tagIds The instance's tag index space, imports first, so a `throw tagidx` folds to its canonical id (docs/proposals/EXCEPTIONS.md EX-2).
 	 * \param internals Instance callables, used to embed a direct tail-call target.
+	 * \param frameByType Call form per module-local type index, so a call site emits the callee type's form.
 	 * \param profileConfig The active profile; its `N` marker enables deterministic NaN canonicalisation at observable boundaries (docs/proposals/PROFILES.md PR-3).
 	 */
 	OpcodeDispatcher(const WASM::Module& module, const WASM::FuncType& funcType,
 			const WASM::FunctionBody& body, std::uint32_t functionIndex,
 			bool frameCallAbi, const std::vector<WASM::TagId>& tagIds,
 			WASM::ModuleInstanceInternals& internals,
+			std::span<const std::uint8_t> frameByType,
 			WASM::ProfileConfig profileConfig);
 
 	/*!
@@ -918,6 +920,21 @@ private:
 	sljit_sw frameSlotOffset() const;
 	/** \brief Offset of the staging scratch area used to build a callee frame. \return Frame offset in bytes. */
 	sljit_sw callFrameOffset() const;
+	/*!
+	 * \brief Records one staging-area request during the measurement pass.
+	 * \param bytes Bytes the request needs from the call area.
+	 */
+	void noteStagingFrame(std::size_t bytes);
+	/*!
+	 * \brief Records a frame-form call's argument and result block.
+	 * \param type Callee signature.
+	 */
+	void noteCallStaging(const WASM::FuncType& type);
+	/*!
+	 * \brief Slots the call area reserves after the operand stack.
+	 * \return The register-result slots plus the measured staging slots.
+	 */
+	std::size_t callAreaSlots() const;
 	//! True when this module compiles to the staging-frame ABI
 	//! (`docs/ABI.md`): `void fn(VMContext*, void* frame)`,
 	//! with every parameter and result in the caller's frame.
@@ -1203,6 +1220,8 @@ private:
 	 */
 	void emitResolvedCall(const WASM::FuncType& type, int callableReg,
 			void* stagedImport, bool calleeFrameForm);
+	//! True when the function type at `typeIndex` uses the staging frame.
+	bool calleeUsesFrameForm(std::uint32_t typeIndex) const;
 	/*!
 	 * \brief Returns the staged native-import entry a call of @p type needs.
 	 *
@@ -1210,10 +1229,11 @@ private:
 	 * not frame-form, and null when the shape carries a `v128` (outside the
 	 * uniform slot model the adapter marshals).
 	 *
+	 * \param typeIndex Callee type index (selects the call form).
 	 * \param type Callee signature.
 	 * \return A `void(VMContext*, Callable*, void* frame)` entry, or null.
 	 */
-	void* stagedImportFor(const WASM::FuncType& type);
+	void* stagedImportFor(std::uint32_t typeIndex, const WASM::FuncType& type);
 
 	/*!
 	 * \brief Validates a memory index and returns its type.
@@ -1332,6 +1352,35 @@ private:
 	 * \param address Helper entry point.
 	 */
 	void emitV128Binary(sljit_sw address);
+	//! `SIMD-8`: native 128-bit bitwise, false when the target has no vectors.
+	bool emitV128BitwiseNative(sljit_s32 operation);
+	/*!
+	 * \brief `SIMD-8`: native splat over the top scalar slot, if available.
+	 * \param width Lane width in bytes (1, 2, 4 or 8).
+	 * \return True when the native form was emitted and the stack updated.
+	 */
+	bool emitV128SplatNative(int width);
+	/*!
+	 * \brief `SIMD-8`: native `extract_lane`, if available.
+	 * \param width Lane width in bytes (1, 2, 4 or 8).
+	 * \param lane Lane index.
+	 * \param signedLane True for `extract_lane_s`, false for `extract_lane_u`.
+	 * \return True when the native form was emitted and the stack updated.
+	 */
+	bool emitV128ExtractNative(int width, std::uint8_t lane, bool signedLane);
+	/*!
+	 * \brief `SIMD-8`: native `replace_lane` merging into the top vector, if available.
+	 * \param width Lane width in bytes (1, 2, 4 or 8).
+	 * \param lane Lane index.
+	 * \return True when the native form was emitted and the stack updated.
+	 */
+	bool emitV128ReplaceNative(int width, std::uint8_t lane);
+	/*!
+	 * \brief The `SLJIT_SIMD_ELEM_*` constant for a lane width.
+	 * \param width Lane width in bytes (1, 2, 4 or 8).
+	 * \return The matching vector element-size constant.
+	 */
+	static sljit_s32 simdElementType(int width);
 	void emitV128F16Binary(uint32_t op, sljit_sw address); //!< Binary `f16x8` helper with its sub-opcode.
 	//! Emits a ternary v128 helper (`a`, `b`, `c`, `out`) over the top three slots.
 	void emitV128Ternary(sljit_sw address);
@@ -1630,6 +1679,9 @@ public:
 	const std::vector<WASM::TagId>& tagIds_; //!< Instance tag index space, imports first.
 	std::uint32_t functionIndex_; //!< Module function index (trap-site annotation).
 	WASM::ModuleInstanceInternals& internals_; //!< Instance callables for direct tail targets.
+	//! Call form per module-local type index (non-zero = staging frame), so a
+	//! call site emits the *callee type's* form instead of the caller module's.
+	std::span<const std::uint8_t> frameByType_;
 	bool tailTrampoline_ = false; //!< True when this body may write TailCallState.
 	const char* functionName_ = nullptr; //!< Name-section name, or null.
 
@@ -1659,6 +1711,9 @@ public:
 	std::size_t maxStackDepth_ = 0; //!< High-water mark of the operand stack.
 	//! Set during measurement when the body uses a frame-form call.
 	mutable bool needsStagingCall_ = false;
+	//! Largest staging-area request measured in the first pass, in bytes. The
+	//! prologue sizes the call area from it instead of a fixed cap.
+	std::size_t maxStagingCallBytes_ = 0;
 	//! Set during measurement when the body uses a continuation operation.
 	mutable bool needsContinuationFrame_ = false;
 	//! Operand depth the prologue reserved on the emitting pass. A push past it

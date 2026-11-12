@@ -205,6 +205,10 @@ void invokeScalarI32(void* target, void* context,
 		const ContinuationValue* args, std::uint32_t argCount,
 		ContinuationValue* results, std::uint32_t resultCount,
 		const std::uint8_t* paramKinds, const std::uint8_t* resultKinds);
+void invokeFfiContinuation(void* target, void* context,
+		const ContinuationValue* args, std::uint32_t argCount,
+		ContinuationValue* results, std::uint32_t resultCount,
+		const std::uint8_t* paramKinds, const std::uint8_t* resultKinds);
 
 struct Worker : std::enable_shared_from_this<Worker> {
 	const ContinuationProvider provider;
@@ -439,11 +443,16 @@ void invokeScalarI32(void* target, void* context,
 		ContinuationValue* results, std::uint32_t resultCount,
 		const std::uint8_t* paramKinds, const std::uint8_t* resultKinds)
 {
-	(void)paramKinds;
-	(void)resultKinds;
 	Callable copy = *static_cast<Callable*>(target);
 	if (copy.context == nullptr)
 		copy.context = static_cast<VMContext*>(context);
+	// A frame-form target needs the frame contract; the ffi invoker builds the
+	// frame from the same kind arrays this scalar path receives (`GR-8`).
+	if (WASM::callableUsesFrameForm(copy)) {
+		invokeFfiContinuation(&copy, context, args, argCount, results, resultCount,
+				paramKinds, resultKinds);
+		return;
+	}
 	switch (argCount) {
 	case 0:
 		if (resultCount != 0)
@@ -859,8 +868,13 @@ ContinuationStatus BWorker::resumeSwitchPeer(std::uint64_t expectedGeneration,
 	std::unique_lock<std::mutex> callerLock(caller->mutex);
 	caller->cv.notify_all();
 	caller->cv.wait(callerLock, [caller] {
-		return caller->state == WorkerState::Running;
+		// A cancelled caller never becomes Running again: without this the wait
+		// would outlive the cancellation and the thread would never join.
+		return caller->state == WorkerState::Running
+				|| caller->cancelRequested;
 	});
+	if (caller->cancelRequested || caller->state != WorkerState::Running)
+		return ContinuationStatus::Invalid;
 	return ContinuationStatus::Completed;
 }
 
@@ -1401,6 +1415,32 @@ bool continuationRefRelease(void* ref) noexcept
 	return true;
 }
 
+// A suspended continuation is a live native stack, and its handles are counts that only
+// compiled code releases. When the instance that created them is destroyed nothing can
+// resume or drop what is left, so teardown releases the handles here, while the store and
+// the instance's storage are still alive. Destroying a worker cancels what it parked
+// (`AWorker::~AWorker` resumes the fiber with the cancel flag, `~BWorker` wakes and joins
+// its thread), which is what releases the values it still owned.
+void releaseContinuationsFor(VMContext* context) noexcept
+{
+	if (context == nullptr)
+		return;
+	std::vector<Continuation*> doomed;
+	try {
+		std::lock_guard<std::mutex> lock(registryMutex());
+		for (Continuation* handle : registry()) {
+			if (handle->worker && handle->worker->creationContext == context)
+				doomed.push_back(handle);
+		}
+		for (Continuation* handle : doomed)
+			registry().erase(handle);
+	} catch (...) {
+		return;
+	}
+	for (Continuation* handle : doomed)
+		delete handle;
+}
+
 HostContinuation::HostContinuation(void* ref, bool takeOwnership) noexcept
 {
 	if (!isContinuationRef(ref))
@@ -1849,8 +1889,8 @@ void invokeFfiContinuation(void* target, void* context,
 	if (callable == nullptr || callable->fnPtr == nullptr)
 		throw std::runtime_error("continuation invoker has no target");
 	void* calleeContext = callable->context != nullptr ? callable->context : context;
-	auto* instance = static_cast<WASM::ModuleInstance*>(context);
-	const bool frameAbi = instance != nullptr && instance->frameCallAbi();
+	// The continuation target's own type decides its form (`GAP-1`, `GR-8`).
+	const bool frameAbi = WASM::callableUsesFrameForm(*callable);
 	if (frameAbi) {
 		std::vector<WASM::ValueKind> params;
 		params.reserve(argCount);
@@ -2011,10 +2051,19 @@ void wasm_cont_suspend_ops(VMContext* context, std::uint64_t packedTags,
 		for (const StorageType& result : tag.results)
 			resultKinds.push_back(continuationKindOf(result.val.opcode));
 		std::uint32_t count = 0;
+		// `resultCapacity` is the bound for the *output* array **and** the number
+		// of entries `resultKinds` carries (docs/API_ABI_STABILITY.md `GAP-14`):
+		// `AWorker::suspend` copies that many kind bytes. Passing the frame's raw
+		// capacity here read past a one-byte kind vector, which is a heap-buffer
+		// overflow under ASan. The tag's declared result list is the correct
+		// bound, and the frame cannot hold more than its own capacity.
+		const std::uint32_t resultCapacity = static_cast<std::uint32_t>(
+				std::min<std::size_t>(tag.results.size(),
+						static_cast<std::size_t>(ContinuationOpFrame::kCapacity)));
 		const std::int32_t resumed = wasm_cont_suspend_ex(static_cast<std::int32_t>(runtimeTag),
 				frame->args, static_cast<std::uint32_t>(tag.params.size()),
 				argKinds.empty() ? nullptr : argKinds.data(),
-				frame->results, ContinuationOpFrame::kCapacity, &count,
+				frame->results, resultCapacity, &count,
 				resultKinds.empty() ? nullptr : resultKinds.data());
 		frame->result.status = resumed;
 		frame->result.resultCount = count;

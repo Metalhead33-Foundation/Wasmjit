@@ -2,8 +2,9 @@
 
 *Pre-Feasibility, Full Feasibility, and the Entry-Gate Readiness Audit*
 
-Status: process definition / study charter (revision 5 — 2026-10-30). `LF-0a` has
-been run ([`READINESS_AUDIT.md`](READINESS_AUDIT.md)), `LF-1` produced the
+Status: process definition / study charter (revision 6 — 2026-11-11: §5.1
+states how a verdict renders on GitHub and gains a guard). `LF-0a` has been
+run ([`READINESS_AUDIT.md`](READINESS_AUDIT.md)), `LF-1` produced the
 [`languages/`](languages/index.md) screen, and `LF-2` produced the `LF2_*`
 reports. **This note defines the studies and the audit that gates them; it runs
 none of them.** No language is evaluated here, no candidate is screened, and
@@ -75,9 +76,9 @@ compiled, and no proof of concept is required.
   gets a row and a reason (§7.5).
 - It must **avoid pretending that unverified technical assumptions are
   established facts**. Each row carries an evidence tier (§7.4).
-- It must **not attempt verdicts**. Green/yellow/red is a full-study output
+- It must **not attempt verdicts**. 🟩 green/🟨 yellow/🟥 red is a full-study output
   (§8.5); the scoping study reports three quick-triage axes (§7.1) and, where a
-  kill signal is already visible, a black early exit (§5.2).
+  kill signal is already visible, a ⬛ black early exit (§5.2).
 
 **Acceptance sentence.** The pre-feasibility study is done when it can say, for
 every candidate — *(1) the single most likely architectural blocker given the
@@ -141,12 +142,12 @@ The audit is not a third column below — it is a precondition on both columns.
 | **Evidence** | Existing knowledge + lightweight research | Compiler/runtime documentation + generated-WASM inspection + PoCs |
 | **Cost** | Small, time-boxed | Charter-capped, per cluster |
 | **Output** | Triage table, clustering, triggers, charters, don't-study list | Verdict per candidate, criteria table, PoCs, gap list |
-| **May conclude** | "Worth studying", "not worth studying now", "blocked" | Green / yellow / red, with the engine work named |
-| **May not conclude** | Supported/unsupported, green/yellow/red | A support promise beyond the tested versions |
+| **May conclude** | "Worth studying", "not worth studying now", "blocked" | 🟩 Green / 🟨 yellow / 🟥 red, with the engine work named |
+| **May not conclude** | Supported/unsupported, 🟩 green/🟨 yellow/🟥 red | A support promise beyond the tested versions |
 
 ### 2.4 What none of them is
 
-- **Not a support commitment.** A green verdict means "a PoC works at this
+- **Not a support commitment.** A 🟩 green verdict means "a PoC works at this
   version"; support is a project decision (`LF-3`), not a study result.
 - **Not a port.** None of them writes product code, adds a toolchain to the
   build, or changes `WasmBase/` or a backend. If an engine gap blocks a
@@ -217,8 +218,8 @@ How the rows are used:
   assumes multi-agent execution is evaluated against that contract, not against
   the spec's ceiling.
 - **"Intended use" keeps the other rows honest.** A language that is excellent
-  for standalone CLI tools and useless for gameplay mods is red for *our* goals
-  even if every other row is green. The library's stated direction is a QVM
+  for standalone CLI tools and useless for gameplay mods is 🟥 red for *our* goals
+  even if every other row is 🟩 green. The library's stated direction is a QVM
   successor for game embedding ([`ABI.md`](ABI.md) "Design Philosophy").
 - **Every answer names the version it applies to**: compiler/toolchain version,
   flags, and the date of the documentation or spec revision consulted.
@@ -227,34 +228,53 @@ How the rows are used:
 
 ### 5.1 The colour code
 
+GitHub-flavoured Markdown has no colour syntax: a `<span style="color:…">` is
+sanitised out of rendered Markdown, so the only portable way to *show* a colour
+is a swatch character. Every verdict in this note, in
+[`languages/`](languages/index.md) and in [`SCOPE.md`](SCOPE.md) §7.1 (which quotes
+the verdicts for the claimed guest-language set) is therefore written as a
+**swatch followed by the colour's name**:
+
 | Colour | Meaning |
 |---|---|
-| **Green** | Likely to work with our existing runtime and a relatively small **embedder-side shim**. |
-| **Yellow** | Viable, but requires substantial runtime support, ABI work, or toolchain configuration. |
-| **Red** | Incompatible with our current goals or disproportionately expensive to support. |
-| **Black** | Meets a kill criterion / early exit: a clear signal that a full study of this language would waste tokens. |
+| 🟩 **Green** | Likely to work with our existing runtime and a relatively small **embedder-side shim**. |
+| 🟨 **Yellow** | Viable, but requires substantial runtime support, ABI work, or toolchain configuration. |
+| 🟥 **Red** | Incompatible with our current goals or disproportionately expensive to support. |
+| ⬛ **Black** | Meets a kill criterion / early exit: a clear signal that a full study of this language would waste tokens. |
+
+**Why the swatch is written beside the word, and not instead of it.** The emoji
+is what a rendered page shows; the word keeps the verdict greppable
+(`grep 'Yellow'`), readable in a monochrome terminal or a plain-text mail, and
+announced by a screen reader. Neither half is optional. Prose that names the code
+uses the same pair — `🟩 green`, `🟨 yellow`, `🟥 red`, `⬛ black` — and a list of
+them is always written in that order, so a verdict reads the same whether the
+reader sees the emoji or not.
 
 Rules:
 
 - A colour is a **verdict**, and only a full feasibility study may assign
-  green/yellow/red (§8.5). A scoping row must not carry one.
-- **Black is the exception.** A kill signal can be observed during scoping, and
-  observing one is exactly what stops a wasted study. A black row names its
+  🟩 green / 🟨 yellow / 🟥 red (§8.5). A scoping row must not carry one.
+- **⬛ Black is the exception.** A kill signal can be observed during scoping, and
+  observing one is exactly what stops a wasted study. A ⬛ black row names its
   signal (`K1`…`K5`) and its evidence tier.
 - Colours are per **(language, toolchain, version)**, never eternal properties
-  of a language. A red verdict expires when the toolchain or the engine changes
+  of a language. A 🟥 red verdict expires when the toolchain or the engine changes
   materially.
 - Every colour needs the §4 table behind it. No colour by vibe, and no colour
   from a single blog post.
+- **A swatch marks a verdict, not a run.** A sentence that calls a test suite
+  "green" is reporting a result of `./Test/WasmJit`, and it takes no swatch; only
+  the four meanings in the table above are colour-coded. Where a document quotes a
+  run and a verdict in the same row, only the verdict carries the swatch.
 
 **Why "shim" rather than "host API".** The engine owns the hook/dispatch
 mechanism; a language's per-module glue — import names and marshalling,
 host-function registration, JS integration, a threading adapter — lives on the
-embedder's side of that seam. Green therefore means the shim is small and the
+embedder's side of that seam. 🟩 Green therefore means the shim is small and the
 engine needs no new surface; it does not mean the language needs no host work.
 §6.3 fixes which side owns what.
 
-### 5.2 Kill criteria (black / early exit)
+### 5.2 Kill criteria (⬛ black / early exit)
 
 A kill signal is about the **study being unproductive**, not about the language
 being bad. Any one of these is enough to stop before commissioning a full study:
@@ -327,7 +347,7 @@ That is why §6.5 defines when the audit must be repeated.
 | ID | Surface | What must be pinned | Why the screening depends on it | Evidence to cite |
 |---|---|---|---|---|
 | **RG1** | **Calling convention and ABI** | The `VMContext*` arg0 convention, `Callable`, the multi-result buffer, `v128`/reference passing, and the trap/exception boundary. | "Friction with our ABI" is a per-language question only if the target ABI is fixed. | [`ABI.md`](ABI.md), the host-ABI tests |
-| **RG2** | **Core proposal support** | GC, exceptions, threads (**shared memory + atomics under the current single-agent contract**), SIMD, reference types, multi-memory and memory64: implemented / partial / upstream-blocked, each with its owning note and status. | Each one flips languages between colour bands — a GC language is red if GC is not pinned; a threading runtime is yellow if only single-agent threads are. | The proposal notes, the table in [`README.md`](../README.md) "Proposal notes" |
+| **RG2** | **Core proposal support** | GC, exceptions, threads (**shared memory + atomics under the current single-agent contract**), SIMD, reference types, multi-memory and memory64: implemented / partial / upstream-blocked, each with its owning note and status. | Each one flips languages between colour bands — a GC language is 🟥 red if GC is not pinned; a threading runtime is 🟨 yellow if only single-agent threads are. | The proposal notes, the table in [`README.md`](../README.md) "Proposal notes" |
 | **RG3** | **Hook/dispatch mechanism** | How the opt-in hooks are registered (`HostBridge`, the JS-integration seam), and whether the `ImportResolver` → dispatcher → native-import path and its shape are settled. | A language's imports and exports are routed through this. If its shape moves, the answer to "how does it call a host function?" moves with it. | [`ABI.md`](ABI.md) "External host adapter", [`proposals/JS_INTEGRATION.md`](proposals/JS_INTEGRATION.md), the host-import tests |
 | **RG4** | **Memory model** | How multi-memory and shared memory are exposed to the embedder, and how much layout control the embedder gets: memory indices, heap base, stack, GC heap, thread-local storage. | The full study's ideal outcome is some layout decision power. The scoping study can judge friction only if the current engine/embedder split is pinned. | [`proposals/MULTI_MEMORY.md`](proposals/MULTI_MEMORY.md), [`proposals/THREADS.md`](proposals/THREADS.md), [`SAFETY.md`](SAFETY.md) §2.3 |
 | **RG5** | **Embedding API** | Registering host functions, instantiating, reading and writing linear memory, and calling exports. Is it versioned, and what is stable versus explicitly planned? | The PoC bar and the "small embedder-side shim" are measured against this API. | [`EMBEDDING_SURFACE.md`](EMBEDDING_SURFACE.md) §2/§4/§7, [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §2.2 |
@@ -471,14 +491,14 @@ The study must produce all five, in this order:
 | **Trigger** | The condition from §7.7 that would start the full study. |
 
 **No colour column.** Colour is a full-study output; the only allowed marker is
-a black kill with its `K` id (§5.2).
+a ⬛ black kill with its `K` id (§5.2).
 
 ### 7.4 Evidence tiers
 
 | Tier | Name | What it is | May it be the sole basis for a decision? |
 |---|---|---|---|
 | **E1** | Well-documented | A published toolchain document, a released artifact that was inspected, or a specification clause. | Yes. |
-| **E2** | Corroborated | Two or more independent secondary sources (release notes, issue threads, third-party write-ups), no artifact inspected. | Yes for inclusion in the shortlist; **no** for a green/yellow/red verdict. |
+| **E2** | Corroborated | Two or more independent secondary sources (release notes, issue threads, third-party write-ups), no artifact inspected. | Yes for inclusion in the shortlist; **no** for a 🟩 green/🟨 yellow/🟥 red verdict. |
 | **E3** | Speculative | One source, inference from an adjacent language, or model/author knowledge. | **No.** It may justify "study this" or "defer", never "this works" or "this cannot work". |
 
 Every triage row carries a tier. A sentence that rests on `E3` must be phrased
@@ -640,19 +660,19 @@ The §2.2 scope, expanded into the concrete questions a report must answer:
 | **Inspection** | The command and the relevant excerpt: imports, exports, memories, start function, custom sections. |
 | **PoC run** | The transcript, naming the export called and the host import used. |
 | **Criteria** | A filled §4 table; "unknown" is allowed only with a reason. |
-| **Work** | For yellow/red, the engine work named and classed per [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §4.1. |
+| **Work** | For 🟨 yellow/🟥 red, the engine work named and classed per [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §4.1. |
 
 ### 8.5 Verdict rules
 
-- **Green**: the §7.8 bar passes, the embedder-side shim needed is small and the
+- 🟩 **Green**: the §7.8 bar passes, the embedder-side shim needed is small and the
   engine needs no new surface, and the §4 table has no conflict with the intended
   use.
-- **Yellow**: the bar passes only with specified engine work, ABI work or
+- 🟨 **Yellow**: the bar passes only with specified engine work, ABI work or
   toolchain configuration; the report names that work, its class (A–E), and what
   closing it would buy.
-- **Red**: incompatible with the current goals or disproportionately expensive;
+- 🟥 **Red**: incompatible with the current goals or disproportionately expensive;
   the report names the goal it conflicts with, or the cost it cannot justify.
-- **Black never survives into a full study.** A killed candidate is not studied;
+- **⬛ Black never survives into a full study.** A killed candidate is not studied;
   if the kill is suspected to be wrong, the right move is to re-open `LF-1` with
   new evidence, not to burn a charter on it.
 - A verdict is scoped to the tested versions and expires when the toolchain or
@@ -705,7 +725,7 @@ on `LF-1` and on a named requester (`T3`).
 
 | Forbidden claim | Why |
 |---|---|
-| **"WasmJit supports language X."** | Support is a milestone decision (`LF-3`), not a study result. A green verdict says "a PoC works at these pinned versions". |
+| **"WasmJit supports language X."** | Support is a milestone decision (`LF-3`), not a study result. A 🟩 green verdict says "a PoC works at these pinned versions". |
 | **"Language X does not work."** from scoping evidence | `E2`/`E3` evidence cannot establish a negative; only a full study with a failed PoC, or a named kill signal (`K1`–`K5`), can. |
 | **A support status derived from a blog post, a README badge, or a demo.** | The demo proves someone shipped *a* module; it does not prove our ABI, our memory model or our import surface. |
 | **A toolchain recommendation to embedders.** | The project has no supported language list yet; a study is internal evidence, not an endorsement. |
@@ -720,7 +740,7 @@ on `LF-1` and on a named requester (`T3`).
 |---|---|---|---|
 | **`LF-0` — Define the studies and the gate** | `✅` This note: the vocabulary, the two protocols, the entry-gate audit, the colour/kill codes, the outputs, the budgets. | — | This note is reviewed and linked from `README.md`, `API_ABI_STABILITY.md` §12 and `AGENTS.md`. |
 | **`LF-0a` — Entry-gate readiness audit** | `✅` **Run 2026-10-30** at `5c3d194`: [`READINESS_AUDIT.md`](READINESS_AUDIT.md) states `RG1`–`RG6` with evidence, and re-checks `G3` in the same sweep. All six rows `Pinned`; one limitation recorded against `RG4` (`RA4`); no dated waiver needed. **Not a language study.** | `LF-0` | Every row has a state, evidence and a date; the moving-targets list exists; no row is `Unpinned` (or a dated waiver says why). |
-| **`LF-1` — Pre-feasibility / scoping study** | `✅` **Run 2026-10-30**: the output is the [`languages/`](languages/index.md) set — [`TRIAGE.md`](languages/TRIAGE.md) (102 rows over all 84 entries), [`CLUSTERING.md`](languages/CLUSTERING.md) (`L1`–`L12`, 5 charters, the don't-study list), [`CHARTERS.md`](languages/CHARTERS.md) (`S1`–`S5`, all proposed) and [`EVIDENCE.md`](languages/EVIDENCE.md). **Re-screened three times the same day** as engine-owned surfaces moved (§6.5): the legacy-EH policy, then `LE-9`, then `MP-1` (a memory reservation policy) — seven rows re-graded in total, no cluster, tier, kill or shortlist position moved ([`languages/TRIAGE.md`](languages/TRIAGE.md) §6.9–§6.12). That sequence also produced the screen's working rule for what the engine owes a language (§3.1 there: *load, instantiate, execute; the host import set is the embedder's*). | `LF-0a` | A triage table over the whole list (every row evidence-tiered), a dependency/abstraction map, trigger conditions, one charter per recommended cluster, and a don't-study list. **No green/yellow/red verdicts**, black kills only. |
+| **`LF-1` — Pre-feasibility / scoping study** | `✅` **Run 2026-10-30**: the output is the [`languages/`](languages/index.md) set — [`TRIAGE.md`](languages/TRIAGE.md) (102 rows over all 84 entries), [`CLUSTERING.md`](languages/CLUSTERING.md) (`L1`–`L12`, 5 charters, the don't-study list), [`CHARTERS.md`](languages/CHARTERS.md) (`S1`–`S5`, all proposed) and [`EVIDENCE.md`](languages/EVIDENCE.md). **Re-screened three times the same day** as engine-owned surfaces moved (§6.5): the legacy-EH policy, then `LE-9`, then `MP-1` (a memory reservation policy) — seven rows re-graded in total, no cluster, tier, kill or shortlist position moved ([`languages/TRIAGE.md`](languages/TRIAGE.md) §6.9–§6.12). That sequence also produced the screen's working rule for what the engine owes a language (§3.1 there: *load, instantiate, execute; the host import set is the embedder's*). | `LF-0a` | A triage table over the whole list (every row evidence-tiered), a dependency/abstraction map, trigger conditions, one charter per recommended cluster, and a don't-study list. **No 🟩 green/🟨 yellow/🟥 red verdicts**, ⬛ black kills only. |
 | **`LF-2` — Full feasibility studies** | One study per chartered cluster, using the §8 protocol. **Run 2026-10-30**: fifteen arms across `S1`–`S5`, reports in [`languages/LF2_INDEX.md`](languages/LF2_INDEX.md). Three engine findings (`F1`–`F3`), each classed and reproduced; 83 non-killed rows were not run and are listed with a condition ([`languages/LF2_L6_L12.md`](languages/LF2_L6_L12.md) §5). | `LF-1` | One report per cluster: filled §4 table, colour verdict per pinned version, reproducible PoCs, budget respected, engine work named and classed. |
 | **`LF-3` — The support decision** | Decide which, if any, language/toolchain receives engine work; classify that work. **Not a study, not started.** | `LF-2` | A milestone decision, not a commit: each follow-up item has a class per [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §4.1 and a gate it touches. |
 
@@ -766,7 +786,7 @@ reviewable artefact is the study report itself, and its evidence rules are §8.4
   the official / canonical candidate list for the scoping study, read by `LF-1`
   at commit `98da486` (2026-05-22) on 2026-10-30.
 - [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §2, §4.1, §9 — the current
-  milestone, the gap classes that a "yellow" verdict must use, and the recorded
+  milestone, the gap classes that a "🟨 yellow" verdict must use, and the recorded
   non-goals (`AASD6`: no text format, no interpreter, no JS engine, no WASI
   implementation) that feed the kill criteria.
 - [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §2.2/§7.5 and

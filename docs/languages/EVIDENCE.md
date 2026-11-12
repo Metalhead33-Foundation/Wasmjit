@@ -33,7 +33,7 @@ toolchain versions, module hashes and transcripts — is a separate log,
 | Tier | What it is | May it carry a decision here? |
 |---|---|---|
 | **E1** | A published toolchain/spec document, or a released artifact that was inspected | Yes — it may support a *shortlist* decision and a phrased claim ("the toolchain documents a standalone output") |
-| **E2** | Two or more independent secondary sources, or one authoritative-but-indirect one (a list entry that links the toolchain) | Yes for shortlisting; **no** for green/yellow/red |
+| **E2** | Two or more independent secondary sources, or one authoritative-but-indirect one (a list entry that links the toolchain) | Yes for shortlisting; **no** for 🟩 green/🟨 yellow/🟥 red |
 | **E3** | One source, inference from an adjacent toolchain, or author/model knowledge | Only as a hypothesis phrased "likely"/"expected", or to justify "study this" or "defer" |
 
 Every external row is stamped with the date it was fetched **and** the version

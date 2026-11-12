@@ -566,12 +566,11 @@ TEST_CASE("tail calls compute correct results")
 	REQUIRE(incRef.has_value());
 	REQUIRE(constViaRef.has_value());
 
-	// The multi-result `pair_via_tail` signature makes AsmJIT choose the
-	// staging-frame ABI for the whole module. Marshal through that form when the
-	// instance reports it; the register calls above remain the LibJIT path.
-	const bool frameAbi = loaded.instance->frameCallAbi();
+	// Each export is marshalled in **its own** call form: the multi-result and
+	// wide signatures are frame-form while the narrow ones keep the register
+	// form, so this module is mixed (`GAP-1`, `GR-8`).
 	const auto callI32_0 = [&](const WASM::Callable& callable) -> std::int32_t {
-		if (!frameAbi)
+		if (!WASM::callableUsesFrameForm(callable))
 			return WASM::callCallable<std::int32_t>(callable);
 		alignas(16) std::array<std::uint8_t, 8> frame{};
 		WASM::callCallableFrame(callable, frame.data());
@@ -580,7 +579,7 @@ TEST_CASE("tail calls compute correct results")
 		return result;
 	};
 	const auto callI32_1 = [&](const WASM::Callable& callable, std::int32_t arg) -> std::int32_t {
-		if (!frameAbi)
+		if (!WASM::callableUsesFrameForm(callable))
 			return WASM::callCallable<std::int32_t>(callable, arg);
 		alignas(16) std::array<std::uint8_t, 16> frame{};
 		std::memcpy(frame.data(), &arg, sizeof(arg));
@@ -590,7 +589,7 @@ TEST_CASE("tail calls compute correct results")
 		return result;
 	};
 	const auto callI64_1 = [&](const WASM::Callable& callable, std::int64_t arg) -> std::int64_t {
-		if (!frameAbi)
+		if (!WASM::callableUsesFrameForm(callable))
 			return WASM::callCallable<std::int64_t>(callable, arg);
 		alignas(16) std::array<std::uint8_t, 24> frame{};
 		std::memcpy(frame.data(), &arg, sizeof(arg));
@@ -601,7 +600,7 @@ TEST_CASE("tail calls compute correct results")
 	};
 	const auto callI64_2 = [&](const WASM::Callable& callable, std::int64_t first,
 			std::int64_t second) -> std::int64_t {
-		if (!frameAbi)
+		if (!WASM::callableUsesFrameForm(callable))
 			return WASM::callCallable<std::int64_t>(callable, first, second);
 		alignas(16) std::array<std::uint8_t, 32> frame{};
 		std::memcpy(frame.data(), &first, sizeof(first));
@@ -613,7 +612,7 @@ TEST_CASE("tail calls compute correct results")
 	};
 	const auto callPair = [&](const WASM::Callable& callable, std::int32_t arg,
 			std::array<std::uint8_t, 16>& results) {
-		if (!frameAbi) {
+		if (!WASM::callableUsesFrameForm(callable)) {
 			WASM::callCallableWithResults(callable, results.data(), arg);
 			return;
 		}
@@ -632,9 +631,7 @@ TEST_CASE("tail calls compute correct results")
 	REQUIRE(callI64_2(*facAcc, int64_t(1), int64_t(1)) == 1);
 	REQUIRE(callI64_2(*facAcc, int64_t(5), int64_t(1)) == 120);
 	REQUIRE(callI64_2(*facAcc, int64_t(25), int64_t(1)) == INT64_C(7034535277573963776));
-	REQUIRE((frameAbi
-			? callI64_2(*facAccI32, 5, 1) == 120
-			: WASM::callCallable<int64_t>(*facAccI32, int32_t(5), int32_t(1)) == 120));
+	REQUIRE(callI64_2(*facAccI32, 5, 1) == 120);
 
 	// Space guarantee for direct self-recursion: `return_call $count` is lowered
 	// to a native tail call, so 10^7 frames run in constant stack. Without that
@@ -2149,8 +2146,7 @@ TEST_CASE("component runtime lifts a canonical string")
 	REQUIRE(function->paramTypes.size() == 1);
 	REQUIRE(function->resultTypes.size() == 1);
 	const WASM::Callable coreEcho = runtime.coreFunction(0);
-	const bool coreFrameAbi = coreEcho.rawFnPtr != nullptr && coreEcho.context != nullptr
-			&& reinterpret_cast<const WASM::ModuleInstance*>(coreEcho.context)->frameCallAbi();
+	const bool coreFrameAbi = WASM::callableUsesFrameForm(coreEcho);
 	REQUIRE((coreFrameAbi
 			? [&] {
 				alignas(16) std::array<std::uint8_t, 24> frame{};
@@ -2343,8 +2339,7 @@ TEST_CASE("component runtime lowers and lifts a map")
 	REQUIRE(function.has_value());
 	REQUIRE(function->indirectResults);
 	const WASM::Callable coreEcho = runtime.coreFunction(0);
-	const bool coreFrameAbi = coreEcho.rawFnPtr != nullptr && coreEcho.context != nullptr
-			&& reinterpret_cast<const WASM::ModuleInstance*>(coreEcho.context)->frameCallAbi();
+	const bool coreFrameAbi = WASM::callableUsesFrameForm(coreEcho);
 	REQUIRE((coreFrameAbi
 			? [&] {
 				alignas(16) std::array<std::uint8_t, 24> frame{};
@@ -5132,7 +5127,7 @@ TEST_CASE("stringview encode returns the next position and bytes written")
 	auto w8 = instance->exportedFunction("w8");
 	REQUIRE(w8.has_value());
 	alignas(16) unsigned char tuple[16] = {};
-	if (instance->frameCallAbi()) {
+	if (WASM::callableUsesFrameForm(*w8)) {
 		alignas(16) unsigned char frame[32] = {};
 		WASM::callCallableFrame(*w8, frame);
 		// Frame results use one 8-byte slot each; the public tuple is packed.
@@ -5154,7 +5149,7 @@ TEST_CASE("stringview encode returns the next position and bytes written")
 	auto w16 = instance->exportedFunction("w16");
 	REQUIRE(w16.has_value());
 	int32_t written16 = 0;
-	if (instance->frameCallAbi()) {
+	if (WASM::callableUsesFrameForm(*w16)) {
 		alignas(16) unsigned char frame[16] = {};
 		WASM::callCallableFrame(*w16, frame);
 		std::memcpy(&written16, frame, sizeof(written16));
@@ -6860,6 +6855,45 @@ TEST_CASE("call form: a two-module graph must not mix the register and frame for
 	}
 }
 
+// Per-signature call forms across a module boundary: the provider compiles its
+// wide function in the frame form and its narrow one in the register form, and
+// an importer emits the *callee's* form for the wide import. Before `GR-8` the
+// provider was wholly frame-form and a frame import was refused by name; the
+// call now succeeds because the call site and the callee agree per type.
+TEST_CASE("call form: a narrow module calls a frame-form import")
+{
+	for (const char* backend : {"libjit", "asmjit", "sljit"}) {
+		std::fprintf(stderr, "CALLFORMWIDE %s: ", backend);
+		auto runtime = WASM::Runtime::create(backend);
+		REQUIRE(runtime != nullptr);
+		auto providerModule = runtime->loadFile(
+				std::filesystem::path(WASM_TEST_DIR) / "call_form_provider.wasm");
+		auto importerModule = runtime->loadFile(
+				std::filesystem::path(WASM_TEST_DIR) / "call_form_wide_importer.wasm");
+		WASM::RegistryImportResolver imports;
+		auto& provider = runtime->instantiate(*providerModule, imports);
+		CHECK_FALSE(provider.frameCallAbi());
+		const auto wide = provider.exportedFunction("wide");
+		const auto narrow = provider.exportedFunction("narrow");
+		REQUIRE(wide.has_value());
+		REQUIRE(narrow.has_value());
+		// LibJIT's register form has no ceiling, so only SLJIT and AsmJIT put the
+		// six-parameter signature on the frame path.
+		const bool wideIsFrame = WASM::callableUsesFrameForm(*wide);
+		CHECK(wideIsFrame == (std::string(backend) != "libjit"));
+		CHECK_FALSE(WASM::callableUsesFrameForm(*narrow));
+		provider.registerExports(imports, "provider");
+
+		auto& importer = runtime->instantiate(*importerModule, imports);
+		CHECK_FALSE(importer.frameCallAbi());
+		const auto call = importer.exportedFunction("call_wide");
+		REQUIRE(call.has_value());
+		CHECK_FALSE(WASM::callableUsesFrameForm(*call));
+		CHECK(WASM::callCallable<std::int32_t>(*call) == 42);
+		std::fprintf(stderr, "mixed=%d\n", wideIsFrame ? 1 : 0);
+	}
+}
+
 TEST_CASE("call form: the opt-in makes a two-module graph consistent")
 {
 	// With the frame form requested process-wide, both modules compile in it and
@@ -6890,6 +6924,50 @@ TEST_CASE("call form: the opt-in makes a two-module graph consistent")
 	WASM::ModuleCallCache cache(*importer);
 	REQUIRE(cache.find("call_narrow") != nullptr);
 	REQUIRE(cache.call<int32_t>("call_narrow", int32_t(14)) == 42);
+}
+
+// `GAP-16`: a register-form helper handed a frame-form export used to pass a
+// stale register as the frame pointer, so the callee's prologue wrote its
+// results through it -- a wild write that moved with the run. The helpers now
+// refuse the mismatch by name, in both directions.
+TEST_CASE("call form: a mismatched call helper refuses instead of writing through a stale frame")
+{
+	struct OptInScope {
+		OptInScope() { WASM::setFrameCallAbiOptIn(true); }
+		~OptInScope() { WASM::setFrameCallAbiOptIn(false); }
+	} optIn;
+
+	for (const char* backend : {"libjit", "asmjit", "sljit"}) {
+		auto runtime = WASM::Runtime::create(backend);
+		REQUIRE(runtime != nullptr);
+		auto module = runtime->loadFile(
+				std::filesystem::path(WASM_TEST_DIR) / "staging_call.wasm");
+		WASM::RegistryImportResolver imports;
+		WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+		REQUIRE(instance.frameCallAbi());
+		const auto callable = instance.exportedFunction("via_call");
+		REQUIRE(callable.has_value());
+		REQUIRE(WASM::callableUsesFrameForm(*callable));
+		// The register helper has no frame to pass; it must refuse, not call with
+		// an uninitialised second argument.
+		REQUIRE_THROWS_WITH(WASM::callCallable<void>(*callable),
+				Catch::Matchers::ContainsSubstring("staging-frame form"));
+	}
+
+	// The reverse mistake: the frame helper on a register-form export.
+	WASM::setFrameCallAbiOptIn(false);
+	auto runtime = WASM::Runtime::create("libjit");
+	REQUIRE(runtime != nullptr);
+	auto module = runtime->loadFile(
+			std::filesystem::path(WASM_TEST_DIR) / "loop_test.wasm");
+	WASM::RegistryImportResolver imports;
+	WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+	const auto callable = instance.exportedFunction("sumUpto");
+	REQUIRE(callable.has_value());
+	REQUIRE_FALSE(WASM::callableUsesFrameForm(*callable));
+	alignas(16) std::uint8_t frame[16] = {};
+	REQUIRE_THROWS_WITH(WASM::callCallableFrame(*callable, frame),
+			Catch::Matchers::ContainsSubstring("register form"));
 }
 
 TEST_CASE("GC reference ownership: the operand stack owns one count per reference")
@@ -7246,6 +7324,18 @@ TEST_CASE("simd: a v128 parameter and result round-trip through the JIT")
 	// SIMD-0's done-when and SIMD-L1's exit criterion (docs/proposals/SIMD.md):
 	// this closes S4 (alignment) / S5 / S9 (calling convention) for the
 	// register-passing case. `V128` is the C++ mirror of the lowered struct.
+	//
+	// A `v128` *result* crosses the register form through the caller's 16-byte
+	// buffer, not as an aggregate return, so the typed `callCallable<V128>`
+	// helper cannot speak it; the frame form is the documented way to carry a
+	// vector both ways, and the per-signature rule would otherwise leave the
+	// one-parameter `identity` in the register form while `four` takes the frame.
+	// The opt-in makes the whole module frame-form, which is what this
+	// round-trip measures.
+	struct OptInScope {
+		OptInScope() { WASM::setFrameCallAbiOptIn(true); }
+		~OptInScope() { WASM::setFrameCallAbiOptIn(false); }
+	} optIn;
 	WASM::RegistryImportResolver imports;
 	auto backend = TestBackend::create();
 	auto loaded = loadAndInstantiateTestModule("simd_abi", imports, *backend);
@@ -7269,7 +7359,7 @@ TEST_CASE("simd: a v128 parameter and result round-trip through the JIT")
 	// these helpers marshal the same canonical frame the embedder uses.
 	const auto callVector = [&instance](const WASM::Callable& callable,
 			const V128& arg) -> V128 {
-		if (!instance.frameCallAbi())
+		if (!WASM::callableUsesFrameForm(callable))
 			return WASM::callCallable<V128>(callable, arg);
 		alignas(16) std::array<std::uint8_t, 32> frame{};
 		std::memcpy(frame.data(), &arg, sizeof(arg));
@@ -7280,7 +7370,7 @@ TEST_CASE("simd: a v128 parameter and result round-trip through the JIT")
 	};
 	const auto callVector4 = [&instance](const WASM::Callable& callable,
 			const V128& a, const V128& b, const V128& c, const V128& d) -> V128 {
-		if (!instance.frameCallAbi())
+		if (!WASM::callableUsesFrameForm(callable))
 			return WASM::callCallable<V128>(callable, a, b, c, d);
 		alignas(16) std::array<std::uint8_t, 80> frame{};
 		std::memcpy(frame.data(), &a, sizeof(a));
@@ -7294,7 +7384,7 @@ TEST_CASE("simd: a v128 parameter and result round-trip through the JIT")
 	};
 	const auto callLane = [&instance](const WASM::Callable& callable,
 			const V128& arg) -> std::int32_t {
-		if (!instance.frameCallAbi())
+		if (!WASM::callableUsesFrameForm(callable))
 			return WASM::callCallable<std::int32_t>(callable, arg);
 		alignas(16) std::array<std::uint8_t, 24> frame{};
 		std::memcpy(frame.data(), &arg, sizeof(arg));
@@ -7305,7 +7395,7 @@ TEST_CASE("simd: a v128 parameter and result round-trip through the JIT")
 	};
 	const auto callLane64 = [&instance](const WASM::Callable& callable,
 			const V128& arg) -> std::int64_t {
-		if (!instance.frameCallAbi())
+		if (!WASM::callableUsesFrameForm(callable))
 			return WASM::callCallable<std::int64_t>(callable, arg);
 		alignas(16) std::array<std::uint8_t, 24> frame{};
 		std::memcpy(frame.data(), &arg, sizeof(arg));
@@ -7315,7 +7405,7 @@ TEST_CASE("simd: a v128 parameter and result round-trip through the JIT")
 		return result;
 	};
 	const auto callZeroLane = [&instance](const WASM::Callable& callable) -> std::int32_t {
-		if (!instance.frameCallAbi())
+		if (!WASM::callableUsesFrameForm(callable))
 			return WASM::callCallable<std::int32_t>(callable);
 		alignas(16) std::array<std::uint8_t, 8> frame{};
 		WASM::callCallableFrame(callable, frame.data());
@@ -7668,7 +7758,7 @@ TEST_CASE("simd: shuffle and swizzle run through the JIT")
 	};
 	const auto callI32 = [&](const char* name) -> std::int32_t {
 		auto fn = i32Export(name);
-		if (!instance.frameCallAbi())
+		if (!WASM::callableUsesFrameForm(fn))
 			return WASM::callCallable<std::int32_t>(fn);
 		alignas(16) std::uint8_t frame[16] = {};
 		WASM::callCallableFrame(fn, frame);
@@ -8055,20 +8145,20 @@ TEST_CASE("simd: v128 globals run through the JIT")
 
 	// Lane 2 of `i8x16 0 1 … 15` is bytes 8..11, i.e. 0x0B0A0908 — the assertion
 	// that pins the byte order through the constant-expression path.
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("imm_lane2")) == 0x0B0A0908);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("imm_byte15")) == 15);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("mut_lane0")) == 1);
+	REQUIRE(callTestI32(i32Export("imm_lane2")) == 0x0B0A0908);
+	REQUIRE(callTestI32(i32Export("imm_byte15")) == 15);
+	REQUIRE(callTestI32(i32Export("mut_lane0")) == 1);
 	// 0x0F0E0D0C: bytes 12..15 of the constant, little-endian (hazard Y11).
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("copy_from_imm")) == 0x0F0E0D0C);
+	REQUIRE(callTestI32(i32Export("copy_from_imm")) == 0x0F0E0D0C);
 
 	// Order matters from here on: the global carries state between calls.
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("set_and_read")) == 10);
+	REQUIRE(callTestI32(i32Export("set_and_read")) == 10);
 	V128 ones{1, 1, 1, 1};
 	// A `v128` parameter makes AsmJIT compile the whole module frame-form.
 	// The generic `callCallable` helper speaks the register ABI, so marshal
 	// the frame explicitly when the instance asks for it.
 	const auto accumulate = i32Export("accumulate");
-	if (!instance.frameCallAbi()) {
+	if (!WASM::callableUsesFrameForm(accumulate)) {
 		REQUIRE(WASM::callCallable<int32_t>(accumulate, ones) == 8);
 	} else {
 		alignas(16) std::array<std::uint8_t, 24> frame{};
@@ -8078,6 +8168,43 @@ TEST_CASE("simd: v128 globals run through the JIT")
 		std::memcpy(&result, frame.data() + 16, sizeof(result));
 		REQUIRE(result == 8);
 	}
+}
+
+TEST_CASE("staging: call arities around the 2 KiB frame boundary",
+		"[staging][abi][call]")
+{
+	// Call-shape probe (docs/API_ABI_STABILITY.md `GAP-11`'s fixtures are
+	// the same mechanism). `i32` is 8 bytes in a staging frame, so 255/256/257
+	// parameters are 2,040/2,048/2,056 bytes: under, at and over the old 2 KiB
+	// scratch. A callee with more than three parameters is frame-form by the
+	// core rule, so this is the staging path rather than the register path.
+	WASM::RegistryImportResolver imports;
+	auto backend = TestBackend::create();
+	auto loaded = loadAndInstantiateTestModule("wide_staging_probe", imports, *backend);
+	REQUIRE(loaded.instance.get() != nullptr);
+	WASM::ModuleInstance& instance = *loaded.instance;
+
+	const auto callI32 = [&instance](const char* name) {
+		const std::optional<WASM::Callable> callable = instance.exportedFunction(name);
+		INFO("export " << name);
+		REQUIRE(callable.has_value());
+		return WASM::callCallable<std::int32_t>(*callable);
+	};
+
+	// The callee returns its last parameter, so the value proves the last
+	// argument crossed the frame rather than a stale/zeroed slot.
+	CHECK(callI32("direct_255") == 255);
+	CHECK(callI32("direct_256") == 256);
+	CHECK(callI32("direct_257") == 257);
+	// The same over-boundary signature through a table.
+	CHECK(callI32("indirect_257") == 257);
+	// A v128 result adds 16 bytes to the 256-parameter frame (2,064 total).
+	CHECK(callI32("v128_result") == 256);
+	// Non-scalar strides in the frame: four vectors and four i64s.
+	CHECK(callI32("v128_args") == 44);
+	const std::optional<WASM::Callable> i64Export = instance.exportedFunction("i64_args");
+	REQUIRE(i64Export.has_value());
+	CHECK(WASM::callCallable<std::int64_t>(*i64Export) == 4);
 }
 
 TEST_CASE("simd benchmark: ns per v128 op (SIMD-L8)", "[.simdbench]")
@@ -8127,6 +8254,25 @@ TEST_CASE("simd benchmark: ns per v128 op (SIMD-L8)", "[.simdbench]")
 		return static_cast<uint32_t>(
 			WASM::callCallable<int32_t>(*benchFn, static_cast<int32_t>(iterations)));
 	};
+	// SIMD-8's shift probe: the same shape with `i32x4.shl` in the position the
+	// add/mul pair occupies above. The `add` stays a helper call on both paths,
+	// so the M1s/M4s difference is the shift's own lowering.
+	auto benchShiftFn = loaded.instance->exportedFunction("bench_shift");
+	REQUIRE(benchShiftFn.has_value());
+	const auto runM1Shift = [&] {
+		return static_cast<uint32_t>(
+			WASM::callCallable<int32_t>(*benchShiftFn, static_cast<int32_t>(iterations)));
+	};
+	// `bench_shift` folds to `acc = (acc + c) << 1` per iteration. Unsigned
+	// arithmetic reproduces it exactly, wrap included; the recurrence reaches
+	// its fixed point after a few dozen iterations, which is fine -- the loop
+	// still executes one add and one shift each time.
+	const auto expectedShift = [&iterations] {
+		uint32_t value = kAcc0[0];
+		for (uint32_t i = 0; i < iterations; ++i)
+			value = (value + kC[0]) << 1;
+		return value;
+	};
 
 	alignas(16) uint8_t t0[16];
 	alignas(16) uint8_t t1[16];
@@ -8160,6 +8306,19 @@ TEST_CASE("simd benchmark: ns per v128 op (SIMD-L8)", "[.simdbench]")
 			wasm_v128_load(c, t1);
 			laneMul->run(t0, t1, t0);
 			laneAdd->run(t0, acc, acc);
+		}
+		uint32_t lane0;
+		std::memcpy(&lane0, acc, 4);
+		return lane0;
+	};
+
+	// ── M4s: the shift probe with the *helper*, as the portable path does ───
+	const auto runM4Shift = [&] {
+		std::memcpy(acc, acc0, 16);
+		for (uint32_t i = 0; i < iterations; ++i) {
+			wasm_v128_load(c, t1);
+			wasm_i32x4_add(acc, t1, acc);
+			wasm_i32x4_shl(acc, 1, acc);
 		}
 		uint32_t lane0;
 		std::memcpy(&lane0, acc, 4);
@@ -8208,6 +8367,8 @@ TEST_CASE("simd benchmark: ns per v128 op (SIMD-L8)", "[.simdbench]")
 	REQUIRE(runM4() == expected(0));
 	REQUIRE(runM3() == expected(0));
 	REQUIRE(runM4n() == expected(0));
+	REQUIRE(runM1Shift() == expectedShift());
+	REQUIRE(runM4Shift() == expectedShift());
 	runM0Load();
 	REQUIRE(std::memcmp(t0, a, 16) == 0);
 	runM0Add();
@@ -8221,6 +8382,12 @@ TEST_CASE("simd benchmark: ns per v128 op (SIMD-L8)", "[.simdbench]")
 	const double m3 = bestNsPerOp(runM3, iterations, kOpsPerIteration);
 	const double m4 = bestNsPerOp(runM4, iterations, kOpsPerIteration);
 	const double m4n = bestNsPerOp(runM4n, iterations, kOpsPerIteration);
+	constexpr uint32_t kShiftOpsPerIteration = 3;
+	const double m1Shift = bestNsPerOp(runM1Shift, iterations, kShiftOpsPerIteration);
+	const double m4Shift = bestNsPerOp(runM4Shift, iterations, kShiftOpsPerIteration);
+	const char* nativeSetting = std::getenv("WASMJIT_SIMD_NATIVE");
+	const bool nativeShifts = nativeSetting == nullptr
+			|| std::string_view(nativeSetting) != "0";
 
 	std::cout << std::fixed << std::setprecision(3)
 			  << "SIMD-L8 benchmark: " << iterations << " iterations x "
@@ -8231,6 +8398,11 @@ TEST_CASE("simd benchmark: ns per v128 op (SIMD-L8)", "[.simdbench]")
 			  << "  M3  D1 route: lane-wise scalar IR          " << m3 << " ns/v128-op\n"
 			  << "  M4  native C calling the same helpers      " << m4 << " ns/v128-op\n"
 			  << "  M4n native C inlined (no calls)            " << m4n << " ns/v128-op\n"
+			  << "  M1s JIT i32x4.shl, native " << (nativeShifts ? "on " : "off")
+			  << "               " << m1Shift << " ns/v128-op\n"
+			  << "  M4s C helper i32x4.shl                     " << m4Shift << " ns/v128-op\n"
+			  << "  shift difference per iteration             "
+			  << ((m1Shift - m4Shift) * kShiftOpsPerIteration) << " ns\n"
 			  << "  helper-call share of M1 (1 - M4n/M1)       "
 			  << (100.0 * (1.0 - m4n / m1)) << " %\n"
 			  << "  M1 over the no-call bound (M1 / M4n)       " << (m1 / m4n) << " x\n";
@@ -8567,7 +8739,7 @@ TEST_CASE("simd: float arithmetic and comparisons run through the JIT")
 	};
 	const auto callI32 = [&](const char* name) -> std::int32_t {
 		auto fn = i32Export(name);
-		if (!instance.frameCallAbi())
+		if (!WASM::callableUsesFrameForm(fn))
 			return WASM::callCallable<std::int32_t>(fn);
 		alignas(16) std::uint8_t frame[16] = {};
 		WASM::callCallableFrame(fn, frame);
@@ -8577,7 +8749,7 @@ TEST_CASE("simd: float arithmetic and comparisons run through the JIT")
 	};
 	const auto callI64 = [&](const char* name) -> std::int64_t {
 		auto fn = i32Export(name);
-		if (!instance.frameCallAbi())
+		if (!WASM::callableUsesFrameForm(fn))
 			return WASM::callCallable<std::int64_t>(fn);
 		alignas(16) std::uint8_t frame[16] = {};
 		WASM::callCallableFrame(fn, frame);
@@ -8723,7 +8895,7 @@ TEST_CASE("simd: three and four v128 parameters cross the boundary")
 	// the register-form coverage and add the frame form the backend actually uses.
 	const auto call3 = [&instance](const WASM::Callable& callable,
 			const V128& x, const V128& y, const V128& z) -> V128 {
-		if (!instance.frameCallAbi())
+		if (!WASM::callableUsesFrameForm(callable))
 			return WASM::callCallable<V128>(callable, x, y, z);
 		alignas(16) std::array<std::uint8_t, 64> frame{};
 		std::memcpy(frame.data(), &x, sizeof(x));
@@ -8736,7 +8908,7 @@ TEST_CASE("simd: three and four v128 parameters cross the boundary")
 	};
 	const auto call4 = [&instance](const WASM::Callable& callable,
 			const V128& x, const V128& y, const V128& z, const V128& w) -> V128 {
-		if (!instance.frameCallAbi())
+		if (!WASM::callableUsesFrameForm(callable))
 			return WASM::callCallable<V128>(callable, x, y, z, w);
 		alignas(16) std::array<std::uint8_t, 80> frame{};
 		std::memcpy(frame.data(), &x, sizeof(x));
@@ -8814,38 +8986,38 @@ TEST_CASE("simd: memory loads and stores run through the JIT")
 	};
 
 	// The data segment at 0 is the 16 bytes 01 02 .. 10.
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("load_lane0")) == 0x04030201);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("load_lane3")) == 0x100F0E0D);
+	REQUIRE(callTestI32(i32Export("load_lane0")) == 0x04030201);
+	REQUIRE(callTestI32(i32Export("load_lane3")) == 0x100F0E0D);
 	// Unaligned (memarg align=1, offset=1): bytes 02 03 04 05.
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("load_unaligned_lane0")) == 0x05040302);
+	REQUIRE(callTestI32(i32Export("load_unaligned_lane0")) == 0x05040302);
 
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("store_roundtrip")) == 0x11223344);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("store_roundtrip2")) == 0x55667788);
+	REQUIRE(callTestI32(i32Export("store_roundtrip")) == 0x11223344);
+	REQUIRE(callTestI32(i32Export("store_roundtrip2")) == 0x55667788);
 
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("load8x8_s_lane0")) == 1);
+	REQUIRE(callTestI32(i32Export("load8x8_s_lane0")) == 1);
 	// load8x8_s reads 8 bytes (indices 0..7), so lane 7 is byte 0x08 — the
 	// 16th byte (0x10) is *not* in this load.
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("load8x8_s_lane7")) == 8);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("load8x8_u_lane7")) == 8);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("load16x4_s_lane1")) == 0x0403);
+	REQUIRE(callTestI32(i32Export("load8x8_s_lane7")) == 8);
+	REQUIRE(callTestI32(i32Export("load8x8_u_lane7")) == 8);
+	REQUIRE(callTestI32(i32Export("load16x4_s_lane1")) == 0x0403);
 
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("load8_splat_lane3")) == 0x02);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("load32_splat_lane2")) == 0x04030201);
-	REQUIRE(WASM::callCallable<int64_t>(i32Export("load64_splat_lane1")) == 0x0807060504030201ll);
+	REQUIRE(callTestI32(i32Export("load8_splat_lane3")) == 0x02);
+	REQUIRE(callTestI32(i32Export("load32_splat_lane2")) == 0x04030201);
+	REQUIRE(callTestI64(i32Export("load64_splat_lane1")) == 0x0807060504030201ll);
 
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("load32_zero_lane0")) == 0x04030201);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("load32_zero_lane1")) == 0);
-	REQUIRE(WASM::callCallable<int64_t>(i32Export("load64_zero_lane1")) == 0);
+	REQUIRE(callTestI32(i32Export("load32_zero_lane0")) == 0x04030201);
+	REQUIRE(callTestI32(i32Export("load32_zero_lane1")) == 0);
+	REQUIRE(callTestI64(i32Export("load64_zero_lane1")) == 0);
 
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("load32_lane1")) == 0x08070605);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("load16_lane0")) == static_cast<int32_t>(0xFFFF0201u));
+	REQUIRE(callTestI32(i32Export("load32_lane1")) == 0x08070605);
+	REQUIRE(callTestI32(i32Export("load16_lane0")) == static_cast<int32_t>(0xFFFF0201u));
 	// ... and that value is the interesting one: `load16_lane 0` replaces the
 	// *i16* lane, i.e. only the low two bytes of i32 lane 0, so the base
 	// vector's high bytes (0xFFFF) have to survive alongside the loaded 0x0201.
 
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("store32_lane2")) == static_cast<int32_t>(0xAABBCCDDu));
+	REQUIRE(callTestI32(i32Export("store32_lane2")) == static_cast<int32_t>(0xAABBCCDDu));
 	// Only one byte reached memory: the neighbouring byte is still zero.
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("store8_lane0_neighbour")) == 0);
+	REQUIRE(callTestI32(i32Export("store8_lane0_neighbour")) == 0);
 }
 
 TEST_CASE("simd: bitwise ops run through the JIT")
@@ -8867,24 +9039,24 @@ TEST_CASE("simd: bitwise ops run through the JIT")
 	};
 
 	// ~0x0F0F0F0F and ~0x33333333 exceed INT32_MAX, so compare the bit pattern.
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("not_lane0")) == static_cast<int32_t>(0xF0F0F0F0u));
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("not_lane3")) == static_cast<int32_t>(0xCCCCCCCCu));
+	REQUIRE(callTestI32(i32Export("not_lane0")) == static_cast<int32_t>(0xF0F0F0F0u));
+	REQUIRE(callTestI32(i32Export("not_lane3")) == static_cast<int32_t>(0xCCCCCCCCu));
 
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("and_lane0")) == 0x000F000F);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("and_lane3")) == 0x00330033);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("or_lane0")) == 0x0FFF0FFF);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("xor_lane0")) == 0x0FF00FF0);
+	REQUIRE(callTestI32(i32Export("and_lane0")) == 0x000F000F);
+	REQUIRE(callTestI32(i32Export("and_lane3")) == 0x00330033);
+	REQUIRE(callTestI32(i32Export("or_lane0")) == 0x0FFF0FFF);
+	REQUIRE(callTestI32(i32Export("xor_lane0")) == 0x0FF00FF0);
 
 	// a AND NOT b, not the other way round.
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("andnot_lane0")) == 0x0F000F00);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("andnot_lane3")) == 0x33003300);
+	REQUIRE(callTestI32(i32Export("andnot_lane0")) == 0x0F000F00);
+	REQUIRE(callTestI32(i32Export("andnot_lane3")) == 0x33003300);
 
 	// c selects: (a & c) | (b & ~c).
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("bitselect_lane0")) == 0x0F0F00FF);
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("bitselect_lane3")) == 0x333300FF);
+	REQUIRE(callTestI32(i32Export("bitselect_lane0")) == 0x0F0F00FF);
+	REQUIRE(callTestI32(i32Export("bitselect_lane3")) == 0x333300FF);
 
 	// A two-op chain, so an intermediate really crosses a slot boundary.
-	REQUIRE(WASM::callCallable<int32_t>(i32Export("chain_lane0")) == static_cast<int32_t>(0xFFF0FFF0u));
+	REQUIRE(callTestI32(i32Export("chain_lane0")) == static_cast<int32_t>(0xFFF0FFF0u));
 }
 
 TEST_CASE("simd: integer arithmetic and comparisons run through the JIT")
@@ -8911,7 +9083,7 @@ TEST_CASE("simd: integer arithmetic and comparisons run through the JIT")
 	};
 	const auto callI32 = [&](const char* name) -> std::int32_t {
 		auto fn = i32Export(name);
-		if (!instance.frameCallAbi())
+		if (!WASM::callableUsesFrameForm(fn))
 			return WASM::callCallable<std::int32_t>(fn);
 		alignas(16) std::uint8_t frame[16] = {};
 		WASM::callCallableFrame(fn, frame);
@@ -8921,7 +9093,7 @@ TEST_CASE("simd: integer arithmetic and comparisons run through the JIT")
 	};
 	const auto callI64 = [&](const char* name) -> std::int64_t {
 		auto fn = i32Export(name);
-		if (!instance.frameCallAbi())
+		if (!WASM::callableUsesFrameForm(fn))
 			return WASM::callCallable<std::int64_t>(fn);
 		alignas(16) std::uint8_t frame[16] = {};
 		WASM::callCallableFrame(fn, frame);
@@ -8940,6 +9112,16 @@ TEST_CASE("simd: integer arithmetic and comparisons run through the JIT")
 	REQUIRE(callI32("eq_i32_lane0") == -1);   // all ones
 	REQUIRE(callI32("ne_i32_lane0") == -1);
 	REQUIRE(callI64("i64_lt_s_lane0") == -1);
+	// i32x4's signed orders: `-1` against `1`, both outcomes, so the swap and
+	// the inversion in the native switch cannot agree with each other by luck.
+	REQUIRE(callI32("i32_lt_s_true") == -1);
+	REQUIRE(callI32("i32_lt_s_false") == 0);
+	REQUIRE(callI32("i32_gt_s_true") == -1);
+	REQUIRE(callI32("i32_gt_s_false") == 0);
+	REQUIRE(callI32("i32_le_s_true") == -1);
+	REQUIRE(callI32("i32_le_s_false") == 0);
+	REQUIRE(callI32("i32_ge_s_true") == -1);
+	REQUIRE(callI32("i32_ge_s_false") == 0);
 
 	// min/max, the same distinction.
 	REQUIRE(callI32("min_s_lane0") == 0x80);
@@ -8964,6 +9146,15 @@ TEST_CASE("simd: integer arithmetic and comparisons run through the JIT")
 	REQUIRE(callI32("shr_s_neg_lane0") == -64);
 	REQUIRE(callI32("shr_u_neg_lane0") == 0x40);
 	REQUIRE(callI32("shl_i16_lane7") == 0x8000);
+	// The same masking, one count beyond each lane width, for the six ops the
+	// AsmJIT backend lowers itself (`SIMD-8`): the native path must mask the
+	// count too, not just the helper.
+	REQUIRE(callI32("shl_i16_masked_lane0") == 0x0101);
+	REQUIRE(callI32("shr_s_i16_masked_lane0") == -1);
+	REQUIRE(callI32("shr_u_i16_masked_lane0") == 0x4000);
+	REQUIRE(callI32("shl_i32_zero_lane0") == 7);
+	REQUIRE(callI32("shr_s_i32_masked_lane0") == -4);
+	REQUIRE(callI32("shr_u_i32_masked_lane0") == 2);
 
 	// Saturating arithmetic and the rounding average.
 	REQUIRE(callI32("add_sat_s_lane0") == 127);
@@ -9078,10 +9269,9 @@ TEST_CASE("multi-value: JIT-to-JIT calls marshal every result")
 	// Any multi-result signature puts the module in the staging-frame ABI. The
 	// generic `callCallable` helpers speak the register ABI, so marshal the
 	// frame explicitly when the instance selects it.
-	const bool frameAbi = instance.frameCallAbi();
 	const auto callI32x2 = [&](const WASM::Callable& callable,
 			int32_t a, int32_t b) -> int32_t {
-		if (!frameAbi)
+		if (!WASM::callableUsesFrameForm(callable))
 			return WASM::callCallable<int32_t>(callable, a, b);
 		alignas(16) std::array<std::uint8_t, 24> frame{};
 		std::memcpy(frame.data(), &a, sizeof(a));
@@ -9092,7 +9282,7 @@ TEST_CASE("multi-value: JIT-to-JIT calls marshal every result")
 		return result;
 	};
 	const auto callI32 = [&](const WASM::Callable& callable, int32_t a) -> int32_t {
-		if (!frameAbi)
+		if (!WASM::callableUsesFrameForm(callable))
 			return WASM::callCallable<int32_t>(callable, a);
 		alignas(16) std::array<std::uint8_t, 16> frame{};
 		std::memcpy(frame.data(), &a, sizeof(a));
@@ -9102,7 +9292,7 @@ TEST_CASE("multi-value: JIT-to-JIT calls marshal every result")
 		return result;
 	};
 	const auto callI32_0 = [&](const WASM::Callable& callable) -> int32_t {
-		if (!frameAbi)
+		if (!WASM::callableUsesFrameForm(callable))
 			return WASM::callCallable<int32_t>(callable);
 		alignas(16) std::array<std::uint8_t, 8> frame{};
 		WASM::callCallableFrame(callable, frame.data());
@@ -9112,7 +9302,7 @@ TEST_CASE("multi-value: JIT-to-JIT calls marshal every result")
 	};
 	const auto callI64x2 = [&](const WASM::Callable& callable,
 			int64_t a, int32_t b) -> int64_t {
-		if (!frameAbi)
+		if (!WASM::callableUsesFrameForm(callable))
 			return WASM::callCallable<int64_t>(callable, a, b);
 		alignas(16) std::array<std::uint8_t, 24> frame{};
 		std::memcpy(frame.data(), &a, sizeof(a));
@@ -9145,7 +9335,7 @@ TEST_CASE("multi-value: JIT-to-JIT calls marshal every result")
 	auto swapExport = instance.exportedFunction("swap_export");
 	REQUIRE(swapExport.has_value());
 	alignas(16) unsigned char tuple[16] = {};
-	if (frameAbi) {
+	if (WASM::callableUsesFrameForm(*swapExport)) {
 		alignas(16) std::array<std::uint8_t, 32> frame{};
 		const int32_t a = 3;
 		const int32_t b = 4;
@@ -9465,10 +9655,9 @@ TEST_CASE("wide arithmetic: add128, sub128 and mul_wide match reference values")
 	auto mulS = exported("mul_wide_s");
 	auto mulU = exported("mul_wide_u");
 
-	const bool frameAbi = instance.frameCallAbi();
 	const auto call2 = [&](const WASM::Callable& callable, auto... args) {
 		alignas(16) uint64_t out[2] = {};
-		if (!frameAbi) {
+		if (!WASM::callableUsesFrameForm(callable)) {
 			WASM::callCallableWithResults(callable, out, args...);
 			return std::array<uint64_t, 2>{out[0], out[1]};
 		}
@@ -11436,6 +11625,179 @@ TEST_CASE("diagnostics: an unreadable or oversized guest string degrades safely"
 }
 
 
+TEST_CASE("diagnostics: the enum log form maps every kind and rejects an unknown selector")
+{
+	WASM::clearDiagnostics();
+	WASM::RegistryImportResolver imports;
+	WASM::registerToEnv(imports);
+
+	WASM::Module module = loadTestModule("diagnostics_log");
+	auto backend = TestBackend::create();
+	auto instance = backend->instantiator().instantiate(module, imports);
+	REQUIRE(instance.get() != nullptr);
+
+	auto all = instance->exportedFunction("log_enum_all");
+	REQUIRE(all.has_value());
+	WASM::callCallable<void>(*all);
+
+	// A zero length means a NUL-terminated C string, so the enum calls need no
+	// explicit lengths; kind 9 is the invalid-selector record, not a crash.
+	const auto records = WASM::recentDiagnostics();
+	REQUIRE(records.size() == 4);
+	REQUIRE(records[0].id == "WASM.EXECUTE.LOG.INFO");
+	REQUIRE(records[0].message == "info from guest");
+	REQUIRE(records[1].id == "WASM.EXECUTE.LOG.WARN");
+	REQUIRE(records[1].message == "warn from guest");
+	REQUIRE(records[2].id == "WASM.EXECUTE.LOG.ERROR");
+	REQUIRE(records[2].message == "error from guest");
+	REQUIRE(records[3].id == "WASM.EXECUTE.LOG.INVALID");
+	REQUIRE(records[3].severity == WASM::DiagnosticSeverity::Error);
+	REQUIRE(records[3].message == "info from guest");
+
+	// kind 3 is the panic: the Fatal record, then a trap with the same text.
+	WASM::clearDiagnostics();
+	auto panic = instance->exportedFunction("log_enum_panic");
+	REQUIRE(panic.has_value());
+	bool trapped = false;
+	std::string message;
+	try {
+		WASM::callCallable<void>(*panic);
+	} catch (const WASM::Trap& trap) {
+		trapped = true;
+		message = trap.message() != nullptr ? trap.message() : "";
+	}
+	REQUIRE(trapped);
+	REQUIRE(message == "panic from guest");
+	REQUIRE(WASM::recentDiagnostics().size() == 2);
+	REQUIRE(WASM::recentDiagnostics()[0].id == "WASM.EXECUTE.LOG.PANIC");
+	REQUIRE(WASM::recentDiagnostics()[0].severity == WASM::DiagnosticSeverity::Fatal);
+}
+
+TEST_CASE("diagnostics: an AssemblyScript String object is logged")
+{
+	WASM::clearDiagnostics();
+	WASM::RegistryImportResolver imports;
+	WASM::registerToEnv(imports);
+
+	WASM::Module module = loadTestModule("diagnostics_log");
+	auto backend = TestBackend::create();
+	auto instance = backend->instantiator().instantiate(module, imports);
+	REQUIRE(instance.get() != nullptr);
+
+	// The fixture stores a fake AS String: `rtSize` at 220, the UTF-16LE code
+	// units at 224. A pointer below the header degrades to a placeholder.
+	auto good = instance->exportedFunction("log_as_good");
+	REQUIRE(good.has_value());
+	WASM::callCallable<void>(*good);
+	REQUIRE(WASM::recentDiagnostics().size() == 1);
+	REQUIRE(WASM::recentDiagnostics()[0].id == "WASM.EXECUTE.LOG.INFO");
+	REQUIRE(WASM::recentDiagnostics()[0].message == "as from guest");
+
+	WASM::clearDiagnostics();
+	auto bad = instance->exportedFunction("log_as_bad");
+	REQUIRE(bad.has_value());
+	WASM::callCallable<void>(*bad);
+	REQUIRE(WASM::recentDiagnostics().size() == 1);
+	REQUIRE(WASM::recentDiagnostics()[0].message
+			== "<guest string: range outside linear memory>");
+
+	// `log_str` imported as `(i32, i32)` lets the guest pass a forged handle; the
+	// host validates it against the Store before dereferencing anything.
+	WASM::clearDiagnostics();
+	auto forged = instance->exportedFunction("log_str_forged");
+	REQUIRE(forged.has_value());
+	WASM::callCallable<void>(*forged);
+	REQUIRE(WASM::recentDiagnostics().size() == 1);
+	REQUIRE(WASM::recentDiagnostics()[0].message
+			== "<guest string: not a Store-owned string>");
+}
+
+TEST_CASE("diagnostics: an AssemblyScript String crosses the real AS layout")
+{
+	// `Test/wasm/diagnostics_interop.ts` calls `env.log_as` with a real AS
+	// `String` literal; the host reads the managed object header the AS 0.28
+	// runtime writes (`rtSize` at `pointer - 4`, UTF-16LE at `pointer`).
+	WASM::clearDiagnostics();
+	WASM::RegistryImportResolver imports;
+	WASM::registerToEnv(imports);
+
+	WASM::Module module = loadTestModule("diagnostics_interop");
+	auto backend = TestBackend::create();
+	auto instance = backend->instantiator().instantiate(module, imports);
+	REQUIRE(instance.get() != nullptr);
+
+	auto info = instance->exportedFunction("logInfoLiteral");
+	REQUIRE(info.has_value());
+	WASM::callCallable<void>(*info);
+	REQUIRE(WASM::recentDiagnostics().size() == 1);
+	REQUIRE(WASM::recentDiagnostics()[0].id == "WASM.EXECUTE.LOG.INFO");
+	REQUIRE(WASM::recentDiagnostics()[0].message == "h\xC3\xA9llo from AS");
+
+	WASM::clearDiagnostics();
+	auto warn = instance->exportedFunction("logWarnLiteral");
+	REQUIRE(warn.has_value());
+	WASM::callCallable<void>(*warn);
+	REQUIRE(WASM::recentDiagnostics().size() == 1);
+	REQUIRE(WASM::recentDiagnostics()[0].id == "WASM.EXECUTE.LOG.WARN");
+	REQUIRE(WASM::recentDiagnostics()[0].message == "warn from AS");
+
+	WASM::clearDiagnostics();
+	auto panic = instance->exportedFunction("logPanicLiteral");
+	REQUIRE(panic.has_value());
+	bool trapped = false;
+	try {
+		WASM::callCallable<void>(*panic);
+	} catch (const WASM::Trap&) {
+		trapped = true;
+	}
+	REQUIRE(trapped);
+	REQUIRE(WASM::recentDiagnostics().size() == 2);
+	REQUIRE(WASM::recentDiagnostics()[0].id == "WASM.EXECUTE.LOG.PANIC");
+	REQUIRE(WASM::recentDiagnostics()[0].message == "panic from AS");
+}
+
+TEST_CASE("diagnostics: a stringref argument is logged")
+{
+	// A host-built module with a `(i32, stringref) -> ()` import: the guest
+	// passes a `string.const` literal, and the host encodes the Store-owned
+	// StringObject to UTF-8.
+	StringFixtureBuilder module;
+	module.section(0x01, {0x02,
+		0x60, 0x02, 0x7f, 0x67, 0x00, // type 0: (i32, stringref) -> ()
+		0x60, 0x00, 0x01, 0x7f});     // type 1: () -> i32
+	module.section(0x02, {0x01,
+		0x03, 'e','n','v', 0x07, 'l','o','g','_','s','t','r', 0x00, 0x00});
+	module.functions(std::vector<std::uint8_t>{0x01});
+	module.section(0x0e, {0x00, 0x01, 0x0d,
+		'g','c',' ','f','r','o','m',' ','g','u','e','s','t'});
+	module.exports({{"run", 1}});
+	module.code({
+		// run: kind 0; string.const 0; call env.log_str; return 0.
+		{0x00, 0x41, 0x00, 0xfb, 0x82, 0x01, 0x00, 0x10, 0x00, 0x41, 0x00, 0x0b}});
+
+	std::span<const std::byte> span(
+			reinterpret_cast<const std::byte*>(module.bytes.data()), module.bytes.size());
+	Euph::Io::ConstBufferDevice device(span);
+	auto artifact = WASM::Artifact::parse(device, testStore());
+	REQUIRE(artifact != nullptr);
+	WASM::Module* parsed = artifact->asCoreModule();
+	REQUIRE(parsed != nullptr);
+
+	WASM::clearDiagnostics();
+	WASM::RegistryImportResolver imports;
+	WASM::registerToEnv(imports);
+	auto backend = TestBackend::create();
+	auto instance = backend->instantiator().instantiate(*parsed, imports);
+	REQUIRE(instance.get() != nullptr);
+
+	auto run = instance->exportedFunction("run");
+	REQUIRE(run.has_value());
+	REQUIRE(WASM::callCallable<std::int32_t>(*run) == 0);
+	REQUIRE(WASM::recentDiagnostics().size() == 1);
+	REQUIRE(WASM::recentDiagnostics()[0].id == "WASM.EXECUTE.LOG.INFO");
+	REQUIRE(WASM::recentDiagnostics()[0].message == "gc from guest");
+}
+
 TEST_CASE("diagnostics: a validation failure carries a stable id and a location")
 {
 	WASM::clearDiagnostics();
@@ -13262,9 +13624,8 @@ TEST_CASE("the deterministic profile canonicalises observable NaNs")
 	REQUIRE(fullResult.has_value());
 	// `nan_pair` has two results, which switches the whole profile module to the
 	// staging-frame ABI in both alternative backends.
-	const bool fullFrame = fullInstance->frameCallAbi();
 	const auto fullI32 = [&](const WASM::Callable& callable, std::int32_t arg) {
-		if (!fullFrame)
+		if (!WASM::callableUsesFrameForm(callable))
 			return WASM::callCallable<std::int32_t>(callable, arg);
 		alignas(16) std::array<std::uint8_t, 16> frame{};
 		std::memcpy(frame.data(), &arg, sizeof(arg));
@@ -13274,7 +13635,7 @@ TEST_CASE("the deterministic profile canonicalises observable NaNs")
 		return result;
 	};
 	const auto fullF32 = [&](const WASM::Callable& callable, std::int32_t arg) {
-		if (!fullFrame)
+		if (!WASM::callableUsesFrameForm(callable))
 			return WASM::callCallable<float>(callable, arg);
 		alignas(16) std::array<std::uint8_t, 16> frame{};
 		std::memcpy(frame.data(), &arg, sizeof(arg));
@@ -13297,9 +13658,8 @@ TEST_CASE("the deterministic profile canonicalises observable NaNs")
 	REQUIRE(detInstance.get() != nullptr);
 
 	struct FloatPair { float first; float second; };
-	const bool detFrame = detInstance->frameCallAbi();
 	const auto detI32 = [&](const WASM::Callable& callable, std::int32_t arg) {
-		if (!detFrame)
+		if (!WASM::callableUsesFrameForm(callable))
 			return WASM::callCallable<std::int32_t>(callable, arg);
 		alignas(16) std::array<std::uint8_t, 16> frame{};
 		std::memcpy(frame.data(), &arg, sizeof(arg));
@@ -13309,7 +13669,7 @@ TEST_CASE("the deterministic profile canonicalises observable NaNs")
 		return result;
 	};
 	const auto detVoidI32 = [&](const WASM::Callable& callable, std::int32_t arg) {
-		if (!detFrame) {
+		if (!WASM::callableUsesFrameForm(callable)) {
 			WASM::callCallable<void>(callable, arg);
 			return;
 		}
@@ -13318,7 +13678,7 @@ TEST_CASE("the deterministic profile canonicalises observable NaNs")
 		WASM::callCallableFrame(callable, frame.data());
 	};
 	const auto detF32 = [&](const WASM::Callable& callable, std::int32_t arg) {
-		if (!detFrame)
+		if (!WASM::callableUsesFrameForm(callable))
 			return WASM::callCallable<float>(callable, arg);
 		alignas(16) std::array<std::uint8_t, 16> frame{};
 		std::memcpy(frame.data(), &arg, sizeof(arg));
@@ -13329,7 +13689,7 @@ TEST_CASE("the deterministic profile canonicalises observable NaNs")
 	};
 	const auto detPair = [&](const WASM::Callable& callable, std::int32_t arg,
 			FloatPair& pair) {
-		if (!detFrame) {
+		if (!WASM::callableUsesFrameForm(callable)) {
 			WASM::callCallableWithResults(callable, &pair, arg);
 			return;
 		}
@@ -13340,7 +13700,7 @@ TEST_CASE("the deterministic profile canonicalises observable NaNs")
 		std::memcpy(&pair.second, frame.data() + 16, sizeof(pair.second));
 	};
 	const auto detI64 = [&](const WASM::Callable& callable, std::int64_t arg) {
-		if (!detFrame)
+		if (!WASM::callableUsesFrameForm(callable))
 			return WASM::callCallable<std::int64_t>(callable, arg);
 		alignas(16) std::array<std::uint8_t, 16> frame{};
 		std::memcpy(frame.data(), &arg, sizeof(arg));
@@ -13350,7 +13710,7 @@ TEST_CASE("the deterministic profile canonicalises observable NaNs")
 		return result;
 	};
 	const auto detVoidI64 = [&](const WASM::Callable& callable, std::int64_t arg) {
-		if (!detFrame) {
+		if (!WASM::callableUsesFrameForm(callable)) {
 			WASM::callCallable<void>(callable, arg);
 			return;
 		}
@@ -14072,7 +14432,7 @@ TEST_CASE("stack-switching carries multi-value and reference payloads")
 	REQUIRE(multi.has_value());
 	REQUIRE(ref.has_value());
 	std::int32_t multiResult = 0;
-	if (instance->frameCallAbi()) {
+	if (WASM::callableUsesFrameForm(*multi)) {
 		alignas(16) unsigned char frame[16] = {};
 		WASM::callCallableFrame(*multi, frame);
 		std::memcpy(&multiResult, frame, sizeof(multiResult));
@@ -14083,7 +14443,7 @@ TEST_CASE("stack-switching carries multi-value and reference payloads")
 
 	int marker = 7;
 	void* returned = nullptr;
-	if (instance->frameCallAbi()) {
+	if (WASM::callableUsesFrameForm(*ref)) {
 		alignas(16) unsigned char frame[32] = {};
 		void* argument = &marker;
 		std::memcpy(frame, &argument, sizeof(argument));
@@ -14506,6 +14866,122 @@ TEST_CASE("stack-switching module routes a suspension to its handler")
 // The diagnostics flags are ours, not Catch2's: consume them before the session
 // sees the command line, install the sink, run the tests, then flush the
 // collected records to stdout or `--diagnostics-file`.
+// ── `i31ref` at the C boundary (GAP-7) ──────────────────────────────────────
+//
+// An `i31` is an *unboxed immediate*: `(value << 1) | 1`. That makes it a legal
+// opaque `void*` token for a C host -- it round-trips unchanged -- but not a
+// pointer, so the boundary rule is stated and pinned here rather than left to a
+// reader's assumption (docs/ABI.md "Reference and Global Representation").
+TEST_CASE("an i31 reaches a C host as an opaque tagged token, not a pointer")
+{
+	WASM::Module module = loadTestModule("i31_boundary_probe");
+	auto backend = TestBackend::create();
+	WASM::RegistryImportResolver imports;
+	auto instance = backend->instantiator().instantiate(module, imports);
+	REQUIRE(instance.get() != nullptr);
+
+	auto make = instance->exportedFunction("make");
+	auto unwrap = instance->exportedFunction("unwrap");
+	REQUIRE(make.has_value());
+	REQUIRE(unwrap.has_value());
+
+	const int32_t values[] = {0, 1, -1, -3, 123456, 1073741823, -1073741824};
+	for (const int32_t value : values) {
+		INFO("i31 value: " << value);
+		void* token = WASM::callCallable<void*>(*make, value);
+		REQUIRE(token != nullptr);
+		// The tag is the low bit; a host may compare and round-trip the token,
+		// never dereference it.
+		REQUIRE((reinterpret_cast<std::uintptr_t>(token) & 1u) == 1u);
+		REQUIRE(WASM::callCallable<int32_t>(*unwrap, token) == value);
+		// It has no header, so it carries no count and releasing it is a no-op.
+		instance->refDrop(token);
+	}
+
+	// The payload is 31 bits: `ref.i31` keeps the low 31 bits and `i31.get_s`
+	// sign-extends them, so 2^31 is not representable and reads back as zero.
+	// That is the spec's rule, not a truncation defect, and stating it here keeps
+	// the boundary contract honest about the range.
+	void* truncated = WASM::callCallable<void*>(*make, int32_t(-2147483647 - 1));
+	REQUIRE(truncated != nullptr);
+	REQUIRE(WASM::callCallable<int32_t>(*unwrap, truncated) == 0);
+}
+
+
+// ── A native import that returns a reference (GAP-5) ────────────────────────
+//
+// The host keeps its own count of the value it returns; the guest's operand
+// stack must therefore *clone* the result instead of taking the count over. The
+// failure direction is the dangerous one: taking it over releases a count the
+// host still owns, and the object is reclaimed while the host can still reach
+// it (docs/WRITING_A_BACKEND.md section 6, docs/API_ABI_STABILITY.md GAP-5).
+//
+// This is the GC-typed counterpart of the `stringref` case above; both run on
+// every backend through the harness selector.
+namespace {
+
+void* g_nativeHandedReference = nullptr;
+int g_nativeHandBackCalls = 0;
+
+void* nativeHandBackReference(WASM::VMContext*)
+{
+	++g_nativeHandBackCalls;
+	return g_nativeHandedReference;
+}
+
+} // namespace
+
+TEST_CASE("a native import's reference result is cloned, so the host keeps its count")
+{
+	WASM::Module module = loadTestModule("native_ref_result_probe");
+	g_nativeHandedReference = nullptr;
+	g_nativeHandBackCalls = 0;
+
+	WASM::RegistryImportResolver imports;
+	imports.registerFunction("env", "hand_back",
+WASM::nativeImport<&nativeHandBackReference>());
+	auto backend = TestBackend::create();
+	auto instance = backend->instantiator().instantiate(module, imports);
+	REQUIRE(instance.get() != nullptr);
+
+	auto make = instance->exportedFunction("make");
+	auto handBackAndDrop = instance->exportedFunction("hand_back_and_drop");
+	auto handBackAndReturn = instance->exportedFunction("hand_back_and_return");
+	REQUIRE(make.has_value());
+	REQUIRE(handBackAndDrop.has_value());
+	REQUIRE(handBackAndReturn.has_value());
+
+	// A reference *result* of a compiled callee is handed over owned.
+	void* object = WASM::callCallable<void*>(*make);
+	REQUIRE(object != nullptr);
+	REQUIRE(instance->gcRefCount(object) == 1);
+
+	// The host now holds its own count, which is what a host C function does when
+	// it keeps the value it returns.
+	REQUIRE(instance->refClone(object) == object);
+	REQUIRE(instance->gcRefCount(object) == 2);
+	g_nativeHandedReference = object;
+
+	// The guest takes the import's result, drops it, and the host's count must
+	// survive: the guest owned a clone, not the host's reference.
+	WASM::callCallable<void>(*handBackAndDrop);
+	REQUIRE(g_nativeHandBackCalls == 1);
+	REQUIRE(instance->gcRefCount(object) == 2);
+
+	// A guest that *returns* the import's result hands the clone on: the count it
+	// took for its operand stack is now the caller's.
+	void* returned = WASM::callCallable<void*>(*handBackAndReturn);
+	REQUIRE(returned == object);
+	REQUIRE(instance->gcRefCount(object) == 3);
+
+	// Give the two counts the test owns back -- its own and the returned clone --
+	// and the host's hold is what remains.
+	instance->refDrop(returned);
+	instance->refDrop(object);
+	REQUIRE(instance->gcRefCount(object) == 1);
+	g_nativeHandedReference = nullptr;
+}
+
 int main(int argc, char* argv[])
 {
 	DiagnosticsHarness diagnostics;

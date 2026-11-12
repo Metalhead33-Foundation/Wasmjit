@@ -203,7 +203,14 @@ void ModuleCallCache::call(const ModuleFfiEntry& entry, void* result,
 	// Staging-frame ABI (docs/ABI.md sections 17 and 21): the
 	// embedder keeps the typed grammar and this cache is the only place that knows
 	// the callee wanted a frame. No backend changes, no per-signature thunk.
-	if (instance_->frameCallAbi()) {
+	// The callable's own form, not the instance's aggregate: a mixed module can
+	// export both a frame-form and a register-form entry (`GAP-1`, `GR-8`). A
+	// native import re-export follows the module's uniform form, which is the
+	// only one its host entry can have been built for.
+	const bool frameResultForm = WASM::callableIsCompiled(entry.callable)
+			? WASM::callableUsesFrameForm(entry.callable)
+			: instance_->frameCallAbi();
+	if (frameResultForm) {
 		const auto widthOf = [](WASM::ValueTypeCode code) -> std::size_t {
 			switch (code) {
 			case WASM::ValueTypeCode::V128: return 16;

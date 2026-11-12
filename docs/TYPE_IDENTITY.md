@@ -2,7 +2,8 @@
 
 *Equivalence, canonicalisation, and matching*
 
-Status: design note / implementation reference (revision 2).
+Status: design note / implementation reference (revision 4; §13 study added
+2026-11-12).
 Audience: anyone touching `WasmType`, `WasmTypeRegistry`, `ModuleInstance`,
 `RegistryImportResolver`, or `LibJitTypeTranslator`.
 
@@ -23,7 +24,9 @@ Revision 2 turns the design (§6) into an ordered implementation plan (§8) and
 test plan (§9), and records decisions that were previously open (§7). Revision 3
 adds the Store-owned/one-canonical-instance target and the JIT cutover pointer
 in §6.7/§10/§12.3; the detailed TM-6…TM-11 plan lives in
-[`proposals/TYPE_MODEL.md`](proposals/TYPE_MODEL.md) §7.10.
+[`proposals/TYPE_MODEL.md`](proposals/TYPE_MODEL.md) §7.10. Revision 4 adds §13,
+a feasibility study of host-object type identity; it records no implementation
+and changes no identity rule in §6.
 
 ## 1. Scope
 
@@ -707,7 +710,209 @@ Reproduce the figures with:
     #include "WasmTypeStore.hpp"
     printf("%zu\n", sizeof(WASM::TypeRecord)); // 16 on x86-64 / libstdc++
 
-## 13. References
+## 13. Host-object type identity (study)
+
+Status: feasibility study (2026-11-12; implementation snapshot `9b2ca92`). No
+implementation and no change to any identity rule in §6. Owner labels:
+core/component identity is **ENG**; a host registry and its descriptors are
+**EMB**; generated descriptors and bindings are **TOOL**; C’s inability to
+declare a typed `(ref $T)` is **LANG**.
+
+### 13.1 The question
+
+[`EMBEDDING_SURFACE.md`](EMBEDDING_SURFACE.md) §17 studies a GObject-shaped host
+object runtime. This section answers only the identity half: could a `GType`-like
+registry give C-family guests a typed object identity, and could GC languages
+share it silently?
+
+Three things must stay separate:
+
+1. **Representation** — the machine word (`void*`, `u64`, a resource handle).
+2. **Type relation** — Wasm `match`, `ref.test`/`ref.cast`, or a host `is_a`.
+3. **Object model** — creation, fields, methods, inheritance, lifetime.
+
+A host registry can own (3), and a host `is_a`/`cast` is a function call. It
+cannot inject a new relation into (2) for a C guest, and it cannot make a
+nominal host type participate in `ref.cast`.
+
+### 13.2 What `TypeId` is, and is not
+
+- `TypeId` is a dense `uint32_t` assigned by the Store’s `TypeRegistry` (§6.1).
+  It identifies one **canonical core Wasm defined type** within that Store.
+- It is **structural over closed forms** (§3.2): two modules that declare
+  structurally identical `rec` groups receive the same `TypeId` after interning.
+- It is **Store-scoped**, not process-global; two runtimes have independent id
+  spaces (§6.1, `EMBEDDING_SURFACE.md` §4.4).
+- It is **not** a name, not a serialized ABI value, not an object address, and
+  not stable across runs or Stores. A generated header must not hard-code one
+  (`EMBEDDING_SURFACE.md` §14.4).
+- A GC object header stores the `TypeId`; `ref.test`/`ref.cast` read it
+  (`ABI.md` “GC Object and Heap ABI”, `GC.md` §4.3).
+- The JIT caches lowered types by it (§6.7). Anything that changes its meaning
+  is an engine change, not an adapter decision.
+
+`LocalTypeIdx` remains module-local; `RecGroupId` identifies an interned group.
+They are distinct struct types, not aliases (§6.1). None of them is a host type.
+
+### 13.3 Three identity domains
+
+| Domain | Key | Scope | Answers | Cannot answer |
+|---|---|---|---|---|
+| **Core Wasm type** | `TypeId` | one Store | structural equivalence and `match` of core types; `ref.test`/`ref.cast` on GC objects | a host class name, method set or C++ RTTI |
+| **Component type** | Store `TypeId` for closed definitions, `SchemeId` for open types, nominal resource identity | one Store / component instance | WIT structural types, `own`/`borrow`, resource handle validity | a core `(ref $T)` field relation; host object layout |
+| **Host object type** | stable name + versioned descriptor; host id | a host runtime (may span Stores) | host object kind, fields, methods, interfaces, host `is_a` | Wasm `match`/`ref.cast`; cross-Store identity |
+
+A handle must say which domain it belongs to. Comparing a host id with a
+`TypeId`, or moving a handle between Stores, is invalid even when the machine
+word is the same size. This is the same rule as `EMBEDDING_SURFACE.md` §14.5:
+kind, identity and ownership are not the same check.
+
+### 13.4 Nominal GType versus structural Wasm
+
+GType is **nominal**: a type is registered, has a name and a parent, and may
+implement interfaces; two structurally identical C structs are different GTypes
+unless they are registered and related. Wasm core types are **structural**:
+after canonicalization, two identical `rec` groups are the same type, even from
+different modules, and declared supertypes are part of the identity (§3.2–§3.4).
+
+That difference is not an implementation detail; it decides what can be shared:
+
+- A **Wasm GC object** can be shared by two GC modules because the *type* is
+  structural and the header carries the canonical `TypeId`. Its language-level
+  class identity is still each runtime’s own
+  (`EMBEDDING_SURFACE.md` §14.6).
+- A **host object** can be shared through a handle because both sides agree on a
+  **descriptor name**, not because Wasm’s `match` understands the host type.
+  The host `is_a` is a function over the host registry.
+- A **C guest** cannot declare `(ref $T)` at all (`LG-1`); a host descriptor
+  does not change its type system. It can hold a handle and call functions.
+
+“Everyone understands it” is therefore only possible at the **handle plus
+descriptor** level, or at the **component resource** level. It is not possible
+at the Wasm type level unless every producer emits the same canonical Wasm type.
+
+### 13.5 What a host descriptor can contain
+
+A host runtime needs enough metadata to validate a handle and expose an API,
+without leaking a layout:
+
+| Field | Purpose | Constraint |
+|---|---|---|
+| stable name | cross-run/cross-Store identity | reverse-DNS or WIT-style name; not a numeric id |
+| version | descriptor evolution | a field reorder or type change is a new version |
+| kind | object/record/array/resource | determines which operations are legal |
+| parent / interfaces | host-side hierarchy and capability query | names, not Wasm heap types; no `(ref $I)` |
+| fields | name, logical type, accessor id | no raw offset or `sizeof` in the guest-visible descriptor |
+| methods | name, signature id | function-table id or WIT function, not a C++ vtable pointer |
+| destructor | release hook id | host-side id; a component resource uses `resource.drop` |
+| thread affinity | which agent may call | host policy; not inferred from the Wasm type |
+| flags | copyable/weak/finalizable/etc. | host policy; document the default |
+
+The descriptor is **host metadata**. A guest sees functions, not the descriptor,
+unless the API deliberately exposes introspection. A generated C header should
+carry the stable name and typedefs, never a `TypeId`, a C++ `typeid` or a field
+offset (`EMBEDDING_SURFACE.md` §14.4). The host resolves the name to its own id;
+the Store resolves a Wasm GC type to its `TypeId`; the two mappings meet only
+where a host object is deliberately wrapped in a Wasm GC object.
+
+### 13.6 Interfaces and subtyping
+
+Wasm GC has a supertype list and structural width subtyping; it has no interface
+types (§3.1). A GObject-style interface is a **nominal capability set**, so it
+cannot be a `(ref $I)` and cannot participate in `ref.cast`. The honest models
+are:
+
+1. **Capability query** — `query_interface(handle, name) -> handle` (or null),
+   and the returned handle supports the interface’s functions. Host `is_a` is a
+   function call, not a Wasm type test.
+2. **Separate resource type** — a WIT resource per interface, with `own`/`borrow`
+   and its own destructor policy. This fits the Component Model and keeps the
+   nominal boundary explicit.
+3. **Declared Wasm supertypes** — if the object is a Wasm GC struct and the
+   interface can be expressed as a structural supertype, put it in the Wasm type
+   at module compile time. It cannot be added later; `TypeId` identity includes
+   the supertype list (§6.2).
+
+A host runtime can offer all three, but it must not claim that a host interface
+is a `ref.test` target. A generated header should expose `query_interface` and
+the interface’s functions, not a cast operator that pretends to be `ref.cast`.
+
+### 13.7 What the runtime must not claim
+
+- **Not a global `TypeId`.** `TypeId` is Store-scoped (§6.1). A host registry
+  that spans Stores needs its own domain and a mapping, not a reused id.
+- **Not a replacement for `TypeRegistry`.** The registry owns core type
+  identity; the host registry owns host object metadata. Sharing an interning
+  table for names is possible; sharing the id space is not.
+- **Not a stable ABI if it exposes C++ layout or RTTI.** `typeid`, vtable
+  pointers, `sizeof(T)` and raw offsets are process-local and compiler-specific.
+- **Not a way for C to declare `(ref $T)`.** That is `LANG`/`TOOL` (`LG-1`).
+- **Not cross-Store object identity.** A host pointer in one Store/runtime is
+  not valid in another; a resource handle is per instance. `own` moves a
+  resource handle; it does not make a pointer valid in a new Store.
+- **Not a finalizer or a GC.** The engine has no finalizer; a host object is
+  released explicitly, from `instanceDestroying`, or by `resource.drop`.
+
+### 13.8 Relationship to component resources
+
+Component resources are the closest standard identity for a host object:
+
+- a resource type is **nominal**; an `own`/`borrow` handle belongs to a
+  component instance and is validated against the expected resource type;
+- `resource.rep` exposes the engine-defined representation (the host can put a
+  table index there), and `resource.drop` runs the declared destructor;
+- the handle table is per instance and bounded (`maxLiveHandles`), and stale,
+  mistyped and out-of-scope handles are rejected
+  (`WasmComponentRuntime.hpp`, `COMPONENT_MODEL.md` §2.3/§4.3).
+
+A host runtime type maps naturally to a **WIT resource type**: the WIT resource
+is the guest-visible identity, and the HOR’s type descriptor is the `rep`
+metadata. This keeps the identity domain explicit and avoids inventing a second
+wire ABI. It also means the resource’s nominal identity, not a host name, is
+what the component validator checks; two components with the same resource name
+are not the same resource unless they are linked/aliased.
+
+For a core module that is not a component, the fallback is a synthetic module
+plus a host handle table; that path must document its own host type domain and
+must not pretend it is a Wasm `TypeId`.
+
+### 13.9 Verdict
+
+| Question | Verdict |
+|---|---|
+| Can a GType-like registry provide a host object identity? | **Yes**, as an auxiliary host domain keyed by stable names and descriptors |
+| Can it extend Wasm’s `match`/`ref.cast`? | **No**; host types are not Wasm heap types |
+| Can C declare `(ref $T)` through it? | **No**; a handle is not a reference type, and the C type system does not change |
+| Can two GC languages share a WIT resource? | **Yes**, at the component boundary, with `own`/`borrow` and nominal resource identity |
+| Can two GC languages share a core Wasm GC struct? | **Yes**, if they emit the same canonical type in the same Store; language class semantics still differ |
+| Can a host object and a Wasm GC object be the same type? | **No**; they can be bridged by a wrapper/resource, not identified |
+| Does this need an engine change? | **No**; `TypeId`, `TypeRegistry` and resource handles stay as they are |
+
+### 13.10 What would make this a tested claim
+
+1. **Structural vs nominal.** Two modules in one Store declare structurally
+   identical Wasm structs; their `TypeId`s are equal and a typed reference
+   crosses. Two host types with identical fields but different stable names are
+   different host types; `is_a` is false both ways. This is the key test of the
+   distinction.
+2. **Store boundary.** The same stable type name in two Stores maps to different
+   `TypeId`s; a host handle from one Store is rejected by the other.
+3. **Cast separation.** A host handle passed where a `(ref $T)` is expected is
+   rejected (or treated as `externref`), not silently matched; a Wasm GC object
+   and a host object with the same fields are not interchangeable.
+4. **Interface query.** An object implements two interfaces; each query returns
+   a handle that supports only its own functions; a method from the other
+   interface is rejected.
+5. **Resource parity.** A WIT resource version of the same API: `own` moves,
+   `borrow` is scoped, `resource.drop` runs the destructor once, and a handle
+   from another instance is rejected.
+6. **Descriptor evolution.** Adding a field or renaming a type is a new version;
+   an old handle does not silently resolve to the new layout.
+
+Until these exist, the verdict is a design argument, not measured evidence.
+
+
+## 14. References
 
 - WebAssembly 3.0 specification (living draft):
   - Validation — Matching:

@@ -908,8 +908,8 @@ std::memcpy(&result, frame, sizeof(result));
 CHECK(result == 42);
 }
 
-// Frame tails are lowered as a frame call plus a frame return; this pins
-// correctness at a depth that does not depend on constant-stack behavior.
+// Frame tails run through the backend-neutral frame driver, so a 1,000,000
+// link chain completes on the default stack (GAP-3, GR-7).
 TEST_CASE("LibJIT tail calls through an opted-in frame",
 "[staging][libjit][abi][tail][frame]")
 {
@@ -917,6 +917,30 @@ auto runtime = WASM::Runtime::create("libjit");
 REQUIRE(runtime != nullptr);
 auto module = runtime->loadFile(
 std::filesystem::path(WASM_TEST_DIR) / "libjit_frame_tail_probe.wasm");
+WASM::RegistryImportResolver imports;
+WASM::setFrameCallAbiOptIn(true);
+WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+CHECK(instance.frameCallAbi());
+const auto run = instance.exportedFunction("run");
+REQUIRE(run.has_value());
+alignas(16) std::uint8_t frame[16] = {};
+WASM::callCallableFrame(*run, frame);
+WASM::setFrameCallAbiOptIn(false);
+std::int32_t result = 0;
+std::memcpy(&result, frame, sizeof(result));
+CHECK(result == 1);
+}
+
+// Frame-form `return_call_ref` through the same driver: the link target is
+// resolved at runtime, so the thunk must stage the arguments in the frame the
+// driver carries instead of in registers (GR-7).
+TEST_CASE("LibJIT frame-form return_call_ref is constant-stack",
+"[staging][libjit][abi][tail][ref][frame]")
+{
+auto runtime = WASM::Runtime::create("libjit");
+REQUIRE(runtime != nullptr);
+auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "tailcall_ref_frame_probe.wasm");
 WASM::RegistryImportResolver imports;
 WASM::setFrameCallAbiOptIn(true);
 WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);

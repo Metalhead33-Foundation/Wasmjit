@@ -6,6 +6,7 @@
 #include "WasmBase/WasmBackendRegistry.hpp"
 #include "WasmBase/WasmRegistryImportResolver.hpp"
 #include "WasmBase/WasmBackendAbi.hpp"
+#include "WasmBase/WasmNativeImport.hpp"
 #include "WasmBase/WasmRuntime.hpp"
 
 #include <algorithm>
@@ -162,10 +163,10 @@ TEST_CASE("AsmJIT returns a v128 through the caller's buffer", "[asmjit][v128][a
 TEST_CASE("the vector-result helper works on every buffered backend",
 "[v128][abi][buffered]")
 {
-	// Both AsmJIT and SLJIT return a v128 through the caller's buffer, so the same
-// fixture and the same helper must produce the same four lanes on each. LibJIT
-// returns the aggregate itself, so it is deliberately not part of this list
-// (docs/backends/HISTORY.md).
+	// A v128 result is frame-form on AsmJIT and SLJIT (`GR-8`), so the frame is
+// the caller buffer here; the register-form `callCallableVector` helper is
+// pinned by the LibJIT aggregate spelling instead. Either way the same four
+// lanes must come back.
 for (const char* backend : {"asmjit", "sljit"}) {
 auto runtime = WASM::Runtime::create(backend);
 REQUIRE(runtime != nullptr);
@@ -177,8 +178,14 @@ WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
 const std::optional<WASM::Callable> callable = instance.exportedFunction("vec_result");
 REQUIRE(callable.has_value());
 REQUIRE(callable->fnPtr != nullptr);
-const std::array<std::uint32_t, 4> lanes =
-WASM::callCallableVector(*callable);
+std::array<std::uint32_t, 4> lanes{};
+if (WASM::callableUsesFrameForm(*callable)) {
+alignas(16) std::uint8_t frame[16] = {};
+WASM::callCallableFrame(*callable, frame);
+std::memcpy(lanes.data(), frame, sizeof(lanes));
+} else {
+lanes = WASM::callCallableVector(*callable);
+}
 CHECK(lanes[0] == 7u);
 CHECK(lanes[1] == 8u);
 CHECK(lanes[2] == 9u);
@@ -465,4 +472,45 @@ std::memcpy(&first, frame, sizeof(first));
 std::memcpy(&second, frame + 8, sizeof(second));
 CHECK(first == 7);
 CHECK(second == 9);
+}
+
+// GAP-11: an indirect call to a wide vector signature in a module that also
+// imports a native function. The address side used to refuse the whole module
+// because the staged-import adapter had no ffi_type for a vector; the assertion
+// here is that the *module* instantiates and the call answers (docs/
+// API_ABI_STABILITY.md 8.5).
+namespace {
+
+std::int32_t asmjitWideV128HostAdd(WASM::VMContext*, std::int32_t value)
+{
+	return value + 1;
+}
+
+} // namespace
+
+TEST_CASE("AsmJIT carries a wide v128 indirect call beside a native import",
+"[staging][asmjit][abi][simd][call]")
+{
+	auto runtime = WASM::Runtime::create("asmjit");
+	REQUIRE(runtime != nullptr);
+	auto module = runtime->loadFile(
+std::filesystem::path(WASM_TEST_DIR) / "wide_v128_indirect_probe.wasm");
+	WASM::RegistryImportResolver imports;
+	imports.registerFunction("env", "host_add", WASM::nativeImport<&asmjitWideV128HostAdd>());
+	WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+	// The wide `$lane` callee is frame-form; the narrow exports keep the register
+	// form, so the module is mixed and the exports are called directly (`GAP-1`,
+	// `GR-8`). The indirect call site must still enter `$lane` through the frame.
+	CHECK_FALSE(instance.frameCallAbi());
+	const auto call = [&](const char* name) -> WASM::Callable {
+		const std::optional<WASM::Callable> callable = instance.exportedFunction(name);
+		INFO("export " << name);
+		REQUIRE(callable.has_value());
+		REQUIRE(callable->fnPtr != nullptr);
+		CHECK_FALSE(WASM::callableUsesFrameForm(*callable));
+		return *callable;
+	};
+
+	CHECK(WASM::callCallable<std::int32_t>(call("indirect")) == 30);
+	CHECK(WASM::callCallable<std::int32_t>(call("host"), std::int32_t(41)) == 42);
 }

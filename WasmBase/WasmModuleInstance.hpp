@@ -629,10 +629,25 @@ public:
 	//! pins.
 	bool frameCallAbi_ = false;
 
+	//! Call form per module-local function type: 1 = the staging frame, 0 = the
+	//! backend's register form. Index-aligned with the module's type section.
+	//! Empty means "no per-type decision" and `frameCallAbi()` answers for every
+	//! type (a module compiled before the per-signature rule, or a null backend).
+	std::vector<std::uint8_t> frameFormByType_;
+
 	/** \brief Records whether this module's functions use the staging-frame call ABI. \param enabled true when they do. */
 	void setFrameCallAbi(bool enabled) noexcept { frameCallAbi_ = enabled; }
-	/** \brief Reports whether this module's functions use the staging-frame call ABI. \return true when `fn(VMContext*, void* frame)` applies. */
+	/** \brief Reports whether this module's functions use the staging-frame call ABI. \return true when every defined function does, or the opt-in requested it. */
 	bool frameCallAbi() const noexcept { return frameCallAbi_; }
+	/** \brief Records each module-local type's call form. \param forms One entry per module type, non-zero for the staging frame. */
+	void setFrameCallForms(std::vector<std::uint8_t> forms) noexcept { frameFormByType_ = std::move(forms); }
+	/** \brief Reports the call form of one function type. \param typeIdx Module-local type index. \return true when that signature uses `void fn(VMContext*, void* frame)`. */
+	bool usesFrameForm(LocalTypeIdx typeIdx) const noexcept
+	{
+		if (typeIdx.value < frameFormByType_.size())
+			return frameFormByType_[typeIdx.value] != 0;
+		return frameCallAbi_;
+	}
 
 	//! Refuses an imported compiled function whose exporting instance chose the
 	//! other call form. A call site emits the **caller's** form, so a graph that

@@ -4,7 +4,7 @@
 
 Status: deep-study note (revision 2 — 2026-10-30: **`F2` is fixed**). `LE-8` now
 translates the delegating shape in place, so `T05` (C++ with libc++, default
-flags) is green without a flag and without `wasm-opt`. The note verifies the
+flags) is 🟩 green without a flag and without `wasm-opt`. The note verifies the
 `wasm-opt --translate-to-exnref` workaround, states the toolchain flags that
 avoid the shape, and records the in-engine translation that replaced them.
 Audience: whoever owns `WasmBase/WasmLegacyEh.cpp`, whoever writes the C/C++ or
@@ -113,7 +113,7 @@ embedder that receives a prebuilt legacy-EH module.
 
 ### 3.3 What this means for the report set
 
-`T05` is **green**: the same module now loads with no flag and no `wasm-opt`
+`T05` is 🟩 **green**: the same module now loads with no flag and no `wasm-opt`
 step, because the engine translates the shape (§4.1). The flag and the
 translated twin remain useful — the flag produces a smaller final-form module and
 is what a source build should prefer — but neither is required for the verdict,
@@ -218,7 +218,7 @@ should default to **on** — "one boolean". The answer from the `LF-2` data is
 
 | Arm | Emits legacy EH? | Would a default-on rewrite help? |
 |---|---|---|
-| Kotlin/Wasm 2.4.21 (`wasmWasi`) | **no** — `try_table` (10 occurrences, zero legacy `try`) | no; it is green without the rewrite |
+| Kotlin/Wasm 2.4.21 (`wasmWasi`) | **no** — `try_table` (10 occurrences, zero legacy `try`) | no; it is 🟩 green without the rewrite |
 | Go 1.27.3 (`wasip1`) | no | no |
 | Rust 1.99.1, Zig, C (freestanding / wasi-sdk) | no (C++ only through libc++) | no |
 | Lua 5.4.8 (`setjmp`) | yes | it already runs **with** the rewrite; defaulting it on removes an env var, not a colour |
@@ -266,18 +266,18 @@ Measured after the change (2026-10-30):
 
 | Arm | Result |
 |---|---|
-| `T26` Lua (`setjmp`) | green **with no environment variable**; the Note names the body count |
-| `T05` C++ default flags | **green** — `LE-8` translates the skip, so clang's default output loads and its exceptions work (40 / 42 / 10 / 10 / −1) |
-| `T20` Dart | still yellow — the recovery accepts the encoding, then the `canonical type reference is not declared by this module` failure (`F3`-adjacent, still unreproduced) |
+| `T26` Lua (`setjmp`) | 🟩 green **with no environment variable**; the Note names the body count |
+| `T05` C++ default flags | 🟩 **green** — `LE-8` translates the skip, so clang's default output loads and its exceptions work (40 / 42 / 10 / 10 / −1) |
+| `T20` Dart | still 🟨 yellow — the recovery accepts the encoding, then the `canonical type reference is not declared by this module` failure (`F3`-adjacent, still unreproduced) |
 | Final-form modules (Kotlin, Go, Rust, Zig, C, MoonBit) | byte-identical; `[legacy-eh]` asserts no Note is emitted for Binaryen's `try_catch.exnref` twin |
 
 ## 6. What changed in the report set
 
 - [`LF2_S1_C_CPP.md`](LF2_S1_C_CPP.md) §3.5 records the default-flags transcript
-  and calls the flag a preference; `T05` moved from yellow to **green**.
+  and calls the flag a preference; `T05` moved from 🟨 yellow to 🟩 **green**.
 - [`LF2_S4_WASMGC.md`](LF2_S4_WASMGC.md) §2 records that Kotlin/Wasm 2.4.21
   emits `try_table`, correcting the `LF-1` premise that it depends on legacy EH.
-- [`LF2_INDEX.md`](LF2_INDEX.md) §4/§5 marks `F2` fixed and `T05` green;
+- [`LF2_INDEX.md`](LF2_INDEX.md) §4/§5 marks `F2` fixed and `T05` 🟩 green;
   [`LF2_EVIDENCE.md`](LF2_EVIDENCE.md) §5.2 keeps the "before" transcript and
   adds the "after" one.
 

@@ -906,6 +906,14 @@ external prerequisite is needed for the tooling-side milestones.
   flat and memory representations. Lowering a component call *serialises* those
   values into a buffer; it must not allocate GC objects. Sharing the `TypeRegistry`
   (CMD9) is about interning, not about unifying the two ASTs.
+- **[`../EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) §17** — a feasibility
+  study of a GObject-shaped host object runtime. Its wire half is the Component
+  Model’s `resource` + `own`/`borrow` + `resource.drop`; the non-redundant half
+  is a dynamic object model (properties, signals, reflection, interfaces), which
+  belongs in a WIT package plus a host implementation, not in `WasmBase/`.
+- **[`../TYPE_IDENTITY.md`](../TYPE_IDENTITY.md) §13** — why a host type registry
+  is a third identity domain, and why nominal GType-style types cannot join
+  Wasm’s structural `match`.
 - **[`../ABI.md`](../ABI.md)** — component host calls are the one place where the
   "no trampolines, bake the `VMContext*`" stance has to give: a lifted/lowered
   function is a generated adapter even though a plain cross-module `call` is not.
