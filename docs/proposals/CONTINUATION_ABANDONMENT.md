@@ -133,6 +133,19 @@ the others only slightly (5,333 / 10,884 / 10,666), which is the `CA3` predictio
 remain sit in *caller* frames and in nested parks that push their own record. CA-1 therefore means
 "move, not record", and CA-4 is not optional if those numbers are to reach zero.
 
+**Why moving cannot finish the job (second run, 2026-11-11).** A move shuffles *raw pointers*;
+it does not touch a handle's `refs` count. `Continuation` holds `shared_ptr<Worker>` and
+`continuationRefRelease` deletes the handle only when `refs` reaches zero, so a count sitting in a
+parked frame keeps the handle alive, the handle keeps the worker alive, and `~Worker` — the only
+place that could release the frame's slots — never runs. The host-thread case went clean because its
+frame does resume; the others do not. The way out is not a better move but a different owner: **the
+store owns its parked continuations**. At `Store::~Store`, force-release every `Continuation` whose
+worker was created in that store and destroy the parked workers whose frames never returned, which
+releases the recorded slots as it goes. That is the `CAD3` release point moved one level up: a
+store's continuations cannot outlive the store, and no handle can pin a worker past it. It needs a
+live-worker registry (insert in the `Worker` constructor, erase in `~Worker`) beside the existing
+handle registry, plus one call from `Store::~Store`; it is the `CA-4` milestone's real shape.
+
 **Build note for the next attempt.** The Asmjit subproject in a build tree can keep a stale
 `libAsmjit.so` when only its sources change (the top-level `make` then relinks the test binary
 against the old library and fails with `undefined reference to ModuleCompiler::ModuleCompiler`).
