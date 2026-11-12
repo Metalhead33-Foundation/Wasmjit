@@ -5325,7 +5325,13 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		case 8: return &wasm_i8x16_sub;
 		case 9: return &wasm_i16x8_sub;
 		case 10: return &wasm_i32x4_sub;
-		default: return &wasm_i64x2_sub;
+		case 11: return &wasm_i64x2_sub;
+		case 12: return &wasm_i8x16_avgr_u;
+		case 13: return &wasm_i16x8_avgr_u;
+		case 14: return &wasm_i8x16_min_u;
+		case 15: return &wasm_i16x8_min_s;
+		case 16: return &wasm_i8x16_max_u;
+		default: return &wasm_i16x8_max_s;
 		}
 	}
 
@@ -5364,7 +5370,13 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		case 8: checkError(compiler.psubb(lhs, rhs), name); break;
 		case 9: checkError(compiler.psubw(lhs, rhs), name); break;
 		case 10: checkError(compiler.psubd(lhs, rhs), name); break;
-		default: checkError(compiler.psubq(lhs, rhs), name); break;
+		case 11: checkError(compiler.psubq(lhs, rhs), name); break;
+		case 12: checkError(compiler.pavgb(lhs, rhs), name); break;
+		case 13: checkError(compiler.pavgw(lhs, rhs), name); break;
+		case 14: checkError(compiler.pminub(lhs, rhs), name); break;
+		case 15: checkError(compiler.pminsw(lhs, rhs), name); break;
+		case 16: checkError(compiler.pmaxub(lhs, rhs), name); break;
+		default: checkError(compiler.pmaxsw(lhs, rhs), name); break;
 		}
 		checkError(compiler.movdqu(asmjit::x86::xmmword_ptr(result), out),
 				"AsmJit v128 native store failed");
@@ -5481,12 +5493,12 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 	void dispatchI64x2ShrU() override { emitVectorShift(&wasm_i64x2_shr_u); }
 
 	void dispatchI8x16MinS() override { emitVectorHelper2(&wasm_i8x16_min_s); }
-	void dispatchI8x16MinU() override { emitVectorHelper2(&wasm_i8x16_min_u); }
+	void dispatchI8x16MinU() override { emitVectorBinaryNative("AsmJit i8x16.min_u failed", 14); }
 	void dispatchI8x16MaxS() override { emitVectorHelper2(&wasm_i8x16_max_s); }
-	void dispatchI8x16MaxU() override { emitVectorHelper2(&wasm_i8x16_max_u); }
-	void dispatchI16x8MinS() override { emitVectorHelper2(&wasm_i16x8_min_s); }
+	void dispatchI8x16MaxU() override { emitVectorBinaryNative("AsmJit i8x16.max_u failed", 16); }
+	void dispatchI16x8MinS() override { emitVectorBinaryNative("AsmJit i16x8.min_s failed", 15); }
 	void dispatchI16x8MinU() override { emitVectorHelper2(&wasm_i16x8_min_u); }
-	void dispatchI16x8MaxS() override { emitVectorHelper2(&wasm_i16x8_max_s); }
+	void dispatchI16x8MaxS() override { emitVectorBinaryNative("AsmJit i16x8.max_s failed", 17); }
 	void dispatchI16x8MaxU() override { emitVectorHelper2(&wasm_i16x8_max_u); }
 	void dispatchI32x4MinS() override { emitVectorHelper2(&wasm_i32x4_min_s); }
 	void dispatchI32x4MinU() override { emitVectorHelper2(&wasm_i32x4_min_u); }
@@ -5501,8 +5513,8 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 	void dispatchI16x8SubSatS() override { emitVectorHelper2(&wasm_i16x8_sub_sat_s); }
 	void dispatchI16x8SubSatU() override { emitVectorHelper2(&wasm_i16x8_sub_sat_u); }
 	void dispatchI16x8Q15MulRSatS() override { emitVectorHelper2(&wasm_i16x8_q15mulr_sat_s); }
-	void dispatchI8x16AvgrU() override { emitVectorHelper2(&wasm_i8x16_avgr_u); }
-	void dispatchI16x8AvgrU() override { emitVectorHelper2(&wasm_i16x8_avgr_u); }
+	void dispatchI8x16AvgrU() override { emitVectorBinaryNative("AsmJit i8x16.avgr_u failed", 12); }
+	void dispatchI16x8AvgrU() override { emitVectorBinaryNative("AsmJit i16x8.avgr_u failed", 13); }
 
 	void dispatchI8x16Abs() override { emitVectorHelper1(&wasm_i8x16_abs); }
 	void dispatchI16x8Abs() override { emitVectorHelper1(&wasm_i16x8_abs); }
