@@ -1,4 +1,6 @@
 #include "AsmjitModuleCompiler.hpp"
+#include <cstdlib>
+#include <string_view>
 
 #include "../WasmBase/WasmOpcodeDispatcher.hpp"
 #include "../WasmBase/WasmSafety.hpp"
@@ -37,6 +39,7 @@
 namespace AsmJitBackend {
 
 namespace {
+
 
 void checkError(asmjit::Error error, const char* operation)
 {
@@ -5192,10 +5195,10 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 	}
 
 	void dispatchV128Not() override { emitVectorHelper1(&wasm_v128_not); }
-	void dispatchV128And() override { emitVectorBitwise2("AsmJit v128.and failed", 0); }
-	void dispatchV128AndNot() override { emitVectorBitwise2("AsmJit v128.andnot failed", 1); }
-	void dispatchV128Or() override { emitVectorBitwise2("AsmJit v128.or failed", 2); }
-	void dispatchV128Xor() override { emitVectorBitwise2("AsmJit v128.xor failed", 3); }
+	void dispatchV128And() override { emitVectorBinaryNative("AsmJit v128.and failed", 0); }
+	void dispatchV128AndNot() override { emitVectorBinaryNative("AsmJit v128.andnot failed", 1); }
+	void dispatchV128Or() override { emitVectorBinaryNative("AsmJit v128.or failed", 2); }
+	void dispatchV128Xor() override { emitVectorBinaryNative("AsmJit v128.xor failed", 3); }
 
 	void dispatchV128Bitselect() override
 	{
@@ -5292,24 +5295,60 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 	}
 
 	//! Calls a binary v128 helper (`a`, `b`, `out`) and pushes `out`.
-	//! Native 16-byte bitwise op on two buffers, no helper call.
-	//! `kind`: 0 = and, 1 = andnot (a & ~b), 2 = or, 3 = xor. The result lands in
-	//! a fresh buffer, exactly as `emitVectorHelper2` leaves it (`SIMD-8`).
-	void emitVectorBitwise2(const char* name, int kind)
+	//! Native 16-byte binary op on two buffers, no helper call.
+	//! Kinds: 0 and, 1 andnot (a & ~b), 2 or, 3 xor, 4..7 `paddb/w/d/q`,
+	//! 8..11 `psubb/w/d/q`. The result lands in a fresh buffer, exactly as
+	//! `emitVectorHelper2` leaves it (`SIMD-8`).
+	//! The portable helper each native kind falls back to (`WASMJIT_SIMD_NATIVE=0`).
+	//! Whether the backend may use its own vector instructions (`SIMD-8`).
+	//! `WASMJIT_SIMD_NATIVE=0` forces the portable helper path, for A/B runs.
+	static bool nativeSimdEnabled()
 	{
+		static const bool enabled = [] {
+			const char* value = std::getenv("WASMJIT_SIMD_NATIVE");
+			return value == nullptr || std::string_view(value) != "0";
+		}();
+		return enabled;
+	}
+
+	static void (*helperForNativeKind(int kind))(const void*, const void*, void*)
+	{
+		switch (kind) {
+		case 0: return &wasm_v128_and;
+		case 1: return &wasm_v128_andnot;
+		case 2: return &wasm_v128_or;
+		case 3: return &wasm_v128_xor;
+		case 4: return &wasm_i8x16_add;
+		case 5: return &wasm_i16x8_add;
+		case 6: return &wasm_i32x4_add;
+		case 7: return &wasm_i64x2_add;
+		case 8: return &wasm_i8x16_sub;
+		case 9: return &wasm_i16x8_sub;
+		case 10: return &wasm_i32x4_sub;
+		default: return &wasm_i64x2_sub;
+		}
+	}
+
+	void emitVectorBinaryNative(const char* name, int kind)
+	{
+		if (!nativeSimdEnabled())
+		{
+			emitVectorHelper2(helperForNativeKind(kind));
+			return;
+		}
 		if (values.size() < 2)
-			throw std::runtime_error("AsmJit v128 bitwise operand underflow");
+			throw std::runtime_error("AsmJit v128 binary operand underflow");
 		auto b = values.back();
 		values.pop_back();
 		auto a = values.back();
 		values.pop_back();
 		auto result = newVectorBuffer("v128Result");
-		auto lhs = compiler.new_xmm("v128BitwiseA");
-		auto rhs = compiler.new_xmm("v128BitwiseB");
+		auto lhs = compiler.new_xmm("v128NativeA");
+		auto rhs = compiler.new_xmm("v128NativeB");
 		checkError(compiler.movdqu(lhs, asmjit::x86::xmmword_ptr(a)),
-				"AsmJit v128 bitwise load failed");
+				"AsmJit v128 native load failed");
 		checkError(compiler.movdqu(rhs, asmjit::x86::xmmword_ptr(b)),
-				"AsmJit v128 bitwise load failed");
+				"AsmJit v128 native load failed");
 		// `pandn` writes `~dst & src`, so `a & ~b` is `pandn(b, a)` and the
 		// result lives in the operand that played the destination.
 		asmjit::x86::Vec out = lhs;
@@ -5317,10 +5356,18 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		case 0: checkError(compiler.pand(lhs, rhs), name); break;
 		case 1: checkError(compiler.pandn(rhs, lhs), name); out = rhs; break;
 		case 2: checkError(compiler.por(lhs, rhs), name); break;
-		default: checkError(compiler.pxor(lhs, rhs), name); break;
+		case 3: checkError(compiler.pxor(lhs, rhs), name); break;
+		case 4: checkError(compiler.paddb(lhs, rhs), name); break;
+		case 5: checkError(compiler.paddw(lhs, rhs), name); break;
+		case 6: checkError(compiler.paddd(lhs, rhs), name); break;
+		case 7: checkError(compiler.paddq(lhs, rhs), name); break;
+		case 8: checkError(compiler.psubb(lhs, rhs), name); break;
+		case 9: checkError(compiler.psubw(lhs, rhs), name); break;
+		case 10: checkError(compiler.psubd(lhs, rhs), name); break;
+		default: checkError(compiler.psubq(lhs, rhs), name); break;
 		}
 		checkError(compiler.movdqu(asmjit::x86::xmmword_ptr(result), out),
-				"AsmJit v128 bitwise store failed");
+				"AsmJit v128 native store failed");
 		values.push_back(result);
 	}
 
@@ -8038,16 +8085,16 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		values.push_back(buffer);
 	}
 
-	void dispatchI8x16Add() override { emitVectorHelper2(&wasm_i8x16_add); }
-	void dispatchI8x16Sub() override { emitVectorHelper2(&wasm_i8x16_sub); }
-	void dispatchI16x8Add() override { emitVectorHelper2(&wasm_i16x8_add); }
-	void dispatchI16x8Sub() override { emitVectorHelper2(&wasm_i16x8_sub); }
+	void dispatchI8x16Add() override { emitVectorBinaryNative("AsmJit i8x16.add failed", 4); }
+	void dispatchI8x16Sub() override { emitVectorBinaryNative("AsmJit i8x16.sub failed", 8); }
+	void dispatchI16x8Add() override { emitVectorBinaryNative("AsmJit i16x8.add failed", 5); }
+	void dispatchI16x8Sub() override { emitVectorBinaryNative("AsmJit i16x8.sub failed", 9); }
 	void dispatchI16x8Mul() override { emitVectorHelper2(&wasm_i16x8_mul); }
-	void dispatchI32x4Add() override { emitVectorHelper2(&wasm_i32x4_add); }
-	void dispatchI32x4Sub() override { emitVectorHelper2(&wasm_i32x4_sub); }
+	void dispatchI32x4Add() override { emitVectorBinaryNative("AsmJit i32x4.add failed", 6); }
+	void dispatchI32x4Sub() override { emitVectorBinaryNative("AsmJit i32x4.sub failed", 10); }
 	void dispatchI32x4Mul() override { emitVectorHelper2(&wasm_i32x4_mul); }
-	void dispatchI64x2Add() override { emitVectorHelper2(&wasm_i64x2_add); }
-	void dispatchI64x2Sub() override { emitVectorHelper2(&wasm_i64x2_sub); }
+	void dispatchI64x2Add() override { emitVectorBinaryNative("AsmJit i64x2.add failed", 7); }
+	void dispatchI64x2Sub() override { emitVectorBinaryNative("AsmJit i64x2.sub failed", 11); }
 	void dispatchI64x2Mul() override { emitVectorHelper2(&wasm_i64x2_mul); }
 	void dispatchI8x16Eq() override { emitVectorHelper2(&wasm_i8x16_eq); }
 	void dispatchI8x16Ne() override { emitVectorHelper2(&wasm_i8x16_ne); }
