@@ -920,6 +920,21 @@ private:
 	sljit_sw frameSlotOffset() const;
 	/** \brief Offset of the staging scratch area used to build a callee frame. \return Frame offset in bytes. */
 	sljit_sw callFrameOffset() const;
+	/*!
+	 * \brief Records one staging-area request during the measurement pass.
+	 * \param bytes Bytes the request needs from the call area.
+	 */
+	void noteStagingFrame(std::size_t bytes);
+	/*!
+	 * \brief Records a frame-form call's argument and result block.
+	 * \param type Callee signature.
+	 */
+	void noteCallStaging(const WASM::FuncType& type);
+	/*!
+	 * \brief Slots the call area reserves after the operand stack.
+	 * \return The register-result slots plus the measured staging slots.
+	 */
+	std::size_t callAreaSlots() const;
 	//! True when this module compiles to the staging-frame ABI
 	//! (`docs/ABI.md`): `void fn(VMContext*, void* frame)`,
 	//! with every parameter and result in the caller's frame.
@@ -1696,6 +1711,9 @@ public:
 	std::size_t maxStackDepth_ = 0; //!< High-water mark of the operand stack.
 	//! Set during measurement when the body uses a frame-form call.
 	mutable bool needsStagingCall_ = false;
+	//! Largest staging-area request measured in the first pass, in bytes. The
+	//! prologue sizes the call area from it instead of a fixed cap.
+	std::size_t maxStagingCallBytes_ = 0;
 	//! Set during measurement when the body uses a continuation operation.
 	mutable bool needsContinuationFrame_ = false;
 	//! Operand depth the prologue reserved on the emitting pass. A push past it

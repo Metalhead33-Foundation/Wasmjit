@@ -1,5 +1,5 @@
 #!/bin/sh
-# SIMD-8 verification — the V-0 probe matrix.
+# SIMD-8 verification — the probe matrix.
 #
 # Every cell runs the whole SIMD surface (the hand-written vector cases plus the
 # curated `simd_*` spec scripts) and reports its assertion/case count. The
@@ -58,7 +58,7 @@ asmjit_native=$((asmjit_binary + asmjit_shift))
 sljit_native=$(grep -cE \
 	'if \(emitV128(Bitwise|Splat|Extract|Replace)Native' \
 	Sljit/SljitOpcodeDispatcher.cpp)
-printf 'SIMD-8 V-0 probe matrix: %s\n' "$BIN"
+printf 'SIMD-8 probe matrix: %s\n' "$BIN"
 printf '  native-dispatch inventory: AsmJIT=%s (%s binary + %s shift)  SLJIT=%s\n' \
 	"$asmjit_native" "$asmjit_binary" "$asmjit_shift" "$sljit_native"
 printf '  filter: %s\n' "$FILTER"
@@ -69,7 +69,7 @@ for backend in libjit sljit asmjit; do
 done
 
 if [ $failures -ne 0 ]; then
-	printf 'V-0 probe matrix: FAILED (%d cell(s))\n' "$failures"
+	printf 'SIMD-8 probe matrix: FAILED (%d cell(s))\n' "$failures"
 	exit 1
 fi
-printf 'V-0 probe matrix: passed (6 cells)\n'
+printf 'SIMD-8 probe matrix: passed (6 cells)\n'

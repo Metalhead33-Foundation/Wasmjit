@@ -12,6 +12,7 @@
 #include "../WasmBase/WasmMemory.hpp"
 #include "../WasmBase/WasmContinuation.hpp"
 #include "../WasmBase/WasmStack.hpp"
+#include "../WasmBase/WasmSafety.hpp"
 #include "../WasmBase/WasmStore.hpp"
 #include "../WasmBase/WasmStringOps.hpp"
 #include "../WasmBase/WasmRoundingOps.hpp"
@@ -52,15 +53,12 @@ struct UnsupportedBody {
 //! (a `v128` is the whole cell, a scalar its first word).
 constexpr std::size_t kSlotBytes = 16;
 
-//! Staging slots reserved for a frame-form callee's argument and result block.
-//! The previous 16-slot (256-byte) area rejected `call.wast`'s 100-parameter
-//! fixture. 128 slots cover 2 KiB, enough for the largest Wasm signature the
-//! engine currently accepts; the call path still checks the exact byte count.
-constexpr std::size_t kStagingCallSlots = 128;
 //! Register-form calls place a v128 result in the first two slots of the call
-//! area, even when no frame-form staging area is reserved.
+//! area, and that is also the minimum when a frame-form call needs no more.
+//! The call area is sized from the module's largest staging request in the
+//! measurement pass, not from a fixed cap; the previous 2 KiB constant
+//! refused a legal signature the other backends compiled.
 constexpr std::size_t kRegisterCallOutSlots = 2;
-constexpr std::size_t kStagingCallBytes = kStagingCallSlots * kSlotBytes;
 //! Fixed scratch frame for one continuation operation. The core defines the
 //! layout; the backend only copies operand slots in and result slots out.
 constexpr std::size_t kContinuationFrameSlots =
@@ -1814,11 +1812,24 @@ bool OpcodeDispatcher::beginFunction()
 	// callee's arguments and results there; register-form calls use the first
 	// two slots as the out-buffer for a v128 result.
 	const std::size_t frameSlots = localSlots_ + kReservedSlots + maxStackDepth_
-			+ kRegisterCallOutSlots
-			+ (needsStagingCall_ ? kStagingCallSlots : 0)
+			+ callAreaSlots()
 			+ (needsContinuationFrame_ ? kContinuationFrameSlots : 0);
-	if (frameSlots > SLJIT_MAX_LOCAL_SIZE / kSlotBytes) {
-		unsupportedReason_ = "the function frame exceeds SLJIT's local-area limit";
+	// The frame is allocated by `sljit_emit_enter` before `wasm_stack_check`
+	// runs, so it must stay below the guard's reserve or a single `sub rsp`
+	// could step over the guard page. `kMaxFunctionLocalBytes` is the core's
+	// existing bound for exactly that reason; SLJIT's own 1 MiB local-area
+	// limit is the second. The message carries all three numbers.
+	const std::size_t frameBytes = frameSlots * kSlotBytes;
+	const std::size_t frameLimit = std::min<std::size_t>(
+			static_cast<std::size_t>(WASM::kMaxFunctionLocalBytes),
+			static_cast<std::size_t>(SLJIT_MAX_LOCAL_SIZE));
+	if (frameBytes > frameLimit) {
+		unsupportedReason_ = "the function frame needs "
+			+ std::to_string(frameBytes) + " bytes but the frame limit is "
+			+ std::to_string(frameLimit) + " bytes (kMaxFunctionLocalBytes="
+			+ std::to_string(WASM::kMaxFunctionLocalBytes) + ", SLJIT_MAX_LOCAL_SIZE="
+			+ std::to_string(SLJIT_MAX_LOCAL_SIZE) + ", stack reserve="
+			+ std::to_string(WASM::kDefaultStackReserveBytes) + ")";
 		return false;
 	}
 
@@ -2322,10 +2333,9 @@ sljit_sw OpcodeDispatcher::frameSlotOffset() const
 void OpcodeDispatcher::continuationFrameAddress(int reg)
 {
 	needsContinuationFrame_ = true;
-	const std::size_t staging = needsStagingCall_ ? kStagingCallSlots
-			: kRegisterCallOutSlots;
 	const sljit_sw offset = static_cast<sljit_sw>(
-			(localSlots_ + kReservedSlots + maxStackDepth_ + staging) * kSlotBytes);
+			(localSlots_ + kReservedSlots + maxStackDepth_ + callAreaSlots())
+			* kSlotBytes);
 	emit(sljit_get_local_base(compiler_, reg, 0, offset));
 }
 
@@ -2351,6 +2361,48 @@ sljit_sw OpcodeDispatcher::callFrameOffset() const
 	// built without disturbing any live operand.
 	return static_cast<sljit_sw>(
 			(localSlots_ + kReservedSlots + maxStackDepth_) * kSlotBytes);
+}
+
+void OpcodeDispatcher::noteStagingFrame(std::size_t bytes)
+{
+	needsStagingCall_ = true;
+	if (measureOnly_) {
+		if (bytes > maxStagingCallBytes_)
+			maxStagingCallBytes_ = bytes;
+		return;
+	}
+	// The frame was fixed from the measurement pass. A larger request here means
+	// the two passes disagree, which would write past the call area; fail the
+	// compile rather than let it corrupt the frame.
+	if (bytes > maxStagingCallBytes_) {
+		unsupportedReason_ = "the SLJIT staging frame grew after the measurement pass ("
+			+ std::to_string(bytes) + " bytes requested while emitting, "
+			+ std::to_string(maxStagingCallBytes_) + " bytes measured)";
+		ok_ = false;
+	}
+}
+
+void OpcodeDispatcher::noteCallStaging(const WASM::FuncType& type)
+{
+	std::vector<WASM::ValueKind> kinds;
+	kinds.reserve(type.params.size());
+	for (const WASM::StorageType& parameter : type.params)
+		kinds.push_back(WASM::valueKindOf(parameter.val.opcode));
+	std::size_t bytes = WASM::frameArgumentsBytes(kinds);
+	kinds.clear();
+	for (const WASM::StorageType& result : type.results)
+		kinds.push_back(WASM::valueKindOf(result.val.opcode));
+	bytes += WASM::frameResultsBytes(kinds);
+	noteStagingFrame(bytes);
+}
+
+std::size_t OpcodeDispatcher::callAreaSlots() const
+{
+	if (!needsStagingCall_)
+		return kRegisterCallOutSlots;
+	const std::size_t staging =
+			(maxStagingCallBytes_ + kSlotBytes - 1) / kSlotBytes;
+	return kRegisterCallOutSlots + staging;
 }
 
 sljit_sw OpcodeDispatcher::exceptionPtrSlotOffset() const
@@ -3588,11 +3640,25 @@ void OpcodeDispatcher::emitResolvedCall(const WASM::FuncType& type, int callable
 		for (const WASM::StorageType& parameter : type.params)
 			argumentKinds.push_back(WASM::valueKindOf(parameter.val.opcode));
 		const std::uint32_t argumentBytes = WASM::frameArgumentsBytes(argumentKinds);
-		const int resultWidth = type.results.empty() ? 0 : widthOf(type.results.front().val);
-		const std::uint32_t resultBytes = resultWidth == 0 ? 0u
-				: WASM::frameValueBytes(WASM::valueKindOf(type.results.front().val.opcode));
-		if (argumentBytes + resultBytes > kStagingCallBytes) {
-			onUnhandledOpcode("a frame-form call whose frame exceeds the staging scratch");
+		std::vector<WASM::ValueKind> resultKinds;
+		resultKinds.reserve(type.results.size());
+		for (const WASM::StorageType& result : type.results)
+			resultKinds.push_back(WASM::valueKindOf(result.val.opcode));
+		// The frame block holds *every* result, so the capacity must too. The
+		// previous check counted only the first result.
+		const std::uint32_t resultBytes = WASM::frameResultsBytes(resultKinds);
+		const std::size_t needed = std::size_t(argumentBytes) + resultBytes;
+		const std::size_t capacity = callAreaSlots() * kSlotBytes;
+		// Sized from the measurement pass, so this is an invariant assertion. It
+		// keeps the byte counts in the message: a bare "exceeds" tells the next
+		// reader nothing (docs/FRESHNESS.md).
+		if (needed > capacity) {
+			const std::string message =
+				"a frame-form call whose frame exceeds the staging scratch ("
+				+ std::to_string(needed) + " bytes needed, "
+				+ std::to_string(capacity) + " available; SLJIT's local-area limit is "
+				+ std::to_string(SLJIT_MAX_LOCAL_SIZE) + " bytes)";
+			onUnhandledOpcode(message.c_str());
 			return;
 		}
 
@@ -3795,8 +3861,6 @@ void OpcodeDispatcher::emitCall(WASM::FuncIdx index, bool isTail)
 	const bool calleeFrameForm = index < importedCount
 			? WASM::callableUsesFrameForm(internals_.importStorage[index])
 			: calleeUsesFrameForm(typeIndex);
-	if (calleeFrameForm)
-		needsStagingCall_ = true;
 	// A signature wider than the register form travels through the staging frame:
 	// a Wasm callee is frame-form, and a native import is reached through the
 	// staged adapter (`stagedImportFor`), which now carries a `v128` as its
@@ -3804,8 +3868,8 @@ void OpcodeDispatcher::emitCall(WASM::FuncIdx index, bool isTail)
 	// libffi prep failure) is the only refusal left.
 	const bool wideCall = calledType.params.size() > kMaxWasmParameters;
 	void* const stagedImport = stagedImportFor(typeIndex, calledType);
-	if (wideCall || stagedImport != nullptr)
-		needsStagingCall_ = true;
+	if (calleeFrameForm || wideCall || stagedImport != nullptr)
+		noteCallStaging(calledType);
 	require(!(wideCall && stagedImport == nullptr && moduleHasNativeImports_),
 			"the SLJIT backend cannot pass a v128 in a signature with more than three "
 			"parameters when the module also imports a native function");
@@ -3864,8 +3928,6 @@ void OpcodeDispatcher::emitCallIndirect(WASM::TypeIdx typeIndex, WASM::TableIdx 
 			: (module_.tables[tableIndex - module_.importTables.size()].limits.flags & 0x04) != 0;
 	const int selectorWidth = table64 ? 8 : 4;
 	const WASM::FuncType calledType = module_.funcTypeAt(typeIndex);
-	if (calleeUsesFrameForm(typeIndex))
-		needsStagingCall_ = true;
 	// A signature wider than the register form travels through the staging frame:
 	// a Wasm callee is frame-form, and a native import is reached through the
 	// staged adapter (`stagedImportFor`), which now carries a `v128` as its
@@ -3873,8 +3935,8 @@ void OpcodeDispatcher::emitCallIndirect(WASM::TypeIdx typeIndex, WASM::TableIdx 
 	// libffi prep failure) is the only refusal left.
 	const bool wideCall = calledType.params.size() > kMaxWasmParameters;
 	void* const stagedImport = stagedImportFor(typeIndex, calledType);
-	if (wideCall || stagedImport != nullptr)
-		needsStagingCall_ = true;
+	if (calleeUsesFrameForm(typeIndex) || wideCall || stagedImport != nullptr)
+		noteCallStaging(calledType);
 	require(!(wideCall && stagedImport == nullptr && moduleHasNativeImports_),
 			"the SLJIT backend cannot pass a v128 in a signature with more than three "
 			"parameters when the module also imports a native function");
@@ -4097,7 +4159,7 @@ void OpcodeDispatcher::emitTailCallIndirectState(WASM::TypeIdx typeIndex, WASM::
 	const int selectorWidth = table64 ? 8 : 4;
 	const WASM::FuncType calledType = module_.funcTypeAt(typeIndex);
 	if (calleeUsesFrameForm(typeIndex))
-		needsStagingCall_ = true;
+		noteCallStaging(calledType);
 	require(calleeUsesFrameForm(typeIndex) || calledType.results.size() <= 1,
 			"the SLJIT register form cannot tail-call a multi-result function");
 	for (const WASM::StorageType& parameter : calledType.params)
@@ -4246,7 +4308,7 @@ void OpcodeDispatcher::dispatchCallRef(WASM::TypeIdx typeIndex)
 			"the call_ref type index is out of range");
 	const WASM::FuncType calledType = module_.funcTypeAt(typeIndex);
 	if (calleeUsesFrameForm(typeIndex))
-		needsStagingCall_ = true;
+		noteCallStaging(calledType);
 	require(calleeUsesFrameForm(typeIndex) || calledType.results.size() <= 1,
 			"the SLJIT register form cannot call a multi-result function");
 	if (!calleeUsesFrameForm(typeIndex))
@@ -4285,7 +4347,7 @@ void OpcodeDispatcher::dispatchReturnCallRef(WASM::TypeIdx typeIndex)
 		require(calledType.params.size() <= kMaxWasmParameters,
 				"the SLJIT backend cannot tail-call a reference-typed function with more than three parameters");
 	if (calleeUsesFrameForm(typeIndex))
-		needsStagingCall_ = true;
+		noteCallStaging(calledType);
 	void* const stagedImport = stagedImportFor(typeIndex, calledType);
 	for (const WASM::StorageType& parameter : calledType.params)
 		require(widthOf(parameter.val) != 0, "the SLJIT backend only calls i32/i64 signatures");
@@ -7475,7 +7537,8 @@ void OpcodeDispatcher::dispatchArrayNewElem(WASM::TypeIdx arg1, uint32_t arg2)
 
 void OpcodeDispatcher::dispatchArrayInitData(WASM::TypeIdx arg1, uint32_t arg2)
 {
-	needsStagingCall_ = true;
+	// Five 32-bit descriptor words at callFrameOffset (offsets 0..16).
+	noteStagingFrame(20);
 	if (!reachable_)
 		return;
 	requireStack(4);
@@ -7514,7 +7577,8 @@ void OpcodeDispatcher::dispatchArrayInitData(WASM::TypeIdx arg1, uint32_t arg2)
 
 void OpcodeDispatcher::dispatchArrayInitElem(WASM::TypeIdx arg1, uint32_t arg2)
 {
-	needsStagingCall_ = true;
+	// Five 32-bit descriptor words at callFrameOffset (offsets 0..16).
+	noteStagingFrame(20);
 	if (!reachable_)
 		return;
 	requireStack(4);
@@ -10463,7 +10527,8 @@ void OpcodeDispatcher::requireTableIndex(WASM::TableIdx index)
 
 void OpcodeDispatcher::dispatchTableFill(WASM::TableIdx arg)
 {
-	needsStagingCall_ = true;
+	// Three 16-byte slots at callFrameOffset (offsets 0, 16 and 32).
+	noteStagingFrame(48);
 	if (!reachable_)
 		return;
 	requireTableIndex(arg);
@@ -10496,7 +10561,9 @@ void OpcodeDispatcher::dispatchTableFill(WASM::TableIdx arg)
 
 void OpcodeDispatcher::dispatchTableInit(uint32_t arg1, WASM::TableIdx arg2)
 {
-	needsStagingCall_ = true;
+	// No staging bytes are written here; the flag is kept for the call-area
+	// reservation's other users.
+	noteStagingFrame(0);
 	if (!reachable_)
 		return;
 	requireTableIndex(arg2);

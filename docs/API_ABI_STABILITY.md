@@ -604,7 +604,7 @@ The root causes and the failing fixtures are in
 | `GAP-5` | A reference-returning native import was cloned only on AsmJIT | **closed 2026-11-11** | `native_ref_result_probe.wat` + “a native import's reference result is cloned, so the host keeps its count” — **13 assertions on each backend**; the `stringref` counterpart already existed |
 | `GAP-7` | `i31ref` at the C boundary, and no literal C caller | **closed 2026-11-11** | the boundary rule is stated in [`ABI.md`](ABI.md) “Reference and Global Representation” and pinned by `i31_boundary_probe.wat` (**26 assertions per backend**); the C caller is `Test/consumer/CanonicalCall.c`, compiled as C and run by `Test/install-check.sh` |
 | `GAP-9` | The strict `WASM_SPEC_VALIDATE=1` sweep was recorded on SLJIT only | **closed 2026-11-11** | LibJIT: **22,558 assertions / 828 cases, exit 0** (2026-11-11, before the form-guard case). AsmJIT: **22,696 / 839, exit 0** (2026-11-11, Debug) — the sweep that used to die in `GAP-16`. SLJIT: green in Debug and Release (§13.1) |
-| `GAP-11` | A wide `v128` indirect call was refused beside a native import | **closed 2026-11-11** | the staged adapter carries the canonical two `uint64_t` words and spools a vector result; `wide_v128_indirect_probe.wat` green on SLJIT **and** AsmJIT, `wide_v128_import_probe.wat` on SLJIT |
+| `GAP-11` | A wide `v128` indirect call was refused beside a native import | **closed 2026-11-11** | the staged adapter carries the canonical two `uint64_t` words and spools a vector result; `wide_v128_indirect_probe.wat` green on SLJIT **and** AsmJIT, `wide_v128_import_probe.wat` on SLJIT. **Adjacent, closed 2026-11-12:** the fixed 2 KiB staging scratch is gone; the call area is sized from the module's largest request, and the 255/256/257-parameter sweep plus `spec: call` is green on all three backends (`Test/staging-probe.sh`) |
 | `GAP-12` | One libffi closure — and one heap vector — per staged invocation | **closed 2026-11-11** | the closure was already cached per signature; the per-call allocation is gone. One `ffi_call` remains and is the documented structural cost of SLJIT's four-entry C-call form (§13.4) |
 | `GAP-13` | Trap entry-point sprawl | **closed 2026-11-11** | the tree already reports through one kind-carrying entry point per backend (`wasm_trap_report_at`, `sljitReportTrap`); the `[trapabi]` scan in `Test/LayeringTests.cpp` keeps it that way |
 | `GAP-14` | `wasm_cont_suspend_ex` used the output *capacity* as the kind count, so `AWorker::suspend` copied past a one-byte kind vector — a heap-buffer-overflow | **closed 2026-11-11** | found by the first SLJIT AddressSanitizer run; the bound is now the tag's declared result list, capped by the frame capacity |
@@ -1167,10 +1167,17 @@ The open register is §8.1. For the backends specifically:
   `wide_v128_indirect_probe.wat` and `wide_v128_import_probe.wat`); its staged
   path keeps one libffi `ffi_call` per invocation as the documented shape of its
   four-entry C-call form (`GAP-12`, closed); and a wide `return_call_ref` reaches
-  the frame driver/thunk pair (`GAP-2`, closed). What it still *does* refuse is a
-  frame-form call whose argument and result block exceeds its 2 KiB staging
-  scratch (`kStagingCallSlots`), which a signature with ~127 `v128` parameters
-  reaches; AsmJIT has no such bound because it allocates the frame per call.
+  the frame driver/thunk pair (`GAP-2`, closed). The staging area is now sized
+  from the module's largest frame-form request instead of a fixed 2 KiB scratch:
+  a 257-parameter frame (2,056 bytes) and a 256-parameter frame with a `v128`
+  result (2,064 bytes) compile and run, and the arity sweep
+  (`Test/staging-probe.sh`) is green on all three backends. Growth is bounded
+  deliberately: the whole frame is capped at the core's **64 KiB**
+  `kMaxFunctionLocalBytes` (`WasmBase/WasmSafety.hpp`), which exists so a frame
+  cannot step over the stack guard's 512 KiB reserve before `wasm_stack_check`
+  runs; SLJIT's own **1 MiB** `SLJIT_MAX_LOCAL_SIZE` is the second bound. A module
+  beyond the cap is refused with the needed bytes, the cap, and both limits in
+  the message. No stack switch is attempted on this path.
 - **AsmJIT** shares the wide-`v128` indirect-call refusal; its register form has
   the same four-entry ceiling, and a signature above it uses the frame form —
   per signature, like SLJIT, since `GR-8`.

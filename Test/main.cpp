@@ -8170,6 +8170,43 @@ TEST_CASE("simd: v128 globals run through the JIT")
 	}
 }
 
+TEST_CASE("staging: call arities around the 2 KiB frame boundary",
+		"[staging][abi][call]")
+{
+	// Call-shape probe (docs/API_ABI_STABILITY.md `GAP-11`'s fixtures are
+	// the same mechanism). `i32` is 8 bytes in a staging frame, so 255/256/257
+	// parameters are 2,040/2,048/2,056 bytes: under, at and over the old 2 KiB
+	// scratch. A callee with more than three parameters is frame-form by the
+	// core rule, so this is the staging path rather than the register path.
+	WASM::RegistryImportResolver imports;
+	auto backend = TestBackend::create();
+	auto loaded = loadAndInstantiateTestModule("wide_staging_probe", imports, *backend);
+	REQUIRE(loaded.instance.get() != nullptr);
+	WASM::ModuleInstance& instance = *loaded.instance;
+
+	const auto callI32 = [&instance](const char* name) {
+		const std::optional<WASM::Callable> callable = instance.exportedFunction(name);
+		INFO("export " << name);
+		REQUIRE(callable.has_value());
+		return WASM::callCallable<std::int32_t>(*callable);
+	};
+
+	// The callee returns its last parameter, so the value proves the last
+	// argument crossed the frame rather than a stale/zeroed slot.
+	CHECK(callI32("direct_255") == 255);
+	CHECK(callI32("direct_256") == 256);
+	CHECK(callI32("direct_257") == 257);
+	// The same over-boundary signature through a table.
+	CHECK(callI32("indirect_257") == 257);
+	// A v128 result adds 16 bytes to the 256-parameter frame (2,064 total).
+	CHECK(callI32("v128_result") == 256);
+	// Non-scalar strides in the frame: four vectors and four i64s.
+	CHECK(callI32("v128_args") == 44);
+	const std::optional<WASM::Callable> i64Export = instance.exportedFunction("i64_args");
+	REQUIRE(i64Export.has_value());
+	CHECK(WASM::callCallable<std::int64_t>(*i64Export) == 4);
+}
+
 TEST_CASE("simd benchmark: ns per v128 op (SIMD-L8)", "[.simdbench]")
 {
 	// The workload is `Test/wasm_wat/simd_bench.wat`: a loop doing
