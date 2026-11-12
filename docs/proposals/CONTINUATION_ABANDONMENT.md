@@ -133,6 +133,13 @@ the others only slightly (5,333 / 10,884 / 10,666), which is the `CA3` predictio
 remain sit in *caller* frames and in nested parks that push their own record. CA-1 therefore means
 "move, not record", and CA-4 is not optional if those numbers are to reach zero.
 
+**Build note for the next attempt.** The Asmjit subproject in a build tree can keep a stale
+`libAsmjit.so` when only its sources change (the top-level `make` then relinks the test binary
+against the old library and fails with `undefined reference to ModuleCompiler::ModuleCompiler`).
+Delete `build/<config>/Asmjit/*.o` and `libAsmjit.so*`, build that directory first, then the
+top level; both configurations need it. Verify with `--list-tests` that the binary really changed
+before trusting a measurement.
+
 ## 8. Indicative test survey
 
 Every row is a recorded run, not an intention. `build/Desktop-ASan` is ASan +
