@@ -118,6 +118,9 @@ struct alignas(16) ContinuationValue {
 //! A backend copies its operand slots into `args`, calls one of the `_ops`
 //! helpers and reads `results`/`tags`/`result` back. Keeping the layout in the
 //! core means every backend agrees about slot widths and status fields.
+/** \brief Force-releases the continuations an instance created. \param context The instance's VM context. */
+void releaseContinuationsFor(VMContext* context) noexcept;
+
 /** \brief Backend-visible continuation operand/result frame. */
 struct ContinuationOpFrame {
 	static constexpr std::uint32_t kCapacity = 16; //!< Slots per buffer.

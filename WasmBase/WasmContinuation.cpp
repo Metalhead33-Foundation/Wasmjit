@@ -868,8 +868,13 @@ ContinuationStatus BWorker::resumeSwitchPeer(std::uint64_t expectedGeneration,
 	std::unique_lock<std::mutex> callerLock(caller->mutex);
 	caller->cv.notify_all();
 	caller->cv.wait(callerLock, [caller] {
-		return caller->state == WorkerState::Running;
+		// A cancelled caller never becomes Running again: without this the wait
+		// would outlive the cancellation and the thread would never join.
+		return caller->state == WorkerState::Running
+				|| caller->cancelRequested;
 	});
+	if (caller->cancelRequested || caller->state != WorkerState::Running)
+		return ContinuationStatus::Invalid;
 	return ContinuationStatus::Completed;
 }
 
@@ -1408,6 +1413,32 @@ bool continuationRefRelease(void* ref) noexcept
 	}
 	delete dead;
 	return true;
+}
+
+// A suspended continuation is a live native stack, and its handles are counts that only
+// compiled code releases. When the instance that created them is destroyed nothing can
+// resume or drop what is left, so teardown releases the handles here, while the store and
+// the instance's storage are still alive. Destroying a worker cancels what it parked
+// (`AWorker::~AWorker` resumes the fiber with the cancel flag, `~BWorker` wakes and joins
+// its thread), which is what releases the values it still owned.
+void releaseContinuationsFor(VMContext* context) noexcept
+{
+	if (context == nullptr)
+		return;
+	std::vector<Continuation*> doomed;
+	try {
+		std::lock_guard<std::mutex> lock(registryMutex());
+		for (Continuation* handle : registry()) {
+			if (handle->worker && handle->worker->creationContext == context)
+				doomed.push_back(handle);
+		}
+		for (Continuation* handle : doomed)
+			registry().erase(handle);
+	} catch (...) {
+		return;
+	}
+	for (Continuation* handle : doomed)
+		delete handle;
 }
 
 HostContinuation::HostContinuation(void* ref, bool takeOwnership) noexcept

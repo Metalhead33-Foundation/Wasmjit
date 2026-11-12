@@ -470,6 +470,11 @@ ModuleInstance::~ModuleInstance()
 			&& ctx.hostBridge->instanceDestroying != nullptr)
 		ctx.hostBridge->instanceDestroying(ctx.hostBridge->userData, &ctx);
 
+	// Continuations are live native stacks: with this instance going away nothing can
+	// resume or drop what is left, so release the handles it created while its storage
+	// is still intact (docs/proposals/CONTINUATION_ABANDONMENT.md).
+	releaseContinuationsFor(&ctx);
+
 	// Withdraw the range before the storage is freed (embedders may destroy
 	// instances while the process-wide Store lives on). Both arrays are
 	// registered by the instantiator: imports during construction and defined
