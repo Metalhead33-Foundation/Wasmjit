@@ -661,7 +661,7 @@ that will not instantiate, which is a hard production blocker but never silent;
 | `GAP-15` | conditional | Kotlin/Wasm, MoonBit, Dart, AssemblyScript (`ref.test` on an `externref`) | **wrong answer** wherever poison-on-free or block reuse exposes a reclaimed box (`ref_test_extern` answered 0 where the spec says 2) | **closed 2026-11-11** — result retained before the operand is released, in both backends; `gc_extern_box.wat` fails before the fix in Debug *and* Release |
 | `GAP-16` | none — caller misuse of the helper | any row whose test called a frame-form export through the register-form helper | **crash** (`SIGSEGV`) from a wild frame pointer, order-dependent | **closed 2026-11-11** — the helpers refuse the form mismatch by name (`GAP-16` guard) and the harness marshals per callable (`callTestI32`/`callTestI64`); the frame-form prologue was correct all along |
 | `GAP-18` | conditional | any row using continuations (stack switching), on SLJIT | leak per abandoned handle | **closed 2026-11-11** — `cont.bind` releases its source handle; the SLJIT `*continuation*` ASan run is clean |
-| `GAP-19` | direct | Kotlin/Wasm, MoonBit and Dart emit `cont.new`/`resume`/`switch` for coroutines and effect handlers; AssemblyScript through a hand-written stack-switching module | leak — a suspended chain pins its native stack, so a long-running coroutine loop grows without bound | **open** (2026-11-11): 31,864 B in 66 allocations on AsmJIT and SLJIT, clean on LibJIT; the owner is a handle the frame-form path never releases |
+| `GAP-19` | direct | Kotlin/Wasm, MoonBit and Dart emit `cont.new`/`resume`/`switch` for coroutines and effect handlers; AssemblyScript through a hand-written stack-switching module | leak — a suspended chain pins its native stack, so a long-running coroutine loop grows without bound | **closed 2026-11-11** (`CA-1`): 31,864 B in 66 allocations on AsmJIT and SLJIT, clean on LibJIT; the owner is a handle the frame-form path never releases |
 
 **`GAP-1` — the call form is chosen per module.** A backend switched the *whole*
 module to `void fn(VMContext*, void* frame)` when any **defined** function needed
@@ -1113,9 +1113,9 @@ measurement).
 
 | Backend | Verdict | Generic suite |
 |---|---|---|
-| **LibJIT** (`LibJit/`) | Production-ready within the envelope; the reference implementation and the semantic oracle | **Release: 22,696 assertions / 839 cases, green** (2026-11-11); Debug: same, green |
-| **SLJIT** (`Sljit/`) | Production-ready within the same envelope, with the documented refusals | **Release: 22,696 assertions / 839 cases, green** (2026-11-11). Debug: same, green (`GAP-15` closed). ASan: `[spec]` (514 / 257) and the `*continuation*` cell are clean; `GAP-18` closed |
-| **AsmJIT** (`Asmjit/`) | Production-ready within the same envelope, with the documented refusals; needs the external AsmJit library at build time | **Release: 22,696 assertions / 839 cases, green** (2026-11-11). Debug: green (`GAP-15` closed; `GAP-16` was a caller-side form mismatch, now refused by name). ASan: `[spec]` clean (514 / 257), the cells `GAP-16` touched clean, and the **full default cell completes** (822 cases / 22,616 assertions, all pass) but reports `GAP-19` — 31,864 bytes in 66 allocations from the `stack-switching*` cases |
+| **LibJIT** (`LibJit/`) | Production-ready within the envelope; the reference implementation and the semantic oracle | **Debug and Release: 22,800 assertions / 839 cases, green** (2026-11-11); the full ASan cell is clean too |
+| **SLJIT** (`Sljit/`) | Production-ready within the same envelope, with the documented refusals | **Debug and Release: 22,800 assertions / 839 cases, green** (2026-11-11). ASan: the full default cell is clean (22,639 assertions / 822 cases, exit 0, no report) since `GAP-18` and `GAP-19` closed |
+| **AsmJIT** (`Asmjit/`) | Production-ready within the same envelope, with the documented refusals; needs the external AsmJit library at build time | **Debug and Release: 22,800 assertions / 839 cases, green** (2026-11-11). ASan: the full default cell is clean (22,639 assertions / 822 cases, exit 0, no report) since `GAP-16` and `GAP-19` closed |
 
 Equal assertion counts are the point: every case executes on every backend, so
 no case is skipped, refused early or cut short by a crash. The promotion gate is
@@ -1177,8 +1177,7 @@ The open register is §8.1. For the backends specifically:
   fixtures); only SysV AMD64 is exercised (`GAP-6`); the strict sweep is recorded
   on all three (`GAP-9`, closed). ASan: LibJIT's full run is clean (2026-11-09),
   SLJIT's `*continuation*` cell is clean since `GAP-18` closed, and AsmJIT's
-  `[spec]` cell and the cells `GAP-16` touched are clean; the full default cell completes and reports the `GAP-19` 
-  continuation leak, identical on SLJIT (`GAP-8`).
+  `[spec]` cell and the cells `GAP-16` touched are clean. **The full default cell is clean on all three backends** since `GAP-19` closed (`GAP-8`, closed).
 - **The SLJIT ASan run** reports no memory error and no leak: the
   `wasm_cont_suspend_ex` kind-count overflow it found first (`GAP-14`) and the
   continuation-handle leak (`GAP-18`) are both fixed.

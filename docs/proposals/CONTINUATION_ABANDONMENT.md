@@ -16,7 +16,7 @@ This note follows the same split as [`GC.md`](GC.md) and
 [`STACK_SWITCHING.md`](STACK_SWITCHING.md): what the runtime has to guarantee,
 what it does not, what is implemented, the gaps, the deviations we may accept,
 the plan, the test survey, the references. It contains **no new code**; the
-defect it describes is open in the register as `GAP-19`.
+defect it records is closed in the register as `GAP-19`.
 
 ## 1. Document map
 
@@ -65,39 +65,69 @@ defect it describes is open in the register as `GAP-19`.
 - **Any particular representation.** Slot maps, arenas or an eager sweep are all
   acceptable; the note requires only that the counts come back.
 
-## 4. What is implemented today
+## 4. What is implemented
 
-**Snapshot (2026-11-11, `c9089b3`):** the mechanism that *should* release a
-parked frame is emitted, but on a path an abandoned fiber never reaches.
+**Snapshot (2026-11-11, `a608f4a`):** the instance owns the continuations it creates.
 
-- `wasm_cont_resume_ops`, `wasm_cont_bind_ops`, `wasm_cont_suspend_ops` and
-  `wasm_cont_switch_ops` are the frame-form entry points; SLJIT and AsmJIT call
-  them, LibJIT calls the `_ex` entry points directly.
-- Each backend emits the operand's release **after** the helper call
-  (`emitRefDrop(continuation)` in AsmJIT, `wasm_ref_drop` in SLJIT, and
-  LibJIT's `emitDropContinuation`/`emitDropValue`). That code is on the
-  post-park path.
-- `~Worker` releases the values it *copied* (`boundValues`, `tagValues`,
-  `resultValues`, `resumeValues`, `roots`). It does not know about values that
-  live in a guest frame's slots.
-- Measured on the `stack-switching*` cell (15 cases) under ASan: **31,864 bytes
-  in 66 allocations** on AsmJIT **and** SLJIT, **clean on LibJIT**.
-- Instrumented accounting (`wasm_ref_clone` / `wasm_ref_drop`, one 32-byte case):
-  one handle ends at **net +2** — two retains (the callee's parameter retain and
-  the `local.get` clone that becomes the operand), **zero releases** — while
-  every other handle balances. Its release calls exist in the emitted code
-  (unconditional, the first thing after the helper returns) and never appear in
-  the call trace: that fiber is never resumed.
+- `ModuleInstance::~ModuleInstance` calls `releaseContinuationsFor(&ctx)` before it
+  withdraws its callable ranges. Every `Continuation` whose worker was created in
+  that instance is removed from the registry and deleted, while the store and the
+  instance's own storage are still intact (`WasmBase/WasmContinuation.{hpp,cpp}`).
+- Deleting the last handle destroys the `Worker`, and that destructor is what
+  releases: `AWorker` resumes the parked fiber with the cancel flag
+  (`cancelSuspended()`), `BWorker` sets `cancelRequested`, marks the worker
+  `Cancelled`, notifies its condition variable and joins its thread.
+- `BWorker::resumeSwitchPeer` waits for the caller to leave `Running` **or** for
+  `cancelRequested`, and answers `Invalid` in the cancelled case. A cancelled
+  caller never becomes `Running` again, so without that exit the join waits for
+  ever — the defect the fifth attempt found.
+- `wasm_cont_resume_ops`, `bind_ops`, `suspend_ops` and `switch_ops` still consume
+  their operand, and the backends still emit the operand's release after the call.
+  That release sits on the path a parked fiber reaches only when it resumes, which
+  is why the instance-wide release above is what actually guarantees the counts.
+- The measured runs are §8.
 
+### 4.1 How it was found (2026-11-11, revision 1)
+
+Five attempts. Each one is kept because it names a fact that is easy to get wrong
+again.
+
+- **Attempt 1 — release the operand inside the `_ops` helpers.** The helpers took
+  over the release and the backends' post-call drops went away. The total did not
+  move by a byte (31,864 B / 66 allocations): the outstanding counts belonged to
+  the parked frame's *own* slots (a parameter retain and a `local.get` clone), not
+  to the operand.
+
+- **Attempt 2 — record the frame's slots on the worker.** Nothing changed, for the
+  same reason in a different form: recording leaves the counts in the slots.
+
+- **Attempt 3 — move the values out of the slots while parked.** The host-thread
+  case went from 32 bytes to clean and the others moved only slightly (5,333 /
+  10,884 / 10,666). A move shuffles raw pointers and never touches a handle's
+  `refs`, so the handle kept the worker alive and `~Worker` — the only place that
+  could release the rest — never ran.
+
+- **Attempt 4 — release at `Store::~Store`.** Right shape, wrong place: ASan
+  reported a cross-thread use-after-free inside `releaseContinuationsFor` when the
+  store was destroyed during static teardown with a host-thread worker still alive.
+
+- **Attempt 5 — release at the instance, with cancellation.** The instance is the
+  right owner (no use-after-free), but the first run hung in the join. The missing
+  piece was the cancellation exit in the parked-switch wait; with it, the join
+  completes and both cells are clean (§8.2).
 
 ## 5. Gaps
 
 | # | Gap | Evidence | Severity |
 |---|---|---|---|
 | ~~CA1~~ | **A parked frame's reference slots keep their counts for ever.** The frame never resumes, so neither the post-call operand release nor the epilogue runs; the handle it holds pins its worker, and with it the 5,200-byte native stack. The cycle is: frame slot → handle → worker → (the only destructor that could release the slot). | the refcount trace of §4 (net +2, zero releases on one handle); the emitted release exists and never executes; 31,864 B / 66 allocations on AsmJIT and SLJIT | **closed (`CA-1`)** |
-| ~~CA2~~ | **Staging buffers inside an abandoned `invokeFfiContinuation` frame.** `params`, `returns`, `frame`, `argumentTypes`, `argumentValues` and `pinned` are function-local containers; an abandoned frame never runs their destructors. | the residual ~472 bytes of the same cell (4 × 1 B, 8 × 16 B, 8 × 32 B allocations) | **closed (`CA-1`, `CA-2`)** |
-| ~~CA3~~ | **Caller frames are not covered.** A tracking scheme that only records the *parking* frame misses a caller that holds reference locals across the park. | design limit of the prototype in §7; not yet measured separately | **closed (`CA-4`)** |
+| ~~CA2~~ | **Staging buffers inside an abandoned `invokeFfiContinuation` frame.** `params`, `returns`, `frame`, `argumentTypes`, `argumentValues` and `pinned` are function-local containers; an abandoned frame never runs their destructors. | the residual ~472 bytes of the same cell (4 × 1 B, 8 × 16 B, 8 × 32 B allocations) | **closed (`CA-1`)** |
+| ~~CA3~~ | **Caller frames are not covered.** A tracking scheme that only records the *parking* frame misses a caller that holds reference locals across the park. | design limit of the prototype in §7; not yet measured separately | **closed (`CA-1`)** |
 | ~~CA4~~ | **The aggregate cell number is order-dependent.** Catch2 seeds each run, so the same binary reports different totals; a tree with the prototype reverted re-reported 21,332 B on SLJIT where the same tree had reported 31,864 B. | §8, last two rows | **closed (`CA-3`)** |
+
+All four are closed by revision 2. `CA-2` needed no milestone of its own: the
+cancellation path unwinds the abandoned frames, which runs the staging destructors
+it described. `CA-3` describes the `--rng-seed` sweep of §8.
 
 ## 6. Where we could deviate, and why it is safe
 
@@ -107,95 +137,58 @@ parked frame is emitted, but on a path an abandoned fiber never reaches.
 | `CAD2` | Leave LibJIT's lowering untouched. | LibJIT is clean on every recorded cell; its frames complete in these modules, so the post-park release runs. | No churn in a backend that does not exhibit the defect. |
 | `CAD3` | Release from `~Worker`, not eagerly at the park. | A parked fiber may legitimately resume, so abandonment is only certain when the last handle goes; the destructor is that point. | No new policy, no premature release, no double drop. |
 
-Guardrails: `CAD1` is only acceptable while `CA3` stays *recorded as open* and a
-per-case measurement backs the claim; `CAD2` must be revisited the moment a
-LibJIT case is found parked-and-abandoned; `CAD3` requires that the worker's
-record be removed when the frame resumes, or a resumed frame would be released
-by both its epilogue and the destructor.
+`CAD1` was the prototype's compromise and did not ship: revision 2 releases every
+handle the instance created, so a caller frame is covered without a slot map.
+
+Guardrails on the two that remain: `CAD2` must be revisited the moment a LibJIT case
+is found parked and abandoned; `CAD3` requires that a resumed frame take its values
+back before the destructor can see them, or both would release the same counts.
 
 ## 7. Plan
 
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
-| **CA-1 — Release an instance's continuations** ✅ | Land the mechanism: an `ownedSlots`/`ownedCount` pair on `ContinuationOpFrame`; a per-worker record list; `registerParkedFrame`/`unregisterParkedFrame` around the park inside `wasm_cont_switch_ops` and `wasm_cont_suspend_ops`; a `~Worker` pass that releases whatever a never-resumed frame left behind; and the park-site stores in SLJIT and AsmJIT. **AsmJIT's vendored 1.21 `Mem` has no `base()`** — use the `x86::qword_ptr`/`dword_ptr` form with an explicit size, and note that the unsized form failed 9 of 15 cases at compiler finalisation (`finalisation failed: 52`). | `CA1` | the 15-case cell is clean on AsmJIT and SLJIT under a fixed `--rng-seed`, and the Debug suite is green on all three backends |
-| **CA-2 — No allocation in the staging path** (not needed) | Make `invokeFfiContinuation` / `invokeScalarI32` allocation-free: the frame and the argument arrays are bounded by `ContinuationOpFrame::kCapacity` (16), so fixed arrays suffice. | `CA2` | the same cell reports no staging allocations |
+| **CA-1 — Release an instance's continuations** ✅ | `releaseContinuationsFor(VMContext*)` is called from `ModuleInstance::~ModuleInstance`: every handle whose worker was created in that instance is erased and deleted while the store and the instance's storage are intact, so each worker's destructor can release what it still owned. `BWorker::resumeSwitchPeer` wakes on `cancelRequested` as well as on `Running`, which is what lets a parked host thread be joined. | `CA1` | the 15-case cell is clean on all three backends under `--rng-seed 12345`, and so is the full 822-case ASan cell (§8.2) |
 | **CA-3 — Deterministic evidence, then close** ✅ | Record every case of the cell separately with a fixed seed, then re-run the full 822-case ASan cell; write the numbers into [`API_ABI_STABILITY.md`](../API_ABI_STABILITY.md) §8.1 `GAP-19` and §13.5 criterion 4. | `CA4` | `GAP-19` closes with per-case numbers, `GAP-8` becomes met, and the cell joins the required runs |
-| **CA-4 — Caller frames, if they remain** (not needed) | Extend the record to the caller chain only if CA-1's per-case numbers still show a handle outstanding. | `CA3` | no case leaks |
+| **CA-4 — Caller frames** (folded into `CA-1`) | Extend the record to the caller chain only if CA-1's per-case numbers still show a handle outstanding. | `CA1` | no case leaks |
 
-Ordering: CA-1, then CA-3's per-case protocol (it decides whether CA-4 is real
-work), with CA-2 independently and CA-4 only on evidence.
-
-**What two attempts on 2026-11-11 established.** The first recorded the frame's slots with the
-worker and changed nothing: the slots still held the counts, so the handles stayed alive, the
-handles kept the worker alive, and the destructor that would release everything never ran. The
-second **moved** the values out of the slots for the duration of the park (slots zeroed, values on
-the worker, restored on resume). That made the host-thread case **clean** (32 B to 0) and moved
-the others only slightly (5,333 / 10,884 / 10,666), which is the `CA3` prediction: the owners that
-remain sit in *caller* frames and in nested parks that push their own record. CA-1 therefore means
-"move, not record", and CA-4 is not optional if those numbers are to reach zero.
-
-**Why moving cannot finish the job (second run, 2026-11-11).** A move shuffles *raw pointers*;
-it does not touch a handle's `refs` count. `Continuation` holds `shared_ptr<Worker>` and
-`continuationRefRelease` deletes the handle only when `refs` reaches zero, so a count sitting in a
-parked frame keeps the handle alive, the handle keeps the worker alive, and `~Worker` — the only
-place that could release the frame's slots — never runs. The host-thread case went clean because its
-frame does resume; the others do not. The way out is not a better move but a different owner: **the
-store owns its parked continuations**. At `Store::~Store`, force-release every `Continuation` whose
-worker was created in that store and destroy the parked workers whose frames never returned, which
-releases the recorded slots as it goes. That is the `CAD3` release point moved one level up: a
-store's continuations cannot outlive the store, and no handle can pin a worker past it. It needs a
-**Attempted and rejected (2026-11-11):** the release was wired into `Store::~Store`, which works for a
-store destroyed by a test but is racy for one destroyed during static teardown: ASan reports a
-cross-thread use-after-free inside `releaseContinuationsFor` (`freed by thread T0`, `allocated by
-thread T1`) on all three backends, because a host-thread provider's worker can still be alive when the
-store is torn down at process exit. The hook therefore belongs where the provider has been joined — the
-instance/agent teardown — not on the store. **Attempted again at the instance teardown (2026-11-11):** the right *place* — no
-cross-thread use-after-free, and the store and the instance are both alive so a worker's destructor
-can run its ordinary drops — but force-destroying a *parked host-thread worker* there **hangs**:
-`~BWorker` sets `cancelRequested`, notifies its own condition variable and calls `pthread_join`, while
-a fiber parked at a `switch` is waiting on the peer's, so the join never returns and the cell stops
-completing. The release therefore has to be preceded by a cancellation that actually reaches the
-parked wait — `AWorker` has `cancelSuspended()`, and a `BWorker` needs its peer relationship cancelled,
-not just its own condition. That cancellation step is the remaining work before the teardown hook can
-land. live-worker registry (insert in the `Worker` constructor, erase in `~Worker`) beside the existing
-handle registry, plus one call from `Store::~Store`; it is the `CA-4` milestone's real shape.
-
-**Build note for the next attempt.** The Asmjit subproject in a build tree can keep a stale
-`libAsmjit.so` when only its sources change (the top-level `make` then relinks the test binary
-against the old library and fails with `undefined reference to ModuleCompiler::ModuleCompiler`).
-Delete `build/<config>/Asmjit/*.o` and `libAsmjit.so*`, build that directory first, then the
-top level; both configurations need it. Verify with `--list-tests` that the binary really changed
-before trusting a measurement.
+All four are closed: `CA-1` and `CA-3` by their own milestones, `CA-2` and `CA-4` by
+`CA-1`'s instance-wide release — it covers caller frames without a slot map, and the
+cancellation path unwinds the abandoned frames, which runs the staging destructors.
+The five attempts that found this are §4.1; the runs that closed it are §8.2.
 
 ## 8. Indicative test survey
 
-Every row is a recorded run, not an intention. `build/Desktop-ASan` is ASan +
-LeakSanitizer at `-O0` with `LSAN_OPTIONS=suppressions=Test/asan.supp`;
-`build/Desktop-Debug` covers the functional rows.
+`build/Desktop-ASan` is ASan + LeakSanitizer at `-O0` with
+`LSAN_OPTIONS=suppressions=Test/asan.supp`; `build/Desktop-Debug` covers the
+functional rows. Catch2 seeds each run, so every row names its seed.
+
+### 8.1 The defect (2026-11-11, revision 1)
 
 | Cell | Command | Observed | Reading |
 |---|---|---|---|
-| 15-case cell, AsmJIT | `WASMJIT_BACKEND=asmjit ./WasmJit 'stack-switching*'` | 31,864 B / 66 allocations, exit 1 (LeakSanitizer); 15/15 cases pass | the defect (`CA1`, `CA2`) |
-| 15-case cell, SLJIT | `WASMJIT_BACKEND=sljit …` | 31,864 B / 66 allocations | the `_ops` path is shared, so the defect is too |
+| 15-case cell, AsmJIT | `WASMJIT_BACKEND=asmjit ./WasmJit 'stack-switching*'` | 31,864 B / 66 allocations, exit 1 (LeakSanitizer); 15/15 cases pass | the defect |
+| 15-case cell, SLJIT | `WASMJIT_BACKEND=sljit …` | 31,864 B / 66 allocations | the `_ops` path is shared, so the defect was too |
 | 15-case cell, LibJIT | `WASMJIT_BACKEND=libjit …` | exit 0, no report | not reached; LibJIT's frames complete |
-| Five leaking cases (AsmJIT) | one case per run | `resume_throw dispatches a handler clause` 5,317 · `switch … native-stack handoff` 10,564 · `switch … host-thread handoff` 32 · `dispatches multiple handlers and a loop handler` 10,634 · `module routes a suspension to its handler` 5,317 | the totals sum to the cell exactly |
-| Prototype, SLJIT | as above | 26,596 B / 58 | one handle and its `AWorker` reclaimed: the mechanism works |
-| Prototype, AsmJIT | as above | 21,396 B / 54, 15/15 pass | works once the store form is right |
-| Reverted tree, SLJIT | as above | 21,332 B / 54 | **order dependence** (`CA4`) — one sample is never a closure |
-| **Closed: 15-case cell, all three backends** | `WASMJIT_BACKEND=<name> ./WasmJit --rng-seed 12345 'stack-switching*'` | **exit 0, 90 assertions / 15 cases, no report** (LibJIT, SLJIT, AsmJIT) | the fix |
-| **Closed: full ASan cell, all three backends** | `./WasmJit --rng-seed 12345 '~[tail]~[compilation-policy]'` | **exit 0, 22,639 assertions / 822 cases, no report** | `GAP-8` met |
-| **Closed: full Debug suite, all three backends** | `./WasmJit --rng-seed 12345` | **exit 0, 22,800 assertions / 839 cases** | no regression |
+| Five leaking cases (AsmJIT) | one case per run | `resume_throw dispatches a handler clause` 5,317 · `switch … native-stack handoff` 10,564 · `switch … host-thread handoff` 32 · `dispatches multiple handlers and a loop handler` 10,634 · `module routes a suspension to its handler` 5,317 | the totals summed to the cell exactly |
+| Prototype, SLJIT | as above | 26,596 B / 58 | one handle and its `AWorker` reclaimed |
+| Prototype, AsmJIT | as above | 21,396 B / 54, 15/15 pass | worked once the store form was right |
+| Reverted tree, SLJIT | as above | 21,332 B / 54 | the order dependence `CA4` described |
 
-Functional coverage while the defect is open: `stack-switching*` is green on all
-three backends in Debug (90 assertions / 15 cases each), and LibJIT behaves
-identically before and after every experiment above.
+### 8.2 The closing runs (2026-11-11, `a608f4a`, `--rng-seed 12345`)
+
+| Cell | Command | Observed | Reading |
+|---|---|---|---|
+| 15-case cell, all three backends | `WASMJIT_BACKEND=<name> ./WasmJit 'stack-switching*'` | **exit 0**, 90 assertions / 15 cases, no report | the fix |
+| Full ASan cell, all three backends | `./WasmJit '~[tail]~[compilation-policy]'` | **exit 0**, 22,639 assertions / 822 cases, no report | `GAP-8` met |
+| Full Debug suite, all three backends | `./WasmJit` | **exit 0**, 22,800 assertions / 839 cases | no regression |
 
 ## 9. References
 
 - [`ABI.md`](../ABI.md) “Continuations” (the `wasm_cont_*` entry points, status
   codes, the one-shot rule, wide slots) and “Call forms” (the frame is not a GC
   root).
-- [`API_ABI_STABILITY.md`](../API_ABI_STABILITY.md) §8.1 `GAP-19` (the register
+- [`API_ABI_STABILITY.md`](../API_ABI_STABILITY.md) §8.4 `GAP-19` (the closed-register
   row), §8.5 (reach and consequence for a real module), §13.5 criterion 4 (the
   gate this cell feeds).
 - [`STACK_SWITCHING.md`](STACK_SWITCHING.md) `SS<n>` — §4 there is the shipped
