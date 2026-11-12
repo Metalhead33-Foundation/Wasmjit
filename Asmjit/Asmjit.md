@@ -6,10 +6,10 @@ This directory contains a native WebAssembly backend built on AsmJit. It
 implements the four `ModuleInstantiator` hooks and executes the shared lowering
 slice with AsmJit’s register allocator.
 
-**Status (2026-11-10):** **production-ready within the declared envelope** —
-`WASMJIT_BACKEND=asmjit ./Test/WasmJit --rng-seed 12345` reports **22,533
-assertions in 824 cases, green**, the same case set and assertion count as the
-reference backend. The envelope is x86-64 Linux / SysV AMD64 with the external
+**Status (2026-11-12, working tree on `2a892f3`):** **production-ready within
+the declared envelope** — `WASMJIT_BACKEND=asmjit ./Test/WasmJit --rng-seed
+12345 '~[tail]~[compilation-policy]'` reports **22,667 assertions in 822 cases,
+green**, the same case set and assertion count as the reference backend. The envelope is x86-64 Linux / SysV AMD64 with the external
 AsmJit library available at build time, and the documented refusals are the same
 three as SLJIT’s (see `Sljit/Sljit.md` "Known limitations"). See
 [`docs/API_ABI_STABILITY.md`](../docs/API_ABI_STABILITY.md) §13 for the verdict

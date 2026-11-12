@@ -1339,6 +1339,33 @@ private:
 	void emitV128Binary(sljit_sw address);
 	//! `SIMD-8`: native 128-bit bitwise, false when the target has no vectors.
 	bool emitV128BitwiseNative(sljit_s32 operation);
+	/*!
+	 * \brief `SIMD-8`: native splat over the top scalar slot, if available.
+	 * \param width Lane width in bytes (1, 2, 4 or 8).
+	 * \return True when the native form was emitted and the stack updated.
+	 */
+	bool emitV128SplatNative(int width);
+	/*!
+	 * \brief `SIMD-8`: native `extract_lane`, if available.
+	 * \param width Lane width in bytes (1, 2, 4 or 8).
+	 * \param lane Lane index.
+	 * \param signedLane True for `extract_lane_s`, false for `extract_lane_u`.
+	 * \return True when the native form was emitted and the stack updated.
+	 */
+	bool emitV128ExtractNative(int width, std::uint8_t lane, bool signedLane);
+	/*!
+	 * \brief `SIMD-8`: native `replace_lane` merging into the top vector, if available.
+	 * \param width Lane width in bytes (1, 2, 4 or 8).
+	 * \param lane Lane index.
+	 * \return True when the native form was emitted and the stack updated.
+	 */
+	bool emitV128ReplaceNative(int width, std::uint8_t lane);
+	/*!
+	 * \brief The `SLJIT_SIMD_ELEM_*` constant for a lane width.
+	 * \param width Lane width in bytes (1, 2, 4 or 8).
+	 * \return The matching vector element-size constant.
+	 */
+	static sljit_s32 simdElementType(int width);
 	void emitV128F16Binary(uint32_t op, sljit_sw address); //!< Binary `f16x8` helper with its sub-opcode.
 	//! Emits a ternary v128 helper (`a`, `b`, `c`, `out`) over the top three slots.
 	void emitV128Ternary(sljit_sw address);

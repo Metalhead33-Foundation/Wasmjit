@@ -38,4 +38,29 @@
             (local.get $acc)))
         (local.set $i (i32.add (local.get $i) (i32.const 1)))
         (br_if $again (i32.lt_u (local.get $i) (local.get $n)))))
+    (i32x4.extract_lane 0 (local.get $acc)))
+
+  ;; The SIMD-8 shift probe. Two helper calls and one shift per iteration, so
+  ;; the difference against the C helper loop is the shift's own cost:
+  ;;
+  ;;   v128.load 32 ─┐
+  ;;                 ┴ i32x4.add ─ i32x4.shl 1 ─ acc
+  ;;
+  ;; With c = [9,10,11,12] and acc0 = [1,2,3,4], lane l advances by
+  ;; ((acc[l] + c[l]) << 1) in 32-bit arithmetic; lane 0 ends at the same
+  ;; value the test's scalar model computes.
+  (func (export "bench_shift") (param $n i32) (result i32)
+    (local $i i32)
+    (local $acc v128)
+    (local.set $acc (v128.const i32x4 1 2 3 4))
+    (block $done
+      (loop $again
+        (local.set $acc
+          (i32x4.shl
+            (i32x4.add
+              (local.get $acc)
+              (v128.load (i32.const 32)))
+            (i32.const 1)))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br_if $again (i32.lt_u (local.get $i) (local.get $n)))))
     (i32x4.extract_lane 0 (local.get $acc))))

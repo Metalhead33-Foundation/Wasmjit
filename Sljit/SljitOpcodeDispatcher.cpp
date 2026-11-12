@@ -5279,20 +5279,77 @@ void OpcodeDispatcher::emitV128SplatInteger(sljit_sw address, int scalarWidth)
 	emitHelper(scalarWidth == 8 ? SLJIT_ARGS2V(W, P) : SLJIT_ARGS2V(32, P), address);
 }
 
-void OpcodeDispatcher::dispatchI8x16Splat() { emitV128SplatInteger(codeAddress(&wasm_i8x16_splat), 4); }
-void OpcodeDispatcher::dispatchI16x8Splat() { emitV128SplatInteger(codeAddress(&wasm_i16x8_splat), 4); }
-void OpcodeDispatcher::dispatchI64x2Splat() { emitV128SplatInteger(codeAddress(&wasm_i64x2_splat), 8); }
-void OpcodeDispatcher::dispatchI8x16ExtractLaneS(uint8_t lane) { emitV128ExtractInteger(codeAddress(&wasm_i8x16_extract_lane_s), 4, lane); }
-void OpcodeDispatcher::dispatchI8x16ExtractLaneU(uint8_t lane) { emitV128ExtractInteger(codeAddress(&wasm_i8x16_extract_lane_u), 4, lane); }
-void OpcodeDispatcher::dispatchI16x8ExtractLaneS(uint8_t lane) { emitV128ExtractInteger(codeAddress(&wasm_i16x8_extract_lane_s), 4, lane); }
-void OpcodeDispatcher::dispatchI16x8ExtractLaneU(uint8_t lane) { emitV128ExtractInteger(codeAddress(&wasm_i16x8_extract_lane_u), 4, lane); }
-void OpcodeDispatcher::dispatchI64x2ExtractLane(uint8_t lane) { emitV128ExtractInteger(codeAddress(&wasm_i64x2_extract_lane), 8, lane); }
-void OpcodeDispatcher::dispatchI8x16ReplaceLane(uint8_t lane) { emitV128ReplaceInteger(codeAddress(&wasm_i8x16_replace_lane), 4, lane); }
-void OpcodeDispatcher::dispatchI16x8ReplaceLane(uint8_t lane) { emitV128ReplaceInteger(codeAddress(&wasm_i16x8_replace_lane), 4, lane); }
-void OpcodeDispatcher::dispatchI64x2ReplaceLane(uint8_t lane) { emitV128ReplaceInteger(codeAddress(&wasm_i64x2_replace_lane), 8, lane); }
+void OpcodeDispatcher::dispatchI8x16Splat()
+{
+	if (emitV128SplatNative(1))
+		return;
+	emitV128SplatInteger(codeAddress(&wasm_i8x16_splat), 4);
+}
+void OpcodeDispatcher::dispatchI16x8Splat()
+{
+	if (emitV128SplatNative(2))
+		return;
+	emitV128SplatInteger(codeAddress(&wasm_i16x8_splat), 4);
+}
+void OpcodeDispatcher::dispatchI64x2Splat()
+{
+	if (emitV128SplatNative(8))
+		return;
+	emitV128SplatInteger(codeAddress(&wasm_i64x2_splat), 8);
+}
+void OpcodeDispatcher::dispatchI8x16ExtractLaneS(uint8_t lane)
+{
+	if (emitV128ExtractNative(1, lane, true))
+		return;
+	emitV128ExtractInteger(codeAddress(&wasm_i8x16_extract_lane_s), 4, lane);
+}
+void OpcodeDispatcher::dispatchI8x16ExtractLaneU(uint8_t lane)
+{
+	if (emitV128ExtractNative(1, lane, false))
+		return;
+	emitV128ExtractInteger(codeAddress(&wasm_i8x16_extract_lane_u), 4, lane);
+}
+void OpcodeDispatcher::dispatchI16x8ExtractLaneS(uint8_t lane)
+{
+	if (emitV128ExtractNative(2, lane, true))
+		return;
+	emitV128ExtractInteger(codeAddress(&wasm_i16x8_extract_lane_s), 4, lane);
+}
+void OpcodeDispatcher::dispatchI16x8ExtractLaneU(uint8_t lane)
+{
+	if (emitV128ExtractNative(2, lane, false))
+		return;
+	emitV128ExtractInteger(codeAddress(&wasm_i16x8_extract_lane_u), 4, lane);
+}
+void OpcodeDispatcher::dispatchI64x2ExtractLane(uint8_t lane)
+{
+	if (emitV128ExtractNative(8, lane, false))
+		return;
+	emitV128ExtractInteger(codeAddress(&wasm_i64x2_extract_lane), 8, lane);
+}
+void OpcodeDispatcher::dispatchI8x16ReplaceLane(uint8_t lane)
+{
+	if (emitV128ReplaceNative(1, lane))
+		return;
+	emitV128ReplaceInteger(codeAddress(&wasm_i8x16_replace_lane), 4, lane);
+}
+void OpcodeDispatcher::dispatchI16x8ReplaceLane(uint8_t lane)
+{
+	if (emitV128ReplaceNative(2, lane))
+		return;
+	emitV128ReplaceInteger(codeAddress(&wasm_i16x8_replace_lane), 4, lane);
+}
+void OpcodeDispatcher::dispatchI64x2ReplaceLane(uint8_t lane)
+{
+	if (emitV128ReplaceNative(8, lane))
+		return;
+	emitV128ReplaceInteger(codeAddress(&wasm_i64x2_replace_lane), 8, lane);
+}
 
 void OpcodeDispatcher::dispatchI32x4Splat()
 {
+	if (emitV128SplatNative(4))
+		return;
 	if (!reachable_)
 		return;
 	requireStack(1);
@@ -5308,6 +5365,8 @@ void OpcodeDispatcher::dispatchI32x4Splat()
 
 void OpcodeDispatcher::dispatchI32x4ExtractLane(uint8_t lane)
 {
+	if (emitV128ExtractNative(4, lane, false))
+		return;
 	if (!reachable_)
 		return;
 	requireStack(1);
@@ -5322,6 +5381,8 @@ void OpcodeDispatcher::dispatchI32x4ExtractLane(uint8_t lane)
 
 void OpcodeDispatcher::dispatchI32x4ReplaceLane(uint8_t lane)
 {
+	if (emitV128ReplaceNative(4, lane))
+		return;
 	if (!reachable_)
 		return;
 	requireStack(2);
@@ -5679,6 +5740,90 @@ bool OpcodeDispatcher::emitV128BitwiseNative(sljit_s32 operation)
 	emit(sljit_emit_simd_op2(compiler_, type | operation, SLJIT_VR0, SLJIT_VR0, SLJIT_VR1, 0));
 	emit(sljit_emit_simd_mov(compiler_, type | SLJIT_SIMD_STORE, SLJIT_VR0,
 			SLJIT_MEM1(SLJIT_R0), 0));
+	return true;
+}
+
+//! `SIMD-8`: the element-size constant for a lane width. The probe in
+//! `build/probe_sljit_simd.sh` pinned the mapping: replicate is exact, and
+//! `lane_mov`'s SIGNED flag is a lane_mov option (simd_mov rejects `SLJIT_32`).
+sljit_s32 OpcodeDispatcher::simdElementType(int width)
+{
+	switch (width) {
+	case 1: return SLJIT_SIMD_ELEM_8;
+	case 2: return SLJIT_SIMD_ELEM_16;
+	case 4: return SLJIT_SIMD_ELEM_32;
+	default: return SLJIT_SIMD_ELEM_64;
+	}
+}
+
+bool OpcodeDispatcher::emitV128SplatNative(int width)
+{
+	if (!nativeSimdEnabled() || !reachable_ || measureOnly_)
+		return false;
+	const sljit_s32 moveType = SLJIT_SIMD_REG_128 | simdElementType(width);
+	if (sljit_emit_simd_replicate(compiler_, moveType | SLJIT_SIMD_TEST,
+			SLJIT_VR0, SLJIT_R0, 0) == SLJIT_ERR_UNSUPPORTED)
+		return false;
+	requireStack(1);
+	const std::size_t depth = stackWidths_.size() - 1;
+	pop();
+	push(16);
+	slotAddress(SLJIT_R0, depth);
+	loadSlot(SLJIT_R1, depth, width == 8 ? 8 : 4);
+	emit(sljit_emit_simd_replicate(compiler_, moveType, SLJIT_VR0, SLJIT_R1, 0));
+	emit(sljit_emit_simd_mov(compiler_, moveType | SLJIT_SIMD_STORE, SLJIT_VR0,
+			SLJIT_MEM1(SLJIT_R0), 0));
+	return true;
+}
+
+bool OpcodeDispatcher::emitV128ExtractNative(int width, std::uint8_t lane,
+		bool signedLane)
+{
+	if (!nativeSimdEnabled() || !reachable_ || measureOnly_)
+		return false;
+	const sljit_s32 moveType = SLJIT_SIMD_REG_128 | simdElementType(width);
+	sljit_s32 laneType = moveType;
+	if (width == 4)
+		laneType |= SLJIT_32; // a 32-bit result, upper half zeroed
+	else if (width < 4 && signedLane)
+		laneType |= SLJIT_SIMD_LANE_SIGNED;
+	if (sljit_emit_simd_lane_mov(compiler_, laneType | SLJIT_SIMD_STORE | SLJIT_SIMD_TEST,
+			SLJIT_VR0, lane, SLJIT_R0, 0) == SLJIT_ERR_UNSUPPORTED)
+		return false;
+	requireStack(1);
+	const std::size_t depth = stackWidths_.size() - 1;
+	slotAddress(SLJIT_R0, depth);
+	emit(sljit_emit_simd_mov(compiler_, moveType, SLJIT_VR0, SLJIT_MEM1(SLJIT_R0), 0));
+	emit(sljit_emit_simd_lane_mov(compiler_, laneType | SLJIT_SIMD_STORE,
+			SLJIT_VR0, lane, SLJIT_R0, 0));
+	const int resultWidth = width == 8 ? 8 : 4;
+	storeSlot(SLJIT_R0, depth, resultWidth);
+	setTopOfStack(resultWidth, false);
+	return true;
+}
+
+bool OpcodeDispatcher::emitV128ReplaceNative(int width, std::uint8_t lane)
+{
+	if (!nativeSimdEnabled() || !reachable_ || measureOnly_)
+		return false;
+	const sljit_s32 moveType = SLJIT_SIMD_REG_128 | simdElementType(width);
+	sljit_s32 laneType = moveType;
+	if (width == 4)
+		laneType |= SLJIT_32;
+	if (sljit_emit_simd_lane_mov(compiler_, laneType | SLJIT_SIMD_TEST,
+			SLJIT_VR0, lane, SLJIT_R0, 0) == SLJIT_ERR_UNSUPPORTED)
+		return false;
+	requireStack(2);
+	const std::size_t vectorDepth = stackWidths_.size() - 2;
+	const std::size_t scalarDepth = stackWidths_.size() - 1;
+	slotAddress(SLJIT_R0, vectorDepth);
+	loadSlot(SLJIT_R1, scalarDepth, width == 8 ? 8 : 4);
+	emit(sljit_emit_simd_mov(compiler_, moveType, SLJIT_VR0, SLJIT_MEM1(SLJIT_R0), 0));
+	// No SLJIT_SIMD_LANE_ZERO: the other 15 bytes must survive the merge.
+	emit(sljit_emit_simd_lane_mov(compiler_, laneType, SLJIT_VR0, lane, SLJIT_R1, 0));
+	emit(sljit_emit_simd_mov(compiler_, moveType | SLJIT_SIMD_STORE, SLJIT_VR0,
+			SLJIT_MEM1(SLJIT_R0), 0));
+	pop();
 	return true;
 }
 

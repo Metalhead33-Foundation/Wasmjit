@@ -8217,6 +8217,25 @@ TEST_CASE("simd benchmark: ns per v128 op (SIMD-L8)", "[.simdbench]")
 		return static_cast<uint32_t>(
 			WASM::callCallable<int32_t>(*benchFn, static_cast<int32_t>(iterations)));
 	};
+	// SIMD-8's shift probe: the same shape with `i32x4.shl` in the position the
+	// add/mul pair occupies above. The `add` stays a helper call on both paths,
+	// so the M1s/M4s difference is the shift's own lowering.
+	auto benchShiftFn = loaded.instance->exportedFunction("bench_shift");
+	REQUIRE(benchShiftFn.has_value());
+	const auto runM1Shift = [&] {
+		return static_cast<uint32_t>(
+			WASM::callCallable<int32_t>(*benchShiftFn, static_cast<int32_t>(iterations)));
+	};
+	// `bench_shift` folds to `acc = (acc + c) << 1` per iteration. Unsigned
+	// arithmetic reproduces it exactly, wrap included; the recurrence reaches
+	// its fixed point after a few dozen iterations, which is fine -- the loop
+	// still executes one add and one shift each time.
+	const auto expectedShift = [&iterations] {
+		uint32_t value = kAcc0[0];
+		for (uint32_t i = 0; i < iterations; ++i)
+			value = (value + kC[0]) << 1;
+		return value;
+	};
 
 	alignas(16) uint8_t t0[16];
 	alignas(16) uint8_t t1[16];
@@ -8250,6 +8269,19 @@ TEST_CASE("simd benchmark: ns per v128 op (SIMD-L8)", "[.simdbench]")
 			wasm_v128_load(c, t1);
 			laneMul->run(t0, t1, t0);
 			laneAdd->run(t0, acc, acc);
+		}
+		uint32_t lane0;
+		std::memcpy(&lane0, acc, 4);
+		return lane0;
+	};
+
+	// ── M4s: the shift probe with the *helper*, as the portable path does ───
+	const auto runM4Shift = [&] {
+		std::memcpy(acc, acc0, 16);
+		for (uint32_t i = 0; i < iterations; ++i) {
+			wasm_v128_load(c, t1);
+			wasm_i32x4_add(acc, t1, acc);
+			wasm_i32x4_shl(acc, 1, acc);
 		}
 		uint32_t lane0;
 		std::memcpy(&lane0, acc, 4);
@@ -8298,6 +8330,8 @@ TEST_CASE("simd benchmark: ns per v128 op (SIMD-L8)", "[.simdbench]")
 	REQUIRE(runM4() == expected(0));
 	REQUIRE(runM3() == expected(0));
 	REQUIRE(runM4n() == expected(0));
+	REQUIRE(runM1Shift() == expectedShift());
+	REQUIRE(runM4Shift() == expectedShift());
 	runM0Load();
 	REQUIRE(std::memcmp(t0, a, 16) == 0);
 	runM0Add();
@@ -8311,6 +8345,12 @@ TEST_CASE("simd benchmark: ns per v128 op (SIMD-L8)", "[.simdbench]")
 	const double m3 = bestNsPerOp(runM3, iterations, kOpsPerIteration);
 	const double m4 = bestNsPerOp(runM4, iterations, kOpsPerIteration);
 	const double m4n = bestNsPerOp(runM4n, iterations, kOpsPerIteration);
+	constexpr uint32_t kShiftOpsPerIteration = 3;
+	const double m1Shift = bestNsPerOp(runM1Shift, iterations, kShiftOpsPerIteration);
+	const double m4Shift = bestNsPerOp(runM4Shift, iterations, kShiftOpsPerIteration);
+	const char* nativeSetting = std::getenv("WASMJIT_SIMD_NATIVE");
+	const bool nativeShifts = nativeSetting == nullptr
+			|| std::string_view(nativeSetting) != "0";
 
 	std::cout << std::fixed << std::setprecision(3)
 			  << "SIMD-L8 benchmark: " << iterations << " iterations x "
@@ -8321,6 +8361,11 @@ TEST_CASE("simd benchmark: ns per v128 op (SIMD-L8)", "[.simdbench]")
 			  << "  M3  D1 route: lane-wise scalar IR          " << m3 << " ns/v128-op\n"
 			  << "  M4  native C calling the same helpers      " << m4 << " ns/v128-op\n"
 			  << "  M4n native C inlined (no calls)            " << m4n << " ns/v128-op\n"
+			  << "  M1s JIT i32x4.shl, native " << (nativeShifts ? "on " : "off")
+			  << "               " << m1Shift << " ns/v128-op\n"
+			  << "  M4s C helper i32x4.shl                     " << m4Shift << " ns/v128-op\n"
+			  << "  shift difference per iteration             "
+			  << ((m1Shift - m4Shift) * kShiftOpsPerIteration) << " ns\n"
 			  << "  helper-call share of M1 (1 - M4n/M1)       "
 			  << (100.0 * (1.0 - m4n / m1)) << " %\n"
 			  << "  M1 over the no-call bound (M1 / M4n)       " << (m1 / m4n) << " x\n";
@@ -9030,6 +9075,16 @@ TEST_CASE("simd: integer arithmetic and comparisons run through the JIT")
 	REQUIRE(callI32("eq_i32_lane0") == -1);   // all ones
 	REQUIRE(callI32("ne_i32_lane0") == -1);
 	REQUIRE(callI64("i64_lt_s_lane0") == -1);
+	// i32x4's signed orders: `-1` against `1`, both outcomes, so the swap and
+	// the inversion in the native switch cannot agree with each other by luck.
+	REQUIRE(callI32("i32_lt_s_true") == -1);
+	REQUIRE(callI32("i32_lt_s_false") == 0);
+	REQUIRE(callI32("i32_gt_s_true") == -1);
+	REQUIRE(callI32("i32_gt_s_false") == 0);
+	REQUIRE(callI32("i32_le_s_true") == -1);
+	REQUIRE(callI32("i32_le_s_false") == 0);
+	REQUIRE(callI32("i32_ge_s_true") == -1);
+	REQUIRE(callI32("i32_ge_s_false") == 0);
 
 	// min/max, the same distinction.
 	REQUIRE(callI32("min_s_lane0") == 0x80);
@@ -9054,6 +9109,15 @@ TEST_CASE("simd: integer arithmetic and comparisons run through the JIT")
 	REQUIRE(callI32("shr_s_neg_lane0") == -64);
 	REQUIRE(callI32("shr_u_neg_lane0") == 0x40);
 	REQUIRE(callI32("shl_i16_lane7") == 0x8000);
+	// The same masking, one count beyond each lane width, for the six ops the
+	// AsmJIT backend lowers itself (`SIMD-8`): the native path must mask the
+	// count too, not just the helper.
+	REQUIRE(callI32("shl_i16_masked_lane0") == 0x0101);
+	REQUIRE(callI32("shr_s_i16_masked_lane0") == -1);
+	REQUIRE(callI32("shr_u_i16_masked_lane0") == 0x4000);
+	REQUIRE(callI32("shl_i32_zero_lane0") == 7);
+	REQUIRE(callI32("shr_s_i32_masked_lane0") == -4);
+	REQUIRE(callI32("shr_u_i32_masked_lane0") == 2);
 
 	// Saturating arithmetic and the rounding average.
 	REQUIRE(callI32("add_sat_s_lane0") == 127);

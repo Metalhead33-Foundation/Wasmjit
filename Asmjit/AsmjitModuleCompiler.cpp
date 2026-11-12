@@ -5313,6 +5313,10 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 
 	static void (*helperForNativeKind(int kind))(const void*, const void*, void*)
 	{
+		// Every kind is listed explicitly and an unknown one returns null. A
+		// `default:` that named *a* helper is how the second `SIMD-8` draft made
+		// `i8x16.max_u` answer zero: a new kind silently fell through to the
+		// wrong fallback. The caller refuses a null mapping instead.
 		switch (kind) {
 		case 0: return &wasm_v128_and;
 		case 1: return &wasm_v128_andnot;
@@ -5331,7 +5335,26 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		case 14: return &wasm_i8x16_min_u;
 		case 15: return &wasm_i16x8_min_s;
 		case 16: return &wasm_i8x16_max_u;
-		default: return &wasm_i16x8_max_s;
+		case 17: return &wasm_i16x8_max_s;
+		case 18: return &wasm_i8x16_eq;
+		case 19: return &wasm_i16x8_eq;
+		case 20: return &wasm_i32x4_eq;
+		case 21: return &wasm_i8x16_ne;
+		case 22: return &wasm_i16x8_ne;
+		case 23: return &wasm_i32x4_ne;
+		case 24: return &wasm_i8x16_lt_s;
+		case 25: return &wasm_i16x8_lt_s;
+		case 26: return &wasm_i32x4_lt_s;
+		case 27: return &wasm_i8x16_gt_s;
+		case 28: return &wasm_i16x8_gt_s;
+		case 29: return &wasm_i32x4_gt_s;
+		case 30: return &wasm_i8x16_le_s;
+		case 31: return &wasm_i16x8_le_s;
+		case 32: return &wasm_i32x4_le_s;
+		case 33: return &wasm_i8x16_ge_s;
+		case 34: return &wasm_i16x8_ge_s;
+		case 35: return &wasm_i32x4_ge_s;
+		default: return nullptr;
 		}
 	}
 
@@ -5339,7 +5362,10 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 	{
 		if (!nativeSimdEnabled())
 		{
-			emitVectorHelper2(helperForNativeKind(kind));
+			auto fallback = helperForNativeKind(kind);
+			if (fallback == nullptr)
+				throw std::runtime_error("AsmJit v128 native kind has no fallback helper");
+			emitVectorHelper2(fallback);
 			return;
 		}
 		if (values.size() < 2)
@@ -5358,6 +5384,15 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		// `pandn` writes `~dst & src`, so `a & ~b` is `pandn(b, a)` and the
 		// result lives in the operand that played the destination.
 		asmjit::x86::Vec out = lhs;
+		// Every comparison result is a per-lane all-ones mask, exactly wasm's.
+		// `ne`/`le_s`/`ge_s` invert one with a register of all ones (`pcmpeqd
+		// r, r`), and `lt_s`/`le_s` swap the `pcmpgt*` operands: `pcmpgt dst,
+		// src` is `dst > src`, so `b > a` is `a < b`.
+		auto invert = [&](const asmjit::x86::Vec& mask) {
+			auto ones = compiler.new_xmm("v128AllOnes");
+			checkError(compiler.pcmpeqd(ones, ones), name);
+			checkError(compiler.pxor(mask, ones), name);
+		};
 		switch (kind) {
 		case 0: checkError(compiler.pand(lhs, rhs), name); break;
 		case 1: checkError(compiler.pandn(rhs, lhs), name); out = rhs; break;
@@ -5376,7 +5411,26 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		case 14: checkError(compiler.pminub(lhs, rhs), name); break;
 		case 15: checkError(compiler.pminsw(lhs, rhs), name); break;
 		case 16: checkError(compiler.pmaxub(lhs, rhs), name); break;
-		default: checkError(compiler.pmaxsw(lhs, rhs), name); break;
+		case 17: checkError(compiler.pmaxsw(lhs, rhs), name); break;
+		case 18: checkError(compiler.pcmpeqb(lhs, rhs), name); break;
+		case 19: checkError(compiler.pcmpeqw(lhs, rhs), name); break;
+		case 20: checkError(compiler.pcmpeqd(lhs, rhs), name); break;
+		case 21: checkError(compiler.pcmpeqb(lhs, rhs), name); invert(lhs); break;
+		case 22: checkError(compiler.pcmpeqw(lhs, rhs), name); invert(lhs); break;
+		case 23: checkError(compiler.pcmpeqd(lhs, rhs), name); invert(lhs); break;
+		case 24: checkError(compiler.pcmpgtb(rhs, lhs), name); out = rhs; break;
+		case 25: checkError(compiler.pcmpgtw(rhs, lhs), name); out = rhs; break;
+		case 26: checkError(compiler.pcmpgtd(rhs, lhs), name); out = rhs; break;
+		case 27: checkError(compiler.pcmpgtb(lhs, rhs), name); break;
+		case 28: checkError(compiler.pcmpgtw(lhs, rhs), name); break;
+		case 29: checkError(compiler.pcmpgtd(lhs, rhs), name); break;
+		case 30: checkError(compiler.pcmpgtb(lhs, rhs), name); invert(lhs); break;
+		case 31: checkError(compiler.pcmpgtw(lhs, rhs), name); invert(lhs); break;
+		case 32: checkError(compiler.pcmpgtd(lhs, rhs), name); invert(lhs); break;
+		case 33: checkError(compiler.pcmpgtb(rhs, lhs), name); invert(rhs); out = rhs; break;
+		case 34: checkError(compiler.pcmpgtw(rhs, lhs), name); invert(rhs); out = rhs; break;
+		case 35: checkError(compiler.pcmpgtd(rhs, lhs), name); invert(rhs); out = rhs; break;
+		default: throw std::runtime_error("unknown AsmJit v128 native kind");
 		}
 		checkError(compiler.movdqu(asmjit::x86::xmmword_ptr(result), out),
 				"AsmJit v128 native store failed");
@@ -5479,15 +5533,86 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		values.push_back(buffer);
 	}
 
+	//! The portable helper each native shift kind falls back to
+	//! (`WASMJIT_SIMD_NATIVE=0`).
+	static void (*helperForNativeShiftKind(int kind))(const void*, int32_t, void*)
+	{
+		switch (kind) {
+		case 0: return &wasm_i16x8_shl;
+		case 1: return &wasm_i16x8_shr_s;
+		case 2: return &wasm_i16x8_shr_u;
+		case 3: return &wasm_i32x4_shl;
+		case 4: return &wasm_i32x4_shr_s;
+		default: return &wasm_i32x4_shr_u;
+		}
+	}
+
+	//! Native 16-byte shift on two buffers, no helper call (`SIMD-8`).
+	//! Kinds: 0..2 `i16x8` `shl`/`shr_s`/`shr_u`, 3..5 the `i32x4` trio.
+	//! SSE2's packed shift by a vector reads a per-lane count from the low 64
+	//! bits and zeroes lanes when the count exceeds the lane width, so the count
+	//! is masked to `laneBits - 1` first -- wasm's `count mod laneBits`.
+	void emitVectorShiftNative(const char* name, int kind)
+	{
+		if (!nativeSimdEnabled())
+		{
+			emitVectorShift(helperForNativeShiftKind(kind));
+			return;
+		}
+		if (values.size() < 2)
+			throw std::runtime_error("AsmJit v128 shift operand underflow");
+		auto count = values.back();
+		values.pop_back();
+		auto a = values.back();
+		values.pop_back();
+		auto result = newVectorBuffer("v128Shift");
+		auto vector = compiler.new_xmm("v128ShiftValue");
+		auto laneCount = compiler.new_xmm("v128ShiftCount");
+		auto mask = compiler.new_xmm("v128ShiftMask");
+		checkError(compiler.movdqu(vector, asmjit::x86::xmmword_ptr(a)),
+				"AsmJit v128 shift load failed");
+		// `movd` zeroes the rest of the Xmm, and `pand` with the lane mask
+		// leaves `count % laneBits` in every lane -- what `psllw`/`psraw`/...
+		// expect. The mask itself is 15 (words) or 31 (dwords) in every lane.
+		checkError(compiler.movd(laneCount, count.r32()),
+				"AsmJit v128 shift count materialisation failed");
+		const bool words = kind < 3;
+		const uint64_t maskBits = words ? 0x000F000F000F000Full
+				: 0x0000001F0000001Full;
+		auto maskBuffer = newVectorBuffer("v128ShiftMaskBits");
+		auto maskValue = compiler.new_gp64("v128ShiftMaskValue");
+		checkError(compiler.mov(maskValue, maskBits),
+				"AsmJit v128 shift mask materialisation failed");
+		checkError(compiler.mov(asmjit::x86::qword_ptr(maskBuffer, 0), maskValue),
+				"AsmJit v128 shift mask store failed");
+		checkError(compiler.mov(asmjit::x86::qword_ptr(maskBuffer, 8), maskValue),
+				"AsmJit v128 shift mask store failed");
+		checkError(compiler.movdqu(mask, asmjit::x86::xmmword_ptr(maskBuffer)),
+				"AsmJit v128 shift mask load failed");
+		checkError(compiler.pand(laneCount, mask),
+				"AsmJit v128 shift count masking failed");
+		switch (kind) {
+		case 0: checkError(compiler.psllw(vector, laneCount), name); break;
+		case 1: checkError(compiler.psraw(vector, laneCount), name); break;
+		case 2: checkError(compiler.psrlw(vector, laneCount), name); break;
+		case 3: checkError(compiler.pslld(vector, laneCount), name); break;
+		case 4: checkError(compiler.psrad(vector, laneCount), name); break;
+		default: checkError(compiler.psrld(vector, laneCount), name); break;
+		}
+		checkError(compiler.movdqu(asmjit::x86::xmmword_ptr(result), vector),
+				"AsmJit v128 shift store failed");
+		values.push_back(result);
+	}
+
 	void dispatchI8x16Shl() override { emitVectorShift(&wasm_i8x16_shl); }
 	void dispatchI8x16ShrS() override { emitVectorShift(&wasm_i8x16_shr_s); }
 	void dispatchI8x16ShrU() override { emitVectorShift(&wasm_i8x16_shr_u); }
-	void dispatchI16x8Shl() override { emitVectorShift(&wasm_i16x8_shl); }
-	void dispatchI16x8ShrS() override { emitVectorShift(&wasm_i16x8_shr_s); }
-	void dispatchI16x8ShrU() override { emitVectorShift(&wasm_i16x8_shr_u); }
-	void dispatchI32x4Shl() override { emitVectorShift(&wasm_i32x4_shl); }
-	void dispatchI32x4ShrS() override { emitVectorShift(&wasm_i32x4_shr_s); }
-	void dispatchI32x4ShrU() override { emitVectorShift(&wasm_i32x4_shr_u); }
+	void dispatchI16x8Shl() override { emitVectorShiftNative("AsmJit i16x8.shl failed", 0); }
+	void dispatchI16x8ShrS() override { emitVectorShiftNative("AsmJit i16x8.shr_s failed", 1); }
+	void dispatchI16x8ShrU() override { emitVectorShiftNative("AsmJit i16x8.shr_u failed", 2); }
+	void dispatchI32x4Shl() override { emitVectorShiftNative("AsmJit i32x4.shl failed", 3); }
+	void dispatchI32x4ShrS() override { emitVectorShiftNative("AsmJit i32x4.shr_s failed", 4); }
+	void dispatchI32x4ShrU() override { emitVectorShiftNative("AsmJit i32x4.shr_u failed", 5); }
 	void dispatchI64x2Shl() override { emitVectorShift(&wasm_i64x2_shl); }
 	void dispatchI64x2ShrS() override { emitVectorShift(&wasm_i64x2_shr_s); }
 	void dispatchI64x2ShrU() override { emitVectorShift(&wasm_i64x2_shr_u); }
@@ -8108,35 +8233,35 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 	void dispatchI64x2Add() override { emitVectorBinaryNative("AsmJit i64x2.add failed", 7); }
 	void dispatchI64x2Sub() override { emitVectorBinaryNative("AsmJit i64x2.sub failed", 11); }
 	void dispatchI64x2Mul() override { emitVectorHelper2(&wasm_i64x2_mul); }
-	void dispatchI8x16Eq() override { emitVectorHelper2(&wasm_i8x16_eq); }
-	void dispatchI8x16Ne() override { emitVectorHelper2(&wasm_i8x16_ne); }
-	void dispatchI8x16LtS() override { emitVectorHelper2(&wasm_i8x16_lt_s); }
+	void dispatchI8x16Eq() override { emitVectorBinaryNative("AsmJit i8x16.eq failed", 18); }
+	void dispatchI8x16Ne() override { emitVectorBinaryNative("AsmJit i8x16.ne failed", 21); }
+	void dispatchI8x16LtS() override { emitVectorBinaryNative("AsmJit i8x16.lt_s failed", 24); }
 	void dispatchI8x16LtU() override { emitVectorHelper2(&wasm_i8x16_lt_u); }
-	void dispatchI8x16GtS() override { emitVectorHelper2(&wasm_i8x16_gt_s); }
+	void dispatchI8x16GtS() override { emitVectorBinaryNative("AsmJit i8x16.gt_s failed", 27); }
 	void dispatchI8x16GtU() override { emitVectorHelper2(&wasm_i8x16_gt_u); }
-	void dispatchI8x16LeS() override { emitVectorHelper2(&wasm_i8x16_le_s); }
+	void dispatchI8x16LeS() override { emitVectorBinaryNative("AsmJit i8x16.le_s failed", 30); }
 	void dispatchI8x16LeU() override { emitVectorHelper2(&wasm_i8x16_le_u); }
-	void dispatchI8x16GeS() override { emitVectorHelper2(&wasm_i8x16_ge_s); }
+	void dispatchI8x16GeS() override { emitVectorBinaryNative("AsmJit i8x16.ge_s failed", 33); }
 	void dispatchI8x16GeU() override { emitVectorHelper2(&wasm_i8x16_ge_u); }
-	void dispatchI16x8Eq() override { emitVectorHelper2(&wasm_i16x8_eq); }
-	void dispatchI16x8Ne() override { emitVectorHelper2(&wasm_i16x8_ne); }
-	void dispatchI16x8LtS() override { emitVectorHelper2(&wasm_i16x8_lt_s); }
+	void dispatchI16x8Eq() override { emitVectorBinaryNative("AsmJit i16x8.eq failed", 19); }
+	void dispatchI16x8Ne() override { emitVectorBinaryNative("AsmJit i16x8.ne failed", 22); }
+	void dispatchI16x8LtS() override { emitVectorBinaryNative("AsmJit i16x8.lt_s failed", 25); }
 	void dispatchI16x8LtU() override { emitVectorHelper2(&wasm_i16x8_lt_u); }
-	void dispatchI16x8GtS() override { emitVectorHelper2(&wasm_i16x8_gt_s); }
+	void dispatchI16x8GtS() override { emitVectorBinaryNative("AsmJit i16x8.gt_s failed", 28); }
 	void dispatchI16x8GtU() override { emitVectorHelper2(&wasm_i16x8_gt_u); }
-	void dispatchI16x8LeS() override { emitVectorHelper2(&wasm_i16x8_le_s); }
+	void dispatchI16x8LeS() override { emitVectorBinaryNative("AsmJit i16x8.le_s failed", 31); }
 	void dispatchI16x8LeU() override { emitVectorHelper2(&wasm_i16x8_le_u); }
-	void dispatchI16x8GeS() override { emitVectorHelper2(&wasm_i16x8_ge_s); }
+	void dispatchI16x8GeS() override { emitVectorBinaryNative("AsmJit i16x8.ge_s failed", 34); }
 	void dispatchI16x8GeU() override { emitVectorHelper2(&wasm_i16x8_ge_u); }
-	void dispatchI32x4Eq() override { emitVectorHelper2(&wasm_i32x4_eq); }
-	void dispatchI32x4Ne() override { emitVectorHelper2(&wasm_i32x4_ne); }
-	void dispatchI32x4LtS() override { emitVectorHelper2(&wasm_i32x4_lt_s); }
+	void dispatchI32x4Eq() override { emitVectorBinaryNative("AsmJit i32x4.eq failed", 20); }
+	void dispatchI32x4Ne() override { emitVectorBinaryNative("AsmJit i32x4.ne failed", 23); }
+	void dispatchI32x4LtS() override { emitVectorBinaryNative("AsmJit i32x4.lt_s failed", 26); }
 	void dispatchI32x4LtU() override { emitVectorHelper2(&wasm_i32x4_lt_u); }
-	void dispatchI32x4GtS() override { emitVectorHelper2(&wasm_i32x4_gt_s); }
+	void dispatchI32x4GtS() override { emitVectorBinaryNative("AsmJit i32x4.gt_s failed", 29); }
 	void dispatchI32x4GtU() override { emitVectorHelper2(&wasm_i32x4_gt_u); }
-	void dispatchI32x4LeS() override { emitVectorHelper2(&wasm_i32x4_le_s); }
+	void dispatchI32x4LeS() override { emitVectorBinaryNative("AsmJit i32x4.le_s failed", 32); }
 	void dispatchI32x4LeU() override { emitVectorHelper2(&wasm_i32x4_le_u); }
-	void dispatchI32x4GeS() override { emitVectorHelper2(&wasm_i32x4_ge_s); }
+	void dispatchI32x4GeS() override { emitVectorBinaryNative("AsmJit i32x4.ge_s failed", 35); }
 	void dispatchI32x4GeU() override { emitVectorHelper2(&wasm_i32x4_ge_u); }
 	void dispatchI64x2Eq() override { emitVectorHelper2(&wasm_i64x2_eq); }
 	void dispatchI64x2Ne() override { emitVectorHelper2(&wasm_i64x2_ne); }
