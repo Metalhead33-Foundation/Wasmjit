@@ -1161,12 +1161,16 @@ encoding (see §8.3 and [`SCOPE.md`](SCOPE.md)).
 
 The open register is §8.1. For the backends specifically:
 
-- **SLJIT** refuses an indirect call whose signature carries a `v128` *and* more
-  than three parameters in a module that also imports a native function
-  (`GAP-11`, closed); its staged path keeps one libffi `ffi_call` per
-  invocation as the documented shape of its four-entry C-call form (`GAP-12`,
-  closed); and a wide `return_call_ref` reaches the frame driver/thunk pair
-  (`GAP-2`, closed).
+- **SLJIT** carries a wide `v128` indirect call beside a native import through the
+  staged adapter (`GAP-11`, **closed**: the adapter spells the vector as the
+  canonical two `uint64_t` words and spools a vector result, pinned by
+  `wide_v128_indirect_probe.wat` and `wide_v128_import_probe.wat`); its staged
+  path keeps one libffi `ffi_call` per invocation as the documented shape of its
+  four-entry C-call form (`GAP-12`, closed); and a wide `return_call_ref` reaches
+  the frame driver/thunk pair (`GAP-2`, closed). What it still *does* refuse is a
+  frame-form call whose argument and result block exceeds its 2 KiB staging
+  scratch (`kStagingCallSlots`), which a signature with ~127 `v128` parameters
+  reaches; AsmJIT has no such bound because it allocates the frame per call.
 - **AsmJIT** shares the wide-`v128` indirect-call refusal; its register form has
   the same four-entry ceiling, and a signature above it uses the frame form —
   per signature, like SLJIT, since `GR-8`.

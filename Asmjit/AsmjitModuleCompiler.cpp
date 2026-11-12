@@ -5192,10 +5192,10 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 	}
 
 	void dispatchV128Not() override { emitVectorHelper1(&wasm_v128_not); }
-	void dispatchV128And() override { emitVectorHelper2(&wasm_v128_and); }
-	void dispatchV128AndNot() override { emitVectorHelper2(&wasm_v128_andnot); }
-	void dispatchV128Or() override { emitVectorHelper2(&wasm_v128_or); }
-	void dispatchV128Xor() override { emitVectorHelper2(&wasm_v128_xor); }
+	void dispatchV128And() override { emitVectorBitwise2("AsmJit v128.and failed", 0); }
+	void dispatchV128AndNot() override { emitVectorBitwise2("AsmJit v128.andnot failed", 1); }
+	void dispatchV128Or() override { emitVectorBitwise2("AsmJit v128.or failed", 2); }
+	void dispatchV128Xor() override { emitVectorBitwise2("AsmJit v128.xor failed", 3); }
 
 	void dispatchV128Bitselect() override
 	{
@@ -5292,6 +5292,38 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 	}
 
 	//! Calls a binary v128 helper (`a`, `b`, `out`) and pushes `out`.
+	//! Native 16-byte bitwise op on two buffers, no helper call.
+	//! `kind`: 0 = and, 1 = andnot (a & ~b), 2 = or, 3 = xor. The result lands in
+	//! a fresh buffer, exactly as `emitVectorHelper2` leaves it (`SIMD-8`).
+	void emitVectorBitwise2(const char* name, int kind)
+	{
+		if (values.size() < 2)
+			throw std::runtime_error("AsmJit v128 bitwise operand underflow");
+		auto b = values.back();
+		values.pop_back();
+		auto a = values.back();
+		values.pop_back();
+		auto result = newVectorBuffer("v128Result");
+		auto lhs = compiler.new_xmm("v128BitwiseA");
+		auto rhs = compiler.new_xmm("v128BitwiseB");
+		checkError(compiler.movdqu(lhs, asmjit::x86::xmmword_ptr(a)),
+				"AsmJit v128 bitwise load failed");
+		checkError(compiler.movdqu(rhs, asmjit::x86::xmmword_ptr(b)),
+				"AsmJit v128 bitwise load failed");
+		// `pandn` writes `~dst & src`, so `a & ~b` is `pandn(b, a)` and the
+		// result lives in the operand that played the destination.
+		asmjit::x86::Vec out = lhs;
+		switch (kind) {
+		case 0: checkError(compiler.pand(lhs, rhs), name); break;
+		case 1: checkError(compiler.pandn(rhs, lhs), name); out = rhs; break;
+		case 2: checkError(compiler.por(lhs, rhs), name); break;
+		default: checkError(compiler.pxor(lhs, rhs), name); break;
+		}
+		checkError(compiler.movdqu(asmjit::x86::xmmword_ptr(result), out),
+				"AsmJit v128 bitwise store failed");
+		values.push_back(result);
+	}
+
 	void emitVectorHelper2(void (*helper)(const void*, const void*, void*))
 	{
 		if (values.size() < 2)
