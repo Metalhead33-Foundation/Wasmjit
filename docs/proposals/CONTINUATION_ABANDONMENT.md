@@ -148,7 +148,15 @@ store destroyed by a test but is racy for one destroyed during static teardown: 
 cross-thread use-after-free inside `releaseContinuationsFor` (`freed by thread T0`, `allocated by
 thread T1`) on all three backends, because a host-thread provider's worker can still be alive when the
 store is torn down at process exit. The hook therefore belongs where the provider has been joined — the
-instance/agent teardown — not on the store. live-worker registry (insert in the `Worker` constructor, erase in `~Worker`) beside the existing
+instance/agent teardown — not on the store. **Attempted again at the instance teardown (2026-11-11):** the right *place* — no
+cross-thread use-after-free, and the store and the instance are both alive so a worker's destructor
+can run its ordinary drops — but force-destroying a *parked host-thread worker* there **hangs**:
+`~BWorker` sets `cancelRequested`, notifies its own condition variable and calls `pthread_join`, while
+a fiber parked at a `switch` is waiting on the peer's, so the join never returns and the cell stops
+completing. The release therefore has to be preceded by a cancellation that actually reaches the
+parked wait — `AWorker` has `cancelSuspended()`, and a `BWorker` needs its peer relationship cancelled,
+not just its own condition. That cancellation step is the remaining work before the teardown hook can
+land. live-worker registry (insert in the `Worker` constructor, erase in `~Worker`) beside the existing
 handle registry, plus one call from `Store::~Store`; it is the `CA-4` milestone's real shape.
 
 **Build note for the next attempt.** The Asmjit subproject in a build tree can keep a stale
