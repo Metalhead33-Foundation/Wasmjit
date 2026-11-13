@@ -129,8 +129,10 @@ host down is the engine's reason, not the host's; it stays hardcoded (`CFGD2`).
   `fromSection`/`fromConfiguration` pair on `RuntimeConfig`, on its five child
   families, on `ProfileConfig` and on `ParseOptions` — because the engine owns no
   file syntax, no path policy and no default file, and a key it does not know is
-  simply not its business. The environment variables stay a convenience for a
-  process that has no embedder code of its own (§4.2).
+  simply not its business. The keys, their defaults and the embedder recipes
+  (read, select a backend, save) are in [`../CONFIGURING.md`](../CONFIGURING.md);
+  the environment variables stay a convenience for a process that has no embedder
+  code of its own (§4.2).
 - **No live reconfiguration of a running instance.** A budget is resolved when
   the owning object is created. `setContinuationBudget` is the one mid-flight
   setter in the tree and §5 `CFG5` records what that costs; the rest stay

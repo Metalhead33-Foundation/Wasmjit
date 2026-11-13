@@ -31,6 +31,7 @@ applies to `proposals/`, `languages/` and `backends/`.
 | change a signature, a function prolog, or a GC object layout | \subpage doc_abi | “The C ABI Contract” (C linkage, host C ABI, target matrix, non-degeneracy) and “GC Object and Heap ABI” |
 | review the `v128` / register-and-stack ABI refactor | [backends/HISTORY.md](backends/HISTORY.md) §3.3 | the historical study and post-mortem: blast radius, phases, what shipped, what failed, and the lessons (frozen record); the current contract is `ABI.md` |
 | embed the engine, or change its install/version story | \subpage doc_embedding_surface | `WASM::Runtime`, the three header tiers, soname/visibility, the install layout |
+| let a user configure the engine, or remember a chosen backend | \subpage doc_configuring | the INI keys and their defaults, the precedence rule, and the read / select / save recipes |
 | change an embedder-facing surface or the backend seam | \subpage doc_api_abi_stability | the milestone and its four gates, the frozen surfaces, the break classes, the merge readiness |
 | decide whether a backend is production-ready | \subpage doc_api_abi_stability | the per-backend verdict and measurement (§13), the promotion gate, and the one open register (§8) |
 | find a defect, gap or limitation | \subpage doc_api_abi_stability | **§8 is the one register**: open items, decisions that are not defects, encoding-blocked scope, and recently closed rows |

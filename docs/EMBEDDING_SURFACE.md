@@ -632,7 +632,8 @@ vendored include and an embedder that never reads an INI file needs nothing from
 includes `Euphemy/Config`; it is linked into `libWasmBase` like any other source,
 so no new runtime dependency appears either. This is the shape any future
 ecosystem seam should take: a signature may *name* a vendored type, a header may
-not depend on it.
+not depend on it. The keys it reads and the caller-side recipes are in
+[`CONFIGURING.md`](CONFIGURING.md).
 
 #### 6.2.1 The long-term direction: `Elvavena` stays, and the ecosystem deepens
 
