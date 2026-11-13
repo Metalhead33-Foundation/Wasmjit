@@ -25,6 +25,12 @@ the one-line check to run.
 
 ## Documentation to follow
 
+- **References must always be the last section.** In every note under `docs/` — proposal, study,
+  index, policy — and in `README.md` when it carries one. An appendix, a post-mortem or a status log
+  goes *before* it, never after. The rule is stated in
+  [`docs/PROPOSALS.md`](docs/PROPOSALS.md) §2.3 and [`docs/DOCUMENTATION.md`](docs/DOCUMENTATION.md)
+  §9, and `./Test/WasmJit '[docs][references]'` fails the suite when a document breaks it.
+
 - **[`docs/LAYERING.md`](docs/LAYERING.md) — read before editing `WasmBase/` or working on a backend.**
   The core must not name, include, link or describe any specific backend: `LibJit/`, `Sljit/` and
   `Asmjit/` are three code generators behind the same seam, and `WasmBase/` states the contracts
@@ -40,7 +46,7 @@ the one-line check to run.
 - **No bespoke interpreter fallback.** WasmJit does not grow a Wasm interpreter: interpretation, if
   ever required, is the backend's own compile/interpret configuration (currently GNU LibJIT, which
   already provides an interpreter), never a core fallback or a new execution engine. See
-  [`docs/proposals/STACK_SWITCHING.md`](docs/proposals/STACK_SWITCHING.md) §10.15 (D-3).
+  [`docs/proposals/STACK_SWITCHING.md`](docs/proposals/STACK_SWITCHING.md) §9.15 (D-3).
 
 - **[`docs/SAFETY.md`](docs/SAFETY.md) — read before touching `WasmBase/` or a backend (currently `LibJit/`).**
   It is the policy for not letting a module take the host down: telling artifacts apart before decoding,

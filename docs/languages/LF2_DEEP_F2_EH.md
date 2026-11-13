@@ -293,3 +293,17 @@ Measured after the change (2026-10-30):
 - That the escape block is free. It costs a `block` around each skipped frame, a
   `catch_all_ref` at the delegated body and one `exnref` local per function; the
   measured load-time effect of the pass itself is in §5.1.
+
+## 8. References
+
+- [`LF2_INDEX.md`](LF2_INDEX.md) — the report set and the `F2` finding in context.
+- [`LF2_EVIDENCE.md`](LF2_EVIDENCE.md) — the clang module, the four fixtures and
+  the transcripts.
+- [`LF2_S4_WASMGC.md`](LF2_S4_WASMGC.md) — the producer whose legacy EH this
+  lowering has to accept.
+- [`../proposals/LEGACY_EXCEPTIONS.md`](../proposals/LEGACY_EXCEPTIONS.md) — the
+  policy: refuse by default, rewrite only on request.
+- [`../SAFETY.md`](../SAFETY.md) — the bounds and failure rules the pass obeys.
+- Source anchors: `WasmBase/WasmLegacyEh.cpp`, `Test/LegacyEhTests.cpp`,
+  `Test/legacy-eh-probe.sh`.
+

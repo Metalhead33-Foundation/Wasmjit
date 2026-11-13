@@ -906,7 +906,7 @@ external prerequisite is needed for the tooling-side milestones.
   flat and memory representations. Lowering a component call *serialises* those
   values into a buffer; it must not allocate GC objects. Sharing the `TypeRegistry`
   (CMD9) is about interning, not about unifying the two ASTs.
-- **[`../EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) §17** — a feasibility
+- **[`../EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) §16** — a feasibility
   study of a GObject-shaped host object runtime. Its wire half is the Component
   Model’s `resource` + `own`/`borrow` + `resource.drop`; the non-redundant half
   is a dynamic object model (properties, signals, reflection, interfaces), which

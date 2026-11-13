@@ -1114,7 +1114,11 @@ sanctioned variants:
   has `Status:` and `Audience:` front matter before its §1 map;
 - the §1 map exists and is the contract: every `## N.` heading (N ≥ 2) appears
   in the map, and every `§N` the map names has a heading;
-- a References section exists.
+- a References section exists — and it is the **last** section, in a note and in
+  every other document under `docs/` (`[docs][references]`,
+  [`DOCUMENTATION.md`](DOCUMENTATION.md) §9). An appendix goes before it; a
+  document with no reference list (an index page) is out of scope. Run it alone
+  with `./Test/WasmJit '[references]'`.
 
 The third case enforces the **verdict colour code**
 ([`LANGUAGE_FEASIBILITY.md`](LANGUAGE_FEASIBILITY.md) §5.1): GitHub-flavoured
@@ -1141,7 +1145,7 @@ its own with:
 ./Test/WasmJit '[docs]'
 ```
 
-It is part of the default suite, so drift fails the normal run. `GC.md` §10,
+It is part of the default suite, so drift fails the normal run. `GC.md` §9,
 `COMPONENT_MODEL.md` §9 and `SMALL_PROPOSALS.md`'s grouped §1–§8 shape all pass,
 because the rule is map ↔ headings rather than a fixed section count
 (`PROPOSALS.md` §3).
@@ -1227,7 +1231,7 @@ schema:
 | `[branch-hint]` | `Test/BranchHintTests.cpp` | The branch-hinting seam (`SMALL_PROPOSALS.md` §4): the backend-neutral lookup (`setBranchHints`/`branchHintAt` — exact hit, between, unknown byte, cleared) and that a hinted module still computes the same results |
 | `[mem-provider]` | `Test/MemoryProviderTests.cpp` | The host-chosen allocation policy for linear memory (`MEMORY_PROVIDER.md` MP-1): the default policy's growth and budget behaviour, a reserved memory's stable base and verbatim maximum, its named refusal of an unbounded memory, a shared memory ignoring the policy, and the store policy reaching the memories a module declares |
 | `[callcache]` | `Test/CallCacheTests.cpp` | The optional libffi precache: module export `ffi_cif` calls, multi-result buffers and component flat calls. |
-| `[bindings]` | `Test/BindingSchemaTests.cpp` | The `EMBEDDING_SURFACE.md` §12.8 tool: core-module and component descriptor→schema for G2H/H2G/G2G, component function/record/type projection with direction-specific G2H/H2G/G2G imports/exports and Canonical ABI flat signatures, opaque reference spelling including a hand-built `stringref` fixture, C/C++/Rust/TypeScript/AssemblyScript/Zig/Kotlin/MoonBit/Go/Dart/Java/C#/F#/Python/Ruby/Lua/Swift/D/Nim/Crystal/Ada/Pascal/Haskell emission, a compiled C++ adapter exercising call/trap/import/reference/multi-value/retain-drop, direction-aware C++ typedef/source generation (g2h import stubs, h2g pointer loader), SWIG and Glue candidate-signature validation and `VMContext*` candidate schemas, non-function entry comments, producer toolchain evidence, a `wasm-tools component wit --json` name/type cross-check, GC struct/array definitions, per-toolchain compile checks including C and C++ compilation of the plain C header, a `wasm-opt` post-optimization signature comparison across five fixtures, Rust/C Wasm import-linkage checks, complete-schema JSON re-projection, and optional `argNames`/`description` use |
+| `[bindings]` | `Test/BindingSchemaTests.cpp` | The `EMBEDDING_SURFACE.md` §11.8 tool: core-module and component descriptor→schema for G2H/H2G/G2G, component function/record/type projection with direction-specific G2H/H2G/G2G imports/exports and Canonical ABI flat signatures, opaque reference spelling including a hand-built `stringref` fixture, C/C++/Rust/TypeScript/AssemblyScript/Zig/Kotlin/MoonBit/Go/Dart/Java/C#/F#/Python/Ruby/Lua/Swift/D/Nim/Crystal/Ada/Pascal/Haskell emission, a compiled C++ adapter exercising call/trap/import/reference/multi-value/retain-drop, direction-aware C++ typedef/source generation (g2h import stubs, h2g pointer loader), SWIG and Glue candidate-signature validation and `VMContext*` candidate schemas, non-function entry comments, producer toolchain evidence, a `wasm-tools component wit --json` name/type cross-check, GC struct/array definitions, per-toolchain compile checks including C and C++ compilation of the plain C header, a `wasm-opt` post-optimization signature comparison across five fixtures, Rust/C Wasm import-linkage checks, complete-schema JSON re-projection, and optional `argNames`/`description` use |
 
 The plugin fixture is `Test/ExampleBackend/ExampleBackend.pro`, a shared library
 built in its own directory (`libwasmjit-backend-example.so`) so the test proves the
@@ -1436,3 +1440,20 @@ The component feature/API tests are:
   ignored, never a rejection.
 - `[component-subtyping]` — the upstream corpus's subtyping verdicts (the same
   516-case run as `[component-corpus]`).
+
+## References
+
+- [`SCOPE.md`](SCOPE.md) — which upstream scripts are in scope, and the two
+  recorded `tag.wast` failures.
+- [`VALIDATION.md`](VALIDATION.md) — what the negative fixtures are proving.
+- [`SAFETY.md`](SAFETY.md) — the corpus environment limits (`WASMJIT_MAX_TOTAL_BYTES`
+  and friends) that the runs assume.
+- [`DOCUMENTATION.md`](DOCUMENTATION.md) §9 — the note-tree and header-doc checks
+  that also run from this binary.
+- [`FRESHNESS.md`](FRESHNESS.md) §8 — the probe that re-measures every tally this
+  note quotes.
+- [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §11 — the dated suite tallies the
+  milestone owns.
+- Data files: `Test/wast_supported.txt` (the curated list),
+  `Test/spec_known_failures.txt`, `Test/component_known_failures.txt`.
+

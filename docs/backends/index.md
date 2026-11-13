@@ -11,7 +11,7 @@ facts live in the documents below, and **history** lives in
 
 | Topic | Read |
 |---|---|
-| Production verdict, measurement envelope, promotion gate | [`../API_ABI_STABILITY.md`](../API_ABI_STABILITY.md) §13 |
+| Production verdict, measurement envelope, promotion gate | [`../API_ABI_STABILITY.md`](../API_ABI_STABILITY.md) §12 |
 | **Every open defect, gap and limitation**, plus the closed index and the decisions that are not defects | [`../API_ABI_STABILITY.md`](../API_ABI_STABILITY.md) §8 |
 | The canonical signature, `v128` boundary, register/frame call forms, cross-backend policy | [`../ABI.md`](../ABI.md) |
 | The target matrix, GC object ABI and what a backend may not do | [`../ABI.md`](../ABI.md) |
@@ -37,7 +37,7 @@ facts live in the documents below, and **history** lives in
 ## 4. References
 
 - [`../index.md`](../index.md) — the documentation tree this folder is a child of.
-- [`../API_ABI_STABILITY.md`](../API_ABI_STABILITY.md) §8/§13 — the current
+- [`../API_ABI_STABILITY.md`](../API_ABI_STABILITY.md) §8/§12 — the current
   register and verdict.
 - [`HISTORY.md`](HISTORY.md) — the dated record.
 - Git history — the deleted per-slice reports, verbatim, for any detail the

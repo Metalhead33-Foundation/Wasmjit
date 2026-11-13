@@ -12,7 +12,7 @@ the declared envelope** — `WASMJIT_BACKEND=asmjit ./Test/WasmJit --rng-seed
 green**, the same case set and assertion count as the reference backend. The envelope is x86-64 Linux / SysV AMD64 with the external
 AsmJit library available at build time, and the documented refusals are the same
 three as SLJIT’s (see `Sljit/Sljit.md` "Known limitations"). See
-[`docs/API_ABI_STABILITY.md`](../docs/API_ABI_STABILITY.md) §13 for the verdict
+[`docs/API_ABI_STABILITY.md`](../docs/API_ABI_STABILITY.md) §12 for the verdict
 and §8 for the open register and the defect ledger. It is still not a
 *code-quality* drop-in replacement for GNU LibJIT.
 

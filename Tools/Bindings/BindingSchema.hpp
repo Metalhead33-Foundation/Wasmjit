@@ -15,7 +15,7 @@
   \file BindingSchema.hpp
   \brief The public binding-schema API and descriptor projection.
 
-  This is tooling, not an engine header (docs/EMBEDDING_SURFACE.md §12.8). It
+  This is tooling, not an engine header (docs/EMBEDDING_SURFACE.md §11.8). It
   consumes the public descriptor metadata on a parsed `WASM::Module` or
   `WASM::Component`; the typed model lives in `BindingModel.hpp` and the
   language emitters live in the `Emit*.cpp` translation units. Never include

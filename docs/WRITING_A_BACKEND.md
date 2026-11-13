@@ -3,7 +3,7 @@
 *The checklist and the walkthrough*
 
 Status: how-to note, revision 5 (2026-11-10). It is both the checklist of what a
-code generator must provide and the walkthrough of how to provide it; §14 is the
+code generator must provide and the walkthrough of how to provide it; §13 is the
 implementation record for the AsmJit and SLJIT backends and the post-mortem they
 produced. It contains no engine behaviour of its own.
 
@@ -13,7 +13,7 @@ order). [`LAYERING.md`](LAYERING.md) §4 states what a backend **may not violate
 this note states what it **must provide** and how to provide it.
 
 **If you only read one section**, read §3 (the four hooks), §6 (the ABI you emit —
-including reference ownership) and §11 (the SLJIT worked example). §14 records
+including reference ownership) and §11 (the SLJIT worked example). §13 records
 how the two additional backends were delivered.
 
 ## 1. Document map
@@ -31,8 +31,8 @@ how the two additional backends were delivered.
 | §10 | Which helpers do I call, and which must I bring? |
 | §11 | What does the SLJIT backend contain, and what is the worked example? |
 | §12 | How do I test it, and what counts as done? |
-| §13 | References |
-| §14 | How did AsmJit and SLJIT become production backends, and what did their post-mortem record? |
+| §13 | How did AsmJit and SLJIT become production backends, and what did their post-mortem record? |
+| §16 | References |
 
 ## 2. What is a backend, and what is not mine to write?
 
@@ -416,7 +416,7 @@ layering violation with extra steps.
 
 `Sljit/` is the second executing backend, and the worked example this checklist
 was distilled from. It is **production-ready within the declared envelope**
-(22,533 assertions / 824 cases, the same case set as LibJIT and AsmJit). The
+(22,533 assertions / 824 cases on 2026-11-10, the same case set as LibJIT and AsmJit). The
 emitted surface, the refusals and the next steps are owned by
 [`Sljit/Sljit.md`](../Sljit/Sljit.md) and
 [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md); this
@@ -490,32 +490,7 @@ If a check cannot pass, the honest outcome is a documented deviation in your own
 note plus a `WASMJIT_CAP_*` flag that makes the runtime refuse the unsupported
 shape — not a silent wrong answer (§11's limitations table is the worked example).
 
-## 13. References
-
-- [`LAYERING.md`](LAYERING.md) — what the core may name (nothing of yours), and
-  §4's contract rows this note elaborates.
-- [`ABI.md`](ABI.md) — the calling convention, tuples, `v128`, traps, tail calls,
-  continuations.
-- [`ABI.md`](ABI.md) — the C ABI contract: the host C
-  convention with C linkage on every target, portability over performance, what a
-  backend may **not** do while lowering it (§4), the target matrix you must declare
-  (§7.2), and the GC object/allocator ABI (§8).
-- [`SAFETY.md`](SAFETY.md) — budgets, bounds, and traps versus `abort`.
-- [`proposals/SIMD.md`](proposals/SIMD.md) §4.10 — what each toolkit can do for SIMD.
-- [`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md) — the dynamic form, its
-  descriptor and the nine hard problems.
-- [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §7.3 — `AAS8`/`AAS9`/`AAS11`,
-  the gaps this checklist closed.
-- [`EMBEDDING_SURFACE.md`](EMBEDDING_SURFACE.md) §6.1.1 — the header tiers that
-  decide whether a helper of yours belongs in `WasmBase/` (it does not).
-- Source anchors: `WasmBase/WasmModuleInstance.hpp` (`ModuleInstantiator`),
-  `WasmBase/WasmBackendSession.hpp` (`BackendSession`),
-  `WasmBase/WasmOpcodeDispatcher.hpp`,
-  `WasmBase/WasmNullInstantiator.cpp` (the smallest correct
-  `declareFunctions`), `WasmBase/WasmBackendAbi.hpp` (the executable tuple
-  rule), `LibJit/LibjitModuleCompiler.cpp` (complete), `Sljit/` (complete),
-  `Test/TestBackend.cpp` (the harness).
-## 14. Implementation record: AsmJit and SLJIT, delivered together
+## 13. Implementation record: AsmJit and SLJIT, delivered together
 
 This section is the **record of a plan that has been executed**, not a claim about
 work still to do. It extends the checklist above with the order in which the two
@@ -523,7 +498,7 @@ partial backends became production backends, and with the post-mortem they left
 behind for the next author. LibJIT remains the reference implementation and the
 oracle for every semantic question unless a row below explicitly says otherwise.
 
-### 14.1 Dated starting point
+### 13.1 Dated starting point
 
 **Snapshot (2026-11-05):**
 
@@ -548,7 +523,7 @@ oracle for every semantic question unless a row below explicitly says otherwise.
 - Neither is a *code-quality* replacement for LibJIT, but both are production
   backends.
 
-### 14.2 Why they ship together
+### 13.2 Why they ship together
 
 Two code generators that share one ABI must be exercised by one conformance
 matrix. Shipping a feature in one and leaving the other to "catch up later" is
@@ -565,7 +540,7 @@ that is borrowed there, a tuple offset that disagrees by four bytes. Therefore:
    it must expose a `WASMJIT_CAP_*` refusal and a named test — never silently
    lower it differently.
 
-### 14.3 The slices, in implementation order
+### 13.3 The slices, in implementation order
 
 | Slice | Deliverable | Exit criterion | Deliberate refusal if any |
 |---|---|---|---|
@@ -584,7 +559,7 @@ the remaining P3 item, and P4/P5 stay LibJIT-only until it lands. Extend the
 `[sljit][module][parity]` fixture set before moving a row to green, and do not
 merge the "complete" label for either until its row is green on both.
 
-### 14.4 Tests that are part of every slice
+### 13.4 Tests that are part of every slice
 
 - `[backendabi]` — tuple/layout and calling-convention conformance.
 - `[parity]` — one module instantiated with both generators, outcomes compared
@@ -601,7 +576,7 @@ merge the "complete" label for either until its row is green on both.
   A refusal is a testable feature: "no compiled body" must be the observed
   result, not a crash, a silent zero or a host `abort()`.
 
-### 14.5 The mandatory post-mortem
+### 13.5 The mandatory post-mortem
 
 At the end of each slice, and again when the backend is declared complete, the
 author writes a post-mortem **for both backends, in one document**, under
@@ -631,7 +606,7 @@ The post-mortem is written by the implementer, reviewed by the backend reviewer,
 
 The `v128` signature seam and the call forms are in [`ABI.md`](ABI.md); both were decided on 2026-11-06 and implemented on all three backends.
 
-### 14.6 Candidate backends for a fourth implementation
+### 13.6 Candidate backends for a fourth implementation
 
 These are candidates for **after** the three existing code generators, all of
 which now reach the P6 gate. The ordering is a recommendation, not a commitment;
@@ -651,7 +626,7 @@ The first three are the realistic near-term list. LLVM and libgccjit are
 specialist". None may be added to `WasmBase/`: the core continues to name only
 `ModuleInstantiator` and `BackendSession`.
 
-### 14.7 Entry checklist for the fourth backend author
+### 13.7 Entry checklist for the fourth backend author
 
 Before writing a line of code, read §3, §6 and §12; then produce:
 
@@ -666,7 +641,7 @@ The measure of success is not "it runs the benchmark". It is that another
 author can read this note, the new backend's page and its post-mortem, and
 write the next backend without rediscovering the same ABI or ownership failure.
 
-## 15. What the second-and-third-backend arc taught a fourth author
+## 14. What the second-and-third-backend arc taught a fourth author
 
 Distilled from the AsmJit/SLJIT parity arc
 ([`backends/HISTORY.md`](backends/HISTORY.md) and its `SIMD*`,
@@ -745,7 +720,7 @@ It is whether its **refusal inventory is explicit**, whether its **trap kinds ma
 the other backends, and whether its **post-mortem was opened on day one** — so that the
 next author inherits the failures instead of the debugging.
 
-### 15.1 Wiring a new backend from the historical defect log
+### 14.1 Wiring a new backend from the historical defect log
 
 The merged record ([`backends/HISTORY.md`](backends/HISTORY.md) §5) is a
 checklist, not just a story. Each row below is one defect that a new backend can
@@ -772,11 +747,14 @@ the arc — the four-entry ceiling, the sixth-argument loss, the three-parameter
 cap, the buffered vector result, the single-result epilogue — was one of those
 guards applied to both forms alike.
 
-## 16. Post-mortem: the parity arc, and what it hands the ABI refactor
+## 15. Post-mortem: the parity arc, and what it hands the ABI refactor
 
-*Section numbers below are the original post-mortem’s provenance; the merged
-content is in [`backends/HISTORY.md`](backends/HISTORY.md) §5 (defects) and §7
-(process lessons).*
+*The `§N` references in this section are **provenance**, not sections of this
+note: they are the numbered entries of the original `ASMJIT_SLJIT_*` slice
+reports, which were consolidated into [`backends/HISTORY.md`](backends/HISTORY.md)
+§4 (the slice series) and §5 (the defect log). Follow the link for the content; the
+numbers are kept because the lessons below are addressed to the entries that
+produced them.*
 
 **Snapshot (2026-11-06, branch `AbiRefactor`, commit `d7b628e`):** 51 entries in
 [`backends/HISTORY.md`](backends/HISTORY.md), 14 commits on the refactor branch,
@@ -843,3 +821,29 @@ that could not be finished in this session. Every piece
 of it has now been shown to be *pinned by a test* — declarations moved alone; parameters did not — which is
 itself the evidence that the tests are doing their job. The next author inherits a line-numbered
 inventory, not a half-applied sweep.
+
+## 16. References
+
+- [`LAYERING.md`](LAYERING.md) — what the core may name (nothing of yours), and
+  §4's contract rows this note elaborates.
+- [`ABI.md`](ABI.md) — the calling convention, tuples, `v128`, traps, tail calls,
+  continuations.
+- [`ABI.md`](ABI.md) — the C ABI contract: the host C
+  convention with C linkage on every target, portability over performance, what a
+  backend may **not** do while lowering it (§4), the target matrix you must declare
+  (§7.2), and the GC object/allocator ABI (§8).
+- [`SAFETY.md`](SAFETY.md) — budgets, bounds, and traps versus `abort`.
+- [`proposals/SIMD.md`](proposals/SIMD.md) §4.10 — what each toolkit can do for SIMD.
+- [`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md) — the dynamic form, its
+  descriptor and the nine hard problems.
+- [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §7.3 — `AAS8`/`AAS9`/`AAS11`,
+  the gaps this checklist closed.
+- [`EMBEDDING_SURFACE.md`](EMBEDDING_SURFACE.md) §6.1.1 — the header tiers that
+  decide whether a helper of yours belongs in `WasmBase/` (it does not).
+- Source anchors: `WasmBase/WasmModuleInstance.hpp` (`ModuleInstantiator`),
+  `WasmBase/WasmBackendSession.hpp` (`BackendSession`),
+  `WasmBase/WasmOpcodeDispatcher.hpp`,
+  `WasmBase/WasmNullInstantiator.cpp` (the smallest correct
+  `declareFunctions`), `WasmBase/WasmBackendAbi.hpp` (the executable tuple
+  rule), `LibJit/LibjitModuleCompiler.cpp` (complete), `Sljit/` (complete),
+  `Test/TestBackend.cpp` (the harness).

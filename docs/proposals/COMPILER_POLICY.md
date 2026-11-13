@@ -18,10 +18,10 @@ and anyone reading the `F1` finding in
 
 Follows the same split as [`MEMORY_PROVIDER.md`](MEMORY_PROVIDER.md) and its
 sibling [`CONFIGURATION.md`](CONFIGURATION.md): §2 demands → §3 non-demands →
-§4 tree → §5 gaps → §6 deviations → §7 plan → §8 tests → §9 references, with
-§10 an appendix (the per-backend mapping and the retry-safety analysis).
+§4 tree → §5 gaps → §6 deviations → §7 plan → §8 tests → §10 references, with
+§9 an appendix (the per-backend mapping and the retry-safety analysis).
 
-Contains **no new code**. The enums in §2.3 and the shape in §10.2 are
+Contains **no new code**. The enums in §2.3 and the shape in §9.2 are
 specifications; §7's `CP-1`…`CP-6` are the work.
 
 ## 1. Document map
@@ -35,8 +35,8 @@ specifications; §7's `CP-1`…`CP-6` are the work.
 | §6 | Where may we deliberately stay as we are (`CPD1`–`CPD7`)? |
 | §7 | Plan (`CP-0`…`CP-6`) with class and done-condition |
 | §8 | Test survey |
-| §9 | References |
-| §10 | Appendix: the per-backend mapping, the policy shape, and why a retry is only safe at module granularity |
+| §9 | Appendix: the per-backend mapping, the policy shape, and why a retry is only safe at module granularity |
+| §10 | References |
 
 ## 2. What a compilation policy must be able to say
 
@@ -72,13 +72,13 @@ interpreting rather than to a lower level", which is a reasonable request, or
 - **Fallback** has the three values the requirement names — *never*, *fall back
   only*, *always* — and one hard constraint: the interpreter is the **backend's**
   configuration, not a core execution engine. That is the rule in `AGENTS.md`
-  and in [`STACK_SWITCHING.md`](STACK_SWITCHING.md) §10.15 (D-3), and it is why
+  and in [`STACK_SWITCHING.md`](STACK_SWITCHING.md) §9.15 (D-3), and it is why
   this axis is a *capability a backend may refuse*, not a mode the core imposes.
 
 ### 2.3 The vocabulary (proposed)
 
 ```cpp
-// WasmBase/… — backend-neutral; the *mapping* belongs to each backend (§10.1).
+// WasmBase/… — backend-neutral; the *mapping* belongs to each backend (§9.1).
 enum class OptimizationLevel : std::uint8_t { None, Basic, Full };
 enum class CompilationStrictness : std::uint8_t { Strict, Lax };
 enum class InterpreterFallback : std::uint8_t { Never, FallbackOnly, Always };
@@ -123,7 +123,7 @@ existing embedder's behaviour by being added.
   are requests a *backend* may honour with its own interpreter
   (`jit_function_apply` for LibJIT, `F1` remedy C). The core never grows an
   execution engine (`AGENTS.md`, [`STACK_SWITCHING.md`](STACK_SWITCHING.md)
-  §10.15 D-3).
+  §9.15 D-3).
 - **Not per-function policy, and not tiering.** No hot-function recompilation,
   no "compile this export at `Full` and that one at `None`", no OSR. The policy
   is per *instantiation*, which is where the compile decision is made.
@@ -374,7 +374,7 @@ per-runtime surface the note is about has no such hole.
 | `CPD1` | **The core carries a coarse enum; each backend maps it** | [`../LAYERING.md`](../LAYERING.md) §2/§4: the core names a contract, never a code generator's API. `None/Basic/Full` is a contract (ordered, testable); an integer level is LibJIT's | A SLJIT or AsmJit backend implements the policy without the core knowing it exists |
 | `CPD2` | **`Basic` is the default and means LibJIT level 0** | `F1`: level 1 rejects a valid graph and the failure is not retryable; a default that fails on a valid module is worse than a slower one | No existing module regresses in correctness; `Full` is a deliberate opt-in, the same shape `MP-1` used |
 | `CPD3` | **`Lax` may regress only at module granularity, on a fresh backend instance, before segments/start** | §4.3's measurement, plus `ModuleInstantiator::instantiate`'s order (compile precedes `applyActiveSegments` and the start call), so no guest-visible effect has happened yet. The discarded attempt's **budget** is not given back — memories have no release path (`CONFIGURATION.md` `CFG14`), so `CP-3` depends on that note's `CFG-9`; until it lands the ladder costs bytes as well as one leaked context | A regression that is correct by construction instead of a retry that crashes, with its cost stated instead of hidden |
-| `CPD4` | **Interpreter fallback stays a backend configuration** | `AGENTS.md`; [`STACK_SWITCHING.md`](STACK_SWITCHING.md) §10.15 D-3. The core asks; the backend either interprets with its own machinery or refuses | No second execution engine in `WasmBase/`, and `FallbackOnly` means exactly "the backend's own choice per function" |
+| `CPD4` | **Interpreter fallback stays a backend configuration** | `AGENTS.md`; [`STACK_SWITCHING.md`](STACK_SWITCHING.md) §9.15 D-3. The core asks; the backend either interprets with its own machinery or refuses | No second execution engine in `WasmBase/`, and `FallbackOnly` means exactly "the backend's own choice per function" |
 | `CPD5` | **A reduction is a `Warning` record, not an error and not silence** | §4.2: the failure path already reports; this adds a record *after* success. `../DIAGNOSTICS.md`'s rule is that ids are the contract and prose is free | An embedder can assert "no reduction happened" in production without turning a fallback into an outage |
 | `CPD6` | **The policy is a request; the backend may refuse it at the boundary** | The precedent is `supportsConcurrency`/`supportsProfileConfig` (`CONFIGURATION.md` §2.1 rule 3): a build that cannot honour a configuration says so where it is set | "Always interpret with a backend that cannot" fails at `create()` with a message, instead of at the first call with a null entry point |
 | `CPD7` | **No per-function policy, no tiering, no OSR** | The compile decision happens once per instantiation; anything finer needs a dispatcher layer, a hotness signal and an ABI slot for "maybe interpreted" — the `F1` remedy C work, not a config field | The policy stays a value a host can reason about, and the ABI does not grow an execution-model field |
@@ -521,43 +521,9 @@ That is a tolerable place for the axis to sit while there is one backend that ca
 optimise: the parts the engine owns are asserted, and the parts a library build
 owns are named rather than faked.
 
-## 9. References
+## 9. Appendix: the mapping, the plumbing, and the retry analysis
 
-- In-tree: [`../languages/LF2_DEEP_F1_BACKEND.md`](../languages/LF2_DEEP_F1_BACKEND.md)
-  §3.5 (the measurement), §4 (remedies A–E), §6 (what shipped), §7 (the runs);
-  [`../LAYERING.md`](../LAYERING.md) §2/§4 (no backend in the core; the contract
-  rows); [`../WRITING_A_BACKEND.md`](../WRITING_A_BACKEND.md) (where a
-  capability row belongs); [`../SAFETY.md`](../SAFETY.md) §2.4 (never abort on a
-  module-derived path); [`../DIAGNOSTICS.md`](../DIAGNOSTICS.md) (ids, severity,
-  the sink); [`../API_ABI_STABILITY.md`](../API_ABI_STABILITY.md) §4.1 (class
-  A/B); [`../TESTING.md`](../TESTING.md) (the suite and its tags).
-- Proposal notes: [`CONFIGURATION.md`](CONFIGURATION.md) (the sibling study: the
-  budget knobs, the precedence rule, `CFG-1`…`CFG-7`);
-  [`STACK_SWITCHING.md`](STACK_SWITCHING.md) §10.15 D-3 (no core interpreter);
-  [`PROFILES.md`](PROFILES.md) (the `supports*`/refusal pattern this note
-  copies); [`MEMORY_PROVIDER.md`](MEMORY_PROVIDER.md) (an opt-in policy whose
-  default is provably the old behaviour — the model `CPD2` follows).
-- Source anchors: `WasmBase/WasmCompilationPolicy.{hpp,cpp}` (the vocabulary,
-  `supports*`, `nextCompilationAttempt`, `CompileFailure`),
-  `LibJit/LibjitModuleCompiler.cpp` (`libjitOptimizationLevel`,
-  `libjitLevelFor`, `applyOptimizationLevel`, `failCompilation`,
-  `compilationCapabilities`), `LibJit/LibJitContext.{hpp,cpp}` (`abandon`),
-  `WasmBase/WasmModuleInstance.hpp` (`ModuleInstantiator`'s policy accessors),
-  `WasmBase/WasmModuleInstance.cpp` (`instantiate`'s order),
-  `WasmBase/WasmRuntime.{hpp,cpp}` (`RuntimeConfig`, `rejectUnsupportedConfig`,
-  `bookReducedCompilation`/`bookInterpreterFallback`, the retry loop,
-  `achievedOptimizationLevel`/`achievedCompilationPolicy`,
-  `backendName_`/`backend_`), `WasmBase/WasmBackendRegistry.hpp`
-  (`createBackendInstance`, `BackendInstance`), `WasmBase/WasmBackendSession.hpp`,
-  `WasmBase/WasmDiagnostics.hpp` (`kCompileFunctionFailed`,
-  `kCompileReducedOptimization`, `kCompileInterpreted`),
-  `Test/SljitBackendTests.cpp`, `Test/AsmjitModuleCompilerTests.cpp`,
-  `Test/ConfigurationTests.cpp` (`[compilation-policy]`).
-
-
-## 10. Appendix: the mapping, the plumbing, and the retry analysis
-
-### 10.1 The per-backend mapping (the part `WasmBase/` must not contain)
+### 9.1 The per-backend mapping (the part `WasmBase/` must not contain)
 
 | Policy value | LibJIT | SLJIT | AsmJit | A future backend |
 |---|---|---|---|---|
@@ -574,7 +540,7 @@ thing [`../LAYERING.md`](../LAYERING.md) §2 keeps out of `WasmBase/`. The core'
 obligation is the other half: a request answered `false` by `compilationCapabilities()` is
 refused at the boundary with a message, never attempted and then failed.
 
-### 10.2 The plumbing shape (`CP-1`, as shipped)
+### 9.2 The plumbing shape (`CP-1`, as shipped)
 
 ```cpp
 // WasmBase/WasmModuleInstance.hpp — additive only.
@@ -623,7 +589,7 @@ the hazard §7.1 item 3 records: the member and the virtual shipped without the
 `abi_version` bump that would make the core refuse such a plugin at load time.
 
 
-### 10.3 The retry analysis, state by state
+### 9.3 The retry analysis, state by state
 
 At the moment `compileFunctions` throws, `ModuleInstantiator::instantiate` has:
 
@@ -654,7 +620,7 @@ Two costs the design must state rather than hide:
   fallback case — which is the case that was already going to be slow, and is
   the honest price of not being able to ask "would this compile at level 1?".
 
-### 10.4 What would make this simpler, if it ever happens
+### 9.4 What would make this simpler, if it ever happens
 
 An upstream LibJIT fix for `F1` removes the *reason* for the ladder, but not the
 policy: an embedder still wants to choose between "compile faster" and "run
@@ -662,4 +628,38 @@ faster", and a backend still has to report that it cannot interpret. The note
 therefore does not make `CP-1` conditional on the fix, and `CP-2`/`CP-3` remain
 useful even if `Full` becomes safe — `Lax` then covers the next backend's
 limitation instead of this one's.
+
+
+## 10. References
+
+- In-tree: [`../languages/LF2_DEEP_F1_BACKEND.md`](../languages/LF2_DEEP_F1_BACKEND.md)
+  §3.5 (the measurement), §4 (remedies A–E), §6 (what shipped), §7 (the runs);
+  [`../LAYERING.md`](../LAYERING.md) §2/§4 (no backend in the core; the contract
+  rows); [`../WRITING_A_BACKEND.md`](../WRITING_A_BACKEND.md) (where a
+  capability row belongs); [`../SAFETY.md`](../SAFETY.md) §2.4 (never abort on a
+  module-derived path); [`../DIAGNOSTICS.md`](../DIAGNOSTICS.md) (ids, severity,
+  the sink); [`../API_ABI_STABILITY.md`](../API_ABI_STABILITY.md) §4.1 (class
+  A/B); [`../TESTING.md`](../TESTING.md) (the suite and its tags).
+- Proposal notes: [`CONFIGURATION.md`](CONFIGURATION.md) (the sibling study: the
+  budget knobs, the precedence rule, `CFG-1`…`CFG-7`);
+  [`STACK_SWITCHING.md`](STACK_SWITCHING.md) §9.15 D-3 (no core interpreter);
+  [`PROFILES.md`](PROFILES.md) (the `supports*`/refusal pattern this note
+  copies); [`MEMORY_PROVIDER.md`](MEMORY_PROVIDER.md) (an opt-in policy whose
+  default is provably the old behaviour — the model `CPD2` follows).
+- Source anchors: `WasmBase/WasmCompilationPolicy.{hpp,cpp}` (the vocabulary,
+  `supports*`, `nextCompilationAttempt`, `CompileFailure`),
+  `LibJit/LibjitModuleCompiler.cpp` (`libjitOptimizationLevel`,
+  `libjitLevelFor`, `applyOptimizationLevel`, `failCompilation`,
+  `compilationCapabilities`), `LibJit/LibJitContext.{hpp,cpp}` (`abandon`),
+  `WasmBase/WasmModuleInstance.hpp` (`ModuleInstantiator`'s policy accessors),
+  `WasmBase/WasmModuleInstance.cpp` (`instantiate`'s order),
+  `WasmBase/WasmRuntime.{hpp,cpp}` (`RuntimeConfig`, `rejectUnsupportedConfig`,
+  `bookReducedCompilation`/`bookInterpreterFallback`, the retry loop,
+  `achievedOptimizationLevel`/`achievedCompilationPolicy`,
+  `backendName_`/`backend_`), `WasmBase/WasmBackendRegistry.hpp`
+  (`createBackendInstance`, `BackendInstance`), `WasmBase/WasmBackendSession.hpp`,
+  `WasmBase/WasmDiagnostics.hpp` (`kCompileFunctionFailed`,
+  `kCompileReducedOptimization`, `kCompileInterpreted`),
+  `Test/SljitBackendTests.cpp`, `Test/AsmjitModuleCompilerTests.cpp`,
+  `Test/ConfigurationTests.cpp` (`[compilation-policy]`).
 

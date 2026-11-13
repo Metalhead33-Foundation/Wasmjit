@@ -177,7 +177,7 @@ tree.** The harness selector reaches `libjit`, `asmjit` and `sljit`, and both
 non-LibJIT backends are real executing generators, so the seam is exercised at
 opcode scale. All three now run the same 22,533-assertion suite and are
 production-ready within the declared envelope
-([`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §13). `G3` said work *may begin*;
+([`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §12). `G3` said work *may begin*;
 it did, and the result is a three-backend conformance result.
 
 Reading: **no finding is Class E, and none blocks beginning.** `RA1`, `RA3` and
@@ -231,7 +231,7 @@ test.
 The audit’s “begin, not finish” caveat (`RA2`: the seam had not been proven at
 opcode scale) is now closed: all three backends execute the same 22,533-assertion
 suite and are production-ready within the declared envelope
-([`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §13).
+([`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §12).
 
 ## 5. The entry-gate rows (`RG1`–`RG6`)
 

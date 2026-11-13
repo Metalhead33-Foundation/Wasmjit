@@ -61,7 +61,7 @@ honest.
 | \subpage lf2_deep_f1 | **Deep study** — `F1`: why libjit refused the module, and the backend fix | — | `T01`/`T04` unblocked |
 | \subpage lf2_deep_f2 | **Deep study** — `F2` (`LE-8`): the workarounds, and the escape-block translation that made them optional | — | `T05` 🟩 green |
 | \subpage lf2_deep_f3 | **Deep study + fix** — `F3`: the GC subtyping gap, its four sub-findings and what is still open | — | `T20`/`T53` unblocked to validation |
-| \subpage lf2_abi | **Cross-language ABI amendment** — the two call directions, synthetic modules, core versus component ABI and the scalar-to-GC/reference matrix | — | not a verdict; links to `EMBEDDING_SURFACE.md` §12 |
+| \subpage lf2_abi | **Cross-language ABI amendment** — the two call directions, synthetic modules, core versus component ABI and the scalar-to-GC/reference matrix | — | not a verdict; links to `EMBEDDING_SURFACE.md` §11 |
 
 Reading order for a decision: this page's §4 → the report for the cluster → the
 cross-language ABI amendment (`LF2_ABI_INTEROP.md`) for the value/reference
@@ -178,7 +178,7 @@ with libc++ at default flags — now loads and runs its own exceptions
 `WASM.DECODE.LEGACY_EXCEPTIONS_REWRITTEN`. The design, the reason the earlier
 analysis thought it impossible, and the measurements are in
 [`LF2_DEEP_F2_EH.md`](LF2_DEEP_F2_EH.md) and
-[`proposals/LEGACY_EXCEPTIONS.md`](../proposals/LEGACY_EXCEPTIONS.md) §10.3.
+[`proposals/LEGACY_EXCEPTIONS.md`](../proposals/LEGACY_EXCEPTIONS.md) §9.3.
 
 ## 6. What this set is not
 

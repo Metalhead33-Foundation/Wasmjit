@@ -382,7 +382,7 @@ The pointer word is a **representation**, not a C type. A generated C/Rust/Zig/
 Go header must keep `externref`, concrete `(ref $T)`, `stringref` and `i31ref`
 distinct as opaque host types; it must not turn them into `struct T*`, a field
 layout or a `sizeof(T)` contract. The cross-module `TypeId` rules and the
-header guidance are in [`EMBEDDING_SURFACE.md`](EMBEDDING_SURFACE.md) §14.
+header guidance are in [`EMBEDDING_SURFACE.md`](EMBEDDING_SURFACE.md) §13.
 
 ### Considered and not taken: a tagged reference word
 
@@ -636,7 +636,7 @@ loading stay in the external adapter. See
 The bridge makes a host `externref` participate in barriers; it does **not**
 expose arbitrary C++ objects or decide their lifetime. Opaque handles, typed
 handle tables and host-runtime finalizer boxes are embedder-side patterns;
-[`EMBEDDING_SURFACE.md`](EMBEDDING_SURFACE.md) §13 records the options, the
+[`EMBEDDING_SURFACE.md`](EMBEDDING_SURFACE.md) §12 records the options, the
 non-options, and the boundary between `GcHeap` (guest Wasm GC objects) and
 native host objects.
 
@@ -1036,7 +1036,7 @@ Universal function reference stored in tables and import storage.
 | `rawFnPtr`     | `void*`    | For a compiled function: the raw entry point behind the driver that `fnPtr` names. Null for native imports. |
 | `tailEntry`    | `void*`    | Per-function-type tail-dispatch thunk `void(VMContext*, void* fn, uint64_t* args, uint64_t* results, void* resultBuffer)` ([`proposals/TAILCALLS.md`](proposals/TAILCALLS.md) TC-5). Null means "no trampoline; fall back to `call` + `return`". |
 
-## Relevant Source Files
+## References
 
 | File | What |
 |------|------|

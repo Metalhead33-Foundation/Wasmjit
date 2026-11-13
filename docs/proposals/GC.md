@@ -39,8 +39,8 @@ artefacts; the plan in §7 says which gaps are worth closing and which are not.
 | §6 | Where do we *choose* to deviate, and why? (the reference-counting collector, §6.1/§6.4) |
 | §7 | Milestones to close the important gaps |
 | §8 | Indicative test survey |
-| §9 | References |
-| §10 | Beyond 3.0 (very last priority): Stringref + JS String Builtins |
+| §9 | Beyond 3.0 (very last priority): Stringref + JS String Builtins |
+| §10 | References |
 
 Terminology follows the spec: a **heap type** classifies a reference; a
 **reference type** is `(ref null? ht)`; a **defined type** (`deftype`) is a
@@ -262,7 +262,7 @@ These appear in Post-MVP documents, not in the standard:
   extensions to imported types;
 - `i31` as a definable/importable type;
 - the `stringref` / `stringview_*` family and the JS String Builtins
-  (separate proposals, *not* part of 3.0 — see §10; the enum entries in
+  (separate proposals, *not* part of 3.0 — see §9; the enum entries in
   `WasmType.hpp` are pre-emptive placeholders);
 - non-`eq` immutable aggregates;
 - thread-shared managed heap / atomics on aggregates.
@@ -942,7 +942,7 @@ defaults, not just the first one to be fixed.
 | `H2`, `H8` | ✅ Closed | — | — |
 | `H3` | ✅ Closed | `Store::callableAt` | The per-cast `O(#functions)` scan is gone with `G2`: identification is now a range test over registered callable ranges (one per instance). |
 | `H4` | ✅ Closed | `i31` 68/0 | The tagged-LibJIT-type / `void_ptr` round-trip that `i31.get_s/u` depend on is exercised by the spec script across every interesting pattern (0, ±1, `0x3fff_ffff`, `-0x4000_0000`, `0x7fff_ffff`, `0xaaaa_aaaa`, `0xcaaa_aaaa`) and all pass. |
-| `H5` | ✅ Closed (own proposal) | `STRINGREF.md` STR-5/STR-6/STR-7/STR-8 tests | `stringref`/`stringview_*`: out of the 3.0 MVP, its own proposal (§7.2, §10). Types, section 14, `string.const`, the core instructions, the full view facility, the GC-array variants, the embedder bridge and reference-counted lifetime are implemented; `wasm:js-string` remains a separate host-import surface. |
+| `H5` | ✅ Closed (own proposal) | `STRINGREF.md` STR-5/STR-6/STR-7/STR-8 tests | `stringref`/`stringview_*`: out of the 3.0 MVP, its own proposal (§7.2, §9). Types, section 14, `string.const`, the core instructions, the full view facility, the GC-array variants, the embedder bridge and reference-counted lifetime are implemented; `wasm:js-string` remains a separate host-import surface. |
 | **`H6`** | ✅ **Closed** | `dispatchRefEq` | The validator rejects non-`eq` operands; runtime equality remains pointer equality, exact for the `eq` hierarchy (D5). |
 | `H7` | ✅ Closed (by design) | `WasmValue.hpp` | `Value::kind` is a *runtime-side* tag for constant-expression values (globals, segments, imports, and the harness's `referenceArgument`); generated code never sees a `Value` — the JIT derives its type from the instruction's field/opcode type. The two agree because every place a `Value` is produced sets `kind` and every consumer is runtime code. |
 | `R1` | ✅ Closed | `table imports are matched against the exported table's type`; `table`/`table_init`/`elem`/`call_indirect` unchanged | The exporter publishes its `TableType` + canonical element `TypeId`; `resolveTable` matches element type by subtyping and limits/index-type/shared-ness by the spec's limit rule (`tableSatisfiesImport`). The manual test asserts that a `funcref` table cannot satisfy an `externref` import and that a `2..8` table cannot satisfy a `5..8` import, while the compatible `shared_table_b` import still links. Embedder-registered tables without a published type stay unchecked. |
@@ -977,7 +977,7 @@ rather than guessed at inside GC.
 |---|---|---|---|
 | `G3` (extern/any conversion fidelity), `R4` (host `externref` model), `GC-8` (extern interop) | **`ABI.md`** | ✅ **Closed (GC-8/RT-1):** the engine keeps host references opaque, boxes internal references at `extern.convert_any`, and unwraps them at `any.convert_extern`. No embedder representation decision is needed for this conforming subset. | `ref_test` 71/0, `extern` 18/0; the opaque-pointer representation remains documented in `ABI.md`. |
 | `RC-4` (atomic counts; `RC2`/`RC11`) | **`THREADS.md`** | The count already uses `std::atomic_ref` and is therefore *safe*, but acquire/release ordering and a two-thread stress test are only meaningful once shared memory and agents exist. | The relaxed-ordering choice is documented in `WasmGcHeader.hpp`; the upgrade is a one-line ordering change plus a stress test, for whoever owns threads. |
-| `H5`, §10 (`stringref`, `stringview_*`) | **its own proposal** (§10 in this document) | Out of the Wasm 3.0 GC MVP by §3.4; the reserved encodings collide with `ref`/`ref null`. | Keep the work in `STRINGREF.md`: the core, the full view facility, the GC-array variants, the embedder bridge and reference-counted lifetime are implemented (STR-1…STR-4, STR-6…STR-8); only the blocked encoding alignment (`STR1`) remains. |
+| `H5`, §9 (`stringref`, `stringview_*`) | **its own proposal** (§9 in this document) | Out of the Wasm 3.0 GC MVP by §3.4; the reserved encodings collide with `ref`/`ref null`. | Keep the work in `STRINGREF.md`: the core, the full view facility, the GC-array variants, the embedder bridge and reference-counted lifetime are implemented (STR-1…STR-4, STR-6…STR-8); only the blocked encoding alignment (`STR1`) remains. |
 
 **Remaining in GC's own domain:** none of the conformance rows. The optional or
 deferred rows — `GC-7` (inline-cache optimisation, measure first), `RC-4`
@@ -1092,80 +1092,7 @@ restored. A leak is therefore visible through `liveObjectCount()`, not only
 through process RSS; the known remaining leak is the uncounted-borrow case in
 RC-1b.
 
-## 9. References
-
-Specification (WebAssembly 3.0, living draft):
-
-- Appendix — Change History (Release 3.0 feature list):
-  https://webassembly.github.io/spec/core/appendix/changes.html
-- Types:
-  https://webassembly.github.io/spec/core/syntax/types.html
-- Instructions (reference, aggregate, `*_cast`):
-  https://webassembly.github.io/spec/core/syntax/instructions.html
-- Validation — Matching / Conventions / Modules:
-  https://webassembly.github.io/spec/core/valid/matching.html
-  https://webassembly.github.io/spec/core/valid/conventions.html
-  https://webassembly.github.io/spec/core/valid/modules.html
-- Appendices — Implementation Limitations / Type Soundness:
-  https://webassembly.github.io/spec/core/appendix/index.html
-
-GC proposal design documents:
-
-- `proposals/gc/Overview.md` — requirements, representation independence,
-  pay-as-you-go, efficiency considerations:
-  https://github.com/WebAssembly/gc/blob/main/proposals/gc/Overview.md
-- `proposals/gc/MVP.md` — the design 3.0 actually standardised (heap-type
-  hierarchies, instructions, formal rules for type equivalence/subtyping):
-  https://github.com/WebAssembly/gc/blob/main/proposals/gc/MVP.md
-- `proposals/gc/Post-MVP.md` — finalizers, weak refs, type parameters, unions,
-  strings (all deliberately out of scope here).
-
-Reference counting / cycle collection (background for §6.1/§6.4):
-
-- Bacon & Rajan, *Concurrent Cycle Collection in Reference Counted Systems*
-  (ECOOP 2001) — the trial-deletion algorithm behind `RC-2`; the synchronous
-  single-threaded variant is what `RC-2` needs.
-- Deutsch & Bobrow, *An Efficient, Incremental, Automatic Garbage Collector*
-  (CACM 1976) — the original deferred reference counting; Blackburn & McKinley,
-  *Ulterior Reference Counting* (OOPSLA 2003) — the modern hybrid that defers
-  stack references and traces the heap, the model for `RC-5`.
-- Boehm & Weiser, *Garbage Collection in an Uncooperative Environment*
-  (SPE 1988) — conservative stack scanning, relevant only to `RC-6`'s
-  last-resort trace.
-
-Related proposals covered in §10 (neither is part of 3.0):
-
-- Stringref (reference-typed strings):
-  https://github.com/WebAssembly/stringref/blob/main/proposals/stringref/Overview.md
-- JS String Builtins (JS-API `wasm:` builtin namespace):
-  https://github.com/WebAssembly/js-string-builtins/blob/main/proposals/js-string-builtins/Overview.md
-
-In-repo:
-
-- [`docs/TYPE_IDENTITY.md`](../TYPE_IDENTITY.md) — type identity, interning,
-  `match`, and the `M1`–`M8` plan.
-- [`docs/ABI.md`](../ABI.md) — VMContext passing, Store ownership, and the
-  "spiritual successor to QVM" design philosophy.
-- [`docs/TESTING.md`](../TESTING.md) — running/filtering the two test families.
-- [`docs/THREADS.md`](THREADS.md) — companion note on the threads/atomics
-  proposal (shared memory, atomics, wait/notify).
-- [`docs/SIMD.md`](SIMD.md) — companion note on fixed-width SIMD (2.0) and
-  Relaxed SIMD (3.0).
-- Phase 5 companion notes: [`BULK_MEMORY.md`](BULK_MEMORY.md),
-  [`MULTI_VALUE.md`](MULTI_VALUE.md), [`EXTENDED_CONST.md`](EXTENDED_CONST.md),
-  [`MUTABLE_GLOBALS.md`](MUTABLE_GLOBALS.md),
-  [`MULTI_MEMORY.md`](MULTI_MEMORY.md), [`MEMORY64.md`](MEMORY64.md),
-  [`TAILCALLS.md`](TAILCALLS.md), [`EXCEPTIONS.md`](EXCEPTIONS.md),
-  [`FUNCTION_REFERENCES.md`](FUNCTION_REFERENCES.md),
-  [`SMALL_PROPOSALS.md`](SMALL_PROPOSALS.md).
-- Source anchors: `WasmBase/WasmType.hpp`, `WasmBase/WasmTypeRegistry.{hpp,cpp}`,
-  `WasmBase/WasmCanonicalType.hpp`, `WasmBase/WasmModuleInstance.{hpp,cpp}`,
-  `WasmBase/WasmOpcode.hpp`, `WasmBase/WasmOpcodeDispatcher.cpp`,
-  `LibJit/LibJitTypeTranslation.{hpp,cpp}`, `LibJit/LibjitOpcodeDispatcher.{hpp,cpp}`,
-  `WasmStub/StubOpcodeDispatcher.cpp`, `Test/WastScript.cpp`,
-  `Test/wast_supported.txt`.
-
-## 10. Beyond 3.0 (very last priority): Stringref and JS String Builtins
+## 9. Beyond 3.0 (very last priority): Stringref and JS String Builtins
 
 Neither of these is part of WebAssembly 3.0, and neither is on the critical
 path for this project. They are recorded here so that the reserved names in
@@ -1174,7 +1101,7 @@ decision has the facts in one place. **Treat this section as the last item on
 any roadmap.** The proposal-side summary is [`STRINGREF.md`](STRINGREF.md);
 this section remains the encoding-level analysis.
 
-### 10.1 Status
+### 9.1 Status
 
 - **Stringref** ("Reference-Typed Strings", `WebAssembly/stringref`) is a
   *separate core proposal* layered on reference types / GC. It adds
@@ -1187,7 +1114,7 @@ this section remains the encoding-level analysis.
   explicitly hopes to type its parameters with the core `stringref` type
   eventually), but either can be used alone.
 
-### 10.2 What the Stringref proposal defines
+### 9.2 What the Stringref proposal defines
 
 New reference types, defined as **opaque** values (like `externref` /
 `funcref`), plus a `string` heap type:
@@ -1233,7 +1160,7 @@ Semantics worth noting:
   may differ from what the guest wants, and the conversion strategy is left to
   the implementation.
 
-### 10.3 What is (and is not) in the tree
+### 9.3 What is (and is not) in the tree
 
 **The core is now in the tree** (see [`STRINGREF.md`](STRINGREF.md)
 STR-1/STR-2/STR-3):
@@ -1261,7 +1188,7 @@ this. Note also that `-0x19 (0x67)` is `AbstractHeapType::None` in this
 codebase; the reserved code is only used in **value-type** positions, where it
 cannot be confused with a heap type.
 
-### 10.4 What the JS String Builtins proposal defines
+### 9.4 What the JS String Builtins proposal defines
 
 A JS host exposes builtin functions under the reserved `wasm:` namespace,
 enabled by a compile-time flag in the JS-API. The MVP set:
@@ -1306,7 +1233,7 @@ Notes:
   expected to **recognise and inline** the builtin call sites — the opposite
   of a generic import.
 
-### 10.5 How it would map onto this engine (QVM spirit)
+### 9.5 How it would map onto this engine (QVM spirit)
 
 - **No GC dependency is required.** Both proposals treat strings and views as
   opaque reference values. Here that is exactly the existing `void*`
@@ -1331,7 +1258,7 @@ Notes:
   arm in `evalConstantExpr`. Views need explicit `advance` state, i.e. a small
   mutable object — again a region/hunk allocation.
 
-### 10.6 If we ever pick this up (ordered, optional)
+### 9.6 If we ever pick this up (ordered, optional)
 
 | Milestone | Work | Done when |
 |---|---|---|
@@ -1350,3 +1277,76 @@ and SR-5 remains a separate host-import surface. Do not add a `string` arm to
 [`GC_EXTENSIONS.md`](GC_EXTENSIONS.md) covers the adjacent post-3.0 GC
 proposals (multibyte array access, more array constructors and frozen values);
 this section remains the stringref/JS-string-specific analysis.
+
+## 10. References
+
+Specification (WebAssembly 3.0, living draft):
+
+- Appendix — Change History (Release 3.0 feature list):
+  https://webassembly.github.io/spec/core/appendix/changes.html
+- Types:
+  https://webassembly.github.io/spec/core/syntax/types.html
+- Instructions (reference, aggregate, `*_cast`):
+  https://webassembly.github.io/spec/core/syntax/instructions.html
+- Validation — Matching / Conventions / Modules:
+  https://webassembly.github.io/spec/core/valid/matching.html
+  https://webassembly.github.io/spec/core/valid/conventions.html
+  https://webassembly.github.io/spec/core/valid/modules.html
+- Appendices — Implementation Limitations / Type Soundness:
+  https://webassembly.github.io/spec/core/appendix/index.html
+
+GC proposal design documents:
+
+- `proposals/gc/Overview.md` — requirements, representation independence,
+  pay-as-you-go, efficiency considerations:
+  https://github.com/WebAssembly/gc/blob/main/proposals/gc/Overview.md
+- `proposals/gc/MVP.md` — the design 3.0 actually standardised (heap-type
+  hierarchies, instructions, formal rules for type equivalence/subtyping):
+  https://github.com/WebAssembly/gc/blob/main/proposals/gc/MVP.md
+- `proposals/gc/Post-MVP.md` — finalizers, weak refs, type parameters, unions,
+  strings (all deliberately out of scope here).
+
+Reference counting / cycle collection (background for §6.1/§6.4):
+
+- Bacon & Rajan, *Concurrent Cycle Collection in Reference Counted Systems*
+  (ECOOP 2001) — the trial-deletion algorithm behind `RC-2`; the synchronous
+  single-threaded variant is what `RC-2` needs.
+- Deutsch & Bobrow, *An Efficient, Incremental, Automatic Garbage Collector*
+  (CACM 1976) — the original deferred reference counting; Blackburn & McKinley,
+  *Ulterior Reference Counting* (OOPSLA 2003) — the modern hybrid that defers
+  stack references and traces the heap, the model for `RC-5`.
+- Boehm & Weiser, *Garbage Collection in an Uncooperative Environment*
+  (SPE 1988) — conservative stack scanning, relevant only to `RC-6`'s
+  last-resort trace.
+
+Related proposals covered in §9 (neither is part of 3.0):
+
+- Stringref (reference-typed strings):
+  https://github.com/WebAssembly/stringref/blob/main/proposals/stringref/Overview.md
+- JS String Builtins (JS-API `wasm:` builtin namespace):
+  https://github.com/WebAssembly/js-string-builtins/blob/main/proposals/js-string-builtins/Overview.md
+
+In-repo:
+
+- [`docs/TYPE_IDENTITY.md`](../TYPE_IDENTITY.md) — type identity, interning,
+  `match`, and the `M1`–`M8` plan.
+- [`docs/ABI.md`](../ABI.md) — VMContext passing, Store ownership, and the
+  "spiritual successor to QVM" design philosophy.
+- [`docs/TESTING.md`](../TESTING.md) — running/filtering the two test families.
+- [`docs/THREADS.md`](THREADS.md) — companion note on the threads/atomics
+  proposal (shared memory, atomics, wait/notify).
+- [`docs/SIMD.md`](SIMD.md) — companion note on fixed-width SIMD (2.0) and
+  Relaxed SIMD (3.0).
+- Phase 5 companion notes: [`BULK_MEMORY.md`](BULK_MEMORY.md),
+  [`MULTI_VALUE.md`](MULTI_VALUE.md), [`EXTENDED_CONST.md`](EXTENDED_CONST.md),
+  [`MUTABLE_GLOBALS.md`](MUTABLE_GLOBALS.md),
+  [`MULTI_MEMORY.md`](MULTI_MEMORY.md), [`MEMORY64.md`](MEMORY64.md),
+  [`TAILCALLS.md`](TAILCALLS.md), [`EXCEPTIONS.md`](EXCEPTIONS.md),
+  [`FUNCTION_REFERENCES.md`](FUNCTION_REFERENCES.md),
+  [`SMALL_PROPOSALS.md`](SMALL_PROPOSALS.md).
+- Source anchors: `WasmBase/WasmType.hpp`, `WasmBase/WasmTypeRegistry.{hpp,cpp}`,
+  `WasmBase/WasmCanonicalType.hpp`, `WasmBase/WasmModuleInstance.{hpp,cpp}`,
+  `WasmBase/WasmOpcode.hpp`, `WasmBase/WasmOpcodeDispatcher.cpp`,
+  `LibJit/LibJitTypeTranslation.{hpp,cpp}`, `LibJit/LibjitOpcodeDispatcher.{hpp,cpp}`,
+  `WasmStub/StubOpcodeDispatcher.cpp`, `Test/WastScript.cpp`,
+  `Test/wast_supported.txt`.

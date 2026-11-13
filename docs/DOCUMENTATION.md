@@ -2,11 +2,12 @@
 
 *Doxygen Style in the Headers, and the Note Tree*
 
-Status: policy note (revision 4 — 2026-11-10). Every header outside `extern/` is
+Status: policy note (revision 5 — 2026-11-13). Every header outside `extern/` is
 covered by the Doxygen rules and the `[headerdoc]` check; the Markdown note tree
 is part of the generated site with four index pages (`docs/`, `proposals/`,
 `languages/`, `backends/`), stable page ids, and §9 carries the current
-header/note counts. Revision history lives in git.
+header/note counts plus the rule that **References is always the last section**
+(enforced by `[docs][references]`). Revision history lives in git.
 Audience: anyone adding or editing a header or a note, or reviewing a change
 that touches one.
 
@@ -297,7 +298,7 @@ a flat tree is. The hierarchy is therefore built by four index pages:
 | Index page | Id | Children |
 |---|---|---|
 | [`index.md`](index.md) | `docs_index` | the 19 notes in `docs/`, plus the three child folders and the ABI-baseline page |
-| [`proposals/index.md`](proposals/index.md) | `proposals_index` | the 39 proposal notes |
+| [`proposals/index.md`](proposals/index.md) | `proposals_index` | the 40 proposal notes |
 | [`languages/index.md`](languages/index.md) | `languages_index` | the 17 language notes (the `LF-1` set and the `LF-2` reports) |
 | [`backends/index.md`](backends/index.md) | `backends_index` | the one frozen backend history note, plus the two backend pages |
 
@@ -321,7 +322,7 @@ WasmJit            (README.md, the main page)
     ├── languages                        (docs/languages/index.md)
     │   └── Triage, Clustering, Charters, Evidence, LF-2 …   (17 study notes)
     └── proposals                        (docs/proposals/index.md)
-        └── GC, SIMD, THREADS, …         (39 notes)
+        └── GC, SIMD, THREADS, …         (40 notes)
 ```
 
 **Adding a note** takes three steps: create the file; append `{#doc_what_it_is}`
@@ -340,6 +341,15 @@ defect.
 revision and the current state; earlier revision notes are git history, not a
 growing preface. Do not append a `Revision N — …` chain to the next edit: replace
 the previous summary with the new one.
+
+**References is always the last section.** In every note, in every folder, in
+every document under `docs/`: a reference list that is not last is a navigation
+defect, because a reader who reaches the final heading and still has no links has
+to scroll back to find them. An appendix, a commissioned-questions section or a
+post-mortem goes **before** it — never after. This is a rule, not a preference,
+and it outranks the canonical nine-slot shape of
+[`PROPOSALS.md`](PROPOSALS.md) §2.2: a note with an appendix ends
+`… §9 Appendix, §10 References`, and its §1 map says so.
 
 **A new folder** takes one more: a folder without an index page is not part of
 the tree, so it gets `<folder>/index.md` with its own id, a `\subpage` row in
@@ -366,7 +376,9 @@ style links keep working because the file links resolve to the page).
   would still build, as a sibling of the whole sub-tree;
 - an index names an id that no note declares (a typo Doxygen would drop without
   complaint). The two backend pages and `Test/abi/ABI_BASELINES.md` are declared
-  pages too, so their `\subpage` rows resolve like any note.
+  pages too, so their `\subpage` rows resolve like any note;
+- a document under `docs/` puts any `##` section after its `## References`
+  (`[docs][references]`), which is the rule above.
 
 `[headerdoc]` keeps the Doxyfile's settings honest (`QT_AUTOBRIEF`,
 `WARN_NO_PARAMDOC`, the output directory); the note tree adds no setting of its

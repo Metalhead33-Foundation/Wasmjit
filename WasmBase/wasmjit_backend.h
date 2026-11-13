@@ -139,6 +139,53 @@ typedef struct wasmjit_status {
 	const char* message; /*!< borrowed; valid until the next plugin call, may be NULL */
 } wasmjit_status;
 
+/*!  ── The POD signature and layout views (BP-1, docs/BACKEND_PLUGIN_ABI.md §4.4)
+ * ────────────────────────────────────────────────────────────────────────────
+ * The calling-convention ABI is four numbers wide: a value kind, a size, an
+ * alignment and an offset (docs/ABI.md "The result tuple layout"). The C++
+ * mirror of everything below is `WASM::SignatureView`, `WASM::AggregateLayout`
+ * and `WASM::FieldLayout` in WasmBackendAbi.hpp, which converts to and from
+ * these structs in both directions; the layout of each struct is pinned by
+ * `static_assert` in that header.
+ *
+ * Nothing here is owned: every pointer is borrowed for the duration of the call
+ * that received it, exactly like the rest of this header. */
+
+/*! The ABI class of one value. The numbering is frozen and matches
+ *  `WASM::ValueKind`; a new kind is an ABI bump, not an insertion. */
+typedef enum wasmjit_value_kind {
+	WASMJIT_KIND_VOID = 0, /*!< No value / zero-byte result. */
+	WASMJIT_KIND_I32  = 1, /*!< 32-bit integer. */
+	WASMJIT_KIND_I64  = 2, /*!< 64-bit integer. */
+	WASMJIT_KIND_F32  = 3, /*!< 32-bit float. */
+	WASMJIT_KIND_F64  = 4, /*!< 64-bit float. */
+	WASMJIT_KIND_V128 = 5, /*!< 128-bit vector. */
+	WASMJIT_KIND_REF  = 6  /*!< any reference type: one pointer-sized word. */
+} wasmjit_value_kind;
+
+/*! Non-owning parameter/result kind view of a function signature. */
+typedef struct wasmjit_signature {
+	const uint8_t* params;       /*!< wasmjit_value_kind entries, or NULL */
+	uint32_t       param_count;  /*!< number of entries in `params` */
+	const uint8_t* results;      /*!< wasmjit_value_kind entries, or NULL */
+	uint32_t       result_count; /*!< number of entries in `results` */
+} wasmjit_signature;
+
+/*! Offset, size and alignment of one field in a lowered aggregate. */
+typedef struct wasmjit_field_layout {
+	uint32_t offset;    /*!< byte offset inside the aggregate */
+	uint32_t size;      /*!< byte size of the field */
+	uint32_t alignment; /*!< required alignment, in bytes */
+} wasmjit_field_layout;
+
+/*! Caller-storage-backed layout description of a lowered aggregate. */
+typedef struct wasmjit_layout {
+	uint32_t              size;        /*!< total byte size, rounded up */
+	uint32_t              alignment;   /*!< required alignment, in bytes */
+	wasmjit_field_layout* fields;      /*!< caller-owned, one entry per field */
+	uint32_t              field_count; /*!< number of entries in `fields` */
+} wasmjit_layout;
+
 /*! Capability flags and signature limits advertised by a backend plugin. */
 typedef struct wasmjit_capabilities {
 	uint32_t           flags;        /*!< WASMJIT_CAP_* */

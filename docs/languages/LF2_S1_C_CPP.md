@@ -279,4 +279,18 @@ keeps its own `extern "C"` signature; the backend driver bridges the two. A
 native import must use the same `VMContext*`-first shape. The full direction
 matrix, synthetic-module rules and per-language comparison are in
 [`LF2_ABI_INTEROP.md`](LF2_ABI_INTEROP.md), with the host-binding contract in
-[`EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) §12.
+[`EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) §11.
+
+## 10. References
+
+- [`LF2_INDEX.md`](LF2_INDEX.md) — the report set and the verdicts.
+- [`LF2_ABI_INTEROP.md`](LF2_ABI_INTEROP.md) — the direction matrix this section
+  summarises.
+- [`LF2_EVIDENCE.md`](LF2_EVIDENCE.md) — the toolchain versions and transcripts.
+- [`../EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) §11 — the host-binding
+  contract behind the amendment.
+- [`TRIAGE.md`](TRIAGE.md) — why the cluster is one arm.
+- [`../proposals/MEMORY_PROVIDER.md`](../proposals/MEMORY_PROVIDER.md) — the
+  allocator contract a C guest assumes.
+- Source anchors: `Test/consumer/Consumer.cpp`, `WasmBase/WasmRuntime.hpp`.
+

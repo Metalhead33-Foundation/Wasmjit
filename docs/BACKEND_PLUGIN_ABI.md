@@ -2,10 +2,11 @@
 
 *Dynamically Loaded Code Generators Behind a Minimal C ABI*
 
-Status: feasibility study + implemented narrow boundary (revision 2 —
-2026-10-29). `BP-1`…`BP-4` landed: the POD views, the name-based registry, the
-`dlopen` loader and its refusal tests. The **full C compilation seam is still
-deliberately not taken** (Design 1, §4.3).
+Status: implementation reference (revision 3 — 2026-11-13). `BP-1`…`BP-5` are
+shipped: the POD views, the name-based registry, the `dlopen` loader, its refusal
+tests, and the plugin packaging. §4 now quotes the interface as it is, including
+the C signature/layout views that closed the last gap this note tracked. The
+**full C compilation seam is still deliberately not taken** (Design 1, §4.3).
 Audience: anyone who will implement another code generator, freeze the public ABI
 ([`EMBEDDING_SURFACE.md`](EMBEDDING_SURFACE.md)), or package the library.
 
@@ -15,14 +16,15 @@ Direct3D, software) — a small C ABI exposes functions that return a pointer to
 backend implementation plus metadata (name, version, limits), with optional
 settings exchange, so the frontend never knows which renderer it got.
 
-Verdict up front:
+Verdict, re-read against the shipped tree:
 
 | Question | Answer |
 |---|---|
-| Is loading a backend from a `.so` feasible? | **Yes, high.** The backend is already a shared library; the process already resolves `libjit.so.0` at load time. |
-| Is a **stable C ABI** feasible? | **Medium.** Only for *discovery, lifecycle, metadata and a POD signature/layout view*. The compilation seam itself consumes C++ types (`ModuleInstance&`, `ModuleInstanceInternals&`), so a fully C seam is a much larger, separately-versioned commitment (§4.3). |
+| Is loading a backend from a `.so` feasible? | **Yes — and it ships.** `WASM::loadBackendPlugin(name)` and `loadBackendPluginFile(path)` exist, and `[plugin]` loads a real plugin built in its own directory. |
+| Is a **stable C ABI** feasible? | **Medium, and taken only where it pays.** Discovery, lifecycle, metadata and the POD signature/layout view are C. The compilation seam itself consumes C++ types (`ModuleInstance&`, `ModuleInstanceInternals&`), so a fully C seam is a much larger, separately-versioned commitment (§4.3). |
 | Does it demote any class-E blocker? | **No.** It is orthogonal to [`proposals/THREADS.md`](proposals/THREADS.md); it does not change what a backend has to *do*. |
-| Is it still worth doing? | **Yes — in two stages.** Freeze the descriptor shape now (even while loading at link time); add `dlopen` behind an opt-in later. That converts a future decision into a build change. |
+| Is it still worth doing? | **Done, in two stages.** The descriptor and the loader are frozen surfaces (`BP-2`…`BP-5`); a later, purely additive change would be the full C seam of Design 2, which nothing currently needs. |
+
 
 One observation reframes the whole problem: **the engine already has a C ABI — it
 runs backwards.** Generated code calls `wasm_trap_slot()`, `wasm_trap_report()`,
@@ -37,7 +39,7 @@ same reason: the dangerous boundary (code ↔ runtime) is already C.
 |---|---|
 | §2 | How far does the Unreal-renderer analogy go before it breaks? |
 | §3 | What does the tree already provide? |
-| §4 | What would the interface look like? |
+| §4 | What **is** the interface, field by field? |
 | §5 | What can cross the boundary, and what must not? |
 | §6 | What are the boundary rules a plugin must obey? |
 | §7 | What are the hard problems that make this "medium" and not "easy"? |
@@ -96,75 +98,120 @@ Two rows matter most: the **selector** already exists (so the concept is accepte
 and **everything is exported** (so symbol hygiene is not cosmetic — it is what
 makes a declared boundary possible at all).
 
-## 4. What the interface would look like
+## 4. The interface, as shipped
+
+`WasmBase/wasmjit_backend.h` **is** the interface, and has been since `BP-1`.
+Everything below is quoted from that header or from a plugin that compiles
+against it (`LibJit/LibJitPlugin.cpp`, `Test/ExampleBackend/`); nothing here is a
+proposal.
 
 ### 4.1 The single required export
 
 ```c
-/* wasmjit_backend.h — the only header a plugin author includes */
-#define WASMJIT_BACKEND_ABI_VERSION 1u
+/* wasmjit_backend.h — the only header a plugin author includes. */
+#define WASMJIT_BACKEND_ABI_VERSION 3u
 
 /* The one symbol a loader looks up with dlsym(). */
-WASMJIT_EXPORT const wasmjit_backend_desc*
-wasmjit_backend_query(uint32_t host_abi_version);
+typedef const wasmjit_backend_desc* (*wasmjit_backend_query_fn)(uint32_t host_abi_version);
+
+/* Marks a backend's required export as visible in the shared library. */
+#if defined(_WIN32)
+#  define WASMJIT_BACKEND_EXPORT __declspec(dllexport)
+#else
+#  define WASMJIT_BACKEND_EXPORT __attribute__((visibility("default")))
+#endif
 
 /* Optional: a human-readable reason the last query failed. */
-WASMJIT_EXPORT const char* wasmjit_backend_last_error(void);
+WASMJIT_BACKEND_EXPORT const char* wasmjit_backend_last_error(void);
 ```
 
-A plugin that does not export `wasmjit_backend_query` is not a backend. A plugin
-that exports it but answers with a different `abi_version` is refused **before any
-of its function pointers are called** — the version check must not depend on
-calling into the plugin.
+The header declares the *type* of the entry point but not the symbol: exporting
+it belongs to the plugin's image. The executing LibJIT backend's implementation
+is the whole handshake:
+
+```cpp
+extern "C" WASMJIT_BACKEND_EXPORT const wasmjit_backend_desc*
+wasmjit_backend_query(uint32_t host_abi_version)
+{
+	g_lastError = nullptr;
+	if (host_abi_version != WASMJIT_BACKEND_ABI_VERSION) {
+		g_lastError = "the host speaks an unsupported backend ABI version";
+		return nullptr;
+	}
+	return &g_descriptor;
+}
+```
+
+A plugin that does not export `wasmjit_backend_query` is not a backend. The
+version is **3**, and each increment records a change the loader has to police:
+2 added `build_flags`, and 3 added the `ModuleInstantiator::releaseInstance`
+virtual slot — the unloader of [`WRITING_A_BACKEND.md`](WRITING_A_BACKEND.md)
+§9 — which changes the vtable a plugin was built against, so a plugin built
+against 2 is refused at load time instead of calling through a stale slot.
+`WASM::loadBackendPluginFile` performs that check before it touches any other
+pointer in the descriptor, and `[plugin]` (`Test/PluginTests.cpp`) covers every
+refusal.
 
 ### 4.2 The descriptor
 
 ```c
-typedef struct wasmjit_status {
-    int32_t     code;      /* 0 = ok; negative = a trap-like failure */
-    const char* message;   /* borrowed, valid until the next plugin call */
-} wasmjit_status;
+/* Versioned host callback table lent to a backend plugin. */
+typedef struct wasmjit_host {
+	uint32_t abi_version;      /* == WASMJIT_BACKEND_ABI_VERSION */
+	uint32_t core_abi_version; /* the host core's ABI version */
+	void*    user_data;        /* opaque host state passed to `emit` */
+	void   (*emit)(void* user_data, int32_t severity, const char* message);
+} wasmjit_host;
 
-typedef struct wasmjit_capabilities {
-    uint32_t flags;            /* SIMD, COMPONENTS, CONTINUATIONS, PROFILES, ... */
-    uint32_t max_params;       /* the backend's own signature limit */
-    uint32_t max_results;
-    uint32_t reserved;
-    const char* const* target_names;   /* "x86_64-linux-gnu", ... */
-} wasmjit_capabilities;
-
+/* Versioned backend descriptor returned by wasmjit_backend_query. */
 typedef struct wasmjit_backend_desc {
-    uint32_t              abi_version;       /* == WASMJIT_BACKEND_ABI_VERSION */
-    uint32_t              core_abi_version;  /* the core ABI it was built against */
-    const char*           name;              /* "libjit", "asmjit", "sljit" */
-    const char*           version;           /* the backend's own version */
-    wasmjit_capabilities  capabilities;
+	uint32_t             abi_version;      /* == WASMJIT_BACKEND_ABI_VERSION */
+	uint32_t             core_abi_version; /* the core ABI it was built against */
+	uint32_t             build_flags;      /* WASMJIT_CURRENT_BUILD_FLAGS (§7.7) */
+	uint32_t             reserved;         /* must be 0 */
+	const char*          name;             /* the backend's own name */
+	const char*          version;          /* the backend's own version */
+	wasmjit_capabilities capabilities;     /* what the backend can compile */
 
-    /* lifecycle: one backend object per process or per runtime */
-    wasmjit_status (*create)(const wasmjit_host* host, void** out_backend);
-    void           (*destroy)(void* backend);
-
-    /* one session per compilation context (per thread) */
-    wasmjit_status (*create_session)(void* backend, void** out_session);
-    void           (*destroy_session)(void* session);
-
-    /* POD queries the frontend needs for marshalling */
-    wasmjit_status (*aggregate_layout)(void* session,
-            const uint8_t* field_kinds, uint32_t field_count,
-            wasmjit_layout* out);
-    wasmjit_status (*invoke)(void* session,
-            const wasmjit_callable* callable,
-            const wasmjit_signature* signature,
-            void* const* arguments,
-            void* result, uint32_t result_capacity,
-            wasmjit_trap* out_trap);
+	/* Lifecycle. `create` returns one opaque instantiator per call. */
+	wasmjit_status (*create)(const wasmjit_host* host, void** out_instantiator);
+	void           (*destroy)(void* instantiator);
 } wasmjit_backend_desc;
 ```
 
-`wasmjit_host` is the **callback table the core hands to the plugin** — allocator,
-diagnostics emitter, trap reporter, and the helper-function addresses the plugin is
-allowed to call. It is versioned with the same `abi_version` and is the only way a
-plugin reaches the core.
+A real descriptor is a static initialiser, so the field order in the header is
+the field order in every backend:
+
+```cpp
+wasmjit_backend_desc g_descriptor = {
+	WASMJIT_BACKEND_ABI_VERSION,
+	WASMJIT_ABI_VERSION,
+	WASMJIT_CURRENT_BUILD_FLAGS,
+	0, // reserved
+	"libjit",
+	WASMJIT_VERSION_STRING,
+	wasmjit_capabilities{
+		WASMJIT_CAP_SIMD | WASMJIT_CAP_PROFILES | WASMJIT_CAP_EXECUTES,
+		0, 0, 0, nullptr},
+	&createInstantiator,
+	&destroyInstantiator,
+};
+```
+
+`create` returns the `ModuleInstantiator` as an opaque `void*` and `destroy`
+takes it back. `wasmjit_host` is the one callback the core lends — a
+diagnostics emitter whose severity is `0..3`; the severity mapping lives in
+`WasmBackendRegistry.cpp` (`hostEmit`), and reporting never throws.
+
+**What the descriptor deliberately does not carry.** Each omission is a
+consequence of Design 1 (§4.3), not a gap:
+
+| Absent | Instead |
+|---|---|
+| `create_session` / `destroy_session` | The session is `WASM::BackendSession` ([`WasmBackendSession.hpp`](../WasmBase/WasmBackendSession.hpp)), returned through the C++ seam; it names no backend and needs no second C lifecycle. |
+| `aggregate_layout` | The rule is the core's: `WASM::computeAggregateLayout` in `WasmBackendAbi.hpp`, and §4.4's C view of its result. |
+| `invoke` | Invocation is `BackendSession::invoke`, which owns every calling-convention detail. |
+| an allocator or trap reporter in `wasmjit_host` | The plugin allocates with its own toolkit; the trap path is reached through the exported `wasm_trap_*` helper symbols (§7.5). |
 
 ### 4.3 The seam question, stated honestly
 
@@ -184,14 +231,49 @@ have to freeze anyway (`EMBEDDING_SURFACE.md` §7). Design 2 buys binary
 portability across compilers, which no C++ engine can promise for its own public
 headers either.
 
-### 4.4 The one POD the core is missing, and should gain regardless
+### 4.4 The POD signature and layout views
 
-`wasmjit_signature` (param/result kind arrays) and `wasmjit_layout` (size,
-alignment, field offsets) are needed by *any* backend-neutral invoker. The harness
-already has both concepts — `TestBackend::AggregateLayout` and its `AbiV128`
-workaround. Promoting them into the core produces the same artifact `ABI.md`
-needs for `AAS2`: a POD signature view an embedder, a harness and a plugin can all
-read. That makes `BP-1` useful even if `dlopen` never ships.
+A backend-neutral invoker needs four numbers per value — a kind, a size, an
+alignment and an offset — and until recently the core published them only in C++
+(`WASM::SignatureView`, `WASM::AggregateLayout`, `WASM::FieldLayout` in
+`WasmBackendAbi.hpp`). `wasmjit_backend.h` now carries the same views in plain C,
+so a plugin, the harness and an embedder can exchange them without sharing an STL
+type:
+
+```c
+typedef enum wasmjit_value_kind {          /* mirrors WASM::ValueKind */
+	WASMJIT_KIND_VOID = 0, WASMJIT_KIND_I32, WASMJIT_KIND_I64, WASMJIT_KIND_F32,
+	WASMJIT_KIND_F64, WASMJIT_KIND_V128, WASMJIT_KIND_REF
+} wasmjit_value_kind;
+
+typedef struct wasmjit_signature {
+	const uint8_t* params;       /* wasmjit_value_kind entries, or NULL */
+	uint32_t       param_count;
+	const uint8_t* results;
+	uint32_t       result_count;
+} wasmjit_signature;
+
+typedef struct wasmjit_field_layout {
+	uint32_t offset, size, alignment;
+} wasmjit_field_layout;
+
+typedef struct wasmjit_layout {
+	uint32_t              size, alignment;
+	wasmjit_field_layout* fields;      /* caller-owned */
+	uint32_t              field_count;
+} wasmjit_layout;
+```
+
+`WasmBackendAbi.hpp` owns the bridge in both directions — `toWasmjitSignature` /
+`signatureView`, `toWasmjitLayout` / `layoutView`, and the `wasmjitKind` /
+`valueKindOfWasmjit` pair for the kind codes — and pins the layouts with
+`static_assert`s, so the two views cannot drift apart silently. Every conversion
+borrows: no array is copied, and the storage stays the caller's.
+
+That closes `AAS2` in the same artifact [`ABI.md`](ABI.md) needs: one POD
+signature view an embedder, a harness and a plugin can all read, whether or not
+the backend that produced it is in-process. `[backendabi]`
+(`Test/BackendAbiTests.cpp`) pins the kind codes and both round trips.
 
 ## 5. What can cross the boundary
 
@@ -332,15 +414,15 @@ guarantees or explicit embedder responsibilities; none is an open code gap.
 
 | Evidence | Result | Reading |
 |---|---|---|
-| Default suite (2026-10-29) | **11,454 assertions / 481 cases, green** | The compiled-in path is the baseline every `BP-*` stage must preserve. |
+| Default suite (2026-11-13) | **22,881 assertions / 843 cases, green** | The compiled-in path is the baseline every `BP-*` stage must preserve. |
 | Backend selection | `WasmBackendRegistry` names `libjit` and `null`; an unknown name is a named error | The selector is general and the second implementation exists. |
 | Plugin load test | **Present** — `Test/ExampleBackend/libwasmjit-backend-example.so`, loaded by path and by name (`[plugin]`) | `BP-3`; the plugin lives in its own directory and the frontend was not rebuilt for it. |
 | Wrong-ABI / missing-symbol / failing-create tests | **Present** — descriptor ABI, core ABI, no query symbol, missing file, failing `create` (`[plugin]`) | `BP-3`/`BP-4`; every path is an exception with a reason, never an abort. |
 | Build-kind refusal (§7.7) | **Present** — the fixture reports a mismatched `build_flags` on request and is refused; the comparison predicate and its text are unit-tested | `build_flags` is real, not aspirational: debug/release and the sanitizer kind must agree. |
 | Helper export (§7.5) | **Present** — `[plugin]` resolves `wasm_trap_slot`, `wasm_trap_report`, `wasm_stack_check`, `wasm_v128_*`, `wasm_exn_*` in the process image | `ES-4`'s hidden visibility did not swallow the plugin ABI. |
 | Diagnostic reporting (§7.9) | **Present** — a refused load and a successful load are both observed through a sink (`WASM.BACKEND.PLUGIN`, Error and Note) | Failure containment is a report, and the happy path is visible too. |
-| POD layout test | **Present** — `[backendabi]` pins the tuple rule | `BP-1`. |
-| Symbol-hygiene check | **Present** — `ES-4` hid the core's internals (23,919 → 2,545 exported symbols at the time; **2,629 dynamic / 1,859 strong** on 2026-11-01) and deliberately re-exported the helper subset | `ES-4`; the plugin ABI is a declared list, not "everything and hope". |
+| POD layout test | **Present** — `[backendabi]` pins the tuple rule and both C views (§4.4) | `BP-1`. |
+| Symbol-hygiene check | **Present** — `ES-4` hid the core's internals (23,919 → 2,545 exported symbols at the time; **3,239 dynamic / 2,110 strong** on 2026-11-13) and deliberately re-exported the helper subset | `ES-4`; the plugin ABI is a declared list, not "everything and hope". |
 | "One core" check (`NEEDED` inspection) | **Present as a symbol-identity probe** — the loader compares the plugin's `wasm_trap_slot` with the host's and refuses a private copy | `BP-3`; a plugin with its own core is refused rather than running two heaps and two allocators. |
 
 ## 12. References

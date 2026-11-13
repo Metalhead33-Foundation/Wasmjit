@@ -593,7 +593,7 @@ is undefined even if a particular run happens to work.
 | **At most one `ModuleInstance` per `Module`, one `VMContext` per instance** | **Design rule** (§3.1); multiple instances are ruled out, not merely unsupported | `ModuleInstance`, `VMContext` |
 | One agent/call at a time on that instance | **Supported and the default** (`ConcurrencyModel::Single`) | `ModuleInstance`, `callCallable` |
 | Several host threads entering the **same** instance | **Supported, opt-in** (`ConcurrencyModel::Agents`); the engine admits concurrent entry and guards its own bookkeeping. The guest must synchronize shared globals/tables/memory with the atomic instructions | `ModuleInstance::enterCall`, `THREADS.md` TH-5 |
-| Concurrent **execution** of compiled code | **Accepted and required** (C1 today; C2 needs the hardening) | native code, `VMContext*` |
+| Concurrent **execution** of compiled code | **Accepted and required** — C1 by default, C2 through the opt-in `ConcurrencyModel::Agents` | native code, `VMContext*` |
 | Re-entrant invoker | **Required**; the harness invoker keeps per-call state on the stack | `callCallable`, `TestBackend` |
 | Several host threads with **separate** instances | Fine for *different modules*; **not** a model for one module (R1) | `Test/main.cpp` host-thread test |
 | Concurrent `ModuleInstantiator`/backend compilation | **Rejected as a feature** (R2): serialize; one compilation at a time | backend session, build lock |
@@ -612,10 +612,12 @@ is undefined even if a particular run happens to work.
 | Guest mutex/semaphore standard | **Absent by design**; modules build them on the atomic instructions | §4.6 |
 | Multi-agent scheduler, shared GC heap, TLS, waitqueue, lifecycle | **Agents and the shared-GC path are implemented**; TLS/managed-waitqueue/lifecycle have no stable encoding (SET-4/5) | `THREADS.md` TH-5; SET-4/5 |
 
-The host-thread test exists to exercise the **current** API's independent
-session/instance setup; it deliberately does **not** test the target
-single-instance concurrency model. Passing it is not evidence that concurrent
-calls into the one instance are safe.
+The `[multiagent]` suite covers the single-instance model: two agents enter one
+instance under `ConcurrencyModel::Agents` and exercise acquire-release ordering,
+`wait`/`notify`, a shared-global read-modify-write, traps, GC stress and the
+reference barrier. The older host-thread test remains only as a check that
+**separate** modules on separate threads do not interfere; it is not evidence for
+concurrent entry into one instance.
 
 ## 9. Minimum embedder protocol
 
@@ -625,11 +627,14 @@ The smallest protocol that is valid with the current engine is:
    trap belongs to the current agent, and the boundary throws only after the
    generated frames have returned, so host destructors run. Re-entrant calls
    from an import see the pending slot instead of an exception.
-2. **Treat the module's single instance as the unit of serialization.** Guard
-   it with an external mutex (or permit only one host thread) today. Do not
-   create per-thread instances as a design — §3.1 rules multiple instances out.
-   Multi-agent entry (C2) is the accepted direction but not yet implemented; when
-   it lands it will be an explicit, opt-in concurrency mode, not a default.
+2. **Choose the instance entry discipline explicitly.** The default,
+   `ConcurrencyModel::Single`, permits one host thread per instance: guard it with
+   an external mutex, or treat the instance as the unit of serialization. The
+   opt-in `ConcurrencyModel::Agents` (C2) admits several agents into the one
+   instance; when you select it, follow G-C/G-D — the guest must synchronize
+   shared globals, tables and memory with the atomic instructions. It is never a
+   default and never an inference. Do not create per-thread instances as a
+   design — §3.1 rules multiple instances out.
    Do not hold the external mutex across an import that can call back into the
    same instance unless it is recursive or the callback is proven non-reentrant.
 3. **Serialize compilation.** One `ModuleInstantiator`/backend session per

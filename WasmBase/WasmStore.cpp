@@ -11,7 +11,7 @@ namespace WASM {
 namespace {
 
 // The engine default when neither the environment nor an embedder says
-// otherwise (docs/proposals/CONFIGURATION.md §10.5).
+// otherwise (docs/proposals/CONFIGURATION.md §9.5).
 constexpr uint64_t kDefaultBudgetBytes = uint64_t{4} << 30; // 4 GiB
 
 // Reads WASMJIT_MAX_TOTAL_BYTES once. Bytes; "0"/"unlimited" means no cap.
@@ -92,7 +92,7 @@ MemoryBudget resolveBudget(const MemoryBudget& requested)
 		budget.continuationStackBytes = budget.totalBytes;
 
 	// A category above the total could never bind; refuse it where it is set
-	// (docs/proposals/CONFIGURATION.md §10.2 rule 2).
+	// (docs/proposals/CONFIGURATION.md §9.2 rule 2).
 	if (budget.totalBytes != UINT64_MAX) {
 		const struct {
 			uint64_t value;

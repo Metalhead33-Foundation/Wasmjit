@@ -128,4 +128,14 @@ errors are VM-internal; they do not become an `exnref` crossing. A synthetic
 host module can provide scalar C imports to Lua exactly as it can to any C
 module. The cross-language direction matrix and the host-binding guide are in
 [`LF2_ABI_INTEROP.md`](LF2_ABI_INTEROP.md) and
-[`EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) §12.
+[`EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) §11.
+
+## 8. References
+
+- [`LF2_INDEX.md`](LF2_INDEX.md) — the report set and the verdicts.
+- [`CHARTERS.md`](CHARTERS.md) — the charter this arm was run under.
+- [`CLUSTERING.md`](CLUSTERING.md) — the cluster map.
+- [`LF2_ABI_INTEROP.md`](LF2_ABI_INTEROP.md) — the direction matrix.
+- [`../EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) §11 — the host-binding
+  contract.
+

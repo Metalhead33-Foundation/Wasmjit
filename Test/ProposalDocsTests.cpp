@@ -1,5 +1,6 @@
 #include <catch2/catch_all.hpp>
 
+#include <algorithm>
 #include <cctype>
 #include <filesystem>
 #include <fstream>
@@ -122,8 +123,8 @@ std::set<std::string> subpageTargets(const std::string& text)
 } // namespace
 
 // Enforces the guardrail in docs/PROPOSALS.md §6 without hard-coding the
-// sanctioned variants: a note may reword headings and append a section
-// (GC.md §10, COMPONENT_MODEL.md §9) or use the grouped shape
+// sanctioned variants: a note may reword headings and place an appendix before
+// the references (GC.md §9, COMPONENT_MODEL.md §9) or use the grouped shape
 // (SMALL_PROPOSALS.md §1–§8), because the rule is map ↔ headings, never a
 // fixed section count.
 TEST_CASE("proposal notes keep the documented structure", "[docs]")
@@ -170,14 +171,66 @@ TEST_CASE("proposal notes keep the documented structure", "[docs]")
 			REQUIRE(headingSet.count(number) == 1);
 		}
 
-		// Every note ends in references (§9 canonically, §8 in the grouped
-		// variant, §10 when a note appends an appendix after §9).
+		// Every note ends in references — and, since the rule was put on the
+		// record (2026-11-13), that is the *last* section, never merely a
+		// section. An appendix goes before it.
 		REQUIRE(text.find("References") != std::string::npos);
 	}
 
-	// The folder holds thirty-six notes today; a new note must appear here
+	// The folder holds forty notes today; a new note must appear here
 	// without the check silently grading an empty directory.
-	REQUIRE(checked >= 36);
+	REQUIRE(checked >= 40);
+}
+
+// The rule, on the record: **References is always the last section** — in every
+// document, not only in a proposal note (docs/PROPOSALS.md §2.2,
+// docs/DOCUMENTATION.md §3.3). A reader who reaches the final heading and still
+// has no links has to scroll back to find them, which is the one navigation cost
+// a reference list exists to remove. A document with no reference section at all
+// (an index page) is out of scope; a document that has one may not put anything
+// after it.
+TEST_CASE("References is the last section of every document", "[docs][references]")
+{
+	const std::filesystem::path docs = std::filesystem::path(WASM_TESTSUITE_SOURCE_DIR)
+			/ ".." / "docs";
+	REQUIRE(std::filesystem::is_directory(docs));
+
+	std::size_t checked = 0;
+	std::vector<std::string> offenders;
+	std::error_code error;
+	for (const std::filesystem::directory_entry& entry :
+			std::filesystem::recursive_directory_iterator(docs, error)) {
+		if (!entry.is_regular_file() || entry.path().extension() != ".md")
+			continue;
+
+		std::istringstream stream(readTextFile(entry.path()));
+		std::string line;
+		std::vector<std::string> headings;
+		while (std::getline(stream, line)) {
+			if (line.rfind("## ", 0) == 0)
+				headings.push_back(line);
+		}
+		const bool hasReferences = std::any_of(headings.begin(), headings.end(),
+				[](const std::string& heading) {
+					return heading.find("References") != std::string::npos;
+				});
+		if (!hasReferences)
+			continue;
+
+		++checked;
+		if (headings.back().find("References") == std::string::npos)
+			offenders.push_back(entry.path().string() + ": last heading is \""
+					+ headings.back() + "\"");
+	}
+
+	std::string report;
+	for (const std::string& offender : offenders)
+		report += offender + "\n";
+	INFO("documents that put something after References:\n" << report);
+	REQUIRE(offenders.empty());
+	// Twenty-odd documents carry a reference list; the floor catches a broken
+	// directory walk rather than pinning a number that legitimately changes.
+	REQUIRE(checked >= 20);
 }
 
 // Enforces docs/DOCUMENTATION.md §9: the generated site nests the notes instead

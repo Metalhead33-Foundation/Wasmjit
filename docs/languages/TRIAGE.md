@@ -145,7 +145,7 @@ says so in its bottleneck text.
 The **gold standard** for a row is *Kotlin/Wasm with its `wasm:js-string`-class
 imports supplied by the embedder*: a module that loads, instantiates and runs
 against the host import/export set it declares. Supplying that set is the
-**embedder's** job, by decision ([`GC.md`](../proposals/GC.md) §10.5,
+**embedder's** job, by decision ([`GC.md`](../proposals/GC.md) §9.5,
 [`JS_INTEGRATION.md`](../proposals/JS_INTEGRATION.md) JS3), and a row is not
 worse for needing it.
 

@@ -5,7 +5,7 @@
 Status: study report set (revision 8 — 2026-11-11: a verdict renders as its
 swatch plus its name, [`../LANGUAGE_FEASIBILITY.md`](../LANGUAGE_FEASIBILITY.md)
 §5.1; revision 7 added the §11 ownership map and pointed the ABI amendment at
-`EMBEDDING_SURFACE.md` §12–16).
+`EMBEDDING_SURFACE.md` §11–16).
 The notes without an `LF2_` prefix are the **output of `LF-1`**, the pre-feasibility /
 scoping study defined in [`LANGUAGE_FEASIBILITY.md`](../LANGUAGE_FEASIBILITY.md)
 §7: they screen the whole canonical candidate list on three axes, cluster the
@@ -46,7 +46,7 @@ the next person who is tempted to answer the question from a blog post.
 | \subpage lf_charters | **The commissionable units.** One charter per shortlisted cluster: scope, pinned candidates, questions, the bar for "feasible", the budget cap, the deliverable, the stop conditions, owner and date. |
 | \subpage lf_evidence | **The receipts.** Every external source with its retrieval date and tier, the in-repo evidence it leans on, and — explicitly — what was *not* verified. |
 | \subpage lf2_index | **The `LF-2` set.** The commissioned full studies: the verdict table, the three engine findings, the budget, and the reading order for the reports below. |
-| \subpage lf2_abi | **Cross-language ABI amendment.** The two call directions, synthetic host modules, core `Callable` versus component Canonical ABI, the scalar-to-GC/reference difficulty matrix per language, and its §11 engine/embedder/tooling/language ownership map; it links to `EMBEDDING_SURFACE.md` §12–16 for host bindings, native objects, GC references and the shared register. |
+| \subpage lf2_abi | **Cross-language ABI amendment.** The two call directions, synthetic host modules, core `Callable` versus component Canonical ABI, the scalar-to-GC/reference difficulty matrix per language, and its §11 engine/embedder/tooling/language ownership map; it links to `EMBEDDING_SURFACE.md` §11–16 for host bindings, native objects, GC references and the shared register. |
 | \subpage lf2_s1 | `S1` — C/C++ toolchain and ABI: five arms, all 🟩 green (the last one after the `LE-8` translation). |
 | \subpage lf2_s2 | `S2` — the LLVM-family languages: Rust (two targets), TinyGo and Zig, all 🟩 green. |
 | \subpage lf2_s3 | `S3` — AssemblyScript (and TypeScript by inheritance): 🟩 green, building on the harness evidence. |

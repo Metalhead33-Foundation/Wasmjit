@@ -14,6 +14,7 @@
 WASMJIT_VISIBLE_BEGIN
 
 #include "WasmType.hpp"
+#include "wasmjit_backend.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -195,6 +196,117 @@ static_assert(std::is_standard_layout_v<SignatureView>);
 static_assert(std::is_standard_layout_v<FieldLayout>);
 static_assert(std::is_standard_layout_v<AggregateLayout>);
 static_assert(sizeof(FieldLayout) == 12, "the C plugin view pins the layout");
+
+//! \par The C plugin views (docs/BACKEND_PLUGIN_ABI.md §4.4)
+//! `wasmjit_signature`, `wasmjit_layout` and `wasmjit_field_layout` in
+//! `wasmjit_backend.h` are the same views in plain C, so a plugin, a harness and
+//! an embedder can exchange them without sharing an STL type. The conversions
+//! below are borrow-only: they never copy the arrays, and the storage stays the
+//! caller's. The `static_assert`s pin the struct layouts the two sides agreed on.
+
+static_assert(static_cast<std::uint8_t>(ValueKind::Void) == WASMJIT_KIND_VOID);
+static_assert(static_cast<std::uint8_t>(ValueKind::I32) == WASMJIT_KIND_I32);
+static_assert(static_cast<std::uint8_t>(ValueKind::I64) == WASMJIT_KIND_I64);
+static_assert(static_cast<std::uint8_t>(ValueKind::F32) == WASMJIT_KIND_F32);
+static_assert(static_cast<std::uint8_t>(ValueKind::F64) == WASMJIT_KIND_F64);
+static_assert(static_cast<std::uint8_t>(ValueKind::V128) == WASMJIT_KIND_V128);
+static_assert(static_cast<std::uint8_t>(ValueKind::Ref) == WASMJIT_KIND_REF);
+
+static_assert(sizeof(wasmjit_field_layout) == sizeof(FieldLayout),
+		"the C plugin view pins the layout");
+static_assert(offsetof(wasmjit_field_layout, offset) == 0);
+static_assert(offsetof(wasmjit_field_layout, size) == 4);
+static_assert(offsetof(wasmjit_field_layout, alignment) == 8);
+static_assert(offsetof(wasmjit_signature, params) == 0);
+static_assert(offsetof(wasmjit_signature, param_count) == sizeof(void*));
+static_assert(sizeof(wasmjit_signature) == 2 * sizeof(void*) + 2 * sizeof(std::uint32_t)
+		+ 2 * (alignof(void*) - sizeof(std::uint32_t)),
+		"the C plugin view pins the layout");
+static_assert(offsetof(wasmjit_layout, size) == 0);
+static_assert(offsetof(wasmjit_layout, alignment) == 4);
+static_assert(offsetof(wasmjit_layout, fields) == 8);
+static_assert(offsetof(wasmjit_layout, field_count) == 8 + sizeof(void*),
+		"the C plugin view pins the layout");
+
+/**
+ * \brief The C kind code of an ABI value kind.
+ * \param kind ABI value category.
+ * \return The matching `wasmjit_value_kind` value.
+ */
+inline constexpr std::uint8_t wasmjitKind(ValueKind kind) noexcept
+{
+	return static_cast<std::uint8_t>(kind);
+}
+
+/**
+ * \brief Maps a C kind code back onto the ABI value category.
+ * \param kind A `wasmjit_value_kind` value.
+ * \return The matching ABI kind; an unknown code is read as Void.
+ */
+inline constexpr ValueKind valueKindOfWasmjit(std::uint8_t kind) noexcept
+{
+	return kind <= WASMJIT_KIND_REF ? static_cast<ValueKind>(kind) : ValueKind::Void;
+}
+
+/**
+ * \brief Borrows a signature view as the C plugin view.
+ * \param view Signature whose kind arrays outlive the result.
+ * \return The same arrays, re-described as `wasmjit_signature`.
+ */
+inline wasmjit_signature toWasmjitSignature(const SignatureView& view) noexcept
+{
+	wasmjit_signature signature{};
+	signature.params = reinterpret_cast<const std::uint8_t*>(view.params);
+	signature.param_count = view.paramCount;
+	signature.results = reinterpret_cast<const std::uint8_t*>(view.results);
+	signature.result_count = view.resultCount;
+	return signature;
+}
+
+/**
+ * \brief Borrows a C plugin signature view as a C++ signature view.
+ * \param signature Signature whose kind arrays outlive the result.
+ * \return The same arrays, re-described as `SignatureView`.
+ */
+inline SignatureView signatureView(const wasmjit_signature& signature) noexcept
+{
+	SignatureView view{};
+	view.params = reinterpret_cast<const ValueKind*>(signature.params);
+	view.paramCount = signature.param_count;
+	view.results = reinterpret_cast<const ValueKind*>(signature.results);
+	view.resultCount = signature.result_count;
+	return view;
+}
+
+/**
+ * \brief Borrows an aggregate layout as the C plugin view.
+ * \param layout Layout whose field storage outlives the result.
+ * \return The same storage, re-described as `wasmjit_layout`.
+ */
+inline wasmjit_layout toWasmjitLayout(const AggregateLayout& layout) noexcept
+{
+	wasmjit_layout view{};
+	view.size = layout.size;
+	view.alignment = layout.alignment;
+	view.fields = reinterpret_cast<wasmjit_field_layout*>(layout.fields);
+	view.field_count = layout.fieldCount;
+	return view;
+}
+
+/**
+ * \brief Borrows a C plugin layout as a C++ aggregate layout.
+ * \param layout Layout whose field storage outlives the result.
+ * \return The same storage, re-described as `AggregateLayout`.
+ */
+inline AggregateLayout layoutView(const wasmjit_layout& layout) noexcept
+{
+	AggregateLayout view{};
+	view.size = layout.size;
+	view.alignment = layout.alignment;
+	view.fields = reinterpret_cast<FieldLayout*>(layout.fields);
+	view.fieldCount = layout.field_count;
+	return view;
+}
 
 /** \brief Number of C argument slots one value kind occupies at the canonical boundary.
 \param kind The value kind.

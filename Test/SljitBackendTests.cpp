@@ -240,7 +240,7 @@ TEST_CASE("sljit: the session invokes a compiled callable through the host ABI",
  * Parity with the AsmJit backend: the same fixture, the same calls, the same
  * expectations. Both backends execute the integer/control/memory slice of
  * `Test/wasm_wat/asmjit_i32_basic.wat`; a divergence here is a conformance bug
- * in one of them (docs/WRITING_A_BACKEND.md §14.2).
+ * in one of them (docs/WRITING_A_BACKEND.md §13.2).
  */
 TEST_CASE("sljit: the shared integer module executes", "[sljit][module][parity]")
 {
@@ -541,7 +541,7 @@ CallOutcome outcomeOf(const WASM::Callable& callable, Args... args)
 } // namespace
 
 /*
- * The conformance matrix of docs/WRITING_A_BACKEND.md §14.2: one module, two
+ * The conformance matrix of docs/WRITING_A_BACKEND.md §13.2: one module, two
  * generators, the same calls. This compares the *outcomes* rather than
  * duplicating expectations, so a fixture change cannot silently diverge.
  */

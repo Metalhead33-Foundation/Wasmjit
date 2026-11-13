@@ -291,3 +291,19 @@ commit they pass the bar with no embedder-side flag.
   default, not a measurement.
 - That other libjit shapes cannot fail. The new failure path exists precisely
   because one can: it reports instead of aborting, and leaks the context.
+
+## 9. References
+
+- [`LF2_INDEX.md`](LF2_INDEX.md) — the report set this note belongs to, and the
+  `F1`–`F3` findings in context.
+- [`LF2_EVIDENCE.md`](LF2_EVIDENCE.md) — the toolchains, modules and transcripts
+  behind the reproduction.
+- [`../WRITING_A_BACKEND.md`](../WRITING_A_BACKEND.md) — what a backend may not
+  do on a failure path, and the definition of done the fix had to meet.
+- [`../DIAGNOSTICS.md`](../DIAGNOSTICS.md) — the diagnostic id/record/sink
+  contract the new report uses.
+- [`../SAFETY.md`](../SAFETY.md) §2.4 — no `abort()` on the trap or failure path.
+- [`../LAYERING.md`](../LAYERING.md) §2/§4 — the rule that kept the fix inside
+  `LibJit/`.
+- Source anchors: `LibJit/LibjitModuleCompiler.cpp`, `Test/LibJitBackendTests.cpp`.
+

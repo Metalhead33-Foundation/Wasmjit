@@ -170,7 +170,7 @@ half-merge cannot pass silently.
 
 The 2026-11-10 consolidation is the worked example: `PRODUCTION_GAPS.md`,
 `BACKEND_PRODUCTION_READINESS.md` and `ABI_PORTABILITY.md` became
-[`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §8/§13 and
+[`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §8/§12 and
 [`ABI.md`](ABI.md); the frame/`v128` design notes became `ABI.md` plus
 [`backends/HISTORY.md`](backends/HISTORY.md); the fifteen slice reports, the
 probes and the handoff became that one history note; the ABI refactor study and
@@ -249,7 +249,7 @@ this revision did about them:
 | `EMBEDDING_SURFACE.md` §6.1.1 tier lists | missing `WasmCompilationPolicy.hpp` (added by `CP-1`) and `WasmLegacyEh.hpp`; internal count said 16 for a 17-item list | both added; 27 + 17 + 17 = the 61 `WasmBase/` header files `[tiers]` counts |
 | `TRAP_CLEANUP.md` §8 "this test fails today", while the suite is green | the row is a *planned* case, not a failing one | "the case the note plans; it is not in the tree" |
 | `COMPILER_POLICY.md` §8.1/§8.3 "operated rather than asserted", after §8.2 added the tests | self-contradictory | §8.3 rewritten as a dated reading of what `[compilation-policy]` pins |
-| `COMPILER_POLICY.md` §10.2 "the query is answered from the *descriptor* for a plugin" | false — the descriptor's `wasmjit_capabilities` carries SIMD/components/continuations/profiles/executed, not a compilation degree; the core calls the instantiator's virtual | stated plainly, and tied to the open `abi_version` item (§7.1 item 3 there) |
+| `COMPILER_POLICY.md` §9.2 "the query is answered from the *descriptor* for a plugin" | false — the descriptor's `wasmjit_capabilities` carries SIMD/components/continuations/profiles/executed, not a compilation degree; the core calls the instantiator's virtual | stated plainly, and tied to the open `abi_version` item (§7.1 item 3 there) |
 
 ### 5.3 Left as it is, deliberately
 
@@ -294,7 +294,7 @@ clearly right and rejected where the section is evidence rather than a claim:
   [`index.md`](index.md) §2 so a reader does not go looking for them.
 - **Merged away (2026-11-10):** `SIMD_BACKENDS.md` + `SIMD_LIBJIT.md` into
   [`proposals/SIMD.md`](proposals/SIMD.md); the backend status and gap notes into
-  [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §8/§13; the fifteen slice
+  [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §8/§12; the fifteen slice
   reports, probes and handoff into [`backends/HISTORY.md`](backends/HISTORY.md);
   the ABI refactor study + post-mortem into [`backends/HISTORY.md`](backends/HISTORY.md).
   [`index.md`](index.md) §2 records every merge so a reader does not go looking
@@ -433,7 +433,8 @@ echo "== per-tag tallies the notes cite =="
 for tag in docs headerdoc runtime concurrency multiagent backendabi plugin \
            tiers compilation-policy config mem-provider abi surface layering \
            component-corpus component-execution component-async component-name \
-           component-subtyping component-fuzz component-api component-features; do
+           component-subtyping component-fuzz component-api component-features \
+           references; do
     printf '%-18s %s\n' "[$tag]" \
         "$("$build/Test/WasmJit" "[$tag]" 2>&1 | tail -2 | tr -d '\n')"
 done
@@ -479,13 +480,14 @@ upstream primitive/structured-return sweep, including JSON nested-value rows), `
 `[abi]` 24/6, `[surface]` 4/1, `[layering]` 4/1. Re-run the probe; these are
 a dated snapshot, not a promise.
 
-**Current (2026-11-10, working tree on `2cce7b9` — re-run the probe):** **22,533
-assertions in 824 test cases**, green on each of the three backends; **20 / 40 /
+**Current (2026-11-13, working tree on `a2a361e` — re-run the probe):** **22,881
+assertions in 843 test cases**, green on each of the three backends; **20 / 41 /
 18 / 2** `.md` files under `docs/`, `docs/proposals/`, `docs/languages/` and
-`docs/backends/` (19 / 39 / 17 / 1 notes); `[docs]` **1024/2** after the
-consolidation, `[headerdoc]` **6/3**. The per-tag and symbol
-counts above are an earlier snapshot; re-run the probe rather than trusting
-either block.
+`docs/backends/` (19 / 40 / 17 / 1 notes); `[docs]` **1055/4** (including the new
+`[references]` case), `[headerdoc]` **6/3**, `[backendabi]` **71/6** after the C
+plugin views, `[tiers]` **258/3**; **3,239 dynamic / 2,110 strong** exported
+`libWasmBase` symbols. The per-tag snapshot above is from 2026-11-03; re-run the
+probe rather than trusting either block.
 
 Three things moved those numbers while this note was being written, which is the
 whole problem in miniature:

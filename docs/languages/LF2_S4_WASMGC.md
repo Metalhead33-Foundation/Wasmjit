@@ -311,4 +311,20 @@ likewise need a language-runtime adapter. A synthetic host module can offer
 scalars cheaply, but a host C++ object cannot become a Kotlin/Dart/MoonBit GC
 object by ABI alone. The direction matrix and the A/B/C classification are in
 [`LF2_ABI_INTEROP.md`](LF2_ABI_INTEROP.md); the binding contract is
-[`EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) §12.
+[`EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) §11.
+
+## 10. References
+
+- [`LF2_INDEX.md`](LF2_INDEX.md) — the report set and the verdicts.
+- [`LF2_DEEP_F3_GC.md`](LF2_DEEP_F3_GC.md) — the `F3` finding this cluster
+  produced.
+- [`LF2_EVIDENCE.md`](LF2_EVIDENCE.md) — the Kotlin, Dart and MoonBit toolchains
+  and their transcripts.
+- [`LF2_ABI_INTEROP.md`](LF2_ABI_INTEROP.md) — the direction matrix.
+- [`../EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) §11 — the host-binding
+  contract.
+- [`../proposals/JS_INTEGRATION.md`](../proposals/JS_INTEGRATION.md) — why a JS
+  engine is not in the core, which keeps the adapter boundary honest.
+- [`../SAFETY.md`](../SAFETY.md) — the budget and bounds rules the corpus runs
+  under.
+

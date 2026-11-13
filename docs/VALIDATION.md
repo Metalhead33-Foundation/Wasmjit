@@ -206,3 +206,18 @@ ones), and the bounds check subtracts instead of adding.
   `Test/spec_known_failures.txt`; it re-opens if upstream provides a
   discriminator between control tags and exception tags (or the engine drops
   the SS-2 form).
+
+## References
+
+- [`TESTING.md`](TESTING.md) — the suite that runs the negative fixtures, and the
+  owner of `wast_supported.txt` / `spec_known_failures.txt`.
+- [`SCOPE.md`](SCOPE.md) — the boundary the validator is not asked to cross.
+- [`proposals/PROFILES.md`](proposals/PROFILES.md) — the language subset that
+  decides which modules reach validation at all.
+- [`proposals/EXCEPTIONS.md`](proposals/EXCEPTIONS.md) — the tag/exception typing
+  rules quoted in the measured-coverage section.
+- [`FRESHNESS.md`](FRESHNESS.md) — how the measured negative coverage is dated
+  and re-measured.
+- Source anchors: `WasmBase/WasmValidator.cpp`, `WasmBase/WasmValidation.hpp`
+  (internal), `Test/spec_known_failures.txt`.
+

@@ -17,7 +17,7 @@ anyone reading [`MEMORY_PROVIDER.md`](MEMORY_PROVIDER.md),
 
 Follows the same split as [`MEMORY_PROVIDER.md`](MEMORY_PROVIDER.md) and
 [`CONFIGURATION.md`](CONFIGURATION.md): §2 demands → §3 non-demands → §4 tree →
-§5 gaps → §6 deviations → §7 plan → §8 tests → §9 references, with §10–§13 as
+§5 gaps → §6 deviations → §7 plan → §8 tests → §15 references, with §9–§12 as
 appendices (the option matrix, the language-layout study, the pseudocode, and the
 linker question).
 
@@ -37,13 +37,13 @@ already implements; what is missing is a *recipe*, a *contract* and
 | §6 | Where may we deliberately stay as we are (`SLMD1`–`SLMD6`)? |
 | §7 | Plan (`SLM-0`…`SLM-7`) with the break class of each |
 | §8 | Test survey — what pins the mechanism, what would pin the recipe |
-| §9 | References |
-| §10 | Appendix A: the options, and the pitfall each one buys |
-| §11 | Appendix B: the language-memory-layout study (what to measure) |
-| §12 | Appendix C: pseudocode — the wiring, the layout, the allocator contract |
-| §13 | Appendix D: what a linker is, what it would buy, and what it would cost — if the engine grew one |
-| §14 | Appendix E: a front-end allocator-injection pass (documented option, no code) |
-| §15 | Appendix F: the embedder-imposed initializer contract |
+| §9 | Appendix A: the options, and the pitfall each one buys |
+| §10 | Appendix B: the language-memory-layout study (what to measure) |
+| §11 | Appendix C: pseudocode — the wiring, the layout, the allocator contract |
+| §12 | Appendix D: what a linker is, what it would buy, and what it would cost — if the engine grew one |
+| §13 | Appendix E: a front-end allocator-injection pass (documented option, no code) |
+| §14 | Appendix F: the embedder-imposed initializer contract |
+| §15 | References |
 
 
 ## 2. What the scenario demands
@@ -126,13 +126,13 @@ The consequence is a design rule the rest of the note obeys: **give the library
 shape a library's memory (shared, one allocator, a layout) and give the script
 shape a script's memory (private, disposable).** A product that uses both at once
 — one monolith plus many scripts — is asking for *both* shapes in one process,
-which is exactly why §4.2 exists and why §13 asks the awkward follow-up question.
+which is exactly why §4.2 exists and why §12 asks the awkward follow-up question.
 
 The QVM lineage matters here. The engine is the spiritual successor of **Quake 3's
 QVM** ([`../API_ABI_STABILITY.md`](../API_ABI_STABILITY.md) §2.1, gate `G1`), and
 Q3 chose the *script* shape for all three of its modules: each VM got its own data
 segment and a narrow `syscall` boundary instead of a shared heap. That choice is
-still the engine's default, and §13.5 keeps it in view when the linker question is
+still the engine's default, and §12.5 keeps it in view when the linker question is
 weighed.
 
 ## 3. What the scenario does not demand
@@ -146,10 +146,10 @@ weighed.
 - **No linker in the engine.** Assigning `__heap_base`, `__data_end` and
   `__stack_pointer` values is a **build-time** job, done by the toolchain that
   produced the module. The engine must not grow a linker, and this note does not
-  propose one (§12.2 shows what a host passes instead). **That is a decision
-  about this milestone, not a claim that the question is closed:** §13 studies
+  propose one (§11.2 shows what a host passes instead). **That is a decision
+  about this milestone, not a claim that the question is closed:** §12 studies
   what a linker actually is and what one would buy, so a future decision would be
-  a decision rather than a discovery. Nothing in §13 is proposed here.
+  a decision rather than a discovery. Nothing in §12 is proposed here.
 - **No security boundary.** A shared memory means module A can read and write
   module B's heap. That is the point, and it is also a trust-domain change the
   host must make explicitly (`SLMD1`).
@@ -236,10 +236,10 @@ Three things the engine must not decide, and which the toolchain and host must:
 - **Where each module's statics, stack and heap begin.** Those are `__data_end`,
   `__stack_pointer` and `__heap_base` — ordinary module globals set by the
   linker. Two independently linked modules pick the same addresses unless the
-  build tells them otherwise (§11, §12.2).
+  build tells them otherwise (§10, §11.2).
 - **Who allocates.** `malloc`/`free` are guest code. The engine sees `memory.grow`
   and loads/stores; it never sees an allocation, so it cannot detect two
-  allocators handing out the same block (§10.1).
+  allocators handing out the same block (§9.1).
 - **Whether a tenant may grow.** `memory.grow` is an instruction with no notion of
   regions, so a partition plan cannot be enforced by the engine (`SLM6`).
 
@@ -249,7 +249,7 @@ Three things the engine must not decide, and which the toolchain and host must:
   note; a host has to read the instantiator to discover R1 and R2.
 - **No ownership/lifetime rule** for a memory that outlives its creator's instance.
 - **No allocator contract** — nothing says "one allocator per memory" or "one per
-  partition", so the default outcome is the trap in §10.1.
+  partition", so the default outcome is the trap in §9.1.
 - **No per-tenant accounting** — `MemoryBudget` is per store (§5 `SLM5`).
 - **No test** in which two instances share one memory and observe each other's
   writes, and none in which B grows it and A notices.
@@ -260,15 +260,15 @@ Three things the engine must not decide, and which the toolchain and host must:
 |---|---|---|---|
 | `SLM1` | **No recipe.** The mechanism is discoverable only by reading the instantiator; `Runtime` + `RegistryImportResolver` + `--import-memory` is nowhere written down as a sequence, and the R1/R2 ownership choice is not recorded | §4.1's three source comments; no `docs/` page mentions both `--import-memory` and `registerMemory` | **High** — this is the whole feature, and it is undocumented |
 | `SLM2` | **No lifetime rule.** An imported memory is borrowed; the engine has no refcount and no liveness check. Under R1, destroying the monolith first leaves every script with a dangling `LinearMemory*` — a plain store into freed host memory, not a trap | `ModuleInstance.cpp` (`~ModuleInstance` skips imported memories); `LinearMemory` has no owner count | **High** — a use-after-free the engine cannot see |
-| `SLM3` | **No allocator contract.** Nothing states that a shared memory has *one* allocator (or one per partition). Two modules linked independently both start their heap at their own `__heap_base` and both hand out the same addresses — silently | guest code; the engine never observes an allocation (§4.3) | **High** — silent heap corruption (§10.1) |
-| `SLM4` | **No layout contract.** `__data_end`/`__stack_pointer`/`__heap_base` are per-module globals; two independently built modules choose overlapping regions unless the build assigns bases | `wasm-ld` defaults; §11 | **High** — silent overlap, and it is the *usual* outcome of a naive build |
+| `SLM3` | **No allocator contract.** Nothing states that a shared memory has *one* allocator (or one per partition). Two modules linked independently both start their heap at their own `__heap_base` and both hand out the same addresses — silently | guest code; the engine never observes an allocation (§4.3) | **High** — silent heap corruption (§9.1) |
+| `SLM4` | **No layout contract.** `__data_end`/`__stack_pointer`/`__heap_base` are per-module globals; two independently built modules choose overlapping regions unless the build assigns bases | `wasm-ld` defaults; §10 | **High** — silent overlap, and it is the *usual* outcome of a naive build |
 | `SLM5` | **No per-tenant accounting.** `MemoryBudget` is per store, charged once per memory. One shared memory means one number for N tenants: a script that grows it spends the monolith's budget, and `singleLinearMemoryBytes` caps the *memory*, not the tenant | `WasmStore.hpp` (`MemoryBudget`, `allocatedBytes_`); `MEMORY_PROVIDER.md` `MP-4` | **High** — the sandbox story weakens exactly where the scenario needs it |
 | `SLM6` | **No growth policy.** Any importer may `memory.grow`; a partition plan is unenforceable because the instruction has no region notion | §4.3; the `memory.grow` lowering | **Medium** — needs a host/build convention, not an engine check |
 | `SLM7` | **Re-instantiation resets shared state.** Active data segments run on every instantiation, so reloading a script re-runs its initialisers over the shared bytes. `Runtime::instantiate` is idempotent per `Module`, so "reload" means a new `Module` and a new resolution — easy to get wrong | `applyActiveSegments`; `Runtime::instantiate`'s early return | **Medium** — a host-side correctness bug triggered by a normal action |
 | `SLM8` | **No test coverage.** No case has two instances share one memory, none has B grow it and A observe the new size, none covers the lifetime rule | `Test/main.cpp` has a page-size *import* case and `WastScript.cpp` registers `spectest.memory`, but no sharing case | **Medium** — the mechanism is untested as a *feature* |
 | `SLM9` | **`Runtime` has no first-class sharing surface.** The host builds a `RegistryImportResolver` by hand and keeps it alive; there is no `Runtime::sharedMemory()` or "register this memory for import" convenience | `WasmRuntime.hpp` | **Low** — ergonomics, not correctness |
 | `SLM10` | **Table sharing has the same shape and less support.** Cross-module indirect calls need a shared table *and* a non-overlapping index allocation; the engine aliases imported tables correctly but nothing assigns indices | `resolveTable`; `JS_INTEGRATION.md` | **Medium** — a shared memory without a shared table half-solves the scenario |
-| `SLM11` | **No language/toolchain evidence.** Which of the tested languages can emit `--import-memory`, where each puts its stack, and whether it exports `__heap_base` are unmeasured for every pinned version | [`../languages/LF2_INDEX.md`](../languages/LF2_INDEX.md); §11 | **Medium** — the recipe is unrunnable without it |
+| `SLM11` | **No language/toolchain evidence.** Which of the tested languages can emit `--import-memory`, where each puts its stack, and whether it exports `__heap_base` are unmeasured for every pinned version | [`../languages/LF2_INDEX.md`](../languages/LF2_INDEX.md); §10 | **Medium** — the recipe is unrunnable without it |
 | `SLM12` | **No study of front-end hooks.** A memory rewrite (forcing `--import-memory`, injecting allocator imports, relocating data segments) is plausible but unstudied; `LEGACY_EXCEPTIONS.md` is the precedent for a desugaring pass | `LEGACY_EXCEPTIONS.md`; `PARSER_PROPOSALS.md` | **Low** — an option, not a need |
 | `SLM13` | **Determinism and debuggability.** With a shared heap, one module's allocation pattern changes another's addresses, so a script's behaviour depends on what ran before it; nothing documents that, and no tool attributes an address to a tenant | consequence of `SLM5` | **Low** — documentation, but it bites during debugging |
 
@@ -297,19 +297,19 @@ would be if it ever were.
 | Milestone | Work | Closes | Class | Done when |
 |---|---|---|---|---|
 | **SLM-0 — This study** ✅ | The three questions, the mechanism, the two recipes, the option matrix, the pitfall list, the priced accounting gap. | — | — | This note exists, is indexed, and `./Test/WasmJit '[docs]'` passes. |
-| **SLM-1 — The recipe, written down** | Fold §4.2 and §12.1 into a worked example: build flags per side, the resolver wiring for R1 and R2, the instantiation order. Cross-link from [`../EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) and [`../ABI.md`](../ABI.md). | `SLM1` | A | A reader can build and run the two-module case from the note alone, and the note says which recipe it recommends and why. |
+| **SLM-1 — The recipe, written down** | Fold §4.2 and §11.1 into a worked example: build flags per side, the resolver wiring for R1 and R2, the instantiation order. Cross-link from [`../EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) and [`../ABI.md`](../ABI.md). | `SLM1` | A | A reader can build and run the two-module case from the note alone, and the note says which recipe it recommends and why. |
 | **SLM-2 — Ownership and lifetime** | State the rule (the creator outlives every importer; prefer R2), spell out what happens under R1 when it is violated, and decide whether `Runtime` gains a convenience. The convenience is *priced*, not promised | `SLM2`, `SLM9` | A (docs) / B if a `Runtime` accessor is added | The lifetime rule is a sentence in the note and an assertion in the `SLM-4` test; the accessor is either shipped additively or recorded as not-worth-it |
-| **SLM-3 — The allocator contract** | Document the three supported shapes: one allocator module; disjoint partitions with one allocator each; the toolchain's main/side dynamic-linking story. Add the partition-overlap assertion a host can run at load time | `SLM3`, `SLM4`, `SLM6` | A | §10.1's trap is described as a *check* the host can perform, and §11's table says which shape each toolchain can produce |
+| **SLM-3 — The allocator contract** | Document the three supported shapes: one allocator module; disjoint partitions with one allocator each; the toolchain's main/side dynamic-linking story. Add the partition-overlap assertion a host can run at load time | `SLM3`, `SLM4`, `SLM6` | A | §9.1's trap is described as a *check* the host can perform, and §10's table says which shape each toolchain can produce |
 | **SLM-4 — The test set** | Four cases: cross-instance store/load; B grows and A observes (size *and* a load above A's old end); imported-memory lifetime; a layout assertion that the two modules' `__heap_base` ranges are disjoint | `SLM8` | A | The four cases run in the default suite under a new tag (`[shared-memory]`) and fail if the mechanism regresses |
 | **SLM-5 — Per-tenant accounting (priced, not proposed)** | What attribution would take: a per-instance charge at `memory.grow`, a `MemoryBudget` field for it, and the interaction with `MP-4` and `CFG-2`. Include the honest answer that it may be worth *nothing* to an embedder who already treats the memory as one tenant | `SLM5`, `SLM13` | C (would need an engine decision) | A written decision — implement or decline — with the cost of both. **No code in this milestone.** |
-| **SLM-6 — The language/toolchain study** | Run §11's matrix: build one minimal module per pinned toolchain with `--import-memory` (or its equivalent), record where the stack, heap and data land, and whether the toolchain emits or consumes `__heap_base` | `SLM11`, `SLM12` | A (measurement) | The table has a measured value or an explicit "not possible" per row, per pinned version — the standard the `LF-2` reports use |
-| **SLM-7 — The linker question (a watch item)** | §13 is the scoping: the five jobs a linker does, the DLL experiment, the capability ladder, and what only a linker could buy. Rungs 5–6 (assign the layout, then re-bind an already-built module) are the whole question, and they are **class E** | — (a decision, not a gap) | — / **E** if ever attempted | A trigger from §13.7 fires *and* §13's ladder shows the trigger cannot be met by the build-side recipe. Until then this row exists so the question stays answerable |
+| **SLM-6 — The language/toolchain study** | Run §10's matrix: build one minimal module per pinned toolchain with `--import-memory` (or its equivalent), record where the stack, heap and data land, and whether the toolchain emits or consumes `__heap_base` | `SLM11`, `SLM12` | A (measurement) | The table has a measured value or an explicit "not possible" per row, per pinned version — the standard the `LF-2` reports use |
+| **SLM-7 — The linker question (a watch item)** | §12 is the scoping: the five jobs a linker does, the DLL experiment, the capability ladder, and what only a linker could buy. Rungs 5–6 (assign the layout, then re-bind an already-built module) are the whole question, and they are **class E** | — (a decision, not a gap) | — / **E** if ever attempted | A trigger from §12.7 fires *and* §12's ladder shows the trigger cannot be met by the build-side recipe. Until then this row exists so the question stays answerable |
 
 Ordering: `SLM-1` and `SLM-2` first (one document, one rule); `SLM-4` next (it
 makes `SLM-1`'s example executable); `SLM-3` after the test exists, because a
 contract is only worth writing when a test can check it; `SLM-6` independently,
 whenever a language matters; `SLM-5` last and never as code by default; `SLM-7`
-never starts without a §13.7 trigger.
+never starts without a §12.7 trigger.
 
 Stop conditions:
 
@@ -322,9 +322,9 @@ Stop conditions:
 - If an embedder needs per-tenant accounting in practice, `SLM-5` becomes a
   proposal and gets its own class; it is not smuggled in as a `CONFIGURATION.md`
   field.
-- If a §13.7 trigger fires *and* §13.3's rungs 5–6 turn out to be reachable
+- If a §12.7 trigger fires *and* §12.3's rungs 5–6 turn out to be reachable
   without a second front end, `SLM-7` becomes a proposal — and the first thing it
-  must state is that it moves the engine away from the QVM model (§13.5). Until
+  must state is that it moves the engine away from the QVM model (§12.5). Until
   both hold, this note stays a study.
 
 ## 8. Test survey
@@ -354,48 +354,9 @@ The last one is worth its own sentence: it is the only automated defence against
 `SLM3`/`SLM4`, and it lives in the **host**, not the engine, because the engine
 cannot see where a module's allocator will start handing out blocks.
 
-## 9. References
+## 9. Appendix A: the options, and the pitfall each one buys
 
-- The mechanism: `WasmBase/WasmModuleInstance.cpp` (`resolveImports`,
-  `initializeMemories`, `~ModuleInstance`), `WasmBase/WasmImport.hpp`
-  (`resolveMemory`), `WasmBase/WasmRegistryImportResolver.{hpp,cpp}`
-  (`registerMemory`, `memorySatisfiesImport`), `WasmBase/WasmVMContext.hpp`,
-  `WasmBase/WasmMemory.hpp` (`LinearMemory`), `WasmBase/WasmStore.hpp`
-  (`createLinearMemory`, `releaseMemory`, `MemoryBudget`),
-  `LibJit/LibjitOpcodeDispatcher.cpp` (`memoryPointerForIndex`,
-  `effectiveMemoryAddress`).
-- The ABI a shared memory is exchanged through: [`../ABI.md`](../ABI.md)
-  (`VMContext*` as arg0, `(ptr, len)` in the flat/value tuples).
-- Neighbouring studies: [`MEMORY_PROVIDER.md`](MEMORY_PROVIDER.md) (backing and
-  the budget), [`MULTI_MEMORY.md`](MULTI_MEMORY.md) (several memories per
-  module), [`CUSTOM_PAGE_SIZES.md`](CUSTOM_PAGE_SIZES.md) (page size is part of
-  the type), [`MEMORY64.md`](MEMORY64.md) (index type is part of the type),
-  [`COMPONENT_MODEL.md`](COMPONENT_MODEL.md) (one memory + `realloc` as the
-  sanctioned multi-module answer), [`LEGACY_EXCEPTIONS.md`](LEGACY_EXCEPTIONS.md)
-  (the precedent for a build/front-end desugaring pass).
-- Policy: [`../SAFETY.md`](../SAFETY.md) §1 (not a sandbox) and §2 (budget),
-  [`../LAYERING.md`](../LAYERING.md) §2 (the engine states contracts, not
-  toolchain flags), [`../FRESHNESS.md`](../FRESHNESS.md) §2.4 (why §4 is stamped).
-- Evidence for the language matrix: [`../languages/LF2_INDEX.md`](../languages/LF2_INDEX.md)
-  and its `LF2_S*` arms; [`../languages/EVIDENCE.md`](../languages/EVIDENCE.md).
-- The DLL model, for §2.4 and §13: `man 3 dlopen`, `man 3 dlsym`, the ELF
-  System V ABI (relocations, `GOT`/`PLT`, `RTLD_GLOBAL`/`RTLD_LOCAL`) — and the
-  linked-library guidance every libc ships ("do not statically link a second
-  copy of me"), which is the DLL-shaped statement of §10.1's trap.
-- The WebAssembly build side, for §13: the `wasm-ld` manual
-  (`--import-memory`, `--export-memory`, `--initial-memory`, `--global-base`,
-  `--stack-first`, `--experimental-pic`, `-r`), Emscripten's
-  `MAIN_MODULE`/`SIDE_MODULE` dynamic-linking model, and
-  [`COMPONENT_MODEL.md`](COMPONENT_MODEL.md) for the specified alternative.
-- The predecessor, for §13.5: Quake 3's QVM (`qcommon/vm.c` in the published
-  `id-Software/Quake-III-Arena` tree) — one data segment per VM, a `syscall`
-  boundary, and `VM_ArgPtr` translating a VM offset into a host pointer. Our own
-  framing of the lineage is [`../API_ABI_STABILITY.md`](../API_ABI_STABILITY.md)
-  §2.1, gate `G1` ("the spiritual successor to Quake 3's QVM").
-
-## 10. Appendix A: the options, and the pitfall each one buys
-
-### 10.1 The trap, written out
+### 9.1 The trap, written out
 
 This is the failure the scenario walks into, and it is worth stating exactly
 because **nothing in it traps**:
@@ -421,7 +382,7 @@ Three shapes avoid it, and they are the only three this note recommends:
 | **Disjoint partitions** | each module is linked with a distinct `--global-base`, so its `__heap_base` lies inside its own region; each keeps its own allocator, which now only hands out addresses in that region | every module's region size is chosen up front; no module grows into its neighbour | any module calls `memory.grow` (`SLM6`) — growth is not partitionable |
 | **Toolchain dynamic linking** | the main module owns the memory, the allocator and the stack; side modules are position-independent and use the main module's symbols | the toolchain's dynamic-linking mode (Emscripten `MAIN_MODULE`/`SIDE_MODULE`, `wasm-ld --experimental-pic`), with its own constraints | a side module needs to grow memory (usually forbidden by that model), or the two sides were built by different toolchains |
 
-### 10.2 The option matrix
+### 9.2 The option matrix
 
 | Option | Sharing | Copy cost | What it buys | What it costs | Pitfalls it owns |
 |---|---|---|---|---|---|
@@ -439,11 +400,11 @@ preferred because it makes `SLM2` structural; E when the toolchain already
 supports it and the modules are third-party; F when the "scripts" are known at
 build time; A for anything untrusted; G as the long-term story, not the near one.
 
-### 10.3 The fourteen pitfalls
+### 9.3 The fourteen pitfalls
 
-Numbered so §10.2 can refer to them; each is a *behaviour*, not a suspicion.
+Numbered so §9.2 can refer to them; each is a *behaviour*, not a suspicion.
 
-1. **Allocator aliasing** — two allocators, one heap, silent corruption (§10.1).
+1. **Allocator aliasing** — two allocators, one heap, silent corruption (§9.1).
 2. **Data-segment overwrite** — every instantiation runs the module's active
    segments; a reload re-initialises shared bytes (`SLM7`).
 3. **Stack collision** — `__stack_pointer` is a module-local global; two
@@ -473,14 +434,14 @@ Numbered so §10.2 can refer to them; each is a *behaviour*, not a suspicion.
 14. **Component expectations** — the canonical ABI *does* marshal, so moving to
     components does not by itself remove copies (option G).
 
-## 11. Appendix B: the language-memory-layout study
+## 10. Appendix B: the language-memory-layout study
 
 `SLM-6` is a measurement, not an assertion, so this appendix is a **plan** for
 it: a list of questions with a column to fill, not a table of claims. Every cell
 below is `verify`, and the standard is the one the `LF-2` reports use — a pinned
 toolchain version, a command, and the value it printed (or "not possible").
 
-### 11.1 The questions
+### 10.1 The questions
 
 | # | Question | Why it decides the recipe |
 |---|---|---|
@@ -494,7 +455,7 @@ toolchain version, a command, and the value it printed (or "not possible").
 | Q8 | Does it emit an **indirect-call table** per module? | decides the table-sharing work (pitfall 9) |
 | Q9 | Does it support **dynamic linking / PIC**? | decides whether option E is available (pitfall 14's sibling) |
 
-### 11.2 The candidate rows
+### 10.2 The candidate rows
 
 The arms the `LF-2` study already built and ran are the natural first rows
 (`../languages/LF2_S1_C_CPP.md`, `LF2_S2_LLVM.md`, `LF2_S3_AS.md`,
@@ -512,7 +473,7 @@ Two rules for the study, both borrowed from `../FRESHNESS.md`:
 - **A pinned version is part of the answer.** "Rust can do it" is not a fact
   about Rust; "the pinned Rust toolchain emits X for this command" is.
 
-### 11.3 What the study would change
+### 10.3 What the study would change
 
 Nothing in §5's mechanism table — the engine does not care which toolchain
 produced the module. It changes **§4.2's recommendation**: if a language cannot
@@ -520,13 +481,13 @@ import a memory (Q1 = no), that language's modules can only participate through
 option A (copy) or F (build-time merge), and `SLM-1` must say so rather than
 suggesting a recipe that will not build.
 
-## 12. Appendix C: pseudocode
+## 11. Appendix C: pseudocode
 
 **None of this is C++**, and none of it is a header. It is the shape the recipe
 (`SLM-1`) would take, written down so the next reader does not have to
 reconstruct it from the source comments.
 
-### 12.1 The wiring
+### 11.1 The wiring
 
 ```
 // ── R2: the host owns the memory (recommended) ───────────────────────────────
@@ -541,7 +502,7 @@ memory   = store.createLinearMemory(
 resolver = RegistryImportResolver()
 resolver.registerMemory("env", "memory", memory) // publishes it under module "env"
 
-// every module is built with:  --import-memory --initial-memory=<same>  (see §11)
+// every module is built with:  --import-memory --initial-memory=<same>  (see §10)
 monolith = runtime.instantiate(loadMonolith(), resolver)   // imports "env"."memory"
 scriptA  = runtime.instantiate(loadScript("a"), resolver)  // imports "env"."memory"
 scriptB  = runtime.instantiate(loadScript("b"), resolver)  // imports "env"."memory"
@@ -556,7 +517,7 @@ scriptA  = runtime.instantiate(loadScript("a"), resolver)      // imports "game"
 // invariant: `monolith` outlives every script above.
 ```
 
-### 12.2 The layout plan (build side)
+### 11.2 The layout plan (build side)
 
 ```
 // Each tenant gets a disjoint region inside the one memory.
@@ -583,7 +544,7 @@ assert_disjoint(  exports(monolith).__heap_base, exports(scriptA).__heap_base,
                   exports(scriptB).__heap_base )        // see SLM-4
 ```
 
-### 12.3 The allocator contract
+### 11.3 The allocator contract
 
 ```
 // Shape 1 — one allocator, imported by everyone.
@@ -605,7 +566,7 @@ others     import:       malloc, free, realloc
 // pitfall 1 and 9 are handled by the toolchain; pitfall 6 is usually forbidden.
 ```
 
-### 12.4 A worked exchange
+### 11.4 A worked exchange
 
 ```
 // The monolith hands a struct to a script, the script writes results in place.
@@ -627,9 +588,9 @@ What the pseudocode deliberately does **not** show: a `memory.grow` in the middl
 of the exchange. If one is needed, it happens through the allocator's normal path
 and every module must be prepared for the base to move — which this engine
 handles (the base is reloaded per access, §4.1) but an allocator's cached
-`memory.size()` does not (§10.3 pitfall 5).
+`memory.size()` does not (§9.3 pitfall 5).
 
-## 13. Appendix D: if the engine grew a linker
+## 12. Appendix D: if the engine grew a linker
 
 **Status: a study, not a plan.** §3 says the engine does not grow a linker, and
 that stays true for this milestone. The question is recorded as a long-run one
@@ -638,7 +599,7 @@ somebody has to be the loader.* This appendix says what "being the loader" would
 mean, what it would buy, and what it would cost — so that a future decision is a
 decision rather than a discovery. `SLM-7` in §7 is the watch item this feeds.
 
-### 13.1 What a linker is: five jobs
+### 12.1 What a linker is: five jobs
 
 The word "linker" hides a short list. Splitting it is the whole point, because
 this engine already does most of it.
@@ -670,7 +631,7 @@ phrase suggests — and a much larger job than it sounds, because L3 is where ev
 piece of layout knowledge lives, and layout is the one thing a validated `Module`
 does not contain.
 
-### 13.2 The DLL experiment, simplified
+### 12.2 The DLL experiment, simplified
 
 Take the analogy literally. What happens when a C/C++ program `dlopen()`s two
 libraries?
@@ -686,7 +647,7 @@ app:  h1 = dlopen("libbig.so",   RTLD_NOW);  f = dlsym(h1, "alloc");
       g(64)   -> 0x7f2a_1000        # the same bytes; no error, no trap
 ```
 
-That is §10.1 in a different notation: **one address space, two allocators.** The
+That is §9.1 in a different notation: **one address space, two allocators.** The
 *loader* does not prevent it, and neither does the linker — the failure is a
 property of the code, not of the loading mechanism. What prevents it in a healthy
 ELF process is a set of conventions the toolchain enforces, and each has an exact
@@ -694,7 +655,7 @@ analogue here:
 
 | ELF/PE convention | What it prevents | Our analogue |
 |---|---|---|
-| **one shared libc**, never a second static copy | two `malloc`s over one heap | §10.1 shape 1: one allocator module, or the host's allocator |
+| **one shared libc**, never a second static copy | two `malloc`s over one heap | §9.1 shape 1: one allocator module, or the host's allocator |
 | **`GOT`/`PLT` indirection** | each library binding its own copy of a symbol | `Callable` + `VMContext`: the indirection exists, but there is no relocation pass and no lazy binding |
 | **`RTLD_GLOBAL`** (or `-rdynamic`) | two libraries reaching *different* instances of one global | `registerExports(instance, "name")` publishing into one registry |
 | **`-Wl,--no-undefined`** | a missing symbol discovered at first call | `UnresolvedImportException` **at instantiation** — we already fail early |
@@ -713,7 +674,7 @@ no teardown hook). So the DLL analogy is honest up to *unloading* and stops ther
 — which matters below, because "unload" is the one thing a linker cannot give you
 either.
 
-### 13.3 What the engine would have to provide: a capability ladder
+### 12.3 What the engine would have to provide: a capability ladder
 
 Each rung is a capability a load-time linker would need. "Today" says what exists;
 the class column uses [`../API_ABI_STABILITY.md`](../API_ABI_STABILITY.md) §4.1's
@@ -733,7 +694,7 @@ A/B/C/E vocabulary.
 | 9 | per-tenant accounting | ❌ | §7 `SLM-5` | C |
 
 **Rungs 5–6 are the whole question, and they are explicitly out of scope for
-the short term** (a decision, not an omission — §13.7 keeps the trigger that
+the short term** (a decision, not an omission — §12.7 keeps the trigger that
 would reopen it). Everything below them is the resolver we already have; rung 7
 buys little (the binding is already eager and cheap); **rung 8 shipped**, which is
 what makes "the engine has no `dlclose`" no longer true: an instance can be given
@@ -749,13 +710,13 @@ module, and a new failure surface (a rewrite that changes an offset the validato
 already approved). `SLM-7` is not started for that reason, and the note says so
 rather than leaving the phrase "grow a linker" to imply something cheaper.
 
-### 13.4 What it would buy — and what it would not
+### 12.4 What it would buy — and what it would not
 
 | The embedder's ask | Bought by an engine linker? | What buys it today |
 |---|---|---|
-| "one memory, N modules, no overlap" | **partly** — it would compute the layout; today the recipe does | per-module `--global-base` + the `SLM-4` overlap assertion (§12.2) |
+| "one memory, N modules, no overlap" | **partly** — it would compute the layout; today the recipe does | per-module `--global-base` + the `SLM-4` overlap assertion (§11.2) |
 | "load two modules that were built **without knowing about each other** and make them coexist" | **yes, uniquely** | nothing — this is the only capability only a load-time linker has |
-| "one allocator across N modules" | **no** | a build/ABI choice: one allocator module, or the host's (§10.1) |
+| "one allocator across N modules" | **no** | a build/ABI choice: one allocator module, or the host's (§9.1) |
 | "no unresolved symbols at load" | **no, already there** | `UnresolvedImportException` at instantiation |
 | "one canonical type across modules" | **no, already there** | store-scoped `TypeId` |
 | "reload a script without restarting" | **no** — that is teardown, not linking | **shipped 2026-11-01**: `Runtime::unload` then `instantiate` again (the `Module` stays loaded) |
@@ -769,7 +730,7 @@ third-party module it cannot rebuild. Everything else on the list is already
 there, or belongs to the build. That is a real capability and a narrow one, which
 is exactly why it is a watch item rather than a plan.
 
-### 13.5 Why not now: the QVM lineage and the trust model
+### 12.5 Why not now: the QVM lineage and the trust model
 
 The engine is the spiritual successor of **Quake 3's QVM**
 ([`../API_ABI_STABILITY.md`](../API_ABI_STABILITY.md) §2.1, gate `G1`), and Q3
@@ -777,7 +738,7 @@ solved "many modules in one process" the *opposite* way to a linker:
 
 | Q3's choice | What it means | What it costs | What it avoids |
 |---|---|---|---|
-| **one data segment per VM** (`qagame`, `cgame`, `ui`) | each module has its own address space; offsets are never shared | a module cannot hand the engine a pointer into its own heap | every layout problem in §13.3 rungs 5–6 |
+| **one data segment per VM** (`qagame`, `cgame`, `ui`) | each module has its own address space; offsets are never shared | a module cannot hand the engine a pointer into its own heap | every layout problem in §12.3 rungs 5–6 |
 | **a fixed bytecode image**, not relocatable code | the VM's bytecode is loaded at a fixed base; nothing is rebound | no JIT, no native ABI | relocations, `GOT`, bindings |
 | **a narrow `syscall` boundary** | cross-module traffic is a numbered call with marshalled arguments | a copy per exchange (the cost this note exists to remove) | the "who owns this pointer" question |
 | **`VM_ArgPtr` translation** | a VM offset becomes a host pointer only when the host needs one | explicit, checked, bounded | silent pointer aliasing |
@@ -801,23 +762,23 @@ question needs a trigger rather than a roadmap slot. Two concrete losses to weig
   [`../SAFETY.md`](../SAFETY.md) would need a policy for it before the first line
   of it existed.
 
-### 13.6 The 80% without a linker
+### 12.6 The 80% without a linker
 
 Four things buy most of the benefit today, in ascending order of commitment:
 
 | # | What it is | What it covers | What it costs |
 |---|---|---|---|
 | 1 | **The recipe in this note** (R2 + per-module `--global-base` + the `SLM-4` overlap assertion) | coexistence for modules you build | a build recipe and a host-side check |
-| 2 | **`wasm-ld -r` / one supermodule** (option F, §10.2) | the layout, computed by a real linker, at build time | a rebuild when any script changes |
+| 2 | **`wasm-ld -r` / one supermodule** (option F, §9.2) | the layout, computed by a real linker, at build time | a rebuild when any script changes |
 | 3 | **The toolchain's dynamic linking** (option E: `MAIN_MODULE`/`SIDE_MODULE`, `--experimental-pic`) | coexistence for modules built by *that* toolchain, plus the table and the allocator | toolchain support, and its own constraints (no side-module growth) |
 | 4 | **The component model** (option G) | a *specified* boundary: one memory + `realloc` per component, canonical ABI | marshalling at lift/lower — but it is the long-term, specified answer |
 
 Option 1 is what this note delivers; options 2–4 are why a linker is not on the
 critical path. Note the shape of the gap: every option above gives coexistence for
 modules **you can rebuild**. Only a load-time linker would cover a module you
-*cannot* — which is precisely §13.7's first trigger.
+*cannot* — which is precisely §12.7's first trigger.
 
-### 13.7 What would make us revisit
+### 12.7 What would make us revisit
 
 A trigger list, so `SLM-7` stays a decision instead of drifting into a roadmap:
 
@@ -836,13 +797,13 @@ A trigger list, so `SLM-7` stays a decision instead of drifting into a roadmap:
 
 Until one of the remaining triggers fires:
 - `SLM-1`…`SLM-6` proceed as written;
-- `SLM-7` stays a watch item with the ladder in §13.3 as its cost estimate;
+- `SLM-7` stays a watch item with the ladder in §12.3 as its cost estimate;
 - and this appendix stays what it says it is — a study, so that the next person to
   ask "why doesn't the engine just link them?" gets an answer with numbers in it
   instead of a shrug.
 
 **The one-line answer, for the record:** the engine already *resolves*, *dedupes*
-and now *unloads* (§13.1's L1, L2, L4 and rung 8); the only missing job is *layout*
+and now *unloads* (§12.1's L1, L2, L4 and rung 8); the only missing job is *layout*
 (L3), and doing it at load time means rewriting modules that were built without
 knowledge of each other — class E, and a step away from the QVM model. That is why
 the build does it, and why this note ends with a recipe rather than an engine
@@ -860,7 +821,7 @@ feature.
 
 
 
-## 14. Appendix E: frontend-only "runtime patching" (a documented option, no code)
+## 13. Appendix E: frontend-only "runtime patching" (a documented option, no code)
 
 The problem rungs 5–6 would solve is *layout*: several modules, one memory, and
 nobody to assign the offsets. There is a cheaper shape that touches **no
@@ -879,17 +840,17 @@ wants.
 
 | Aspect | Bought by injection? | Why |
 |---|---|---|
-| one heap across modules | **yes** | every allocator call lands in the same host allocator, so two modules cannot hand out the same block (§10.1's trap disappears by construction) |
+| one heap across modules | **yes** | every allocator call lands in the same host allocator, so two modules cannot hand out the same block (§9.1's trap disappears by construction) |
 | allocator policy per workload | **yes** | the embedder picks the allocator, not the toolchain |
 | a language-independent rule | **yes** | the pass matches *symbols*, not source languages: C, C++, Rust, Zig, Kotlin/Wasm, MoonBit, AssemblyScript and Dart all end up calling something |
-| **stacks** | **no** | `__stack_pointer` is a per-module global; injecting an allocator does not give two modules one stack. Per-module stacks inside one memory remain, and their regions still have to be disjoint (§10.3 pitfall 3) |
+| **stacks** | **no** | `__stack_pointer` is a per-module global; injecting an allocator does not give two modules one stack. Per-module stacks inside one memory remain, and their regions still have to be disjoint (§9.3 pitfall 3) |
 | **static data layout** | **partly** | relocating data segments is a second rewrite, and it is rung 6 under another name |
 | a module with no visible allocator | **no** | an inlined bump pointer, a static buffer or a language GC (Go, Kotlin/Wasm) has no `malloc` to rebind |
 
 **The hard parts, stated as work rather than as risk.**
 
 - **Recognising the allocator.** It is a *symbol name* per toolchain, and those
-  names are not stable API. The pass needs a per-toolchain table (the one §11
+  names are not stable API. The pass needs a per-toolchain table (the one §10
   already plans) plus a fallback that leaves an unknown module alone.
 - **The ABI of the injected call.** The host function must match the module's
   expectation exactly: size and alignment types, `realloc` semantics, and the
@@ -903,7 +864,7 @@ wants.
   `LEGACY_EXCEPTIONS.md` carries, and the reason that note has a test suite.
 - **GC languages.** A module with its own tracing GC has no `malloc` to rebind;
   the pass can observe its heap, not replace it. Those languages stay on the copy
-  path (option A) or on the embedder's initializer contract (§15).
+  path (option A) or on the embedder's initializer contract (§14).
 
 **Why it is documented and not built.** It is a front-end pass with a
 per-toolchain table, an ABI contract and its own test suite — `SLM-12`'s
@@ -911,9 +872,9 @@ per-toolchain table, an ABI contract and its own test suite — `SLM-12`'s
 matrix at once. It is the most promising backend-neutral direction in this note,
 and the one with the clearest failure mode (a rewrite that changes behaviour), so
 it belongs behind the same gate as the rest: written down, scoped, not started
-until a §13.7 trigger fires.
+until a §12.7 trigger fires.
 
-## 15. Appendix F: the embedder-imposed initializer contract
+## 14. Appendix F: the embedder-imposed initializer contract
 
 The engine stays agnostic about data model, memory model and layout. An
 **embedder** need not be. The last option in this note is a *contract on modules*,
@@ -955,7 +916,7 @@ by itself — "every mod shares this class library" — except the shared thing 
 **Its limits, plainly.** It only covers modules the embedder can *require* to
 export an initializer; a third-party module cannot be forced into it. It does not
 make an allocator safe by itself — two modules can still both `malloc` into one
-heap unless the contract also names the allocator (§10.1). And it is
+heap unless the contract also names the allocator (§9.1). And it is
 *unverifiable by the engine*: the engine sees a call to an export and a store into
 a global, and cannot tell a negotiated layout from any other store.
 
@@ -963,3 +924,42 @@ That is why this appendix is documentation: the engine's job is to keep the
 modules' memory *addressable* and the layout *unconstrained*; the embedder's job
 is to impose a layout on the modules it controls. The two compose without a line
 of engine code.
+
+## 15. References
+
+- The mechanism: `WasmBase/WasmModuleInstance.cpp` (`resolveImports`,
+  `initializeMemories`, `~ModuleInstance`), `WasmBase/WasmImport.hpp`
+  (`resolveMemory`), `WasmBase/WasmRegistryImportResolver.{hpp,cpp}`
+  (`registerMemory`, `memorySatisfiesImport`), `WasmBase/WasmVMContext.hpp`,
+  `WasmBase/WasmMemory.hpp` (`LinearMemory`), `WasmBase/WasmStore.hpp`
+  (`createLinearMemory`, `releaseMemory`, `MemoryBudget`),
+  `LibJit/LibjitOpcodeDispatcher.cpp` (`memoryPointerForIndex`,
+  `effectiveMemoryAddress`).
+- The ABI a shared memory is exchanged through: [`../ABI.md`](../ABI.md)
+  (`VMContext*` as arg0, `(ptr, len)` in the flat/value tuples).
+- Neighbouring studies: [`MEMORY_PROVIDER.md`](MEMORY_PROVIDER.md) (backing and
+  the budget), [`MULTI_MEMORY.md`](MULTI_MEMORY.md) (several memories per
+  module), [`CUSTOM_PAGE_SIZES.md`](CUSTOM_PAGE_SIZES.md) (page size is part of
+  the type), [`MEMORY64.md`](MEMORY64.md) (index type is part of the type),
+  [`COMPONENT_MODEL.md`](COMPONENT_MODEL.md) (one memory + `realloc` as the
+  sanctioned multi-module answer), [`LEGACY_EXCEPTIONS.md`](LEGACY_EXCEPTIONS.md)
+  (the precedent for a build/front-end desugaring pass).
+- Policy: [`../SAFETY.md`](../SAFETY.md) §1 (not a sandbox) and §2 (budget),
+  [`../LAYERING.md`](../LAYERING.md) §2 (the engine states contracts, not
+  toolchain flags), [`../FRESHNESS.md`](../FRESHNESS.md) §2.4 (why §4 is stamped).
+- Evidence for the language matrix: [`../languages/LF2_INDEX.md`](../languages/LF2_INDEX.md)
+  and its `LF2_S*` arms; [`../languages/EVIDENCE.md`](../languages/EVIDENCE.md).
+- The DLL model, for §2.4 and §12: `man 3 dlopen`, `man 3 dlsym`, the ELF
+  System V ABI (relocations, `GOT`/`PLT`, `RTLD_GLOBAL`/`RTLD_LOCAL`) — and the
+  linked-library guidance every libc ships ("do not statically link a second
+  copy of me"), which is the DLL-shaped statement of §9.1's trap.
+- The WebAssembly build side, for §12: the `wasm-ld` manual
+  (`--import-memory`, `--export-memory`, `--initial-memory`, `--global-base`,
+  `--stack-first`, `--experimental-pic`, `-r`), Emscripten's
+  `MAIN_MODULE`/`SIDE_MODULE` dynamic-linking model, and
+  [`COMPONENT_MODEL.md`](COMPONENT_MODEL.md) for the specified alternative.
+- The predecessor, for §12.5: Quake 3's QVM (`qcommon/vm.c` in the published
+  `id-Software/Quake-III-Arena` tree) — one data segment per VM, a `syscall`
+  boundary, and `VM_ArgPtr` translating a VM offset into a host pointer. Our own
+  framing of the lineage is [`../API_ABI_STABILITY.md`](../API_ABI_STABILITY.md)
+  §2.1, gate `G1` ("the spiritual successor to Quake 3's QVM").

@@ -180,7 +180,7 @@ namespace {
 
 //! Rewrites one function body: superseded `try`/`catch`/`catch_all`/`rethrow`/
 //! `delegate` into the final `try_table`/`throw_ref` encoding. The shape it
-//! emits is the one docs/proposals/LEGACY_EXCEPTIONS.md §10.3 works out:
+//! emits is the one docs/proposals/LEGACY_EXCEPTIONS.md §9.3 works out:
 //!
 //!     block <bt>                      ; A: the try's label, the merge point
 //!       block <last arm payload …>    ; arms open in *reverse* order, so the

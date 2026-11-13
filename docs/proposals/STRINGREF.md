@@ -30,7 +30,7 @@ Follows the same split as [`GC.md`](GC.md) / [`SIMD.md`](SIMD.md) /
 ## 2. What the proposal demands
 
 Reference-Typed Strings is a post-3.0 proposal (it is outside the Wasm 3.0 GC
-MVP; `GC.md` §10 places it last).
+MVP; `GC.md` §9 places it last).
 
 - One new reference type `stringref`, nullable and opaque (like `externref`).
   A null `stringref` traps on every string instruction except `string.eq`.
@@ -173,7 +173,7 @@ encoding collision (`STR1`) remains, and it is external to this engine.
 | **STR-7 — Embedder bridge** | ✅ `createFromUtf8`/`createFromWtf8`/`createFromWtf16` and `copyToUtf8`/`copyToWtf8`/`copyToWtf16`, with `StringObject*` passed through `callCallable`. | STR5 | A host string survives a call round-trip. |
 | **STR-8 — Lifetime** | ✅ Reference-counted strings, views and iterators (`StringStore::retain`/`release`), driven by `refClone`/`refDrop` and the GC walker; zero count frees and credits the budget. Host strings are owned. | STR9 | A long-lived Store creating many short strings stays bounded: the direct RC test and the JIT `drop`-a-concat test observe the count return to baseline. |
 
-The encoding-level staging is `GC.md` §10.6 (`SR-1`…`SR-3`); this note's
+The encoding-level staging is `GC.md` §9.6 (`SR-1`…`SR-3`); this note's
 milestones are the same work seen from the proposal side. The implemented
 surface is complete — types, section, core, views, GC arrays, embedder bridge
 and lifetime — with only the proposal-side encoding collision (`STR1`) left
@@ -215,7 +215,7 @@ cases**.
   https://github.com/WebAssembly/stringref/blob/main/proposals/stringref/Overview.md
 - Spec — GC and reference types (the substrate):
   https://webassembly.github.io/spec/core/syntax/types.html
-- In-repo: [`GC.md`](GC.md) §10 (Beyond 3.0), [`REFERENCE_TYPES.md`](REFERENCE_TYPES.md),
+- In-repo: [`GC.md`](GC.md) §9 (Beyond 3.0), [`REFERENCE_TYPES.md`](REFERENCE_TYPES.md),
   [`FUNCTION_REFERENCES.md`](FUNCTION_REFERENCES.md), [`../SAFETY.md`](../SAFETY.md),
   [`../ABI.md`](../ABI.md); sources `WasmBase/WasmType.hpp` (`ValueTypeCode`,
   `isModeledValueTypeCode`), `WasmBase/WasmString.hpp`/`.cpp`

@@ -7,12 +7,12 @@ ABI/interop dimension the cluster reports did not treat as one subject: how a
 language sees WasmJit's exports and synthetic host modules, how the C/C++ runtime
 and a JavaScript bridge see the language's exports, and where each language sits
 on the scalar-to-GC/reference difficulty scale. It points at
-`EMBEDDING_SURFACE.md` §13–§15 and adds the §11 ownership map. It does **not**
+`EMBEDDING_SURFACE.md` §12–§14 and adds the §11 ownership map. It does **not**
 change any `LF-2` verdict.
 
 This is deliberately an amendment to the language-feasibility set, not a new
 language charter. The host-binding contract it elaborates is
-[`EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) §12 (“Host bindings: guide,
+[`EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) §11 (“Host bindings: guide,
 generator, or embedder?”).
 
 ## 1. Document map
@@ -220,7 +220,7 @@ The pattern is stable:
   runtime-specific”, not “a C host cannot hold the value”. A C **host** can
   carry an opaque `externref`/GC pointer; a C **guest** cannot declare a typed
   `(ref $T)` import without a GC-capable toolchain. See
-  [`EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) §14.
+  [`EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) §13.
 - **A** ends at scalars and at pointers the host already owns.
 - **B** begins when the value has a **guest-memory representation**: strings,
   lists, records, tuples, result buffers, `v128`, and language-specific object
@@ -232,7 +232,7 @@ The pattern is stable:
   the component Canonical ABI adapter) understands it.
 
 This is the same line as
-[`EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) §12: `A`/`B` are the
+[`EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) §11: `A`/`B` are the
 descriptor-and-template generator’s territory; `C` is where the embedder’s
 runtime adapter is unavoidable.
 
@@ -304,7 +304,7 @@ host-to-guest templates and the SWIG/Glue boundary.
 ## 9. Consequences for the guide and generator plan
 
 The matrix turns the host-binding recommendation in
-[`EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) §12 into a language-planning
+[`EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) §11 into a language-planning
 rule:
 
 1. **Start with A.** A generated scalar/pointer declaration adapter is useful for
@@ -350,7 +350,7 @@ verdicts.
 ## 11. Problem ownership map
 
 The canonical definitions and decision rules are
-[`EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) §16.1–§16.2. This table applies
+[`EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) §15.1–§15.2. This table applies
 them to the language arms. The one-line version:
 
 > **ENG** changes the engine contract; **EMB** changes the host/runtime policy;
@@ -396,7 +396,7 @@ system, which is host-side/tooling, not a language capability.
 
 ## 12. References
 
-- [`EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) §12 — host-binding guide,
+- [`EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) §11 — host-binding guide,
   descriptor-driven generation, per-language limits and the embedder fallback;
   §13 — native C++ objects/C structs, opaque handles, typed handle tables,
   `externref`/finalizer boxes, and the engine-vs-embedder boundary; §14 — GC

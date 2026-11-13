@@ -61,7 +61,7 @@ embedder supplies the policy, engine or event loop.
 |---|---|---|---|
 | Multi-agent scheduling and thread pools | The embedder | `ConcurrencyModel::Agents`, per-agent `ExecutionState`, the waiter table, the `ComponentExecutor` hook | `THREADSAFETY.md` §9–§10; `proposals/THREADS.md`; `COMPONENT_MODEL.md` `CMD3` |
 | JavaScript engine, JS API and JS object model | The embedder | `ImportResolver`, `Callable`, `HostBridge`, `Module::importDescriptors()` / `exportDescriptors()` | `JS_INTEGRATION.md` `JSD1`–`JSD6` |
-| Promise / event-loop integration, JSPI `WebAssembly.Suspending` / `promising` | The embedder | `HostContinuation`, `HostContinuationScheduler`, `submit*`/`onSuspended*`/`onCompleted*` | `JS_INTEGRATION.md` `JS5`; `STACK_SWITCHING.md` §4/§10.12 |
+| Promise / event-loop integration, JSPI `WebAssembly.Suspending` / `promising` | The embedder | `HostContinuation`, `HostContinuationScheduler`, `submit*`/`onSuspended*`/`onCompleted*` | `JS_INTEGRATION.md` `JS5`; `STACK_SWITCHING.md` §4/§9.12 |
 | ESM loader, URL resolution and import maps | The embedder | Binary module loading and `(module, field)` import resolution | `JS_INTEGRATION.md` `JS6` |
 | `js-prototypes` configuration | The embedder | The descriptor/RTT/JS-Types metadata surface | `JS_INTEGRATION.md` `JS8` |
 | WASI function exports and host imports | The embedder | `ImportResolver`, native imports, `VMContext::hostData` | `WasmImport.hpp`; `WasmNativeImport.hpp` |

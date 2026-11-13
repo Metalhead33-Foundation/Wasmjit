@@ -64,7 +64,7 @@ struct ExecutionLimits {
 //! `wasm_exn_slot()` / `currentTailCallState()` once per function, and those
 //! helpers resolve the *current* execution state. This is the seam that makes
 //! fibre-style continuations possible without changing the generated ABI
-//! (docs/proposals/STACK_SWITCHING.md §10.7–§10.8).
+//! (docs/proposals/STACK_SWITCHING.md §9.7–§9.8).
 //!
 //! The object is deliberately non-copyable and non-movable: `DeferStack` points
 //! at the inline `deferRecords` array, and generated frames may hold a

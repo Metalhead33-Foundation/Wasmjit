@@ -2,13 +2,14 @@
 
 *`WASM::Runtime`, the Umbrella Header, Versioning, and the Include Set*
 
-Status: design note + implementation reference (revision 31 — 2026-11-12).
-`Tools/Bindings/` now has a typed schema model, modular emitters, complete
-descriptor/candidate schemas, and a C++-front-end path that produces both JSON
-and every non-C++ header target. `WasmBase/WasmCallCache.hpp` remains the
-optional libffi precache. This note answers `AAS1`/`AAS2` of
-[`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) and records the fate of two empty
-placeholder headers. The binding-tool snapshot is in §10.
+Status: implementation reference + design note (revision 32 — 2026-11-13).
+`WASM::Runtime` is shipped (`ES-1`…`ES-6` are all closed), so §2, §4 and §4.7
+describe the surface as it is rather than as it was planned. `Tools/Bindings/`
+has a typed schema model, modular emitters, complete descriptor/candidate schemas,
+and a C++-front-end path that produces both JSON and every non-C++ header target;
+`WasmBase/WasmCallCache.hpp` remains the optional libffi precache. This note
+answers `AAS1`/`AAS2` of [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) and records
+the fate of two empty placeholder headers. The binding-tool snapshot is in §10.
 Audience: anyone who will freeze the public surface, package the library, write
 an embedder, or implement a backend.
 
@@ -16,24 +17,27 @@ Four deliverables, in the order the questions were asked:
 
 1. **Is there room for a `WASM::Runtime`?** (the `JSRuntime` / `JSContext` split)
    — and therefore should `WasmRuntime.hpp` be filled or deleted? **Verdict:
-   fill it.** The role is real, the file is the right home, and it fixes more
-   than it costs. A **`WASM::Context`** has no role left: the realm is
-   `ModuleInstance`, the execution context is `Agent`/`ExecutionState`, the
-   config is `RuntimeConfig` — so `WasmContext.hpp` is **deleted**, and
+   fill it** — and it is filled (§4.7). The role was real, the file was the right
+   home, and it fixed more than it cost. A **`WASM::Context`** has no role left:
+   the realm is `ModuleInstance`, the execution context is `Agent`/`ExecutionState`,
+   the config is `RuntimeConfig` — so `WasmContext.hpp` is **deleted**, and
    §3.1–§3.2 record why each candidate meaning lost the name.
 2. **What should the runtime's surface actually be?** — the ownership table, the
    profile and diagnostic defaults (with
-   [`proposals/PROFILES.md`](proposals/PROFILES.md)), and a C++-style skeleton of
-   `WasmRuntime.hpp` (§4.6–§4.7).
+   [`proposals/PROFILES.md`](proposals/PROFILES.md)), and the header that
+   implements them (§4.6–§4.7).
 3. **The umbrella header and the documented include set** — with the awkward
-   facts: the public load API currently requires an `Elv::Io::Device`, and seven
-   `WasmBase/` headers pull in the vendored `Elvavena`/`Euphemy` headers.
-4. **Versioning, soname and install** — what exists (qmake defaults only), what
-   the policy should be, and how it ties to the frozen surfaces of
-   `API_ABI_STABILITY.md` §2.2.
+   facts that survived the freeze: the low-level parser still takes an
+   `Elv::Io::Device`, and five `WasmBase/` headers pull in the vendored
+   `Elvavena`/`Euphemy` headers (§6.2).
+4. **Versioning, soname and install** — the shipped policy (`ES-4`/`ES-5`) and how
+   it ties to the frozen surfaces of `API_ABI_STABILITY.md` §2.2.
 
-Revision 31 adds §17, a feasibility study of a GObject-shaped host object
-runtime; it records no implementation and opens no engine work.
+Revision 32 moves References to the end (§17), which is where every note keeps
+it, and re-derives §11–§16 from the shipped tree: §2 lists the closures of P1–P6,
+§4.7 quotes the real header, and §10 re-measures the suite. Revision 31's addition
+— §16, a feasibility study of a GObject-shaped host object runtime — still records
+no implementation and opens no engine work.
 
 The earlier `JitRuntime`/`JitContext`/`ModuleInstance` sketch from a different
 repository is reviewed in §5 as a **salvage list**, not a template; its
@@ -45,53 +49,53 @@ provenance and the reason its two names do not survive here are in §3.
 |---|---|
 | §2 | What does an embedder have to include and call today? |
 | §3 | Which JS-engine role maps onto which WasmJit object — and what "context" means each time? |
-| §4 | What would `WASM::Runtime` own, what must it not own, and what should its header look like? |
+| §4 | What does `WASM::Runtime` own, what must it not own, and what does its header declare? |
 | §5 | What is worth salvaging from the earlier sketch, and what is not? |
 | §6 | Which headers are public, which are backend-only, and what is the umbrella? |
 | §7 | What is the version, soname, symbol-visibility and install policy? |
 | §8 | Plan (`ES-<n>`) |
 | §9 | What this closes, and what stays open |
 | §10 | Test survey |
-| §11 | References |
-| §12 | What can and should generate host bindings — and what stays the embedder's job? |
-| §13 | How does a guest see a native C++ object or C struct, and where is the GC boundary? |
-| §14 | What do importing modules and generated headers see when a GC module exports struct, array or string references? |
-| §15 | Can host-to-guest templates, class bridges, SWIG or Glue replace an engine reflection system? |
-| §16 | Who owns each remaining problem: engine, embedder, tooling or source language? |
-| §17 | Could a GObject-shaped host object runtime give C-family languages a common object model, and how much of it is already the Component Model? |
+| §11 | What can and should generate host bindings — and what stays the embedder's job? |
+| §12 | How does a guest see a native C++ object or C struct, and where is the GC boundary? |
+| §13 | What do importing modules and generated headers see when a GC module exports struct, array or string references? |
+| §14 | Can host-to-guest templates, class bridges, SWIG or Glue replace an engine reflection system? |
+| §15 | Who owns each remaining problem: engine, embedder, tooling or source language? |
+| §16 | Could a GObject-shaped host object runtime give C-family languages a common object model, and how much of it is already the Component Model? |
+| §17 | References |
 
 ## 2. What the embedder has today
 
-The smallest working recipe, read off `Test/helper.cpp` and `Test/main.cpp`:
+The smallest working recipe: a `Runtime` in, a module in, a call out. It is the
+`[runtime]` suite's path (`Test/RuntimeTests.cpp`) and what
+`Test/consumer/Consumer.cpp` does out of tree through `pkg-config`.
 
-| Step | Call | Included from |
+| Step | Call | Header |
 |---|---|---|
-| 1. Make a device | `Euph::Io::File file(path, Elv::Io::Mode::READ)` | `Euphemy/Io/EuphFile.hpp` |
-| 2. Parse | `WASM::Module module; module.fromFile(file);` (or `Artifact::parse`) | `WasmBase/WasmArtifact.hpp`, `WasmModule.hpp` |
-| 3. Register imports | `WASM::RegistryImportResolver imports;` + `registerFunction(...)` | `WasmBase/WasmRegistryImportResolver.hpp` |
-| 4. Instantiate | `instantiator.instantiate(module, imports, bridge, profile)` | `WasmBase/WasmModuleInstance.hpp` |
-| 5. Get an export | `instance->exportedFunction("name")` → `std::optional<Callable>` | same |
-| 6. Call it | `WASM::callCallable<int32_t>(callable, args...)` | `WasmBase/WasmValue.hpp` |
-| 7. Catch a trap | `catch (const WASM::Trap&)` | `WasmBase/WasmTrap.hpp` |
-| 8. Reclaim | `instance->gcCollect()` at a safepoint | same as 4 |
-| 9. Diagnostics (optional) | a `DiagnosticSink` / a `HostBridge` | `WasmBase/WasmDiagnostics.hpp`, `WasmHostBridge.hpp` |
-| 10. Suspend/resume (optional) | `HostContinuation`, `HostContinuationScheduler` | `WasmBase/WasmContinuation.hpp` |
-| 11. Run on a worker thread (optional) | `WASM::Agent agent; WASM::AgentScope scope(agent);` before the first call | `WasmBase/WasmAgent.hpp` |
-| 12. Load and call a component (optional) | `runtime->loadComponentBytes(bytes[, ComponentOptions])`; `instantiateComponent(*loaded[, imports][, executor])`; `exportedFunction("name")` or `callAsync` | `WasmBase/WasmComponentInstance.hpp` |
+| 1. Create the engine | `WASM::Runtime::create("libjit", WASM::RuntimeConfig{})` | `WasmRuntime.hpp` |
+| 2. Load | `runtime->loadFile(path)` or `runtime->loadBytes(bytes)` | same |
+| 3. Register imports | `WASM::RegistryImportResolver imports;` + `registerFunction(...)` | `WasmRegistryImportResolver.hpp` |
+| 4. Instantiate | `WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);` | same |
+| 5. Get an export | `instance.exportedFunction("name")` → `std::optional<Callable>` | `WasmModuleInstance.hpp` |
+| 6. Call it | `runtime->callExport<int32_t>(instance, "name", args...)` (or `WASM::callCallable`) | `WasmRuntime.hpp`, `WasmValue.hpp` |
+| 7. Catch a trap | `catch (const WASM::Trap&)` | `WasmTrap.hpp` |
+| 8. Reclaim | `runtime->safepoint()` | `WasmRuntime.hpp` |
+| 9. Diagnostics (optional) | `RuntimeConfig::sink` / a `HostBridge` | `WasmDiagnostics.hpp`, `WasmHostBridge.hpp` |
+| 10. Suspend/resume (optional) | `HostContinuation`, `HostContinuationScheduler` | `WasmContinuation.hpp` |
+| 11. Run on a worker thread (optional) | `auto agent = runtime->createAgent();` then `WASM::AgentScope scope(*agent);` before the first call | `WasmAgent.hpp` |
+| 12. Load and call a component (optional) | `runtime->loadComponentBytes(bytes[, ComponentOptions])`; `instantiateComponent(*loaded[, imports][, executor])`; `exportedFunction("name")` or `callAsync` | `WasmComponentInstance.hpp` |
 
-Six problems fall out of that table, and they are the reason this note exists:
+Six problems drove this note. All six are closed, and the table records what
+closed each one — it is history, not a to-do list:
 
-| # | Problem | Evidence |
+| # | Problem as it stood in revision 1 | Closed by |
 |---|---|---|
-| P1 | **Every object is reachable only by convention.** There is no single owner of the `Store`, the loaded modules or the backend session; the harness assembles them by hand. | `Test/TestBackend.cpp`, `Test/helper.cpp` |
-| P2 | **The load API speaks an I/O library.** `Module::fromFile(Elv::Io::Device&)` and `Artifact::parse(Elv::Io::Device&)`; there is no `loadFile(path)` / `loadBytes(span)`. | `WasmModule.hpp`, `WasmArtifact.hpp` |
-| P3 | **The public headers pull in `Elvavena`/`Euphemy`.** Seven headers do, transitively including `WasmType.hpp`, which `WasmValue.hpp` needs. | `grep -l 'Elvavena\|Euphemy' WasmBase/*.hpp` |
-| P4 | **There is no version or capability surface.** No macro, no function, no capability query. | no `VERSION` in any `.pro` |
-| P5 | **`WasmRuntime.hpp` and `WasmContext.hpp` were 6-line empty namespaces**, and `LibJIT::Runtime` was an empty stub — leftover shells of an earlier sketch whose `JitRuntime`/`JitContext` pair copied the `JSRuntime`/`JSContext` split (§3 intro). **`WasmContext.hpp` and `LibJIT::Runtime` are deleted (2026-10-29); `WasmRuntime.hpp` is still the `ES-1` placeholder.** The deletion stands after the reconsideration in §3.1; the role it was reaching for is named in §3.2. | `WasmBase/WasmRuntime.hpp` |
-| P6 | **The GC safepoint is the embedder's job** and nothing reminds them. | `ABI.md` "Other store-owned entities" |
-
-P1–P4 are `AAS1`/`AAS2`; P5 is the question this note was asked to settle; P6 is
-answered by giving the runtime a `safepoint()` entry point (§4.5).
+| P1 | **Every object was reachable only by convention.** There was no single owner of the `Store`, the loaded modules or the backend session; the harness assembled them by hand. | `ES-1`: `WASM::Runtime` owns the store, the modules, the instances and the backend ([`WasmRuntime.hpp`](../WasmBase/WasmRuntime.hpp)). |
+| P2 | **The load API spoke an I/O library.** `Module::fromFile(Elv::Io::Device&)` was the only path; there was no `loadFile(path)` / `loadBytes(span)`. | `ES-1`: `Runtime::loadFile`/`loadBytes` take a path or a byte span. `Module::fromFile(Elv::Io::Device&, Store&)` remains the low-level parser entry point, and no embedder-facing signature needs it. |
+| P3 | **The public headers pulled in `Elvavena`/`Euphemy`.** Seven did, transitively including `WasmType.hpp`, which `WasmValue.hpp` needs. | `ES-3`: every public header compiles alone under `Test/headers/`, and the umbrella is the embedder tier. Two direct vendored dependencies remain by decision — `WasmType.hpp` (`ElvDataStream`) and `WasmAgent.hpp` (`ElvDeferStack`) — recorded in §6.2 as the accepted first-freeze cost. |
+| P4 | **There was no version or capability surface.** | `ES-4`: `WasmVersion.hpp`, `Runtime::version()`, `abiVersion()`, `profile()`, `supports()` and `compilationCapabilities()`. |
+| P5 | **`WasmRuntime.hpp` and `WasmContext.hpp` were 6-line empty namespaces**, leftover shells of an earlier sketch; `LibJIT::Runtime` was an empty stub. | `WasmContext.hpp` and `LibJIT::Runtime` are deleted (2026-10-29); `WasmRuntime.hpp` is the real engine object (`ES-1`). §3.1–§3.2 record why each candidate meaning of "context" lost the name. |
+| P6 | **The GC safepoint was the embedder's job** and nothing reminded them. | `ES-1`: `Runtime::safepoint()` collects on every live instance; `ABI.md` "Other store-owned entities" still explains the mechanism. |
 
 ## 3. Does the JS-engine split map onto this engine?
 
@@ -195,7 +199,7 @@ Three consequences that resolve the ambiguity:
 contexts that can share data — which is also the WebAssembly threads model's word
 (`THREADSAFETY.md` §2). That is why `Agent`, not `Runtime`, owns the row-4 state.
 
-## 4. `WASM::Runtime` — what it would own
+## 4. `WASM::Runtime` — what it owns
 
 ### 4.1 The ownership table
 
@@ -389,88 +393,107 @@ survive keep their reason: the profile is a *language subset*, not a knob; the
 budget is a *byte* budget; and the bridge and sink are borrowed, because the
 runtime must not outlive its embedder's hooks or callbacks.
 
-### 4.7 What `WasmRuntime.hpp` should look like
+### 4.7 What `WasmRuntime.hpp` declares
 
-This is the shape `ES-1` fills — C++-style pseudocode, not a frozen header. It
-contains the *adopted* half of the earlier sketch (§5), so it deliberately has no
-`Result<T>`, no `CompiledFunc`, no `createContext()` and no `JitBackend` enum.
+The header is shipped (`ES-1`, 2026-10-29). What follows is its declared surface,
+abridged to the calls an embedder uses — the *adopted* half of the earlier sketch
+(§5), so it deliberately has no `Result<T>`, no `CompiledFunc`, no
+`createContext()` and no `JitBackend` enum.
 
 ```cpp
-// WasmBase/WasmRuntime.hpp — ES-1 fills this; the umbrella already includes it.
+// WasmBase/WasmRuntime.hpp — the shipped header, abridged.
 namespace WASM {
 
 struct RuntimeConfig {
-    ProfileConfig  profile{};                  // fullProfile() by default (PROFILES.md)
-    const HostBridge* hostBridge = nullptr;    // borrowed; must outlive the runtime
-    DiagnosticSink sink          = nullptr;    // borrowed; null = no callback
-    void*          sinkUserData  = nullptr;
-    std::uint64_t  allocationBudgetBytes = 0;  // 0 = the SAFETY.md default
-    // Since CFG-1 (docs/proposals/CONFIGURATION.md) the budget is a struct and
-    // there are three more groups of knobs:
-    //   MemoryBudget      memory;      // total + opt-in category caps
-    //   StoreLimits       store;       // string cap, GC geometry, cycle cap
-    //   ExecutionLimits   execution;   // defer stack, diagnostic ring, stack reserve
-    //   CompilationPolicy compilation; // degree, strictness, interpreter fallback
-    //   ContinuationSettings continuation; // live count, stack bytes, provider
+	ProfileConfig        profile{};                    // fullProfile() by default (PROFILES.md)
+	ConcurrencyModel     concurrency = ConcurrencyModel::Single;   // THREADS.md
+	const HostBridge*    hostBridge = nullptr;         // borrowed; must outlive the runtime
+	DiagnosticSink       sink = nullptr;               // borrowed; null = no callback
+	void*                sinkUserData = nullptr;
+	MemoryBudget         memory{};                     // total + opt-in category caps (CFG-1)
+	StoreLimits          store{};                      // string cap, GC geometry, cycle cap
+	ExecutionLimits      execution{};                  // defer stack, diagnostic ring, stack reserve
+	CompilationPolicy    compilation{};                // degree, strictness, interpreter fallback
+	ContinuationSettings continuation{};               // live count, stack bytes, provider
+	std::uint64_t        allocationBudgetBytes = 0;    // compatibility form of memory.totalBytes
 };
 
-class Runtime {
+class WASMJIT_API Runtime {
 public:
-    // A name, not an enum: a plugin-loaded backend must not need a frontend
-    // rebuild (BACKEND_PLUGIN_ABI.md).
-    static std::unique_ptr<Runtime> create(std::string_view backend,
-                                           const RuntimeConfig& config = {});
-    ~Runtime();
+	// A name, not an enum: a plugin-loaded backend must not need a frontend
+	// rebuild (BACKEND_PLUGIN_ABI.md). The empty name is refused.
+	static std::unique_ptr<Runtime> create(std::string_view backend,
+	                                       const RuntimeConfig& config = {});
+	~Runtime();
 
-    Runtime(const Runtime&) = delete;
-    Runtime& operator=(const Runtime&) = delete;
+	Runtime(const Runtime&) = delete;
+	Runtime& operator=(const Runtime&) = delete;
 
-    std::shared_ptr<const Module> loadBytes(std::span<const std::byte> bytes);
-    std::shared_ptr<const Module> loadFile(Elv::Io::Device& io);
-    // Shorthand for Euph::Io::File opened with the given path.
-    std::shared_ptr<const Module> loadFile(const std::filesystem::path& path);
+	std::shared_ptr<const Module> loadBytes(std::span<const std::byte> bytes);
+	std::shared_ptr<const Module> loadFile(const std::filesystem::path& path);
 
-    // Instantiate (idempotent): one instance per Module. A repeat call returns
-    // the same instance (a second instance is not expressible). The instance is
-    // owned by the runtime, so the handle is a reference; `imports` and the
-    // config's bridge are borrowed and must outlive it.
-    ModuleInstance& instantiate(const Module& module, ImportResolver& imports);
-    ModuleInstance* instanceOf(const Module& module) noexcept;   // null before instantiate
-    // Unload (the `dlclose` half): destroys one instance, frees the code the
-    // backend compiled for it, and keeps the Module loaded so it can be
-    // instantiated again. Refused while a call is in flight on that instance.
-    bool unload(const Module& module);
+	// Components (CM-21): the definition, then one instance per call.
+	std::shared_ptr<const LoadedComponent> loadComponentBytes(
+			std::span<const std::byte> bytes,
+			const ComponentOptions& options = ComponentOptions{ComponentFeatures::implemented()});
+	std::shared_ptr<const LoadedComponent> loadComponentFile(
+			const std::filesystem::path& path,
+			const ComponentOptions& options = ComponentOptions{ComponentFeatures::implemented()});
+	ComponentInstanceHandle& instantiateComponent(const LoadedComponent& component,
+			ComponentHostImports imports = {},
+			std::unique_ptr<ComponentExecutor> executor = {});
 
-    // Calls: the lookup happens once; the ABI does not change.
-    template <typename Ret, typename... Args>
-    Ret callExport(ModuleInstance& instance, std::string_view name, Args&&... args);
-    template <typename... Args>
-    void callExportWithResults(ModuleInstance& instance, std::string_view name,
-                               void* results, Args&&... args);
+	// Instantiate (idempotent): one instance per Module. A repeat call returns
+	// the same instance (a second instance is not expressible). The instance is
+	// owned by the runtime, so the handle is a reference; `imports` and the
+	// config's bridge are borrowed and must outlive it.
+	ModuleInstance& instantiate(const Module& module, ImportResolver& imports);
+	ModuleInstance* instanceOf(const Module& module) noexcept;   // null before instantiate
+	// Unload (the `dlclose` half): destroys one instance, frees the code the
+	// backend compiled for it, and keeps the Module loaded so it can be
+	// instantiated again. Refused while a call is in flight on that instance.
+	bool unload(const Module& module);
 
-    // Frame end (P6): collect on every live instance at a safepoint.
-    void safepoint();
+	// Calls: the lookup happens once; the ABI does not change.
+	template <typename Ret, typename... Args>
+	Ret callExport(ModuleInstance& instance, std::string_view name, Args&&... args);
+	template <typename... Args>
+	void callExportWithResults(ModuleInstance& instance, std::string_view name,
+	                           void* results, Args&&... args);
 
-    // Identity and capability (P4), also what the plugin loader compares.
-    std::string_view backendName() const noexcept;
-    std::string_view version()     const noexcept;   // WasmVersion.hpp
-    std::uint32_t    abiVersion()  const noexcept;
-    ProfileConfig    profile()     const noexcept;   // what instantiate() will apply
-    bool             supports(Profile profile) const noexcept;
+	// Frame end (P6): collect on every live instance at a safepoint.
+	void safepoint();
 
-    // The execution half (§3.2): an engine instance hands out agents; it does
-    // not become one.
-    std::unique_ptr<Agent> createAgent();
+	// Identity and capability (P4), also what the plugin loader compares.
+	std::string_view backendName() const noexcept;
+	std::string_view version()     const noexcept;   // WasmVersion.hpp
+	std::uint32_t    abiVersion()  const noexcept;
+	ProfileConfig    profile()     const noexcept;   // what instantiate() will apply
+	bool             supports(Profile profile) const noexcept;
+	BackendCompilationCapabilities compilationCapabilities() const;
+	OptimizationLevel   achievedOptimizationLevel() const noexcept;
+	const CompilationPolicy& achievedCompilationPolicy() const noexcept;
 
-    // ES-2 option B: runtime-scoped storage. This is the runtime's own Store;
-    // cross-runtime handles are rejected (§4.4).
-    Store& store() noexcept;
+	// The execution half (§3.2): an engine instance hands out agents; it does
+	// not become one.
+	std::unique_ptr<Agent> createAgent();
+
+	// Runtime-scoped storage (`ES-2` option B): the runtime's own Store, by
+	// value. Cross-runtime handles are rejected (§4.4).
+	Store& store() noexcept;
 
 private:
-    Store*                              store_;
-    std::unique_ptr<ModuleInstantiator> backend_;
-    RuntimeConfig                       config_;
-    // + loaded modules, instances, the instanceOf() index, the backend session
+	std::string     backendName_;         // the selected backend name (BP-2)
+	BackendInstance backend_;             // prototype session, owned
+	BackendFactory  backendFactory_;      // re-creates a backend per module
+	RuntimeConfig   config_;
+	OptimizationLevel achievedLevel_;     // what the last instantiation achieved
+	CompilationPolicy achievedPolicy_;
+	Store           store_;               // the runtime's own store, by value
+	std::vector<std::shared_ptr<const Module>> modules_;
+	std::unordered_map<const Module*, LoadedModule> instances_;   // at most one per module
+	std::vector<std::shared_ptr<const LoadedComponent>> loadedComponents_;
+	std::vector<std::unique_ptr<ComponentInstanceHandle>> componentInstances_;
 };
 
 } // namespace WASM
@@ -537,25 +560,25 @@ tier load-bearing, so name it now:
 
 | Tier | Purpose | Examples (current path) |
 |---|---|---|
-| **Embedder API** | What a game includes. Self-contained, no backend header, and ideally no `Elvavena`/`Euphemy` type in a signature. | `WasmRuntime.hpp` (new), `WasmArtifact.hpp`, `WasmCallCache.hpp`, `WasmCompilationPolicy.hpp`, `WasmModule.hpp`, `WasmModuleInstance.hpp`, `WasmValue.hpp`, `WasmTrap.hpp`, `WasmImport.hpp`, `WasmHostBridge.hpp`, `WasmNativeImport.hpp`, `WasmProfile.hpp`, `WasmDiagnostics.hpp`, `WasmAgent.hpp`, `WasmContinuation.hpp`, `WasmMemory.hpp`, `WasmTable.hpp`, `WasmExn.hpp`, `WasmString.hpp` (stringref bridge), `WasmTracing.hpp`, `WasmComponentFeature.hpp`, `WasmComponentValue.hpp`, `WasmComponentExecutor.hpp`, `WasmComponentInstance.hpp` |
+| **Embedder API** | What a game includes. Self-contained, no backend header, and ideally no `Elvavena`/`Euphemy` type in a signature. | `WasmRuntime.hpp`, `WasmArtifact.hpp`, `WasmCallCache.hpp`, `WasmCompilationPolicy.hpp`, `WasmModule.hpp`, `WasmModuleInstance.hpp`, `WasmValue.hpp`, `WasmTrap.hpp`, `WasmImport.hpp`, `WasmHostBridge.hpp`, `WasmNativeImport.hpp`, `WasmProfile.hpp`, `WasmDiagnostics.hpp`, `WasmAgent.hpp`, `WasmContinuation.hpp`, `WasmMemory.hpp`, `WasmTable.hpp`, `WasmExn.hpp`, `WasmString.hpp` (stringref bridge), `WasmTracing.hpp`, `WasmComponentFeature.hpp`, `WasmComponentValue.hpp`, `WasmComponentExecutor.hpp`, `WasmComponentInstance.hpp` |
 | **Backend SDK** | What a code generator includes in addition: the contract rows of [`LAYERING.md`](LAYERING.md) §4 plus the helper entry points it may call. | `WasmVMContext.hpp`, `WasmGcHeader.hpp`, `WasmType.hpp`, `WasmTypeIdentity.hpp`, `WasmOpcode.hpp`, `WasmOpcodeDispatcher.hpp`, `WasmStack.hpp`, `WasmSafety.hpp`, `wasm_atomic.hpp`, `wasm_simd_scalar.hpp` (+ `wasm_simd_vector.hpp`, `wasm_simd_ops.inc`), `wasm_f16.hpp`, `WasmBackendAbi.hpp` (the POD views), `WasmBackendRegistry.hpp`, `WasmNullInstantiator.hpp`, `wasmjit_backend.h` (the plugin descriptor) |
 | **Internal** | Not installed; may change at will. | `WasmSection.hpp`, `WasmTypeStore.hpp`, `WasmCanonicalType.hpp`, `WasmTypeRegistry.hpp`, `WasmGcHeap.hpp`, `WasmValidator.hpp`, `WasmComponent.hpp`, `WasmComponentAbi.hpp`, `WasmComponentAsync.hpp`, `WasmComponentModel.hpp`, `WasmComponentRuntime.hpp`, `WasmComponentSection.hpp`, `WasmComponentValidation.hpp`, `WasmComponentParser.inc`, `WasmDeterminism.hpp`, `WasmValidation.hpp` |
 
-#### 6.1.1 The complete classification (2026-11-03)
+#### 6.1.1 The complete classification (2026-11-13)
 
-Every header under `WasmBase/` now has a tier. The three lists are exhaustive; a
-new header must be added to one of them in the same change, and every header in
-the first two lists has a compile-only translation unit under `Test/headers/`
-(49 TUs, including the C plugin header).
+Every header under `WasmBase/` has a tier. The three lists are exhaustive; a new
+header must be added to one of them in the same change, and every header in the
+first two lists has a compile-only translation unit under `Test/headers/`
+(51 TUs, including the C plugin header).
 
 | Tier | Count | Headers |
 |---|---|---|
 | **Embedder API** (installed, in `WasmJit.hpp`) | 32 | `WasmApi.hpp`, `WasmJit.hpp`, `WasmRuntime.hpp`, `WasmVersion.hpp`, `WasmArtifact.hpp`, `WasmCallCache.hpp`, `WasmCompilationPolicy.hpp`, `WasmModule.hpp`, `WasmModuleInstance.hpp`, `WasmValue.hpp`, `WasmTrap.hpp`, `WasmException.hpp`, `WasmImport.hpp`, `WasmHostBridge.hpp`, `WasmNativeImport.hpp`, `WasmProfile.hpp`, `WasmConcurrency.hpp`, `WasmDiagnostics.hpp`, `WasmAgent.hpp`, `WasmContinuation.hpp`, `WasmMemory.hpp`, `WasmTable.hpp`, `WasmExn.hpp`, `WasmString.hpp`, `WasmTracing.hpp`, `WasmRegistryImportResolver.hpp`, `WasmStore.hpp`, `WasmParseOptions.hpp`, `WasmComponentFeature.hpp`, `WasmComponentValue.hpp`, `WasmComponentExecutor.hpp`, `WasmComponentInstance.hpp` |
-| **Backend SDK** (installed, not in the umbrella) | 18 | `WasmVMContext.hpp`, `WasmGcHeader.hpp`, `WasmType.hpp`, `WasmTypeIdentity.hpp`, `WasmOpcode.hpp`, `WasmOpcodeDispatcher.hpp`, `WasmStack.hpp`, `WasmSafety.hpp`, `WasmBackendAbi.hpp`, `WasmBackendRegistry.hpp`, `WasmBackendSession.hpp`, `WasmNullInstantiator.hpp`, `wasmjit_backend.h`, `wasm_atomic.hpp`, `wasm_simd_scalar.hpp`, `wasm_simd_vector.hpp`, `wasm_simd_ops.inc`, `wasm_f16.hpp` |
-| **Internal** (not installed) | 17 | `WasmSection.hpp`, `WasmTypeStore.hpp`, `WasmCanonicalType.hpp`, `WasmTypeRegistry.hpp`, `WasmGcHeap.hpp`, `WasmValidator.hpp`, `WasmValidation.hpp`, `WasmDeterminism.hpp`, `WasmComponent.hpp`, `WasmComponentAbi.hpp`, `WasmComponentAsync.hpp`, `WasmComponentModel.hpp`, `WasmComponentRuntime.hpp`, `WasmComponentSection.hpp`, `WasmComponentValidation.hpp`, `WasmComponentParser.inc`, `WasmLegacyEh.hpp` |
+| **Backend SDK** (installed, not in the umbrella) | 20 | `WasmVMContext.hpp`, `WasmGcHeader.hpp`, `WasmType.hpp`, `WasmTypeIdentity.hpp`, `WasmOpcode.hpp`, `WasmOpcodeDispatcher.hpp`, `WasmStack.hpp`, `WasmSafety.hpp`, `WasmBackendAbi.hpp`, `WasmBackendRegistry.hpp`, `WasmBackendSession.hpp`, `WasmNullInstantiator.hpp`, `WasmStringOps.hpp`, `WasmRoundingOps.hpp`, `wasmjit_backend.h`, `wasm_atomic.hpp`, `wasm_simd_scalar.hpp`, `wasm_simd_vector.hpp`, `wasm_simd_ops.inc`, `wasm_f16.hpp` |
+| **Internal** (not installed) | 18 | `WasmSection.hpp`, `WasmTypeStore.hpp`, `WasmCanonicalType.hpp`, `WasmTypeRegistry.hpp`, `WasmGcHeap.hpp`, `WasmValidator.hpp`, `WasmValidation.hpp`, `WasmDeterminism.hpp`, `WasmComponent.hpp`, `WasmComponentAbi.hpp`, `WasmComponentAsync.hpp`, `WasmComponentModel.hpp`, `WasmComponentRuntime.hpp`, `WasmComponentSection.hpp`, `WasmComponentValidation.hpp`, `WasmComponentParser.inc`, `WasmLegacyEh.hpp`, `WasmTailTrampoline.hpp` |
 
-That is **67** header files under `WasmBase/` — 64 `.hpp`, one `.h` and two
-`.inc` — which is what `[tiers]` counts (2026-11-04, `WasmCallCache`). The lists in
+That is **70** header files under `WasmBase/` — 67 `.hpp`, one `.h` and two
+`.inc` — which is what `[tiers]` counts. The lists in
 `Test/HeaderTierTests.cpp` are the contract; this table is their readable copy,
 so it is the copy that has to be updated when a header moves.
 
@@ -665,21 +688,21 @@ resolver. The shapes are the ones in §4.7 — the runtime is held by
 
 ## 7. Version, soname, symbol visibility and install
 
-### 7.1 What exists
+### 7.1 What ships
 
 | Fact | Value | Evidence |
 |---|---|---|
-| Soname today | `libWasmBase.so.1`, `libLibJit.so.1` (files `.so.1.0.0`) | `readelf -d build/Desktop-Debug/Test/WasmJit`; `ls build/Desktop-Debug/LibJit` |
-| Where the version comes from | Explicit `VERSION = 1.0.0` in every library `.pro` (2026-10-29, `ES-4`); soname = `lib*.so.1` | `grep -rn 'VERSION' */*.pro` |
-| Install rules | **None** (`INSTALLS` absent from every `.pro`) | same |
-| pkg-config | Not for this project (only `libffi`, `nlohmann_json` as consumers) | `WasmBase.pro` |
+| Soname | `libWasmBase.so.1`, `libLibJit.so.1`, `libSljit.so.1`, `libAsmjit.so.1` (files `.so.1.0.0`) | `readelf -d build/Desktop-Debug/Test/WasmJit`; `ls build/Desktop-Debug/{WasmBase,LibJit}` |
+| Where the version comes from | Explicit `VERSION = 1.0.0` in every library `.pro` (`ES-4`, 2026-10-29); soname = `lib*.so.1` | `grep -rn 'VERSION' */*.pro` |
+| Install rules | `INSTALLS += headers target pkgconfig` per subproject (`ES-5`): public headers to `include/wasmjit/`, the internal closure to `include/wasmjit/internal/`, libraries and `wasmjit.pc` | the `.pro` files; `Test/install-check.sh` |
+| pkg-config | `lib/pkgconfig/wasmjit.pc`, generated from `wasmjit.pc.in`; it names the core only and no backend | `WasmBase/wasmjit.pc.in`; `Test/install-check.sh` |
 | Version macro/function | `WASMJIT_VERSION_MAJOR`/`MINOR`/`PATCH`, `WASMJIT_ABI_VERSION`, `WASM::versionString()`, `WASM::abiVersion()` | `WasmBase/WasmVersion.hpp`/`.cpp` (added 2026-10-29) |
-| Exported symbols | **2,545 dynamic symbols** (2026-10-29, `ES-4`): the core is built with `-fvisibility=hidden`; only declarations from the public headers are exported, and the embedder-tier classes carry `WASMJIT_API` | `nm -D --defined-only libWasmBase.so.1.0.0 \| wc -l` |
-| Include convention | `INCLUDEPATH += $$PWD/..` so `#include <WasmBase/Header.hpp>` works | `WasmBase/WasmBase.pri` |
+| Exported symbols | **3,239 dynamic / 2,110 strong** (2026-11-13): the core is built with `-fvisibility=hidden`, only declarations from the public headers are exported, and the embedder-tier classes carry `WASMJIT_API` | `nm -D --defined-only libWasmBase.so.1.0.0 \| wc -l` |
+| Include convention | Installed as `#include <wasmjit/Header.hpp>`; in-tree as `#include <WasmBase/Header.hpp>` (`INCLUDEPATH += $$PWD/..`) | `WasmBase/WasmBase.pri`; `Test/consumer/` |
 
-The last two rows are the ABI problem in one number: a library that exports 23k
-symbols has no API — it has a symbol table. That cannot be frozen; a declared
-subset can.
+The last two rows are the ABI argument in one number: before `ES-4` the library
+exported 23,284 symbols and therefore had no API — it had a symbol table. That
+cannot be frozen; a declared subset can, and does.
 
 ### 7.2 The policy
 
@@ -688,7 +711,7 @@ subset can.
 | Version macros | `WASMJIT_VERSION_MAJOR` / `MINOR` / `PATCH`, plus a monotonic `WASMJIT_ABI_VERSION` integer, in `wasmjit/version.hpp` included by the umbrella |
 | Version functions | `const char* WASM::versionString() noexcept;` and `uint32_t WASM::abiVersion() noexcept;` — callable by an embedder *and* by a plugin's compatibility check |
 | Soname | `VERSION` = `MAJOR.MINOR.PATCH`, soname = **major** (`libWasmBase.so.<major>`). Bump rules are [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §2.2: a change to S1–S9 bumps major; an additive field or a new optional hook bumps minor |
-| Symbol visibility | Compile with `-fvisibility=hidden` and mark the public tier with `WASMJIT_API`. Target: a symbol table an `abidiff` run can police |
+| Symbol visibility | Compile with `-fvisibility=hidden` and mark the public tier with `WASMJIT_API`. Result: a symbol table an `abidiff` run can police (3,239 dynamic / 2,110 strong today) |
 | Deprecation | `WASMJIT_DEPRECATED("use X")` for one minor cycle before removal, recorded in the ABI note |
 | Backend libraries | Same policy: `libLibJit.so.<major>`, and the plugin descriptor carries its own `abi_version` ([`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md) §4) |
 | Vendored libraries | If `Elvavena`/`Euphemy` stay in the public headers (§6.2), their sonames join the embedder's runtime requirements and the `.pc` `Requires:` line |
@@ -715,8 +738,8 @@ must name whatever §6.2 decides about `Elvavena`/`Euphemy`.
 | Milestone | Work | Class | Closes | Done when |
 |---|---|---|---|---|
 | **ES-1 — `WASM::Runtime` skeleton** ✅ | **Landed 2026-10-29:** `WasmBase/WasmRuntime.{hpp,cpp}` implements `RuntimeConfig` (profile, concurrency, bridge, sink, budget — §4.6), `create(name)` (registry, then the `dlopen` fallback), `loadFile`/`loadBytes` (no `Elv::Io::Device`), idempotent `instantiate` (one instance per `Module`; a repeat call returns the same instance), `instanceOf`/`hasInstance`, `callExport`/`callExportWithResults` (with the `MF-2` in-call guard), `safepoint`, `version`/`abiVersion`/`backendName`/`profile`/`supports`, `createAgent` and `store()`. `WasmContext.hpp` and `LibJit::Runtime` are deleted. | A | P1, P2, P4, P5, P6; R1 enforcement; AAS1 | `Test/RuntimeTests.cpp` exercises load → instantiate → call against the real backend and the null one; the default suite is unchanged. The installed `wasmjit/wasmjit.hpp` spelling and the out-of-tree consumer stay `ES-5`. |
-| **ES-2 — Store scoping migration** | **Done (option B, 2026-10-29).** `Store::global()`, `Store::current()` and `Store::Scope` are deleted. The store is threaded through every consumer: parser entry points take `Store&` and the artifact keeps it; instances use `module->store()`; components use `component.store()`; continuation workers, `wasm_exn_create` and the backend string/type helpers take the `VMContext`; the resolver is bound by the resolving/exporting instance; `Runtime` owns one. Two runtimes have independent heaps and budgets and reject cross-runtime modules/instances. | A (wide) | Multi-tenancy; §4.4 | No `Store::current()`/`global()`/`Scope` remains in `WasmBase/` or `LibJit/`; the default suite is green (11,454 assertions / 481 cases). |
-| **ES-3 — Header tiers and umbrella** ✅ | **Landed 2026-10-29:** `WasmJit.hpp` covers the embedder tier; §6.1.1 classifies every header into the three tiers; `WasmRegistryImportResolver.hpp` and `WasmSafety.hpp` no longer include the vendored library (the maps are `std::map<std::string, T, std::less<>>`, the bounds helpers are templates); 41 compile-only TUs plus `[tiers]`, which fails when a new header is unclassified, the umbrella includes a non-embedder header, or a public header has no TU. The two hard `Elv` dependencies (`WasmType.hpp`, `WasmAgent.hpp`) are accepted for the first freeze (§6.2). | A | P3, `AAS2` (partly) | Every public header compiles alone ✅; the umbrella covers the embedder tier ✅; the installed include path is verified by §8 `ES-5`. |
+| **ES-2 — Store scoping migration** | **Done (option B, 2026-10-29).** `Store::global()`, `Store::current()` and `Store::Scope` are deleted. The store is threaded through every consumer: parser entry points take `Store&` and the artifact keeps it; instances use `module->store()`; components use `component.store()`; continuation workers, `wasm_exn_create` and the backend string/type helpers take the `VMContext`; the resolver is bound by the resolving/exporting instance; `Runtime` owns one. Two runtimes have independent heaps and budgets and reject cross-runtime modules/instances. | A (wide) | Multi-tenancy; §4.4 | No `Store::current()`/`global()`/`Scope` remains in `WasmBase/` or `LibJit/`; the default suite is green. |
+| **ES-3 — Header tiers and umbrella** ✅ | **Landed 2026-10-29:** `WasmJit.hpp` covers the embedder tier; §6.1.1 classifies every header into the three tiers; `WasmRegistryImportResolver.hpp` and `WasmSafety.hpp` no longer include the vendored library (the maps are `std::map<std::string, T, std::less<>>`, the bounds helpers are templates); 51 compile-only TUs plus `[tiers]`, which fails when a new header is unclassified, the umbrella includes a non-embedder header, or a public header has no TU. The two hard `Elv` dependencies (`WasmType.hpp`, `WasmAgent.hpp`) are accepted for the first freeze (§6.2). | A | P3, `AAS2` (partly) | Every public header compiles alone ✅; the umbrella covers the embedder tier ✅; the installed include path is verified by §8 `ES-5`. |
 | **ES-4 — Visibility and versioning** ✅ | **Landed 2026-10-29:** `WasmApi.hpp` defines `WASMJIT_API` (the Elvavena `MH_UTIL_API` pattern: `WASMJIT_BUILD` → export, otherwise import) and `WASMJIT_VISIBLE_BEGIN/END` for headers that are entirely public; the core is compiled with `-fvisibility=hidden -fvisibility-inlines-hidden` and every library sets `VERSION = 1.0.0` (soname `lib*.so.1`). The exported set fell from **23,919 to 2,545** symbols and is exactly what the public headers declare. | A | P4; ABI hygiene | The exported set is the header-declared surface ✅; `Test/abi-check.sh` is the mandatory additive-only check and an `abidiff` run is the optional extra. |
 | **ES-5 — Install and pkg-config** ✅ | **Landed 2026-10-29:** `INSTALLS` for the 45 public headers (`include/wasmjit/`), the internal closure (`include/wasmjit/internal/`), the eight vendored header directories, the libraries and `wasmjit.pc` (generated from `wasmjit.pc.in`, installed to `lib/pkgconfig`). `Test/install-check.sh` installs into a scratch prefix with `INSTALL_ROOT`, builds `Test/consumer/Consumer.cpp` through `pkg-config --cflags --libs wasmjit` and runs it. | A | Packaging | `make install` into a scratch prefix yields a working out-of-tree consumer ✅ (`install-check: OK`). |
 | **ES-6 — ABI documentation completion** ✅ | **Done 2026-10-29:** `ABI.md` gains "`v128` by Value", "The result tuple layout" (a backend-neutral rule) and "Limits an Embedder Must Know" (`S1`, `S3`, `S4`, `S7`, `S8`). | A | `AAS2` ✅, `AAS5` ✅ | An embedder can implement every signature class from the note alone. |
@@ -752,89 +775,37 @@ check. The embedding surface is what the installed `wasmjit/wasmjit.hpp` exposes
 
 ## 10. Test survey
 
-**Snapshot (2026-11-05, working tree on `77506af`):** the default suite is
-18,572 assertions in 661 cases; `[bindings]` is 937/43, `[docs]` is 1017/2,
-`[tiers]` is 250/3, and Doxygen is warning-free. Re-run the tagged cases after
-changing a schema, emitter or this note's code paths.
+**Snapshot (2026-11-13, working tree on `a2a361e`):** the default suite is
+22,881 assertions in 843 cases; `[bindings]` is 957/44, `[docs]` is 1055/4,
+`[backendabi]` 71/6, `[tiers]` 258/3, and Doxygen is warning-free. Re-run the
+tagged cases after changing a schema, emitter or this note's code paths.
 
 | Evidence | Result | Reading |
 |---|---|---|
-| Default suite (**2026-11-05**, `77506af`) | **18,572 assertions in 661 cases, green** | Supersedes the 2026-11-01 baseline (17,090 / 551); every earlier assertion still passes. The 2026-10-29 run (11,454 / 481) in the milestone notes remains the historical baseline. |
-| `[docs]` lint (**2026-11-05**, `77506af`) | **1017 assertions / 2 cases, green** | Note shape for `docs/proposals/` **and** the note tree for all four folders (§9 of `DOCUMENTATION.md`), so this note's index row is checked too |
+| Default suite (**2026-11-13**, `a2a361e`) | **22,881 assertions in 843 cases, green** | Supersedes the 2026-11-05 run (18,572 / 661). The 2026-10-29 run (11,454 / 481) in the milestone notes remains the historical baseline for `ES-1`. |
+| `[docs]` lint (**2026-11-13**) | **1055 assertions / 4 cases, green** | Note shape for `docs/proposals/` **and** the note tree for all four folders (§9 of `DOCUMENTATION.md`), plus `[references]`: no document under `docs/` puts a section after References. |
 | `[callcache]` (**2026-11-04**) | **18 assertions / 4 cases, green** | `ModuleCallCache` ffi calls, `v128` by value, multi-result calls and `ComponentCallCache` flat calls. |
-| `[bindings]` (**2026-11-05**, `77506af`) | **937 assertions / 43 cases, green** | The §12.8 tool: descriptor→schema, direction-specific module/component imports/exports (G2H/H2G/G2G), complete-schema export/re-import and editorial name/description fields, opaque reference spelling, `stringref` through every emitter, C header (compiled as C11 and C++23), Rust, TypeScript, AssemblyScript, Zig, Kotlin, MoonBit, Go, Dart, Java, C#, F#, Python, Ruby, Lua, Swift, D, Nim, Crystal, Ada, Pascal and Haskell emission, a compiled C++ adapter (call/trap/import/reference/multi-value/retain-drop), SWIG and Glue candidate validation, `VMContext*` candidate schemas, WIT JSON/text input and world projection, direction-aware C++ typedefs/source, non-function entry comments, producer toolchain evidence, defined-reference kind naming, exact-reference flags, GC struct/array definitions, Rust `#[link(wasm_import_module)]`/`#[link_name]` declarations and export skeletons, C `WASMJIT_WASM_IMPORT` annotations, per-toolchain compile checks, and a `wasm-opt --all-features -O2` signature comparison on five fixtures. |
-| `[runtime]` (**2026-11-05**) | 151 assertions / 19 cases, green | Load → instantiate → call, idempotence, named errors, the `MF-2` guard, agents, the store-scoping proof (two stores, two heaps, an artifact records its store), and the unloader (one instance destroyed, the module re-instantiated, a provisional backend's code freed twice over). |
+| `[bindings]` (**2026-11-13**) | **957 assertions / 44 cases, green** | The §11.8 tool: descriptor→schema, direction-specific module/component imports/exports (G2H/H2G/G2G), complete-schema export/re-import and editorial name/description fields, opaque reference spelling, `stringref` through every emitter, C header (compiled as C11 and C++23), Rust, TypeScript, AssemblyScript, Zig, Kotlin, MoonBit, Go, Dart, Java, C#, F#, Python, Ruby, Lua, Swift, D, Nim, Crystal, Ada, Pascal and Haskell emission, a compiled C++ adapter (call/trap/import/reference/multi-value/retain-drop), SWIG and Glue candidate validation, `VMContext*` candidate schemas, WIT JSON/text input and world projection, direction-aware C++ typedefs/source, non-function entry comments, producer toolchain evidence, defined-reference kind naming, exact-reference flags, GC struct/array definitions, Rust `#[link(wasm_import_module)]`/`#[link_name]` declarations and export skeletons, C `WASMJIT_WASM_IMPORT` annotations, per-toolchain compile checks, and a `wasm-opt --all-features -O2` signature comparison on five fixtures. |
+| `[runtime]` (**2026-11-13**) | 151 assertions / 19 cases, green | Load → instantiate → call, idempotence, named errors, the `MF-2` guard, agents, the store-scoping proof (two stores, two heaps, an artifact records its store), and the unloader (one instance destroyed, the module re-instantiated, a provisional backend's code freed twice over). |
 | `[concurrency]` | 80 assertions / 13 cases, green | The model claim, the `Single` refusal, re-entrant invocation across threads, the `MF-2` guard, the `MF-3`/`MF-4` safepoint rules and the multi-agent suite. |
 | `[multiagent]` | 51 assertions / 6 cases, green | Two agents on one instance: acquire-release, wait/notify, shared-global RMW, traps, GC stress, reference barrier. |
-| `[backendabi]` | 36 assertions / 4 cases, green | The POD signature/layout views (`WasmBackendAbi.hpp`) match `ABI.md`'s tuple rule. |
+| `[backendabi]` (**2026-11-13**) | 71 assertions / 6 cases, green | The POD signature/layout views (`WasmBackendAbi.hpp`) match `ABI.md`'s tuple rule, and the C views in `wasmjit_backend.h` round-trip to and from them (`BACKEND_PLUGIN_ABI.md` §4.4). |
 | `[plugin]` | 50 assertions / 9 cases, green | Load by path and by name, a real example plugin, and every refusal path (missing file, no query symbol, unknown name, descriptor ABI, core ABI, failing `create`). |
 | `[compilation-policy]` | 30 assertions / 3 cases, green | The policy vocabulary, the capability query, and the ladder's ordering (`COMPILER_POLICY.md` §8.2). |
-| `[tiers]` (**2026-11-05**, `77506af`) | 250 assertions / 3 cases, green | Every header is classified exactly once, the umbrella matches the embedder tier, and every public header has a compile-only TU (`.inc` fragments excepted). |
-| Public-header self-containment test | **Present** (2026-11-04) | **49** TUs under `Test/headers/`, enforced by `[tiers]`. |
+| `[tiers]` (**2026-11-13**) | 258 assertions / 3 cases, green | Every header is classified exactly once, the umbrella matches the embedder tier, and every public header has a compile-only TU (`.inc` fragments excepted). |
+| Public-header self-containment test | **Present** (2026-11-13) | **51** TUs under `Test/headers/`, enforced by `[tiers]`. |
 | Install / out-of-tree consumer test | **Present** (2026-10-29) | `Test/install-check.sh`: `make install INSTALL_ROOT=...`, then a consumer built through `wasmjit.pc` runs. |
-| Symbol-hygiene check | **2,629 exported symbols, 1,859 strong** (2026-11-01, `build/Desktop-Debug`) | `-fvisibility=hidden` + `WASMJIT_API`; the remaining count is the header-declared surface. `Test/abi-check.sh` freezes the **1,859** strong symbols (`Test/abi/libWasmBase.exports`) and fails on a removal. |
+| Symbol-hygiene check | **3,239 exported symbols, 2,110 strong** (2026-11-13, `build/Desktop-Debug`) | `-fvisibility=hidden` + `WASMJIT_API`; the remaining count is the header-declared surface. `Test/abi-check.sh` freezes the strong-symbol set in `Test/abi/libWasmBase.exports` and fails on a removal. |
 | ABI diff (`abidiff`) | **Optional** | The mandatory check is the `nm -D` symbol baseline (`Test/abi/*.exports`, `Test/abi-check.sh`), which needs no libabigail. `ABI_REFERENCE=<previous .so>` adds `abidiff` when the tool is installed. |
 
-## 11. References
-
-- [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) — the gates, the frozen surfaces
-  (§2.2), and `AAS1`/`AAS2`/`AAS5` which this note discharges.
-- [`ABI.md`](ABI.md) — the calling convention, the embedder guide, `gcCollect()`
-  as an embedder-driven safepoint.
-- [`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md) — the loader that
-  `Runtime::create(name)` is designed to make possible.
-- [`proposals/THREADS.md`](proposals/THREADS.md) §6 — the concurrency
-  mode a `RuntimeConfig` would eventually carry.
-- [`THREADSAFETY.md`](THREADSAFETY.md) §2 and §3.1–§3.2 — the agent/instance/
-  host vocabulary behind the ladder in §3.2, and the instance-cardinality rule
-  the runtime has to enforce.
-- [`proposals/PROFILES.md`](proposals/PROFILES.md) — the profile markers, the
-  double gate at load and instantiation, and why `{N,T}` alone is refused (§4.6,
-  `PR-3`/`PRD6`).
-- [`DIAGNOSTICS.md`](DIAGNOSTICS.md) — the bounded sink and the per-execution-state
-  `DiagnosticState` that `RuntimeConfig` seeds.
-- [`TYPE_IDENTITY.md`](TYPE_IDENTITY.md) §6.1 — Store-scoped `TypeId`,
-  canonical interning and cross-module matching.
-- [`LAYERING.md`](LAYERING.md) §2/§4/§6 — the rule the public headers must keep,
-  the contract rows, and the grep.
-- [`SAFETY.md`](SAFETY.md) §2.2/§2.3/§2.8 — the bounds, budget and stack policies
-  that make three of the sketch's config options unshippable (§5).
-- [`proposals/JS_INTEGRATION.md`](proposals/JS_INTEGRATION.md) — why a JS engine
-  is not in the core, which is what keeps the "realm" mapping (§3) honest.
-- [`proposals/SHARING_LINEAR_MEMORY.md`](proposals/SHARING_LINEAR_MEMORY.md) —
-  the layout-negotiation problem that rules out putting arbitrary C++ object
-  images in linear memory (§13.7.1).
-- Source anchors for §13: `WasmBase/WasmHostBridge.hpp` (the opaque-reference
-  contract), `WasmBase/WasmGcHeap.hpp` (guest-only GC regions),
-  `WasmBase/WasmComponentRuntime.hpp` / `WasmBase/WasmComponentValue.hpp`
-  (component resource slots and `uint64_t` representations), and
-  `extern/MhLib/Elvavena/Util/ElvAllocatorBasic.hpp` /
-  `extern/MhLib/Elvavena/Util/ElvIntrusiveArray.hpp` (host-side allocator and
-  slab helpers, not a guest ABI).
-- [`proposals/GC.md`](proposals/GC.md) and
-  [`proposals/STRINGREF.md`](proposals/STRINGREF.md) — the GC object header,
-  `ref.test`/`ref.cast` identity, and the Store-owned `StringObject` bridge.
-- Source anchors for §14/§15: `WasmBase/WasmTypeIdentity.hpp` and
-  `WasmBase/WasmTypeRegistry.hpp` (Store-scoped `TypeId`, interning and
-  `matches`), `WasmBase/WasmModule.hpp` (descriptors and `typeView`),
-  `WasmBase/WasmModuleInstance.hpp` (`tryGetGcTypeId`, `refMatchesHeapType`,
-  `refClone`/`refDrop`), `WasmBase/WasmValue.hpp` (`Value::ref` and `Callable`),
-  `WasmBase/WasmNativeImport.hpp` (`nativeImport`), and
-  `WasmBase/WasmString.hpp` (`StringStore`).
-- Source anchors: `WasmBase/WasmStore.hpp` (the store, and why there is no global one),
-  `WasmBase/WasmRuntime.hpp` (the `ES-1` placeholder), `WasmBase/WasmJit.hpp`
-  (the umbrella), `WasmBase/WasmVersion.hpp`, `WasmBase/WasmProfile.hpp`,
-  `WasmBase/WasmAgent.hpp` (`Agent`/`ExecutionState`), `WasmBase/WasmModule.hpp`
-  (`fromFile`), `WasmBase/WasmValidation.hpp` (internal, §4.6),
-  `WasmBase/WasmBase.pri`, `Test/helper.cpp` (the current recipe).
-## 12. Host bindings: guide, generator, or embedder?
+## 11. Host bindings: guide, generator, or embedder?
 
 “Host bindings” here means the **typed declarations and adapter stubs** an
 embedder writes so its language can call a module/component, and so a
 module/component can call host functions. It does **not** mean a binary format,
 and it does not mean parsing WIT text in the engine.
 
-Using the §16 ownership labels: the descriptor metadata is **ENG**; the guide,
+Using the §15 ownership labels: the descriptor metadata is **ENG**; the guide,
 schema emitter and language emitters are **TOOL**; a hand-written or
 product-specific adapter is **EMB**.
 
@@ -847,7 +818,7 @@ layers:
 | Binding declarations and adapter stubs | **tooling or embedder** | C/C++ headers, TypeScript/AssemblyScript declarations, Rust/Zig/Kotlin/MoonBit/Go/Dart wrappers, memory/realloc glue, resource and async adapters |
 | Host policy | **embedder** | WASI implementations, JS/Promise/event-loop integration, OS threads/fibers, product-specific object models |
 
-### 12.1 Answer to “just a guide, or can we generate?”
+### 11.1 Answer to “just a guide, or can we generate?”
 
 **Both are realistic, in this order:**
 
@@ -864,7 +835,7 @@ layers:
    resources, or the engine’s trap/ownership rules. They can be an adapter
    layer behind a generator, not the source of truth.
 
-### 12.2 The authoritative inputs already in the tree
+### 11.2 The authoritative inputs already in the tree
 
 - `Module::importDescriptors()` / `exportDescriptors()` (see [`ABI.md`](ABI.md)
   “Module metadata descriptors”): import-section order, names, `ExternalKind`,
@@ -893,21 +864,21 @@ parameter names only in an optional candidate front-end, and only as editorial
 metadata; it must not treat a C++ class or an arbitrary source header as the
 ABI. The neutral schema built from descriptors has four directions —
 guest-to-host, host-to-guest, guest-to-guest and the complete `all` interchange
-form — defined in §12.8.
+form — defined in §11.8.
 
-### 12.3 Options and decisions
+### 11.3 Options and decisions
 
 | Option | What it can produce | Status / decision |
 |---|---|---|
-| **Hand-written guide + per-language templates** | Language-specific declarations and adapter skeletons from the documented ABI | **Always valid.** The guide in §12.5 and the hand-written adapter path remain supported; generation is optional. |
-| **Descriptor-driven schema + emitters** | A neutral schema from `Module`/`Component` metadata, then every target named in §12.6 | **Shipped** in `Tools/Bindings/`, outside `WasmBase/` (§12.8). The engine guarantees metadata; the first-party tool consumes it. |
+| **Hand-written guide + per-language templates** | Language-specific declarations and adapter skeletons from the documented ABI | **Always valid.** The guide in §11.5 and the hand-written adapter path remain supported; generation is optional. |
+| **Descriptor-driven schema + emitters** | A neutral schema from `Module`/`Component` metadata, then every target named in §11.6 | **Shipped** in `Tools/Bindings/`, outside `WasmBase/` (§11.8). The engine guarantees metadata; the first-party tool consumes it. |
 | **WIT as the IDL** | Component-level interfaces and skeleton adapters for component exports/imports | **Shipped as an optional schema input and cross-check.** `--wit-json` parses `wasm-tools` JSON; `--wit` accepts text/package input and converts it through `wasm-tools`. WIT cannot describe a core module’s memory/table/global imports or its raw `Callable` ABI, and its logical types are not the exact Canonical ABI; descriptors remain the truth. |
-| **SWIG** | C++ bindings driven by parsed C++ declarations | **Shipped as an optional candidate front-end.** `--candidates` parses a header; `--frontend-schema` now writes a G2H `imports` schema and can emit every non-C++ target. It is never the authority (`TB-4a`, §12.8). |
-| **Glue** | Runtime C++ map + `DeclarationPrinter`; the host registers functions explicitly | **Shipped as an optional candidate front-end.** `--glue-candidates` compiles a registration source, prints declarations and validates them; the same schema/emitter path applies (`TB-4a`, §12.8). |
+| **SWIG** | C++ bindings driven by parsed C++ declarations | **Shipped as an optional candidate front-end.** `--candidates` parses a header; `--frontend-schema` now writes a G2H `imports` schema and can emit every non-C++ target. It is never the authority (`TB-4a`, §11.8). |
+| **Glue** | Runtime C++ map + `DeclarationPrinter`; the host registers functions explicitly | **Shipped as an optional candidate front-end.** `--glue-candidates` compiles a registration source, prints declarations and validates them; the same schema/emitter path applies (`TB-4a`, §11.8). |
 | **Automatic scan of existing C/C++ headers** | Guessed declarations | **Rejected as truth; retained only as a candidate front-end.** The literal `TB-4` form remains rejected; a candidate must still be checked against descriptors when a module or component is available. |
 | **Embedder-owned adapters** | Any language/runtime-specific binding | **Always valid.** This is the correct default when the target runtime is not one the project can support. |
 
-### 12.4 What “WIT texts based on embedder exports” can and cannot mean
+### 11.4 What “WIT texts based on embedder exports” can and cannot mean
 
 WIT is useful at the **component boundary**:
 
@@ -930,7 +901,7 @@ WIT → component remains a build-time/tooling step (`wasm-tools component wit
 --wasm`, or another producer).
 
 
-### 12.5 The guide’s minimum contents
+### 11.5 The guide’s minimum contents
 
 A useful guide is language-neutral first, then has per-language appendices:
 
@@ -952,7 +923,7 @@ A useful guide is language-neutral first, then has per-language appendices:
 8. **Conformance tests:** the harness must exercise the generated adapter, not
    only the raw `callValues`/`Callable` path.
 
-### 12.6 Per-language notes
+### 11.6 Per-language notes
 
 | Target | What a generator can emit | Important limit |
 |---|---|---|
@@ -982,7 +953,7 @@ This is why a single “C++ header generator” is not the answer: the source of
 truth is the Wasm metadata, and the target language’s host ABI decides the
 shape of the adapter.
 
-### 12.7 Decision and current state
+### 11.7 Decision and current state
 
 **Decision:** generation stays out of `WasmBase/`. The engine guarantees the
 metadata descriptors and the hand-written contract; `Tools/Bindings/` owns the
@@ -990,12 +961,12 @@ schema and language emitters. An embedder may always write an adapter by hand.
 
 What is implemented:
 
-1. §12.5 is the guide; the generated declarations and the hand-written path
+1. §11.5 is the guide; the generated declarations and the hand-written path
    describe the same ABI.
 2. `wasmjit-bindings` reads core modules and components, records any schema
    direction (G2H/H2G/G2G/all), imports a complete schema with `--schema`, and
    exposes a typed model to the CLI rather than raw JSON.
-3. Every target in §12.6 has an emitter, plus the C++ adapter, typedefs and
+3. Every target in §11.6 has an emitter, plus the C++ adapter, typedefs and
    source helpers. Opaque references retain `TB-8` ownership notes and `TB-11`
    runs a compiled adapter through call/trap/import/reference/multi-value
    retain-drop cases.
@@ -1016,13 +987,13 @@ The one synthetic module the engine ships is the diagnostics guest-log facility
 ([`SCOPE.md`](SCOPE.md) §3.1, [`DIAGNOSTICS.md`](DIAGNOSTICS.md) §5.4); every
 other host namespace is the embedder's, generated or hand-written.
 
-### 12.8 Where the schema and the generator live
+### 11.8 Where the schema and the generator live
 
 The generator is **TOOL**, not engine: it must not be linked into `WasmBase/` or a
 backend, and the engine must not grow a reflection registry for it. It is
 nevertheless a **first-party in-repo deliverable**, because it consumes the
 engine’s metadata contract and because `EN-12` cannot be proved without one.
-“Outside the engine” is not “outside the project” (§16.5).
+“Outside the engine” is not “outside the project” (§15.5).
 
 #### Four schema directions, not one
 
@@ -1081,7 +1052,7 @@ fields, and that remains valid.
 to the requested direction.
 
 A reference type is spelled with its kind, nullability and interface/type name;
-it never carries a numeric `TypeId` into generated code (§14.4, §14.8):
+it never carries a numeric `TypeId` into generated code (§13.4, §13.8):
 
 ```json
 { "type": "ref", "nullable": true, "heap": "extern" }
@@ -1233,7 +1204,7 @@ record/variant/list/tuple/flags/enum/option/
 result/own/borrow/stream/future/map/resource value types. WIT JSON is not
 required for the projection; when a component was built from WIT, its export
 names are preserved. `[bindings]` cross-checks the schema names and parameter
-types against `wasm-tools component wit --json` (§12.4). Component function
+types against `wasm-tools component wit --json` (§11.4). Component function
 entries also carry an `abi` object: the exact flattened core
 parameter/result cells and the `indirectParams`/`indirectResults` flags from
 `TypeStore::canonicalAbi()`. The emitters prefer that core signature, so a
@@ -1242,7 +1213,7 @@ actually passes. The structured `type` remains in the schema for tooling and WIT
 documentation.
 
 `Glue` and `SWIG` are **not** the schema. They are optional C++ candidate
-front-ends for the loose `TB-4` gloss recorded as `TB-4a` in §16.5: they may
+front-ends for the loose `TB-4` gloss recorded as `TB-4a` in §15.5: they may
 propose signatures. `wasmjit-bindings --candidates HEADER` runs SWIG's XML
 front-end (`swigCandidates()`). `wasmjit-bindings --glue-candidates SOURCE`
 compiles a source that defines `glue::MapValue wasmjit_bindings()`, runs Glue's
@@ -1255,7 +1226,7 @@ candidate-derived and is not authoritative until checked against a module or
 component. The descriptor schema remains the contract.
 
 
-### 12.9 Optional libffi call cache
+### 11.9 Optional libffi call cache
 
 `WasmBase/WasmCallCache.hpp` is an optional convenience layer for embedders
 that want name lookup plus libffi invocation instead of writing their own
@@ -1275,7 +1246,7 @@ that want name lookup plus libffi invocation instead of writing their own
 - Both caches borrow the instance, own only metadata, and rethrow a pending trap
   through `checkTrap()`. They are not required by the runtime or by any backend.
 
-### 12.10 Other schema inputs: an exploration
+### 11.10 Other schema inputs: an exploration
 
 The question is not “which parser is best”. It is which artefact is *allowed to
 be authoritative* for a Wasm ABI. There are four useful classes:
@@ -1324,7 +1295,7 @@ The practical rule: **descriptors own truth, JSON owns interchange, C++ scans
 own candidate discovery.** A future front-end is welcome if it fits the third
 row and passes `crossCheckCandidates()`; it does not need a new schema dialect.
 
-### 12.10.1 Recommended WASI Preview 1 path
+### 11.10.1 Recommended WASI Preview 1 path
 
 WASI Preview 1 is a **core module ABI**, not a component WIT world. The
 recommended split is:
@@ -1350,7 +1321,7 @@ The WITX front-end is therefore an optional metadata layer, exactly as the
 module descriptor is the ABI layer. `--emit witx` is useful for preserving or
 reviewing the legacy interface, not for deriving the Preview 1 load ABI.
 
-### 12.11 WIT/WASI stub completeness: gaps and prerequisites
+### 11.11 WIT/WASI stub completeness: gaps and prerequisites
 
 The WIT front-end currently proves the **input pipeline** and produces useful
 scalar/import/export scaffolding. It does not yet produce a *valid WASI stub*:
@@ -1448,14 +1419,14 @@ the WIT package/world representation, but WIT-origin schemas round-trip through
   function identifiers are WIT-normalized, and a `[bindings]` test feeds the
   emitted WIT back through `wasm-tools component wit` successfully.
 
-## 13. Native C++ objects, C structs, and the GC boundary
+## 12. Native C++ objects, C structs, and the GC boundary
 
 Owner labels: the opaque `externref`/`GcHeap`/`HostBridge` primitive is **ENG**;
 the A/B/C object policy, handle table, finalizer and class bridge are **EMB**;
 a generated header or SWIG/Glue adapter is **TOOL**. The native class model is
 not an engine feature.
 
-### 13.1 The question this section answers
+### 12.1 The question this section answers
 
 [`languages/LF2_ABI_INTEROP.md`](languages/LF2_ABI_INTEROP.md) maps a guest’s
 scalars, strings, lists and references onto WIT and the Canonical ABI. It leaves
@@ -1475,21 +1446,21 @@ There are only a few honest answers:
    pointer or `externref`, and the host runtime’s finalizer releases it. This is
    the SpiderMonkey/[`JsUtil`](https://github.com/Metalhead33-Foundation/GuiTest/blob/master/JS/JsUtil.hpp) model and it is not language-neutral.
 4. **The object image placed in linear memory** — rejected as a general
-   mechanism in §13.7.1. It works only for explicitly serialised POD data.
+   mechanism in §12.7.1. It works only for explicitly serialised POD data.
 5. **The engine GC owning native objects** — rejected as an engine feature in
-   §13.7.2. It is not what `GcHeap` is, and `std::pmr::memory_resource` is not a
+   §12.7.2. It is not what `GcHeap` is, and `std::pmr::memory_resource` is not a
    general object lifetime system.
-6. **A C++ reflection system in the engine** — rejected in §13.7.3. It would be
+6. **A C++ reflection system in the engine** — rejected in §12.7.3. It would be
    a new subsystem, not a binding mechanism.
 
-The decision in §13.8 is deliberately narrower than “make everything
+The decision in §12.8 is deliberately narrower than “make everything
 work”: the engine owns the **opaque boundary** (`externref`, `HostBridge`,
 component resource handles), while the embedder or a host-side adapter library
 owns the **typed object model**. This is the same split already chosen for WASI,
 JavaScript integration and OS threads: the engine supplies the contract, not a
 particular host runtime.
 
-### 13.2 What the engine already guarantees
+### 12.2 What the engine already guarantees
 
 These facts matter because they bound what a future design may claim without
 changing the engine:
@@ -1525,7 +1496,7 @@ So “the engine could just expose the object” is not true today, and making i
 true would not be a small extension to `externref`. It would be a new object
 model with a new ownership contract.
 
-### 13.3 The three practical difficulties
+### 12.3 The three practical difficulties
 
 The A/B/C labels used by `LF2_ABI_INTEROP.md` §6 describe how hard it is to
 carry a reference between the two sides. On the host side they correspond to
@@ -1558,7 +1529,7 @@ stubs. Option C below is the runtime-identity case. The labels below therefore
 describe **host implementation difficulty**, not a second definition of the
 LF2 scale.
 
-### 13.4 Options A, B and C
+### 12.4 Options A, B and C
 
 | Option | Wire shape | Host implementation | Where it works |
 |---|---|---|---|
@@ -1572,7 +1543,7 @@ shape for a generated C++ class bridge. C is a policy of one host runtime, not
 an engine ABI: the engine must not encode it, because that privileges one GC
 language and makes the same object behave differently depending on its wrapper.
 
-### 13.5 Host-side invariants
+### 12.5 Host-side invariants
 
 Every option follows the same rules:
 
@@ -1584,7 +1555,7 @@ Every option follows the same rules:
 - a destructor is explicit (`destroy`) or runs from a host/guest finalizer; the
   engine never runs an arbitrary C++ destructor.
 
-### 13.6 Bridge sketch
+### 12.6 Bridge sketch
 
 The useful C++ shape is a small host-side template, not an engine type:
 
@@ -1601,28 +1572,28 @@ as `u64` (or `externref` where the target supports it), and converts a failed
 resolution into the engine trap path. The table, deleter and thread policy stay
 with the embedder.
 
-### 13.7 Non-options
+### 12.7 Non-options
 
-#### 13.7.1 Linear-memory object images
+#### 12.7.1 Linear-memory object images
 
 A raw pointer plus `sizeof(T)` promises a layout the engine cannot enforce. A
 Wasm guest cannot dereference a host pointer, and a GC reference is not a
 linear-memory address. Only explicit POD/canonical data crosses.
 
-#### 13.7.2 “The GC allocates C++ objects”
+#### 12.7.2 “The GC allocates C++ objects”
 
 `GcHeap` allocates Wasm structs/arrays and owns their reference counts; it does
 not know `T`, destructors or host ownership. `std::pmr` allocates bytes and does
 not run a destructor. A host-side type-erased releaser is the correct finalizer
 hook.
 
-#### 13.7.3 A C++ reflection system in the engine
+#### 12.7.3 A C++ reflection system in the engine
 
 It would need RTTI (absent in C and Rust), one ownership model for every
 embedder, and a security policy for forged handles. It duplicates what
 SWIG/Glue/pybind11 already do, badly. Keep reflection in an embedder adapter.
 
-### 13.8 The boundary and the decision
+### 12.8 The boundary and the decision
 
 The split is:
 
@@ -1673,7 +1644,7 @@ The direct answers to the questions that prompted this section:
   engine must provide the opaque primitive and the contract; the guide and
   adapter recipes are the deliverables that make the answer usable.
 
-### 13.9 Per-language consequences
+### 12.9 Per-language consequences
 
 | Target | What crosses | Recommended native-object model | Limit |
 |---|---|---|---|
@@ -1721,7 +1692,7 @@ For C++ specifically, the working policy is:
   automatically safe for concurrent calls just because the engine can run
   multiple agents.
 
-### 13.10 What would make this a tested claim
+### 12.10 What would make this a tested claim
 
 The section is a design decision, not a claim that every language has been
 exercised. The following tests would turn it into evidence, in increasing cost:
@@ -1766,14 +1737,14 @@ That closes the host-side question without turning the engine into a C++
 runtime, and it keeps the production-readiness boundary consistent with the
 one already recorded for WASI, JS integration and OS threads.
 
-## 14. GC references across modules and generated headers
+## 13. GC references across modules and generated headers
 
 Owner labels: the type identity, `Callable` representation, GC header and
 `stringref` lifetime are **ENG**; the target-language header/emitter is **TOOL**;
 a hand-written host adapter or a GC-language façade is **EMB**; the absence of
 typed GC references in C/Rust/Zig/Go is **LANG**.
 
-### 14.1 The short answer: `void*` is the representation, not the type
+### 13.1 The short answer: `void*` is the representation, not the type
 
 When a GC language exports a function that takes or returns a struct or array
 reference, four layers see different things:
@@ -1815,7 +1786,7 @@ pointers. The backend contract is one machine word of representation plus the
 engine’s type identity; a backend that invents its own layout breaks the
 `Callable` ABI and cross-module calls.
 
-### 14.2 Same-Store type identity is what makes the typed case work
+### 13.2 Same-Store type identity is what makes the typed case work
 
 The authoritative identity rules are:
 
@@ -1851,7 +1822,7 @@ object” in one module and “a MoonBit object” in another; the fields match,
 the runtimes’ methods, invariants and class metadata do not. Wasm GC unifies
 the object layout/type, not the language runtime.
 
-### 14.3 The four useful combinations
+### 13.3 The four useful combinations
 
 “GC language” below means a language that emits Wasm GC struct/array types
 (Kotlin/Wasm, MoonBit, Dart, AssemblyScript’s managed objects, etc.). “Non-GC
@@ -1894,7 +1865,7 @@ reference can cross, but each runtime still interprets its own class metadata;
 the safe cross-language surface is the exported function set, not a shared
 “object model”.
 
-### 14.4 What generated headers should contain
+### 13.4 What generated headers should contain
 
 There are two tiers, and mixing them is the source of most bad C headers:
 
@@ -1973,7 +1944,7 @@ layout description. For a `structref`, the only legal operations are the
 exported functions for that type; for an `arrayref`, length/get/set functions
 must be exported by the producing module or a typed adapter.
 
-### 14.5 Kind, identity and ownership in the generated wrapper
+### 13.5 Kind, identity and ownership in the generated wrapper
 
 A generated wrapper needs three checks that a raw `void*` cannot express:
 
@@ -2004,7 +1975,7 @@ pointer. A generated header that uses one `void*` typedef for every reference
 kind has already lost this distinction; generate kind-specific opaque types, or
 carry a kind tag alongside the value.
 
-### 14.6 Both GC languages, and cross-language objects
+### 13.6 Both GC languages, and cross-language objects
 
 Two GC languages can exchange a typed reference only when **all** of these are
 true:
@@ -2030,7 +2001,7 @@ gives them a common *object representation and type system*; it does not give
 them a common `Object` class. Cross-language APIs must be expressed as exported
 functions over the common Wasm types, not as a shared native class hierarchy.
 
-### 14.7 Stringref
+### 13.7 Stringref
 
 `stringref` is a separate post-3.0 reference type, not a GC `struct` or
 `array`:
@@ -2059,7 +2030,7 @@ language wants its native string, the guest-side adapter performs the same copy
 or calls the module’s string operations. There is no universal string layout
 and no automatic “this pointer is a Kotlin/Dart/AS string” conversion.
 
-### 14.8 Generator rules for import and export headers
+### 13.8 Generator rules for import and export headers
 
 For every function import/export descriptor:
 
@@ -2099,7 +2070,7 @@ identity, but it is **runtime metadata**, not a C type name. The generator’s
 job is to preserve the distinction between “this is a struct of type T” and
 “this is an opaque word that happens to be pointer-sized”.
 
-## 15. Host-to-guest templates, class-size registration and tooling
+## 14. Host-to-guest templates, class-size registration and tooling
 
 Owner labels: `nativeImport`/`callCallable` are **ENG** primitives; the
 `GuestFunction`/`HostClass` convenience layer and the handle table are **EMB**
@@ -2107,7 +2078,7 @@ Owner labels: `nativeImport`/`callCallable` are **ENG** primitives; the
 adapters are **TOOL**. The source-language inability to express a type is
 **LANG** and is not fixed by any of these.
 
-### 15.1 What already exists
+### 14.1 What already exists
 
 The engine has the two directions but only one is templated:
 
@@ -2120,13 +2091,13 @@ The engine has the two directions but only one is templated:
   arguments.
 - **host reference lifetime:** `HostBridge` and `ModuleInstance::refClone`/
   `refDrop` for `externref`/StringStore/GC counts.
-- **host object storage:** the §13 `NativeTable` pattern. It is deliberately
+- **host object storage:** the §12 `NativeTable` pattern. It is deliberately
   not an engine type.
 
 There is no engine-side C++ class registry, so a convenience layer has to be
 either a host-side header/library or generated code.
 
-### 15.2 A host-to-guest function wrapper
+### 14.2 A host-to-guest function wrapper
 
 A small host-side template can make `Callable` less error-prone without
 changing the engine:
@@ -2163,7 +2134,7 @@ C++ class. A generated wrapper converts those values to/from the opaque types
 before and after the call; changing the `callCallable` template argument to a
 class wrapper would change the C ABI of the call.
 
-For reference parameters, `Args` is the opaque host spelling from §14
+For reference parameters, `Args` is the opaque host spelling from §13
 (`GcRef`, `ExternRef`, `StringRef`, or `void*` at the raw layer). The wrapper
 does not dereference them and does not invent a C++ type. It can additionally
 carry the `ModuleInstance*` needed for `refClone`/`refDrop`, but ownership must
@@ -2177,10 +2148,10 @@ This is the inverse of `nativeImport` in ergonomics only: `nativeImport` wraps
 a host body for generated code, while `GuestFunction` wraps a `Callable` for
 host code. Neither requires reflection.
 
-### 15.3 A class bridge without `sizeof`
+### 14.3 A class bridge without `sizeof`
 
 The useful host-side shape for a C++ class is a table-backed create/destroy/
-method bridge. `NativeTable`/`NativeHandle` are the §13.5 sketches; `encode()`/
+method bridge. `NativeTable`/`NativeHandle` are the §12.5 sketches; `encode()`/
 `decode()` are the obvious u64 bridge.
 
 ```cpp
@@ -2246,14 +2217,14 @@ What this layer deliberately does **not** provide:
 - a way for a C/Rust guest to call a C++ method through a `(ref $T)` unless the
   guest has a compatible Wasm-level type and an adapter.
 
-### 15.4 Do not register a class size
+### 14.4 Do not register a class size
 
 A “register `sizeof(T)`” step is tempting because it sounds like the missing
 piece for a guest-side allocator. It should not be part of the bridge:
 
 - the guest cannot use `sizeof(T)` to read a host object. A host object is not
   in guest linear memory, and copying its bytes is the rejected object-image
-  model (§13.7.1);
+  model (§12.7.1);
 - `sizeof(T)` differs between the host and the guest compiler: ABI, packing,
   virtual tables, allocator state and standard-library layout are not shared;
 - a size without field offsets, alignment, lifetime and ownership is not a
@@ -2264,10 +2235,10 @@ piece for a guest-side allocator. It should not be part of the bridge:
   reference, not a copy of `T`;
 - if the host wants to allocate an object in a **guest-owned** arena, that is a
   host/guest allocator protocol, not a class registration; it needs an
-  explicit ABI and lifetime contract, and remains item 2 of §13.
+  explicit ABI and lifetime contract, and remains item 2 of §12.
 
 Constructor, destructor and member-function trampolines are different: they are
-ordinary host functions over a handle, and §15.3 shows the shape. They do not
+ordinary host functions over a handle, and §14.3 shows the shape. They do not
 need a size, a field layout or reflection. The `JsUtil` `ReturnValueWrapper`
 specialisations and member-function trampolines are the right *shape* for the
 scalar conversion and dispatch parts; their global `shared_ptr<void>` table and
@@ -2277,7 +2248,7 @@ For a plain C struct with a canonical schema, a size may be part of an
 explicitly generated record/list ABI. That is a POD copy, not a native C++ object
 bridge, and the schema must state every field and its encoding.
 
-### 15.5 SWIG, Glue and the reflection boundary
+### 14.5 SWIG, Glue and the reflection boundary
 
 The sentence “a reflection system would duplicate, badly, what SWIG, Glue and
 `pybind11`-style tools already do” is a criticism of building reflection into
@@ -2288,7 +2259,7 @@ the engine. It is **not** a decision to link those tools into `WasmBase`.
 | **SWIG** | parses C/C++ declarations and generates bindings for many host languages | optional build-time generator for a host adapter, outside the engine | Wasm GC types, `externref`, the Canonical ABI, component resources, `Callable` context/traps |
 | **Glue** | runtime C++ map of `AnyFunction`/`MapValue` with a `DeclarationPrinter` | optional build-time front-end for functions the host registers explicitly | the same Wasm/ABI gap; it does not know a `Store`, `TypeId` or `GcHeader` |
 | **pybind11** | Python-specific C++ binding library | a Python host adapter only | all other languages and the engine ABI; not a generic answer |
-| **descriptor-driven emitter** | reads `importDescriptors()`/`exportDescriptors()` and emits target declarations | the preferred first-party generator (§12) | C++ class discovery; it needs a separate C++ front-end if that is wanted |
+| **descriptor-driven emitter** | reads `importDescriptors()`/`exportDescriptors()` and emits target declarations | the preferred first-party generator (§11) | C++ class discovery; it needs a separate C++ front-end if that is wanted |
 
 Even a successful SWIG or Glue run produces **candidate declarations**, not Wasm
 bindings. Its output still has to be connected to `Callable`, `Value`, `TypeId`,
@@ -2339,7 +2310,7 @@ A runtime “reflection system” in the engine would be a third path that every
 embedder must use and every backend must understand. The arrows above keep it
 out of the core.
 
-### 15.6 Decision and validation
+### 14.6 Decision and validation
 
 1. **`nativeImport` stays in the engine.** It is a generic
    exception-to-trap trampoline with no object model.
@@ -2347,12 +2318,12 @@ out of the core.
    They depend on C++ types and ownership policy, so they are not engine or
    backend contract.
 3. **Generate the bridge; do not reflect at runtime.** The generator consumes
-   descriptors and emits the opaque reference types from §14 plus the handle and
-   method stubs from §15.3.
+   descriptors and emits the opaque reference types from §13 plus the handle and
+   method stubs from §14.3.
 4. **Never register `sizeof(T)`.** Expose create/destroy/accessors and keep the
    object on the host or in an `externref` box.
 5. **SWIG/Glue remain optional and out-of-tree.** They propose C++ surfaces;
-   descriptors define the ABI. The candidate path is documented in §12.8.
+   descriptors define the ABI. The candidate path is documented in §11.8.
 6. **C++ and Rust are the baseline adapters.** AssemblyScript and the GC
    languages test typed references across a two-language link.
 
@@ -2363,9 +2334,9 @@ type mismatch rejected at link time; a GC → C `externref` that is never
 dereferenced; a `stringref` round-trip; and a cross-Store reference rejected.
 
 
-## 16. Problem ownership: engine, embedder, tooling, language
+## 15. Problem ownership: engine, embedder, tooling, language
 
-### 16.1 What counts as a problem
+### 15.1 What counts as a problem
 
 Here “problem” means **anything unresolved**: a gap, a bug, a design question,
 a rejected option, a compatibility limit, or an open test/evidence question.
@@ -2383,7 +2354,7 @@ as engine debt.
 | **TOOL** — tooling / build-time | Compilers and Wasm tooling (emscripten/LLVM, Binaryen, `wasm-opt`, linkers), generators (SWIG/Glue/schema emitters), build/install | a tool change, flag, generated source, build step or test harness |
 | **LANG** — source language | A source-language semantic/ABI limitation that needs a language or compiler-frontend change, not an engine or host adapter | language proposal, compiler work, or an explicit “not expressible” boundary |
 
-### 16.2 Decision rules
+### 15.2 Decision rules
 
 Use these in order:
 
@@ -2416,36 +2387,36 @@ Use these in order:
    missing.
 
 The old `P1`–`P6` and `ES-*` items are milestone history; §9 remains the
-milestone status. This register covers the open questions introduced by §12–15
-and the constraints they inherit from §4/§13/§14.
+milestone status. This register covers the open questions introduced by §11–15
+and the constraints they inherit from §4/§12/§13.
 
 
-### 16.3 Engine-owned register
+### 15.3 Engine-owned register
 
 These are things the engine must decide, implement or deliberately refuse. They
 do not name a host runtime or a source language.
 
 | ID | Problem / open question | Where | Status | Decision / next action |
 |---|---|---|---|---|
-| **EN-1** | Reference identity is Store-scoped; cross-Store references are not shareable | §4.4, §14.2 | **Accepted** | One `Store` per runtime; two runtimes reject cross-runtime modules/instances. Do not add a process-global type registry. |
-| **EN-2** | A bare `Callable` carries a numeric `typeId` but not its originating `Store` | §15.2 | **Open** | Decide whether to add provenance or require `ModuleInstance`-owned wrappers; a numeric id alone cannot reject a foreign Store. |
-| **EN-3** | Every reference must lower to one pointer-sized machine word across backends | §14.1 | **Verify** | LibJIT, SLJIT and AsmJIT do; any future backend must. Add an ABI check when a new backend is promoted. |
-| **EN-4** | `HostBridge` is the only host-reference lifetime primitive; it does not own C++ objects | §13.2, §13.6 | **Accepted** | Keep it as retain/release/equals + lifecycle callbacks. Do not move a C++ object model into it. |
-| **EN-5** | `GcHeap` is guest-Wasm-GC only; it is not a native C++ heap | §13.7.2 | **Accepted** | No `std::pmr`-based native GC. Host objects stay in a host table/arena or an `externref` box. |
-| **EN-6** | Component resource slots are not native C++ object storage | §13.2 | **Accepted** | A `uint64_t` representation is data, not a destructor contract for arbitrary `T`. |
-| **EN-7** | Engine-side C++ reflection/class registry | §13.7.3, §15.5 | **Rejected** | Do not add one to `WasmBase`. Host-side reflection/tooling is allowed (§16.4/§16.5). |
-| **EN-8** | Arbitrary C++ object images in guest linear memory | §13.7.1 | **Rejected** | Only explicit POD/canonical data crosses. Layout negotiation is not an engine feature. |
-| **EN-9** | Class-size registration as an engine API | §15.4 | **Rejected** | No `sizeof(T)` contract. Guest wrapper sizes belong to the guest compiler; host objects stay host-side. |
-| **EN-10** | `stringref` and GC references are Store-owned; cross-Store sharing is unsupported | §14.7 | **Accepted** | Copy/serialize across runtimes; do not pass the pointer. |
-| **EN-11** | A `(ref $T)` import must match the canonical function/type identity, not just a pointer kind | §14.2, §14.8 | **Verify** | The matching machinery exists; add the two-module GC/typed-ref test to the evidence set. |
-| **EN-12** | The public metadata must be sufficient for generated headers | §14.8 | **Verify** | `importDescriptors`/`exportDescriptors` + `typeView` are the schema; prove a C/C++ and Rust emitter consumes them without parsing C++ headers. |
+| **EN-1** | Reference identity is Store-scoped; cross-Store references are not shareable | §4.4, §13.2 | **Accepted** | One `Store` per runtime; two runtimes reject cross-runtime modules/instances. Do not add a process-global type registry. |
+| **EN-2** | A bare `Callable` carries a numeric `typeId` but not its originating `Store` | §14.2 | **Open** | Decide whether to add provenance or require `ModuleInstance`-owned wrappers; a numeric id alone cannot reject a foreign Store. |
+| **EN-3** | Every reference must lower to one pointer-sized machine word across backends | §13.1 | **Verify** | LibJIT, SLJIT and AsmJIT do; any future backend must. Add an ABI check when a new backend is promoted. |
+| **EN-4** | `HostBridge` is the only host-reference lifetime primitive; it does not own C++ objects | §12.2, §12.6 | **Accepted** | Keep it as retain/release/equals + lifecycle callbacks. Do not move a C++ object model into it. |
+| **EN-5** | `GcHeap` is guest-Wasm-GC only; it is not a native C++ heap | §12.7.2 | **Accepted** | No `std::pmr`-based native GC. Host objects stay in a host table/arena or an `externref` box. |
+| **EN-6** | Component resource slots are not native C++ object storage | §12.2 | **Accepted** | A `uint64_t` representation is data, not a destructor contract for arbitrary `T`. |
+| **EN-7** | Engine-side C++ reflection/class registry | §12.7.3, §14.5 | **Rejected** | Do not add one to `WasmBase`. Host-side reflection/tooling is allowed (§15.4/§15.5). |
+| **EN-8** | Arbitrary C++ object images in guest linear memory | §12.7.1 | **Rejected** | Only explicit POD/canonical data crosses. Layout negotiation is not an engine feature. |
+| **EN-9** | Class-size registration as an engine API | §14.4 | **Rejected** | No `sizeof(T)` contract. Guest wrapper sizes belong to the guest compiler; host objects stay host-side. |
+| **EN-10** | `stringref` and GC references are Store-owned; cross-Store sharing is unsupported | §13.7 | **Accepted** | Copy/serialize across runtimes; do not pass the pointer. |
+| **EN-11** | A `(ref $T)` import must match the canonical function/type identity, not just a pointer kind | §13.2, §13.8 | **Verify** | The matching machinery exists; add the two-module GC/typed-ref test to the evidence set. |
+| **EN-12** | The public metadata must be sufficient for generated headers | §13.8 | **Verify** | `importDescriptors`/`exportDescriptors` + `typeView` are the schema; prove a C/C++ and Rust emitter consumes them without parsing C++ headers. |
 | **EN-13** | `Elvavena` remains in the public SDK headers | §6.2, §9 | **Accepted** | Deliberate first-freeze tradeoff; removal is a separate public-header/API decision, not an embedding-runtime bug. **Won't be removed. We in fact intend to make WasmJit a first-class member of the MhLib ecosystem in the distant future.** |
 
-The **ENG** list is deliberately short. Most of the remaining work in §12–15 is
+The **ENG** list is deliberately short. Most of the remaining work in §11–15 is
 not a missing engine feature; it is a host adapter or a generator.
 
 
-### 16.4 Embedder-owned register
+### 15.4 Embedder-owned register
 
 This is the category that must stay explicit. None of these is an engine gap
 when the engine already supplies the primitive; they are policies, adapters and
@@ -2453,29 +2424,29 @@ product decisions.
 
 | ID | Problem / open question | Where | Status | Owner-side action |
 |---|---|---|---|---|
-| **EM-1** | How a guest sees a native C++ object or C struct: A/B/C | §13.4–§13.6 | **Open** | Choose/implement the handle table, generated stubs or host box; the engine only supplies `externref`/barriers. |
-| **EM-2** | Host-side C++ reflection/class registration | §13.7.3, §15.3–§15.5 | **Open** | Build it outside `WasmBase` if a product needs it; do not ask the engine to own a class model. |
-| **EM-3** | Native object lifetime and finalization | §13.6, §13.9 | **Open** | Pick `unique_ptr`, `shared_ptr`, arena, custom deleter or `HostBox`; install the `HostBridge` callbacks and drop per-instance roots. |
-| **EM-4** | Host object table storage and thread affinity | §13.5, §13.9 | **Open** | Choose a mutex/thread-local/per-agent table; document that a native object is not automatically thread-safe. |
+| **EM-1** | How a guest sees a native C++ object or C struct: A/B/C | §12.4–§12.6 | **Open** | Choose/implement the handle table, generated stubs or host box; the engine only supplies `externref`/barriers. |
+| **EM-2** | Host-side C++ reflection/class registration | §12.7.3, §14.3–§14.5 | **Open** | Build it outside `WasmBase` if a product needs it; do not ask the engine to own a class model. |
+| **EM-3** | Native object lifetime and finalization | §12.6, §12.9 | **Open** | Pick `unique_ptr`, `shared_ptr`, arena, custom deleter or `HostBox`; install the `HostBridge` callbacks and drop per-instance roots. |
+| **EM-4** | Host object table storage and thread affinity | §12.5, §12.9 | **Open** | Choose a mutex/thread-local/per-agent table; document that a native object is not automatically thread-safe. |
 | **EM-5** | WASI implementation | §4.2 | **Accepted** | Implement it as host imports; the engine has no WASI subsystem. |
-| **EM-6** | JavaScript engine / JS object model / Promise loop | §12, §15.5 | **Accepted** | Implement behind `HostBridge`/host imports; the core has no JS runtime. |
+| **EM-6** | JavaScript engine / JS object model / Promise loop | §11, §14.5 | **Accepted** | Implement behind `HostBridge`/host imports; the core has no JS runtime. |
 | **EM-7** | Multi-agent scheduling and OS thread/fiber policy | §4.2, §9 | **Accepted** | The engine supplies `Agent` and instance rules; the embedder schedules and pins. |
 | **EM-8** | `gcCollect()` safepoint discipline | §2, `ABI.md` | **Accepted** | Call it where no Wasm frame is live and no un-counted references are held; this is a host obligation. |
-| **EM-9** | Host binding declarations/adapters by hand or generator output | §12, §15 | **Open** | Choose hand-written or generated adapters; own the target-language ABI and memory protocol. |
-| **EM-10** | GC → non-GC façade (`extern.convert_any`/`any.convert_extern`) | §14.3 | **Open** | The GC module exports the façade; the non-GC host/guest stays opaque. |
-| **EM-11** | Cross-Store copy/serialize/remote boundary | §14.2–§14.3 | **Open** | Copy or serialize; do not pass a Store-owned reference across runtimes. |
-| **EM-12** | Native string ↔ `stringref`/UTF-8/WTF conversion | §14.7 | **Open** | Use `StringStore` copy methods in the adapter; no native string layout crosses. |
-| **EM-13** | Host object `Tag`/handle validation and stale-handle policy | §13.4–§13.5 | **Open** | Put generation/type tags in the table; reject stale/mistyped handles before dereference. |
-| **EM-14** | Host adapter conformance tests | §13.10, §15.6 | **Open** | Test the generated adapter, not only raw `Callable`; assert ownership and trap paths. |
-| **EM-15** | Host-to-guest template library (`GuestFunction`, `HostClass`) | §15.2–§15.3 | **Open** | Optional host-side header/library, not `WasmBase`; keep the ownership policy in the table. |
-| **EM-16** | Register `sizeof(T)` / host layout in the adapter | §15.4 | **Rejected** | Use a handle or guest wrapper; a size without offsets/lifetime is not a contract. |
+| **EM-9** | Host binding declarations/adapters by hand or generator output | §11, §14 | **Open** | Choose hand-written or generated adapters; own the target-language ABI and memory protocol. |
+| **EM-10** | GC → non-GC façade (`extern.convert_any`/`any.convert_extern`) | §13.3 | **Open** | The GC module exports the façade; the non-GC host/guest stays opaque. |
+| **EM-11** | Cross-Store copy/serialize/remote boundary | §13.2–§13.3 | **Open** | Copy or serialize; do not pass a Store-owned reference across runtimes. |
+| **EM-12** | Native string ↔ `stringref`/UTF-8/WTF conversion | §13.7 | **Open** | Use `StringStore` copy methods in the adapter; no native string layout crosses. |
+| **EM-13** | Host object `Tag`/handle validation and stale-handle policy | §12.4–§12.5 | **Open** | Put generation/type tags in the table; reject stale/mistyped handles before dereference. |
+| **EM-14** | Host adapter conformance tests | §12.10, §14.6 | **Open** | Test the generated adapter, not only raw `Callable`; assert ownership and trap paths. |
+| **EM-15** | Host-to-guest template library (`GuestFunction`, `HostClass`) | §14.2–§14.3 | **Open** | Optional host-side header/library, not `WasmBase`; keep the ownership policy in the table. |
+| **EM-16** | Register `sizeof(T)` / host layout in the adapter | §14.4 | **Rejected** | Use a handle or guest wrapper; a size without offsets/lifetime is not a contract. |
 
 **EM-5/EM-6/EM-7/EM-8 are decisions, not engine debt.** They stay in this
 register so a future reader does not “fix” them by adding WASI, a JS engine or a
 scheduler to `WasmBase/`.
 
 
-### 16.5 Tooling / build-time register
+### 15.5 Tooling / build-time register
 
 This owner covers two things the user question deliberately conflates:
 **Wasm producers/optimizers** and **bindings generators**. Both are outside the
@@ -2485,21 +2456,21 @@ and the producer rows are toolchain constraints recorded in this repository.
 
 | ID | Problem / open question | Where | Status | Tool-side action |
 |---|---|---|---|---|
-| **TB-1** | No neutral schema emitter from `Module`/`Component` descriptors | §12.2, §12.7, §12.8 | **Verify** | The first-party `Tools/Bindings/` emitter and `wasmjit-bindings` CLI project both core modules and components, with the Canonical ABI flat signature on component functions; WIT JSON is optional and `[bindings]` cross-checks its names against the schema. The descriptor path reads metadata, never a C++ header; `--frontend-schema` is a separate candidate path, not the authority. |
-| **TB-2** | No C/C++, Rust, Zig, AS, Kotlin, MoonBit, Go, Dart, Java, C#, Python, Ruby, Lua, Swift, D, Nim, Crystal, Ada, Pascal or Haskell emitter | §12.6–§12.8 | **Verify** | Emitters exist for the C/C++, Rust, TypeScript/AssemblyScript, Zig, Kotlin, MoonBit, Go, Dart, Java, C#, F#, Python, Ruby, Lua, Swift, D, Nim, Crystal, Ada, Pascal and Haskell targets, plus a C++ adapter and direction-aware `cpp-typedefs`/`cpp-source`; `[bindings]` compiles the targets whose toolchains are present. Consume the schema, not C++ headers. |
-| **TB-3** | SWIG/Glue integration | §12.3, §15.5 | **Verify** | Optional build-time front-ends only: `--candidates` runs SWIG's XML front-end and `--glue-candidates` compiles a Glue registration source and reads its declaration printer. Local snapshot in §15.5; never link into the engine. |
-| **TB-4** | Automatic scan of existing C/C++ headers as truth | §12.3 | **Rejected** | A C++ header is not a Wasm ABI; the literal form stays rejected. The `VMContext*`-filtered candidate schema is `TB-4a`, not an exception to this row. |
-| **TB-4a** | C++ header discovery as a *candidate* front-end | §12.3, §12.8, §15.5 | **Verify** | SWIG header proposals and Glue-declaration proposals are checked against the schema by name, arity, result shape and type; `[bindings]` covers a match and a mismatch for both. `--frontend-schema` additionally derives a G2H imports schema (and can emit every non-C++ target) only from functions with `VMContext*` first. Glue 1.5 is runtime registration, not a header parser. |
-| **TB-5** | WIT as an IDL for core modules | §12.3–§12.4 | **Accepted** | WIT is component-level only. `--wit-json`/`--wit` now make it an optional schema source (with `wasm-tools` as the text converter), while descriptor components remain the authority for the Canonical ABI. Core modules use descriptors/`Callable`; no second core IDL. |
-| **TB-6** | Binaryen/`wasm-opt` rewrites/optimizations | §12, §14 | **Verify** | Keep them in the producer pipeline; `[bindings]` runs `wasm-opt --all-features -O2` on five fixtures (scalars, multi-value, GC struct/array, reference ownership and an externref import) and compares both imported and exported function signatures, ignoring the store-scoped `typeId`. |
-| **TB-7** | Compiler flags/versions that emit or omit GC refs, `externref`, EH, stringref | §12, §14 | **Verify** | 2026-11-04 host recorded by `[bindings]` in `toolchain.txt`: wasm-opt 124, wasm-tools 1.252.0, wat2wasm 1.0.41, clang 23.1.4, rustc 1.99.0 and Go 1.27.3; the optimizer flags stay pinned at `--all-features -O2`. Re-record when a producer toolchain changes. |
-| **TB-8** | Generated headers for GC/string references | §14.4–§14.8 | **Verify** | Emitter rule, not an engine gap: opaque per-kind types, no layout/`TypeId` constants, explicit ownership comments. All emitters spell `stringref` as opaque `wasm_stringref`; `[bindings]` covers it with a hand-built reserved-encoding fixture. |
+| **TB-1** | No neutral schema emitter from `Module`/`Component` descriptors | §11.2, §11.7, §11.8 | **Verify** | The first-party `Tools/Bindings/` emitter and `wasmjit-bindings` CLI project both core modules and components, with the Canonical ABI flat signature on component functions; WIT JSON is optional and `[bindings]` cross-checks its names against the schema. The descriptor path reads metadata, never a C++ header; `--frontend-schema` is a separate candidate path, not the authority. |
+| **TB-2** | No C/C++, Rust, Zig, AS, Kotlin, MoonBit, Go, Dart, Java, C#, Python, Ruby, Lua, Swift, D, Nim, Crystal, Ada, Pascal or Haskell emitter | §11.6–§11.8 | **Verify** | Emitters exist for the C/C++, Rust, TypeScript/AssemblyScript, Zig, Kotlin, MoonBit, Go, Dart, Java, C#, F#, Python, Ruby, Lua, Swift, D, Nim, Crystal, Ada, Pascal and Haskell targets, plus a C++ adapter and direction-aware `cpp-typedefs`/`cpp-source`; `[bindings]` compiles the targets whose toolchains are present. Consume the schema, not C++ headers. |
+| **TB-3** | SWIG/Glue integration | §11.3, §14.5 | **Verify** | Optional build-time front-ends only: `--candidates` runs SWIG's XML front-end and `--glue-candidates` compiles a Glue registration source and reads its declaration printer. Local snapshot in §14.5; never link into the engine. |
+| **TB-4** | Automatic scan of existing C/C++ headers as truth | §11.3 | **Rejected** | A C++ header is not a Wasm ABI; the literal form stays rejected. The `VMContext*`-filtered candidate schema is `TB-4a`, not an exception to this row. |
+| **TB-4a** | C++ header discovery as a *candidate* front-end | §11.3, §11.8, §14.5 | **Verify** | SWIG header proposals and Glue-declaration proposals are checked against the schema by name, arity, result shape and type; `[bindings]` covers a match and a mismatch for both. `--frontend-schema` additionally derives a G2H imports schema (and can emit every non-C++ target) only from functions with `VMContext*` first. Glue 1.5 is runtime registration, not a header parser. |
+| **TB-5** | WIT as an IDL for core modules | §11.3–§11.4 | **Accepted** | WIT is component-level only. `--wit-json`/`--wit` now make it an optional schema source (with `wasm-tools` as the text converter), while descriptor components remain the authority for the Canonical ABI. Core modules use descriptors/`Callable`; no second core IDL. |
+| **TB-6** | Binaryen/`wasm-opt` rewrites/optimizations | §11, §13 | **Verify** | Keep them in the producer pipeline; `[bindings]` runs `wasm-opt --all-features -O2` on five fixtures (scalars, multi-value, GC struct/array, reference ownership and an externref import) and compares both imported and exported function signatures, ignoring the store-scoped `typeId`. |
+| **TB-7** | Compiler flags/versions that emit or omit GC refs, `externref`, EH, stringref | §11, §13 | **Verify** | 2026-11-04 host recorded by `[bindings]` in `toolchain.txt`: wasm-opt 124, wasm-tools 1.252.0, wat2wasm 1.0.41, clang 23.1.4, rustc 1.99.0 and Go 1.27.3; the optimizer flags stay pinned at `--all-features -O2`. Re-record when a producer toolchain changes. |
+| **TB-8** | Generated headers for GC/string references | §13.4–§13.8 | **Verify** | Emitter rule, not an engine gap: opaque per-kind types, no layout/`TypeId` constants, explicit ownership comments. All emitters spell `stringref` as opaque `wasm_stringref`; `[bindings]` covers it with a hand-built reserved-encoding fixture. |
 | **TB-9** | Install/pkg-config/out-of-tree consumer | §7, §8 | **Verify** | Re-run 2026-11-04: `Test/install-check.sh build/Desktop-Release` installed into a scratch prefix, linked the consumer through `wasmjit.pc`, and ran the i32/f64/multi-result/v128/mixed-tuple checks (`install-check: OK`). Re-run when packaging changes. |
 | **TB-10** | Cross-vendor C++ ABI stability | §9 | **Accepted** | Soname discipline only; deferred unless a pimpl firewall is designed. |
-| **TB-11** | Generated-adapter conformance tests | §12.5, §12.8, §15.6 | **Verify** | In-repo `[bindings]` tests compile every generated target (including the C header as C and C++), compare five `wasm-opt` modules, and run a generated C++ adapter through an export call, a trap, an import, an opaque-reference pass-through, a multi-value export and explicit retain/drop of a GC reference result (43 cases / 937 assertions across the suite, **2026-11-05**). |
-| **TB-12** | Compiler/tool output whose encoding collides with the engine’s reserved forms | §14.7, `STRINGREF.md` | **Verify** | The reserved `stringref` encoding (`0x67`) is covered by the hand-built `[bindings]` fixture (TB-8) and stays opaque through every emitter. Keep the producer/toolchain checklist note; do not patch the engine around a tool bug. |
-| **TB-13** | Legacy/alternative exception encoding from a producer (e.g. Kotlin/Wasm) | §12, `LEGACY_EXCEPTIONS.md` | **Verify** | `[legacy-eh]` covers strict refusal, default recovery, opt-in rewrite, rethrow/delegate cases and agreement with Binaryen (110 assertions / 12 cases, green 2026-11-04). The policy stays producer/parser-side, not a source-language type rule. |
-| **TB-14** | Language-specific host import/export ABI emission | §12.6, §12.8, §14.4 | **Verify** | Function entries are emitted for every target in §12.6, plus C++ host-side typedef/source output. Non-function component value/instance/type/component/core-module entries (and core global/memory/table entries) are emitted as explicit comments because host access is through `ComponentInstance`/`ModuleInstance`, not a generated callable; `[bindings]` checks the comments are present. The engine only sees the resulting Wasm function signature. |
+| **TB-11** | Generated-adapter conformance tests | §11.5, §11.8, §14.6 | **Verify** | In-repo `[bindings]` tests compile every generated target (including the C header as C and C++), compare five `wasm-opt` modules, and run a generated C++ adapter through an export call, a trap, an import, an opaque-reference pass-through, a multi-value export and explicit retain/drop of a GC reference result (43 cases / 937 assertions across the suite, **2026-11-05**). |
+| **TB-12** | Compiler/tool output whose encoding collides with the engine’s reserved forms | §13.7, `STRINGREF.md` | **Verify** | The reserved `stringref` encoding (`0x67`) is covered by the hand-built `[bindings]` fixture (TB-8) and stays opaque through every emitter. Keep the producer/toolchain checklist note; do not patch the engine around a tool bug. |
+| **TB-13** | Legacy/alternative exception encoding from a producer (e.g. Kotlin/Wasm) | §11, `LEGACY_EXCEPTIONS.md` | **Verify** | `[legacy-eh]` covers strict refusal, default recovery, opt-in rewrite, rethrow/delegate cases and agreement with Binaryen (110 assertions / 12 cases, green 2026-11-04). The policy stays producer/parser-side, not a source-language type rule. |
+| **TB-14** | Language-specific host import/export ABI emission | §11.6, §11.8, §13.4 | **Verify** | Function entries are emitted for every target in §11.6, plus C++ host-side typedef/source output. Non-function component value/instance/type/component/core-module entries (and core global/memory/table entries) are emitted as explicit comments because host access is through `ComponentInstance`/`ModuleInstance`, not a generated callable; `[bindings]` checks the comments are present. The engine only sees the resulting Wasm function signature. |
 
 **“Outside the engine” is not “outside the project.”** `TB-1`, `TB-2` and
 `TB-8` are **TOOL**: they must not add a header to `WasmBase/` or a link
@@ -2510,7 +2481,7 @@ contract and the validation step. `TB-10` is recorded and deferred; the rest of
 the table is in scope for this repository’s tooling work.
 
 
-### 16.6 Source-language register
+### 15.6 Source-language register
 
 These are constraints of the source language/compiler model. They are not
 engine gaps, and an adapter cannot make the language express something it has
@@ -2529,15 +2500,15 @@ no type or lifetime rule for.
 
 The **LANG** rows are not “won’t fix”; they are “fixing this means changing the
 source language or its frontend, not `WasmBase`”. The practical adapter choices
-are in §13–§15 and in the per-language notes of
+are in §12–§14 and in the per-language notes of
 [`languages/LF2_ABI_INTEROP.md`](languages/LF2_ABI_INTEROP.md).
 
-### 16.7 Using the register in review
+### 15.7 Using the register in review
 
 For a new issue or design note:
 
 1. State the **observable problem**, not the implementation you prefer.
-2. Assign one **primary owner** using §16.2.
+2. Assign one **primary owner** using §15.2.
 3. If the fix requires two owners, split the item; do not hide a language
    limitation inside an engine ticket or a generator ticket.
 4. Mark the status explicitly. “Accepted” is a decision, not a closed bug.
@@ -2557,7 +2528,7 @@ The one-line summary is:
 > express.
 
 
-## 17. A host-provided object runtime: the GObject-shaped option (study)
+## 16. A host-provided object runtime: the GObject-shaped option (study)
 
 Owner labels: the wire primitive (`externref`, `HostBridge`, `GcHeap`, component
 resources) is **ENG**; the object runtime, its table and its lifetime policy are
@@ -2566,11 +2537,11 @@ cannot declare a typed `(ref $T)` is **LANG**. **No engine change is proposed.**
 
 Status: feasibility study (2026-11-12; implementation snapshot `9b2ca92`). It
 records no code, no header and no frozen-surface change. It answers the question
-left by §13 and [`languages/LF2_ABI_INTEROP.md`](languages/LF2_ABI_INTEROP.md)
+left by §12 and [`languages/LF2_ABI_INTEROP.md`](languages/LF2_ABI_INTEROP.md)
 §6: could a GObject/GLib-shaped host runtime be the common object model that
 C-family languages use manually and GC languages wrap silently?
 
-### 17.1 Three layers, often conflated
+### 16.1 Three layers, often conflated
 
 The question “can C use a typed `(ref $T)`?” mixes three decisions:
 
@@ -2590,7 +2561,7 @@ system.
 This is why the honest target is not “C understands a Wasm GC object”. It is
 “C can use a host object through a documented handle ABI, and a GC language can
 use the same object through a generated wrapper”. The two statements have
-different strengths; §17.6 separates them.
+different strengths; §16.6 separates them.
 
 **If a C compiler did gain a typed `(ref $T)` extension**, three things would
 still be true: the C code would need GC rooting/barriers at every local and
@@ -2601,10 +2572,10 @@ usable. That is a **LANG**/**TOOL** project, not an engine or HOR feature.
 
 “Everyone understands it” is likewise not a property a runtime can grant. It is
 either a **shared canonical Wasm type** (structural, same Store) or a **shared
-IDL/resource convention** (nominal, via WIT or a descriptor name). §17.6
-separates those two meanings; §17.8 measures the Component Model overlap.
+IDL/resource convention** (nominal, via WIT or a descriptor name). §16.6
+separates those two meanings; §16.8 measures the Component Model overlap.
 
-### 17.2 What GObject contributes, and what transfers
+### 16.2 What GObject contributes, and what transfers
 
 GObject is the closest prior art for a C-first cross-language object system. Its
 type system is built on `GType`; its object model adds reference counting,
@@ -2636,7 +2607,7 @@ introspectable object model** — GType registration, properties, signals and
 interface queries. That is the non-redundant core of this proposal, not the
 container types or the main loop.
 
-### 17.3 The shape of a host object runtime
+### 16.3 The shape of a host object runtime
 
 Working name: **the host object runtime (HOR)**. No header or symbol is proposed
 by this study; the name is only a placeholder for the design.
@@ -2685,7 +2656,7 @@ The table is the host’s, not the engine’s. It must validate a handle before 
 access (generation, type, thread). A forged integer is a normal C mistake and
 must be a clean error, not a wild pointer.
 
-### 17.4 Two backing strategies, and the one-owner rule
+### 16.4 Two backing strategies, and the one-owner rule
 
 A HOR can own objects in two different ways, and the choice must be visible in
 the handle:
@@ -2714,7 +2685,7 @@ object is host memory; a guest-GC-owned object can also be created by a guest
 factory and returned as an `externref`, or by a component resource. This is a
 deliberate boundary, not a missing hook.
 
-### 17.5 What each language actually gets
+### 16.5 What each language actually gets
 
 | Target | What it sees | How it calls the runtime | Limit |
 |---|---|---|---|
@@ -2723,14 +2694,14 @@ deliberate boundary, not a missing hook.
 | **Rust** | `#[repr(transparent)]` handle | `Drop` calls `release`; no `Deref` | no Rust `Drop` across the boundary; no `String`/`Vec` layout |
 | **Zig** | `*anyopaque` or `u64` | explicit `deinit` | no guest finalizer |
 | **Go / TinyGo** | `uint64` handle | `Close`/`release`; `//go:wasmimport` | Go’s GC does not trace the host object; no Go pointer crosses |
-| **GC language** | its own object/class, or a generated resource wrapper | the wrapper holds the handle and forwards | “silent” only at the source level; see §17.6 |
+| **GC language** | its own object/class, or a generated resource wrapper | the wrapper holds the handle and forwards | “silent” only at the source level; see §16.6 |
 
-This is **B** in §13.4: a typed handle table with generated ergonomics. It is a
+This is **B** in §12.4: a typed handle table with generated ergonomics. It is a
 standardised version of the B recipe, not a new C in the LF2 scale. Calling it
 “C solved” is accurate only in the sense that C can use the object; the C type
 system still has no typed GC reference.
 
-### 17.6 What “silently wrapped in a GC language” can mean
+### 16.6 What “silently wrapped in a GC language” can mean
 
 There are three distinct cases, and only one of them is truly shared:
 
@@ -2745,14 +2716,14 @@ object. It requires the C side to be a host adapter (not a C guest), or a C
 toolchain extension that emits GC types; the ordinary C guest is not in this
 case. Case 2 is the usual “silent” wrapper, and it is an adapter, not a shared
 object model. Case 3 is the Component Model’s version of the same idea and is
-the most portable of the three; §17.8 measures the overlap.
+the most portable of the three; §16.8 measures the overlap.
 
 “Silent” can therefore mean **the generated binding hides the handle from the
 application programmer**. It cannot mean **two language runtimes agree on what
 the object is**. Kotlin’s dispatch, MoonBit’s runtime and Dart’s object model
 remain their own; only the handle and the exported functions are common.
 
-### 17.7 Type identity is the hard part, and it is already owned
+### 16.7 Type identity is the hard part, and it is already owned
 
 A GObject-shaped runtime wants a runtime type registry: register a type, give it
 a name and a parent, query it, cast to it. WasmJit already has a type identity
@@ -2777,7 +2748,7 @@ comparing a host handle with a `TypeId`, or moving a handle between Stores, is
 invalid. The full argument and the descriptor shape are in
 [`TYPE_IDENTITY.md`](TYPE_IDENTITY.md) §13.
 
-### 17.8 How much is redundant with the Component Model?
+### 16.8 How much is redundant with the Component Model?
 
 The Component Model already specifies the wire contract this idea needs:
 **nominal resource types**, `own`/`borrow` handles, `resource.drop` with a
@@ -2807,7 +2778,7 @@ implemented at the wire level”.
 generated bindings; a plain core C module must go through a canonical lift/lower
 adapter or a synthetic module, which is the same handle-plus-functions shape.
 Whether a given GC toolchain has component bindings is a **TOOL**/**LANG**
-question; case 2 of §17.6 (an `externref`/integer handle in a language object)
+question; case 2 of §16.6 (an `externref`/integer handle in a language object)
 is the fallback wherever the toolchain can hold one.
 
 **Verdict.** If the goal is “a C guest can create, use and release a host object
@@ -2822,17 +2793,17 @@ one generated binding — not a new primitive in `WasmBase/`.
 So: **the wire surface is largely redundant; the object model is not; neither
 belongs in the engine.**
 
-### 17.9 Feasibility verdict
+### 16.9 Feasibility verdict
 
 | Question | Verdict | Why |
 |---|---|---|
 | Can a host runtime give C/C++/Rust/Zig/Go/TinyGo a usable object API? | **Yes** | all can call C-linkage imports with integer/handle arguments; `HostBridge` and native imports already exist |
 | Does it give them a typed `(ref $T)`? | **No** | that is a source-language/toolchain feature (`LG-1`); a handle is not a Wasm reference type |
 | Can a GC language wrap it silently? | **Yes, as an adapter** | a wrapper object holds the handle; the wrapper’s methods forward. It is not a shared object identity |
-| Can C and Kotlin share the *same* object? | **Only in case 1 or 3 of §17.6** | same canonical Wasm GC type in one Store, or a component resource handle; not by both having a class named `Widget` |
+| Can C and Kotlin share the *same* object? | **Only in case 1 or 3 of §16.6** | same canonical Wasm GC type in one Store, or a component resource handle; not by both having a class named `Widget` |
 | Can the Component Model replace the wire half? | **Yes** | resources + `own`/`borrow` + destructor + WIT bindings are the same contract, already implemented |
 | Can the Component Model replace the object model? | **No** | no dynamic properties, signals, reflection, interfaces or class hierarchy |
-| Is this an engine feature? | **No** | §13.8 and [`LAYERING.md`](LAYERING.md): the engine owns the opaque primitive, not a product object model |
+| Is this an engine feature? | **No** | §12.8 and [`LAYERING.md`](LAYERING.md): the engine owns the opaque primitive, not a product object model |
 | Is a first-party optional library feasible? | **Yes** | outside `WasmBase/`, versioned separately, built on `HostBridge`/`externref` or on component resources |
 
 The cost is not in the handle table; it is in the **descriptor format, the
@@ -2864,9 +2835,9 @@ the part most likely to become a language-specific runtime.
 
 **Decision:** study accepted; **engine implementation rejected**; optional
 host library / component package recommended; no milestone opened. This is the
-same boundary as §13.8, not a reversal of it.
+same boundary as §12.8, not a reversal of it.
 
-### 17.10 What would make this a tested claim
+### 16.10 What would make this a tested claim
 
 In increasing cost:
 
@@ -2899,15 +2870,15 @@ Until (1)–(4) exist, the correct statement is: **the engine provides the opaqu
 primitive and the component resource contract; the HOR is an optional host
 design, not a tested feature.**
 
-### 17.11 Ownership register
+### 16.11 Ownership register
 
 | Item | Owner | Status | Where |
 |---|---|---|---|
 | `externref` payload, `HostBridge`, GC object header, component resources | **ENG** | implemented; no change proposed | [`ABI.md`](ABI.md), [`GC.md`](proposals/GC.md), [`COMPONENT_MODEL.md`](proposals/COMPONENT_MODEL.md) |
 | HOR handle table, type registry, lifetime/thread policy | **EMB** | proposed, optional | this section |
-| C/C++/Rust/Zig/Go/TinyGo headers and GC-language bindings | **TOOL** | proposed | §12/§15 generator plan |
-| C has no typed `(ref $T)` | **LANG** | accepted (`LG-1`) | §16.6 |
-| Dynamic properties/signals/reflection | **EMB** | optional; not an engine feature | §13.7.3, §17.8 |
+| C/C++/Rust/Zig/Go/TinyGo headers and GC-language bindings | **TOOL** | proposed | §11/§14 generator plan |
+| C has no typed `(ref $T)` | **LANG** | accepted (`LG-1`) | §15.6 |
+| Dynamic properties/signals/reflection | **EMB** | optional; not an engine feature | §12.7.3, §16.8 |
 | Component resource contract | **ENG** + **TOOL** | engine side installed; WIT/bindings are tooling | [`COMPONENT_MODEL.md`](proposals/COMPONENT_MODEL.md) §2.3/§4.3 |
 
 No engine work is opened by this study. If a product later needs a host object
@@ -2915,3 +2886,63 @@ model, the first implementation should be a WIT package and a host library; the
 engine should be asked only for a missing primitive that cannot be expressed
 through `externref`/`HostBridge`/resources, not for a reflection system.
 
+
+## 17. References
+
+- [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) — the gates, the frozen surfaces
+  (§2.2), and `AAS1`/`AAS2`/`AAS5` which this note discharges.
+- [`ABI.md`](ABI.md) — the calling convention, the embedder guide, `gcCollect()`
+  as an embedder-driven safepoint.
+- [`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md) — the loader that
+  `Runtime::create(name)` is designed to make possible.
+- [`proposals/THREADS.md`](proposals/THREADS.md) §6 — the concurrency
+  mode a `RuntimeConfig` would eventually carry.
+- [`THREADSAFETY.md`](THREADSAFETY.md) §2 and §3.1–§3.2 — the agent/instance/
+  host vocabulary behind the ladder in §3.2, and the instance-cardinality rule
+  the runtime has to enforce.
+- [`proposals/PROFILES.md`](proposals/PROFILES.md) — the profile markers, the
+  double gate at load and instantiation, and why `{N,T}` alone is refused (§4.6,
+  `PR-3`/`PRD6`).
+- [`DIAGNOSTICS.md`](DIAGNOSTICS.md) — the bounded sink and the per-execution-state
+  `DiagnosticState` that `RuntimeConfig` seeds.
+- [`TYPE_IDENTITY.md`](TYPE_IDENTITY.md) §6.1 — Store-scoped `TypeId`,
+  canonical interning and cross-module matching.
+- [`LAYERING.md`](LAYERING.md) §2/§4/§6 — the rule the public headers must keep,
+  the contract rows, and the grep.
+- [`SAFETY.md`](SAFETY.md) §2.2/§2.3/§2.8 — the bounds, budget and stack policies
+  that make three of the sketch's config options unshippable (§5).
+- [`proposals/JS_INTEGRATION.md`](proposals/JS_INTEGRATION.md) — why a JS engine
+  is not in the core, which is what keeps the "realm" mapping (§3) honest.
+- [`proposals/SHARING_LINEAR_MEMORY.md`](proposals/SHARING_LINEAR_MEMORY.md) —
+  the layout-negotiation problem that rules out putting arbitrary C++ object
+  images in linear memory (§12.7.1).
+- Source anchors for §12: `WasmBase/WasmHostBridge.hpp` (the opaque-reference
+  contract), `WasmBase/WasmGcHeap.hpp` (guest-only GC regions),
+  `WasmBase/WasmComponentRuntime.hpp` / `WasmBase/WasmComponentValue.hpp`
+  (component resource slots and `uint64_t` representations), and
+  `extern/MhLib/Elvavena/Util/ElvAllocatorBasic.hpp` /
+  `extern/MhLib/Elvavena/Util/ElvIntrusiveArray.hpp` (host-side allocator and
+  slab helpers, not a guest ABI).
+- [`proposals/GC.md`](proposals/GC.md) and
+  [`proposals/STRINGREF.md`](proposals/STRINGREF.md) — the GC object header,
+  `ref.test`/`ref.cast` identity, and the Store-owned `StringObject` bridge.
+- **GObject**, the shape §16 studies (a reference, not a dependency): the
+  tutorial at https://docs.gtk.org/gobject/tutorial.html — fundamental-type
+  registration, the `GTypeInstance`/`GObjectClass` pair, and the property system
+  are the parts §16 borrows, and the parts the Component Model already covers for
+  the engine's own import/export surface
+  ([`proposals/COMPONENT_MODEL.md`](proposals/COMPONENT_MODEL.md)).
+- Source anchors for §13/§14: `WasmBase/WasmTypeIdentity.hpp` and
+  `WasmBase/WasmTypeRegistry.hpp` (Store-scoped `TypeId`, interning and
+  `matches`), `WasmBase/WasmModule.hpp` (descriptors and `typeView`),
+  `WasmBase/WasmModuleInstance.hpp` (`tryGetGcTypeId`, `refMatchesHeapType`,
+  `refClone`/`refDrop`), `WasmBase/WasmValue.hpp` (`Value::ref` and `Callable`),
+  `WasmBase/WasmNativeImport.hpp` (`nativeImport`), and
+  `WasmBase/WasmString.hpp` (`StringStore`).
+- Source anchors: `WasmBase/WasmStore.hpp` (the store, and why there is no global one),
+  `WasmBase/WasmRuntime.hpp` (the engine object), `WasmBase/WasmJit.hpp`
+  (the umbrella), `WasmBase/WasmVersion.hpp`, `WasmBase/WasmProfile.hpp`,
+  `WasmBase/WasmAgent.hpp` (`Agent`/`ExecutionState`), `WasmBase/WasmModule.hpp`
+  (`fromFile`), `WasmBase/WasmValidation.hpp` (internal, §4.6),
+  `WasmBase/WasmBase.pri`, `Test/RuntimeTests.cpp` and `Test/consumer/Consumer.cpp`
+  (the recipe, in-tree and out of tree).

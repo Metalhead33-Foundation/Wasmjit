@@ -259,3 +259,15 @@ does not rediscover it: [`WRITING_A_BACKEND.md`](../WRITING_A_BACKEND.md) §6
 | The `wasm-opt`-less Dart path | the rewrite rejects Dart's legacy EH with "canonical type reference is not declared" | reproduce on a reduced module; likely a stale index in a copied type reference |
 | A conformance sweep of the bottom-type rule | the spec suite already exercises `ref.null none` casts; a targeted set of `sub`-with-bottom-field modules would pin the rule | add them to `Test/wasm_wat/` |
 | A GC ownership review of the other backends | `F3d` was a LibJIT lowering bug; Sljit/Asmjit do not execute references yet, but the same "who owns a parameter slot" question will arrive with them | fold into [`WRITING_A_BACKEND.md`](../WRITING_A_BACKEND.md) when they gain references |
+
+## 9. References
+
+- [`LF2_INDEX.md`](LF2_INDEX.md) — the report set and the `F3` finding in context.
+- [`../proposals/GC.md`](../proposals/GC.md) — the GC surface the value belongs
+  to, and the reference-ownership rule.
+- [`../WRITING_A_BACKEND.md`](../WRITING_A_BACKEND.md) §9 — memory, GC and
+  ownership, which is where `F3d` belongs.
+- [`../LAYERING.md`](../LAYERING.md) §2 — why the fix landed in `LibJit/` and not
+  in the core.
+- Source anchors: `LibJit/LibjitOpcodeDispatcher.cpp`, `Test/LibJitBackendTests.cpp`.
+

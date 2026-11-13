@@ -6,7 +6,7 @@ Status: **historical record (frozen at 2026-11-10)**. This note is the merged
 archive of the per-slice post-mortems, the capability probes, the handoff and the
 two design campaigns. It explains how the backends got here and what broke on the
 way; it is **not** a statement about today. Current status is
-[`API_ABI_STABILITY.md`](../API_ABI_STABILITY.md) §13, the open-item index is §8
+[`API_ABI_STABILITY.md`](../API_ABI_STABILITY.md) §12, the open-item index is §8
 there, and the current call-form contract is [`ABI.md`](../ABI.md) “Call forms”.
 
 Read it for the **root causes and the lessons**, not for current numbers.

@@ -49,7 +49,7 @@ Tail Call is a **Phase 5** proposal, integrated into WebAssembly **3.0**.
   an interpreter are all acceptable; only the *observable* stack behaviour is
   constrained. (The engine nevertheless does not use that freedom to add a
   bespoke interpreter: the trampoline is the chosen mechanism, per
-  [`STACK_SWITCHING.md`](STACK_SWITCHING.md) §10.15 D-3.)
+  [`STACK_SWITCHING.md`](STACK_SWITCHING.md) §9.15 D-3.)
 - **No performance guarantee** beyond space; a tail call need not be faster
   than `call`+`return`.
 - **No ABI change**; a caller's frame may be reused or abandoned.

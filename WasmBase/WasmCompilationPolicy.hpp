@@ -69,7 +69,7 @@ const char* compilationStrictnessName(CompilationStrictness strictness) noexcept
  * \brief Whether an interpreter may stand in for compiled code.
  *
  * The interpreter is always the *backend's* own facility, never a fallback the
- * core supplies (`AGENTS.md`, docs/proposals/STACK_SWITCHING.md §10.15 D-3). A
+ * core supplies (`AGENTS.md`, docs/proposals/STACK_SWITCHING.md §9.15 D-3). A
  * backend that cannot interpret reports `interprets == false` from its
  * capabilities, and a request for `FallbackOnly`/`Always` is then refused where
  * it is set.

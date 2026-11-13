@@ -35,8 +35,8 @@ fiber annotations.
 | §6 | Where do we play fast and loose? |
 | §7 | Plan |
 | §8 | Indicative test survey |
-| §9 | References |
-| §10 | Which execution mechanisms are viable on each of the three backends, what each costs, and what the core must own before one can start? |
+| §9 | Which execution mechanisms are viable on each of the three backends, what each costs, and what the core must own before one can start? |
+| §10 | References |
 
 ## 2. What the proposal demands
 
@@ -84,7 +84,7 @@ lightweight tasks.
 interpreter fallback. If interpretation is ever required it must be the
 backend's own compile/interpret configuration (GNU LibJIT already provides an
 interpreter), not a new engine; `WasmStub/` is a pretty-printer, not a runtime.
-The decision applies engine-wide and is recorded with its reasoning in §10.15
+The decision applies engine-wide and is recorded with its reasoning in §9.15
 (D-3).
 
 ## 4. What we have implemented today
@@ -251,25 +251,7 @@ suspended-stack roots, A stack exhaustion, serial A migration and symmetric
 `switch` on both A and B are verified. True multi-agent execution is not tested
 or claimed.
 
-## 9. References
-
-- Proposal repository and explainer (`WebAssembly/stack-switching`):
-  https://github.com/WebAssembly/stack-switching
-  (https://github.com/WebAssembly/stack-switching/blob/main/proposals/stack-switching/Explainer.md)
-- Spec — Exception tags (the reused identity):
-  https://webassembly.github.io/spec/core/syntax/instructions.html
-- In-repo: [`EXCEPTIONS.md`](EXCEPTIONS.md) (tags, `TagId`), [`TAILCALLS.md`](TAILCALLS.md)
-  (native-stack trampoline), [`THREADS.md`](THREADS.md) (single-agent model),
-  [`FUNCTION_REFERENCES.md`](FUNCTION_REFERENCES.md), [`../ABI.md`](../ABI.md),
-  [`../LAYERING.md`](../LAYERING.md), [`../SAFETY.md`](../SAFETY.md); sources
-  `WasmBase/WasmType.hpp` (`AbstractHeapType`, `Subtype`),
-  `WasmBase/WasmModule.cpp` (`processSubtypes`, `processTagSection`),
-  `WasmBase/WasmOpcode.hpp`, `WasmBase/WasmOpcodeDispatcher.cpp`,
-  `LibJit/LibjitModuleCompiler.cpp`.
-- Backend feasibility sources and the mechanism study are in §10.14.
-
-
-## 10. Feasibility against the three backends
+## 9. Feasibility against the three backends
 
 > **Status of this appendix.** This is a *pre-commitment* study, written after
 > SS-2 closed. It claims no execution support and adds no milestone to §7. It
@@ -280,10 +262,10 @@ or claimed.
 > `LibJit/` was the only backend that executed when this study was written.
 > `Asmjit/` and `Sljit/` contained no backend sources then (`Asmjit/Asmjit.pro`,
 > `Sljit/Sljit.pro`; `Sljit/` shipped the upstream `libSljit.so*`), so their rows
-> were **API-level** assessments, not measurements. §10.11 states the minimal
+> were **API-level** assessments, not measurements. §9.11 states the minimal
 > backend slice a measurement needed. **Both are executing backends today.**
 
-### 10.1 The two boxes
+### 9.1 The two boxes
 
 The proposal fixes observable behaviour tightly and leaves the mechanism open:
 
@@ -296,7 +278,7 @@ The proposal fixes observable behaviour tightly and leaves the mechanism open:
 - **Free (§3):** copied, segmented or native stacks; the handler compilation
   strategy; whether an engine emits unwind tables; scheduling and threads; the
   stack representation behind the instruction. This is what makes the matrix in
-  §10.4 meaningful.
+  §9.4 meaningful.
 
 The engine adds a third, smaller box of its own: JIT frames with no unwind
 tables, traps as a pending status that unwinds by returning
@@ -305,7 +287,7 @@ stack maps, a single-mutator instance model, and a stack guard expressed as one
 integer in `VMContext`. Those constraints, not the proposal, eliminate half the
 mechanisms below.
 
-### 10.2 Mechanism catalogue
+### 9.2 Mechanism catalogue
 
 Six mechanism families are considered. A family can have several providers (for
 example `ucontext`, Boost.Context or a per-architecture context switch for A).
@@ -325,12 +307,12 @@ A and B are the only members that keep the JIT's native frames and the current
 trap model without writing a second engine. They differ in *where* the
 per-execution state lives, not in the Wasm semantics: A multiplexes contexts on
 one host thread; B gives each suspended continuation its own thread. C is
-**rejected by project decision** (§10.15): it would be a second execution
+**rejected by project decision** (§9.15): it would be a second execution
 engine, and WasmJit will not carry a bespoke interpreter fallback. D and F are
 rejected on engine and semantic grounds, and E is an AsmJit-only research item,
 not an MVP candidate.
 
-### 10.3 What each engine actually offers
+### 9.3 What each engine actually offers
 
 Evidence: the installed GNU LibJIT headers and library
 (`/usr/local/include/jit`, `/usr/local/lib64/libjit.so.0.0.1`); the upstream
@@ -360,10 +342,10 @@ The row that matters most is **root storage**: every backend can materialise a
 small array of live reference slots at a `suspend` call. LibJIT has the
 dispatcher's compile-time type stack; SLJIT has a local area whose base
 `sljit_get_local_base` can pass; AsmJit has explicit frame slots. That makes the
-suspend-point root list (the hard GC requirement in §10.9) a *per-backend
+suspend-point root list (the hard GC requirement in §9.9) a *per-backend
 emission cost*, not a blocker on any of them.
 
-### 10.4 Mechanism × backend matrix
+### 9.4 Mechanism × backend matrix
 
 Effort scale: **S** — one file plus tests; **M** — one subsystem plus tests;
 **L** — a design spanning the core and a provider or one backend; **XL** — a new
@@ -376,7 +358,7 @@ verdicts.
 |---|---|---|---|---|
 | **A — native stacks + context switch** | **✅ M–L** | **◑ M–L** | **◑ M–L** | No backend blocker. The switch is a helper call; each backend must emit the call, a root array and a per-entry stack check. The core work (context object, allocator, transfer) dominates. |
 | **B — host thread per continuation** | **✅ M** | **◑ M** | **◑ M** | Backend-independent; B adds no codegen work, but the backend must exist to run it. The per-thread state already exists; the work is the context object, hand-off, trap/exception transfer and the one-mutator protocol. |
-| **C — interpreter fallback** | **—** | **—** | **—** | **Rejected by project decision (§10.15):** no bespoke interpreter fallback anywhere. If interpretation is ever required it must be LibJIT's own compile/interpret configuration, not a WasmJit engine. |
+| **C — interpreter fallback** | **—** | **—** | **—** | **Rejected by project decision (§9.15):** no bespoke interpreter fallback anywhere. If interpretation is ever required it must be LibJIT's own compile/interpret configuration, not a WasmJit engine. |
 | **D — native stack copy** | **—** | **—** | **—** | No frame maps, raw pointers into frames, host C++ frames, ASAN fake stacks; `ABI.md` burns `VMContext*` addresses into code. |
 | **E — segmented stacks** | **—** | **—** | **◑ L–XL** | LibJIT has no frame control and SLJIT's local area is fixed at enter; only AsmJit's PEI could base a stacklet ABI, and every call would need a stack check. |
 | **F — CPS / asyncify** | **—** | **—** | **—** | The rewrite does not preserve one-shot, `switch`, `resume_throw` or host-import behaviour (SSD4). |
@@ -393,9 +375,9 @@ A is also the only option whose *provider* can be swapped without touching the
 instruction lowering: `ucontext`, Boost.Context, a hand-written SysV
 `fcontext`, and (on another platform) Windows fibers all satisfy the same
 “save/restore the callee-saved context” contract. That is why the recommendation
-in §10.12 puts the mechanism-neutral context first and the provider second.
+in §9.12 puts the mechanism-neutral context first and the provider second.
 
-### 10.5 Why the switch itself is backend-neutral
+### 9.5 Why the switch itself is backend-neutral
 
 Mechanism A is often described as “JIT stack switching”, which makes it sound
 backend-specific. It is not, provided five ordinary ABI facts hold:
@@ -423,14 +405,14 @@ root array, the stack check and (where it exists) the tail-call driver.
 
 The corollary is that the hard parts are in the core, not the backends:
 
-- per-execution-context state and transfer (§10.7–§10.8);
-- the suspend-point root list and continuation disposal (§10.9);
+- per-execution-context state and transfer (§9.7–§9.8);
+- the suspend-point root list and continuation disposal (§9.9);
 - a per-stack limit instead of the current single `VMContext::stackLimit`
-  (§10.10);
+  (§9.10);
 - ASAN fiber annotations on the A provider and the absence of them on B
-  (§10.11).
+  (§9.11).
 
-### 10.6 What each backend must emit
+### 9.6 What each backend must emit
 
 The core owns the mechanism-neutral contract
 `WasmContinuation.hpp` and each backend implements only the emission side. The
@@ -450,10 +432,10 @@ contract is the same for A and B; it is the provider behind it that differs.
 
 The backend cost is therefore **M** for LibJIT (mostly the root spill and the
 driver state) and **S–M** for SLJIT/AsmJit *once those backends exist*. The
-larger, backend-independent cost is the ExecutionContext migration in §10.7 and
-the continuation/GC contract in §10.9.
+larger, backend-independent cost is the ExecutionContext migration in §9.7 and
+the continuation/GC contract in §9.9.
 
-### 10.7 Per-host-thread state that must become per-execution-context
+### 9.7 Per-host-thread state that must become per-execution-context
 
 The engine's per-thread state is not a speculative concern: it is the first
 obstacle any continuation mechanism meets. The table records what exists today,
@@ -467,7 +449,7 @@ where it lives, and what scope a continuation runtime needs.
 | Defer stack (records + top index) | `thread_local` (`WasmTrap.cpp:59-60`) | per context, **and stack-scoped** | Records point into frames on the suspended stack. A peer context on the same thread must not see or drain them; the records must travel with the continuation. |
 | Pending exception pointer | `thread_local` (`WasmExn.cpp:29`) | per context | `resume_throw` injects an exception into another context; an uncaught exception in a resumed continuation must surface at the resume site. |
 | `TailCallState` (pending/target/args) | `thread_local` (`WasmModuleInstance.cpp:18`, declared in `WasmValue.hpp:84`) | per context | The trampoline state is transient between a tail-call return and the driver's re-dispatch, but a switch must save/restore it so two contexts cannot observe each other's target. |
-| `VMContext::stackLimit` | one integer per instance, captured at construction from the creating thread (`WasmModuleInstance.cpp:317`, `WasmStack.hpp`) | **per executing stack** | Not TLS, but it encodes the same one-call-chain-per-thread assumption. Two disjoint stack mappings cannot share one numeric limit (§10.10). |
+| `VMContext::stackLimit` | one integer per instance, captured at construction from the creating thread (`WasmModuleInstance.cpp:317`, `WasmStack.hpp`) | **per executing stack** | Not TLS, but it encodes the same one-call-chain-per-thread assumption. Two disjoint stack mappings cannot share one numeric limit (§9.10). |
 | `currentThreadStackBounds` | `pthread_self()` (`WasmStack.cpp:19`) | per stack provider | A continuation stack needs its own bounds and guard page, not the host thread's. |
 | `Store` (type registry, GC heap, string store) | process-wide singleton, mutex-guarded for host-side bookkeeping | **shared** (not per agent) | Agents/continuations share the store by design; the existing locks are the starting point, not a multi-mutator collector. |
 | `internals.gcSet`, `gcAllocatedObjects` | per instance (`WasmModuleInstance.cpp:323`, `:1364`, `:1404`) | shared by agents of the instance | `gcAllocatedObjects` is a plain counter and `gcSet` is mutated by the active mutator. B's one-mutator hand-off makes this safe; concurrent agents need a lock or an atomic protocol. |
@@ -485,12 +467,12 @@ where it lives, and what scope a continuation runtime needs.
   entry trampoline;
 - the **captured-stack descriptor** (provider-specific: mmap base/size/guard, or
   thread id/handoff state);
-- the **suspend-point root list** (§10.9);
+- the **suspend-point root list** (§9.9);
 - the **resume status** (normal completion, suspension, trap, injected
   exception);
 - the **parent/peer link** used by splicing and `switch`.
 
-### 10.8 A continuation is an execution context, not necessarily an agent
+### 9.8 A continuation is an execution context, not necessarily an agent
 
 This distinction decides how much of TRAP-6 is forced.
 
@@ -530,9 +512,9 @@ scope widened:
 
 This refactor is **common to A and C** and **optional but still useful for B**
 (it is how B can later support true agents without a second migration). It is the
-recommended first step in §10.12.
+recommended first step in §9.12.
 
-### 10.9 GC, roots and continuation disposal
+### 9.9 GC, roots and continuation disposal
 
 The RC + cycle collector is the part that most changes the runtime design, and
 the good news is that it is **less** demanding than a tracing collector would be.
@@ -565,13 +547,13 @@ exist:
 2. **Leak until teardown.** Keep the counts and free only the stack, or keep both
    until the Store dies. This is safe and cheap but unbounded in a long-running
    server; it is a documented stop-gap for a prototype, not a final design.
-3. **Interpreter fallback (C) — rejected (§10.15); listed only to close the
+3. **Interpreter fallback (C) — rejected (§9.15); listed only to close the
    argument.** Its frames are heap objects and its value stack is explicit, so
    disposal would be a normal traversal. It is not an available option.
 
 The root list is also what makes the A provider competitive with C on GC
 correctness without paying for an interpreter. Its cost is per-backend emission
-(§10.6), not a new collector.
+(§9.6), not a new collector.
 
 **The continuation object itself** is a `cont` reference in Wasm terms, so it
 must be Store-owned and refcounted like the other store entities. Its one-shot
@@ -587,7 +569,7 @@ an exception object between contexts; exception objects are already Store-owned
 pending slot.
 
 **Instance accounting.** `gcSet` and `gcAllocatedObjects` are per instance
-(§10.7). Under B, only one mutator runs at a time, so the hand-off is the
+(§9.7). Under B, only one mutator runs at a time, so the hand-off is the
 synchronization edge; if two agents ever run concurrently on one instance, the
 set and the counter need a lock or an atomic protocol. That is a THREADS
 G-C/G-D item, not a continuation-specific one.
@@ -597,7 +579,7 @@ moving collector would invalidate the “counts keep the frame alive” argument
 require full stack maps at every safepoint; that is out of scope here and should
 be stated in any GC redesign.
 
-### 10.10 The stack guard and stack memory
+### 9.10 The stack guard and stack memory
 
 The stack guard is the sharpest ABI constraint in the whole design, because it
 currently looks like a per-instance field but encodes a per-host-thread fact.
@@ -650,7 +632,7 @@ get the guard page, the per-stack limit and the fiber annotations right; B gets
 all three from the OS but pays in thread memory and hand-off cost. Neither is
 blocked by a backend.
 
-### 10.11 Spikes and acceptance criteria
+### 9.11 Spikes and acceptance criteria
 
 The study's verdicts are paper verdicts until a spike runs. The order below keeps
 the backend-independent work first and makes the SLJIT/AsmJit rows measurable
@@ -712,9 +694,9 @@ Until the full criteria are met, `cont.bind`, `resume_throw`,
 The stage-2 slice enables only `cont.new`, `suspend` and `resume`; it must not be
 described as full stack-switching support.
 
-### 10.12 Preliminary recommendation and staging
+### 9.12 Preliminary recommendation and staging
 
-The study's recommendation was mechanism-neutral; §10.15 now records the
+The study's recommendation was mechanism-neutral; §9.15 now records the
 project's decision (A primary, B opt-in fallback, C rejected). The staging
 remains:
 
@@ -726,11 +708,11 @@ remains:
 | **4. Full instruction set** | `switch` on A and B, multi-value/reference payloads, full `resume_throw*` handler clauses, continuation drop/root release. | All done; multi-agent scheduling is an embedder-owned concern, not a continuation gap | — |
 
 The implementation order (B prototype first) is **not** the product order: A is
-the default provider, B is the opt-in fallback, and C is excluded (§10.15).
+the default provider, B is the opt-in fallback, and C is excluded (§9.15).
 
 This ordering also answers the SLJIT/AsmJit question without blocking on it:
 stages 1–2 are LibJIT-only and measurable; stage 3's provider is
-backend-independent; the SLJIT/AsmJit emission work (§10.6) follows their
+backend-independent; the SLJIT/AsmJit emission work (§9.6) follows their
 minimal backend implementations, not the reverse. Their rows stay `◑` until
 Spike 3 runs.
 
@@ -738,12 +720,12 @@ Two boundary rules:
 
 - **C is rejected permanently.** No bespoke interpreter fallback will be added
   anywhere in WasmJit; if interpretation is ever required it must be LibJIT's
-  own compile/interpret configuration, not a new engine. See §10.15.
+  own compile/interpret configuration, not a new engine. See §9.15.
 - **Do not start with E.** AsmJit's frame control makes stacklets conceivable,
   but a stacklet-aware ABI touches every call and every backend; it is a
   research item after A works, not an alternative to it.
 
-### 10.13 Open questions
+### 9.13 Open questions
 
 These are the decisions the study deliberately leaves open; each one changes the
 effort rather than the semantics.
@@ -752,7 +734,7 @@ effort rather than the semantics.
    must it build on Windows/macOS and AArch64 from day one? Boost.Context buys
    portability at a dependency cost; a hand-written provider per architecture is
    more work but has no dependency.
-2. **When is B enabled?** B is the opt-in fallback (§10.15), so the question is
+2. **When is B enabled?** B is the opt-in fallback (§9.15), so the question is
    which platforms/builds select it and what thread/stack budget it advertises.
    It is legitimate under the proposal (no scheduling or thread semantics are
    required), but it changes the operational profile: a thread and a stack per
@@ -771,7 +753,7 @@ effort rather than the semantics.
    context per thread; TRAP-6 state is already done and multi-agent execution
    stays deferred.
 6. **LibJIT's own compile/interpret mode.** WasmJit forbids a bespoke
-   interpreter fallback (§10.15). If a future requirement needs interpretation,
+   interpreter fallback (§9.15). If a future requirement needs interpretation,
    is LibJIT's own configuration the only acceptable route, and does its ABI fit?
 7. **First semantic milestone.** Is `cont.bind`/`resume_throw`/`switch` part of
    the first “supported” claim, or is the first claim only
@@ -788,7 +770,7 @@ effort rather than the semantics.
     trap) or as a refusal to create the stack? The proposal does not prescribe
     the host failure mode; the engine's `SAFETY.md` policy does.
 
-### 10.14 Sources for this appendix
+### 9.14 Sources for this appendix
 
 - Upstream SLJIT public header:
   https://github.com/zherczeg/sljit/blob/master/sljit_src/sljitLir.h
@@ -804,8 +786,8 @@ effort rather than the semantics.
   backend in `LibJit/`.
 - In-repo: [`../ABI.md`](../ABI.md) (VMContext, result buffers, tail-call
   driver), [`../LAYERING.md`](../LAYERING.md) (what the core owns vs what a
-  backend emits), [`../TRAP_CLEANUP.md`](../TRAP_CLEANUP.md) §8.5/§10/§12.1,
-  [`../THREADSAFETY.md`](../THREADSAFETY.md) §10/§10.1, [`THREADS.md`](THREADS.md)
+  backend emits), [`../TRAP_CLEANUP.md`](../TRAP_CLEANUP.md) §8.5/§9/§12.1,
+  [`../THREADSAFETY.md`](../THREADSAFETY.md) §10/§9.1, [`THREADS.md`](THREADS.md)
   TH-5/T9, [`SIMD.md`](SIMD.md) §3,
   [`../SAFETY.md`](../SAFETY.md) §2.3/§2.8; sources `WasmBase/WasmStack.hpp`,
   `WasmBase/WasmStack.cpp`, `WasmBase/WasmTrap.hpp`, `WasmBase/WasmTrap.cpp`,
@@ -815,7 +797,7 @@ effort rather than the semantics.
   `LibJit/LibjitModuleCompiler.cpp`, `LibJit/LibjitOpcodeDispatcher.cpp`;
   backend build files `Asmjit/Asmjit.pro`, `Sljit/Sljit.pro`.
 
-### 10.15 Decision record
+### 9.15 Decision record
 
 Recorded by the project owner. These are binding design decisions, not options
 for a later study.
@@ -828,3 +810,21 @@ for a later study.
 | **D-4** | **Execution state belongs to the execution context and is owned by an `Agent`.** | SS-6 is implemented: `ExecutionState` (trap slot, pending exception, tail-call state, defer stack, depth counters, stack limit) lives in `WasmBase/WasmAgent.hpp`; TLS holds the current pointer; `wasm_trap_slot()`, `wasm_exn_slot()`, `currentTailCallState()` and `wasm_stack_check()` resolve it. |
 | **D-5** | **A continuation is not an agent; multi-agent scheduling is embedder-owned.** | `Agent`, `AgentScope` and per-thread default agents exist and own the state; `ConcurrencyModel::Agents` is the core opt-in and `ComponentExecutor` is the component async seam. A and B continuations remain execution contexts, **not** agents: neither has a shared-instance entry point, scheduler, waiter table or multi-mutator GC. The host handle is serial-only. |
 | **D-6** | **The provider contract is backend-neutral.** | The contract lives in `WasmBase/WasmContinuation.hpp`; A (default) and B (fallback) are implemented once there. LibJIT, SLJIT and AsmJit only emit the suspend call, the root array and the stack check. SLJIT/AsmJit remain prerequisites for their own measurements, not for the decision. |
+
+## 10. References
+
+- Proposal repository and explainer (`WebAssembly/stack-switching`):
+  https://github.com/WebAssembly/stack-switching
+  (https://github.com/WebAssembly/stack-switching/blob/main/proposals/stack-switching/Explainer.md)
+- Spec — Exception tags (the reused identity):
+  https://webassembly.github.io/spec/core/syntax/instructions.html
+- In-repo: [`EXCEPTIONS.md`](EXCEPTIONS.md) (tags, `TagId`), [`TAILCALLS.md`](TAILCALLS.md)
+  (native-stack trampoline), [`THREADS.md`](THREADS.md) (single-agent model),
+  [`FUNCTION_REFERENCES.md`](FUNCTION_REFERENCES.md), [`../ABI.md`](../ABI.md),
+  [`../LAYERING.md`](../LAYERING.md), [`../SAFETY.md`](../SAFETY.md); sources
+  `WasmBase/WasmType.hpp` (`AbstractHeapType`, `Subtype`),
+  `WasmBase/WasmModule.cpp` (`processSubtypes`, `processTagSection`),
+  `WasmBase/WasmOpcode.hpp`, `WasmBase/WasmOpcodeDispatcher.cpp`,
+  `LibJit/LibjitModuleCompiler.cpp`.
+- Backend feasibility sources and the mechanism study are in §9.14.
+

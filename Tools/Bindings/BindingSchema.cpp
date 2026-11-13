@@ -15,7 +15,7 @@
 #include <string_view>
 #include <vector>
 
-// docs/EMBEDDING_SURFACE.md §12.8: descriptor projection and the public schema
+// docs/EMBEDDING_SURFACE.md §11.8: descriptor projection and the public schema
 // wrappers. This is tooling, not an engine source file.
 namespace WASM::Bindings {
 

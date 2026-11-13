@@ -7,7 +7,7 @@ implemented: a host-chosen allocation policy can reserve a non-shared memory's
 maximum and keep its base, with the old behaviour as the default. `MP-2` (a
 provider factory) shipped; `MP-3` stays rejected; `MP-4` is reopened as an
 opt-in quota by the per-runtime budget in [`CONFIGURATION.md`](CONFIGURATION.md).
-§7 records the verdicts; §10 answers the six commissioning questions.
+§7 records the verdicts; §9 answers the six commissioning questions.
 Audience: anyone touching linear memory (`WasmBase/WasmMemory.hpp`,
 `WasmMemory.cpp`, `WasmStore.cpp`, `WasmModuleInstance::instantiateMemories`), an
 embedder who holds a `LinearMemory*` across a guest call, and the feasibility
@@ -17,8 +17,8 @@ charters whose rows cite `F3`/`F8` (`S5`, and the `L7`/`L8`/`L9` questions in
 Follows the same split as [`LEGACY_EXCEPTIONS.md`](LEGACY_EXCEPTIONS.md) /
 [`EXCEPTIONS.md`](EXCEPTIONS.md) / [`GC.md`](GC.md): §2 what is demanded → §3
 what is **not** demanded → §4 what is in the tree → §5 gaps → §6 where we may
-deviate → §7 plan → §8 test survey → §9 references. §10 is an appendix, in the
-shape `GC.md` §10, `STACK_SWITCHING.md` §10 and `LEGACY_EXCEPTIONS.md` §10
+deviate → §7 plan → §8 test survey → §11 references. §9 is an appendix, in the
+shape `GC.md` §9, `STACK_SWITCHING.md` §9 and `LEGACY_EXCEPTIONS.md` §9
 already use.
 
 Contains **no new code**. The measurements in §4 were taken on 2026-10-30
@@ -36,9 +36,9 @@ throwaway program outside the tree, not a new test.
 | §6 | Where may we deliberately stay as we are (`MPD1`–`MPD5`)? |
 | §7 | Plan (`MP-0`…`MP-4`) and the verdict per milestone |
 | §8 | Test survey — what exists, what each milestone would need |
-| §9 | References |
-| §10 | The six commissioned questions: conflicts, safety, size, usefulness, workarounds, least resistance |
-| §11 | The runtime memory budget (revisions 3/4): what it changed in §5/§6/§7, and what stays rejected |
+| §9 | The six commissioned questions: conflicts, safety, size, usefulness, workarounds, least resistance |
+| §10 | The runtime memory budget (revisions 3/4): what it changed in §5/§6/§7, and what stays rejected |
+| §11 | References |
 
 ## 2. What is demanded
 
@@ -124,7 +124,7 @@ host is *supposed* to call it after a growth, and the module re-derives its
 views. That is a call the embedder makes into the guest, not a hook the engine
 owes. All the embedder needs is a way to notice a growth — and
 `wasm_memory_size()` already returns the current size, so compare it, or call the
-export after any call that might grow. §10.5 records this as a workaround that
+export after any call that might grow. §9.5 records this as a workaround that
 works today.
 
 ### 3.4 A new memory *kind* is not needed for any of it
@@ -299,10 +299,10 @@ Two design points worth keeping visible:
 - **MPD4 — the budget is process-wide and byte-based.** Deliberately not
   per-memory: `SAFETY.md`'s model is "one module must not take the host down",
   and a per-memory quota invites an embedder to think it is a security boundary.
-  Reject `MP-4`. *(Amended by §11: the budget became per **runtime** when
+  Reject `MP-4`. *(Amended by §10: the budget became per **runtime** when
   [`CONFIGURATION.md`](CONFIGURATION.md) `CFG-1` was proposed, not per process,
   and `MP-4` was reopened as an opt-in quota. The "not a security boundary"
-  warning is unchanged — see §11.3.)*
+  warning is unchanged — see §10.3.)*
 - **MPD5 — a private memory may relocate.** Legal (a guest sees offsets, not
   host addresses) but it is the one deviation with an embedder-visible
   consequence, so it must be documented rather than merely true.
@@ -335,16 +335,16 @@ tests:
 
 Five milestones. `MP-0` and `MP-1` are shipped; `MP-1` is **additive**
 (`API_ABI_STABILITY.md` §4.1 class A), as `MP-2` turned out to be; `MP-0` changed no
-surface; `MP-3` is a verdict, not work, and `MP-4` is a verdict that §11
+surface; `MP-3` is a verdict, not work, and `MP-4` is a verdict that §10
 reopened.
 
 | Milestone | What | Closes | Status |
 |---|---|---|---|
 | **MP-0 — Correct the record** | Fix `hostData`'s comment; document that a private memory may relocate and that a shared one caps `memoryMax` at 4 GiB; point `RA4`/`RA-2` at this note and `T09`'s `F8` at §4.5. | MP3 (part), MP4, MPD5 | `✅` Shipped (revision 2) — docs and comments only |
-| **MP-1 — Make the policy expressible** | One **overload** of `createLinearMemory` taking an allocation policy — *growable buffer* (today's behaviour, the default) or *reserved range, commit on grow* — implemented by reusing the `SharedLinearMemory` machinery for a non-shared memory. It must be an overload, not a sixth defaulted parameter: that would change the mangled name and be class B (§10.3). | MP2, MP6, D2, D3 | `✅` Shipped (revision 2) — class A, 13 added symbols, 0 removed |
+| **MP-1 — Make the policy expressible** | One **overload** of `createLinearMemory` taking an allocation policy — *growable buffer* (today's behaviour, the default) or *reserved range, commit on grow* — implemented by reusing the `SharedLinearMemory` machinery for a non-shared memory. It must be an overload, not a sixth defaulted parameter: that would change the mangled name and be class B (§9.3). | MP2, MP6, D2, D3 | `✅` Shipped (revision 2) — class A, 13 added symbols, 0 removed |
 | **MP-2 — Install a provider** | `Wasm::MemoryProvider` (an exported interface) plus a `Store` slot: the store consults the installed provider for every memory it creates, after the budget is charged and before the built-in factory, and refuses by name a backing that rewrites `LinearMemory::hostData`. Returning `nullptr` accepts the built-in backing. | MP1, D4, D5-quota | `✅` Shipped (revision 4) — class A, 5 added symbols, 0 removed; `[mem-provider]` covers the consult, the fallback, the policy pass-through, the budget order and the refusal |
-| **MP-3 — Notify on growth** | A callback into the embedder on a successful grow. | MP5 (part) | **Rejected** — §10.5's workaround is sufficient |
-| **MP-4 — Per-memory quota** | An embedder-settable per-memory maximum below the declaration's. | MP5 (part) | **Reopened** by §11 — it is `CONFIGURATION.md` `CFG-2`'s opt-in `singleLinearMemoryBytes`, not a per-memory interface. The original rejection of a *provider-shaped* quota stands |
+| **MP-3 — Notify on growth** | A callback into the embedder on a successful grow. | MP5 (part) | **Rejected** — §9.5's workaround is sufficient |
+| **MP-4 — Per-memory quota** | An embedder-settable per-memory maximum below the declaration's. | MP5 (part) | **Reopened** by §10 — it is `CONFIGURATION.md` `CFG-2`'s opt-in `singleLinearMemoryBytes`, not a per-memory interface. The original rejection of a *provider-shaped* quota stands |
 
 ### 7.1 Why `MP-1` came before `MP-2` (and why both now exist)
 
@@ -411,13 +411,194 @@ test for the cap belongs with whatever fix `MP3` eventually gets.
 |---|---|
 | `MP-0` | `✅` none (comments); `[headerdoc]` and `doxygen` stayed green |
 | `MP-1` | `✅` shipped as `[mem-provider]`, five cases: the default policy's behaviour; a reserved memory's **stable base**, verbatim 6 GiB maximum, commit-only accounting and refusal past its max; the named refusal of an unbounded memory (with the budget credited back); a shared memory ignoring the policy; and the store policy reaching the memories a module declares, in both policies, driven through the module's own `grow`/`load` exports |
-| `MP-2` (shipped) | `an installed provider creates the backings and keeps the budget` — the provider is consulted, sees the requested policy, its backing is zero-filled and charged, a `nullptr` return falls back to the built-in backing, an over-budget request never reaches it, and removing it restores the factory; `a backing that rewrites hostData is refused by name`; the contract items (a) `false` from `growMemory` yields a −1 grow with a credited budget and (c) `true` without publishing `memorySize` is the embedder's bug remain documented, not defended (§10.2) |
+| `MP-2` (shipped) | `an installed provider creates the backings and keeps the budget` — the provider is consulted, sees the requested policy, its backing is zero-filled and charged, a `nullptr` return falls back to the built-in backing, an over-budget request never reaches it, and removing it restores the factory; `a backing that rewrites hostData is refused by name`; the contract items (a) `false` from `growMemory` yields a −1 grow with a credited budget and (c) `true` without publishing `memorySize` is the embedder's bug remain documented, not defended (§9.2) |
 | `MP-3`, `MP-4` | none — rejected |
 
 `MP-1`'s (c) is the one that would have caught §4.5's subtlety, and it is why the
 budget interaction, not the base pointer, is the first thing to write.
 
-## 9. References
+## 9. Appendix — the six commissioned questions
+
+### 9.1 What conflicts with what we already promise?
+
+Two that a build would hit, plus one that a *deferral* avoids:
+
+- **`hostData` is spoken for** (MPD1/`MP4`). A provider seam cannot hand the
+  embedder that field without moving the back-pointer into a side table, which
+  costs a lookup on every grow. Conclusion: the field stays the engine's, and the
+  comment gets fixed.
+- **`isShared` is doing two jobs** (MPD2). A non-shared memory cannot reserve
+  today because the only reserving provider is the shared one. `MP-1` adds the
+  policy as an argument instead of a flag, so no `MemoryType` semantics change
+  and no guest-visible byte changes.
+
+`MP-2` conflicts with something subtler: a provider contract that embedders can
+implement becomes an ABI promise (`API_ABI_STABILITY.md`), and this engine has
+been careful to promise only what it can keep. That is why it was deferred
+until revision 4, and why the shipped contract is narrow: one interface, five
+documented guarantees, and a store that refuses a backing breaking the one it
+can check (`hostData`).
+
+### 9.2 Does any of this weaken `SAFETY.md`?
+
+`MP-1`: no. The `Store` keeps the budget (`reserveBytes` before, `releaseBytes`
+on failure), keeps the fence, and keeps the zero-fill guarantee — the new path
+adds `mprotect`-commit, whose pages are zeroed by the kernel exactly as
+`SharedLinearMemory`'s already are. A reservation that is never committed costs
+address space, capped at 4 GiB by `MAX_SHARED_BYTES`.
+
+`MP-2`: **yes, one invariant moves out of the engine, and that is the price of
+shipping it.** "growMemory returned true" used to mean the pages exist and read
+as zeros, because the engine wrote both implementations; with an installed
+provider it becomes a promise the embedder can break, and breaking it means a
+guest store lands in unmapped memory — a host signal, i.e. the `std::abort()`
+class of failure `SAFETY.md` §4 exists to avoid. The decision taken in revision 4
+is that a provider is **trusted host code**, on the same footing as a
+`HostBridge` callback or a `MemoryAllocationPolicy`: installing one is the
+embedder's explicit act, the interface documents the five guarantees, and the
+one the engine can cheaply check (`hostData`) is checked. Everything else in the
+contract is the embedder's to keep — which is also what `MPD4` says about a
+quota: a host-side knob is not a security boundary.
+
+`MP-3`: would run embedder code on the growth path, where an exception cannot
+propagate. Rejected for the same reason.
+
+Trap-versus-abort is untouched throughout: an out-of-bounds access is checked
+against `memorySize` and traps, whatever the host has reserved.
+
+### 9.3 How big is it?
+
+- `MP-0`: an afternoon, no code — and it found one real defect (`MP4`: the
+  `hostData` comment claimed a field the engine owns).
+- `MP-1`: **as built**, an allocation-policy overload plus a third provider —
+  ~190 lines in `WasmMemory.{hpp,cpp}`, ~30 in `WasmStore`, one line at the
+  instantiator, and a five-case suite. **One ABI caveat**: adding a
+  defaulted parameter to `createLinearMemory` *changes its mangled name* and
+  would show up as one removed plus one added symbol in `abi-check.sh` — i.e.
+  class B. It must be done as an **overload** (the existing five-argument
+  signature forwarding to the new one) to stay class A.
+- `MP-2`: **as built**, the interface + slot + factory branch came to ~70 lines in `WasmMemory.hpp` / `WasmStore.{hpp,cpp}` plus the `hostData` guard and two test cases: 5 added symbols, 0 removed. Original estimate:
+  ~2 days, one new exported class, and the ABI promise discussed above.
+
+### 9.4 Is it worth it?
+
+Split by demand, because that is the whole point of §2:
+
+| Demand | Who wants it | Worth it? |
+|---|---|---|
+| **D1** guest-owned heap | every toolchain | already there; nothing to do |
+| **D2** stable base | embedders (BYOB, host windows); falls out of `MP-1` | **shipped** — `Reserved`, free of charge |
+| **D3** reserve-then-commit | `T09`, `T14`, `T83`; and it is a **footprint** demand, not a correctness one | **shipped** — `MP-1`; the PoC question is now "does the runtime need it", not "can we do it" |
+| **D4** embedder's arena | embedders only; `MC4`/`MC5` would consume it | **shipped** — `MP-2`; returning `nullptr` keeps the built-in backing for one request |
+| **D5** growth hook | `T01`, quotas | no — the workaround is a two-line poll (§9.5) |
+
+The honest summary: **one small change was built, one large change is worth
+designing but not building, and two are worth refusing in writing.** Nothing here
+makes a language feasible or infeasible; it prices a friction the screen already
+named. `MP-1` removes the *engine-side* half of `F8`; the other half — whether a
+runtime actually wants a reservation, and how much it grows before `main` — is
+still a PoC question, and still `T3`'s to ask.
+
+### 9.5 What works today, without touching the engine?
+
+| Want | Workaround | Cost |
+|---|---|---|
+| a base that does not move, and lazy commit | declare the memory `shared` with an explicit `max` — `SharedLinearMemory` reserves and commits on grow, base stable | the memory becomes atomics-eligible and capped at 4 GiB; a module you did not write may not allow it |
+| notice that memory grew | compare `wasm_memory_size()` before/after a call, or call the toolchain's own export (`emscripten_notify_memory_growth`) | one call per boundary; correct for every toolchain that has such an export |
+| a bigger heap | raise `WASMJIT_MAX_TOTAL_BYTES` (`SAFETY.md` §2.3) | global, and it weakens the guardrail for everything in the process |
+| a per-module limit | none — the budget is process-wide and static | separate processes |
+| bytes in your own arena | install a `MemoryProvider` (`MP-2`) | one interface implementation; return `nullptr` for the requests you do not want |
+
+### 9.6 Least resistance, and what shipped
+
+Done in that order: the record was corrected (`MP-0`), and a non-shared memory can
+now reserve through a five-argument-compatible **overload** whose default keeps
+every existing caller byte-identical (`MP-1`), and the factory (`MP-2`) shipped in
+revision 4 as an *override* whose absence is indistinguishable from the old
+behaviour. The two rejections (`MP-3`, `MP-4`) are written down so the next reader
+does not re-derive them. The decision
+`MP-1` did **not** settle is the PoC one (§7.2): whether a shortlisted runtime
+actually needs the reservation, or only looks like it does.
+
+
+## 10. The runtime memory budget (revisions 3/4)
+
+[`CONFIGURATION.md`](CONFIGURATION.md) is the study of every resource knob; this
+appendix records only the part that touches *this* note, because two of its
+verdicts were made on facts that have changed.
+
+### 10.1 What changed
+
+**All three milestones landed** (`CONFIGURATION.md` revision 2), so the right-hand
+column is the shipped behaviour, not a plan.
+
+| Before (revision 2) | Shipped (`CONFIGURATION.md` `CFG-1`/`CFG-2`/`CFG-3`/`CFG-9`) |
+|---|---|
+| one process-wide ceiling, `WASMJIT_MAX_TOTAL_BYTES`, read once into a `static` (2 GiB) | one ceiling **per runtime** (one per `Store`), default **4 GiB**, settable in `RuntimeConfig::memory`; the environment variable survives as the *process default* a `0` resolves to |
+| one counter, all categories | the same total, plus **opt-in** maxima under it: all linear memories, **one linear memory**, the GC heap, tables |
+| a reservation is charged to nothing (§4.5: "a 4 GiB reservation is free") | unchanged **by default**; an opt-in `reservedAddressBytes` counter bounds the number of reservations, because address space is a resource even when it is free |
+| "a per-module limit: none" (§9.5) | `singleLinearMemoryBytes` |
+| a destroyed instance's memories stayed charged forever | `Store::releaseMemory`/`releaseTable`, called from the instance destructor (`CFG-9`) |
+
+### 10.2 What it does to §4.5, §5 and §7
+
+- **§4.5's accounting paragraph** stays true: bytes are charged when they become
+  *usable*, so a reservation is still free by default. The sentence "the budget
+  charges commitments, not reservations" acquires a footnote — the commitment
+  charge is *one* budget now, and a host may add a second one for reservations
+  without changing the first.
+- **§5 `MP6`** (a copying provider is charged for two buffers during a grow) is
+  unchanged and is not closed by a budget change; it is a provider property.
+- **A finding this note did not have**: `Store` had no release path for a memory
+  or a table, so a destroyed instance's commitment stayed charged for the store's
+  lifetime (`CONFIGURATION.md` `CFG14`, milestone `CFG-9`, now shipped). It
+  belongs to the
+  budget rather than the provider — a provider is never asked to give a memory
+  back — but it is recorded here because it is the one place where the
+  "charged once, credited on failure" promise in §6.3 is narrower than it reads.
+- **§7's `MP-4` row** is marked reopened. Nothing in `MP-1`'s code changes.
+- **§9.5's workaround table** gains one row: "a per-module limit — set
+  `singleLinearMemoryBytes` (opt-in)".
+
+### 10.3 Why `MP-4` is reopened, and what the rejection still means
+
+The rejection rested on three claims, and only one survives unchanged:
+
+| Claim in revision 2 | Status |
+|---|---|
+| "the budget is process-wide, so a quota would be a second mechanism beside it" | **gone** — the budget is per runtime (`ES-2`), so a quota is a field of a structure an embedder already owns, not a new interface |
+| "no requester has asked" | **gone** — a host with several guests in one runtime asked for exactly it (`CONFIGURATION.md` §9.6) |
+| "a per-memory quota invites an embedder to think it is a security boundary" | **survives, verbatim.** The quota is a *resource-partitioning* knob: it bounds one memory's commitment below the runtime's budget. It does not isolate a module, does not prevent a guest from writing outside its memory (bounds checking does), and does not survive a bug in the engine |
+
+That is why the reopened form is **opt-in and off by default**
+(`singleLinearMemoryBytes = 0`): the default must stay the behaviour every
+existing build has, exactly as `MP-1` insisted for the allocation policy.
+
+### 10.4 What stays as it is
+
+- `MP-1`'s providers, its overload, its refusal of an unbounded memory under
+  `Reserved`, and its "the view is the same POD, no backend is told" property.
+- `MP-3` (notify on growth): still rejected. A budget refusal is not a growth
+  notification, and `CONFIGURATION.md` `CFG-7`'s diagnostic is not one either.
+- `MP-2` (a provider factory): **shipped** (revision 4). Its contract carries the
+  five items of §4.2, plus one sentence the budget work added: a provider must
+  not charge the budget, including the reservation counter; the `Store` does that
+  before calling it.
+- `MPD1`–`MPD3`, `MPD5`.
+
+### 10.5 What is still not settled
+
+1. Whether a per-memory quota is *used* by anyone once it exists. If not, it
+   stays documented and unexercised rather than becoming a default — the stop
+   condition `MP-1` wrote for itself applies to `MP-4` too.
+2. Whether the address-space counter (`CFG-3`) is reachable in practice on the
+   target platforms. Its verdict is "available, off by default" until a
+   measurement says otherwise.
+3. The PoC question of §7.2 is untouched: whether a shortlisted runtime needs
+   the reservation, or only looks like it does.
+
+
+## 11. References
 
 - The memory section of the core specification — limits, `shared`, page size,
   `memory.grow`/`memory.size`, and the sentence that makes all of §3.1 true: a
@@ -445,184 +626,3 @@ budget interaction, not the base pointer, is the first thing to write.
   `S5`, whose probe list carries the memory question.
 - [`LEGACY_EXCEPTIONS.md`](LEGACY_EXCEPTIONS.md) — the note this one copies its
   shape from, including the appendix of commissioned questions.
-
-## 10. Appendix — the six commissioned questions
-
-### 10.1 What conflicts with what we already promise?
-
-Two that a build would hit, plus one that a *deferral* avoids:
-
-- **`hostData` is spoken for** (MPD1/`MP4`). A provider seam cannot hand the
-  embedder that field without moving the back-pointer into a side table, which
-  costs a lookup on every grow. Conclusion: the field stays the engine's, and the
-  comment gets fixed.
-- **`isShared` is doing two jobs** (MPD2). A non-shared memory cannot reserve
-  today because the only reserving provider is the shared one. `MP-1` adds the
-  policy as an argument instead of a flag, so no `MemoryType` semantics change
-  and no guest-visible byte changes.
-
-`MP-2` conflicts with something subtler: a provider contract that embedders can
-implement becomes an ABI promise (`API_ABI_STABILITY.md`), and this engine has
-been careful to promise only what it can keep. That is why it was deferred
-until revision 4, and why the shipped contract is narrow: one interface, five
-documented guarantees, and a store that refuses a backing breaking the one it
-can check (`hostData`).
-
-### 10.2 Does any of this weaken `SAFETY.md`?
-
-`MP-1`: no. The `Store` keeps the budget (`reserveBytes` before, `releaseBytes`
-on failure), keeps the fence, and keeps the zero-fill guarantee — the new path
-adds `mprotect`-commit, whose pages are zeroed by the kernel exactly as
-`SharedLinearMemory`'s already are. A reservation that is never committed costs
-address space, capped at 4 GiB by `MAX_SHARED_BYTES`.
-
-`MP-2`: **yes, one invariant moves out of the engine, and that is the price of
-shipping it.** "growMemory returned true" used to mean the pages exist and read
-as zeros, because the engine wrote both implementations; with an installed
-provider it becomes a promise the embedder can break, and breaking it means a
-guest store lands in unmapped memory — a host signal, i.e. the `std::abort()`
-class of failure `SAFETY.md` §4 exists to avoid. The decision taken in revision 4
-is that a provider is **trusted host code**, on the same footing as a
-`HostBridge` callback or a `MemoryAllocationPolicy`: installing one is the
-embedder's explicit act, the interface documents the five guarantees, and the
-one the engine can cheaply check (`hostData`) is checked. Everything else in the
-contract is the embedder's to keep — which is also what `MPD4` says about a
-quota: a host-side knob is not a security boundary.
-
-`MP-3`: would run embedder code on the growth path, where an exception cannot
-propagate. Rejected for the same reason.
-
-Trap-versus-abort is untouched throughout: an out-of-bounds access is checked
-against `memorySize` and traps, whatever the host has reserved.
-
-### 10.3 How big is it?
-
-- `MP-0`: an afternoon, no code — and it found one real defect (`MP4`: the
-  `hostData` comment claimed a field the engine owns).
-- `MP-1`: **as built**, an allocation-policy overload plus a third provider —
-  ~190 lines in `WasmMemory.{hpp,cpp}`, ~30 in `WasmStore`, one line at the
-  instantiator, and a five-case suite. **One ABI caveat**: adding a
-  defaulted parameter to `createLinearMemory` *changes its mangled name* and
-  would show up as one removed plus one added symbol in `abi-check.sh` — i.e.
-  class B. It must be done as an **overload** (the existing five-argument
-  signature forwarding to the new one) to stay class A.
-- `MP-2`: **as built**, the interface + slot + factory branch came to ~70 lines in `WasmMemory.hpp` / `WasmStore.{hpp,cpp}` plus the `hostData` guard and two test cases: 5 added symbols, 0 removed. Original estimate:
-  ~2 days, one new exported class, and the ABI promise discussed above.
-
-### 10.4 Is it worth it?
-
-Split by demand, because that is the whole point of §2:
-
-| Demand | Who wants it | Worth it? |
-|---|---|---|
-| **D1** guest-owned heap | every toolchain | already there; nothing to do |
-| **D2** stable base | embedders (BYOB, host windows); falls out of `MP-1` | **shipped** — `Reserved`, free of charge |
-| **D3** reserve-then-commit | `T09`, `T14`, `T83`; and it is a **footprint** demand, not a correctness one | **shipped** — `MP-1`; the PoC question is now "does the runtime need it", not "can we do it" |
-| **D4** embedder's arena | embedders only; `MC4`/`MC5` would consume it | **shipped** — `MP-2`; returning `nullptr` keeps the built-in backing for one request |
-| **D5** growth hook | `T01`, quotas | no — the workaround is a two-line poll (§10.5) |
-
-The honest summary: **one small change was built, one large change is worth
-designing but not building, and two are worth refusing in writing.** Nothing here
-makes a language feasible or infeasible; it prices a friction the screen already
-named. `MP-1` removes the *engine-side* half of `F8`; the other half — whether a
-runtime actually wants a reservation, and how much it grows before `main` — is
-still a PoC question, and still `T3`'s to ask.
-
-### 10.5 What works today, without touching the engine?
-
-| Want | Workaround | Cost |
-|---|---|---|
-| a base that does not move, and lazy commit | declare the memory `shared` with an explicit `max` — `SharedLinearMemory` reserves and commits on grow, base stable | the memory becomes atomics-eligible and capped at 4 GiB; a module you did not write may not allow it |
-| notice that memory grew | compare `wasm_memory_size()` before/after a call, or call the toolchain's own export (`emscripten_notify_memory_growth`) | one call per boundary; correct for every toolchain that has such an export |
-| a bigger heap | raise `WASMJIT_MAX_TOTAL_BYTES` (`SAFETY.md` §2.3) | global, and it weakens the guardrail for everything in the process |
-| a per-module limit | none — the budget is process-wide and static | separate processes |
-| bytes in your own arena | install a `MemoryProvider` (`MP-2`) | one interface implementation; return `nullptr` for the requests you do not want |
-
-### 10.6 Least resistance, and what shipped
-
-Done in that order: the record was corrected (`MP-0`), and a non-shared memory can
-now reserve through a five-argument-compatible **overload** whose default keeps
-every existing caller byte-identical (`MP-1`), and the factory (`MP-2`) shipped in
-revision 4 as an *override* whose absence is indistinguishable from the old
-behaviour. The two rejections (`MP-3`, `MP-4`) are written down so the next reader
-does not re-derive them. The decision
-`MP-1` did **not** settle is the PoC one (§7.2): whether a shortlisted runtime
-actually needs the reservation, or only looks like it does.
-
-
-## 11. The runtime memory budget (revisions 3/4)
-
-[`CONFIGURATION.md`](CONFIGURATION.md) is the study of every resource knob; this
-appendix records only the part that touches *this* note, because two of its
-verdicts were made on facts that have changed.
-
-### 11.1 What changed
-
-**All three milestones landed** (`CONFIGURATION.md` revision 2), so the right-hand
-column is the shipped behaviour, not a plan.
-
-| Before (revision 2) | Shipped (`CONFIGURATION.md` `CFG-1`/`CFG-2`/`CFG-3`/`CFG-9`) |
-|---|---|
-| one process-wide ceiling, `WASMJIT_MAX_TOTAL_BYTES`, read once into a `static` (2 GiB) | one ceiling **per runtime** (one per `Store`), default **4 GiB**, settable in `RuntimeConfig::memory`; the environment variable survives as the *process default* a `0` resolves to |
-| one counter, all categories | the same total, plus **opt-in** maxima under it: all linear memories, **one linear memory**, the GC heap, tables |
-| a reservation is charged to nothing (§4.5: "a 4 GiB reservation is free") | unchanged **by default**; an opt-in `reservedAddressBytes` counter bounds the number of reservations, because address space is a resource even when it is free |
-| "a per-module limit: none" (§10.5) | `singleLinearMemoryBytes` |
-| a destroyed instance's memories stayed charged forever | `Store::releaseMemory`/`releaseTable`, called from the instance destructor (`CFG-9`) |
-
-### 11.2 What it does to §4.5, §5 and §7
-
-- **§4.5's accounting paragraph** stays true: bytes are charged when they become
-  *usable*, so a reservation is still free by default. The sentence "the budget
-  charges commitments, not reservations" acquires a footnote — the commitment
-  charge is *one* budget now, and a host may add a second one for reservations
-  without changing the first.
-- **§5 `MP6`** (a copying provider is charged for two buffers during a grow) is
-  unchanged and is not closed by a budget change; it is a provider property.
-- **A finding this note did not have**: `Store` had no release path for a memory
-  or a table, so a destroyed instance's commitment stayed charged for the store's
-  lifetime (`CONFIGURATION.md` `CFG14`, milestone `CFG-9`, now shipped). It
-  belongs to the
-  budget rather than the provider — a provider is never asked to give a memory
-  back — but it is recorded here because it is the one place where the
-  "charged once, credited on failure" promise in §6.3 is narrower than it reads.
-- **§7's `MP-4` row** is marked reopened. Nothing in `MP-1`'s code changes.
-- **§10.5's workaround table** gains one row: "a per-module limit — set
-  `singleLinearMemoryBytes` (opt-in)".
-
-### 11.3 Why `MP-4` is reopened, and what the rejection still means
-
-The rejection rested on three claims, and only one survives unchanged:
-
-| Claim in revision 2 | Status |
-|---|---|
-| "the budget is process-wide, so a quota would be a second mechanism beside it" | **gone** — the budget is per runtime (`ES-2`), so a quota is a field of a structure an embedder already owns, not a new interface |
-| "no requester has asked" | **gone** — a host with several guests in one runtime asked for exactly it (`CONFIGURATION.md` §10.6) |
-| "a per-memory quota invites an embedder to think it is a security boundary" | **survives, verbatim.** The quota is a *resource-partitioning* knob: it bounds one memory's commitment below the runtime's budget. It does not isolate a module, does not prevent a guest from writing outside its memory (bounds checking does), and does not survive a bug in the engine |
-
-That is why the reopened form is **opt-in and off by default**
-(`singleLinearMemoryBytes = 0`): the default must stay the behaviour every
-existing build has, exactly as `MP-1` insisted for the allocation policy.
-
-### 11.4 What stays as it is
-
-- `MP-1`'s providers, its overload, its refusal of an unbounded memory under
-  `Reserved`, and its "the view is the same POD, no backend is told" property.
-- `MP-3` (notify on growth): still rejected. A budget refusal is not a growth
-  notification, and `CONFIGURATION.md` `CFG-7`'s diagnostic is not one either.
-- `MP-2` (a provider factory): **shipped** (revision 4). Its contract carries the
-  five items of §4.2, plus one sentence the budget work added: a provider must
-  not charge the budget, including the reservation counter; the `Store` does that
-  before calling it.
-- `MPD1`–`MPD3`, `MPD5`.
-
-### 11.5 What is still not settled
-
-1. Whether a per-memory quota is *used* by anyone once it exists. If not, it
-   stays documented and unexercised rather than becoming a default — the stop
-   condition `MP-1` wrote for itself applies to `MP-4` too.
-2. Whether the address-space counter (`CFG-3`) is reachable in practice on the
-   target platforms. Its verdict is "available, off by default" until a
-   measurement says otherwise.
-3. The PoC question of §7.2 is untouched: whether a shortlisted runtime needs
-   the reservation, or only looks like it does.
-

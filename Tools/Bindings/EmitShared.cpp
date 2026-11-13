@@ -636,7 +636,7 @@ std::string goType(const Json& type)
 	if (kind == "v128") return "[16]byte";
 	if (kind == "void") return "";
 	// Go's wasmimport/wasmexport accept integer handles, not pointer types
-	// (docs/EMBEDDING_SURFACE.md §12.6: prefer a table handle).
+	// (docs/EMBEDDING_SURFACE.md §11.6: prefer a table handle).
 	if (kind == "error-context" || isReference(type)) return "uintptr";
 	return "uintptr";
 }

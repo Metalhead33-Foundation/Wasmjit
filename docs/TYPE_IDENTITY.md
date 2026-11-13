@@ -720,7 +720,7 @@ declare a typed `(ref $T)` is **LANG**.
 
 ### 13.1 The question
 
-[`EMBEDDING_SURFACE.md`](EMBEDDING_SURFACE.md) §17 studies a GObject-shaped host
+[`EMBEDDING_SURFACE.md`](EMBEDDING_SURFACE.md) §16 studies a GObject-shaped host
 object runtime. This section answers only the identity half: could a `GType`-like
 registry give C-family guests a typed object identity, and could GC languages
 share it silently?
@@ -745,7 +745,7 @@ nominal host type participate in `ref.cast`.
   spaces (§6.1, `EMBEDDING_SURFACE.md` §4.4).
 - It is **not** a name, not a serialized ABI value, not an object address, and
   not stable across runs or Stores. A generated header must not hard-code one
-  (`EMBEDDING_SURFACE.md` §14.4).
+  (`EMBEDDING_SURFACE.md` §13.4).
 - A GC object header stores the `TypeId`; `ref.test`/`ref.cast` read it
   (`ABI.md` “GC Object and Heap ABI”, `GC.md` §4.3).
 - The JIT caches lowered types by it (§6.7). Anything that changes its meaning
@@ -764,7 +764,7 @@ They are distinct struct types, not aliases (§6.1). None of them is a host type
 
 A handle must say which domain it belongs to. Comparing a host id with a
 `TypeId`, or moving a handle between Stores, is invalid even when the machine
-word is the same size. This is the same rule as `EMBEDDING_SURFACE.md` §14.5:
+word is the same size. This is the same rule as `EMBEDDING_SURFACE.md` §13.5:
 kind, identity and ownership are not the same check.
 
 ### 13.4 Nominal GType versus structural Wasm
@@ -780,7 +780,7 @@ That difference is not an implementation detail; it decides what can be shared:
 - A **Wasm GC object** can be shared by two GC modules because the *type* is
   structural and the header carries the canonical `TypeId`. Its language-level
   class identity is still each runtime’s own
-  (`EMBEDDING_SURFACE.md` §14.6).
+  (`EMBEDDING_SURFACE.md` §13.6).
 - A **host object** can be shared through a handle because both sides agree on a
   **descriptor name**, not because Wasm’s `match` understands the host type.
   The host `is_a` is a function over the host registry.
@@ -811,7 +811,7 @@ without leaking a layout:
 The descriptor is **host metadata**. A guest sees functions, not the descriptor,
 unless the API deliberately exposes introspection. A generated C header should
 carry the stable name and typedefs, never a `TypeId`, a C++ `typeid` or a field
-offset (`EMBEDDING_SURFACE.md` §14.4). The host resolves the name to its own id;
+offset (`EMBEDDING_SURFACE.md` §13.4). The host resolves the name to its own id;
 the Store resolves a Wasm GC type to its `TypeId`; the two mappings meet only
 where a host object is deliberately wrapped in a Wasm GC object.
 

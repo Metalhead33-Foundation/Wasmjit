@@ -31,7 +31,7 @@
 #define WASM_TESTSUITE_SOURCE_DIR ""
 #endif
 
-// docs/EMBEDDING_SURFACE.md §12.8: conformance tests for the first-party
+// docs/EMBEDDING_SURFACE.md §11.8: conformance tests for the first-party
 // bindingSchema tool. The implementation lives in Tools/Bindings/, outside
 // WasmBase/; these tests prove the schema and both emitters from the engine's
 // public descriptors.

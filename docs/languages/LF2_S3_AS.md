@@ -95,4 +95,16 @@ wants an AS `string` must know the UTF-16 convention and the guest allocator; a
 objects are not WasmGC references, and a component resource/exception is a
 **C** adapter. The host-binding guide and the scalar-to-GC matrix are in
 [`LF2_ABI_INTEROP.md`](LF2_ABI_INTEROP.md); the contract is
-[`EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) §12.
+[`EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) §11.
+
+## 7. References
+
+- [`LF2_INDEX.md`](LF2_INDEX.md) — the report set and the verdicts.
+- [`TRIAGE.md`](TRIAGE.md) — why AssemblyScript is its own arm.
+- [`CLUSTERING.md`](CLUSTERING.md) — the cluster map.
+- [`LF2_ABI_INTEROP.md`](LF2_ABI_INTEROP.md) — the direction matrix and the
+  scalar-to-GC matrix.
+- [`../EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) §11 — the host-binding
+  contract.
+- [`../TESTING.md`](../TESTING.md) — the harness the arm's fixtures run under.
+

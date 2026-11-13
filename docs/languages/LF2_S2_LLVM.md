@@ -140,4 +140,15 @@ or an exception value is the **C** case and needs an adapter, not a C-shaped
 header. `//go:wasmimport`/`//go:wasmexport` and `extern "C"` are source
 spellings; the engine still sees `Callable`, `TypeId` and the outer
 `VMContext*` ABI. See [`LF2_ABI_INTEROP.md`](LF2_ABI_INTEROP.md) and
-[`EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) §12.
+[`EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) §11.
+
+## 8. References
+
+- [`LF2_INDEX.md`](LF2_INDEX.md) — the report set and the verdicts.
+- [`LF2_L6_L12.md`](LF2_L6_L12.md) — the cluster map this arm sits in.
+- [`LF2_ABI_INTEROP.md`](LF2_ABI_INTEROP.md) — the direction matrix and the two
+  call directions.
+- [`CLUSTERING.md`](CLUSTERING.md) — how the toolchains were grouped.
+- [`../EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) §11 — the host-binding
+  contract.
+

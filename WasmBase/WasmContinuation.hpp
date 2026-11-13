@@ -23,7 +23,7 @@ namespace WASM {
 //! \par Continuations: the backend-neutral contract
 //!
 //! A continuation is an execution context that is not the current one
-//! (docs/proposals/STACK_SWITCHING.md §10.8). This header is the contract a
+//! (docs/proposals/STACK_SWITCHING.md §9.8). This header is the contract a
 //! backend emits calls against; it deliberately knows nothing about the
 //! mechanism behind it.
 //!
@@ -42,7 +42,7 @@ namespace WASM {
 //! and `resume_throw*`. The scalar `wasm_cont_*` entry points remain as a
 //! compatibility path for i32/void tests; the generated code uses the `_ex`
 //! forms. `switch` remains rejected until its prompt/peer model is implemented
-//! (STACK_SWITCHING.md §10.12 stage 4).
+//! (STACK_SWITCHING.md §9.12 stage 4).
 //!
 //! A continuation reference behaves like every other reference: it is cloned
 //! and dropped by the generic reference helpers. `continuationRefRetain` /

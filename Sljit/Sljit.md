@@ -7,7 +7,7 @@ envelope** — `WASMJIT_BACKEND=sljit ./Test/WasmJit --rng-seed 12345` reports
 **22,533 assertions in 824 cases, green**, the same case set and assertion count
 as the reference backend. The envelope is x86-64 Linux / SysV AMD64, and the
 documented refusals are listed in "Known limitations" below. See
-[`docs/API_ABI_STABILITY.md`](../docs/API_ABI_STABILITY.md) §13 for the verdict
+[`docs/API_ABI_STABILITY.md`](../docs/API_ABI_STABILITY.md) §12 for the verdict
 and §8 for the open register and the defect ledger that closed the last
 failures.
 
@@ -72,7 +72,7 @@ checked against one fixture set rather than two drifting ones.
 ## Conformance
 
 The generic backend-selected run is the gate, and it is green: 22,533 assertions
-in 824 cases. The last failures were four cases with two root causes:
+in 824 cases (2026-11-10). The last failures were four cases with two root causes:
 
 * the Custom Descriptors family (`struct.new_desc`, `struct.new_default_desc`,
   `ref.get_desc`, `ref.cast_desc_eq(_null)`, `br_on_cast_desc_eq(_fail)`) had no

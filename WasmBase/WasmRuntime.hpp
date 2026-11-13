@@ -267,8 +267,9 @@ public:
 	/** \brief Creates an agent with this runtime's diagnostic sink configured. \return Owning pointer to the new execution agent. */
 	std::unique_ptr<Agent> createAgent();
 
-	//! ES-2: runtime-scoped storage. Until the store is threaded through, this is
-	//! the process-wide store (docs/EMBEDDING_SURFACE.md §4.3 option A→C).
+	//! Runtime-scoped storage (`ES-2` option B, docs/EMBEDDING_SURFACE.md §4.3):
+	//! this runtime's own store, by value. There is no process-wide store, and a
+	//! handle from another runtime is rejected.
 	/** \brief Returns the Store used by this runtime's modules and instances. \return Mutable reference to the runtime Store. */
 	Store& store() noexcept;
 

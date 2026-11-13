@@ -113,7 +113,7 @@ TEST_CASE("WasmBase names no backend", "[layering]")
 	}
 }
 
-// docs/API_ABI_STABILITY.md `GAP-13` and docs/WRITING_A_BACKEND.md §15 lesson 5:
+// docs/API_ABI_STABILITY.md `GAP-13` and docs/WRITING_A_BACKEND.md §14 lesson 5:
 // the trap ABI is *one* entry point per reporting layer, and the kind travels as
 // an argument. The historical shape was thirteen nullary per-kind wrappers per
 // backend, and a textual substitution across them once gave `array.len` the

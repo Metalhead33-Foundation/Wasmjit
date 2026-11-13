@@ -89,7 +89,7 @@ live, because every backend and the runtime both depend on them:
 | Reference ownership at a boundary: a reference **parameter** is the caller's borrow, a reference **local** owns one count, the operand stack owns one per reference it holds | `WasmModuleInstance.hpp` (`refClone`/`refDrop`), [`WRITING_A_BACKEND.md`](WRITING_A_BACKEND.md) §6 “Reference ownership”, [`proposals/GC.md`](proposals/GC.md) RC-5 | retain a reference parameter into its slot at entry, then keep the local and stack rules static — never per-instruction bookkeeping |
 | The POD views generated code may touch: `VMContext`, `LinearMemory`, `TableInstance` | `WasmVMContext.hpp`, `WasmMemory.hpp`, `WasmTable.hpp` (standard-layout + first-field `static_assert`s) | access them only through those layouts |
 | The trap entry point | `WasmTrap.hpp` ([`SAFETY.md`](SAFETY.md) §2.4) | call it with the same kind/message convention instead of inventing a failure mode |
-| The continuation provider contract: `wasm_cont_new` / `resume` / `suspend`, status codes, one-shot and trap/exception transfer | `WasmContinuation.hpp` ([`proposals/STACK_SWITCHING.md`](proposals/STACK_SWITCHING.md) §10.6) | emit the calls and branch on the documented status; do not implement a provider in the backend or change the status layout |
+| The continuation provider contract: `wasm_cont_new` / `resume` / `suspend`, status codes, one-shot and trap/exception transfer | `WasmContinuation.hpp` ([`proposals/STACK_SWITCHING.md`](proposals/STACK_SWITCHING.md) §9.6) | emit the calls and branch on the documented status; do not implement a provider in the backend or change the status layout |
 | Core-module instantiation: component execution instantiates embedded modules only through `ModuleInstantiator` | `WasmModuleInstance.hpp`, `WasmComponentRuntime.hpp` | implement the `ModuleInstantiator` hooks; `ComponentRuntime` must not be made to depend on one code generator |
 | The SIMD helper ABI (`const void*` / `void* out`, immediates as scalars) | `wasm_simd_scalar.hpp` | lower `v128` ops onto those entry points, or provide its own but keep the same semantics |
 | The half-precision helper ABI (`f32` scalars, `v128` bytes, the 0xFD sub-opcode as an immediate) | `wasm_f16.hpp` | lower `f16x8` operations through these entry points, or provide its own binary16 implementation with the same NaN, zero-sign, rounding and trap rules |
@@ -102,7 +102,7 @@ interpretation is ever required, it is the backend's own configuration (for the
 current backend, GNU LibJIT already provides an interpreter alongside its
 compiler), not a new WasmJit interpreter. This is a project decision, not a
 layering preference:
-[`proposals/STACK_SWITCHING.md`](proposals/STACK_SWITCHING.md) §10.15 (D-3).
+[`proposals/STACK_SWITCHING.md`](proposals/STACK_SWITCHING.md) §9.15 (D-3).
 
 ## 5. Vocabulary: how to refer to a backend from core code
 

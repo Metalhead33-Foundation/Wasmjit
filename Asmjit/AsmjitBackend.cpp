@@ -27,5 +27,5 @@ WASM::BackendInstance makeBackend()
 } // namespace
 
 // `Runtime::create("asmjit")` now reaches this backend, the same way the SLJIT
-// and LibJIT backends are reached (docs/WRITING_A_BACKEND.md §8, §14.3 P0).
+// and LibJIT backends are reached (docs/WRITING_A_BACKEND.md §8, §13.3 P0).
 WASMJIT_REGISTER_BACKEND("asmjit", makeBackend);

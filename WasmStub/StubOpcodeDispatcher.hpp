@@ -12,7 +12,7 @@
   `WasmStub` is a textual listing backend: it pretty-prints instructions
   instead of executing them. It is not an interpreter and is never a fallback
   execution path. The project does not add a bespoke interpreter
-  (docs/proposals/STACK_SWITCHING.md §10.15 D-3).
+  (docs/proposals/STACK_SWITCHING.md §9.15 D-3).
 
   This header is internal: it is not part of the embedding surface.
 */
