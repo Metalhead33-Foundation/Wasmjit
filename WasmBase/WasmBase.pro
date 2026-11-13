@@ -45,6 +45,7 @@ SOURCES += \
         WasmAgent.cpp \
         WasmBackendRegistry.cpp \
         WasmCompilationPolicy.cpp \
+        WasmConfiguration.cpp \
         WasmComponent.cpp \
         WasmCallCache.cpp \
         WasmComponentInstance.cpp \

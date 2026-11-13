@@ -621,6 +621,19 @@ Recommendation: **accept it for the first freeze and record it in the ABI note.*
 Removing it later is additive — a header can stop including something without
 breaking source compatibility.
 
+**One seam names `Euph::Conf` without including it.** The configuration-file
+reader (`RuntimeConfig::fromSection` / `fromConfiguration`, and the same pair on
+`ProfileConfig`, `MemoryBudget`, `StoreLimits`, `ExecutionLimits`,
+`CompilationPolicy`, `ContinuationSettings` and `ParseOptions`) takes
+`Euph::Conf::ConfigurationSection` and `Euph::Conf::Configuration` by `const`
+reference and **forward-declares the two classes**, so no public header gains the
+vendored include and an embedder that never reads an INI file needs nothing from
+`Euphemy` to compile. `WasmBase/WasmConfiguration.cpp` is the one core source that
+includes `Euphemy/Config`; it is linked into `libWasmBase` like any other source,
+so no new runtime dependency appears either. This is the shape any future
+ecosystem seam should take: a signature may *name* a vendored type, a header may
+not depend on it.
+
 #### 6.2.1 The long-term direction: `Elvavena` stays, and the ecosystem deepens
 
 Accepting `Elvavena` is **not** a temporary concession to be undone later. The

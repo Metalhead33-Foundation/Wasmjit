@@ -16,7 +16,14 @@ WASMJIT_VISIBLE_BEGIN
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <string_view>
 #include <vector>
+
+//! Forward declarations of the configuration-file types the reader below
+//! accepts (docs/proposals/CONFIGURATION.md §3). They are named by reference, so
+//! the vendored reader stays out of this header; `WasmConfiguration.cpp` — the
+//! one core source that includes it — holds the definitions.
+namespace Euph { namespace Conf { class Configuration; class ConfigurationSection; } }
 
 namespace WASM {
 
@@ -222,6 +229,26 @@ struct ContinuationSettings {
 	//! Provider for continuations created in this runtime; `Inherit` = the
 	//! process default.
 	ContinuationProvider provider = ContinuationProvider::Inherit;
+
+	//! \par Reading the settings from a configuration file
+	//! `uMaxLive` and `uStackBytes` are unsigned; `sProvider` is one of
+	//! `inherit`, `native-stacks` or `host-threads` (case-insensitive, `_` and `-`
+	//! interchangeable). `0`, the widest `Euph::Conf::ConfUint`, an absent
+	//! `sProvider` and `sProvider = inherit` all mean the same thing: follow the
+	//! *live* process default, exactly as the zero-initialised struct does. A
+	//! provider spelling that names no value is refused with
+	//! `std::invalid_argument` rather than read as `Inherit`.
+	//!
+	//! The section is read through a copy, so a `const` configuration stays
+	//! `const` (see `MemoryBudget::fromSection`).
+	/** \brief Reads the settings from one configuration-file section. \param section Section to read; the caller's object is not modified. \return The settings the section describes; every absent key inherits. */
+	static ContinuationSettings fromSection(const Euph::Conf::ConfigurationSection& section);
+
+	//! The same read, from a named section of a configuration the caller has
+	//! already parsed (for example with `Euph::Conf::Configuration::fromString`).
+	/** \brief Reads the settings from a named section of a parsed configuration. \param config Parsed configuration to read; it is not modified. \param sectionName Section to read; `"WasmJit"` when omitted. \return The settings the section describes. */
+	static ContinuationSettings fromConfiguration(const Euph::Conf::Configuration& config,
+			std::string_view sectionName = "WasmJit");
 };
 
 /** \brief Returns the *process default* continuation allocation budget. \return Snapshot of the configured limits. */

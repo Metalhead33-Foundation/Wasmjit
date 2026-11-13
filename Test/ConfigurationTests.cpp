@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 
+#include <Euphemy/Config/EuphConfiguration.hpp>
 #include <Euphemy/Io/EuphFile.hpp>
 
 #include "WasmBase/WasmCompilationPolicy.hpp"
@@ -13,6 +14,8 @@
 #include "WasmBase/WasmGcHeap.hpp"
 #include "WasmBase/WasmMemory.hpp"
 #include "WasmBase/WasmModule.hpp"
+#include "WasmBase/WasmParseOptions.hpp"
+#include "WasmBase/WasmProfile.hpp"
 #include "WasmBase/WasmRegistryImportResolver.hpp"
 #include "WasmBase/WasmRuntime.hpp"
 #include "WasmBase/WasmStore.hpp"
@@ -29,6 +32,12 @@
   docs/proposals/COMPILER_POLICY.md (`CP-1`…`CP-5`). The point of the suite is
   that every knob is *scoped* (one runtime, not one process), *resolved once*
   (a `0` inherits), and *refused where it is set* when it cannot be honoured.
+
+  The last five cases cover the configuration-file reader — the
+  `fromSection`/`fromConfiguration` seam over `Euph::Conf` — and they hold it to
+  the same three properties: an absent key inherits, the widest `ConfUint` is
+  the "unset" sentinel, and a spelling the engine cannot honour is refused by
+  name (docs/proposals/CONFIGURATION.md §3, §8.3).
 */
 
 namespace {
@@ -51,6 +60,13 @@ bool hasDiagnostic(std::string_view id)
 			return true;
 	}
 	return false;
+}
+
+//! Parses an INI document the way an embedder does: one `fromString`, then a
+//! `fromConfiguration` per structure.
+Euph::Conf::Configuration parseConfiguration(const std::string& text)
+{
+	return Euph::Conf::Configuration(text);
 }
 
 } // namespace
@@ -542,5 +558,208 @@ TEST_CASE("the remaining allocation categories can be capped too", "[config]")
 	bad.totalBytes = 1 * kMiB;
 	bad.continuationStackBytes = 2 * kMiB;
 	REQUIRE_THROWS_AS(WASM::Store{bad}, std::invalid_argument);
+}
+
+TEST_CASE("a runtime configuration is read from a configuration file", "[config]")
+{
+	// The file channel, one section, every family. The keys carry their type in
+	// their first letter because that is how the reader types a value
+	// (`ConfigurationSection::insert`); the values are the stable spellings the
+	// engine's own `*Name()` helpers report.
+	const Euph::Conf::Configuration file = parseConfiguration(
+			"[WasmJit]\n"
+			"sProfile = scalar\n"
+			"sConcurrency = agents\n"
+			"uExcludedMarkers = 1\n"
+			"uTotalBytes = 268435456\n"
+			"uSingleLinearMemoryBytes = 67108864\n"
+			"uMaxStringBytes = 8388608\n"
+			"uGcBlocksPerRegion = 32\n"
+			"uStackReserveBytes = 1048576\n"
+			"uDeferStackCapacity = 8\n"
+			"uFuel = 1000000\n"
+			"sLevel = Full\n"
+			"sStrictness = Lax\n"
+			"sInterpreterFallback = fallback_only\n"
+			"uMaxLive = 8\n"
+			"uStackBytes = 262144\n"
+			"sProvider = host-threads\n"
+			"uAllocationBudgetBytes = 268435456\n");
+
+	const WASM::RuntimeConfig config = WASM::RuntimeConfig::fromConfiguration(file);
+
+	// `scalar` is `{V}`; `uExcludedMarkers = 1` adds `N`, and the two compose into
+	// an intersection no named helper spells.
+	REQUIRE(config.profile.excludes(WASM::ProfileMarker::Vectors));
+	REQUIRE(config.profile.excludes(WASM::ProfileMarker::NonDeterministic));
+	REQUIRE_FALSE(config.profile.excludes(WASM::ProfileMarker::Threads));
+	REQUIRE(config.concurrency == WASM::ConcurrencyModel::Agents);
+
+	REQUIRE(config.memory.totalBytes == 268435456u);
+	REQUIRE(config.memory.singleLinearMemoryBytes == 67108864u);
+	REQUIRE(config.memory.gcHeapBytes == 0); // absent, so no separate cap
+
+	REQUIRE(config.store.maxStringBytes == 8388608u);
+	REQUIRE(config.store.gcBlocksPerRegion == 32u);
+	REQUIRE(config.execution.stackReserveBytes == 1048576u);
+	REQUIRE(config.execution.deferStackCapacity == 8u);
+	REQUIRE(config.execution.fuel == 1000000u);
+
+	// Spelling is case-insensitive and `_`/`-` are interchangeable, so the file
+	// may read like prose while the vocabulary stays the diagnostic one.
+	REQUIRE(config.compilation.level == WASM::OptimizationLevel::Full);
+	REQUIRE(config.compilation.strictness == WASM::CompilationStrictness::Lax);
+	REQUIRE(config.compilation.fallback == WASM::InterpreterFallback::FallbackOnly);
+
+	REQUIRE(config.continuation.maxLive == 8u);
+	REQUIRE(config.continuation.stackBytes == 262144u);
+	REQUIRE(config.continuation.provider == WASM::ContinuationProvider::HostThreads);
+	REQUIRE(config.allocationBudgetBytes == 268435456u);
+
+	// A borrowed pointer cannot come out of a text file: the file channel leaves
+	// the three host-owned members alone.
+	REQUIRE(config.hostBridge == nullptr);
+	REQUIRE(config.sink == nullptr);
+	REQUIRE(config.sinkUserData == nullptr);
+
+	// Parse options read from the same section, as an embedder would.
+	const WASM::ParseOptions options = WASM::ParseOptions::fromConfiguration(file);
+	REQUIRE_FALSE(options.legacyExceptionHandling);
+	REQUIRE(options.legacyExceptionRecovery);
+}
+
+TEST_CASE("an absent key and an absent section both keep the defaults", "[config]")
+{
+	// An empty file configures nothing: every field stays what a default-
+	// constructed struct has, so a host can ship one `[WasmJit]` section and grow
+	// it key by key without changing today's behaviour in between.
+	const Euph::Conf::Configuration file = parseConfiguration("[WasmJit]\n");
+
+	const WASM::RuntimeConfig config = WASM::RuntimeConfig::fromConfiguration(file);
+	REQUIRE(config.profile.isFull());
+	REQUIRE(config.concurrency == WASM::ConcurrencyModel::Single);
+	REQUIRE(config.memory.totalBytes == 0);
+	REQUIRE(config.memory.allLinearMemoriesBytes == 0);
+	REQUIRE(config.memory.singleLinearMemoryBytes == 0);
+	REQUIRE(config.memory.gcHeapBytes == 0);
+	REQUIRE(config.memory.tableBytes == 0);
+	REQUIRE(config.memory.stringBytes == 0);
+	REQUIRE(config.memory.exceptionBytes == 0);
+	REQUIRE(config.memory.continuationStackBytes == 0);
+	REQUIRE(config.memory.reservedAddressBytes == 0);
+	REQUIRE(config.store.maxStringBytes == 0);
+	REQUIRE(config.store.gcInlineClassBytes == 0);
+	REQUIRE(config.store.gcMinRegionBytes == 0);
+	REQUIRE(config.store.gcBlocksPerRegion == 0);
+	REQUIRE(config.store.gcCycleCandidates == 0);
+	REQUIRE(config.execution.stackReserveBytes == 0);
+	REQUIRE(config.execution.deferStackCapacity == 0);
+	REQUIRE(config.execution.diagnosticRingCapacity == 0);
+	REQUIRE(config.execution.fuel == 0);
+	REQUIRE(config.compilation.level == WASM::OptimizationLevel::Basic);
+	REQUIRE(config.compilation.strictness == WASM::CompilationStrictness::Strict);
+	REQUIRE(config.compilation.fallback == WASM::InterpreterFallback::Never);
+	REQUIRE(config.continuation.maxLive == 0);
+	REQUIRE(config.continuation.stackBytes == 0);
+	REQUIRE(config.continuation.provider == WASM::ContinuationProvider::Inherit);
+	REQUIRE(config.allocationBudgetBytes == 0);
+
+	// A configuration that names no such section at all reads the same way: the
+	// section is created on demand, so "the file has no `[WasmJit]`" is a default,
+	// never an error.
+	const Euph::Conf::Configuration other = parseConfiguration("[Unrelated]\nuThing = 7\n");
+	const WASM::RuntimeConfig alsoDefault = WASM::RuntimeConfig::fromConfiguration(other);
+	REQUIRE(alsoDefault.memory.totalBytes == 0);
+	REQUIRE(alsoDefault.compilation.level == WASM::OptimizationLevel::Basic);
+
+	// The default parse options are the field defaults: recovery on, permissive
+	// rewriting off.
+	const WASM::ParseOptions options = WASM::ParseOptions::fromConfiguration(other);
+	REQUIRE_FALSE(options.legacyExceptionHandling);
+	REQUIRE(options.legacyExceptionRecovery);
+}
+
+TEST_CASE("the widest configuration integer is the budget's \"inherit\"", "[config]")
+{
+	// A 32-bit `ConfUint` cannot hold 4 GiB, so the widest value a file can name
+	// is read as "unset" — the same meaning `0` has — and the budget resolves to
+	// the process default rather than to 4294967295 bytes.
+	const Euph::Conf::Configuration file = parseConfiguration(
+			"[WasmJit]\n"
+			"uTotalBytes = 4294967295\n"
+			"uStringBytes = 4294967295\n");
+
+	const WASM::MemoryBudget budget = WASM::MemoryBudget::fromConfiguration(file);
+	REQUIRE(budget.totalBytes == 0);
+	REQUIRE(budget.stringBytes == 0);
+
+	WASM::Store store(budget);
+	REQUIRE(store.budget().totalBytes == WASM::Store::allocationBudgetBytes());
+	REQUIRE(store.budgetSource() == WASM::MemoryBudgetSource::Default);
+
+	// The same budget, as an embedder would pass it on to a runtime.
+	WASM::RuntimeConfig config;
+	config.memory = WASM::MemoryBudget::fromConfiguration(file);
+	config.memory.totalBytes = 1 * kMiB;
+	auto runtime = WASM::Runtime::create("libjit", config);
+	REQUIRE(runtime->memoryBudget().totalBytes == 1 * kMiB);
+}
+
+TEST_CASE("a misspelled configuration value is refused by name", "[config]")
+{
+	// A typo must not silently compile at `Basic`: the refusal names the key and
+	// the spellings it accepts, which is what makes the file debuggable.
+	const Euph::Conf::Configuration level = parseConfiguration("[WasmJit]\nsLevel = warp\n");
+	try {
+		WASM::RuntimeConfig::fromConfiguration(level);
+		FAIL("a misspelled optimisation level must be refused");
+	} catch (const std::invalid_argument& error) {
+		const std::string message(error.what());
+		REQUIRE(message.find("sLevel") != std::string::npos);
+		REQUIRE(message.find("basic") != std::string::npos);
+		REQUIRE(message.find("full") != std::string::npos);
+	}
+
+	const Euph::Conf::Configuration provider =
+			parseConfiguration("[WasmJit]\nsProvider = threads\n");
+	REQUIRE_THROWS_AS(WASM::ContinuationSettings::fromConfiguration(provider),
+			std::invalid_argument);
+
+	const Euph::Conf::Configuration profile = parseConfiguration("[WasmJit]\nsProfile = tiny\n");
+	REQUIRE_THROWS_AS(WASM::RuntimeConfig::fromConfiguration(profile), std::invalid_argument);
+
+	// A refused value means nothing is applied half-way: the factory returns a
+	// whole struct or throws.
+	const Euph::Conf::Configuration both = parseConfiguration(
+			"[WasmJit]\nuFuel = 500\nsConcurrency = many\n");
+	REQUIRE_THROWS_AS(WASM::RuntimeConfig::fromConfiguration(both), std::invalid_argument);
+}
+
+TEST_CASE("a configuration section can be read one family at a time", "[config]")
+{
+	// The section overload is what an embedder with its own INI layout uses: any
+	// `Euph::Conf::ConfigurationSection` works, not only one from a whole
+	// `Configuration`.
+	Euph::Conf::ConfigurationSection section;
+	section.setUint("uMaxStringBytes", 1u << 20);
+	section.setUint("uGcCycleCandidates", 128);
+	section.setBool("bLegacyExceptionHandling", 1);
+
+	const WASM::StoreLimits limits = WASM::StoreLimits::fromSection(section);
+	REQUIRE(limits.maxStringBytes == 1u << 20);
+	REQUIRE(limits.gcCycleCandidates == 128);
+	REQUIRE(limits.gcInlineClassBytes == 0); // untouched
+
+	const WASM::ParseOptions options = WASM::ParseOptions::fromSection(section);
+	REQUIRE(options.legacyExceptionHandling);
+	REQUIRE(options.legacyExceptionRecovery);
+
+	// The other families see a section that names none of their keys, so they
+	// read their defaults rather than someone else's values.
+	const WASM::MemoryBudget budget = WASM::MemoryBudget::fromSection(section);
+	REQUIRE(budget.totalBytes == 0);
+	const WASM::CompilationPolicy policy = WASM::CompilationPolicy::fromSection(section);
+	REQUIRE(policy.level == WASM::OptimizationLevel::Basic);
+	REQUIRE(policy.strictness == WASM::CompilationStrictness::Strict);
 }
 

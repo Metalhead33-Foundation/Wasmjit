@@ -13,6 +13,15 @@
 
 WASMJIT_VISIBLE_BEGIN
 #include <cstdint>
+#include <string_view>
+
+//! Forward declarations of the configuration-file types a reader below accepts
+//! (docs/proposals/CONFIGURATION.md §3). They are named by reference so the
+//! vendored reader stays out of this header: the definitions that need
+//! `Euphemy`'s configuration reader live in `WasmConfiguration.cpp`, the one
+//! core source that includes it.
+namespace Euph { namespace Conf { class Configuration; class ConfigurationSection; } }
+
 namespace WASM {
 
 //! Language-profile capability statement (docs/proposals/PROFILES.md).
@@ -104,6 +113,30 @@ struct ProfileConfig {
 	{
 		return excludes(ProfileMarker::Vectors);
 	}
+
+	//! \par Reading a profile from a configuration file
+	//! `sProfile` names one of the spellings `profileName()` reports — `full`
+	//! (the default), `deterministic`, `scalar` or `deterministic+scalar` — and
+	//! `uExcludedMarkers` is a raw `ProfileMarker` bit set. The two compose: a
+	//! named profile is the starting point and the bit set is OR-ed into it, so
+	//! `sProfile = scalar` together with `uExcludedMarkers = 1` names `{N,V}`,
+	//! which no named helper spells. A key that is absent contributes nothing, and
+	//! a spelling that is neither a name nor a marker set is refused with
+	//! `std::invalid_argument` rather than silently read as the full profile.
+	//!
+	//! The section is taken by `const` reference: the reader works on a copy,
+	//! because `Euph::Conf`'s getters record the default they are given for a key
+	//! they did not find, and a reader must not edit the caller's configuration.
+	/** \brief Reads a profile from one configuration-file section. \param section Section to read; the caller's object is not modified. \return The profile the section describes; the full profile when it names neither key. */
+	static ProfileConfig fromSection(const Euph::Conf::ConfigurationSection& section);
+
+	//! The same read, from a named section of a configuration the caller has
+	//! already parsed (for example with `Euph::Conf::Configuration::fromString`).
+	//! A configuration that carries no such section yields the defaults, never an
+	//! error.
+	/** \brief Reads a profile from a named section of a parsed configuration. \param config Parsed configuration to read; it is not modified. \param sectionName Section to read; `"WasmJit"` when omitted. \return The profile the section describes. */
+	static ProfileConfig fromConfiguration(const Euph::Conf::Configuration& config,
+			std::string_view sectionName = "WasmJit");
 };
 
 //! The full profile `{}`: no exclusions.

@@ -25,8 +25,16 @@ WASMJIT_VISIBLE_BEGIN
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
+
+//! Forward declarations of the configuration-file types the readers below
+//! accept (docs/proposals/CONFIGURATION.md §3). They are named by reference, so
+//! the vendored reader stays out of this header; `WasmConfiguration.cpp` — the
+//! one core source that includes it — holds the definitions.
+namespace Euph { namespace Conf { class Configuration; class ConfigurationSection; } }
+
 namespace WASM {
 
 //! Forward declarations for the failed-instantiation retention record.
@@ -82,6 +90,41 @@ struct MemoryBudget {
 	//! Cap on *reserved* (not committed) address space. `0` = reservations are
 	//! not counted, which is `MEMORY_PROVIDER.md` `MP-1`'s behaviour.
 	std::uint64_t reservedAddressBytes = 0;
+
+	//! \par Reading a budget from a configuration file
+	//! Every key is unsigned (`u`), so the reader types it as a number:
+	//! ```
+	//! [WasmJit]
+	//! uTotalBytes              = 268435456
+	//! uSingleLinearMemoryBytes = 67108864
+	//! ```
+	//! **`0` and the widest `Euph::Conf::ConfUint` both mean "inherit"**, i.e. the
+	//! field stays `0` above. The widest value is the sentinel because the 4 GiB
+	//! process default is not representable in a 32-bit `ConfUint`: a host that
+	//! leaves the key alone, writes `0` or writes `4294967295` all get the process
+	//! default rather than a budget of 4294967295 bytes. The one visible
+	//! consequence is that an explicit cap of exactly `ConfUint`'s maximum cannot
+	//! be expressed — it is read as "no separate cap", which is what the total
+	//! already enforces. A configuration that needs larger numbers builds the
+	//! `Store` with `LARGE_CONF_DATA`'s 64-bit `ConfUint`.
+	//!
+	//! A total above a category is not checked here: `Store`'s constructor refuses
+	//! it where the budget is used, so a bad file fails at creation, not at the
+	//! first allocation.
+	//!
+	//! The section is read through a copy, so a `const` configuration stays
+	//! `const`: `Euph::Conf`'s getters record a default for a key they did not
+	//! find, and that bookkeeping belongs to a throwaway copy.
+	/** \brief Reads a budget from one configuration-file section. \param section Section to read; the caller's object is not modified. \return The budget the section describes; every absent key inherits. */
+	static MemoryBudget fromSection(const Euph::Conf::ConfigurationSection& section);
+
+	//! The same read, from a named section of a configuration the caller has
+	//! already parsed (for example with `Euph::Conf::Configuration::fromString`).
+	//! A configuration that carries no such section yields the defaults, never an
+	//! error.
+	/** \brief Reads a budget from a named section of a parsed configuration. \param config Parsed configuration to read; it is not modified. \param sectionName Section to read; `"WasmJit"` when omitted. \return The budget the section describes. */
+	static MemoryBudget fromConfiguration(const Euph::Conf::Configuration& config,
+			std::string_view sectionName = "WasmJit");
 };
 
 //! \brief Where a resolved budget came from, for introspection.
@@ -118,6 +161,25 @@ struct StoreLimits {
 	std::uint32_t gcBlocksPerRegion = 0;
 	//! Cycle-collection candidate cap per instance. `0` = 4096.
 	std::uint32_t gcCycleCandidates = 0;
+
+	//! \par Reading the limits from a configuration file
+	//! Byte-sized keys are unsigned and read exactly as `MemoryBudget`'s are,
+	//! with the same "`0` or the widest `ConfUint` means the built-in default"
+	//! rule; the count keys (`uGcInlineClassBytes`, `uGcBlocksPerRegion`,
+	//! `uGcCycleCandidates`) read the same way and keep their clamps, so a value
+	//! the implementation cannot honour is rounded or clamped where it is used
+	//! rather than rejected here.
+	//!
+	//! The section is read through a copy, so a `const` configuration stays
+	//! `const` (see `MemoryBudget::fromSection`).
+	/** \brief Reads the limits from one configuration-file section. \param section Section to read; the caller's object is not modified. \return The limits the section describes; every absent key keeps the built-in default. */
+	static StoreLimits fromSection(const Euph::Conf::ConfigurationSection& section);
+
+	//! The same read, from a named section of a configuration the caller has
+	//! already parsed (for example with `Euph::Conf::Configuration::fromString`).
+	/** \brief Reads the limits from a named section of a parsed configuration. \param config Parsed configuration to read; it is not modified. \param sectionName Section to read; `"WasmJit"` when omitted. \return The limits the section describes. */
+	static StoreLimits fromConfiguration(const Euph::Conf::Configuration& config,
+			std::string_view sectionName = "WasmJit");
 };
 
 /*!

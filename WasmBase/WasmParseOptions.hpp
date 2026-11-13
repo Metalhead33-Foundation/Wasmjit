@@ -14,6 +14,13 @@
 WASMJIT_VISIBLE_BEGIN
 #include <cstdlib>
 #include <string>
+#include <string_view>
+
+//! Forward declarations of the configuration-file types the readers below
+//! accept (docs/proposals/CONFIGURATION.md §3). They are named by reference, so
+//! the vendored reader stays out of this header; `WasmConfiguration.cpp` — the
+//! one core source that includes it — holds the definitions.
+namespace Euph { namespace Conf { class Configuration; class ConfigurationSection; } }
 
 namespace WASM {
 
@@ -94,6 +101,35 @@ struct ParseOptions {
 	//! it means and a future member is not forgotten.
 	/** \brief Returns a copy of this policy that accepts the superseded exception form. \return The updated policy. */
 	ParseOptions acceptingLegacyExceptionHandling() const;
+
+	//! \par Reading a policy from a configuration file
+	//! The two switches are booleans (`b`), so a file carries them as words:
+	//! ```
+	//! [WasmJit]
+	//! bLegacyExceptionHandling = false
+	//! bLegacyExceptionRecovery = true
+	//! ```
+	//! The parser defaults *are* the field defaults above — `false` and `true` —
+	//! so an absent key and an explicit value that repeats the default are
+	//! indistinguishable, and a file only ever records a deliberate departure.
+	//! `getBool` accepts `true`/`false`, `TRUE`/`FALSE`, `yes`/`no`,
+	//! `YES`/`NO` and a number, which is the reader's spelling rule, not this
+	//! struct's.
+	//!
+	//! This is a *file* channel, not a third precedence level: `fromEnvironment()`
+	//! still seeds the policy an argument-less `fromFile` uses, and a policy read
+	//! here is the explicit argument the existing rule already ranks first.
+	//!
+	//! The section is read through a copy, so a `const` configuration stays
+	//! `const` (see `MemoryBudget::fromSection`).
+	/** \brief Reads a policy from one configuration-file section. \param section Section to read; the caller's object is not modified. \return The policy the section describes; every absent key keeps the field default. */
+	static ParseOptions fromSection(const Euph::Conf::ConfigurationSection& section);
+
+	//! The same read, from a named section of a configuration the caller has
+	//! already parsed (for example with `Euph::Conf::Configuration::fromString`).
+	/** \brief Reads a policy from a named section of a parsed configuration. \param config Parsed configuration to read; it is not modified. \param sectionName Section to read; `"WasmJit"` when omitted. \return The policy the section describes. */
+	static ParseOptions fromConfiguration(const Euph::Conf::Configuration& config,
+			std::string_view sectionName = "WasmJit");
 };
 
 inline ParseOptions ParseOptions::fromEnvironment()

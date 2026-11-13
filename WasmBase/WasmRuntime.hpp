@@ -93,6 +93,50 @@ struct RuntimeConfig {
 	//! into the budget; a value that disagrees with a non-zero
 	//! `memory.totalBytes` is refused at `create()`.
 	std::uint64_t     allocationBudgetBytes = 0;
+
+	//! \par Reading a runtime configuration from a configuration file
+	//! One section configures the whole struct, because every child keeps its own
+	//! keys and no key of one family collides with another:
+	//! ```
+	//! [WasmJit]
+	//! sProfile              = scalar
+	//! sConcurrency          = single
+	//! uTotalBytes           = 268435456
+	//! sLevel                = full
+	//! uFuel                 = 1000000
+	//! sProvider             = native-stacks
+	//! ```
+	//! `fromSection` reads the runtime's own keys and delegates the five child
+	//! families and the profile to their readers, so the file is described once,
+	//! beside the fields it fills. `hostBridge`, `sink` and `sinkUserData` are
+	//! pointers into the embedder and are never touched: they stay `nullptr`, and
+	//! an embedder that wants a bridge assigns it in code, because a borrowed
+	//! pointer cannot come out of a text file.
+	//!
+	//! Precedence is unchanged and explicit: the struct this returns is what the
+	//! caller passes to `Runtime::create`, so a value read here is *the* value;
+	//! the environment still seeds the process defaults that a `0` field inherits
+	//! (`WASMJIT_MAX_TOTAL_BYTES`, `WASMJIT_MAX_CONTINUATIONS`,
+	//! `WASMJIT_CONT_STACK_BYTES`), and a file that leaves a key out inherits them
+	//! exactly as a default-constructed `RuntimeConfig` does.
+	//!
+	//! `uAllocationBudgetBytes` is read as well, for the compatibility field
+	//! above; `uTotalBytes` is the preferred spelling, and a file that sets both
+	//! to different values is refused by `create()` with the message the existing
+	//! check already produces.
+	//!
+	//! The section is read through a copy, so a `const` configuration stays
+	//! `const` (see `MemoryBudget::fromSection`).
+	/** \brief Reads a runtime configuration from one configuration-file section. \param section Section to read; the caller's object is not modified. \return The configuration the section describes; every absent key keeps its default. */
+	static RuntimeConfig fromSection(const Euph::Conf::ConfigurationSection& section);
+
+	//! The same read, from a named section of a configuration the caller has
+	//! already parsed (for example with `Euph::Conf::Configuration::fromString`).
+	//! A configuration that carries no such section yields the defaults, never an
+	//! error: an empty file configures nothing.
+	/** \brief Reads a runtime configuration from a named section of a parsed configuration. \param config Parsed configuration to read; it is not modified. \param sectionName Section to read; `"WasmJit"` when omitted. \return The configuration the section describes. */
+	static RuntimeConfig fromConfiguration(const Euph::Conf::Configuration& config,
+			std::string_view sectionName = "WasmJit");
 };
 
 //! \brief The engine instance (docs/EMBEDDING_SURFACE.md §4, ES-1)

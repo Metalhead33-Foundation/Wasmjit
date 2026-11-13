@@ -2,12 +2,15 @@
 
 *The Hardcoded Values, What Became a Knob, and the Budget Model*
 
-Status: engine-seam study, revision 4 (2026-11-01). The work is implemented:
+Status: engine-seam study, revision 5 (2026-11-13). The work is implemented:
 `CFG-1`…`CFG-9` and `CFG-4` ship a per-runtime memory budget (4 GiB default),
 opt-in category caps, an address-space counter, release paths, resolved-budget
 introspection, store/execution limits, string/exception/continuation counters,
 and `CFG-8`'s per-agent execution budget for LibJIT. §7 records the landed
 milestones and the places the implementation differs from the sketch in §9.
+Revision 5 adds the configuration-file *reader* (§3, §8.3): the structs this
+note defines are readable from an INI section through `Euph::Conf`, which is a
+way to fill them, not a second configuration surface.
 Audience: anyone touching `WasmStore` (`WasmBase/WasmStore.{hpp,cpp}`), the
 memory providers (`WasmBase/WasmMemory.{hpp,cpp}`), `WasmRuntime`
 (`WasmBase/WasmRuntime.{hpp,cpp}`), the continuation provider
@@ -119,10 +122,15 @@ host down is the engine's reason, not the host's; it stays hardcoded (`CFGD2`).
   (`ExecutionLimits::fuel`) and the LibJIT entry/back-edge lowering; a runtime
   that leaves the budget at zero keeps the historical unmetered behaviour, and
   a backend that cannot lower it refuses the configuration.
-- **No configuration file format.** The engine has no `.toml`/`.json` config
-  reader and does not grow one; the embedder builds a struct in code. The
-  environment variables stay a convenience for a process that has no embedder
-  code of its own (§4.2).
+- **No configuration file format of the engine's own.** The engine has no
+  `.toml`/`.json` reader and does not grow one: the embedder builds a struct in
+  code, or reads one out of an INI file through the `Euph::Conf` reader the rest
+  of the MhLib ecosystem already uses. That seam is a *reader only* — a
+  `fromSection`/`fromConfiguration` pair on `RuntimeConfig`, on its five child
+  families, on `ProfileConfig` and on `ParseOptions` — because the engine owns no
+  file syntax, no path policy and no default file, and a key it does not know is
+  simply not its business. The environment variables stay a convenience for a
+  process that has no embedder code of its own (§4.2).
 - **No live reconfiguration of a running instance.** A budget is resolved when
   the owning object is created. `setContinuationBudget` is the one mid-flight
   setter in the tree and §5 `CFG5` records what that costs; the rest stay
@@ -548,6 +556,16 @@ test.
 Reading: the budget is now *tested* rather than only operated, which is the
 difference revision 1 could not have: a budget no API can set is a budget no
 suite can set differently.
+
+### 8.3 What revision 5 added — the configuration-file reader (`Test/ConfigurationTests.cpp`, `[config]`)
+
+| Test | What it pins |
+|---|---|
+| `a runtime configuration is read from a configuration file` | every family parses out of one `[WasmJit]` section: a named profile composes with a raw marker set, the three compilation knobs accept the `*Name()` spellings case-insensitively with `_`/`-` interchangeable, and the three host-owned pointers stay null |
+| `an absent key and an absent section both keep the defaults` | the reader is additive: an empty section and a configuration with no such section both produce exactly the values a `RuntimeConfig{}` has |
+| `the widest configuration integer is the budget's "inherit"` | `uTotalBytes = 4294967295` reads as "unset" (a 32-bit `ConfUint` cannot hold 4 GiB), so the budget resolves to the process default with `MemoryBudgetSource::Default` |
+| `a misspelled configuration value is refused by name` | `std::invalid_argument` naming the key and its accepted spellings — never a silent default |
+| `a configuration section can be read one family at a time` | the `ConfigurationSection` overload serves an embedder's own INI layout, and a family ignores keys that are not its own |
 
 
 ## 9. Appendix: the memory budget in full

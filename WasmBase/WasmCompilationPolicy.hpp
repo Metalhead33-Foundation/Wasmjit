@@ -22,6 +22,13 @@ WASMJIT_VISIBLE_BEGIN
 #include <cstdint>
 #include <optional>
 #include <stdexcept>
+#include <string_view>
+
+//! Forward declarations of the configuration-file types the reader below
+//! accepts (docs/proposals/CONFIGURATION.md §3). They are named by reference, so
+//! the vendored reader stays out of this header; `WasmConfiguration.cpp` — the
+//! one core source that includes it — holds the definitions.
+namespace Euph { namespace Conf { class Configuration; class ConfigurationSection; } }
 
 namespace WASM {
 
@@ -101,6 +108,32 @@ struct CompilationPolicy {
 	CompilationStrictness strictness = CompilationStrictness::Strict;
 	//! Whether an interpreter may substitute for compiled code.
 	InterpreterFallback fallback = InterpreterFallback::Never;
+
+	//! \par Reading a policy from a configuration file
+	//! The three knobs are strings (`s`), spelled exactly as the stable names
+	//! above report them, so a file and a diagnostic use one vocabulary:
+	//! ```
+	//! [WasmJit]
+	//! sLevel               = full
+	//! sStrictness          = lax
+	//! sInterpreterFallback = fallback-only
+	//! ```
+	//! Matching is case-insensitive and treats `_` and `-` as the same character.
+	//! An absent key keeps the default the field documents; a spelling that names
+	//! no value is refused with `std::invalid_argument` naming the key and the
+	//! accepted spellings, because a typo that silently compiles at `Basic` is
+	//! exactly the surprise this policy exists to remove.
+	//!
+	//! The section is read through a copy, so a `const` configuration stays
+	//! `const` (see `MemoryBudget::fromSection`).
+	/** \brief Reads a policy from one configuration-file section. \param section Section to read; the caller's object is not modified. \return The policy the section describes; every absent key keeps its default. */
+	static CompilationPolicy fromSection(const Euph::Conf::ConfigurationSection& section);
+
+	//! The same read, from a named section of a configuration the caller has
+	//! already parsed (for example with `Euph::Conf::Configuration::fromString`).
+	/** \brief Reads a policy from a named section of a parsed configuration. \param config Parsed configuration to read; it is not modified. \param sectionName Section to read; `"WasmJit"` when omitted. \return The policy the section describes. */
+	static CompilationPolicy fromConfiguration(const Euph::Conf::Configuration& config,
+			std::string_view sectionName = "WasmJit");
 };
 
 /*!

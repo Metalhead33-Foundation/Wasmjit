@@ -19,7 +19,14 @@ WASMJIT_VISIBLE_BEGIN
 #include <Elvavena/Util/ElvDeferStack.hpp>
 #include <cstddef>
 #include <cstdint>
+#include <string_view>
 #include <thread>
+
+//! Forward declarations of the configuration-file types the reader below
+//! accepts (docs/proposals/CONFIGURATION.md §3). They are named by reference, so
+//! the vendored reader stays out of this header; `WasmConfiguration.cpp` — the
+//! one core source that includes it — holds the definitions.
+namespace Euph { namespace Conf { class Configuration; class ConfigurationSection; } }
 
 namespace WASM {
 
@@ -47,6 +54,25 @@ struct ExecutionLimits {
 	//! charges function entries and loop back-edges, not individual Wasm
 	//! instructions, so this is a deterministic coarse execution budget.
 	std::uint64_t fuel = 0;
+
+	//! \par Reading the limits from a configuration file
+	//! Every key is unsigned (`u`): `uStackReserveBytes`, `uDeferStackCapacity`,
+	//! `uDiagnosticRingCapacity` and `uFuel`. `0` — or the widest
+	//! `Euph::Conf::ConfUint` — keeps the built-in default documented above, so an
+	//! absent key and an explicit `0` mean the same thing: today's behaviour. The
+	//! defer-stack capacity keeps its clamp to `[1, kDeferCapacity]`, because the
+	//! inline array is the ceiling and the reader does not pretend otherwise.
+	//!
+	//! The section is read through a copy, so a `const` configuration stays
+	//! `const` (see `MemoryBudget::fromSection`).
+	/** \brief Reads the limits from one configuration-file section. \param section Section to read; the caller's object is not modified. \return The limits the section describes; every absent key keeps the built-in default. */
+	static ExecutionLimits fromSection(const Euph::Conf::ConfigurationSection& section);
+
+	//! The same read, from a named section of a configuration the caller has
+	//! already parsed (for example with `Euph::Conf::Configuration::fromString`).
+	/** \brief Reads the limits from a named section of a parsed configuration. \param config Parsed configuration to read; it is not modified. \param sectionName Section to read; `"WasmJit"` when omitted. \return The limits the section describes. */
+	static ExecutionLimits fromConfiguration(const Euph::Conf::Configuration& config,
+			std::string_view sectionName = "WasmJit");
 };
 
 //! \brief The state one execution context owns.
