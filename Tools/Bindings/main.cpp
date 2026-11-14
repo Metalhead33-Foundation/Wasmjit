@@ -2,7 +2,6 @@
 #include "frontend/cpp/CppFrontend.hpp"
 #include "frontend/wit/WitFrontend.hpp"
 
-#include <Euphemy/Config/GlobalConfig.hpp>
 #include <Euphemy/Io/EuphFile.hpp>
 
 #include "WasmBase/WasmArtifact.hpp"
@@ -16,10 +15,6 @@
 #include <string>
 #include <string_view>
 #include <vector>
-
-// The vendored Euphemy library expects the host executable to define its
-// configuration object; the test harness and consumer satisfy the same contract.
-Euph::Conf::Configuration GLOBAL_CONFIGURATION;
 
 namespace {
 

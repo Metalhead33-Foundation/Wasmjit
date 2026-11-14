@@ -223,6 +223,13 @@ The strict pass is a *work list*, not a gate: at revision 4 (2026-11-01,
 `8c87f5f`) it reports **1,810 warnings**, and §8 classifies them. The **default**
 render is the gate, and it is warning-free.
 
+The HTML theme is read from `extern/doxygen-awesome-css`, a submodule of this
+tree: the `Doxyfile` names its stylesheets and scripts by path, so a checkout
+that skipped `git submodule update --init --recursive` renders unstyled and
+reports that those files cannot be read. MhLib carries its own copy of the same
+submodule for its own `Doxyfile`; the two are independent, and neither project
+reads the other's.
+
 ## 7. Why this is necessary
 
 1. **The headers are the API reference.** There is no hand-written reference

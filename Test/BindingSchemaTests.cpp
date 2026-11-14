@@ -1104,9 +1104,6 @@ TEST_CASE("a generated C++ adapter calls an export and reports a trap", "[bindin
 #include <WasmBase/WasmRuntime.hpp>
 #include <WasmBase/WasmTrap.hpp>
 #include <WasmBase/WasmRegistryImportResolver.hpp>
-#include <Euphemy/Config/GlobalConfig.hpp>
-
-Euph::Conf::Configuration GLOBAL_CONFIGURATION;
 extern WASM::ModuleInstance* wasmjit_adapter_instance;
 
 int main(int argc, char** argv)
@@ -1134,10 +1131,8 @@ TEST_CASE("a generated C++ adapter satisfies an import and passes a reference", 
 #include "adapter.h"
 #include <WasmBase/WasmRuntime.hpp>
 #include <WasmBase/WasmRegistryImportResolver.hpp>
-#include <Euphemy/Config/GlobalConfig.hpp>
 #include <cstdint>
 
-Euph::Conf::Configuration GLOBAL_CONFIGURATION;
 extern WASM::ModuleInstance* wasmjit_adapter_instance;
 
 namespace {
@@ -1170,10 +1165,8 @@ TEST_CASE("a generated C++ adapter calls a multi-value export", "[bindings]")
 #include "adapter.h"
 #include <WasmBase/WasmRuntime.hpp>
 #include <WasmBase/WasmRegistryImportResolver.hpp>
-#include <Euphemy/Config/GlobalConfig.hpp>
 #include <cstdint>
 
-Euph::Conf::Configuration GLOBAL_CONFIGURATION;
 extern WASM::ModuleInstance* wasmjit_adapter_instance;
 
 namespace {
@@ -1205,9 +1198,6 @@ TEST_CASE("a generated C++ adapter owns and releases a reference result", "[bind
 #include "adapter.h"
 #include <WasmBase/WasmRuntime.hpp>
 #include <WasmBase/WasmRegistryImportResolver.hpp>
-#include <Euphemy/Config/GlobalConfig.hpp>
-
-Euph::Conf::Configuration GLOBAL_CONFIGURATION;
 extern WASM::ModuleInstance* wasmjit_adapter_instance;
 
 int main(int argc, char** argv)
@@ -1595,9 +1585,6 @@ TEST_CASE("generated h2g callable loader resolves guest exports", "[bindings]")
 #include <WasmBase/WasmRuntime.hpp>
 #include <WasmBase/WasmModuleInstance.hpp>
 #include <WasmBase/WasmRegistryImportResolver.hpp>
-#include <Euphemy/Config/GlobalConfig.hpp>
-
-Euph::Conf::Configuration GLOBAL_CONFIGURATION;
 
 int main(int argc, char** argv)
 {

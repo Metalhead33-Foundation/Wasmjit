@@ -10,17 +10,10 @@
 
 #include <wasmjit/WasmJit.hpp>
 
-#include <Euphemy/Config/GlobalConfig.hpp>
-
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <span>
-
-// The vendored Euphemy library expects the host executable to define its
-// configuration object (the same contract the test harness satisfies); the
-// embedder note records this as part of accepting Elvavena/Euphemy in the SDK.
-Euph::Conf::Configuration GLOBAL_CONFIGURATION;
 
 namespace {
 

@@ -62,8 +62,6 @@
 #include "WasmStub/StubOpcodeDispatcher.hpp"
 #include "WastScript.hpp"
 
-Euph::Conf::Configuration GLOBAL_CONFIGURATION;
-
 // ── Harness diagnostics output (docs/DIAGNOSTICS.md DG-6/DG-7) ──────────────
 //
 // The test binary accepts three opt-in flags before Catch2 sees the command

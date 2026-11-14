@@ -281,12 +281,9 @@ that knob at the default this note documents in §3.
 #include <fstream>
 #include <memory>
 
-// The vendored reader expects the *host executable* to define its configuration
-// object — the same contract every consumer of the installed SDK satisfies
-// (docs/EMBEDDING_SURFACE.md §6.2). One definition, in one translation unit, or
-// the link fails with an undefined `GLOBAL_CONFIGURATION`.
-#include <Euphemy/Config/GlobalConfig.hpp>
-Euph::Conf::Configuration GLOBAL_CONFIGURATION;
+// The vendored reader asks nothing of the host executable: the settings object
+// below is a plain value, and no process-wide configuration symbol has to be
+// defined in a translation unit for the link to succeed.
 
 // 1. Read the file *you* own. The engine has no path, no default file name and no
 //    opinion about when this runs; `fromString(std::istream&)` or the

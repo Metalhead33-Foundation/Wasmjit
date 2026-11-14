@@ -1,6 +1,5 @@
 #ifndef HELPER_HPP
 #define HELPER_HPP
-#include <Euphemy/Config/GlobalConfig.hpp>
 #include <Euphemy/Io/EuphFile.hpp>
 #include <cstdint>
 #include <iostream>

@@ -21,6 +21,7 @@ backend can add tests without touching the shared fixtures.
 | Requirement | Needed for |
 | --- | --- |
 | Qt 6 `qmake` (`/usr/bin/qmake6`) and a C++20 compiler | building |
+| The system libraries the vendored MhLib libraries link — `libpng`, `libgif`, `libjpeg-turbo`, `libsndfile`, `libsamplerate`, `libopenmpt`, `libwebp`, `zstd`, `snappy`, PhysicsFS, OpenSSL and an OpenMP runtime | building `extern/MhLib/Euphemy`, which the core links; `Euphemy.pro` is the authoritative list |
 | GNU LibJIT (`-ljit`) | the JIT backend |
 | libffi (`pkg-config libffi`) | flat component `canon lower` closures |
 | Catch2 3.x (`-lCatch2 -lCatch2Main`) | the test framework |
