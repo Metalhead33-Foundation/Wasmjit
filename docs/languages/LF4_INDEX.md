@@ -2,13 +2,21 @@
 
 *Producing and Running Components*
 
-Status: full-study report set (revision 1 — 2026-11-16). `LF-4` is the
+Status: full-study report set (revision 2 — 2026-11-16). `LF-4` is the
 component-model counterpart of `LF-2`: the same language-feasibility protocol
 ([`../LANGUAGE_FEASIBILITY.md`](../LANGUAGE_FEASIBILITY.md) §8) applied to a
 different artifact. `LF-2` asked whether a toolchain's **core module** reaches
 the host ABI; this set asks whether the toolchain's **component** — a
 WIT-described, Canonical-ABI-lifted artifact — can be loaded, instantiated and
 called through `WASM::Runtime`'s component surface.
+
+**Revision 2** adds the re-run at commit `1ec91f8`, after the three
+component-validator defects the first run found (`GAP-20`) and then masked
+(`GAP-21`, `GAP-22`) were closed. The short answer to the question it was made
+to answer — *does closing `GAP-20` turn the yellow arms green?* — is **no**: it
+removes the load blocker and exposes the two behind it, and after all three the
+four preview2 arms stop at the host-import seam instead (§4.2, §5.4). No arm's
+verdict moved to 🟩 Green, and none was expected to: no WASI shim was written.
 
 **Commissioning.** The repository owner commissioned the study on 2026-11-16
 with the scope below: the languages of the upstream *Building a Simple
@@ -112,7 +120,8 @@ line.
 
 ### 3.3 The engine and the runner
 
-Measured at commit `6164c53` (2026-11-14) on x86-64 Linux / SysV AMD64, backend
+Measured at commit `6164c53` (2026-11-14) for §4.1 and re-measured at
+`1ec91f8` (2026-11-16) for §4.2, on x86-64 Linux / SysV AMD64, backend
 **LibJIT**, single agent. The component surface used is the public one
 ([`proposals/COMPONENT_MODEL.md`](../proposals/COMPONENT_MODEL.md) `CM-21`):
 `Runtime::loadComponentFile`, `Runtime::instantiateComponent`,
@@ -121,6 +130,13 @@ Measured at commit `6164c53` (2026-11-14) on x86-64 Linux / SysV AMD64, backend
 ships a different `wit-bindgen` than the CLI, the report says which.
 
 ## 4. The verdicts
+
+Measured twice. The **first run** (2026-11-16, commit `6164c53`) is §4.1: it is
+what the study found before any engine change. The **second run** (same day,
+commit `1ec91f8`, after the three validator defects of §5 were closed) is §4.2,
+and its verdict column is the one this set reports.
+
+### 4.1 First run — before the fixes
 
 | Arm | Toolchain (pinned in [`LF4_EVIDENCE.md`](LF4_EVIDENCE.md) §2) | Artifact | Component imports | Engine result | Verdict |
 |---|---|---:|---:|---|---|
@@ -132,37 +148,78 @@ ships a different `wit-bindgen` than the CLI, the report says which.
 | `S1` C# | .NET SDK 10.0.113, `componentize.wasi.cli` 0.8.0-preview, NativeAOT-LLVM | 2,227,102 B | 18 (WASI 0.2.6) | **rejected at load** — `GAP-20` | 🟨 Yellow |
 | `S3` Go | Go 1.27.4, `componentize-go` 0.4.2 (`wit-bindgen` 0.61.1) | 2,524,500 B | 18 (WASI 0.2.12) | **rejected at load** — `GAP-20` | 🟨 Yellow |
 | `S3` TinyGo | TinyGo 0.40.1, `-target=wasip2`, `wit-bindgen-go` v0.7.0 | 22,207 B | 4 (WASI 0.2.0) | **rejected at load** — `GAP-20` | 🟨 Yellow |
+| `u64probe` (the reduction, §5.1) | wasi-sdk 34.0, `wit-bindgen c`, one `func () -> u64` | 50,644 B | 0 | **rejected at load** — `GAP-20` | 🟥 Red (engine) |
 
-Two things stand out, and both are the point of the study:
+### 4.2 Second run — after `GAP-20`, `GAP-21` and `GAP-22` were closed
 
-1. **Four of the seven components work end to end today, and they are the
-   import-free ones.** C, C++, Rust and MoonBit each produce a component whose
-   only import list is empty; the engine parses it, validates it, instantiates
-   its core module, resolves the interface export bag and returns the right
-   answer from `add`.
-2. **The “batteries-included” toolchains are all blocked by one engine defect,
-   not by their own size.** C#, Go and TinyGo pull in WASI Preview 2
-   (`wasi:io`, `wasi:cli`, `wasi:clocks`, `wasi:random`, and for C#/Go
-   `wasi:filesystem`); all three artifacts are valid per `wasm-tools` and all
-   three are rejected at **load** with the same message. The libc-linked C arm
-   shows the same thing for the C family: the same source with and without a
-   libc call is 🟩 Green and 🟨 Yellow respectively.
+| Arm | Engine result at `1ec91f8` | Verdict |
+|---|---|---|
+| `S2` C | loads, instantiates, `add(20,22)=42` | 🟩 Green |
+| `S2` C++ | loads, instantiates, `add(20,22)=42` | 🟩 Green |
+| `S4` Rust | loads, instantiates, `add(20,22)=42` | 🟩 Green |
+| `S5` MoonBit | loads, instantiates, `add(20,22)=42` | 🟩 Green |
+| `u64probe` | loads, instantiates, `callValues` returns `u64=42` | 🟩 Green (engine) |
+| `S2` C + libc | loads and validates, **stops at instantiation**: `missing host import` names `wasi:io/error@0.2.12` | 🟨 Yellow |
+| `S1` C# | loads and validates, **stops at instantiation**: `missing host import` names `wasi:io/poll@0.2.6` | 🟨 Yellow |
+| `S3` Go | loads and validates, **stops at instantiation**: `missing host import` names `wasi:cli/environment@0.2.12` | 🟨 Yellow |
+| `S3` TinyGo | loads and validates, **stops at instantiation**: `missing host import` names `wasi:io/error@0.2.0` | 🟨 Yellow |
 
-**Why 🟨 Yellow rather than 🟥 Red.** Two blockers are named, and only one of
-them is engine work:
+**So: no, fixing `GAP-20` alone does not turn the yellow arms green — and that is
+the finding, not a failure of the fix.** It does exactly what §5.1 predicted:
+the four arms stop failing at *load*. Two more validator defects (`GAP-21`,
+`GAP-22`) were standing directly behind it — and which one bit an arm depended on
+its artifact (C# and C + libc hit `GAP-21`, Go hit `GAP-22`, TinyGo hit neither)
+— which is why the first run's identical message looked like a single gap. With all three closed, every artifact is accepted and validated, and
+each of the four reaches the host-import seam inside `instantiateComponent`;
+what is left is the host side.
+
+Three things stand out:
+
+1. **The four import-free arms are green before and after.** C, C++, Rust and
+   MoonBit each produce a component whose only import list is empty; the engine
+   parses it, validates it, instantiates its core modules, resolves the
+   interface export bag and returns the right answer from `add`. Closing the
+   three defects changed nothing about them, which is the regression evidence
+   that the fixes are additive.
+2. **The “batteries-included” toolchains are blocked by the embedder seam, not
+   by their own size.** C#, Go and TinyGo pull in WASI Preview 2 (`wasi:io`,
+   `wasi:cli`, `wasi:clocks`, `wasi:random`, and for C#/Go `wasi:filesystem`),
+   and the libc-linked C arm shows the same for the C family. All four artifacts
+   are valid per `wasm-tools`, all four now pass load and validation, and all
+   four stop at the same place: inside `instantiateComponent`, on the first
+   `wasi:*` interface the component imports and the host does not supply. The interface each one names first is
+   in §5.4.
+3. **The `u64probe` arm now runs end to end** (`get() -> u64=42` through
+   `callValues`), so `GAP-20` is verified at the call boundary and not only at
+   the parser.
+
+**Why 🟨 Yellow rather than 🟥 Red.** One blocker is named and it is not engine
+work:
 
 | Blocker | Class | What it is | What closing it buys |
 |---|---|---|---|
-| `GAP-20` — the validator counts 64-bit scalars as two flat slots | **A** (additive, `WasmBase`) | §5 below; a valid `func() -> u64` lift is rejected as if it needed a `memory` option | every preview2 component becomes *loadable*; `GAP-20` is a one-rule fix in the component validator |
+| `GAP-20`, `GAP-21`, `GAP-22` — three validator defects | **A** (additive, `WasmBase`) | §5; a valid `func() -> u64` lift was rejected as if it needed a `memory` option, a lowered alias had “no closed identity”, and a 36-page memory could not satisfy `(memory 0)` | **closed 2026-11-16** in `1ec91f8`: every preview2 artifact in §4.2 now loads and validates, and reaches the host-import seam inside `instantiateComponent` |
 | A WASI 0.2 host shim | **D** (embedder-owned by recorded decision) | the component's `wasi:*` imports are `ComponentHostImports`; WASI is explicitly the embedder's surface ([`SCOPE.md`](../SCOPE.md) §3) | running, not loading: the shim is what `wasi:io/streams`, resources and `wasi:cli` need. It is also the next study's question, not this one's |
 
 Neither is a goal conflict and neither is disproportionately expensive, so
-🟥 Red is not the verdict. Neither is done, so 🟩 Green is not either.
+🟥 Red is not the verdict. Neither shim exists, so 🟩 Green is not either.
 
+## 5. The engine findings
 
-## 5. The engine finding
+Three defects, all in `WasmBase/WasmComponentValidation.cpp`, all class **A**
+(additive, `WasmBase`-only, no backend or contract change), all found by this
+set, all **closed 2026-11-16 in commit `1ec91f8`**.
 
-### 5.1 `F-CM-1` / `GAP-20` — a 64-bit scalar is counted as two flat slots
+The order matters. The study's first run recorded `GAP-20` and stopped there,
+because it fails first and rejects every preview2 component before any other
+rule runs. Fixing it and re-running the same artifacts surfaced `GAP-21` (C +
+libc, C#) and `GAP-22` (Go), while TinyGo went straight from load failure to
+the host-import seam. The fixes are `LF-3`-prep engine work, made after the
+study's run so that [`../LANGUAGE_FEASIBILITY.md`](../LANGUAGE_FEASIBILITY.md)
+§8.7 (“a study changes nothing”) held for the run itself; each carries a fixture
+and a test under `[component-validation]`.
+
+### 5.1 `GAP-20` — a 64-bit scalar was counted as two flat slots
 
 **The specification.** `flatten_type` maps `s64`/`u64` to **one** `i64` core
 value and `f64` to **one** `f64`; `MAX_FLAT_PARAMS = 16` and
@@ -172,15 +229,13 @@ involved, when the flattened parameter count exceeds 16, or when the flattened
 result count exceeds 1 ([CanonicalABI.md](https://github.com/WebAssembly/component-model/blob/main/design/mvp/CanonicalABI.md)
 “flatten_functype”, retrieved 2026-11-16).
 
-**What the engine does.** `flatSlots` in `WasmBase/WasmComponentValidation.cpp`
-returns **2** for `PrimitiveValueType::U64`, `S64` and `F64` — the comment says
-“the Canonical ABI flattens to 32-bit slots” — and the lift/lower rule then
-requires `memory` when `flatResults > 1`. A one-result `-> u64` function
-therefore crosses the result limit in the validator's arithmetic while it has
-one core result in the ABI's.
+**What the engine did.** `flatSlots` returned **2** for `PrimitiveValueType::U64`,
+`S64` and `F64` — the comment said “the Canonical ABI flattens to 32-bit slots” —
+and the lift/lower rule then required `memory` when `flatResults > 1`. A
+one-result `-> u64` function therefore crossed the result limit in the
+validator's arithmetic while it has one core result in the ABI's.
 
-**The minimal reproduction, built for this study.** A component whose whole WIT
-is
+**The reproduction.** A component whose whole WIT is
 
 ```wit
 package docs:u64probe@0.1.0;
@@ -195,7 +250,7 @@ world u64probe {
 ```
 
 — `wit-bindgen c` plus `wasm32-wasip2-clang`, 50,644 bytes, no imports, one bare
-`canon lift`:
+`canon lift`. Before the fix:
 
 ```
 $ wasm-tools validate --features all probe.wasm   # exit 0
@@ -203,35 +258,113 @@ $ component_probe probe.wasm
 status=error: component validation: canonical option `memory` is required
 ```
 
+After it the same artifact runs to the call boundary:
+
+```
+instantiate=ok
+bag docs:u64probe/get@0.1.0: functions=get values=0 types=0
+call get() -> u64=42
+status=ok
+```
+
 **Blast radius.** Any component that lowers or lifts a function with a 64-bit
 scalar in the result position without a `memory` option — which is every
 component importing `wasi:clocks/monotonic-clock`, whose `now: func() -> instant`
-is a `u64`. Nine or more `u64` parameters would trip the parameter limit the
-same way (9 real slots, 18 counted). This is why every preview2 artifact in §4
-is rejected while the scalar-`u32` adders load.
+is a `u64`. Nine or more `u64` parameters tripped the parameter limit the same
+way (9 real values, 18 counted).
 
-**Honesty about the reduction.** The message names no construct, so the reports
-below can prove *that* an arm is rejected, and the `u64` probe pins *one*
-trigger of the rule, but the study did not reduce every arm to the same line: a
-component may have more than one construct that trips it. Naming the construct in
-the diagnostic is itself a `DIAGNOSTICS.md` improvement worth making with the
-fix.
+**The fix and its tests.** `flatSlots` became `flatValueCount` and counts core
+values: every primitive is one, `string`/`list`/`map` two, records/tuples summed,
+variant one tag plus the widest case. Three fixtures pin it:
+`component_canon_u64_result` (a bare `lift` of `func () -> u64`, executed and
+asserted to return 42), `component_canon_u64_params` (nine `u64` parameters,
+executed and asserted to return its first argument) and
+`component_canon_u64_spill` (a `tuple<u64, u64>` result, which really is two flat
+values and still must carry a `memory` option).
 
-**What it costs to close.** One rule in `flatSlots` (return 1 for `U64`/`S64`/
-`F64`, or count `flatten_types` instead of hand-rolling it), plus a re-check of
-the `[component-*]` fixtures that assert the current memory requirement. Class
-**A**: additive, `WasmBase`-only, no backend or contract change. Fixing it is
-`LF-3` work ([`../LANGUAGE_FEASIBILITY.md`](../LANGUAGE_FEASIBILITY.md) §8.7),
-not feasibility work; nothing was patched for this study.
+**Honesty about the reduction, revised.** The first run could only prove *that*
+an arm was rejected, because the message names no construct. The re-run settles
+it for this gap: every one of the four preview2 artifacts passes load and
+validation once these three fixes are in, so `GAP-20` was a *sufficient*
+blocker, not merely a plausible one. Naming the construct in the diagnostic is
+still a [`../DIAGNOSTICS.md`](../DIAGNOSTICS.md) improvement worth making.
 
-### 5.2 What is *not* a finding
+### 5.2 `GAP-21` — a lowered alias of an imported function had “no closed identity”
 
-The WASI 0.2 import lists are **not** an engine defect. `SCOPE.md` §3 records
-WASI as embedder-owned, and the component surface already accepts host imports
-as `ComponentHostImports`. The arms never reached that seam because they failed
-at load; once `GAP-20` is fixed the next question is how much of `wasi:io`
-(resources, streams, pollables) a shim must implement before a C# or Go
-component runs — a design question, recorded here so it is not mistaken for a
+**What it is.** `validateCanonicalAbi()` needs a `TypeId` for the function a
+`canon lift`/`canon lower` names. For `lift` it reads the component's local type
+table; for `lower` it read `entity->type->typeId`. A function reached through
+`alias export` of an **imported instance** carries its own resolved type node,
+which no earlier pass interns, so `typeId` was `kNone` and the component was
+rejected with
+
+```
+component validation: canon lift/lower type has no closed identity
+```
+
+— for `wasi:clocks/monotonic-clock.now`, whose type is the perfectly closed
+`func () -> u64`. `wasm-tools validate --features all` accepts the artifact; the
+open-type escape hatch above that check (`containsAbstractResource`) does not
+help, because there is no resource in the signature.
+
+**Who hit it.** `S2` C + libc and `S1` C# — every preview2 component whose
+imports are aliased out of an imported interface instance rather than declared
+inline. This is the normal shape `wasm-component-ld` and `componentize-*`
+emit, which is why it stood behind `GAP-20` looking like the same failure.
+
+**The fix and its test.** `canonicalTypeOf` interns the node on demand once the
+open-type test has passed (`return internResolvedType(entity->type)`); the
+identity is the same one the loader computes. Fixture
+`component_canon_lower_alias` imports an instance, aliases a `func (result u64)`
+out of it and lowers it.
+
+### 5.3 `GAP-22` — core instantiation compared memory limits for equality
+
+**What it is.** A core module's import is satisfied by an exported entity whose
+type must be a *subtype* of the import's declared type: for a memory or table
+the provided minimum may be larger than the declared one, and its maximum, when
+the declaration has one, may be smaller. The engine used `coreMemoryTypeEqual` /
+`coreTableTypeEqual`, i.e. exact limits equality. The preview1 adapter every
+`wasip1`-era toolchain uses imports `(import "env" "memory" (memory 0))` and is
+handed a 36-page memory, so `componentize-go`'s component was rejected with
+
+```
+component validation: core instantiate argument has an incompatible memory type
+```
+
+**The fix and its tests.** Two predicates, `memorySubtype` and `tableSubtype`,
+now express the rule — limits subtyped, everything else exact (address width,
+custom page size, the shared bit, the table's element type and shared flag) — and
+they are shared with the module-type ascription path that already had this
+right. Fixtures `component_core_instantiate_memory` (valid: `(memory 0)` accepts
+`(memory 1)`) and `component_invalid_core_instantiate_memory` (invalid: a
+provided minimum below the declared one), matching `wasm-tools` in both
+directions.
+
+### 5.4 What is *not* a finding: the WASI 0.2 host shim
+
+The WASI import lists are **not** an engine defect. `SCOPE.md` §3 records WASI
+as embedder-owned, and the component surface already accepts host imports as
+`ComponentHostImports`. With the three validator defects closed, that seam is
+exactly where each of the four arms stops, and the interface it names first is
+different for each:
+
+| Arm | First `missing host import` | Interfaces declared |
+|---|---|---:|
+| `S2` C + libc | `wasi:io/error@0.2.12` | 13 |
+| `S1` C# | `wasi:io/poll@0.2.6` | 18 |
+| `S3` Go | `wasi:cli/environment@0.2.12` | 18 |
+| `S3` TinyGo | `wasi:io/error@0.2.0` | 4 |
+
+The order is the component's own declaration order, so the table is a statement
+about which imports the loader resolves first, not about how much of WASI each
+language needs. The design question a shim must answer first is not “how many
+functions” but whether the host side can satisfy an interface import that
+exports a **resource type** — `wasi:io/error` and `wasi:io/streams` both do, and
+`ComponentInstanceValue` carries functions, values and types, so where a host
+resource implementation lives is the first thing to settle. That question
+belongs to the embedding surface, not to the language studies, and it is
+recorded here so it is not mistaken for a validation bug.
 
 ## 6. What this set is not
 
@@ -249,8 +382,10 @@ component runs — a design question, recorded here so it is not mistaken for a
   native targets, Go's native `wasip2` build without `componentize-go`, TinyGo's
   `wit-bindgen-go` alternatives, and `wasm32-wasip1` + `--adapt` for C are not
   run.
-- **Not an engine fix.** `GAP-20` is recorded (and registered in
-  [`../API_ABI_STABILITY.md`](../API_ABI_STABILITY.md) §8.1), not implemented.
+- **Not an engine fix in the study's run.** The three gaps were found by this
+  set and fixed *after* its first run (`1ec91f8`), so the recorded verdicts are
+  measurements, not the fix's own claims. Each gap is registered closed in
+  [`../API_ABI_STABILITY.md`](../API_ABI_STABILITY.md) §8.4 with its fixture.
 - **Not a performance study.** Nothing here measures size, start-up or speed as
   a virtue; the byte counts are identification, not a ranking.
 
@@ -259,21 +394,25 @@ component runs — a design question, recorded here so it is not mistaken for a
 | Row | State |
 |---|---|
 | `LF-2` — core-module feasibility | `✅` 2026-10-30, [`LF2_INDEX.md`](LF2_INDEX.md) |
-| `LF-4` — component-model feasibility | `✅` 2026-11-16, this set: 7 arms, 4 🟩 Green, 3 🟨 Yellow |
-| `LF-3` — the support decision | **Open.** `GAP-20` and the WASI 0.2 shim question are its input |
-| `GAP-20` — the 64-bit flat-slot over-count | **Open**, class A, [`../API_ABI_STABILITY.md`](../API_ABI_STABILITY.md) §8.1 |
+| `LF-4` — component-model feasibility | `✅` 2026-11-16, this set: 7 arms, twice run, 4 🟩 Green and 4 🟨 Yellow |
+| `LF-3` — the support decision | **Open.** Its input is now the WASI 0.2 shim question, not a defect |
+| `GAP-20` — the 64-bit flat-value over-count | **Closed** 2026-11-16, class A, [`../API_ABI_STABILITY.md`](../API_ABI_STABILITY.md) §8.4 |
+| `GAP-21` — a lowered alias had no closed identity | **Closed** 2026-11-16, class A, [`../API_ABI_STABILITY.md`](../API_ABI_STABILITY.md) §8.4 |
+| `GAP-22` — memory limits compared for equality | **Closed** 2026-11-16, class A, [`../API_ABI_STABILITY.md`](../API_ABI_STABILITY.md) §8.4 |
 | A WASI 0.2 host shim | **Uncommissioned**; embedder-owned by [`../SCOPE.md`](../SCOPE.md) §3 |
 
 **Budget.** One AI session plus the toolchain acquisition recorded in
 [`LF4_EVIDENCE.md`](LF4_EVIDENCE.md) §2, against the `LF-2` cap band
 (`CHARTERS.md` §2.3); the stop rule was not hit.
 
-**What the next study must answer.** With `GAP-20` closed, run the same seven
-artifacts again: four move from “not tested” to measurable at the call boundary,
-and the three preview2 arms move from *load failure* to *missing-import* failure.
-The interesting question then is not “does C# work” but “what is the smallest
-`wasi:io`/`wasi:cli` shim that lets a `wasi:cli/command` world instantiate”, which
-belongs to the embedding surface, not to the language studies.
+**What the next study must answer.** The re-run has already done the first half:
+the same seven artifacts now all load and validate, and the four preview2 arms
+fail at *instantiation* on a named missing import (§5.4). What is left is not
+“does C# work” but two questions the embedding surface owns: what is the smallest
+`wasi:io`/`wasi:cli`/`wasi:clocks` shim that lets a `wasi:cli/command` world
+instantiate, and where does a host implementation of a **resource type** live.
+Only after those are answered can an arm's verdict move from 🟨 Yellow to
+🟩 Green on the strength of its own artifact rather than of a shim.
 
 ## 8. References
 
@@ -289,9 +428,7 @@ belongs to the embedding surface, not to the language studies.
   component surface (`CM-21`), the Canonical ABI and `CM-15`'s feature gates.
 - [`../SCOPE.md`](../SCOPE.md) §3, §7.1 — WASI as an embedder boundary and the
   core-module producer claim this set does not extend.
-- [`../API_ABI_STABILITY.md`](../API_ABI_STABILITY.md) §4.1 and §8.1 — the gap
-  classes and the `GAP-20` register row.
+- [`../API_ABI_STABILITY.md`](../API_ABI_STABILITY.md) §4.1 and §8.4 — the gap
+  classes and the three closed register rows.
 - [`LF4_EVIDENCE.md`](LF4_EVIDENCE.md) — versions, hashes, commands, transcripts
   and the reproduction.
-
-validation bug.

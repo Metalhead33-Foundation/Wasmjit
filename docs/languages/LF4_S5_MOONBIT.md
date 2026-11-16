@@ -1,6 +1,6 @@
 # `S5` — MoonBit {#lf4_s5}
 
-Status: `LF-4` arm report (revision 1 — 2026-11-16). Arm of
+Status: `LF-4` arm report (revision 2 — 2026-11-16). Arm of
 [`LF4_INDEX.md`](LF4_INDEX.md); toolchain pinned in
 [`LF4_EVIDENCE.md`](LF4_EVIDENCE.md) §2. **Verdict: 🟩 Green** — the component
 loads, instantiates and returns 42, and at 3,236 bytes it is the smallest
@@ -67,7 +67,9 @@ status=ok
 
 A component does not have to be a runtime. MoonBit's 3,236-byte artifact is the
 whole adder component — core module, WIT metadata and wrapper — and it runs
-through the same public surface as the 2.2 MB C# one would after `GAP-20`. The
+through the same public surface as the 2.2 MB C# one does now that `GAP-20`,
+`GAP-21` and `GAP-22` are closed (the C# arm stops at the host-import seam, not
+at the loader). The
 `--encoding utf16` option is MoonBit's WIT convention rather than an engine
 requirement; the engine reads the encoding from the component's own canonical
 options.
@@ -82,7 +84,7 @@ options.
 
 ## 6. References
 
-- [`LF4_INDEX.md`](LF4_INDEX.md) §4–§5 — verdicts and `GAP-20`.
+- [`LF4_INDEX.md`](LF4_INDEX.md) §4–§5 — verdicts and the three findings.
 - [`LF4_EVIDENCE.md`](LF4_EVIDENCE.md) §2–§5 — versions, hash, transcript.
 - [`../ABI.md`](../ABI.md) “Host and Guest: the vocabulary”.
 - [`LF2_S4_WASMGC.md`](LF2_S4_WASMGC.md) — MoonBit as a **core-module**

@@ -1,11 +1,12 @@
 # `S1` — C# through `componentize-dotnet` {#lf4_s1}
 
-Status: `LF-4` arm report (revision 1 — 2026-11-16). Arm `S1` of
+Status: `LF-4` arm report (revision 2 — 2026-11-16). Arm `S1` of
 [`LF4_INDEX.md`](LF4_INDEX.md); toolchain pinned in
 [`LF4_EVIDENCE.md`](LF4_EVIDENCE.md) §2. **Verdict: 🟨 Yellow** — the toolchain
-produces a valid, self-describing component with the guide's own steps, and the
-engine rejects it at load (`GAP-20`); once that is fixed a WASI 0.2 host shim is
-the remaining, embedder-owned blocker.
+produces a valid, self-describing component with the guide's own steps. The
+engine used to reject it at load (`GAP-20`); with `GAP-20`, `GAP-21` and `GAP-22`
+closed it loads, validates and instantiates as far as the host-import seam, where
+the embedder-owned WASI 0.2 shim is the remaining blocker.
 
 Audience: anyone planning to ship C# components to WasmJit, and whoever
 sequences `LF-3`.
@@ -101,34 +102,53 @@ own WIT.
 
 ## 5. What the engine did
 
+**First run, commit `6164c53`:**
+
 ```
 status=error: component validation: canonical option `memory` is required
 ```
 
-The load fails in the component validator, before the feature check reports
-anything and before `instantiateComponent` is reached. `wasm-tools` accepts the
-same bytes. This is `GAP-20`
-([`LF4_INDEX.md`](LF4_INDEX.md) §5): the validator's `flatSlots` counts a 64-bit
-scalar as two flat slots, and the NativeAOT component's WASI imports include
-`wasi:clocks` (`now: func() -> instant`, a `u64`), so a lowering that is valid
-without a `memory` option trips the rule.
+That load failure was `GAP-20` ([`LF4_INDEX.md`](LF4_INDEX.md) §5.1): the
+validator's `flatSlots` counted a 64-bit scalar as two flat slots, and the
+NativeAOT component's WASI imports include `wasi:clocks`
+(`now: func () -> instant`, a `u64`), so a lowering that is valid without a
+`memory` option tripped the rule. `wasm-tools` accepted the same bytes.
 
-Because the failure is at load, the arm says nothing about the next stage: the
-18 imports are never resolved.
+**Second run, commit `1ec91f8`**, after `GAP-20`, `GAP-21` and `GAP-22` were
+closed ([`LF4_EVIDENCE.md`](LF4_EVIDENCE.md) §4.9):
+
+```
+loaded path=…/publish/adder.wasm backend=libjit size=2227102
+features=baseline,values,async,threads,component-imports,memory64,error-context
+status=error: component runtime: missing host import `wasi:io/poll@0.2.6`
+```
+
+The artifact now loads, passes validation and enters `instantiateComponent`,
+where it stops on the first `wasi:*` interface the host does not supply. This arm
+is also where `GAP-21` mattered: its imports are aliased out of imported
+interface instances, the shape the validator rejected as having “no closed
+identity” once `GAP-20` stopped masking it
+([`LF4_INDEX.md`](LF4_INDEX.md) §5.2).
+
+Because the failure is still inside instantiation, the 18 declared imports are
+never resolved and the arm says nothing yet about its own `add`.
 
 ## 6. What it would take to run it
 
-1. **`GAP-20`** — class A, `WasmBase`-only, one rule. Without it nothing about
-   this component can be measured past `wasm-tools`.
-2. **A WASI 0.2 host shim** — class D, the embedder's ([`../SCOPE.md`](../SCOPE.md)
+1. **A WASI 0.2 host shim** — class D, the embedder's ([`../SCOPE.md`](../SCOPE.md)
    §3). The component surface already accepts `ComponentHostImports`; what is
    missing is an implementation of `wasi:io/poll`, `wasi:io/error`,
    `wasi:io/streams` (resources + streams),
    `wasi:cli/{stdin,stdout,stderr,exit,environment,terminal-*}`,
    `wasi:clocks`, `wasi:filesystem` and `wasi:random`. The `adder` call itself
    needs none of them; the runtime's `_start`-equivalent might.
+2. **A host-side resource story** — `wasi:io/error` and `wasi:io/streams` export
+   resource types and `wasi:io/poll` is the first import this component asks
+   for; where a host implementation of a resource lives is the first design
+   question a shim must answer ([`LF4_INDEX.md`](LF4_INDEX.md) §5.4).
 
-Neither is a goal change, which is why the verdict is 🟨 Yellow rather than
+The three engine defects are closed, so the only open item is embedder work.
+Nothing here is a goal change, which is why the verdict is 🟨 Yellow rather than
 🟥 Red.
 
 ## 7. What this arm does not answer
@@ -143,7 +163,7 @@ Neither is a goal change, which is why the verdict is 🟨 Yellow rather than
 
 ## 8. References
 
-- [`LF4_INDEX.md`](LF4_INDEX.md) §4–§5 — the verdict table and `GAP-20`.
+- [`LF4_INDEX.md`](LF4_INDEX.md) §4–§5 — the verdict tables and the three findings.
 - [`LF4_EVIDENCE.md`](LF4_EVIDENCE.md) §2–§5 — versions, hash, transcript,
   reproduction.
 - [`../ABI.md`](../ABI.md) “Host and Guest: the vocabulary” and “VMContext

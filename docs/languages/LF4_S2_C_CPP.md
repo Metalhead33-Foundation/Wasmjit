@@ -1,6 +1,6 @@
 # `S2` — C and C++ through wasi-sdk {#lf4_s2}
 
-Status: `LF-4` cluster report (revision 1 — 2026-11-16). Arms of
+Status: `LF-4` cluster report (revision 2 — 2026-11-16). Arms of
 [`LF4_INDEX.md`](LF4_INDEX.md); toolchain pinned in
 [`LF4_EVIDENCE.md`](LF4_EVIDENCE.md) §2. Three arms:
 
@@ -8,7 +8,7 @@ Status: `LF-4` cluster report (revision 1 — 2026-11-16). Arms of
 |---|---|---|
 | `s2-c` | C, `wit-bindgen c`, no libc call | 🟩 **Green** |
 | `s2-cpp` | C++, `wit-bindgen cpp`, no libc call | 🟩 **Green** |
-| `s2-c-libc` | the same C source plus one `printf` | 🟨 **Yellow** — `GAP-20` |
+| `s2-c-libc` | the same C source plus one `printf` | 🟨 **Yellow** — a WASI 0.2 shim (`GAP-20` and `GAP-21` blocked load) |
 
 The two green arms are the study's clearest result: a component with no WIT
 imports is a component the engine can load, instantiate and call today. The
@@ -103,15 +103,24 @@ surface.
 The C source plus `printf("add(%u, %u)\n", x, y);` — nothing else changed —
 produces a 274,861-byte component that imports 13 WASI 0.2.12 interfaces
 (`wasi:io/{error,poll,streams}`, `wasi:cli/{stdin,stdout,stderr,terminal-*}`,
-`wasi:clocks/{monotonic,wall}`). The engine's transcript is one line:
+`wasi:clocks/{monotonic,wall}`). In the first run the engine's transcript was one
+line:
 
 ```
 status=error: component validation: canonical option `memory` is required
 ```
 
-`wasm-tools validate --features all` accepts it. The rejection is `GAP-20`
-([`LF4_INDEX.md`](LF4_INDEX.md) §5): `wasi:clocks/monotonic-clock.now` returns a
-`u64`, and the validator's flat-slot arithmetic over-counts it.
+`wasm-tools validate --features all` accepted it. That rejection was `GAP-20`
+([`LF4_INDEX.md`](LF4_INDEX.md) §5.1): `wasi:clocks/monotonic-clock.now` returns
+a `u64`, and the validator's flat-slot arithmetic over-counted it. With `GAP-20`
+fixed the next rule in line rejected the same bytes — `GAP-21`, a lowered alias of
+an imported function reporting “no closed identity” (§5.2) — and with all three
+closed the transcript is the host-import seam
+([`LF4_EVIDENCE.md`](LF4_EVIDENCE.md) §4.9):
+
+```
+status=error: component runtime: missing host import `wasi:io/error@0.2.12`
+```
 
 The lesson is not “printf is expensive”; it is that **the presence of a WASI
 import list is what separates a green C component from a yellow one**, and that
@@ -141,12 +150,13 @@ why the runner's `--bagcall` names the interface, not the function alone.
   this SDK.
 - **C++ with libc++** (`-lc++ -lc++abi`) was not run as a separate arm. The
   C++ arm above is header-only C++ over the C ABI; a `std::string` version would
-  import WASI and join `s2-c-libc` on the yellow side until `GAP-20` is fixed.
+  import WASI and join `s2-c-libc` on the yellow side for the same reason — the
+  missing host shim, not a validator rule.
 - **Performance and size** — out of scope; the byte counts identify artifacts.
 
 ## 7. References
 
-- [`LF4_INDEX.md`](LF4_INDEX.md) §4–§5 — verdicts and `GAP-20`.
+- [`LF4_INDEX.md`](LF4_INDEX.md) §4–§5 — verdicts and the three findings.
 - [`LF4_EVIDENCE.md`](LF4_EVIDENCE.md) §2–§5 — toolchain pin, hashes,
   transcripts, reproduction.
 - [`../ABI.md`](../ABI.md) — the core `Callable` ABI one layer below the

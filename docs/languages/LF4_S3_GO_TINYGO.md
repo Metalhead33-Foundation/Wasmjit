@@ -1,16 +1,17 @@
 # `S3` — Go and TinyGo {#lf4_s3}
 
-Status: `LF-4` cluster report (revision 1 — 2026-11-16). Two arms of
+Status: `LF-4` cluster report (revision 2 — 2026-11-16). Two arms of
 [`LF4_INDEX.md`](LF4_INDEX.md); toolchains pinned in
 [`LF4_EVIDENCE.md`](LF4_EVIDENCE.md) §2.
 
 | Arm | Toolchain | Verdict |
 |---|---|---|
-| `s3-go` | Go 1.27.4 + `componentize-go` 0.4.2 | 🟨 **Yellow** — `GAP-20` |
-| `s3-tinygo` | TinyGo 0.40.1, `-target=wasip2` | 🟨 **Yellow** — `GAP-20` |
+| `s3-go` | Go 1.27.4 + `componentize-go` 0.4.2 | 🟨 **Yellow** — a WASI 0.2 shim (`GAP-20` and `GAP-22` blocked load) |
+| `s3-tinygo` | TinyGo 0.40.1, `-target=wasip2` | 🟨 **Yellow** — a WASI 0.2 shim (`GAP-20` blocked load) |
 
-Both toolchains build valid components and both components are rejected at
-**load** by the same validator rule. The two paths differ in almost everything
+Both toolchains build valid components, and both components used to be rejected
+at **load** by the same validator rule; both now load and reach the host-import
+seam. The two paths differ in almost everything
 else — a 2.5 MB runtime-heavy component versus a 22 KB one — which is useful:
 the blocker is not the runtime's size or complexity, it is the WASI import list
 that both carry.
@@ -98,25 +99,41 @@ this arm needed — the guide's `wkg`-based workflow, the newer `wit-bindgen-go`
 
 ## 4. What the engine did
 
-Both arms fail identically and immediately:
+**First run (`6164c53`).** Both arms failed identically and immediately:
 
 ```
 status=error: component validation: canonical option `memory` is required
 ```
 
-`wasm-tools validate --features all` accepts both bytes. This is `GAP-20`
-([`LF4_INDEX.md`](LF4_INDEX.md) §5). The failure is in the loader, before any
-import is resolved, so the host-import seam is never exercised.
+`wasm-tools validate --features all` accepted both bytes. That was `GAP-20`
+([`LF4_INDEX.md`](LF4_INDEX.md) §5.1), in the loader, before any import was
+resolved.
 
-The difference between the two artifacts is instructive: 2.5 MB and 18 imports
-(Go) versus 22 KB and 4 imports (TinyGo) makes no difference to the verdict. What
-the validator reacts to is the shape of the canon definitions, not the size of
-the runtime.
+**Second run (`1ec91f8`).** Both artifacts now load and validate, and the two
+arms stop at *different* places, which is the interesting part:
+
+```
+>>> s3-go
+status=error: component runtime: missing host import `wasi:cli/environment@0.2.12`
+>>> s3-tinygo
+status=error: component runtime: missing host import `wasi:io/error@0.2.0`
+```
+
+Go needed a second validator fix beyond `GAP-20`: `componentize-go` wraps a
+`wasip1` core module with the preview1 adapter, whose memory import is
+`(memory 0)` while the instance it is handed is 36 pages, and the engine compared
+the limits for equality — `GAP-22`
+([`LF4_INDEX.md`](LF4_INDEX.md) §5.3). TinyGo's 22 KB component has no adapter and
+went straight from load failure to the host seam.
+
+The difference between the two artifacts is still instructive: 2.5 MB and 18
+imports versus 22 KB and 4 imports makes no difference to the *kind* of blocker.
+What the engine reacts to is the shape of the artifact — an adapted preview1
+module or not — not the size of the runtime.
 
 ## 5. What it would take to run either
 
-1. **`GAP-20`** — class A, one rule in the component validator.
-2. **A WASI 0.2 shim** — class D, the embedder's ([`../SCOPE.md`](../SCOPE.md)
+1. **A WASI 0.2 shim** — class D, the embedder's ([`../SCOPE.md`](../SCOPE.md)
    §3). TinyGo's four imports are a much smaller shim than Go's eighteen: both
    need `wasi:io/streams` (resources and a write path) and `wasi:random`, and
    TinyGo's `wasi:cli/stdout` is the narrowest useful output surface in this set.
@@ -135,7 +152,7 @@ the runtime.
 
 ## 7. References
 
-- [`LF4_INDEX.md`](LF4_INDEX.md) §4–§5 — verdicts and `GAP-20`.
+- [`LF4_INDEX.md`](LF4_INDEX.md) §4–§5 — verdicts and the three findings.
 - [`LF4_EVIDENCE.md`](LF4_EVIDENCE.md) §2–§5 — versions, hashes, transcripts,
   reproduction.
 - [`../ABI.md`](../ABI.md) “Host and Guest: the vocabulary”.

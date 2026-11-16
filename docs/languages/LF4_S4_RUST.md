@@ -1,6 +1,6 @@
 # `S4` — Rust through `wasm32-wasip2` {#lf4_s4}
 
-Status: `LF-4` arm report (revision 1 — 2026-11-16). Arm of
+Status: `LF-4` arm report (revision 2 — 2026-11-16). Arm of
 [`LF4_INDEX.md`](LF4_INDEX.md); toolchain pinned in
 [`LF4_EVIDENCE.md`](LF4_EVIDENCE.md) §2. **Verdict: 🟩 Green** — the component
 loads, instantiates and returns 42.
@@ -95,11 +95,13 @@ uses the native path only.
 - `wasm32-wasip1` + `wit-bindgen` + `component new` — the older manual path, not
   run.
 - `std`'s own WASI use (a Rust component that prints) — that joins the
-  preview2-import family and would be yellow until `GAP-20` is fixed.
+  preview2-import family and would be yellow for the same reason the other four
+  are: the engine loads and instantiates it, and the embedder supplies no
+  `wasi:*` imports ([`LF4_INDEX.md`](LF4_INDEX.md) §5.4).
 
 ## 6. References
 
-- [`LF4_INDEX.md`](LF4_INDEX.md) §4–§5 — verdicts and `GAP-20`.
+- [`LF4_INDEX.md`](LF4_INDEX.md) §4–§5 — verdicts and the three findings.
 - [`LF4_EVIDENCE.md`](LF4_EVIDENCE.md) §2–§5 — versions, hash, transcript.
 - [`../ABI.md`](../ABI.md) “Host and Guest: the vocabulary”.
 - [`LF2_S2_LLVM.md`](LF2_S2_LLVM.md) — Rust as a **core-module** producer.

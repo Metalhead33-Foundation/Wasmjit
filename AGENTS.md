@@ -72,9 +72,11 @@ the one-line check to run.
   folder: fifteen arms built and run, colour verdicts per pinned version, and three engine
   findings `F1`–`F3`. Its component-model counterpart (`LF-4`, 2026-11-16) is the `LF4_*` set
   beside them: seven component arms over C#, C/C++, Go, TinyGo, Rust and MoonBit, four
-  🟩 Green and three 🟨 Yellow, and one engine finding (`GAP-20`). **No language is supported
-  by any of this** — support would be `LF-3`, which has not started. Its entry-gate readiness
-  audit (`LF-0a`) was run first:
+  🟩 Green and four 🟨 Yellow, and three engine findings (`GAP-20`–`GAP-22`) that the study
+  found and that are now closed — the four yellow arms load and instantiate as far as the
+  host-import seam, where an embedder-owned WASI 0.2 shim is the blocker. **No language is
+  supported by any of this** — support would be `LF-3`, which has not started. Its entry-gate
+  readiness audit (`LF-0a`) was run first:
   [`docs/READINESS_AUDIT.md`](docs/READINESS_AUDIT.md) reports `RG1`–`RG6` as `Pinned`
   and, in the same sweep, re-checks `G3` of the milestone (whether a second code
   generator may begin — it may; SLJIT is the recommendation, and the `RA1`/`RA2` proof
