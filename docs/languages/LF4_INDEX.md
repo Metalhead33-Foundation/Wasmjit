@@ -451,7 +451,7 @@ the same call — and it is recorded as `LF4-G1` in §7.
 | `GAP-21` — a lowered alias had no closed identity | **Closed** 2026-11-16, class A, [`../API_ABI_STABILITY.md`](../API_ABI_STABILITY.md) §8.4 |
 | `GAP-22` — memory limits compared for equality | **Closed** 2026-11-16, class A, [`../API_ABI_STABILITY.md`](../API_ABI_STABILITY.md) §8.4 |
 | `GAP-23` — a host-bag function had no type identity | **Closed** 2026-11-16, class A, [`../API_ABI_STABILITY.md`](../API_ABI_STABILITY.md) §8.4 |
-| `GAP-24` — a lowered method on an imported resource could not be flattened | **Closed** 2026-11-16, class A, [`../API_ABI_STABILITY.md`](../API_ABI_STABILITY.md) §8.4; fixtures `component_wasi_resource_import`, `component_host_resource_call` |
+| `GAP-24` — a lowered method on an imported resource could not be flattened | **Closed** 2026-11-16 (`e764825`), class A, [`../API_ABI_STABILITY.md`](../API_ABI_STABILITY.md) §8.4; fixtures `component_wasi_resource_import`, `component_host_resource_call` |
 | `LF4-G1` — the Go arm's embedded adapter has no allocator | **Open**, guest toolchain: `componentize-go` 0.4.2 embeds a preview1→preview2 adapter whose `cabi_import_realloc` refuses every host-placed allocation; rebuild with `GOOS=wasip2` to test |
 | A WASI 0.2 host shim | **Still uncommissioned, still embedder-owned** ([`../SCOPE.md`](../SCOPE.md) §3). The fixture host ([`../TESTING.md`](../TESTING.md)) proves the seam and is not a product; a real shim would need real files, sockets and an async executor |
 
