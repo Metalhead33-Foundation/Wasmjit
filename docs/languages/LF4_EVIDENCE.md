@@ -310,6 +310,12 @@ DBG allocate size=32 align=1 -> 0       trap=1 fn=0x7f549326cfc0 memBytes=235929
 # backtrace: allocate <- storeValueAt <- lowerCallback
 ```
 
+One note on the guest's diagnostic: the text `no allocator configured` is not
+present as a literal in the artifact (nor in the adapter artefacts on disk), so its
+provenance inside the guest was not attributed. It is quoted as observed, and it
+turned out to be a red herring — the fix is established by the reference-host
+result and by the call count, neither of which depends on the message.
+
 Two identical `realloc` requests, one `trap` — the guest state is not the variable,
 the *number of calls* is. `GAP-25`: `lowerCallback` lowered an indirect result to
 flat values (allocating and discarding a copy) before writing the real copy with

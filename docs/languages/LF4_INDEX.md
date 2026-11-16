@@ -518,7 +518,7 @@ and red here, and the defect was a second marshalling pass in
 | `GAP-22` — memory limits compared for equality | **Closed** 2026-11-16, class A, [`../API_ABI_STABILITY.md`](../API_ABI_STABILITY.md) §8.4 |
 | `GAP-23` — a host-bag function had no type identity | **Closed** 2026-11-16, class A, [`../API_ABI_STABILITY.md`](../API_ABI_STABILITY.md) §8.4 |
 | `GAP-24` — a lowered method on an imported resource could not be flattened | **Closed** 2026-11-16 (`e764825`), class A, [`../API_ABI_STABILITY.md`](../API_ABI_STABILITY.md) §8.4; fixtures `component_wasi_resource_import`, `component_host_resource_call` |
-| `GAP-25` — a lowered indirect result is marshalled twice | **Closed** 2026-11-16, class A, [`../API_ABI_STABILITY.md`](../API_ABI_STABILITY.md) §8.4; fixture `component_single_marshal`, which counts the guest's `realloc` calls and fails with `2 == 1` when the second pass comes back |
+| `GAP-25` — a lowered indirect result is marshalled twice | **Closed** 2026-11-16 (`263e868`), class A, [`../API_ABI_STABILITY.md`](../API_ABI_STABILITY.md) §8.4; fixture `component_single_marshal`, which counts the guest's `realloc` calls and fails with `2 == 1` when the second pass comes back |
 | `LF4-G1` — "the Go arm's embedded adapter has no allocator" | **Withdrawn.** The artifact runs unchanged on wasmtime 50; the trap was `GAP-25` in this engine (§4.4). Kept as the record of a wrong hypothesis (§5.5) |
 | A WASI 0.2 host shim | **Still uncommissioned, still embedder-owned** ([`../SCOPE.md`](../SCOPE.md) §3). The fixture host ([`../TESTING.md`](../TESTING.md)) proves the seam and is not a product; a real shim would need real files, sockets and an async executor |
 
