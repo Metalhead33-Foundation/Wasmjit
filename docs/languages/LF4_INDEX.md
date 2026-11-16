@@ -204,6 +204,30 @@ work:
 Neither is a goal conflict and neither is disproportionately expensive, so
 🟥 Red is not the verdict. Neither shim exists, so 🟩 Green is not either.
 
+### 4.3 Third run — with the hermetic fixture host
+
+Same seven artifacts, same SHA-256 (nothing was rebuilt). The runner is
+`build/cm/poc/wasi_probe.cpp` (study artifact, ignored), and the host is
+`Test/WasiComponentHost.hpp`, the fixture host of
+[`../TESTING.md`](../TESTING.md) “The fake WASI a fixture can import”.
+
+| Arm | Result with the fixture host | Verdict |
+|---|---|---|
+| `S2` C + libc | instantiates; `add(20,22)=42` | 🟩 **Green** |
+| `S1` C# | instantiates; `add(20,22)=42` | 🟩 **Green** |
+| `S3` TinyGo | instantiates; `add(20,22)=42` | 🟩 **Green** |
+| `S3` Go | instantiates; then the guest traps inside its own embedded adapter: `unreachable executed at adapter line 447: no allocator configured` | 🟥 **Red (toolchain)** |
+| `S2` C, `S2` C++, `S4` Rust, `S5` MoonBit | unchanged: instantiates; `add(20,22)=42` | 🟩 **Green** |
+
+The three greens are the ones §5.4 predicted: every import resolves, every
+lowered signature matches, every resource handle the host hands out survives a
+method call and a `resource.drop`. The Go red is a *guest* finding — the trace
+(`WASMJIT_STUB_TRACE=1`) shows the host being asked for random bytes and the
+adapter's `cabi_import_realloc` refusing to place them, before any of our data is
+used. Rebuilding the arm with a toolchain path that does not embed that adapter
+(`GOOS=wasip2`) is the way to test it, and that is a study step, not an engine
+one.
+
 ## 5. The engine findings
 
 Three defects, all in `WasmBase/WasmComponentValidation.cpp`, all class **A**
@@ -362,29 +386,36 @@ language needs. The design question a shim must answer first is not “how many
 functions” but whether the host side can satisfy an interface import that
 exports a **resource type** — `wasi:io/error` and `wasi:io/streams` both do.
 
-**That question now has a measured answer, and it is “not yet”.** A hermetic fake
-WASI was written for the test fixtures ([`../TESTING.md`](../TESTING.md) “The fake
-WASI a fixture can import”) to see whether stubbing would turn these four arms
-green. Two things happened:
+**That question now has a measured answer, and the answer is: yes, for three of
+the four.** A hermetic fake WASI was written for the test fixtures
+([`../TESTING.md`](../TESTING.md) “The fake WASI a fixture can import”) to see
+whether stubbing would turn these four arms green. It took three engine fixes and
+one fixture host:
 
-1. A stub *can* satisfy the mechanical part. The `S3` TinyGo artifact, given four
-   host-supplied interface bags (resource types plus the three functions it
-   lowers), gets past every import and past the signature check — and the first
-   of those bags is `wasi:io/error`, a resource type. Doing that needed one engine
-   fix (`GAP-23`, closed): a function from a host bag had no type identity, so
-   `canon lower` could not resolve its signature at all.
-2. It cannot satisfy the *resource-bearing* part. `canon lower` of a method whose
-   type mentions an imported abstract resource is refused, because the handle is
-   still a parser-local type index when the Canonical ABI is asked to flatten it
-   (`GAP-24`, open). The refusal is in the loader, before any host function runs,
-   so no stub — minimal or complete — can get past it.
+1. `GAP-23` (closed): a function taken from a host bag carried no type identity
+   and no structured signature, so `canon lower` of it could not resolve a
+   Canonical ABI signature at all.
+2. `GAP-24` (closed): an imported interface that exports a **resource type** has
+   no closed identity in the importer's own type index space — every abstract
+   resource the validator mints is nominal, but the function type was interned
+   only as an open *scheme*, so nothing could flatten a handle. Closing it means
+   a method on an imported resource now lowers, and a host that exports the type
+   owns its handles: `ComponentInstanceValue::resourceDrops` is the drop the
+   guest's `resource.drop` calls back into.
+3. The fixture host (`Test/WasiComponentHost.hpp`) then implements the interfaces
+   the arms actually import — `wasi:io/{error,poll,streams}`, `wasi:cli/*`,
+   `wasi:clocks/*`, `wasi:filesystem/{types,preopens}`, `wasi:random` — with
+   synthetic, allocation-only behaviour: no file, socket, terminal or clock is
+   touched.
 
-So the honest verdict of the experiment is: **a stub is not enough; `GAP-24` is
-first.** The fixture that pins the boundary is
-`Test/wasm_wat/component_wasi_resource_import.wat` and the case is
-`[wasi-stub][gap-24]`; the resource-free half of the surface is proven green in
-the same tag by a component importing `wasi:clocks/monotonic-clock` and calling
-through the stub.
+With that, `S2` C + libc, `S1` C# and `S3` TinyGo each load, instantiate and
+return `add(20,22)=42`; the third run is §4.3. `S3` Go instantiates too, and then
+**traps inside its own artifact**: the preview1→preview2 adapter that
+`componentize-go` embeds has no allocator configured, so the first host call that
+must place data in guest memory (`random.get-random-bytes`, during Go's runtime
+init) hits `unreachable executed at adapter line 447: no allocator configured`.
+That is a toolchain finding, not an engine or host one — a real host would make
+the same call — and it is recorded as `LF4-G1` in §7.
 
 ## 6. What this set is not
 
@@ -414,26 +445,30 @@ through the stub.
 | Row | State |
 |---|---|
 | `LF-2` — core-module feasibility | `✅` 2026-10-30, [`LF2_INDEX.md`](LF2_INDEX.md) |
-| `LF-4` — component-model feasibility | `✅` 2026-11-16, this set: 7 arms, twice run, 4 🟩 Green and 4 🟨 Yellow |
-| `LF-3` — the support decision | **Open.** Its input is now the WASI 0.2 shim question, not a defect |
+| `LF-4` — component-model feasibility | `✅` 2026-11-16, this set: 7 arms, three runs; with the fixture host every arm but Go instantiates and answers, Go blocked by its own toolchain (`LF4-G1`) |
+| `LF-3` — the support decision | **Open.** Its input is now `LF4-G1` and the shape of a real shim, not an engine defect |
 | `GAP-20` — the 64-bit flat-value over-count | **Closed** 2026-11-16, class A, [`../API_ABI_STABILITY.md`](../API_ABI_STABILITY.md) §8.4 |
 | `GAP-21` — a lowered alias had no closed identity | **Closed** 2026-11-16, class A, [`../API_ABI_STABILITY.md`](../API_ABI_STABILITY.md) §8.4 |
 | `GAP-22` — memory limits compared for equality | **Closed** 2026-11-16, class A, [`../API_ABI_STABILITY.md`](../API_ABI_STABILITY.md) §8.4 |
-| `GAP-24` — a lowered method on an imported resource cannot be flattened | **Open**, class A, [`../API_ABI_STABILITY.md`](../API_ABI_STABILITY.md) §8.1; found by the stub experiment, fixture `component_wasi_resource_import` |
-| A WASI 0.2 host shim | **Uncommissioned**; embedder-owned by [`../SCOPE.md`](../SCOPE.md) §3 — and it cannot start before `GAP-24` |
+| `GAP-23` — a host-bag function had no type identity | **Closed** 2026-11-16, class A, [`../API_ABI_STABILITY.md`](../API_ABI_STABILITY.md) §8.4 |
+| `GAP-24` — a lowered method on an imported resource could not be flattened | **Closed** 2026-11-16, class A, [`../API_ABI_STABILITY.md`](../API_ABI_STABILITY.md) §8.4; fixtures `component_wasi_resource_import`, `component_host_resource_call` |
+| `LF4-G1` — the Go arm's embedded adapter has no allocator | **Open**, guest toolchain: `componentize-go` 0.4.2 embeds a preview1→preview2 adapter whose `cabi_import_realloc` refuses every host-placed allocation; rebuild with `GOOS=wasip2` to test |
+| A WASI 0.2 host shim | **Still uncommissioned, still embedder-owned** ([`../SCOPE.md`](../SCOPE.md) §3). The fixture host ([`../TESTING.md`](../TESTING.md)) proves the seam and is not a product; a real shim would need real files, sockets and an async executor |
 
 **Budget.** One AI session plus the toolchain acquisition recorded in
 [`LF4_EVIDENCE.md`](LF4_EVIDENCE.md) §2, against the `LF-2` cap band
 (`CHARTERS.md` §2.3); the stop rule was not hit.
 
-**What the next study must answer.** The re-run has already done the first half:
-the same seven artifacts now all load and validate, and the four preview2 arms
-fail at *instantiation* on a named missing import (§5.4). What is left is not
-“does C# work” but two questions the embedding surface owns: what is the smallest
-`wasi:io`/`wasi:cli`/`wasi:clocks` shim that lets a `wasi:cli/command` world
-instantiate, and where does a host implementation of a **resource type** live.
-Only after those are answered can an arm's verdict move from 🟨 Yellow to
-🟩 Green on the strength of its own artifact rather than of a shim.
+**What the next study must answer.** Two things, and neither is an engine defect.
+First, `LF4-G1`: the Go arm cannot receive host-placed data because the adapter its
+toolchain embeds has no allocator; the way to test it is to rebuild the arm through
+a path that does not embed that adapter (`GOOS=wasip2`), and until then the arm's
+verdict says nothing about Go or about the engine. Second, the shim itself: the
+fixture host ([`../TESTING.md`](../TESTING.md)) proves the *seam* — imports resolve,
+lowered signatures match, resource handles round-trip and drops call back — but it
+deliberately implements no file, socket or clock. A real shim is an embedder
+decision ([`../SCOPE.md`](../SCOPE.md) §3), and §5.4 now names exactly what it
+would have to implement for these four artifacts.
 
 ## 8. References
 

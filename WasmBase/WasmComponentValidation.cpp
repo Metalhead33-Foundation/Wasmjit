@@ -911,6 +911,91 @@ bool containsAbstractResource(const ValuePtr& value)
 	}
 }
 
+//! True when every abstract resource the value mentions already carries a
+//! nominal Store identity. Such a value still makes its owning type a *scheme*
+//! (the identity is the importer's, not the provider's), but it can also be
+//! interned as a closed record, which is what the Canonical ABI needs.
+bool abstractResourcesAreNominal(const ValuePtr& value)
+{
+	if (!value)
+		return true;
+	switch (value->kind) {
+	case ResolvedValueType::Kind::Own:
+	case ResolvedValueType::Kind::Borrow:
+		return !value->resourceAbstract || !value->resourceTypeId.isNone();
+	case ResolvedValueType::Kind::Record:
+		for (const auto& field : value->fields)
+			if (!abstractResourcesAreNominal(field.second))
+				return false;
+		return true;
+	case ResolvedValueType::Kind::Variant:
+		for (const ResolvedCase& item : value->cases)
+			if (item.type && !abstractResourcesAreNominal(*item.type))
+				return false;
+		return true;
+	case ResolvedValueType::Kind::List:
+	case ResolvedValueType::Kind::FixedList:
+	case ResolvedValueType::Kind::Option:
+		return abstractResourcesAreNominal(value->element);
+	case ResolvedValueType::Kind::Tuple:
+		for (const ValuePtr& element : value->tuple)
+			if (!abstractResourcesAreNominal(element))
+				return false;
+		return true;
+	case ResolvedValueType::Kind::Result:
+		return (!value->ok || abstractResourcesAreNominal(*value->ok))
+				&& (!value->error || abstractResourcesAreNominal(*value->error));
+	case ResolvedValueType::Kind::Stream:
+		return !value->streamElement
+				|| abstractResourcesAreNominal(*value->streamElement);
+	case ResolvedValueType::Kind::Future:
+		return !value->futureElement
+				|| abstractResourcesAreNominal(*value->futureElement);
+	case ResolvedValueType::Kind::Map:
+		return abstractResourcesAreNominal(value->mapKey)
+				&& abstractResourcesAreNominal(value->mapValue);
+	case ResolvedValueType::Kind::Primitive:
+	case ResolvedValueType::Kind::Flags:
+	case ResolvedValueType::Kind::Enum:
+		return true;
+	}
+	return true;
+}
+
+//! Type-level form of abstractResourcesAreNominal().
+bool abstractResourcesAreNominal(const TypePtr& type)
+{
+	if (!type)
+		return true;
+	switch (type->kind) {
+	case ResolvedType::Kind::Value:
+		return abstractResourcesAreNominal(type->value);
+	case ResolvedType::Kind::Func:
+		for (const auto& [name, value] : type->func->params)
+			if (!abstractResourcesAreNominal(value))
+				return false;
+		return !type->func->result
+				|| abstractResourcesAreNominal(*type->func->result);
+	case ResolvedType::Kind::Resource:
+		return type->typeId.isNone() == false || !type->resource->abstract;
+	case ResolvedType::Kind::Instance:
+		for (const ResolvedDecl& declaration : type->instance->exports)
+			if (!abstractResourcesAreNominal(declaration.type))
+				return false;
+		return true;
+	case ResolvedType::Kind::Component:
+		for (const ResolvedDecl& declaration : type->component->imports)
+			if (!abstractResourcesAreNominal(declaration.type))
+				return false;
+		for (const ResolvedDecl& declaration : type->component->exports)
+			if (!abstractResourcesAreNominal(declaration.type))
+				return false;
+		return true;
+	}
+	return true;
+}
+
+
 bool containsAbstractResource(const TypePtr& type)
 {
 	if (!type)
@@ -1819,7 +1904,10 @@ void ComponentValidator::run()
 		component_.localTypeIds.push_back(type
 				? type->typeId : TypeId{TypeId::kNone});
 		SchemeId scheme{SchemeId::kNone};
-		if (type && type->typeId.isNone()) {
+		// A type can now carry both identities: an open type whose abstract
+		// resources are all nominal is also interned as a closed record (GAP-24),
+		// and the scheme stays the alpha-equivalence contract.
+		if (type) {
 			const auto found = schemeIds_.find(type.get());
 			if (found != schemeIds_.end())
 				scheme = found->second;
@@ -2951,8 +3039,17 @@ TypeId ComponentValidator::internResolvedType(const TypePtr& type)
 			&& containsAbstractResource(type)) {
 		if (schemeIds_.find(type.get()) == schemeIds_.end())
 			schemeIds_.emplace(type.get(), internScheme(type));
-		resolvedTypeIds_.emplace(type.get(), TypeId{TypeId::kNone});
-		return TypeId{TypeId::kNone};
+		// The scheme is not the only thing a caller needs. An imported resource
+		// type already has a nominal identity in *this* component's index space
+		// (`instantiateInstanceType` mints one), and the Canonical ABI flattens a
+		// handle to one `i32` whatever that identity is — so the record can be
+		// interned as well, and must be: without it a `canon lower` of a method on
+		// an imported resource has no type to resolve and no host can satisfy a
+		// `wasi:io` import (GAP-24).
+		if (!abstractResourcesAreNominal(type)) {
+			resolvedTypeIds_.emplace(type.get(), TypeId{TypeId::kNone});
+			return TypeId{TypeId::kNone};
+		}
 	}
 
 	// Guard recursive declaration graphs: a cycle gets no closed id rather than

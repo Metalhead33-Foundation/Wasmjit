@@ -256,6 +256,40 @@ present for all nine — and the four WASI-using arms stop inside
 supply. `missing host import` is a runtime message from the host-import seam, not
 a validation error, which is the distinction §5 turns on.
 
+### 4.10 The third run — with the fixture host
+
+Same artifacts, same hashes (§3). The runner is
+`build/cm/poc/wasi_probe.cpp` (a study artifact, ignored), the host is
+`Test/WasiComponentHost.hpp` — the hermetic fake WASI of
+[`../TESTING.md`](../TESTING.md) “The fake WASI a fixture can import” — and the
+engine is the tree of this revision.
+
+```
+>>> s2-c-libc (274,861 B)
+instantiate=ok
+add(20,22)=42
+>>> s1-dotnet (2,227,102 B)
+instantiate=ok
+add(20,22)=42
+>>> s3-tinygo (22,207 B)
+instantiate=ok handles=1
+add(20,22)=42
+>>> s3-go (2,524,500 B)
+status=error: unreachable in function 57 ($cabi_import_realloc)
+stream bytes (67): unreachable executed at adapter line 447: no allocator configured
+>>> s2-c, s2-cpp, s4-rust, s5-moonbit
+instantiate=ok
+add(20,22)=42
+```
+
+The Go transcript is the whole finding: the call that traps is the host placing
+the result of `wasi:random/random.get-random-bytes` in guest memory during the
+component's own initialisation, and the refusal comes from the adapter embedded
+in the artifact (`cabi_import_realloc`), not from the engine or the host.
+`WASMJIT_STUB_TRACE=1` names the sequence — `monotonic-clock#now` twice, then
+`random#get-random-bytes`, then the trap — and the guest's own stderr (captured
+by the fixture) carries the adapter's message.
+
 ## 5. The findings and their reproductions
 
 All three are [`LF4_INDEX.md`](LF4_INDEX.md) §5, all in

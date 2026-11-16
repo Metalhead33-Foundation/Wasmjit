@@ -16,12 +16,11 @@
 
 /*!
   \file WasiStub.hpp
-  \brief A hermetic, deliberately fake WASI for test fixtures.
+  \brief A hermetic, deliberately fake WASI 0.1 surface for test fixtures.
 
   This is **not** a WASI implementation and must never become one. It exists so a
-  fixture that imports `wasi_snapshot_preview1`, or a resource-free `wasi:*`
-  preview2 interface, can be instantiated and called in the suite without a file,
-  socket, wall clock or entropy source being touched:
+  fixture that imports `wasi_snapshot_preview1` can be instantiated and called in
+  the suite without a file, socket, wall clock or entropy source being touched:
 
   - `fd_write` appends to a sink owned by the fixture; nothing reaches a console;
   - `fd_read` reports end of file, and every `path_*` call is refused with
@@ -30,11 +29,9 @@
     pattern; the environment is empty and the argument list is `test`;
   - `proc_exit` records the code and raises an internal trap.
 
-  An interface that exports a **resource type** cannot be stubbed yet: the engine
-  refuses to flatten a `canon lower` of a method on an imported abstract
-  resource (`GAP-23`, `Test/wasm_wat/component_wasi_resource_import.wat`). The
-  component-side helpers therefore cover only the resource-free clock and
-  `random`, and there is deliberately no `wasi:io` stub.
+  The component side of the same fake lives in `WasiComponentHost.hpp`, which
+  covers `wasi:io`, `wasi:cli`, `wasi:clocks`, `wasi:filesystem` and
+  `wasi:random` — including resource types, whose handles a host bag owns.
 
   This header is internal: it is not part of the embedding surface.
 */
@@ -49,6 +46,10 @@ struct State {
 	std::uint32_t randomCalls = 0; //!< `random_get` call count.
 	std::uint32_t clockCalls = 0; //!< `clock_time_get` call count.
 	std::uint32_t refusedCalls = 0; //!< Calls refused with `ENOSYS`.
+	//! Number of `wasi:io/streams` writes the component host captured.
+	std::uint32_t streamWrites = 0;
+	//! Bytes `wasi:io/streams` handed to the component host.
+	std::string streamBytes;
 	bool exitCalled = false; //!< True once `proc_exit` ran.
 	std::int32_t exitCode = 0; //!< The code `proc_exit` received.
 	std::uint64_t clockTicks = 4096; //!< The fixed tick count the clocks report.
@@ -566,67 +567,6 @@ inline WASM::ComponentFunction zeroFunction(
 	function.callValues = [](std::span<const WASM::ComponentValue>,
 			std::span<WASM::ComponentValue>) {};
 	return function;
-}
-
-/**
- * \brief Adds `wasi:clocks/monotonic-clock` to the component imports.
- * \param imports The import map the instance is instantiated with.
- * \param name The import name, including its version.
- */
-inline void addMonotonicClock(WASM::ComponentHostImports& imports,
-		const std::string& name = "wasi:clocks/monotonic-clock@0.2.0")
-{
-	auto bag = std::make_shared<WASM::ComponentInstanceValue>();
-	WASM::ComponentFunction now = zeroFunction({}, { WASM::AbiCoreType::I64 });
-	now.callValues = [](std::span<const WASM::ComponentValue>,
-			std::span<WASM::ComponentValue> results) {
-		++state().clockCalls;
-		if (!results.empty()) {
-			results[0].kind = WASM::ComponentValue::Kind::U64;
-			results[0].u64 = state().clockTicks;
-		}
-	};
-	bag->functions.emplace("now", now);
-	imports.emplace(name, WASM::ComponentImport::instanceImport(bag));
-}
-
-/**
- * \brief Adds `wasi:random/random` to the component imports.
- * \param imports The import map the instance is instantiated with.
- * \param name The import name, including its version.
- */
-inline void addRandom(WASM::ComponentHostImports& imports,
-		const std::string& name = "wasi:random/random@0.2.0")
-{
-	auto bag = std::make_shared<WASM::ComponentInstanceValue>();
-	WASM::ComponentFunction random =
-			zeroFunction({}, { WASM::AbiCoreType::I64 });
-	random.callValues = [](std::span<const WASM::ComponentValue>,
-			std::span<WASM::ComponentValue> results) {
-		++state().randomCalls;
-		if (!results.empty()) {
-			results[0].kind = WASM::ComponentValue::Kind::U64;
-			results[0].u64 = 0x5eed5eed5eed5eedull;
-		}
-	};
-	bag->functions.emplace("get-random-u64", random);
-	imports.emplace(name, WASM::ComponentImport::instanceImport(bag));
-}
-
-/**
- * \brief Builds the fake component-side WASI import set.
- *
- * Resource-free interfaces only: `wasi:clocks/monotonic-clock` and
- * `wasi:random/random`. The file comment explains why `wasi:io` is absent.
- *
- * \return The import map to pass to `Runtime::instantiateComponent`.
- */
-inline WASM::ComponentHostImports componentImports()
-{
-	WASM::ComponentHostImports imports;
-	addMonotonicClock(imports);
-	addRandom(imports);
-	return imports;
 }
 
 } // namespace WasiStub

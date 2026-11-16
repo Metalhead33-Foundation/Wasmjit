@@ -182,7 +182,8 @@ HEADERS +=  \
     TestFixtures.hpp \
     AgentFixture.hpp \
     WastScript.hpp \
-    WasiStub.hpp
+    WasiStub.hpp \
+    WasiComponentHost.hpp
 
 # One translation unit per embedder-tier header. Each file includes exactly one
 # header, so a header that stops compiling standalone fails the build instead of

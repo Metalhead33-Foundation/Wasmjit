@@ -3106,7 +3106,11 @@ TEST_CASE("open component types intern as alpha-equivalent schemes")
 	second->validate();
 	REQUIRE(first->localTypeIds.size() == 1);
 	REQUIRE(first->localSchemeIds.size() == 1);
-	REQUIRE(first->typeId(0).isNone());
+	//! GAP-24: an open type now also carries a closed identity, because every
+	//! abstract resource it mentions has a nominal one. The scheme stays the
+	//! alpha-equivalence contract, and it is still the only thing two independent
+	//! loads share — the closed record names *this* load's resource.
+	REQUIRE_FALSE(first->typeId(0).isNone());
 	REQUIRE_FALSE(first->schemeId(0).isNone());
 	REQUIRE(first->schemeId(0) == second->schemeId(0));
 	REQUIRE(typeStore().scheme(first->schemeId(0)).parameterCount == 1);
@@ -3121,7 +3125,6 @@ TEST_CASE("open component types intern as alpha-equivalent schemes")
 	REQUIRE(twoAgain != nullptr);
 	two->validate();
 	twoAgain->validate();
-	REQUIRE(two->typeId(0).isNone());
 	REQUIRE_FALSE(two->schemeId(0).isNone());
 	REQUIRE(two->schemeId(0) != first->schemeId(0));
 	REQUIRE(two->schemeId(0) == twoAgain->schemeId(0));

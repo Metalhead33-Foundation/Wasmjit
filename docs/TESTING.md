@@ -1447,27 +1447,56 @@ The component feature/API tests are:
 
 ## The fake WASI a fixture can import {#testing_wasi_stub}
 
-`Test/WasiStub.hpp` is a **fake** WASI for fixtures, and the word is
-load-bearing: it is not an implementation, it is not shipped, and it must never
-grow into one ([`SCOPE.md`](SCOPE.md) §3 keeps WASI on the embedder's side). It
-exists so a preview1 module, or a component importing a resource-free `wasi:*`
-interface, can be instantiated and called inside the suite without a file,
-socket, wall clock or entropy source being touched:
+Two headers make up the fake WASI, and the word **fake** is load-bearing: this is
+not an implementation, it is not shipped, and it must never grow into one
+([`SCOPE.md`](SCOPE.md) §3 keeps WASI on the embedder's side). Together they let a
+preview1 module, or a component importing the `wasi:*` interfaces the language
+arms use, be instantiated and called inside the suite without a file, socket,
+terminal, wall clock or entropy source being touched.
+
+### The preview1 surface — `Test/WasiStub.hpp`
 
 | Surface | What the stub answers |
 |---|---|
 | `fd_write` | appends the iovec bytes to `WasiStub::state().stdoutBytes` / `stderrBytes`; nothing is printed |
 | `fd_read` | end of file |
-| `clock_time_get`, `wasi:clocks/monotonic-clock.now` | the fixed `state().clockTicks` |
-| `random_get`, `wasi:random/random.get-random-u64` | a fixed pattern, and a fixed constant |
+| `clock_time_get` | the fixed `state().clockTicks` |
+| `random_get` | the fixed `WasiStub::randomByte` pattern |
 | `args_*`, `environ_*` | one `test` argument, an empty environment |
 | `path_open`, `path_rename`, `path_remove_directory`, `path_unlink_file` | `ENOSYS`, counted in `state().refusedCalls`; the fixture cannot reach the host filesystem |
 | `proc_exit` | records the code and raises an internal trap |
 
-Two entry points: `WasiStub::registerPreview1(resolver)` for the
-`wasi_snapshot_preview1` module and `WasiStub::componentImports()` for the
-component surface; `WasiStub::reset()` clears the state between cases. The three
-`[wasi-stub]` fixtures prove the surface:
+`WasiStub::registerPreview1(resolver)` registers the module and
+`WasiStub::reset()` clears the state between cases.
+
+### The component surface — `Test/WasiComponentHost.hpp`
+
+`WasiComponentHost::Host::create(store)` mints its own resource types in the
+runtime's store and `host->imports()` returns every interface bag the arms
+import, each published under `@0.2.0`, `@0.2.6`, `@0.2.12` and with no version
+suffix, so a fixture does not have to know which toolchain produced the artifact.
+
+| Interface | What the fake host answers |
+|---|---|
+| `wasi:io/error` | a resource type with no functions |
+| `wasi:io/poll` | `poll` reports every pollable ready, in order; `pollable.block` returns at once |
+| `wasi:io/streams` | writes are captured in `state().streamBytes`, `check-write` reports room, `subscribe` hands out a ready pollable |
+| `wasi:cli/environment` | one variable, `WASMJIT_STUB=1`, and one argument, `test` |
+| `wasi:cli/exit` | records the status and returns; it never ends the process |
+| `wasi:cli/stdin`, `stdout`, `stderr` | one synthetic stream handle each |
+| `wasi:cli/terminal-*` | `option::none`: this is not a terminal |
+| `wasi:clocks/monotonic-clock`, `wall-clock` | `state().clockTicks` |
+| `wasi:filesystem/types` | one synthetic directory: `stat` is a zeroed record, `get-type` is `directory`, `metadata-hash` is zero, streams are empty |
+| `wasi:filesystem/preopens` | one preopen, `/`, whose descriptor is a synthetic handle |
+| `wasi:random/random` | `get-random-bytes` in the fixed pattern, `get-random-u64` a fixed constant |
+
+The resource types are **host-owned**: the handles are the fixture's own numbers,
+and each bag registers its drop in `ComponentInstanceValue::resourceDrops`, so a
+guest `resource.drop` calls back into the fixture instead of the guest handle
+table. `WASMJIT_STUB_TRACE=1` prints one line per host call, which is how a trap
+inside a guest is attributed to the call that caused it.
+
+### What the tag proves
 
 - `wasi_preview1_probe.wat` — a `wasip1`-shaped module: the write lands in the
   sink, the clock value and the random bytes are the fixed ones, `path_open` is
@@ -1475,20 +1504,19 @@ component surface; `WasiStub::reset()` clears the state between cases. The three
 - `component_wasi_clock.wat` — a component importing
   `wasi:clocks/monotonic-clock@0.2.0` and returning `now() + 1`: the whole
   host-import seam, with a real call into the host stub;
-- `component_wasi_resource_import.wat` — the boundary. An interface that exports
-  a **resource type** cannot be stubbed yet: the stub supplies the type and the
-  method, and the engine still refuses at `canon lower`, because an imported
-  abstract resource is still a parser-local type index when the Canonical ABI
-  signature is resolved (`GAP-24` in [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md)
-  §8.1). That one gap keeps a `wasi:io` stub — and with it every preview2 arm of
-  [`languages/LF4_INDEX.md`](languages/LF4_INDEX.md) — out of reach.
+- `component_wasi_resource_import.wat` and `component_host_resource_call.wat` —
+  an imported interface that exports a **resource type**: the host owns the
+  handles, a method sees a borrowed one, and `resource.drop` reaches the host.
+  These two used to pin `GAP-24`; that gap is closed, and they now pin its fix;
+- the stub's own bodies are called directly to assert the `wasi:io/streams` and
+  `wasi:filesystem` shapes (`[wasi-stub]`, `Test/WasiStubTests.cpp`).
 
 What it is **not**: a WASI 0.1 guest runtime (no filesystem, sockets or polling),
-a WASI 0.2 implementation (no `wasi:io` resources, streams or pollables, and no
-`wasi:cli` world), a preview-3 (async) surface, or a harness for running
-untrusted modules. A fixture that
-needs behaviour beyond the table must not widen the stub silently: add the entry
-point, refuse the rest, and say so here.
+a WASI 0.2 implementation (no real files, no sockets, no async streams), a
+preview-3 surface, or a harness for running untrusted modules. A fixture that
+needs behaviour beyond these tables must not widen the stub silently: add the
+entry point, refuse the rest, and say so here.
+
 
 ## References
 

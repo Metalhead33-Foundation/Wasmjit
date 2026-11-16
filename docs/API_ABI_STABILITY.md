@@ -2,11 +2,11 @@
 
 *The Milestone, and How Close We Are*
 
-Status: **milestone met 2026-10-29** (revision 15 — 2026-11-16: a hermetic WASI
-stub for the test fixtures, `GAP-23` closed and `GAP-24` recorded: a lowered
-function taken from a host-supplied instance bag has a type identity now, while a
-`canon lower` whose type mentions an imported abstract resource still cannot be
-flattened — which is the one rule that keeps a `wasi:io` stub out of reach.
+Status: **milestone met 2026-10-29** (revision 16 — 2026-11-16: `GAP-24` closed,
+so a `canon lower` of a method on an imported resource now flattens; host-owned
+resource types are a documented embedding contract (`ComponentInstanceValue::resourceDrops`),
+and the fixture host built on it runs three of the four preview2 `LF-4` arms.
+Revision 15 — 2026-11-16: a hermetic WASI stub for the test fixtures and `GAP-23` closed.
 Revision 14 — 2026-11-16: the three
 component-validator defects the `LF-4` component study found are **closed**;
 `GAP-20` (a 64-bit scalar counted as two flat slots, so a bare `canon lift` of a
@@ -564,7 +564,6 @@ otherwise.
 
 | ID | Kind | What it is | Where it bites | Owner / detail |
 |---|---|---|---|---|
-| `GAP-24` | defect | A `canon lift`/`canon lower` of a function whose type mentions an **imported abstract resource** cannot be flattened: `flatten_type` maps a handle to one `i32`, but the imported resource is still a parser-local `TypeIndex` value in the interned function type, so `appendAbiFlat` refuses it and the loader reports “canon lower type is outside the flat ABI subset”. A host cannot work around it — the refusal happens before any host function runs. | every component whose imports export a **resource type**, i.e. all of `wasi:io` (`error`, `poll`, `streams`), `wasi:filesystem` and `wasi:sockets`; this is what stops the four preview2 `LF-4` arms from turning green even with a stub | [`TESTING.md`](TESTING.md) “The fake WASI a fixture can import”, [`languages/LF4_INDEX.md`](languages/LF4_INDEX.md) §5.4; fixture `Test/wasm_wat/component_wasi_resource_import.wat`, test `[wasi-stub][gap-24]` |
 | `GAP-6` | limitation | Only **x86-64 Linux / SysV AMD64** is exercised. MS x64, AAPCS64, Windows ARM64, RISC-V and MIPS are specified but *provisional*; big-endian and ILP32 are unsupported by decision. **Excluded from the §10.1 closure plan by decision** — it needs a runner, not a patch. | all | [`ABI.md`](ABI.md) “The C ABI Contract” |
 
 The `LF-4` component-model rows (`GAP-20`–`GAP-22`) are closed in §8.4.
@@ -602,6 +601,7 @@ The root causes and the failing fixtures are in
 
 | ID | Defect | Closed | Evidence |
 |---|---|---|---|
+| `GAP-24` | A `canon lift`/`canon lower` of a function whose type mentions an **imported abstract resource** could not be flattened: the imported resource was still a parser-local `TypeIndex` value in the function type, so `appendAbiFlat` refused it and the loader reported “canon lower type is outside the flat ABI subset”. A host could not work around it — the refusal happened before any host function ran. | **closed 2026-11-16**: an open type whose abstract resources all have a nominal identity is now interned as a closed record as well (the scheme stays the alpha-equivalence contract), and a host bag that exports a resource type owns its handles: `ComponentInstanceValue::resourceDrops` is the drop `resource.drop` calls back into, and `hostOwnsResource` keeps such handles out of the guest table | `[wasi-stub]`: fixtures `component_wasi_resource_import` (a method lowers and instantiates) and `component_host_resource_call` (construct, borrow, drop); the three preview2 `LF-4` arms run on the fixture host ([`languages/LF4_INDEX.md`](languages/LF4_INDEX.md) §4.3) |
 | `GAP-23` | A component function taken from a **host-supplied instance bag** carried no type identity, so a `canon lower` of it could not resolve its Canonical ABI signature and the loader reported “canon lower type is outside the flat ABI subset”; the same copy also lacked the structured parameter/result types and the indirection flags the lift/lower marshalling needs | **closed 2026-11-16** (`77d4720`) | `processImport` fills `typeId`, `paramTypes`/`resultTypes` from the imported instance type's declaration, and the lower site takes `indirectParams`/`indirectResults` from the resolved signature. Fixture `component_wasi_clock.wat` imports `wasi:clocks/monotonic-clock@0.2.0`, calls `now()` through the stub and returns it (`Test/WasiStubTests.cpp`) |
 | `GAP-20` | The component validator counted a 64-bit scalar (`u64`/`s64`/`f64`) as **two** flat slots, so `MAX_FLAT_RESULTS = 1` was over-counted and a valid bare `canon lift` of `func () -> u64` was rejected with “canonical option `memory` is required” — every preview2 component imports `wasi:clocks`, whose `now: func () -> instant` trips it | **closed 2026-11-16** (`1ec91f8`) | `flatSlots` became `flatValueCount` and counts core values, not 32-bit halves ([`languages/LF4_INDEX.md`](languages/LF4_INDEX.md) §5.1). Fixtures `component_canon_u64_result` / `_params` / `_spill` (bare `-> u64`, nine `u64` parameters, and the two-result spill that still demands `memory`) plus the `u64probe` arm, which now returns 42 through `callValues` |
 | `GAP-21` | A `canon lower` of a function aliased out of an **imported instance** was rejected as having “no closed identity”: the function's resolved type node never entered the component's local type index space, so no pass interned it | **closed 2026-11-16** (`1ec91f8`) | `canonicalTypeOf` interns the node on demand once the open-type test has passed. Fixture `component_canon_lower_alias`; the `LF-4` arms (`S2` C + libc, `S1` C#) reaches the host-import seam instead of failing validation |

@@ -860,6 +860,11 @@ layers:
   `CanonicalAbiOptions`, indirect-parameter/result flags.
 - `ComponentValueType` / `ComponentValue` for structured component values and
   resource/stream/future kinds.
+- `ComponentInstanceValue::resourceDrops`: a bag that exports a **resource type**
+  declares the drop a released handle of that type runs, and the type's handles
+  then stay in the host's own table (`resource.drop` calls back; the guest table
+  is not consulted). A type absent from that map keeps guest-side handle
+  semantics, which is also what a nested component's export snapshot gets.
 - `ComponentImport` for host-supplied functions, values, instances, types,
   loaded components, host-defined components and core modules. A component-sort
   import can use either a `LoadedComponent` artifact or a
