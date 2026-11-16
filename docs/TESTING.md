@@ -1485,7 +1485,8 @@ component surface; `WasiStub::reset()` clears the state between cases. The three
 
 What it is **not**: a WASI 0.1 guest runtime (no filesystem, sockets or polling),
 a WASI 0.2 implementation (no `wasi:io` resources, streams or pollables, and no
-`wasi:cli` world), or a harness for running untrusted modules. A fixture that
+`wasi:cli` world), a preview-3 (async) surface, or a harness for running
+untrusted modules. A fixture that
 needs behaviour beyond the table must not widen the stub silently: add the entry
 point, refuse the rest, and say so here.
 
