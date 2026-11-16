@@ -360,11 +360,31 @@ The order is the component's own declaration order, so the table is a statement
 about which imports the loader resolves first, not about how much of WASI each
 language needs. The design question a shim must answer first is not “how many
 functions” but whether the host side can satisfy an interface import that
-exports a **resource type** — `wasi:io/error` and `wasi:io/streams` both do, and
-`ComponentInstanceValue` carries functions, values and types, so where a host
-resource implementation lives is the first thing to settle. That question
-belongs to the embedding surface, not to the language studies, and it is
-recorded here so it is not mistaken for a validation bug.
+exports a **resource type** — `wasi:io/error` and `wasi:io/streams` both do.
+
+**That question now has a measured answer, and it is “not yet”.** A hermetic fake
+WASI was written for the test fixtures ([`../TESTING.md`](../TESTING.md) “The fake
+WASI a fixture can import”) to see whether stubbing would turn these four arms
+green. Two things happened:
+
+1. A stub *can* satisfy the mechanical part. The `S3` TinyGo artifact, given four
+   host-supplied interface bags (resource types plus the three functions it
+   lowers), gets past every import and past the signature check — and the first
+   of those bags is `wasi:io/error`, a resource type. Doing that needed one engine
+   fix (`GAP-23`, closed): a function from a host bag had no type identity, so
+   `canon lower` could not resolve its signature at all.
+2. It cannot satisfy the *resource-bearing* part. `canon lower` of a method whose
+   type mentions an imported abstract resource is refused, because the handle is
+   still a parser-local type index when the Canonical ABI is asked to flatten it
+   (`GAP-24`, open). The refusal is in the loader, before any host function runs,
+   so no stub — minimal or complete — can get past it.
+
+So the honest verdict of the experiment is: **a stub is not enough; `GAP-24` is
+first.** The fixture that pins the boundary is
+`Test/wasm_wat/component_wasi_resource_import.wat` and the case is
+`[wasi-stub][gap-24]`; the resource-free half of the surface is proven green in
+the same tag by a component importing `wasi:clocks/monotonic-clock` and calling
+through the stub.
 
 ## 6. What this set is not
 
@@ -399,7 +419,8 @@ recorded here so it is not mistaken for a validation bug.
 | `GAP-20` — the 64-bit flat-value over-count | **Closed** 2026-11-16, class A, [`../API_ABI_STABILITY.md`](../API_ABI_STABILITY.md) §8.4 |
 | `GAP-21` — a lowered alias had no closed identity | **Closed** 2026-11-16, class A, [`../API_ABI_STABILITY.md`](../API_ABI_STABILITY.md) §8.4 |
 | `GAP-22` — memory limits compared for equality | **Closed** 2026-11-16, class A, [`../API_ABI_STABILITY.md`](../API_ABI_STABILITY.md) §8.4 |
-| A WASI 0.2 host shim | **Uncommissioned**; embedder-owned by [`../SCOPE.md`](../SCOPE.md) §3 |
+| `GAP-24` — a lowered method on an imported resource cannot be flattened | **Open**, class A, [`../API_ABI_STABILITY.md`](../API_ABI_STABILITY.md) §8.1; found by the stub experiment, fixture `component_wasi_resource_import` |
+| A WASI 0.2 host shim | **Uncommissioned**; embedder-owned by [`../SCOPE.md`](../SCOPE.md) §3 — and it cannot start before `GAP-24` |
 
 **Budget.** One AI session plus the toolchain acquisition recorded in
 [`LF4_EVIDENCE.md`](LF4_EVIDENCE.md) §2, against the `LF-2` cap band

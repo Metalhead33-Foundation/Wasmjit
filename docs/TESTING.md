@@ -1441,6 +1441,53 @@ The component feature/API tests are:
   ignored, never a rejection.
 - `[component-subtyping]` — the upstream corpus's subtyping verdicts (the same
   516-case run as `[component-corpus]`).
+- `[wasi-stub]` — the fake WASI (`Test/WasiStub.hpp`): a preview1 module runs
+  hermetically, a resource-free component import is satisfied end to end, and the
+  resource-bearing import is pinned as `GAP-24`.
+
+## The fake WASI a fixture can import {#testing_wasi_stub}
+
+`Test/WasiStub.hpp` is a **fake** WASI for fixtures, and the word is
+load-bearing: it is not an implementation, it is not shipped, and it must never
+grow into one ([`SCOPE.md`](SCOPE.md) §3 keeps WASI on the embedder's side). It
+exists so a preview1 module, or a component importing a resource-free `wasi:*`
+interface, can be instantiated and called inside the suite without a file,
+socket, wall clock or entropy source being touched:
+
+| Surface | What the stub answers |
+|---|---|
+| `fd_write` | appends the iovec bytes to `WasiStub::state().stdoutBytes` / `stderrBytes`; nothing is printed |
+| `fd_read` | end of file |
+| `clock_time_get`, `wasi:clocks/monotonic-clock.now` | the fixed `state().clockTicks` |
+| `random_get`, `wasi:random/random.get-random-u64` | a fixed pattern, and a fixed constant |
+| `args_*`, `environ_*` | one `test` argument, an empty environment |
+| `path_open`, `path_rename`, `path_remove_directory`, `path_unlink_file` | `ENOSYS`, counted in `state().refusedCalls`; the fixture cannot reach the host filesystem |
+| `proc_exit` | records the code and raises an internal trap |
+
+Two entry points: `WasiStub::registerPreview1(resolver)` for the
+`wasi_snapshot_preview1` module and `WasiStub::componentImports()` for the
+component surface; `WasiStub::reset()` clears the state between cases. The three
+`[wasi-stub]` fixtures prove the surface:
+
+- `wasi_preview1_probe.wat` — a `wasip1`-shaped module: the write lands in the
+  sink, the clock value and the random bytes are the fixed ones, `path_open` is
+  refused, and `proc_exit` traps with the code recorded;
+- `component_wasi_clock.wat` — a component importing
+  `wasi:clocks/monotonic-clock@0.2.0` and returning `now() + 1`: the whole
+  host-import seam, with a real call into the host stub;
+- `component_wasi_resource_import.wat` — the boundary. An interface that exports
+  a **resource type** cannot be stubbed yet: the stub supplies the type and the
+  method, and the engine still refuses at `canon lower`, because an imported
+  abstract resource is still a parser-local type index when the Canonical ABI
+  signature is resolved (`GAP-24` in [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md)
+  §8.1). That one gap keeps a `wasi:io` stub — and with it every preview2 arm of
+  [`languages/LF4_INDEX.md`](languages/LF4_INDEX.md) — out of reach.
+
+What it is **not**: a WASI 0.1 guest runtime (no filesystem, sockets or polling),
+a WASI 0.2 implementation (no `wasi:io` resources, streams or pollables, and no
+`wasi:cli` world), or a harness for running untrusted modules. A fixture that
+needs behaviour beyond the table must not widen the stub silently: add the entry
+point, refuse the rest, and say so here.
 
 ## References
 

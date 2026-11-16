@@ -3752,6 +3752,10 @@ void ComponentRuntime::processCanon(const WASM::Canon& canon)
 					"component runtime: canon lower type is outside the flat ABI subset");
 		data->coreParams = abi->coreParams;
 		data->coreResults = abi->coreResults;
+		// The marshalling path reads the indirection flags from the function
+		// copy; a host bag does not know them, so take the resolved ones.
+		data->function.indirectParams = abi->indirectParams;
+		data->function.indirectResults = abi->indirectResults;
 		data->argumentTypes.push_back(&ffi_type_pointer);
 		for (WASM::AbiCoreType type : abi->coreParams)
 			data->argumentTypes.push_back(ffiType(type));
@@ -4188,14 +4192,44 @@ void ComponentRuntime::processImport(const WASM::ImportDecl& importDecl)
 					store.componentType(instanceType);
 			for (const WASM::ComponentDeclRecord& declaration :
 					view.declarations()) {
-				if (declaration.sort
-							!= static_cast<uint16_t>(WASM::ComponentSort::Type)
-						|| declaration.type.isNone())
+				if (declaration.type.isNone())
 					continue;
-				const auto exported = import->instance->types.find(
+				if (declaration.sort
+						== static_cast<uint16_t>(WASM::ComponentSort::Type)) {
+					const auto exported = import->instance->types.find(
+							std::string(store.string(declaration.name)));
+					if (exported != import->instance->types.end())
+						recordTypeAlias(declaration.type, exported->second);
+					continue;
+				}
+				if (declaration.sort
+						!= static_cast<uint16_t>(WASM::ComponentSort::Func))
+					continue;
+				// GAP-23: a host function carries no type identity of its own,
+				// and a later `canon lower` of it needs one to resolve the
+				// Canonical ABI signature. Take it from the imported instance
+				// type's declaration; the handle owns a copy of the bag, so this
+				// fills the runtime's copy and never the embedder's.
+				auto& functions = componentInstances_.back()->exports.functions;
+				const auto entry = functions.find(
 						std::string(store.string(declaration.name)));
-				if (exported != import->instance->types.end())
-					recordTypeAlias(declaration.type, exported->second);
+				if (entry == functions.end() || !entry->second.typeId.isNone())
+					continue;
+				entry->second.typeId = declaration.type;
+				// The structured parameter and result types drive the
+				// lift/lower marshalling; a host bag only carries the flat
+				// signature, so take the structured ones from the declaration.
+				const WASM::ComponentTypeView funcView =
+						store.componentType(declaration.type);
+				if (funcView.kind() == WASM::TypeKind::ComponentFunc) {
+					entry->second.paramTypes.clear();
+					entry->second.resultTypes.clear();
+					for (const WASM::ComponentFuncParam& param : funcView.params())
+						entry->second.paramTypes.push_back(param.type);
+					for (const WASM::ComponentValueType& result :
+							funcView.results())
+						entry->second.resultTypes.push_back(result);
+				}
 			}
 		}
 		for (const auto& [name, module] : import->instance->coreModules)

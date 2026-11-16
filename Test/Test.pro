@@ -172,7 +172,8 @@ SOURCES += main.cpp \
     ../Tools/Bindings/frontend/cpp/CppFrontend.cpp \
     ../Tools/Bindings/frontend/wit/WitFrontend.cpp \
     BindingSchemaTests.cpp \
-    CallCacheTests.cpp
+    CallCacheTests.cpp \
+    WasiStubTests.cpp
 HEADERS +=  \
     helper.hpp \
     Diagnose.hpp \
@@ -180,7 +181,8 @@ HEADERS +=  \
     TestStore.hpp \
     TestFixtures.hpp \
     AgentFixture.hpp \
-    WastScript.hpp
+    WastScript.hpp \
+    WasiStub.hpp
 
 # One translation unit per embedder-tier header. Each file includes exactly one
 # header, so a header that stops compiling standalone fails the build instead of
