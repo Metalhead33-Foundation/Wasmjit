@@ -1508,6 +1508,10 @@ inside a guest is attributed to the call that caused it.
   an imported interface that exports a **resource type**: the host owns the
   handles, a method sees a borrowed one, and `resource.drop` reaches the host.
   These two used to pin `GAP-24`; that gap is closed, and they now pin its fix;
+- `component_single_marshal.wat` — a lowered function whose `list<u8>` result
+  does not fit the flat limit, with an allocator that **counts its calls**: the
+  host must marshal that result into guest memory exactly once. It is the
+  regression test for `GAP-25`;
 - the stub's own bodies are called directly to assert the `wasi:io/streams` and
   `wasi:filesystem` shapes (`[wasi-stub]`, `Test/WasiStubTests.cpp`).
 

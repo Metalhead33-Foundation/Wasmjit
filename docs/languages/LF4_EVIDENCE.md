@@ -282,13 +282,57 @@ instantiate=ok
 add(20,22)=42
 ```
 
-The Go transcript is the whole finding: the call that traps is the host placing
-the result of `wasi:random/random.get-random-bytes` in guest memory during the
-component's own initialisation, and the refusal comes from the adapter embedded
-in the artifact (`cabi_import_realloc`), not from the engine or the host.
-`WASMJIT_STUB_TRACE=1` names the sequence — `monotonic-clock#now` twice, then
-`random#get-random-bytes`, then the trap — and the guest's own stderr (captured
-by the fixture) carries the adapter's message.
+The Go transcript above was first read as a toolchain finding. It is not: see
+§4.11, which is the fourth run and the one this set reports.
+
+### 4.11 The fourth run — after `GAP-25`
+
+The Go arm was attacked from three directions after §4.10:
+
+```
+# 1. the unmodified artifact, on a reference host
+$ ~/.wasmtime/bin/wasmtime --version
+wasmtime 50.0.2 (f9a93b049 2026-11-16)
+$ wasmtime run --invoke 'add(20, 22)' build/cm/arms/go/adder/main.wasm
+42
+
+# 2. a rebuild from the arm's own sources (no compiler patch): componentize-go's
+#    own patched Go, installed by `componentize-go install-go`
+$ componentize-go install-go
+Downloading patched Go from …/go1.25.5-wasi-on-idle-v2/go-linux-amd64-bootstrap.tbz.
+$ componentize-go -d ./wit -w adder build --go …/v2/bin/go -o /tmp/lf4g1/rebuilt_default.wasm
+$ wasmtime run --invoke 'add(20, 22)' /tmp/lf4g1/rebuilt_default.wasm
+42                       # and it traps identically under this engine
+
+# 3. the engine's own instrumentation (temporary, removed before committing)
+DBG allocate size=32 align=1 -> 1288808 trap=0 fn=0x7f549326cfc0 memBytes=2359296
+DBG allocate size=32 align=1 -> 0       trap=1 fn=0x7f549326cfc0 memBytes=2359296
+# backtrace: allocate <- storeValueAt <- lowerCallback
+```
+
+Two identical `realloc` requests, one `trap` — the guest state is not the variable,
+the *number of calls* is. `GAP-25`: `lowerCallback` lowered an indirect result to
+flat values (allocating and discarding a copy) before writing the real copy with
+`storeValueAt`. Go's preview1 adapter treats the second, re-entrant
+`cabi_import_realloc` as fatal; wasmtime makes one call.
+
+After the fix:
+
+```
+>>> s2-c-libc / s1-dotnet / s3-tinygo / s3-go
+instantiate=ok
+add(20,22)=42
+```
+
+And the regression fixture counts what the arm could not show:
+
+```
+$ ./WasmJit '[wasi-stub]'
+All tests passed (69 assertions in 7 test cases)
+```
+
+`component_single_marshal.wat` returns `(list length, realloc calls)`; with the
+double marshalling put back the case fails with `2 == 1`.
 
 ## 5. The findings and their reproductions
 

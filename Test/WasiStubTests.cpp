@@ -202,6 +202,51 @@ TEST_CASE("a host bag owns the handles of the resource types it exports",
 	REQUIRE(dropped == 1);
 }
 
+TEST_CASE("a lowered list result is marshalled into guest memory once",
+		"[wasi-stub]")
+{
+	// An indirect result is written into the buffer the guest passes. Marshalling
+	// it to flat values *as well* allocates a second, unused copy and calls the
+	// guest's allocator twice — which is what stopped the Go arm of
+	// `docs/languages/LF4_INDEX.md` from instantiating. The fixture counts the
+	// calls: `run` returns (list length, realloc calls).
+	auto loaded = loadArtifact("component_single_marshal");
+	REQUIRE(loaded != nullptr);
+	auto* component = loaded->asComponent();
+	REQUIRE(component != nullptr);
+
+	auto bag = std::make_shared<WASM::ComponentInstanceValue>();
+	WASM::ComponentFunction bytes =
+			WasiStub::zeroFunction({}, { WASM::AbiCoreType::I32,
+					WASM::AbiCoreType::I32 });
+	bytes.callValues = [](std::span<const WASM::ComponentValue>,
+			std::span<WASM::ComponentValue> results) {
+		results[0].kind = WASM::ComponentValue::Kind::List;
+		for (std::uint32_t i = 0; i < 4; ++i) {
+			WASM::ComponentValue byte;
+			byte.kind = WASM::ComponentValue::Kind::U8;
+			byte.u64 = i;
+			results[0].elements.push_back(byte);
+		}
+	};
+	bag->functions.emplace("bytes", bytes);
+
+	WASM::ComponentHostImports imports;
+	imports.emplace("dep", WASM::ComponentImport::instanceImport(bag));
+
+	auto backend = TestBackend::create();
+	WASM::ComponentRuntime runtime(backend->instantiator(), *component,
+			std::move(imports));
+	auto run = runtime.exportedFunction("run");
+	REQUIRE(run.has_value());
+	WASM::ComponentValue result;
+	run->callValues({}, { &result, 1 });
+	REQUIRE(result.kind == WASM::ComponentValue::Kind::Tuple);
+	REQUIRE(result.elements.size() == 2);
+	REQUIRE(result.elements[0].u64 == 4); // the length the guest read back
+	REQUIRE(result.elements[1].u64 == 1); // guest realloc calls
+}
+
 TEST_CASE("the fake wasi host captures stream writes", "[wasi-stub]")
 {
 	// The bodies are called directly: a fixture's assertion about what a guest

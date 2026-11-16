@@ -10,6 +10,14 @@ the host ABI; this set asks whether the toolchain's **component** — a
 WIT-described, Canonical-ABI-lifted artifact — can be loaded, instantiated and
 called through `WASM::Runtime`'s component surface.
 
+**Revision 3** adds the fourth run: `GAP-24` closed, a hermetic fixture host
+written, and — because `S3` Go still trapped inside its own adapter — the
+cross-check that settled it. The Go artifact runs unchanged on wasmtime 50, so the
+trap was **ours**: a lowered indirect result was marshalled into guest memory
+*twice*, which calls the guest's allocator twice (`GAP-25`, closed). With that
+fixed all nine arms answer, and the `LF4-G1` toolchain hypothesis is withdrawn
+(§4.4, §5.5).
+
 **Revision 2** adds the re-run at commit `1ec91f8`, after the three
 component-validator defects the first run found (`GAP-20`) and then masked
 (`GAP-21`, `GAP-22`) were closed. The short answer to the question it was made
@@ -46,9 +54,9 @@ engine to run its output.
 
 | Report | Arms | Verdicts |
 |---|---|---|
-| \subpage lf4_s1 | `S1` — **C#** through `componentize-dotnet` (NativeAOT-LLVM) | 1 🟨 Yellow |
-| \subpage lf4_s2 | `S2` — **C** and **C++** through wasi-sdk 34 and `wit-bindgen c`/`cpp` | 2 🟩 Green, 1 🟨 Yellow (the libc/WASI variant) |
-| \subpage lf4_s3 | `S3` — **Go** through `componentize-go` and **TinyGo** `-target=wasip2` | 2 🟨 Yellow |
+| \subpage lf4_s1 | `S1` — **C#** through `componentize-dotnet` (NativeAOT-LLVM) | 1 🟩 Green |
+| \subpage lf4_s2 | `S2` — **C** and **C++** through wasi-sdk 34 and `wit-bindgen c`/`cpp` | 3 🟩 Green |
+| \subpage lf4_s3 | `S3` — **Go** through `componentize-go` and **TinyGo** `-target=wasip2` | 2 🟩 Green |
 | \subpage lf4_s4 | `S4` — **Rust** through `wasm32-wasip2` and `wit-bindgen` | 1 🟩 Green |
 | \subpage lf4_s5 | `S5` — **MoonBit** through `wit-bindgen moonbit` and `wasm-tools` | 1 🟩 Green |
 | \subpage lf4_evidence | Toolchains, artifacts, hashes, commands, transcripts, the finding's reproduction, and what was not verified | — |
@@ -216,17 +224,51 @@ Same seven artifacts, same SHA-256 (nothing was rebuilt). The runner is
 | `S2` C + libc | instantiates; `add(20,22)=42` | 🟩 **Green** |
 | `S1` C# | instantiates; `add(20,22)=42` | 🟩 **Green** |
 | `S3` TinyGo | instantiates; `add(20,22)=42` | 🟩 **Green** |
-| `S3` Go | instantiates; then the guest traps inside its own embedded adapter: `unreachable executed at adapter line 447: no allocator configured` | 🟥 **Red (toolchain)** |
+| `S3` Go | instantiates; then the guest traps inside its own embedded adapter (`unreachable executed at adapter line 447: no allocator configured`). **Superseded by §4.4: the cause was `GAP-25` in this engine, not the artifact** | 🟥 **Red (engine)** |
 | `S2` C, `S2` C++, `S4` Rust, `S5` MoonBit | unchanged: instantiates; `add(20,22)=42` | 🟩 **Green** |
 
 The three greens are the ones §5.4 predicted: every import resolves, every
 lowered signature matches, every resource handle the host hands out survives a
-method call and a `resource.drop`. The Go red is a *guest* finding — the trace
-(`WASMJIT_STUB_TRACE=1`) shows the host being asked for random bytes and the
-adapter's `cabi_import_realloc` refusing to place them, before any of our data is
-used. Rebuilding the arm with a toolchain path that does not embed that adapter
-(`GOOS=wasip2`) is the way to test it, and that is a study step, not an engine
-one.
+method call and a `resource.drop`. The Go red was read as a guest finding at the
+time — the trace (`WASMJIT_STUB_TRACE=1`) shows the host being asked for random
+bytes and the adapter's `cabi_import_realloc` refusing to place them — and §4.4
+shows that reading was wrong.
+
+### 4.4 Fourth run — the Go red was ours
+
+Three independent checks, in the order they were run:
+
+1. **The artifact on a reference host.** `wasmtime run --invoke 'add(20, 22)'` on
+   the *unmodified* arm returns `42` (wasmtime 50.0.2). The artifact is fine.
+2. **A rebuild from the arm's own sources.** `componentize-go build` with its
+   patched Go (`install-go`, a go1.25.5-based toolchain) produces a byte-different
+   component that traps identically under this engine — and also returns `42` on
+   wasmtime.
+3. **The engine's own instrumentation.** Every `allocate()` call was logged with
+   its `size`, `align` and the guest callable: the first `cabi_realloc` call
+   during Go's `_initialize` succeeded, and the *second* — identical, `size=32
+   align=1` — trapped. A backtrace put it in `storeValueAt` under `lowerCallback`.
+
+The cause is `GAP-25`: for an **indirect result** the canonical-ABI closure
+lowered the values to flat form *and* stored them into the guest's result buffer.
+The flat copy is unused, but lowering it allocates guest memory, so every list or
+string returned by a lowered import cost **two** `cabi_realloc` calls. Go's
+preview1 adapter treats a re-entrant `cabi_import_realloc` as fatal and traps;
+wasmtime makes one call, so it never sees it.
+
+With `GAP-25` closed, the fourth run:
+
+| Arm | Result | Verdict |
+|---|---|---|
+| `S2` C + libc | instantiates; `add(20,22)=42` | 🟩 **Green** |
+| `S1` C# | instantiates; `add(20,22)=42` | 🟩 **Green** |
+| `S3` Go | instantiates; `add(20,22)=42` | 🟩 **Green** |
+| `S3` TinyGo | instantiates; `add(20,22)=42` | 🟩 **Green** |
+| `S2` C, `S2` C++, `S4` Rust, `S5` MoonBit | unchanged | 🟩 **Green** |
+
+**So `LF4-G1` is withdrawn.** It was filed as a guest-toolchain finding on the
+strength of the adapter's own diagnostic; the reference-host check refutes it. The
+lesson is recorded in §5.5 rather than deleted.
 
 ## 5. The engine findings
 
@@ -410,12 +452,34 @@ one fixture host:
 
 With that, `S2` C + libc, `S1` C# and `S3` TinyGo each load, instantiate and
 return `add(20,22)=42`; the third run is §4.3. `S3` Go instantiates too, and then
-**traps inside its own artifact**: the preview1→preview2 adapter that
-`componentize-go` embeds has no allocator configured, so the first host call that
-must place data in guest memory (`random.get-random-bytes`, during Go's runtime
-init) hits `unreachable executed at adapter line 447: no allocator configured`.
-That is a toolchain finding, not an engine or host one — a real host would make
-the same call — and it is recorded as `LF4-G1` in §7.
+**trapped** inside the preview1→preview2 adapter that `componentize-go` embeds, on
+the first host call that must place data in guest memory
+(`random.get-random-bytes`, during Go's runtime init). The adapter's diagnostic
+reads like a toolchain problem, and it was filed as `LF4-G1` — wrongly: §4.4 shows
+the same artifact running on wasmtime and the trap being `GAP-25`, a second
+marshalling pass of our own.
+
+### 5.5 The lesson: run the artifact on a reference host first
+
+`LF4-G1` was filed from inside this engine. The evidence for it was the guest's
+own diagnostic plus a public comment in the Go-side adapter glue
+(`go.bytecodealliance.org/pkg/wit/runtime`) warning that `cabi_realloc` may run
+before the Go runtime is initialised. Both facts are true and neither is
+sufficient: an artifact that prints "no allocator configured" under *this* host may
+be perfectly good, because the host decides how often, and in what window, the
+allocator is called.
+
+The check that settles it costs one command:
+
+```
+wasmtime run --invoke 'add(20, 22)' ./build/cm/arms/go/adder/main.wasm
+```
+
+A 🟥 Red verdict that blames the guest's toolchain must carry either that line or a
+rebuild that reproduces the failure outside this tree. §4.4 is the counter-example
+that makes the rule worth writing down: the arm was green on the reference host
+and red here, and the defect was a second marshalling pass in
+`lowerCallback` that no reading of the artifact could have revealed.
 
 ## 6. What this set is not
 
@@ -424,7 +488,9 @@ the same call — and it is recorded as `LF4-G1` in §7.
   `LF-3`, and the `SCOPE.md` §7.1 claim stays a claim about **core-module
   producers** — this set adds no row there.
 - **Not a WASI study.** No shim was written; no `wasi:*` function was
-  implemented, and nothing here says how hard that is.
+  implemented, and nothing here says how hard that is. The hermetic fixture host
+  of [`../TESTING.md`](../TESTING.md) is a *test double*: it proves the seam, and
+  it deliberately does no I/O.
 - **Not an aggregate study.** Every arm's world is scalar-only. Strings, lists,
   records, variants, resources, streams, futures and async lifts are
   **untested**; the `LF-2` ABI amendment's scalar-to-GC scale
@@ -445,30 +511,28 @@ the same call — and it is recorded as `LF4-G1` in §7.
 | Row | State |
 |---|---|
 | `LF-2` — core-module feasibility | `✅` 2026-10-30, [`LF2_INDEX.md`](LF2_INDEX.md) |
-| `LF-4` — component-model feasibility | `✅` 2026-11-16, this set: 7 arms, three runs; with the fixture host every arm but Go instantiates and answers, Go blocked by its own toolchain (`LF4-G1`) |
+| `LF-4` — component-model feasibility | `✅` 2026-11-16, this set: 7 arms, four runs; every arm instantiates and answers, the last one after `GAP-25` (§4.4) |
 | `LF-3` — the support decision | **Open.** Its input is now `LF4-G1` and the shape of a real shim, not an engine defect |
 | `GAP-20` — the 64-bit flat-value over-count | **Closed** 2026-11-16, class A, [`../API_ABI_STABILITY.md`](../API_ABI_STABILITY.md) §8.4 |
 | `GAP-21` — a lowered alias had no closed identity | **Closed** 2026-11-16, class A, [`../API_ABI_STABILITY.md`](../API_ABI_STABILITY.md) §8.4 |
 | `GAP-22` — memory limits compared for equality | **Closed** 2026-11-16, class A, [`../API_ABI_STABILITY.md`](../API_ABI_STABILITY.md) §8.4 |
 | `GAP-23` — a host-bag function had no type identity | **Closed** 2026-11-16, class A, [`../API_ABI_STABILITY.md`](../API_ABI_STABILITY.md) §8.4 |
 | `GAP-24` — a lowered method on an imported resource could not be flattened | **Closed** 2026-11-16 (`e764825`), class A, [`../API_ABI_STABILITY.md`](../API_ABI_STABILITY.md) §8.4; fixtures `component_wasi_resource_import`, `component_host_resource_call` |
-| `LF4-G1` — the Go arm's embedded adapter has no allocator | **Open**, guest toolchain: `componentize-go` 0.4.2 embeds a preview1→preview2 adapter whose `cabi_import_realloc` refuses every host-placed allocation; rebuild with `GOOS=wasip2` to test |
+| `GAP-25` — a lowered indirect result is marshalled twice | **Closed** 2026-11-16, class A, [`../API_ABI_STABILITY.md`](../API_ABI_STABILITY.md) §8.4; fixture `component_single_marshal`, which counts the guest's `realloc` calls and fails with `2 == 1` when the second pass comes back |
+| `LF4-G1` — "the Go arm's embedded adapter has no allocator" | **Withdrawn.** The artifact runs unchanged on wasmtime 50; the trap was `GAP-25` in this engine (§4.4). Kept as the record of a wrong hypothesis (§5.5) |
 | A WASI 0.2 host shim | **Still uncommissioned, still embedder-owned** ([`../SCOPE.md`](../SCOPE.md) §3). The fixture host ([`../TESTING.md`](../TESTING.md)) proves the seam and is not a product; a real shim would need real files, sockets and an async executor |
 
 **Budget.** One AI session plus the toolchain acquisition recorded in
 [`LF4_EVIDENCE.md`](LF4_EVIDENCE.md) §2, against the `LF-2` cap band
 (`CHARTERS.md` §2.3); the stop rule was not hit.
 
-**What the next study must answer.** Two things, and neither is an engine defect.
-First, `LF4-G1`: the Go arm cannot receive host-placed data because the adapter its
-toolchain embeds has no allocator; the way to test it is to rebuild the arm through
-a path that does not embed that adapter (`GOOS=wasip2`), and until then the arm's
-verdict says nothing about Go or about the engine. Second, the shim itself: the
-fixture host ([`../TESTING.md`](../TESTING.md)) proves the *seam* — imports resolve,
-lowered signatures match, resource handles round-trip and drops call back — but it
-deliberately implements no file, socket or clock. A real shim is an embedder
-decision ([`../SCOPE.md`](../SCOPE.md) §3), and §5.4 now names exactly what it
-would have to implement for these four artifacts.
+**What the next study must answer.** One thing, and it is not an engine defect:
+the shim itself. The fixture host ([`../TESTING.md`](../TESTING.md)) proves the
+*seam* — imports resolve, lowered signatures match, resource handles round-trip and
+drops call back — but it deliberately implements no file, socket or clock. A real
+WASI 0.2 shim is an embedder decision ([`../SCOPE.md`](../SCOPE.md) §3), and §5.4
+names exactly what it would have to implement for these four artifacts. No arm is
+blocked on WasmJit any more.
 
 ## 8. References
 

@@ -59,13 +59,13 @@ the next person who is tempted to answer the question from a blog post.
 | \subpage lf2_deep_f1 | `F1` deep study: the libjit optimizer bug, the minimal repro, and the backend fix (`WASM.COMPILE.FUNCTION_FAILED`, level-0 default, context poisoning). |
 | \subpage lf2_deep_f2 | `F2` deep study: the `delegate`-skips-a-catch shape, the verified `wasm-opt --translate-to-exnref` workaround, and the escape-block translation that made the workaround optional. |
 | \subpage lf2_deep_f3 | `F3` deep study and fix: the bottom-type rule, the three defects it exposed, and the one still open (`F3d`). |
-| \subpage lf4_index | **The `LF-4` set.** The component-model counterpart of `LF-2`: the arms, the bar, the two verdict tables, the three `GAP-20`–`GAP-22` findings, and the reading order. |
+| \subpage lf4_index | **The `LF-4` set.** The component-model counterpart of `LF-2`: the arms, the bar, the four verdict tables, the `GAP-20`–`GAP-25` findings, and the reading order. |
 | \subpage lf4_s1 | `S1` — C# through `componentize-dotnet`: 🟨 Yellow, stopped at the host-import seam by the missing WASI 0.2 shim (`GAP-20`/`GAP-21` blocked load, both closed). |
 | \subpage lf4_s2 | `S2` — C and C++ through wasi-sdk: two 🟩 Green (import-free) and one 🟨 Yellow (the same source with one libc call). |
 | \subpage lf4_s3 | `S3` — Go and TinyGo: two 🟨 Yellow, 2.5 MB and 22 KB, the same kind of blocker (`GAP-20` and, for Go, `GAP-22` closed; the WASI shim remains). |
 | \subpage lf4_s4 | `S4` — Rust `wasm32-wasip2`: 🟩 Green. |
 | \subpage lf4_s5 | `S5` — MoonBit: 🟩 Green, 3,236 bytes. |
-| \subpage lf4_evidence | The `LF-4` evidence log: toolchains, hashes, transcripts from both runs, the three findings' reproductions, and what wasi-sdk 34.0 contains. |
+| \subpage lf4_evidence | The `LF-4` evidence log: toolchains, hashes, transcripts from all four runs, the findings' reproductions, the reference-host cross-check, and what wasi-sdk 34.0 contains. |
 
 Reading order for a decision: `TRIAGE.md` §5 (is my language on the list, and
 what is its blocker?) → `CLUSTERING.md` §3/§6 (which study would answer it?) →
@@ -139,7 +139,7 @@ imports the engine does not ship.
 | `LF-0a` — entry-gate readiness audit | `✅` 2026-10-30, [`READINESS_AUDIT.md`](../READINESS_AUDIT.md) |
 | `LF-1` — pre-feasibility / scoping study | `✅` **this folder**, 2026-10-30, and **re-screened** the same day after `LE-1`…`LE-6` landed ([`TRIAGE.md`](TRIAGE.md) §6.9) |
 | `LF-2` — full feasibility studies | `✅` **run** 2026-10-30 by the repository owner's commission (`T3` recorded in [`LF2_INDEX.md`](LF2_INDEX.md)): five chartered clusters, **15 arms** built and run, three engine findings (`F1`–`F3`); **not exhaustive** — 83 non-killed rows remain untested with a named condition ([`LF2_L6_L12.md`](LF2_L6_L12.md) §5) |
-| `LF-4` — component-model feasibility | `✅` **run** 2026-11-16 by the same owner's commission: **7 arms** over C#, C/C++, Go, TinyGo, Rust and MoonBit, run twice (4 🟩 Green and 4 🟨 Yellow both times); three engine findings (`GAP-20`–`GAP-22`) found and closed; [`LF4_INDEX.md`](LF4_INDEX.md) |
+| `LF-4` — component-model feasibility | `✅` **run** 2026-11-16 by the same owner's commission: **7 arms** over C#, C/C++, Go, TinyGo, Rust and MoonBit, run four times; **every arm 🟩 Green** after `GAP-20`–`GAP-25` were closed (the last one found only because a 🟥 Red that blamed Go's toolchain did not reproduce on wasmtime); [`LF4_INDEX.md`](LF4_INDEX.md) |
 | `LF-3` — the support decision | **Not started.** `F1`–`F3` and the WASI 0.2 shim question are its input; it may reject every verdict. |
 
 ## 6. References

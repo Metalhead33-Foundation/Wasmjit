@@ -1918,15 +1918,21 @@ void lowerCallback(ffi_cif*, void* result, void** args, void* userData)
 		transferHandles(structuredOutput, data->function.resultTypes, false,
 				borrowScope);
 		output.clear();
-		for (std::size_t i = 0; i < structuredOutput.size(); ++i)
-			lowerValue(store, data->function.resultTypes[i], structuredOutput[i],
-					data->memory, output, 0);
+		// An indirect result is written straight into the guest's result buffer
+		// below. Lowering it to flat values as well would allocate a second,
+		// unused copy of every list and string in it, and a guest that treats
+		// `cabi_realloc` as a re-entrancy hazard (Go's preview1 adapter does)
+		// notices the difference.
+		if (!data->function.indirectResults)
+			for (std::size_t i = 0; i < structuredOutput.size(); ++i)
+				lowerValue(store, data->function.resultTypes[i],
+						structuredOutput[i], data->memory, output, 0);
 	} else {
 		data->function.call(input, output);
 	}
 	if (data->function.results.empty())
 		return;
-	if (output.empty())
+	if (!data->function.indirectResults && output.empty())
 		throw std::runtime_error("component runtime: lower produced no result");
 	if (data->function.indirectResults) {
 		const std::size_t resultIndex = 1 + (data->function.indirectParams

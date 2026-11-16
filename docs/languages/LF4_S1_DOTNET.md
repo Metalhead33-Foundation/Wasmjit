@@ -1,12 +1,14 @@
 # `S1` — C# through `componentize-dotnet` {#lf4_s1}
 
-Status: `LF-4` arm report (revision 2 — 2026-11-16). Arm `S1` of
+Status: `LF-4` arm report (revision 3 — 2026-11-16). Arm `S1` of
 [`LF4_INDEX.md`](LF4_INDEX.md); toolchain pinned in
-[`LF4_EVIDENCE.md`](LF4_EVIDENCE.md) §2. **Verdict: 🟨 Yellow** — the toolchain
-produces a valid, self-describing component with the guide's own steps. The
-engine used to reject it at load (`GAP-20`); with `GAP-20`, `GAP-21` and `GAP-22`
-closed it loads, validates and instantiates as far as the host-import seam, where
-the embedder-owned WASI 0.2 shim is the remaining blocker.
+[`LF4_EVIDENCE.md`](LF4_EVIDENCE.md) §2. **Verdict: 🟩 Green** — the toolchain
+produces a valid, self-describing component with the guide's own steps. The engine
+used to reject it at load (`GAP-20`); with `GAP-20`, `GAP-21`, `GAP-22` and
+`GAP-24` closed, and a hermetic fixture host supplying the `wasi:*` interfaces it
+imports, the arm instantiates and returns `add(20,22)=42`
+([`LF4_INDEX.md`](LF4_INDEX.md) §4.4). What is left is the embedder-owned WASI 0.2
+shim, which is a product decision, not a blocker in the artifact or the engine.
 
 Audience: anyone planning to ship C# components to WasmJit, and whoever
 sequences `LF-3`.

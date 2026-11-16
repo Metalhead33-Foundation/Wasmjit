@@ -1,6 +1,6 @@
 # `S2` — C and C++ through wasi-sdk {#lf4_s2}
 
-Status: `LF-4` cluster report (revision 2 — 2026-11-16). Arms of
+Status: `LF-4` cluster report (revision 3 — 2026-11-16). Arms of
 [`LF4_INDEX.md`](LF4_INDEX.md); toolchain pinned in
 [`LF4_EVIDENCE.md`](LF4_EVIDENCE.md) §2. Three arms:
 
@@ -8,7 +8,7 @@ Status: `LF-4` cluster report (revision 2 — 2026-11-16). Arms of
 |---|---|---|
 | `s2-c` | C, `wit-bindgen c`, no libc call | 🟩 **Green** |
 | `s2-cpp` | C++, `wit-bindgen cpp`, no libc call | 🟩 **Green** |
-| `s2-c-libc` | the same C source plus one `printf` | 🟨 **Yellow** — a WASI 0.2 shim (`GAP-20` and `GAP-21` blocked load) |
+| `s2-c-libc` | the same C source plus one `printf` | 🟩 **Green** — after `GAP-20`, `GAP-21` and `GAP-24`, with the fixture host supplying `wasi:io`/`wasi:cli`/`wasi:clocks` |
 
 The two green arms are the study's clearest result: a component with no WIT
 imports is a component the engine can load, instantiate and call today. The

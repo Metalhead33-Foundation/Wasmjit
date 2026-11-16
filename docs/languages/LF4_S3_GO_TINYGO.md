@@ -1,13 +1,13 @@
 # `S3` — Go and TinyGo {#lf4_s3}
 
-Status: `LF-4` cluster report (revision 2 — 2026-11-16). Two arms of
+Status: `LF-4` cluster report (revision 3 — 2026-11-16). Two arms of
 [`LF4_INDEX.md`](LF4_INDEX.md); toolchains pinned in
 [`LF4_EVIDENCE.md`](LF4_EVIDENCE.md) §2.
 
 | Arm | Toolchain | Verdict |
 |---|---|---|
-| `s3-go` | Go 1.27.4 + `componentize-go` 0.4.2 | 🟨 **Yellow** — a WASI 0.2 shim (`GAP-20` and `GAP-22` blocked load) |
-| `s3-tinygo` | TinyGo 0.40.1, `-target=wasip2` | 🟨 **Yellow** — a WASI 0.2 shim (`GAP-20` blocked load) |
+| `s3-go` | Go 1.27.4 + `componentize-go` 0.4.2 | 🟩 **Green** — after `GAP-25`; the red that looked like a toolchain defect reproduced on no other host |
+| `s3-tinygo` | TinyGo 0.40.1, `-target=wasip2` | 🟩 **Green** — after `GAP-20` and `GAP-24` |
 
 Both toolchains build valid components, and both components used to be rejected
 at **load** by the same validator rule; both now load and reach the host-import
