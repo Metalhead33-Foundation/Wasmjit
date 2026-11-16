@@ -55,7 +55,9 @@ mean “the operation is meaningful” or “the guest's own logic is correct”
   model's term; informally a Wasm thread). Today there is exactly one agent per
   host thread, and it is the caller's host thread.
 - **Host / embedder** — the native C++ process that parses, instantiates and
-  calls into Wasm, and supplies native imports.
+  calls into Wasm, and supplies native imports. This is the *host* half of
+  `H2G`/`G2H`; the guest is WebAssembly itself, whichever source language
+  produced it ([`ABI.md`](ABI.md) “Host and Guest: the vocabulary”).
 - **Module author / toolchain author** — the producer of the Wasm artifact and
   the documentation that says which concurrency model (G-A…G-D) its exports and
   imports assume.
@@ -94,10 +96,15 @@ The overlap is the four boundary combinations:
 
 | Initiator | Callee/state | Name in this note |
 |---|---|---|
-| host thread | exported Wasm function | **H→W export** |
-| Wasm agent | native C/C++ import | **W→H import** |
-| Wasm agent | another Wasm function/instance | **W→W call** |
+| host thread | exported Wasm function | **H→W export** (`H2G`) |
+| Wasm agent | native C/C++ import | **W→H import** (`G2H`) |
+| Wasm agent | another Wasm function/instance | **W→W call** (`G2G`) |
 | host thread | engine API / Store object | **H→E API** |
+
+The three parenthesised names are the canonical ones ([`ABI.md`](ABI.md) “Host
+and Guest: the vocabulary”); the arrow spellings are this note's shorthand, kept
+because the thread-safety question is always “which of the four crosses an
+agent boundary”.
 
 A program can be safe on one axis and unsafe on another. The rest of this note
 keeps the axes separate instead of collapsing them into a single “thread-safe”

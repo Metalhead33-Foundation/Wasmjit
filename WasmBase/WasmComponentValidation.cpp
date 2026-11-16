@@ -669,6 +669,27 @@ bool limitsSubtype(const Limits& provided, const Limits& expected)
 	return true;
 }
 
+// Core import matching for a memory: the address width, the custom page size and
+// the shared flag (limits bit 1) are exact, the limits are subtyped — the
+// provided memory may start larger and be capped lower than the import asks for.
+bool memorySubtype(const MemoryType& provided, const MemoryType& expected)
+{
+	return provided.indexType == expected.indexType
+			&& provided.pageSize == expected.pageSize
+			&& (provided.limits.flags & 0x02) == (expected.limits.flags & 0x02)
+			&& limitsSubtype(provided.limits, expected.limits);
+}
+
+// Core import matching for a table: the element type and the shared flag are
+// exact, the limits are subtyped. The initialiser expression is not part of the
+// import's type.
+bool tableSubtype(const TableType& provided, const TableType& expected)
+{
+	return coreValueTypeEqual(provided.elementType, expected.elementType)
+			&& provided.isShared == expected.isShared
+			&& limitsSubtype(provided.limits, expected.limits);
+}
+
 bool coreExternTypeSubtype(const CoreExternType& provided, TypeId providedId,
 		const CoreExternType& expected, TypeId expectedId)
 {
@@ -688,14 +709,9 @@ bool coreExternTypeSubtype(const CoreExternType& provided, TypeId providedId,
 			return false;
 		return provided.tagAttribute == expected.tagAttribute;
 	case CoreExternType::Kind::Table:
-		return coreValueTypeEqual(provided.table.elementType,
-						expected.table.elementType)
-				&& provided.table.isShared == expected.table.isShared
-				&& limitsSubtype(provided.table.limits, expected.table.limits);
+		return tableSubtype(provided.table, expected.table);
 	case CoreExternType::Kind::Memory:
-		return provided.memory.indexType == expected.memory.indexType
-				&& provided.memory.pageSize == expected.memory.pageSize
-				&& limitsSubtype(provided.memory.limits, expected.memory.limits);
+		return memorySubtype(provided.memory, expected.memory);
 	case CoreExternType::Kind::Global:
 		return coreGlobalTypeEqual(provided.global, expected.global);
 	}
@@ -895,6 +911,91 @@ bool containsAbstractResource(const ValuePtr& value)
 	}
 }
 
+//! True when every abstract resource the value mentions already carries a
+//! nominal Store identity. Such a value still makes its owning type a *scheme*
+//! (the identity is the importer's, not the provider's), but it can also be
+//! interned as a closed record, which is what the Canonical ABI needs.
+bool abstractResourcesAreNominal(const ValuePtr& value)
+{
+	if (!value)
+		return true;
+	switch (value->kind) {
+	case ResolvedValueType::Kind::Own:
+	case ResolvedValueType::Kind::Borrow:
+		return !value->resourceAbstract || !value->resourceTypeId.isNone();
+	case ResolvedValueType::Kind::Record:
+		for (const auto& field : value->fields)
+			if (!abstractResourcesAreNominal(field.second))
+				return false;
+		return true;
+	case ResolvedValueType::Kind::Variant:
+		for (const ResolvedCase& item : value->cases)
+			if (item.type && !abstractResourcesAreNominal(*item.type))
+				return false;
+		return true;
+	case ResolvedValueType::Kind::List:
+	case ResolvedValueType::Kind::FixedList:
+	case ResolvedValueType::Kind::Option:
+		return abstractResourcesAreNominal(value->element);
+	case ResolvedValueType::Kind::Tuple:
+		for (const ValuePtr& element : value->tuple)
+			if (!abstractResourcesAreNominal(element))
+				return false;
+		return true;
+	case ResolvedValueType::Kind::Result:
+		return (!value->ok || abstractResourcesAreNominal(*value->ok))
+				&& (!value->error || abstractResourcesAreNominal(*value->error));
+	case ResolvedValueType::Kind::Stream:
+		return !value->streamElement
+				|| abstractResourcesAreNominal(*value->streamElement);
+	case ResolvedValueType::Kind::Future:
+		return !value->futureElement
+				|| abstractResourcesAreNominal(*value->futureElement);
+	case ResolvedValueType::Kind::Map:
+		return abstractResourcesAreNominal(value->mapKey)
+				&& abstractResourcesAreNominal(value->mapValue);
+	case ResolvedValueType::Kind::Primitive:
+	case ResolvedValueType::Kind::Flags:
+	case ResolvedValueType::Kind::Enum:
+		return true;
+	}
+	return true;
+}
+
+//! Type-level form of abstractResourcesAreNominal().
+bool abstractResourcesAreNominal(const TypePtr& type)
+{
+	if (!type)
+		return true;
+	switch (type->kind) {
+	case ResolvedType::Kind::Value:
+		return abstractResourcesAreNominal(type->value);
+	case ResolvedType::Kind::Func:
+		for (const auto& [name, value] : type->func->params)
+			if (!abstractResourcesAreNominal(value))
+				return false;
+		return !type->func->result
+				|| abstractResourcesAreNominal(*type->func->result);
+	case ResolvedType::Kind::Resource:
+		return type->typeId.isNone() == false || !type->resource->abstract;
+	case ResolvedType::Kind::Instance:
+		for (const ResolvedDecl& declaration : type->instance->exports)
+			if (!abstractResourcesAreNominal(declaration.type))
+				return false;
+		return true;
+	case ResolvedType::Kind::Component:
+		for (const ResolvedDecl& declaration : type->component->imports)
+			if (!abstractResourcesAreNominal(declaration.type))
+				return false;
+		for (const ResolvedDecl& declaration : type->component->exports)
+			if (!abstractResourcesAreNominal(declaration.type))
+				return false;
+		return true;
+	}
+	return true;
+}
+
+
 bool containsAbstractResource(const TypePtr& type)
 {
 	if (!type)
@@ -968,26 +1069,21 @@ bool containsHandle(const ValuePtr& value)
 	}
 }
 
-// CM14: the Canonical ABI flattens a value into at most 16 slots; anything
-// larger is spilt to linear memory, so the `memory` option becomes mandatory.
-// This counts slots the way the ABI lays them out (scalars 1, `string`/`list`/
-// `map` 2, records and tuples summed, variants one tag plus the widest case).
-uint32_t flatSlots(const ValuePtr& value)
+// CM14: `flatten_functype` compares against MAX_FLAT_PARAMS (16) and
+// MAX_FLAT_RESULTS (1) the number of *core values* a value flattens to, not a
+// count of 32-bit words: `flatten_type` maps `u64`/`s64` to one `i64` and `f64`
+// to one `f64`, so a 64-bit scalar is one flat value (`9 x u64` is 9, not 18).
+// This counts that way (`string`/`list`/`map` 2, records and tuples summed,
+// variants one tag plus the widest case). GAP-20 was this function returning 2
+// for the 64-bit primitives, which demanded a `memory` option for a bare
+// `canon lift` of `func () -> u64`.
+uint32_t flatValueCount(const ValuePtr& value)
 {
 	if (!value)
 		return 0;
 	switch (value->kind) {
 	case ResolvedValueType::Kind::Primitive:
-		// The Canonical ABI flattens to 32-bit slots, so a 64-bit scalar occupies
-		// two of them (`9 x u64` is 18 slots and therefore spilt to memory).
-		switch (value->primitive) {
-		case PrimitiveValueType::U64:
-		case PrimitiveValueType::S64:
-		case PrimitiveValueType::F64:
-			return 2;
-		default:
-			return 1;
-		}
+		return 1;
 	case ResolvedValueType::Kind::List:
 	case ResolvedValueType::Kind::FixedList:
 	case ResolvedValueType::Kind::Map:
@@ -995,27 +1091,27 @@ uint32_t flatSlots(const ValuePtr& value)
 	case ResolvedValueType::Kind::Record: {
 		uint32_t total = 0;
 		for (const auto& field : value->fields)
-			total += flatSlots(field.second);
+			total += flatValueCount(field.second);
 		return total;
 	}
 	case ResolvedValueType::Kind::Tuple: {
 		uint32_t total = 0;
 		for (const ValuePtr& element : value->tuple)
-			total += flatSlots(element);
+			total += flatValueCount(element);
 		return total;
 	}
 	case ResolvedValueType::Kind::Variant: {
 		uint32_t widest = 0;
 		for (const ResolvedCase& item : value->cases)
 			if (item.type)
-				widest = std::max(widest, flatSlots(*item.type));
+				widest = std::max(widest, flatValueCount(*item.type));
 		return 1 + widest;
 	}
 	case ResolvedValueType::Kind::Option:
-		return 1 + flatSlots(value->element);
+		return 1 + flatValueCount(value->element);
 	case ResolvedValueType::Kind::Result:
-		return 1 + std::max(value->ok ? flatSlots(*value->ok) : 0,
-				value->error ? flatSlots(*value->error) : 0);
+		return 1 + std::max(value->ok ? flatValueCount(*value->ok) : 0,
+				value->error ? flatValueCount(*value->error) : 0);
 	default:
 		return 1;
 	}
@@ -1808,7 +1904,10 @@ void ComponentValidator::run()
 		component_.localTypeIds.push_back(type
 				? type->typeId : TypeId{TypeId::kNone});
 		SchemeId scheme{SchemeId::kNone};
-		if (type && type->typeId.isNone()) {
+		// A type can now carry both identities: an open type whose abstract
+		// resources are all nominal is also interned as a closed record (GAP-24),
+		// and the scheme stays the alpha-equivalence contract.
+		if (type) {
 			const auto found = schemeIds_.find(type.get());
 			if (found != schemeIds_.end())
 				scheme = found->second;
@@ -1859,6 +1958,11 @@ void ComponentValidator::validateCanonicalAbi()
 		if (canon.async)
 			options.async = *canon.async;
 	};
+	// A lifted or lowered function's resolved type is not necessarily in the
+	// component's local type index space: an `alias export` out of an imported
+	// instance carries its own node, which no earlier pass interns. A closed
+	// type is interned here so the ABI check sees the identity the loader will;
+	// open types are rejected by the caller before this runs.
 	const auto canonicalTypeOf = [&](const Canon& canon) -> TypeId {
 		if (canon.kind == Canon::Kind::Lift)
 			return component_.typeId(canon.typeIndex);
@@ -1868,7 +1972,7 @@ void ComponentValidator::validateCanonicalAbi()
 			return TypeId{TypeId::kNone};
 		if (!entity->type->typeId.isNone())
 			return entity->type->typeId;
-		return TypeId{TypeId::kNone};
+		return internResolvedType(entity->type);
 	};
 
 	for (const Canon& canon : component_.canons) {
@@ -2935,8 +3039,17 @@ TypeId ComponentValidator::internResolvedType(const TypePtr& type)
 			&& containsAbstractResource(type)) {
 		if (schemeIds_.find(type.get()) == schemeIds_.end())
 			schemeIds_.emplace(type.get(), internScheme(type));
-		resolvedTypeIds_.emplace(type.get(), TypeId{TypeId::kNone});
-		return TypeId{TypeId::kNone};
+		// The scheme is not the only thing a caller needs. An imported resource
+		// type already has a nominal identity in *this* component's index space
+		// (`instantiateInstanceType` mints one), and the Canonical ABI flattens a
+		// handle to one `i32` whatever that identity is — so the record can be
+		// interned as well, and must be: without it a `canon lower` of a method on
+		// an imported resource has no type to resolve and no host can satisfy a
+		// `wasi:io` import (GAP-24).
+		if (!abstractResourcesAreNominal(type)) {
+			resolvedTypeIds_.emplace(type.get(), TypeId{TypeId::kNone});
+			return TypeId{TypeId::kNone};
+		}
 	}
 
 	// Guard recursive declaration graphs: a cycle gets no closed id rather than
@@ -4296,16 +4409,22 @@ void ComponentValidator::processCoreInstance(uint32_t index)
 		// CM14: the sort matching above says nothing about the *type*. An argument
 		// whose table/memory/global has the right sort but a different shape was
 		// accepted; the corpus calls that out as an instantiation error.
-		for (const ImportTable& import : module.importTables)
-			if (!coreTableTypeEqual(
-						check(import.moduleName, import.fieldName, CoreSort::Table).table,
-						import.table))
+		// CM22: the comparison is core *import subtyping*, not equality — a
+		// supplied memory or table may declare a larger minimum and a smaller
+		// maximum than the import asks for (an adapter imports `(memory 0)` and is
+		// handed a 36-page memory).
+		for (const ImportTable& import : module.importTables) {
+			const TableType& provided = check(import.moduleName,
+					import.fieldName, CoreSort::Table).table;
+			if (!tableSubtype(provided, import.table))
 				fail("core instantiate argument has an incompatible table type");
-		for (const ImportMemory& import : module.importMemories)
-			if (!coreMemoryTypeEqual(
-						check(import.moduleName, import.fieldName, CoreSort::Memory).memory,
-						import.memory))
+		}
+		for (const ImportMemory& import : module.importMemories) {
+			const MemoryType& provided = check(import.moduleName,
+					import.fieldName, CoreSort::Memory).memory;
+			if (!memorySubtype(provided, import.memory))
 				fail("core instantiate argument has an incompatible memory type");
+		}
 		for (const ImportGlobal& import : module.importGlobals)
 			if (!coreGlobalTypeEqual(
 						check(import.moduleName, import.fieldName, CoreSort::Global).global,
@@ -4732,18 +4851,19 @@ void ComponentValidator::validateCanon(const Canon& canon)
 			if (asyncRequested && !funcType->func->isAsync)
 				fail("the `async` canonical option requires an async function type");
 			// CanonicalABI `flatten_functype`: MAX_FLAT_PARAMS = 16 and
-			// MAX_FLAT_RESULTS = 1. Async lowering uses MAX_FLAT_ASYNC_PARAMS
+			// MAX_FLAT_RESULTS = 1, counted in core values (see
+			// `flatValueCount`). Async lowering uses MAX_FLAT_ASYNC_PARAMS
 			// (4) and always passes results through a pointer. A `string`/
 			// `list`/`map` anywhere also needs memory.
 			uint32_t flatParams = 0;
 			bool needsMemory = false;
 			for (const auto& [name, value] : funcType->func->params) {
-				flatParams += flatSlots(value);
+				flatParams += flatValueCount(value);
 				if (valueNeedsMemory(value))
 					needsMemory = true;
 			}
 			const uint32_t flatResults = funcType->func->result
-					? flatSlots(*funcType->func->result) : 0;
+					? flatValueCount(*funcType->func->result) : 0;
 			if (funcType->func->result
 					&& valueNeedsMemory(*funcType->func->result))
 				needsMemory = true;

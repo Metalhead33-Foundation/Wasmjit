@@ -724,11 +724,14 @@ void lowerValue(const WASM::TypeStore& store,
 		uint32_t handle = value.discriminant;
 		if (memory.runtime != nullptr) {
 			const WASM::TypeId resource{view.typeRef()};
-			if (view.kind() == WASM::TypeKind::ComponentBorrow)
-				handle = memory.runtime->useResourceHandle(handle, resource,
-						true, memory.borrowScope);
-			else
-				memory.runtime->validateResourceHandle(handle, resource);
+			// A host-owned type's handles live in the host's own table.
+			if (!memory.runtime->hostOwnsResource(resource)) {
+				if (view.kind() == WASM::TypeKind::ComponentBorrow)
+					handle = memory.runtime->useResourceHandle(handle, resource,
+							true, memory.borrowScope);
+				else
+					memory.runtime->validateResourceHandle(handle, resource);
+			}
 		}
 		pushI32(out, handle);
 		return;
@@ -958,7 +961,9 @@ void liftValue(const WASM::TypeStore& store,
 			throw std::runtime_error("component runtime: missing handle");
 		if ((view.kind() == WASM::TypeKind::ComponentOwn
 				|| view.kind() == WASM::TypeKind::ComponentBorrow)
-				&& memory.runtime != nullptr)
+				&& memory.runtime != nullptr
+				&& !memory.runtime->hostOwnsResource(
+						WASM::TypeId{view.typeRef()}))
 			memory.runtime->validateResourceHandle(flat[index].u32,
 					WASM::TypeId{view.typeRef()});
 		out.kind = view.kind() == WASM::TypeKind::ComponentOwn
@@ -1259,7 +1264,8 @@ void storeValueAt(const WASM::TypeStore& store,
 	}
 	case WASM::TypeKind::ComponentOwn:
 	case WASM::TypeKind::ComponentBorrow:
-		if (memory.runtime != nullptr)
+		if (memory.runtime != nullptr
+				&& !memory.runtime->hostOwnsResource(WASM::TypeId{view.typeRef()}))
 			memory.runtime->validateResourceHandle(value.discriminant,
 					WASM::TypeId{view.typeRef()});
 		writeUInt(memory, address, value.discriminant, 4);
@@ -1497,7 +1503,9 @@ void loadValueAt(const WASM::TypeStore& store,
 		const uint32_t handle = uint32_t(readUInt(memory, address, 4));
 		if ((view.kind() == WASM::TypeKind::ComponentOwn
 				|| view.kind() == WASM::TypeKind::ComponentBorrow)
-				&& memory.runtime != nullptr)
+				&& memory.runtime != nullptr
+				&& !memory.runtime->hostOwnsResource(
+						WASM::TypeId{view.typeRef()}))
 			memory.runtime->validateResourceHandle(handle,
 					WASM::TypeId{view.typeRef()});
 		out.kind = view.kind() == WASM::TypeKind::ComponentOwn
@@ -1910,15 +1918,21 @@ void lowerCallback(ffi_cif*, void* result, void** args, void* userData)
 		transferHandles(structuredOutput, data->function.resultTypes, false,
 				borrowScope);
 		output.clear();
-		for (std::size_t i = 0; i < structuredOutput.size(); ++i)
-			lowerValue(store, data->function.resultTypes[i], structuredOutput[i],
-					data->memory, output, 0);
+		// An indirect result is written straight into the guest's result buffer
+		// below. Lowering it to flat values as well would allocate a second,
+		// unused copy of every list and string in it, and a guest that treats
+		// `cabi_realloc` as a re-entrancy hazard (Go's preview1 adapter does)
+		// notices the difference.
+		if (!data->function.indirectResults)
+			for (std::size_t i = 0; i < structuredOutput.size(); ++i)
+				lowerValue(store, data->function.resultTypes[i],
+						structuredOutput[i], data->memory, output, 0);
 	} else {
 		data->function.call(input, output);
 	}
 	if (data->function.results.empty())
 		return;
-	if (output.empty())
+	if (!data->function.indirectResults && output.empty())
 		throw std::runtime_error("component runtime: lower produced no result");
 	if (data->function.indirectResults) {
 		const std::size_t resultIndex = 1 + (data->function.indirectParams
@@ -2915,7 +2929,8 @@ void ComponentRuntime::processAlias(const WASM::Alias& alias, uint32_t typeIndex
 			const auto it = exports.functions.find(alias.name);
 			if (it == exports.functions.end())
 				throw std::runtime_error(
-						"component runtime: component export is not a function");
+						"component runtime: component export `" + alias.name +
+						"` is not a function");
 			componentFuncs_.push_back(it->second);
 			return;
 		}
@@ -2923,7 +2938,8 @@ void ComponentRuntime::processAlias(const WASM::Alias& alias, uint32_t typeIndex
 			const auto it = exports.values.find(alias.name);
 			if (it == exports.values.end())
 				throw std::runtime_error(
-						"component runtime: component export is not a value");
+						"component runtime: component export `" + alias.name +
+						"` is not a value");
 			componentValues_.push_back(it->second);
 			return;
 		}
@@ -2942,7 +2958,8 @@ void ComponentRuntime::processAlias(const WASM::Alias& alias, uint32_t typeIndex
 			const auto it = exports.instances.find(alias.name);
 			if (it == exports.instances.end())
 				throw std::runtime_error(
-						"component runtime: component export is not an instance");
+						"component runtime: component export `" + alias.name +
+						"` is not an instance");
 			componentInstances_.push_back(makeInstanceHandle(*it->second));
 			return;
 		}
@@ -2950,7 +2967,8 @@ void ComponentRuntime::processAlias(const WASM::Alias& alias, uint32_t typeIndex
 			const auto it = exports.components.find(alias.name);
 			if (it == exports.components.end())
 				throw std::runtime_error(
-						"component runtime: component export is not a component");
+						"component runtime: component export `" + alias.name +
+						"` is not a component");
 			ComponentDefinitionHandle handle{
 					it->second->componentDefinition(), it->second, {}, {}, nullptr};
 			const auto source = componentInstances_[alias.instanceIndex];
@@ -2971,7 +2989,8 @@ void ComponentRuntime::processAlias(const WASM::Alias& alias, uint32_t typeIndex
 							alias.name);
 			if (it == componentInstances_[alias.instanceIndex]->coreModules.end())
 				throw std::runtime_error(
-						"component runtime: component export is not a core module");
+						"component runtime: component export `" + alias.name +
+						"` is not a core module");
 			coreModuleSpace_.push_back(it->second);
 			return;
 		}
@@ -3546,6 +3565,31 @@ void ComponentRuntime::processResourceCanon(const WASM::Canon& canon)
 			component_.store().types().store().componentType(typeId);
 	if (view.kind() != WASM::TypeKind::ComponentResource)
 		throw std::runtime_error("component runtime: canon resource type is not a resource");
+	// A host that exported the resource type owns its handles: the guest never
+	// built them, so `resource.new`/`resource.rep` have nothing to address and
+	// `resource.drop` calls the host's drop instead of the guest handle table.
+	if (hostOwnsResource(typeId)) {
+		if (canon.kind != WASM::Canon::Kind::ResourceDrop)
+			throw std::runtime_error(
+					"component runtime: a host resource type has no representation "
+					"the guest can build");
+		auto data = std::make_unique<ResourceClosureData>();
+		data->argumentTypes.push_back(&ffi_type_pointer);
+		data->argumentTypes.push_back(&ffi_type_sint32);
+		std::function<void(uint32_t)> drop;
+		const auto registered = hostResourceDrops_.find(typeId.value);
+		if (registered != hostResourceDrops_.end())
+			drop = registered->second;
+		data->handler = [drop](void*, void** args) {
+			// A host resource with no registered drop is still legal: the handle
+			// is the host's, and it simply forgets it.
+			if (drop)
+				drop(uint32_t(*static_cast<int32_t*>(args[1])));
+		};
+		pushBuiltinClosure(resourceClosures_, resourceCifs_, resourceData_,
+				coreFuncs_, std::move(data), &ffi_type_void);
+		return;
+	}
 	const WASM::ValueTypeCode repCode = view.resource().rep.opcode;
 	const WASM::AbiCoreType rep = repCode == WASM::ValueTypeCode::I32
 			? WASM::AbiCoreType::I32
@@ -3752,6 +3796,10 @@ void ComponentRuntime::processCanon(const WASM::Canon& canon)
 					"component runtime: canon lower type is outside the flat ABI subset");
 		data->coreParams = abi->coreParams;
 		data->coreResults = abi->coreResults;
+		// The marshalling path reads the indirection flags from the function
+		// copy; a host bag does not know them, so take the resolved ones.
+		data->function.indirectParams = abi->indirectParams;
+		data->function.indirectResults = abi->indirectResults;
 		data->argumentTypes.push_back(&ffi_type_pointer);
 		for (WASM::AbiCoreType type : abi->coreParams)
 			data->argumentTypes.push_back(ffiType(type));
@@ -4188,19 +4236,59 @@ void ComponentRuntime::processImport(const WASM::ImportDecl& importDecl)
 					store.componentType(instanceType);
 			for (const WASM::ComponentDeclRecord& declaration :
 					view.declarations()) {
-				if (declaration.sort
-							!= static_cast<uint16_t>(WASM::ComponentSort::Type)
-						|| declaration.type.isNone())
+				if (declaration.type.isNone())
 					continue;
-				const auto exported = import->instance->types.find(
+				if (declaration.sort
+						== static_cast<uint16_t>(WASM::ComponentSort::Type)) {
+					const auto exported = import->instance->types.find(
+							std::string(store.string(declaration.name)));
+					if (exported != import->instance->types.end())
+						recordTypeAlias(declaration.type, exported->second);
+					continue;
+				}
+				if (declaration.sort
+						!= static_cast<uint16_t>(WASM::ComponentSort::Func))
+					continue;
+				// GAP-23: a host function carries no type identity of its own,
+				// and a later `canon lower` of it needs one to resolve the
+				// Canonical ABI signature. Take it from the imported instance
+				// type's declaration; the handle owns a copy of the bag, so this
+				// fills the runtime's copy and never the embedder's.
+				auto& functions = componentInstances_.back()->exports.functions;
+				const auto entry = functions.find(
 						std::string(store.string(declaration.name)));
-				if (exported != import->instance->types.end())
-					recordTypeAlias(declaration.type, exported->second);
+				if (entry == functions.end() || !entry->second.typeId.isNone())
+					continue;
+				entry->second.typeId = declaration.type;
+				// The structured parameter and result types drive the
+				// lift/lower marshalling; a host bag only carries the flat
+				// signature, so take the structured ones from the declaration.
+				const WASM::ComponentTypeView funcView =
+						store.componentType(declaration.type);
+				if (funcView.kind() == WASM::TypeKind::ComponentFunc) {
+					entry->second.paramTypes.clear();
+					entry->second.resultTypes.clear();
+					for (const WASM::ComponentFuncParam& param : funcView.params())
+						entry->second.paramTypes.push_back(param.type);
+					for (const WASM::ComponentValueType& result :
+							funcView.results())
+						entry->second.resultTypes.push_back(result);
+				}
 			}
 		}
 		for (const auto& [name, module] : import->instance->coreModules)
 			if (module)
 				componentInstances_.back()->coreModules[name] = module.get();
+		// A host that exported a resource type owns the handles of that type. The
+		// drop callback is the marker: a nested component's export snapshot is a
+		// bag too, and its resources are still guest-owned.
+		for (const auto& [type, drop] : import->instance->resourceDrops) {
+			if (!drop)
+				continue;
+			const WASM::TypeId resolved = canonicalTypeId(WASM::TypeId{type});
+			hostResourceDrops_.insert_or_assign(resolved.value, drop);
+			hostResourceTypes_.insert(resolved.value);
+		}
 		const auto modules = instanceCoreModules_.find(importDecl.name.name);
 		if (modules != instanceCoreModules_.end())
 			for (const auto& [name, module] : modules->second)
@@ -4552,6 +4640,17 @@ void ComponentRuntime::endBorrowScope(uint32_t scope)
 		}
 	}
 	currentBorrowScope_ = 0;
+}
+
+bool ComponentRuntime::hostOwnsResource(WASM::TypeId type) const
+{
+	const WASM::TypeId resolved = canonicalTypeId(type);
+	if (resolved.isNone())
+		return false;
+	// Only a type a host bag published is host-owned. Being abstract is not
+	// enough: a guest-local resource handed to a nested component's type import
+	// comes back as an abstract alias whose handles are still in this table.
+	return hostResourceTypes_.find(resolved.value) != hostResourceTypes_.end();
 }
 
 void ComponentRuntime::validateResourceHandle(uint32_t handle,

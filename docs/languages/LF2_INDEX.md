@@ -80,7 +80,7 @@ The verdict expires when the toolchain or the engine moves
 | Backend | `libjit` (LibJIT), selected by `WASM::Runtime::create("libjit")` |
 | Runtime config | defaults: `Profile::Full`, `ConcurrencyModel::Single`, no host bridge |
 | Runner | `build/lf2/poc/probe.cpp` — the §6.4 recipe: `loadFile` → `instantiate` → `callExport`, imports through `RegistryImportResolver` |
-| WASI shim | 20 `wasi_snapshot_preview1` entry points in the runner, every one registered through `WASM::nativeImport<&fn>()`; unimplemented path calls return `ENOSYS` |
+| WASI shim | 20 `wasi_snapshot_preview1` entry points in the runner, every one registered through `WASM::nativeImport<&fn>()`; unimplemented path calls return `ENOSYS`. The same set is committed as the hermetic fixture `Test/WasiStub.hpp` (`[wasi-stub]`, [`../TESTING.md`](../TESTING.md) “The fake WASI a fixture can import”), so a `wasip1` module can be exercised in the suite without touching a real descriptor, clock or entropy source |
 
 The runner is a **study artifact** under `build/`, as
 [`CHARTERS.md`](CHARTERS.md) §2.2 requires; it is not product code and was not

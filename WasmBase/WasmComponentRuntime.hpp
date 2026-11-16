@@ -32,6 +32,7 @@ WASMJIT_VISIBLE_BEGIN
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace WASM {
@@ -174,6 +175,8 @@ public:
 	void endBorrowScope(uint32_t scope);
 	/** \brief Checks that a resource handle is live and has the expected type. \param handle Resource handle. \param expected Expected canonical resource type. \throws std::runtime_error when the handle is invalid or has the wrong type. */
 	void validateResourceHandle(uint32_t handle, WASM::TypeId expected) const;
+	/** \brief Reports whether a resource type's handles belong to the host. \param type Resource type identity. \return true when the type is an imported (abstract) resource, whose handles are minted and released by whoever provided the type. */
+	bool hostOwnsResource(WASM::TypeId type) const;
 	/** \brief Moves an owning resource handle from another runtime into this one. \param source Runtime that owns the handle. \param handle Handle in the source table. \param expected Expected canonical resource type. \return The corresponding handle in this runtime's table. \throws std::runtime_error when the source handle is invalid, borrowed, or mistyped. */
 	uint32_t adoptResourceHandle(ComponentRuntime& source, uint32_t handle,
 			WASM::TypeId expected);
@@ -348,6 +351,16 @@ private:
 	std::vector<uint32_t> freeResourceSlots_; //!< Indices of released resource slots.
 	//! Local alias TypeId -> concrete imported TypeId for resource identity.
 	std::unordered_map<uint32_t, WASM::TypeId> typeAliases_;
+	//! Host-owned resource types (TypeId value -> drop). A handle of one of these
+	//! types never enters `resourceSlots_`: the host that exported the type owns
+	//! it, and `resource.drop` calls back instead.
+	std::unordered_map<uint32_t, std::function<void(uint32_t)>> hostResourceDrops_;
+	//! The resource types a host owns, by canonical identity: the ones whose bag
+	//! registered a drop. Being abstract is not enough — a guest-local resource can
+	//! be handed to a nested component's type import and aliased back, and a nested
+	//! component's export snapshot is a bag too — so the registered drop is the
+	//! marker that the handles live outside this runtime.
+	std::unordered_set<uint32_t> hostResourceTypes_;
 	//! Cursor over the component-local type index space during build().
 	uint32_t nextTypeIndex_ = 0;
 	//! Single-agent async state. The allocator/releaser keep async handles in the

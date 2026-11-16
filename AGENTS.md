@@ -41,7 +41,10 @@ the one-line check to run.
   of the target (SysV AMD64, MS x64, AAPCS64, RISC-V, MIPS), that a backend may diverge in
   implementation only while the signature stays canonical and the ABI non-degenerate, and that
   **portability outranks performance**. “GC Object and Heap ABI” owns the canonical object and
-  allocator ABI. Untested targets are labelled *provisional*, not dropped.
+  allocator ABI. Untested targets are labelled *provisional*, not dropped. “Host and Guest: the
+  vocabulary” owns the four terms this tree uses — **host** is WasmJit and its embedder, **guest**
+  is WebAssembly itself, and `H2G`/`G2H`/`G2G` are the three call directions — which are *not* the
+  upstream Component Model's senses of “host” and “guest”.
 
 - **No bespoke interpreter fallback.** WasmJit does not grow a Wasm interpreter: interpretation, if
   ever required, is the backend's own compile/interpret configuration (currently GNU LibJIT, which
@@ -67,8 +70,13 @@ the one-line check to run.
   a clustering map, five **proposed** charters and an evidence log — and the commissioned
   full-feasibility studies (`LF-2`, 2026-10-30) produced the `LF2_*` reports in the same
   folder: fifteen arms built and run, colour verdicts per pinned version, and three engine
-  findings `F1`–`F3`. **No language is supported by any of this** — support would be
-  `LF-3`, which has not started. Its entry-gate readiness audit (`LF-0a`) was run first:
+  findings `F1`–`F3`. Its component-model counterpart (`LF-4`, 2026-11-16) is the `LF4_*` set
+  beside them: seven component arms over C#, C/C++, Go, TinyGo, Rust and MoonBit, four
+  🟩 Green and four 🟨 Yellow, and three engine findings (`GAP-20`–`GAP-22`) that the study
+  found and that are now closed — the four yellow arms load and instantiate as far as the
+  host-import seam, where an embedder-owned WASI 0.2 shim is the blocker. **No language is
+  supported by any of this** — support would be `LF-3`, which has not started. Its entry-gate
+  readiness audit (`LF-0a`) was run first:
   [`docs/READINESS_AUDIT.md`](docs/READINESS_AUDIT.md) reports `RG1`–`RG6` as `Pinned`
   and, in the same sweep, re-checks `G3` of the milestone (whether a second code
   generator may begin — it may; SLJIT is the recommendation, and the `RA1`/`RA2` proof

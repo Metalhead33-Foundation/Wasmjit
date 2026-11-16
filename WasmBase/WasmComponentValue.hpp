@@ -212,6 +212,12 @@ struct ComponentInstanceValue {
 	std::unordered_map<std::string, std::shared_ptr<const LoadedComponent>> components;
 	//! Named core-module exports (host-supplied instance bags and re-exports).
 	std::unordered_map<std::string, std::shared_ptr<const Module>> coreModules;
+	//! Host-owned resource types, keyed by the type id the bag publishes in
+	//! `types`, with the drop a released handle of that type runs. A host that
+	//! exports a resource type owns its handles and registers its drop here; a
+	//! type absent from this map keeps the guest-side handle table.
+	std::unordered_map<std::uint32_t, std::function<void(std::uint32_t)>>
+			resourceDrops;
 
 	/** \brief Visits every nested instance export depth-first. \param visitor Callback receiving the export name and bag. */
 	void visitNested(const std::function<void(std::string_view,

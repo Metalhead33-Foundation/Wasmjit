@@ -3106,7 +3106,11 @@ TEST_CASE("open component types intern as alpha-equivalent schemes")
 	second->validate();
 	REQUIRE(first->localTypeIds.size() == 1);
 	REQUIRE(first->localSchemeIds.size() == 1);
-	REQUIRE(first->typeId(0).isNone());
+	//! GAP-24: an open type now also carries a closed identity, because every
+	//! abstract resource it mentions has a nominal one. The scheme stays the
+	//! alpha-equivalence contract, and it is still the only thing two independent
+	//! loads share — the closed record names *this* load's resource.
+	REQUIRE_FALSE(first->typeId(0).isNone());
 	REQUIRE_FALSE(first->schemeId(0).isNone());
 	REQUIRE(first->schemeId(0) == second->schemeId(0));
 	REQUIRE(typeStore().scheme(first->schemeId(0)).parameterCount == 1);
@@ -3121,7 +3125,6 @@ TEST_CASE("open component types intern as alpha-equivalent schemes")
 	REQUIRE(twoAgain != nullptr);
 	two->validate();
 	twoAgain->validate();
-	REQUIRE(two->typeId(0).isNone());
 	REQUIRE_FALSE(two->schemeId(0).isNone());
 	REQUIRE(two->schemeId(0) != first->schemeId(0));
 	REQUIRE(two->schemeId(0) == twoAgain->schemeId(0));
@@ -3357,6 +3360,78 @@ TEST_CASE("component core instances and canon lifts are parsed")
 	coreModule.core = WASM::CoreSortIdx{WASM::CoreSort::Module, 0};
 	REQUIRE(spaces.resolve(coreModule).has_value());
 }
+// GAP-20: `flatten_functype` counts *core values*, not 32-bit words, so a bare
+// `canon lift` of a 64-bit scalar needs no `memory` option. `wasm-tools
+// validate --features all` accepts both positive fixtures; before the fix the
+// engine rejected them with "canonical option `memory` is required".
+TEST_CASE("canon lift counts a 64-bit scalar as one flat value", "[component-validation]")
+{
+	auto result = loadTestArtifact("component_canon_u64_result");
+	REQUIRE(result != nullptr);
+	auto* component = result->asComponent();
+	REQUIRE(component != nullptr);
+
+	// `func () -> u64` is one flat result: the lift carries no `memory` option,
+	// and the runtime returns the core `i64` unchanged.
+	auto backend = TestBackend::create();
+	WASM::ComponentRuntime runtime(backend->instantiator(), *component);
+	auto function = runtime.exportedFunction("get");
+	REQUIRE(function.has_value());
+	WASM::ComponentValue value;
+	function->callValues({}, { &value, 1 });
+	REQUIRE(value.kind == WASM::ComponentValue::Kind::U64);
+	REQUIRE(value.u64 == 42);
+
+	// Nine `u64` parameters are nine flat values, not eighteen: still under
+	// MAX_FLAT_PARAMS = 16, and still no `memory` option.
+	auto params = loadTestArtifact("component_canon_u64_params");
+	REQUIRE(params != nullptr);
+	auto* sumComponent = params->asComponent();
+	REQUIRE(sumComponent != nullptr);
+	WASM::ComponentRuntime sumRuntime(backend->instantiator(), *sumComponent);
+	auto sum = sumRuntime.exportedFunction("sum");
+	REQUIRE(sum.has_value());
+	std::array<WASM::ComponentValue, 9> args{};
+	for (WASM::ComponentValue& arg : args) {
+		arg.kind = WASM::ComponentValue::Kind::U64;
+		arg.u64 = 70;
+	}
+	WASM::ComponentValue sumResult;
+	sum->callValues({ args.data(), args.size() }, { &sumResult, 1 });
+	REQUIRE(sumResult.kind == WASM::ComponentValue::Kind::U64);
+	REQUIRE(sumResult.u64 == 70);
+
+	// Two `u64` results are two flat values, so the result limit still bites.
+	REQUIRE_THROWS_WITH(loadTestArtifact("component_canon_u64_spill"),
+			Catch::Matchers::ContainsSubstring(
+					"canonical option `memory` is required"));
+}
+
+// GAP-21 and GAP-22: the two validator defects the `LF-4` re-run exposed once
+// GAP-20 stopped hiding them. `wasm-tools validate --features all` accepts the
+// two positive fixtures and rejects the negative one at the same rule.
+TEST_CASE("canon lower of an aliased import and core memory import matching",
+		"[component-validation]")
+{
+	// GAP-21: a function aliased out of an imported instance carries its own
+	// resolved type node, so the type is not in the component's local type index
+	// space. A closed type must be interned on demand, not rejected.
+	auto lower = loadTestArtifact("component_canon_lower_alias");
+	REQUIRE(lower != nullptr);
+	REQUIRE(lower->asComponent() != nullptr);
+
+	// GAP-22: `(memory 0)` accepts a provided `(memory 1)` — import matching is
+	// subtyping over the limits, not equality.
+	auto memory = loadTestArtifact("component_core_instantiate_memory");
+	REQUIRE(memory != nullptr);
+	REQUIRE(memory->asComponent() != nullptr);
+	// The other direction is still an error: a provided minimum below the
+	// declared one does not match.
+	REQUIRE_THROWS_WITH(loadTestArtifact("component_invalid_core_instantiate_memory"),
+			Catch::Matchers::ContainsSubstring("incompatible memory type"));
+}
+
+
 
 TEST_CASE("component core types and core module types are parsed")
 {

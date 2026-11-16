@@ -2,7 +2,24 @@
 
 *The Milestone, and How Close We Are*
 
-Status: **milestone met 2026-10-29** (revision 12 — 2026-11-11: `GAP-19` closed and `GAP-8` met. An
+Status: **milestone met 2026-10-29** (revision 17 — 2026-11-16: `GAP-25` closed. A
+lowered function whose result does not fit the flat limit was marshalled into
+guest memory **twice** — once to flat values (unused) and once into the guest's
+result buffer — so every list or string a host returned cost two `cabi_realloc`
+calls. Go's preview1 adapter traps on the second, which is why the `S3` Go arm of
+`LF-4` looked red for a toolchain reason; on wasmtime the same artifact returns
+42. With it closed, all nine `LF-4` arms answer.
+Revision 16 — 2026-11-16: `GAP-24` closed,
+so a `canon lower` of a method on an imported resource now flattens; host-owned
+resource types are a documented embedding contract (`ComponentInstanceValue::resourceDrops`),
+and the fixture host built on it runs every preview2 `LF-4` arm.
+Revision 15 — 2026-11-16: a hermetic WASI stub for the test fixtures and `GAP-23` closed.
+Revision 14 — 2026-11-16: the three
+component-validator defects the `LF-4` component study found are **closed**;
+`GAP-20` (a 64-bit scalar counted as two flat slots, so a bare `canon lift` of a
+`-> u64` function was rejected for a missing `memory` option) plus `GAP-21` and
+`GAP-22`, which only became visible once `GAP-20` stopped masking them. Revision 13 — 2026-11-16: `GAP-20` recorded by
+the `LF-4` component study. Revision 12 — 2026-11-11: `GAP-19` closed and `GAP-8` met. An
 instance now releases the continuations it created when it is destroyed, and the parked-switch wait wakes on
 cancellation, so a worker's destructor can join a parked host thread; the fifteen-case cell and the full
 822-case ASan cell are clean on all three backends. Revision 11 — 2026-11-11: the full AddressSanitizer cell finally ran to 
@@ -556,6 +573,8 @@ otherwise.
 |---|---|---|---|---|
 | `GAP-6` | limitation | Only **x86-64 Linux / SysV AMD64** is exercised. MS x64, AAPCS64, Windows ARM64, RISC-V and MIPS are specified but *provisional*; big-endian and ILP32 are unsupported by decision. **Excluded from the §10.1 closure plan by decision** — it needs a runner, not a patch. | all | [`ABI.md`](ABI.md) “The C ABI Contract” |
 
+The `LF-4` component-model rows (`GAP-20`–`GAP-22`) are closed in §8.4.
+
 ### 8.2 Decisions that are not defects
 
 These are deliberate choices. They are listed here so nobody re-files them as
@@ -589,6 +608,12 @@ The root causes and the failing fixtures are in
 
 | ID | Defect | Closed | Evidence |
 |---|---|---|---|
+| `GAP-25` | A lowered host function whose result does not fit `MAX_FLAT_RESULTS` was marshalled **twice** by `lowerCallback`: `lowerValue` produced a flat copy (which the indirect path then discards) and `storeValueAt` wrote the real copy into the guest's result buffer. The discarded copy still allocated guest memory, so every list or string a host returned cost two `cabi_realloc` calls, and a guest that treats a re-entrant import-side allocator as fatal — Go's preview1 adapter does — trapped | **closed 2026-11-16** (`263e868`) | the flat pass is skipped when the result is indirect. Fixture `Test/wasm_wat/component_single_marshal.wat` counts the guest's `realloc` calls and returns `(length, calls)`; the test fails with `2 == 1` if the second pass returns. Verified end to end by `docs/languages/LF4_INDEX.md` §4.4: the `S3` Go arm instantiates and returns 42, as it already did on wasmtime 50 |
+| `GAP-24` | A `canon lift`/`canon lower` of a function whose type mentions an **imported abstract resource** could not be flattened: the imported resource was still a parser-local `TypeIndex` value in the function type, so `appendAbiFlat` refused it and the loader reported “canon lower type is outside the flat ABI subset”. A host could not work around it — the refusal happened before any host function ran. | **closed 2026-11-16** (`e764825`): an open type whose abstract resources all have a nominal identity is now interned as a closed record as well (the scheme stays the alpha-equivalence contract), and a host bag that exports a resource type owns its handles: `ComponentInstanceValue::resourceDrops` is the drop `resource.drop` calls back into, and `hostOwnsResource` keeps such handles out of the guest table | `[wasi-stub]`: fixtures `component_wasi_resource_import` (a method lowers and instantiates) and `component_host_resource_call` (construct, borrow, drop); every preview2 `LF-4` arm runs on the fixture host ([`languages/LF4_INDEX.md`](languages/LF4_INDEX.md) §4.3–§4.4) |
+| `GAP-23` | A component function taken from a **host-supplied instance bag** carried no type identity, so a `canon lower` of it could not resolve its Canonical ABI signature and the loader reported “canon lower type is outside the flat ABI subset”; the same copy also lacked the structured parameter/result types and the indirection flags the lift/lower marshalling needs | **closed 2026-11-16** (`77d4720`) | `processImport` fills `typeId`, `paramTypes`/`resultTypes` from the imported instance type's declaration, and the lower site takes `indirectParams`/`indirectResults` from the resolved signature. Fixture `component_wasi_clock.wat` imports `wasi:clocks/monotonic-clock@0.2.0`, calls `now()` through the stub and returns it (`Test/WasiStubTests.cpp`) |
+| `GAP-20` | The component validator counted a 64-bit scalar (`u64`/`s64`/`f64`) as **two** flat slots, so `MAX_FLAT_RESULTS = 1` was over-counted and a valid bare `canon lift` of `func () -> u64` was rejected with “canonical option `memory` is required” — every preview2 component imports `wasi:clocks`, whose `now: func () -> instant` trips it | **closed 2026-11-16** (`1ec91f8`) | `flatSlots` became `flatValueCount` and counts core values, not 32-bit halves ([`languages/LF4_INDEX.md`](languages/LF4_INDEX.md) §5.1). Fixtures `component_canon_u64_result` / `_params` / `_spill` (bare `-> u64`, nine `u64` parameters, and the two-result spill that still demands `memory`) plus the `u64probe` arm, which now returns 42 through `callValues` |
+| `GAP-21` | A `canon lower` of a function aliased out of an **imported instance** was rejected as having “no closed identity”: the function's resolved type node never entered the component's local type index space, so no pass interned it | **closed 2026-11-16** (`1ec91f8`) | `canonicalTypeOf` interns the node on demand once the open-type test has passed. Fixture `component_canon_lower_alias`; the `LF-4` arms (`S2` C + libc, `S1` C#) reaches the host-import seam instead of failing validation |
+| `GAP-22` | Core instantiation matched tables and memories by **exact limits equality**, so the preview1 adapter's `(import "env" "memory" (memory 0))` could not be satisfied by a 36-page memory and `componentize-go`'s component was rejected as an “incompatible memory type” | **closed 2026-11-16** (`1ec91f8`) | core import matching is subtyping over the limits and exact over the flags (`memorySubtype`/`tableSubtype`, shared by the module-type path). Fixtures `component_core_instantiate_memory` (valid) and `component_invalid_core_instantiate_memory` (a minimum below the declared one is still rejected) |
 | `D-L1` | LibJIT loses the sixth integer argument (`r9`) on the register path | framed by the opt-in ABI; aggregate spelling remains a recorded deviation | `[libjit][v128][order]`, `[libjit][v128][ir]` |
 | `D-1` | “LibJIT uncaught throw” was a **probe** bug: a trap was asserted where the contract is a normal return with a pending exception | 2026-11-07 | `[staging][abi][exceptions]` |
 | `D-2` | `array.fill` used the fill value as the offset on AsmJIT and SLJIT | 2026-11-07 | value-first parity fixture |
