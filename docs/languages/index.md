@@ -2,9 +2,10 @@
 
 *The `LF-1` Screen and the `LF-2` Studies*
 
-Status: study report set (revision 8 — 2026-11-11: a verdict renders as its
-swatch plus its name, [`../LANGUAGE_FEASIBILITY.md`](../LANGUAGE_FEASIBILITY.md)
-§5.1; revision 7 added the §11 ownership map and pointed the ABI amendment at
+Status: study report set (revision 9 — 2026-11-16: added the `LF-4`
+component-model set, `LF4_*`; revision 8 rendered a verdict as its swatch plus
+its name, [`../LANGUAGE_FEASIBILITY.md`](../LANGUAGE_FEASIBILITY.md) §5.1;
+revision 7 added the §11 ownership map and pointed the ABI amendment at
 `EMBEDDING_SURFACE.md` §11–16).
 The notes without an `LF2_` prefix are the **output of `LF-1`**, the pre-feasibility /
 scoping study defined in [`LANGUAGE_FEASIBILITY.md`](../LANGUAGE_FEASIBILITY.md)
@@ -58,13 +59,23 @@ the next person who is tempted to answer the question from a blog post.
 | \subpage lf2_deep_f1 | `F1` deep study: the libjit optimizer bug, the minimal repro, and the backend fix (`WASM.COMPILE.FUNCTION_FAILED`, level-0 default, context poisoning). |
 | \subpage lf2_deep_f2 | `F2` deep study: the `delegate`-skips-a-catch shape, the verified `wasm-opt --translate-to-exnref` workaround, and the escape-block translation that made the workaround optional. |
 | \subpage lf2_deep_f3 | `F3` deep study and fix: the bottom-type rule, the three defects it exposed, and the one still open (`F3d`). |
+| \subpage lf4_index | **The `LF-4` set.** The component-model counterpart of `LF-2`: the arms, the bar, the verdicts, the `GAP-20` finding, and the reading order. |
+| \subpage lf4_s1 | `S1` — C# through `componentize-dotnet`: 🟨 Yellow, blocked at load by `GAP-20`. |
+| \subpage lf4_s2 | `S2` — C and C++ through wasi-sdk: two 🟩 Green (import-free) and one 🟨 Yellow (the same source with one libc call). |
+| \subpage lf4_s3 | `S3` — Go and TinyGo: two 🟨 Yellow, 2.5 MB and 22 KB, the same blocker. |
+| \subpage lf4_s4 | `S4` — Rust `wasm32-wasip2`: 🟩 Green. |
+| \subpage lf4_s5 | `S5` — MoonBit: 🟩 Green, 3,236 bytes. |
+| \subpage lf4_evidence | The `LF-4` evidence log: toolchains, hashes, transcripts, `GAP-20`'s reproduction, and what wasi-sdk 34.0 contains. |
 
 Reading order for a decision: `TRIAGE.md` §5 (is my language on the list, and
 what is its blocker?) → `CLUSTERING.md` §3/§6 (which study would answer it?) →
 `CHARTERS.md` (what would that study cost and prove?) → `LF2_INDEX.md` §4 (was
 it run, and what was the verdict?) → the cluster report. `EVIDENCE.md` and
 `LF2_EVIDENCE.md` are read whenever a claim in the others is about to be relied
-on.
+on. A **component** question — “will this `componentize`/`wit-bindgen` output
+load?” — starts at [`LF4_INDEX.md`](LF4_INDEX.md) §4 instead: the artifact is a
+different one, and its verdicts are scoped to `wasm-tools` + the component
+surface, not to the core `Callable` ABI.
 
 The charter's five required outputs
 ([`LANGUAGE_FEASIBILITY.md`](../LANGUAGE_FEASIBILITY.md) §7.2) are all here, in
@@ -97,6 +108,12 @@ same way the audit does: when an engine-owned surface moves
 [`READINESS_AUDIT.md`](../READINESS_AUDIT.md) §6.5), or when the canonical list
 changes materially.
 
+The `LF-4` component set is measured separately, at `6164c53` on 2026-11-16, with
+the toolchains pinned in [`LF4_EVIDENCE.md`](LF4_EVIDENCE.md) §2. It does not
+re-open the `LF-1` screen: it asks a different question (a component artifact,
+not a core module) and its conclusions expire with the component surface and the
+validator rule `GAP-20` names.
+
 ## 4. What this folder is not
 
 - **Not a support list.** An entry's presence, a cluster's charter, and even a
@@ -121,7 +138,8 @@ changes materially.
 | `LF-0a` — entry-gate readiness audit | `✅` 2026-10-30, [`READINESS_AUDIT.md`](../READINESS_AUDIT.md) |
 | `LF-1` — pre-feasibility / scoping study | `✅` **this folder**, 2026-10-30, and **re-screened** the same day after `LE-1`…`LE-6` landed ([`TRIAGE.md`](TRIAGE.md) §6.9) |
 | `LF-2` — full feasibility studies | `✅` **run** 2026-10-30 by the repository owner's commission (`T3` recorded in [`LF2_INDEX.md`](LF2_INDEX.md)): five chartered clusters, **15 arms** built and run, three engine findings (`F1`–`F3`); **not exhaustive** — 83 non-killed rows remain untested with a named condition ([`LF2_L6_L12.md`](LF2_L6_L12.md) §5) |
-| `LF-3` — the support decision | **Not started.** `F1`–`F3` are its input; it may reject every verdict. |
+| `LF-4` — component-model feasibility | `✅` **run** 2026-11-16 by the same owner's commission: **7 arms** over C#, C/C++, Go, TinyGo, Rust and MoonBit, 4 🟩 Green and 3 🟨 Yellow, one engine finding (`GAP-20`); [`LF4_INDEX.md`](LF4_INDEX.md) |
+| `LF-3` — the support decision | **Not started.** `F1`–`F3` and `GAP-20` are its input; it may reject every verdict. |
 
 ## 6. References
 

@@ -29,6 +29,57 @@ frame” below; the rest of this document applies to both.
 > instances as a concurrency model. The guest/host responsibility split is in
 > [`THREADSAFETY.md`](THREADSAFETY.md); the scenario table is §3.1–§3.2 there.
 
+## Host and Guest: the vocabulary {#abi_host_guest}
+
+**These two words are anchored differently here from the upstream WebAssembly
+material, and the difference is not cosmetic.** In the Component Model book and
+in most `wit-bindgen` documentation the *host* is the WebAssembly runtime and the
+*guest* is the source language compiled to it — “when compiling C or C++ to
+WebAssembly components, we say that C or C++ is the ‘guest’ language, and
+WebAssembly is the ‘host’ language”. In this tree the *host* is the native side
+that embeds the engine and the *guest* is WebAssembly itself, so a reader coming
+from those pages has the two vocabulary halves swapped:
+
+| Term here | Means | Does **not** mean |
+|---|---|---|
+| **host** | **WasmJit itself, or the native C++ application embedding it.** A host function, object or thread is native C++ that the engine calls, or that calls the engine. The harness, a game, a tool and an `Application` are hosts. | the WebAssembly runtime as a product; a source language; anything compiled to `.wasm` |
+| **guest** | **WebAssembly itself: a module or a component, or an instance of one**, whichever source language produced it — C, C++, Rust, Zig, Go, TinyGo, C#, AssemblyScript, MoonBit, Kotlin, Dart, … A guest is the `.wasm` artifact and its execution, never the language. | a language name; the compiler; the embedder |
+| **host-to-guest** (`H2G`) | Native C++ → a compiled Wasm function: `ModuleInstance::exportedFunction` followed by `callCallable`, or `ComponentFunction::callValues`. The C++ caller has no `VMContext*`, so the **callee's** context is arg0 (`Callable::context`). | a Wasm→Wasm call |
+| **guest-to-host** (`G2H`) | A compiled Wasm function → a native C++ function exposed to it through a **synthetic module**: a core `ImportResolver` entry whose `Callable::context` is `nullptr`, or a `ComponentHostImports` entry. arg0 is the **caller's** `VMContext*`, which is what lets the import read the importing module's linear memory, globals, tables and `hostData`. | a call into another module; a language runtime shipped in the engine |
+| **guest-to-guest** (`G2G`) | A compiled Wasm function → another Wasm function, in the same instance or in a different one. Mechanically the same call instruction as `G2H`, but `Callable::context` is **non-null**, so the **callee's** `VMContext*` is arg0 — burnt in for a direct cross-module import, loaded at run time for `call_indirect`/`call_ref`. | a host call; “the guest language calling itself” |
+
+The mechanical core of the last three rows is exactly the table in “VMContext
+Selection Rules” above: `G2H` is the `context == nullptr` import, `G2G` is the
+import with a context or an indirect call, and `H2G` is an export the C++ side
+enters with the callee's context. Three consequences follow, and they are the
+reason the three names exist at all:
+
+1. **A `G2H` call always starts from a `VMContext*` that owns memory.** The
+   native import sees the caller's `memories`, `globals`, `tables` and
+   `hostData`. A synthetic module has no `VMContext*` of its own and therefore no
+   memory of its own to offer; the callee's role in the call is filled by the
+   caller's context.
+2. **A `G2G` call cannot assume the caller's linear memory.** arg0 is the
+   callee's context, so a cross-module callee that needs the other module's
+   memory must import that memory; the pointer it receives names its own
+   instance's index spaces. This is a soundness rule, not a performance detail.
+3. **A `H2G` call has no caller context at all.** The C++ side owns no
+   `VMContext`; the only one that exists is the instance's, and that is the one
+   passed. That is why `exportedFunction()` returns a `Callable` that already
+   carries its instance's context.
+
+The same three names are the `direction` values of the neutral binding schema —
+`h2g`, `g2h`, `g2g`, plus the complete `all` form — that the `Tools/Bindings`
+projector emits
+([`EMBEDDING_SURFACE.md`](EMBEDDING_SURFACE.md) §11.8), and the `H→W` / `W→H` /
+`W→W` names of [`THREADSAFETY.md`](THREADSAFETY.md) §3 in their thread-safety
+role. **“Guest language” — Go, C#, MoonBit, … — means “a language that produces
+a guest”, and nothing more.** A synthetic module is defined in
+[`proposals/COMPONENT_MODEL.md`](proposals/COMPONENT_MODEL.md) §4.6,
+[`languages/LF2_ABI_INTEROP.md`](languages/LF2_ABI_INTEROP.md) §2 and
+[`SCOPE.md`](SCOPE.md) §3.1, and the one the engine ships is the diagnostics
+guest log ([`DIAGNOSTICS.md`](DIAGNOSTICS.md) §5.4).
+
 ## Design Philosophy
 
 WasmJit is designed as a spiritual successor to Quake 3's QVM — not as a

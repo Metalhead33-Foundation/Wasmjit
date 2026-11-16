@@ -2,7 +2,10 @@
 
 *The Milestone, and How Close We Are*
 
-Status: **milestone met 2026-10-29** (revision 12 — 2026-11-11: `GAP-19` closed and `GAP-8` met. An
+Status: **milestone met 2026-10-29** (revision 13 — 2026-11-16: `GAP-20` added to
+§8.1 by the `LF-4` component study — the component validator counts a 64-bit
+scalar as two flat slots, so a valid bare `canon lift` of a `-> u64` function is
+rejected for a missing `memory` option. Revision 12 — 2026-11-11: `GAP-19` closed and `GAP-8` met. An
 instance now releases the continuations it created when it is destroyed, and the parked-switch wait wakes on
 cancellation, so a worker's destructor can join a parked host thread; the fifteen-case cell and the full
 822-case ASan cell are clean on all three backends. Revision 11 — 2026-11-11: the full AddressSanitizer cell finally ran to 
@@ -555,6 +558,7 @@ otherwise.
 | ID | Kind | What it is | Where it bites | Owner / detail |
 |---|---|---|---|---|
 | `GAP-6` | limitation | Only **x86-64 Linux / SysV AMD64** is exercised. MS x64, AAPCS64, Windows ARM64, RISC-V and MIPS are specified but *provisional*; big-endian and ILP32 are unsupported by decision. **Excluded from the §10.1 closure plan by decision** — it needs a runner, not a patch. | all | [`ABI.md`](ABI.md) “The C ABI Contract” |
+| `GAP-20` | defect | The component validator counts a 64-bit scalar (`u64`/`s64`/`f64`) as **two** flat slots. `flatten_type` maps it to **one** core value, so `MAX_FLAT_RESULTS = 1` is over-counted and a valid bare `canon lift`/`canon lower` of `func() -> u64` is rejected with “canonical option `memory` is required”. Found by `LF-4`; **not fixed**. | any preview2 component importing `wasi:clocks` (C#, Go, TinyGo, libc-linked C); a `-> u64` export or nine `u64` parameters | [`languages/LF4_INDEX.md`](languages/LF4_INDEX.md) §5, [`languages/LF4_EVIDENCE.md`](languages/LF4_EVIDENCE.md) §5; fix is `flatSlots` in `WasmBase/WasmComponentValidation.cpp`, class **A** |
 
 ### 8.2 Decisions that are not defects
 

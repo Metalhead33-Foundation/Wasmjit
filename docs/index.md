@@ -27,6 +27,7 @@ applies to `proposals/`, `languages/` and `backends/`.
 | change type identity, canonicalisation or `match` | \subpage doc_type_identity | module-local indices → store-scoped `TypeId`, interning, `rec` groups |
 | add or change a diagnostic | \subpage doc_diagnostics | the id/record/schema contract, the ring, the sink, the host flags |
 | emit, call or embed compiled code | \subpage doc_abi | `VMContext*` as arg0, `Callable`, result tuples, `v128`, references, the embedder guide |
+| write “host”, “guest”, `H2G`, `G2H` or `G2G` in a note, a comment or an API name | \subpage doc_abi | the four terms as this tree uses them, and the upstream component-model sense they are **not** |
 | audit or refresh the link-visible ABI | \subpage doc_abi_baselines | the `libWasmBase`/`libLibJit` export baselines and what `abi-check.sh` treats as a break |
 | change a signature, a function prolog, or a GC object layout | \subpage doc_abi | “The C ABI Contract” (C linkage, host C ABI, target matrix, non-degeneracy) and “GC Object and Heap ABI” |
 | review the `v128` / register-and-stack ABI refactor | [backends/HISTORY.md](backends/HISTORY.md) §3.3 | the historical study and post-mortem: blast radius, phases, what shipped, what failed, and the lessons (frozen record); the current contract is `ABI.md` |
@@ -45,7 +46,7 @@ applies to `proposals/`, `languages/` and `backends/`.
 | decide whether something is an engine gap or an out-of-scope boundary | \subpage doc_scope | the triage rule, the embedder/text/encoding-blocked tables, the recorded deviations |
 | find a per-proposal note | \subpage proposals_index | the per-proposal notes: spec demands → shipped state → gaps → deviations → plan → tests |
 | find a backend slice, defect or measurement | \subpage backends_index | the current backend facts, the two backend pages, and the frozen `HISTORY.md` |
-| find a language study | \subpage languages_index | the `LF-1` triage, the `LF-2` arms, the verdicts and engine findings |
+| find a language study | \subpage languages_index | the `LF-1` triage, the `LF-2` arms, the `LF-4` component arms, the verdicts and engine findings |
 
 ## 2. What is deliberately *not* a separate document
 

@@ -216,6 +216,11 @@ row: its documented path is AssemblyScript (`T15`).
   row of `API_ABI_STABILITY.md` §8 is measured against. A language on it is
   served *as a `.wasm` producer*; nothing here promises a language runtime,
   stdlib, WASI implementation or JS host — those stay in §3.
+- **It is a claim about core modules.** A *component* produced by one of these
+  languages is a different artifact with a different ABI, and its verdicts are a
+  different study ([`languages/LF4_INDEX.md`](languages/LF4_INDEX.md)); nothing in
+  this table is extended by one of them, and a component that fails to load is
+  not a row here.
 - It is **not** the `LF-3` support decision, which is still open and may reject
   any of these verdicts ([`LANGUAGE_FEASIBILITY.md`](LANGUAGE_FEASIBILITY.md) §8).
   The green rows are "passed the charter bar at this version on this engine",
