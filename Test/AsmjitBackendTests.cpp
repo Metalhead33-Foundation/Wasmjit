@@ -535,12 +535,18 @@ namespace {
 //! Calls that *are* the structure rather than the instruction stream.
 //! `invoke`, `bind`, `ret` and the allocators are ABI and register plumbing, and
 //! the universal layer wraps the same host compiler, so they do not move.
+//! The structural calls the backend may make on the host compiler.
+//!
+//! These are ABI and register plumbing — allocation, frames, labels, function
+//! bodies — which `ujit` delegates rather than replaces. The *portable* spelling
+//! is the only one listed: `new_vec128`, not its x86-only synonym `new_xmm`.
+//! \return The allowed call names.
 const std::set<std::string>& structuralCalls()
 {
 	static const std::set<std::string> names = {
 		"bind", "finalize", "invoke", "new_func", "new_gp16", "new_gp32",
 		"new_gp64", "new_gp8", "new_gp_ptr", "new_label", "new_stack",
-		"new_vec128", "new_xmm", "ret",
+		"new_vec128", "ret",
 	};
 	return names;
 }
@@ -657,4 +663,29 @@ TEST_CASE("asmjit: the host-specific emission set only shrinks", "[asmjit][ujit]
 		INFO("sub-register view in the seam: " << view);
 		CHECK(emitter.find(view) == std::string::npos);
 	}
+
+	// No host *type* either: the three files spell `asmjit::ujit::Gp`/`Mem`/`Vec`
+	// and nothing from the ISA namespace, so the same source compiles for a second
+	// target. This is the rule that closes `BE-7`'s residue (416 spellings).
+	for (const auto* source : { &compiler, &context, &emitter }) {
+		CHECK(source->find("asmjit::x86") == std::string::npos);
+	}
+
+	// The seam's escape hatch is unused: every instruction now has a universal
+	// operation, including `lea` and the GC object addresses it forms.
+	CHECK(compiler.find("emitter.host()") == std::string::npos);
+	CHECK(context.find("emitter.host()") == std::string::npos);
+
+	// One guarded exception remains, and only one: the per-lane variable-count
+	// vector shift, which the universal vocabulary cannot express (immediate
+	// counts only). It sits inside `ASMJIT_UJIT_X86` and the caller takes the
+	// portable helper path everywhere else, so this count is the whole host set.
+	const std::string guard = "#if defined(ASMJIT_UJIT_X86)";
+	CHECK(emitter.find(guard) != std::string::npos);
+	std::size_t hostShifts = 0;
+	for (std::size_t at = emitter.find("backend_.ps"); at != std::string::npos;
+			at = emitter.find("backend_.ps", at + 1))
+		++hostShifts;
+	INFO("guarded host vector shifts: " << hostShifts);
+	CHECK(hostShifts == 6);
 }

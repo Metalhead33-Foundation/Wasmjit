@@ -7,14 +7,17 @@ This directory contains a native WebAssembly backend built on AsmJit. It
 implements the four `ModuleInstantiator` hooks and executes the shared lowering
 slice with AsmJit’s register allocator.
 
-**Status (2026-11-17, working tree on `d9d560b`+):** **production-ready within
-the declared envelope, and now a converting backend** — `WASMJIT_BACKEND=asmjit
-./Test/WasmJit --rng-seed 12345 '~[tail]~[compilation-policy]'` reports **23,132
-assertions in 857 cases, green**, and every emitted instruction goes through
-AsmJIT's Universal JIT, so the byte-order reversal SLJIT emits is available here
-too (`BE-7`). The envelope is x86-64 Linux / SysV AMD64 with the external
-AsmJit library available at build time, and the documented refusals are the same
-three as SLJIT’s (see `Sljit/Sljit.md` "Known limitations"). See
+**Status (2026-11-17, working tree):** **production-ready within the declared
+envelope, converting, and now target-independent at the source level** —
+`WASMJIT_BACKEND=asmjit ./Test/WasmJit --rng-seed 12345
+'~[tail]~[compilation-policy]'` reports **23,139 assertions in 857 cases,
+green**. Every emitted instruction goes through AsmJIT's Universal JIT, every
+guest access converts when the byte-order decision says so, and the translation
+units name no host instruction, register or memory type — so a second target is
+an AsmJit build configuration, not a change here (`BE-7`). The envelope is still
+x86-64 Linux / SysV AMD64 with the external AsmJit library available at build
+time, and the documented refusals are the same three as SLJIT’s (see
+`Sljit/Sljit.md` "Known limitations"). See
 [`docs/API_ABI_STABILITY.md`](../docs/API_ABI_STABILITY.md) §12 for the verdict
 and §8 for the open register and the defect ledger. It is still not a
 *code-quality* drop-in replacement for GNU LibJIT.
@@ -142,17 +145,18 @@ target-architecture check).
 
 ## Byte order
 
-A big-endian host is **served, not refused** — on any architecture this backend can
-compile for. This backend emits the same byte reversal SLJIT does
-(docs/proposals/BIG_ENDIAN.md `BE-7`, closing `BED4`'s AsmJIT half). The reversal
-is decided once, while the code is generated, so a little-endian build emits
-nothing extra and its code is byte-identical to what it always was (`BED5`).
+A big-endian host is **served, not refused**. This backend emits the same byte
+reversal SLJIT does (docs/proposals/BIG_ENDIAN.md `BE-7`, closing `BED4`'s AsmJIT
+half). The reversal is decided once, while the code is generated, so a
+little-endian build emits nothing extra and its code is byte-identical to what it
+always was (`BED5`).
 
-The qualifier matters and is not a formality: the *conversion* is complete, but
-the *reach* is currently x86-64 only, because the type names in this backend are
-still host-spelled ("what is still host-spelled" below). Every big-endian target
-AsmJIT could serve is AArch64 BE, so the two halves meet only once that residue
-is cleared.
+The *conversion* and the *reach* are now both complete: the conversion is
+policy-driven at every guest access, and the source names no host type, so
+building it for a big-endian AArch64 host is an AsmJit configuration question
+rather than a change to this code ("nothing is host-spelled" below). No such
+build has been run — that is `BE-5`'s runner — so the target remains
+*provisional* in [`docs/ABI.md`](../docs/ABI.md) terms.
 
 What converts, and what does not:
 
@@ -232,6 +236,9 @@ The slices, in the order they landed:
 | Vector arithmetic, compares, moves | `p*` → `kAndU32`/`kAddU8`/`kAvgrU8`/`kMinU8`/`kCmpLtI8`/`kLoad128_U32`/`kStore128_U32`/`kMovU32`… | S5 |
 | Diagnostic probes (`AsmjitContext.cpp`) | the same vocabulary, through the same façade | S6 |
 | Guest accesses and the GC header word | `guestLoad*`/`guestStore*`, `headerLoad32` → `kLoad*`/`kStore*` plus `kBSwap`/`kRor` | S7 |
+| Sub-register views, sign and zero extension, flag materialisation | `mov` made total (width change through a slot), `movsx*`/`movzx*` as shift pairs, `selectFlag` without a subject | S8 |
+| Host *types* and memory operands | `x86::Gp`/`Mem`/`Vec`/`Compiler`, `*_ptr(...)`, `CondCode`, `new_xmm` → the `ujit` aliases, `ujit::mem_ptr`, a relation enum over `cmp_eq`/`scmp_*`/`ucmp_*`, `new_vec128` | S9 |
+| Address formation and the return-42 probe | `lea` → `ujit`'s `lea`; `x86::Assembler` + `eax` → the same `ujit` function path the backend uses | S9 |
 
 ### What the conversion bought
 
@@ -255,16 +262,26 @@ instruction, one meaning:
   invert a mask all disappeared, because `kCmpLtI8`/`kCmpGeI8` name the
   predicate and the signedness.
 
-### The host-specific set
+### The last host-side path, and why it is conditional
 
-| Entry | Why it stays host-side |
+The host-specific set is now **one guarded instruction family**, and it is
+optional rather than required:
+
+| Entry | Why it is host-side, and what happens without it |
 |---|---|
-| `lea` | no address-formation operation exists, and a frame-relative operand's displacement is rewritten during frame finalisation, so extracting base and offset would read the pre-layout value |
-| `psllw`/`psraw`/`psrlw`/`pslld`/`psrad`/`psrld` by a per-lane count (6 sites) | the universal shift vocabulary is immediate-count only; a vector-count shift has no universal operation at all |
-| `asmjit::x86::Assembler` in `compileReturn42` | a target probe, not generated code: it asks whether this CPU can execute what AsmJit produces, so it is deliberately spelled in the host ISA and would be rewritten per target |
+| `psllw`/`psraw`/`psrlw`/`pslld`/`psrad`/`psrld` by a per-lane count (6 sites, inside `#if defined(ASMJIT_UJIT_X86)`) | the universal shift vocabulary is **immediate-count only** (`v_slli_i16`, `v_srai_i32`, …), so wasm's per-lane variable shift has no universal operation at all. `Emitter::hasVariableVectorShift()` answers the capability at compile time; a target without it takes the shared `wasm_simd` helper path, which is the same path `WASMJIT_SIMD_NATIVE=0` already uses. It is the one thing to file upstream |
 
-The first two are the whole remainder — six instructions and one address
-operation — and both are named in the ledger test, so they cannot grow silently.
+Two entries that used to be here are gone, and neither was what the earlier note
+claimed:
+
+- **`lea` was never host-only.** `ujit` has `lea(dst, mem)`, including for a stack
+  slot whose displacement is not final until the frame is laid out — which is
+  exactly why the operand is passed through rather than decomposed. The façade
+  now calls `universal_.lea` and the frame-relative sites work unchanged.
+- **The return-42 probe was rewritten, not dropped.** It asked whether the CPU can
+  execute what AsmJit produces; going through the same `ujit` function path the
+  backend uses makes it answer that question about the code the backend actually
+  emits, instead of about a bare host assembler.
 
 ### Width discipline: no sub-register views
 
@@ -306,40 +323,39 @@ price of expressing it portably, and exactly where a target with `uxtw`/`mov w, 
 would do it in one. And `i64.load32_s`-style accesses are unaffected, because a
 widening *load* is a single universal instruction (`kLoadI32`).
 
-### What is still host-spelled
+### Nothing is host-spelled
 
-With the views gone, what remains is a naming layer: the backend translation
-units still spell `asmjit::x86::` **416** times (`AsmjitModuleCompiler.cpp` 377,
-`AsmjitContext.cpp` 39). The ledger test cannot see it because it reads
-instructions rather than types. Nothing about it affects an x86-64 build — the
-universal aliases are the same types — but it is what would stop this file
-compiling for AArch64, so it is the honest statement of `BE-7`'s boundary:
+The residue the first audit found — **416 `asmjit::x86::` spellings** across the
+compiler and the context — is now **zero**, so this backend's source names only
+`asmjit::ujit` aliases and no host type at all. What it took, and what it taught:
 
-| Residue | Count | Portable spelling | Difficulty |
-|---|---|---|---|
-| `asmjit::x86::Gp` / `Mem` / `Vec` | 238 | `asmjit::ujit::Gp` / `Mem` / `Vec` (exact aliases) | rename |
-| `x86::qword_ptr` / `dword_ptr` / `word_ptr` / `byte_ptr` / `ptr` | 160 | `asmjit::ujit::mem_ptr(base, disp)` | rename, but `mem_ptr` carries no size — the one API difference to check |
-| `x86::xmmword_ptr` | 6 | `ujit::Mem(base, disp, 16)` | as above |
-| `x86::CondCode` (`kE`, `kNB`, …) | 21 | `ujit::Condition` (`kEq`, `kGtu`, …) | small mapping, values differ |
-| `asmjit::x86::Compiler` | 9 | `asmjit::ujit::BackendCompiler` | rename |
-| `new_xmm(...)` | 24 | `new_vec128(...)` | rename; the ledger's structural list should prefer the portable name |
-| `x86::Assembler` + `x86::eax` (`compileReturn42`) | 2 | a target probe, guarded per ISA | see "The host-specific set" |
-| ~~`.r32()` / `.r8()` / `.r16()` / `.r64()`~~ | ~~81~~ **0** | — | **done**: see "Width discipline" above |
+| Was | Now | Note |
+|---|---|---|
+| `asmjit::x86::Gp` / `Mem` / `Vec` (238) | `asmjit::ujit::Gp` / `Mem` / `Vec` | exact aliases — the same types on x86 |
+| `x86::qword_ptr` / `dword_ptr` / `word_ptr` / `byte_ptr` / `ptr` (160) | `asmjit::ujit::mem_ptr(base, disp)` | `mem_ptr` carries **no size**, which is the one real API change |
+| `x86::xmmword_ptr` (6) | `ujit::mem_ptr(...)` | the 128-bit helpers take the operand, not its width |
+| `x86::CondCode` (`kE`, `kNB`, …) (21) | a local `Compare` relation enum over `cmp_eq`/`scmp_*`/`ucmp_*` | the factories carry the signedness; no host flag name survives |
+| `asmjit::x86::Compiler` (9) | `asmjit::ujit::BackendCompiler` | alias of `host::Compiler` |
+| `new_xmm(...)` (24) | `new_vec128(...)` | the portable allocation call |
+| `x86::Assembler` + `x86::eax` (2) | the same `ujit` function path the backend uses | the return-42 probe |
 
-The last row is the interesting one, and it is not a rename. `ujit::Gp` *is*
-`host::Gp` (`ujitbase.h`), so a sub-register view is spelled in the host's
-vocabulary: `.r32()` on x86, `.w()`/`.x()` on AArch64. `ujit` replaces the
-instruction set, not the register type — allocation (`new_gp32`/`new_gp64`/
-`new_vec128`) is portable, but *narrowing an existing register* is not. A real
-second-target port has to keep operands at their declared width from allocation
-onwards, which is a design pass through `IntegerFunctionEmitter`'s helpers rather
-than a search-and-replace.
+The unsized operand was the interesting half, because the seam had been deriving
+the access width *from* the memory operand's metadata (`accessWidth(mem.size(),
+reg.size())`) — and sizes are an x86 convenience: `x86::Mem` has `set_size()`,
+`a64::Mem` does not. So a sized operand is not portable, and the width now lives
+where it belongs — in the seam: `store8/16/32/64` and `loadZ8/16/32` name it
+outright, and the sites whose access is *narrower* than the register
+(`array.copy`'s packed moves, the zero-initialised GC fields, the `i32` half of a
+global cell) use them. Everything else keeps an unsized operand and the seam
+derives the width from the register, which is what the size always meant.
 
-So `BE-7`'s claim is precise and deliberately narrow: **the emitted instruction
-vocabulary is target-independent, and a big-endian host of a supported
-architecture can be served.** "Compiles for AArch64" is a further slice, and the
-first step of it is mechanical: the 415 → 0 rename plus a ledger rule that fails
-on `asmjit::x86::` in these two files.
+Three ledger rules keep it closed: no `asmjit::x86` in any of the three files, no
+sub-register view, and no `host()` call — plus an exact count of six for the
+guarded vector shifts, so the host set cannot grow silently.
+
+`BE-7`'s claim is therefore now the strong one: **the source is
+target-independent.** A second-target build needs an AsmJit with that target
+enabled, not a change to this code.
 
 ### Error reporting
 
@@ -351,17 +367,17 @@ hidden, because it is a diagnostic regression, not a correctness one.
 
 ### What the conversion left open
 
-Nothing in the emission path: the vocabulary is universal, the ledger is empty of
-raw instructions, and the byte reversal rides on the same guest accessors. Two
-things are worth knowing rather than fixing:
+Nothing in the emission path: the vocabulary is universal, the source names no
+host type, and the byte reversal rides on the same guest accessors. Two things are
+worth knowing rather than fixing:
 
 - **A per-lane variable-count vector shift** has no universal operation (the
-  vocabulary offers immediate counts only), so those six instructions still go
-  through `host()`. They are the whole host-specific instruction set, and the
-  ledger names them.
-- **A register-to-register sign extension** has no universal operation either, so
-  the façade re-expresses it as a shift pair. Two instructions instead of one, and
-  nothing target-specific.
+  vocabulary offers immediate counts only). It is the one guarded host path, it is
+  capability-gated, and a target without it takes the portable helper route.
+- **A register-to-register extension** has no universal operation either, so the
+  façade re-expresses it as a shift pair, and a same-width-changing `mov` costs a
+  store-forwarded pair. Two instructions instead of one, and nothing
+  target-specific.
 
 The byte-order half is closed for this backend; the port as a whole still needs a
 big-endian runner (docs/proposals/BIG_ENDIAN.md `BE-5`), which is a hardware and

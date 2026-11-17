@@ -13,10 +13,11 @@
   \file AsmjitEmitter.hpp
   \brief The one place this backend spells a generated instruction.
 
-  The backend emits through **AsmJit's Universal JIT** (`asmjit::ujit`) rather
-  than through `asmjit::x86` directly (docs/proposals/BIG_ENDIAN.md `BE-7`).
-  `asmjit::ujit::UniCompiler` wraps the same `asmjit::host::Compiler` this backend
-  already used — `asmjit::ujit::Gp`, `asmjit::ujit::Vec` and `asmjit::ujit::Mem` *are* the host's
+  The backend emits through **AsmJit's Universal JIT** (`asmjit::ujit`) and names
+  nothing else (docs/proposals/BIG_ENDIAN.md `BE-7`): no host instruction, no host
+  register or memory *type*, and no sub-register view. `asmjit::ujit::UniCompiler`
+  wraps the same `asmjit::host::Compiler` this backend already used —
+  `asmjit::ujit::Gp`, `asmjit::ujit::Vec` and `asmjit::ujit::Mem` *are* the host's
   register and memory types — so only the *instruction* vocabulary changes:
   `uc.add(dst, a, b)` instead of `cc.add(dst, b)`, `uc.j(label, condition)`
   instead of `cc.test`/`cc.jz`.
@@ -198,6 +199,100 @@ public:
 			universal_.load_u64(dst, slot);
 			return;
 		}
+	}
+
+	/*!
+	 * \brief Stores a byte at the access width, whatever the register's width.
+	 *
+	 * The width is the *parameter*, not the memory operand's metadata: a sized
+	 * memory operand is an x86-only convenience (`a64::Mem` has no `set_size()`),
+	 * so the seam states the width and the operand carries only the address.
+	 * \param dst Destination memory operand.
+	 * \param src Source register, read at byte width.
+	 */
+	void store8(const asmjit::ujit::Mem& dst, const asmjit::ujit::Gp& src)
+	{
+		universal_.store_u8(dst, src);
+	}
+
+	/*!
+	 * \brief Stores a halfword at the access width.
+	 * \param dst Destination memory operand.
+	 * \param src Source register, read at word width.
+	 */
+	void store16(const asmjit::ujit::Mem& dst, const asmjit::ujit::Gp& src)
+	{
+		universal_.store_u16(dst, src);
+	}
+
+	/*!
+	 * \brief Stores a doubleword at the access width.
+	 * \param dst Destination memory operand.
+	 * \param src Source register, read at doubleword width.
+	 */
+	void store32(const asmjit::ujit::Mem& dst, const asmjit::ujit::Gp& src)
+	{
+		universal_.store_u32(dst, src);
+	}
+
+	/*!
+	 * \brief Stores a quadword at the access width.
+	 * \param dst Destination memory operand.
+	 * \param src Source register.
+	 */
+	void store64(const asmjit::ujit::Mem& dst, const asmjit::ujit::Gp& src)
+	{
+		universal_.store_u64(dst, src);
+	}
+
+	/*!
+	 * \brief Loads a quadword.
+	 * \param dst Destination register.
+	 * \param src Source memory operand.
+	 */
+	void load64(const asmjit::ujit::Gp& dst, const asmjit::ujit::Mem& src)
+	{
+		universal_.load_u64(dst, src);
+	}
+
+	/*!
+	 * \brief Stores an immediate at byte width.
+	 * \param dst Destination memory operand.
+	 * \param value Immediate value.
+	 */
+	void store8(const asmjit::ujit::Mem& dst, const asmjit::Imm& value)
+	{
+		storeImmediate(1, dst, value);
+	}
+
+	/*!
+	 * \brief Stores an immediate at halfword width.
+	 * \param dst Destination memory operand.
+	 * \param value Immediate value.
+	 */
+	void store16(const asmjit::ujit::Mem& dst, const asmjit::Imm& value)
+	{
+		storeImmediate(2, dst, value);
+	}
+
+	/*!
+	 * \brief Stores an immediate at doubleword width.
+	 * \param dst Destination memory operand.
+	 * \param value Immediate value.
+	 */
+	void store32(const asmjit::ujit::Mem& dst, const asmjit::Imm& value)
+	{
+		storeImmediate(4, dst, value);
+	}
+
+	/*!
+	 * \brief Stores an immediate at quadword width.
+	 * \param dst Destination memory operand.
+	 * \param value Immediate value.
+	 */
+	void store64(const asmjit::ujit::Mem& dst, const asmjit::Imm& value)
+	{
+		storeImmediate(8, dst, value);
 	}
 
 	/*!
@@ -1061,24 +1156,76 @@ public:
 
 	//! \}
 
-	//! \name Host-specific vocabulary
-	//! Each entry is a *decision* that the universal layer has no spelling for,
-	//! and `Asmjit.md` "The host-specific set" records the reason.
+	//! \name The one capability-gated host path
+	//! `lea` and every other instruction now have a universal operation; what
+	//! remains here is the per-lane variable-count vector shift, which the
+	//! universal vocabulary cannot express. It is compiled only where the host
+	//! instruction set has it, and the caller asks hasVariableVectorShift() first
+	//! rather than assuming. `Asmjit.md` "The last host-side path" records why.
 	//! \{
 
 	/*!
-	 * \brief Forms the address of a memory operand in a register.
+	 * \brief Forms an address from a memory operand, without loading it.
 	 *
-	 * Host-specific on purpose: the operand may be frame-relative, and the
-	 * compiler rewrites such an operand's displacement during frame
-	 * finalisation, so extracting base and displacement here would read the
-	 * pre-layout value. The universal layer has no address-formation op.
+	 * \p src may be a register base plus a displacement *or* a stack slot whose
+	 * displacement is not final until the frame is laid out, which is why the
+	 * operand is passed through rather than decomposed into base and offset:
+	 * `ujit`'s `lea` takes the operand and leaves the layout to the compiler.
 	 * \param dst Destination register.
 	 * \param src Address operand.
 	 */
 	void lea(const asmjit::ujit::Gp& dst, const asmjit::ujit::Mem& src)
 	{
-		backend_.lea(dst, src);
+		universal_.lea(dst, src);
+	}
+
+	/*!
+	 * \brief Tests whether a per-lane variable-count vector shift can be emitted.
+	 *
+	 * The universal vector shift vocabulary is **immediate-count only**
+	 * (`v_slli_i16`, `v_srai_i32`, …), so wasm's per-lane variable shift has no
+	 * universal operation at all. This build answers true only where the host
+	 * instruction set has one and ujit exposes it; the caller otherwise takes the
+	 * portable helper path, which is why this is a capability query rather than a
+	 * silent no-op.
+	 * \return true when vectorShiftBy() can emit the shift.
+	 */
+	static constexpr bool hasVariableVectorShift() noexcept
+	{
+#if defined(ASMJIT_UJIT_X86)
+		return true;
+#else
+		return false;
+#endif
+	}
+
+	/*!
+	 * \brief Emits one per-lane variable-count vector shift.
+	 *
+	 * Kinds are the `wasm_simd` integer shifts in the order the dispatcher uses
+	 * them: 0..2 `i16x8` `shl`/`shr_s`/`shr_u`, 3..5 the `i32x4` trio. Only
+	 * reached when hasVariableVectorShift() is true.
+	 * \param kind Shift kind, 0..5.
+	 * \param vector Value register, shifted in place.
+	 * \param count Per-lane count register.
+	 */
+	void vectorShiftBy(uint32_t kind, const asmjit::ujit::Vec& vector,
+			const asmjit::ujit::Vec& count)
+	{
+#if defined(ASMJIT_UJIT_X86)
+		switch (kind) {
+		case 0: backend_.psllw(vector, count); return;
+		case 1: backend_.psraw(vector, count); return;
+		case 2: backend_.psrlw(vector, count); return;
+		case 3: backend_.pslld(vector, count); return;
+		case 4: backend_.psrad(vector, count); return;
+		default: backend_.psrld(vector, count); return;
+		}
+#else
+		(void)kind;
+		(void)vector;
+		(void)count;
+#endif
 	}
 
 	//! \}
@@ -1190,6 +1337,37 @@ public:
 	asmjit::ujit::UniCompiler& universal() noexcept { return universal_; }
 
 private:
+	/*!
+	 * \brief Stores an immediate at an explicit width.
+	 *
+	 * A zeroing store has its own universal instruction; any other immediate is
+	 * materialised in a scratch register and stored at the same width.
+	 * \param width Access width in bytes.
+	 * \param dst Destination memory operand.
+	 * \param value Immediate value.
+	 */
+	void storeImmediate(std::uint32_t width, const asmjit::ujit::Mem& dst,
+			const asmjit::Imm& value)
+	{
+		if (value.value() == 0) {
+			switch (width) {
+			case 1: universal_.store_zero_u8(dst); return;
+			case 2: universal_.store_zero_u16(dst); return;
+			case 4: universal_.store_zero_u32(dst); return;
+			default: universal_.store_zero_u64(dst); return;
+			}
+		}
+		asmjit::ujit::Gp scratch = width == 8
+				? backend_.new_gp64("immediateStore") : backend_.new_gp32("immediateStore");
+		universal_.mov(scratch, value);
+		switch (width) {
+		case 1: universal_.store_u8(dst, scratch); return;
+		case 2: universal_.store_u16(dst, scratch); return;
+		case 4: universal_.store_u32(dst, scratch); return;
+		default: universal_.store_u64(dst, scratch); return;
+		}
+	}
+
 	//! \name Byte-order helpers
 	//! The four reversals one guest access can need, and the two in-place
 	//! extensions a reversed signed load finishes with. All of them work on the

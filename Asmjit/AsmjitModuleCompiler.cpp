@@ -456,7 +456,7 @@ extern "C" float asmjitF32DemoteF64(double x) noexcept { return static_cast<floa
 extern "C" double asmjitF64PromoteF32(float x) noexcept { return static_cast<double>(x); }
 
 
-asmjit::x86::Gp newIntegerRegister(asmjit::x86::Compiler& compiler,
+asmjit::ujit::Gp newIntegerRegister(asmjit::ujit::BackendCompiler& compiler,
 		const WASM::ValueType& type, const char* name)
 {
 	// A float value travels as its bit pattern in a Gp (4 bytes for f32, 8 for
@@ -1339,7 +1339,7 @@ private:
 	struct ControlFrame;
 
 public:
-	IntegerFunctionEmitter(asmjit::x86::Compiler& compiler, asmjit::ujit::UniCompiler& universal,
+	IntegerFunctionEmitter(asmjit::ujit::BackendCompiler& compiler, asmjit::ujit::UniCompiler& universal,
 			asmjit::FuncNode& function,
 			const WASM::FuncType& type, const WASM::FunctionBody& body,
 			const WASM::Module& module, WASM::ModuleInstanceInternals& internals,
@@ -1390,7 +1390,7 @@ public:
 			// The caller supplies a 16-byte buffer as a trailing pointer argument; keep
 			// it in a stack slot so helper calls cannot clobber it.
 			v128ResultSlot = compiler.new_stack(16, 16, "v128ResultBuffer");
-			asmjit::x86::Gp bufferPointer = compiler.new_gp_ptr("v128ResultBufferIn");
+			asmjit::ujit::Gp bufferPointer = compiler.new_gp_ptr("v128ResultBufferIn");
 			function.set_arg(static_cast<uint32_t>(stack.parameterCount) + 1,
 					bufferPointer);
 			emitter.mov(v128ResultSlot, bufferPointer);
@@ -1418,10 +1418,10 @@ public:
 		checkError(compiler.invoke(asmjit::Out(trapSlotCall),
 				reinterpret_cast<uint64_t>(&WASM::wasm_trap_slot), trapSlotSignature),
 				"AsmJit failed to emit pending-trap slot lookup");
-		asmjit::x86::Gp trapSlot = compiler.new_gp_ptr("trapSlot");
+		asmjit::ujit::Gp trapSlot = compiler.new_gp_ptr("trapSlot");
 		trapSlotCall->set_ret(0, trapSlot);
-		asmjit::x86::Gp pending = compiler.new_gp32("pendingTrap");
-		emitter.mov(pending, asmjit::x86::dword_ptr(trapSlot,
+		asmjit::ujit::Gp pending = compiler.new_gp32("pendingTrap");
+		emitter.mov(pending, asmjit::ujit::mem_ptr(trapSlot,
 				static_cast<int32_t>(offsetof(WASM::TrapSlot, pending))));
 		asmjit::Label bodyLabel = compiler.new_label();
 		emitter.j(bodyLabel, asmjit::ujit::test_z(pending, pending));
@@ -1431,11 +1431,11 @@ public:
 			// there is nothing to store (step 5c).
 			checkError(compiler.ret(), "AsmJit trap-path void return emission failed");
 		} else if (isFloatKind(resultType)) {
-			auto zero = compiler.new_xmm("trapFloatResult");
+			auto zero = compiler.new_vec128("trapFloatResult");
 			emitter.vectorZero(zero);
 			checkError(compiler.ret(zero), "AsmJit trap-path float return emission failed");
 		} else {
-			asmjit::x86::Gp zero = kindWidth(resultType) == 8
+			asmjit::ujit::Gp zero = kindWidth(resultType) == 8
 					? compiler.new_gp64("trapResult") : compiler.new_gp32("trapResult");
 			emitter.xor_(zero, zero);
 			checkError(compiler.ret(zero), "AsmJit trap-path result return emission failed");
@@ -1453,9 +1453,9 @@ public:
 			for (uint32_t i = 0; i < stack.parameterCount; ++i) {
 				const WASM::ValueType& declared = stack.allLocals[i];
 				if (declared.opcode == WASM::ValueTypeCode::V128) {
-					asmjit::x86::Gp buffer = newVectorBuffer("v128Param");
-					asmjit::x86::Gp source = compiler.new_gp_ptr("paramAddress");
-					emitter.lea(source, asmjit::x86::Mem(framePointer, offset));
+					asmjit::ujit::Gp buffer = newVectorBuffer("v128Param");
+					asmjit::ujit::Gp source = compiler.new_gp_ptr("paramAddress");
+					emitter.lea(source, asmjit::ujit::Mem(framePointer, offset));
 					copyVector(buffer, source);
 					locals.push_back(buffer);
 					offset += 16;
@@ -1463,8 +1463,8 @@ public:
 				}
 				// Scalars -- integers and float bit patterns alike -- load
 				// straight out of the frame into their register.
-				asmjit::x86::Gp parameter = newIntegerRegister(compiler, declared, "parameter");
-				emitter.mov(parameter, asmjit::x86::Mem(framePointer, offset));
+				asmjit::ujit::Gp parameter = newIntegerRegister(compiler, declared, "parameter");
+				emitter.mov(parameter, asmjit::ujit::Mem(framePointer, offset));
 				locals.push_back(parameter);
 				offset += 8;
 			}
@@ -1473,7 +1473,7 @@ public:
 			const WASM::ValueType& declared = stack.allLocals[i];
 			if (isFloatKind(declared.opcode)) {
 				// The ABI argument is an Xmm; the body works on its bit pattern.
-				auto parameter = compiler.new_xmm("parameter");
+				auto parameter = compiler.new_vec128("parameter");
 				function.set_arg(i + 1, parameter);
 				const int width = kindWidth(declared.opcode);
 				auto bits = width == 4
@@ -1485,7 +1485,7 @@ public:
 					emitter.vectorToGp64(bits, parameter);
 				locals.push_back(bits);
 			} else {
-				asmjit::x86::Gp parameter = newIntegerRegister(compiler, declared, "parameter");
+				asmjit::ujit::Gp parameter = newIntegerRegister(compiler, declared, "parameter");
 				function.set_arg(i + 1, parameter);
 				locals.push_back(parameter);
 			}
@@ -1493,11 +1493,11 @@ public:
 		for (uint32_t i = 0; i < stack.localCount; ++i) {
 			const WASM::ValueTypeCode kind = stack.allLocals[stack.parameterCount + i].opcode;
 			if (kind == WASM::ValueTypeCode::V128) {
-				asmjit::x86::Gp local = newVectorBuffer("v128Local");
+				asmjit::ujit::Gp local = newVectorBuffer("v128Local");
 				zeroVector(local);
 				locals.push_back(local);
 			} else {
-				asmjit::x86::Gp local = newIntegerRegister(compiler,
+				asmjit::ujit::Gp local = newIntegerRegister(compiler,
 						stack.allLocals[stack.parameterCount + i], "local");
 				emitter.xor_(local, local);
 				locals.push_back(local);
@@ -1567,29 +1567,29 @@ public:
 				// Multi-result (docs/ABI.md): every
 				// result goes into the frame in declaration order, 8 bytes per scalar
 				// slot and 16 for a `v128` taken from its local buffer.
-				asmjit::x86::Gp destination = compiler.new_gp_ptr("resultAddress");
+				asmjit::ujit::Gp destination = compiler.new_gp_ptr("resultAddress");
 				emitter.lea(destination,
-						asmjit::x86::Mem(framePointer, frameResultOffset));
+						asmjit::ujit::Mem(framePointer, frameResultOffset));
 				const std::size_t firstResult = values.size() - resultCount;
 				uint32_t offset = 0;
 				for (uint32_t i = 0; i < resultCount; ++i) {
 					const WASM::ValueTypeCode code = resultTypes[i];
-					const asmjit::x86::Gp value = values[firstResult + i];
+					const asmjit::ujit::Gp value = values[firstResult + i];
 					if (code == WASM::ValueTypeCode::V128) {
 						for (int word = 0; word < 2; ++word) {
-							asmjit::x86::Gp bits = compiler.new_gp64("frameResultWord");
+							asmjit::ujit::Gp bits = compiler.new_gp64("frameResultWord");
 							emitter.mov(bits,
-									asmjit::x86::qword_ptr(value, word * 8));
+									asmjit::ujit::mem_ptr(value, word * 8));
 							emitter.mov(
-									asmjit::x86::qword_ptr(destination, offset + word * 8), bits);
+									asmjit::ujit::mem_ptr(destination, offset + word * 8), bits);
 						}
 						offset += 16;
 						continue;
 					}
-					const asmjit::x86::Gp stored = isFloatKind(code)
+					const asmjit::ujit::Gp stored = isFloatKind(code)
 							? canonicalizeFloatBits(value, kindWidth(code)) : value;
 					emitter.mov(
-							asmjit::x86::Mem(destination, offset, stored.size()), stored);
+							asmjit::ujit::Mem(destination, offset, stored.size()), stored);
 					offset += 8;
 				}
 				checkError(compiler.ret(), "AsmJit frame result return failed");
@@ -1603,14 +1603,14 @@ public:
 			} else if (bufferedVectorResult) {
 				// The value is the address of the vector 16-byte buffer; copy it into the
 				// caller buffer and return void.
-				asmjit::x86::Gp destination = compiler.new_gp_ptr("v128ResultOut");
+				asmjit::ujit::Gp destination = compiler.new_gp_ptr("v128ResultOut");
 				emitter.mov(destination, v128ResultSlot);
-				asmjit::x86::Gp source = values.back();
-				asmjit::x86::Gp word = compiler.new_gp64("v128ResultWord");
-				emitter.mov(word, asmjit::x86::qword_ptr(source, 0));
-				emitter.mov(asmjit::x86::qword_ptr(destination, 0), word);
-				emitter.mov(word, asmjit::x86::qword_ptr(source, 8));
-				emitter.mov(asmjit::x86::qword_ptr(destination, 8), word);
+				asmjit::ujit::Gp source = values.back();
+				asmjit::ujit::Gp word = compiler.new_gp64("v128ResultWord");
+				emitter.mov(word, asmjit::ujit::mem_ptr(source, 0));
+				emitter.mov(asmjit::ujit::mem_ptr(destination, 0), word);
+				emitter.mov(word, asmjit::ujit::mem_ptr(source, 8));
+				emitter.mov(asmjit::ujit::mem_ptr(destination, 8), word);
 				checkError(compiler.ret(), "AsmJit v128 result return emission failed");
 			} else {
 				checkError(compiler.ret(values.back()),
@@ -1623,7 +1623,7 @@ public:
 protected:
 	void dispatchI32Const(int32_t value) override
 	{
-		asmjit::x86::Gp reg = compiler.new_gp32("constant");
+		asmjit::ujit::Gp reg = compiler.new_gp32("constant");
 		emitter.movImm(reg, value);
 		values.push_back(reg);
 	}
@@ -1634,12 +1634,12 @@ protected:
 		if (i >= locals.size())
 			throw std::runtime_error("AsmJit local.get index is out of range");
 		if (localWidths[i] == 16) {
-			asmjit::x86::Gp copy = newVectorBuffer("v128Copy");
+			asmjit::ujit::Gp copy = newVectorBuffer("v128Copy");
 			copyVector(copy, locals[i]);
 			values.push_back(copy);
 			return;
 		}
-		asmjit::x86::Gp copy = locals[i].size() == 8
+		asmjit::ujit::Gp copy = locals[i].size() == 8
 				? compiler.new_gp64("localCopy") : compiler.new_gp32("localCopy");
 		emitter.mov(copy, locals[i]);
 		if (isReferenceKind(localKinds[i])) {
@@ -1657,7 +1657,7 @@ protected:
 		const size_t i = static_cast<size_t>(index);
 		if (i >= locals.size() || values.empty())
 			throw std::runtime_error("AsmJit local.set stack/index underflow");
-		const asmjit::x86::Gp value = values.back();
+		const asmjit::ujit::Gp value = values.back();
 		values.pop_back();
 		if (localWidths[i] == 16) {
 			copyVector(locals[i], value);
@@ -1692,7 +1692,7 @@ protected:
 			emitLocalRefStore(i, values.back());
 			return;
 		}
-		asmjit::x86::Gp copy = locals[i].size() == 8
+		asmjit::ujit::Gp copy = locals[i].size() == 8
 				? compiler.new_gp64("teeCopy") : compiler.new_gp32("teeCopy");
 		emitter.mov(copy, values.back());
 		emitter.mov(locals[i], copy);
@@ -1716,7 +1716,7 @@ protected:
         emitSelect();
     }
 
-	void pushStringValue(const asmjit::x86::Gp& value)
+	void pushStringValue(const asmjit::ujit::Gp& value)
 	{
 		values.push_back(value);
 		stringValues.insert(value.id());
@@ -1724,27 +1724,27 @@ protected:
 	}
 
 	//! Marks a value that was just pushed as owning one reference count.
-	void markReference(const asmjit::x86::Gp& value)
+	void markReference(const asmjit::ujit::Gp& value)
 	{
 		referenceValues.insert(value.id());
 	}
 
 	//! Reports whether a value owns a reference count.
-	bool isReferenceValue(const asmjit::x86::Gp& value) const
+	bool isReferenceValue(const asmjit::ujit::Gp& value) const
 	{
 		return referenceValues.count(value.id()) != 0;
 	}
 
 	//! Emits the reference write barrier for a local: retain the incoming value
 	//! for the slot, store it, release the value the slot held.
-	void emitLocalRefStore(std::size_t index, const asmjit::x86::Gp& value)
+	void emitLocalRefStore(std::size_t index, const asmjit::ujit::Gp& value)
 	{
 		// The old value is copied into a fresh register first: writing the local
 		// overwrites its virtual register, so a handle to it would read the new
 		// value afterwards.
-		const asmjit::x86::Gp old = compiler.new_gp64("localOldRef");
+		const asmjit::ujit::Gp old = compiler.new_gp64("localOldRef");
 		emitter.mov(old, locals[index]);
-		const asmjit::x86::Gp kept = emitRefClone(value);
+		const asmjit::ujit::Gp kept = emitRefClone(value);
 		emitter.mov(locals[index], kept);
 		emitRefDrop(old);
 	}
@@ -1758,12 +1758,12 @@ protected:
 		for (std::size_t i = 0; i < count; ++i) {
 			if (!isReferenceKind(localKinds[i]) || localWidths[i] != 8)
 				continue;
-			const asmjit::x86::Gp kept = emitRefClone(locals[i]);
+			const asmjit::ujit::Gp kept = emitRefClone(locals[i]);
 			emitter.mov(locals[i], kept);
 		}
 	}
 
-	asmjit::x86::Gp emitRefClone(const asmjit::x86::Gp& value)
+	asmjit::ujit::Gp emitRefClone(const asmjit::ujit::Gp& value)
 	{
 		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
 		signature.set_ret(asmjit::TypeId::kUIntPtr);
@@ -1780,7 +1780,7 @@ protected:
 		return result;
 	}
 
-	void emitRefDrop(const asmjit::x86::Gp& value)
+	void emitRefDrop(const asmjit::ujit::Gp& value)
 	{
 		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
 		signature.set_ret(asmjit::TypeId::kVoid);
@@ -1799,7 +1799,7 @@ protected:
 	//! memory (a struct field, an array element).
 	//! \param address Address of the slot being written.
 	//! \param value New reference value.
-	void emitRefStore(const asmjit::x86::Gp& address, const asmjit::x86::Gp& value)
+	void emitRefStore(const asmjit::ujit::Gp& address, const asmjit::ujit::Gp& value)
 	{
 		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
 		signature.set_ret(asmjit::TypeId::kVoid);
@@ -1886,7 +1886,7 @@ protected:
 		const WASM::FuncType payload = tagPayloadType(arg);
 		if (values.size() < payload.params.size())
 			throw std::runtime_error("AsmJit throw operand stack underflow");
-		std::vector<asmjit::x86::Gp> payloadValues(payload.params.size());
+		std::vector<asmjit::ujit::Gp> payloadValues(payload.params.size());
 		for (std::size_t i = payload.params.size(); i-- > 0; ) {
 			payloadValues[i] = values.back();
 			values.pop_back();
@@ -1917,14 +1917,14 @@ protected:
 				for (int word = 0; word < 2; ++word) {
 					auto bits = compiler.new_gp64("thrownPayloadWord");
 					emitter.mov(bits,
-							asmjit::x86::qword_ptr(payloadValues[i], word * 8));
+							asmjit::ujit::mem_ptr(payloadValues[i], word * 8));
 					emitter.mov(
-							asmjit::x86::qword_ptr(exn, offset + word * 8), bits);
+							asmjit::ujit::mem_ptr(exn, offset + word * 8), bits);
 				}
 				continue;
 			}
 			emitter.mov(
-					asmjit::x86::Mem(exn, offset, payloadValues[i].size()),
+					asmjit::ujit::Mem(exn, offset, payloadValues[i].size()),
 					payloadValues[i]);
 		}
 
@@ -2012,7 +2012,7 @@ protected:
 		emitter.jmp(frame.end);
 		checkError(compiler.bind(frame.alternate), "AsmJit else label binding failed");
 		values.resize(frame.stackHeight);
-		for (const asmjit::x86::Gp& param : frame.params)
+		for (const asmjit::ujit::Gp& param : frame.params)
 			values.push_back(param);
 		armTerminated = !frame.entryReachable;
 		frame.hasElse = true;
@@ -2057,7 +2057,7 @@ protected:
 		}
 		checkError(compiler.bind(frame.end), "AsmJit structured block end binding failed");
 		values.resize(frame.stackHeight);
-		for (const asmjit::x86::Gp& result : frame.results)
+		for (const asmjit::ujit::Gp& result : frame.results)
 			values.push_back(result);
 		armTerminated = !endReachable;
 	}
@@ -2100,7 +2100,7 @@ protected:
 			auto skip = compiler.new_label();
 			emitter.j(skip, asmjit::ujit::test_z(condition, condition));
 			const size_t first = values.size() - branchValues;
-			const std::vector<asmjit::x86::Gp>& destinations = loopTarget ? target.params : target.results;
+			const std::vector<asmjit::ujit::Gp>& destinations = loopTarget ? target.params : target.results;
 			const std::vector<WASM::ValueTypeCode>& codes = loopTarget
 					? target.paramTypes : target.resultTypes;
 			for (size_t i = 0; i < branchValues; ++i)
@@ -2150,7 +2150,7 @@ protected:
 		}
 		if (branchValues != 0) {
 			const size_t first = values.size() - branchValues;
-			const std::vector<asmjit::x86::Gp>& destinations = loopTarget ? target.params : target.results;
+			const std::vector<asmjit::ujit::Gp>& destinations = loopTarget ? target.params : target.results;
 			const std::vector<WASM::ValueTypeCode>& codes = loopTarget
 					? target.paramTypes : target.resultTypes;
 			for (size_t i = 0; i < branchValues; ++i)
@@ -2225,7 +2225,7 @@ protected:
 			const size_t transferCount = loopTarget ? target.paramCount : target.resultCount;
 			if (transferCount != 0) {
 				const size_t firstValue = values.size() - transferCount;
-				const std::vector<asmjit::x86::Gp>& destinations = loopTarget ? target.params : target.results;
+				const std::vector<asmjit::ujit::Gp>& destinations = loopTarget ? target.params : target.results;
 				const std::vector<WASM::ValueTypeCode>& codes = loopTarget
 						? target.paramTypes : target.resultTypes;
 				for (size_t i = 0; i < transferCount; ++i)
@@ -2276,7 +2276,7 @@ protected:
 			// and loop to the body start. The frame is reused, so the host stack does
 			// not grow. Mutual/indirect chains still use call + return until the
 			// cross-function trampoline lands.
-			std::vector<asmjit::x86::Gp> selfArgs(calledType.params.size());
+			std::vector<asmjit::ujit::Gp> selfArgs(calledType.params.size());
 			for (std::size_t i = calledType.params.size(); i-- > 0; ) {
 				selfArgs[i] = values.back();
 				values.pop_back();
@@ -2303,7 +2303,7 @@ protected:
 		if (WASM::tailCallTrampolinesEligible(module, frameByType) && tailSupported) {
 			// Cross-function trampoline: the driver wrapping this function observes
 			// the pending state and re-enters the target through its type thunk.
-			std::vector<asmjit::x86::Gp> tailArgs(calledType.params.size());
+			std::vector<asmjit::ujit::Gp> tailArgs(calledType.params.size());
 			for (std::size_t i = calledType.params.size(); i-- > 0; ) {
 				tailArgs[i] = values.back();
 				values.pop_back();
@@ -2364,7 +2364,7 @@ protected:
 			if (WASM::tailCallTrampolinesEligible(module, frameByType) && tailFits) {
 				const ResolvedIndirect resolved = resolveIndirectTarget(typeIndex, tableIndex);
 				auto thunk = compiler.new_gp_ptr("tailThunk");
-				emitter.mov(thunk, asmjit::x86::ptr(resolved.callable,
+				emitter.mov(thunk, asmjit::ujit::mem_ptr(resolved.callable,
 						static_cast<int32_t>(offsetof(WASM::Callable, tailEntry))));
 				auto fallback = compiler.new_label();
 				emitter.j(fallback, asmjit::ujit::test_z(thunk, thunk));
@@ -2385,7 +2385,7 @@ protected:
 		if (WASM::tailCallTrampolinesEligible(module, frameByType) && tailFits) {
 			const ResolvedIndirect resolved = resolveIndirectTarget(typeIndex, tableIndex);
 			auto thunk = compiler.new_gp_ptr("tailThunk");
-			emitter.mov(thunk, asmjit::x86::ptr(resolved.callable,
+			emitter.mov(thunk, asmjit::ujit::mem_ptr(resolved.callable,
 					static_cast<int32_t>(offsetof(WASM::Callable, tailEntry))));
 			auto fallback = compiler.new_label();
 			emitter.j(fallback, asmjit::ujit::test_z(thunk, thunk));
@@ -2400,8 +2400,8 @@ protected:
 	}
 
 	struct ResolvedIndirect {
-		asmjit::x86::Gp callable;
-		std::vector<asmjit::x86::Gp> arguments;
+		asmjit::ujit::Gp callable;
+		std::vector<asmjit::ujit::Gp> arguments;
 	};
 
 	//! Validates an indirect call and resolves its table slot to a Callable.
@@ -2430,7 +2430,7 @@ protected:
 
 		auto elementIndex = values.back();
 		values.pop_back();
-		std::vector<asmjit::x86::Gp> arguments(calledType.params.size());
+		std::vector<asmjit::ujit::Gp> arguments(calledType.params.size());
 		for (size_t i = calledType.params.size(); i > 0; --i) {
 			arguments[i - 1] = values.back();
 			values.pop_back();
@@ -2466,10 +2466,10 @@ protected:
 			uint32_t typeIndex)
 	{
 		auto target = compiler.new_gp_ptr("indirectFunction");
-		emitter.mov(target, asmjit::x86::ptr(resolved.callable,
+		emitter.mov(target, asmjit::ujit::mem_ptr(resolved.callable,
 				static_cast<int32_t>(offsetof(WASM::Callable, fnPtr))));
 		auto calleeContext = compiler.new_gp_ptr("indirectContext");
-		emitter.mov(calleeContext, asmjit::x86::ptr(resolved.callable,
+		emitter.mov(calleeContext, asmjit::ujit::mem_ptr(resolved.callable,
 				static_cast<int32_t>(offsetof(WASM::Callable, context))));
 		auto callerContext = compiler.new_label();
 		emitter.j(callerContext, asmjit::ujit::test_nz(calleeContext, calleeContext));
@@ -2478,15 +2478,15 @@ protected:
 		// A parameter is the caller's borrow: the counts the operand stack holds
 		// must survive the invoke, so each reference argument is parked in its
 		// own stack slot first and released from there afterwards.
-		const std::vector<asmjit::x86::Mem> keptArguments =
+		const std::vector<asmjit::ujit::Mem> keptArguments =
 				spillCallReferenceArguments(calledType, resolved.arguments);
 		if (calleeUsesFrameForm(typeIndex)) {
 			uint32_t argBytes = 0;
 			for (const WASM::StorageType& parameter : calledType.params)
 				argBytes += parameter.val.opcode == WASM::ValueTypeCode::V128 ? 16u : 8u;
-			asmjit::x86::Mem frameStorage = compiler.new_stack(
+			asmjit::ujit::Mem frameStorage = compiler.new_stack(
 					frameCallStorageBytes(calledType), 16, "indirectFrame");
-			asmjit::x86::Gp frameAddress = compiler.new_gp_ptr("indirectFrame");
+			asmjit::ujit::Gp frameAddress = compiler.new_gp_ptr("indirectFrame");
 			emitter.lea(frameAddress, frameStorage);
 			uint32_t offset = 0;
 			for (std::size_t i = 0; i < resolved.arguments.size(); ++i) {
@@ -2494,15 +2494,15 @@ protected:
 					for (int word = 0; word < 2; ++word) {
 						auto bits = compiler.new_gp64("indirectFrameWord");
 						emitter.mov(bits,
-								asmjit::x86::qword_ptr(resolved.arguments[i], word * 8));
+								asmjit::ujit::mem_ptr(resolved.arguments[i], word * 8));
 						emitter.mov(
-								asmjit::x86::qword_ptr(frameAddress, offset + word * 8), bits);
+								asmjit::ujit::mem_ptr(frameAddress, offset + word * 8), bits);
 					}
 					offset += 16;
 					continue;
 				}
 				emitter.mov(
-						asmjit::x86::Mem(frameAddress, offset, resolved.arguments[i].size()),
+						asmjit::ujit::Mem(frameAddress, offset, resolved.arguments[i].size()),
 						resolved.arguments[i]);
 				offset += 8;
 			}
@@ -2518,16 +2518,16 @@ protected:
 					for (int word = 0; word < 2; ++word) {
 						auto bits = compiler.new_gp64("indirectResultWord");
 						emitter.mov(bits,
-								asmjit::x86::qword_ptr(frameAddress, resultOffset + word * 8));
+								asmjit::ujit::mem_ptr(frameAddress, resultOffset + word * 8));
 						emitter.mov(
-								asmjit::x86::qword_ptr(buffer, word * 8), bits);
+								asmjit::ujit::mem_ptr(buffer, word * 8), bits);
 					}
 					values.push_back(buffer);
 					resultOffset += 16;
 				} else {
 					auto result = newIntegerRegister(compiler, resultType.val, "indirectResult");
 					emitter.mov(result,
-							asmjit::x86::Mem(frameAddress, resultOffset, result.size()));
+							asmjit::ujit::Mem(frameAddress, resultOffset, result.size()));
 					// A reference result arrives owning one count (the callee hands
 					// over the count its operand stack held).
 					if (isReferenceKind(resultType.val.opcode))
@@ -2555,7 +2555,7 @@ protected:
 	}
 
 	//! Traps when a function reference is null, continuing on the non-null path.
-	void emitNullRefCheck(const asmjit::x86::Gp& callable)
+	void emitNullRefCheck(const asmjit::ujit::Gp& callable)
 	{
 		auto nonNull = compiler.new_label();
 		emitter.j(nonNull, asmjit::ujit::test_nz(callable, callable));
@@ -2570,15 +2570,15 @@ protected:
 	}
 
 	//! Invokes a `Callable` whose address is already in a register.
-	void emitCallRefInvocation(const asmjit::x86::Gp& callable,
-			const std::vector<asmjit::x86::Gp>& arguments,
+	void emitCallRefInvocation(const asmjit::ujit::Gp& callable,
+			const std::vector<asmjit::ujit::Gp>& arguments,
 			const WASM::FuncType& calledType, uint32_t typeIndex)
 	{
 		auto target = compiler.new_gp_ptr("refFunction");
-		emitter.mov(target, asmjit::x86::ptr(callable,
+		emitter.mov(target, asmjit::ujit::mem_ptr(callable,
 				static_cast<int32_t>(offsetof(WASM::Callable, fnPtr))));
 		auto calleeContext = compiler.new_gp_ptr("refContext");
-		emitter.mov(calleeContext, asmjit::x86::ptr(callable,
+		emitter.mov(calleeContext, asmjit::ujit::mem_ptr(callable,
 				static_cast<int32_t>(offsetof(WASM::Callable, context))));
 		auto callerContext = compiler.new_label();
 		emitter.j(callerContext, asmjit::ujit::test_nz(calleeContext, calleeContext));
@@ -2587,7 +2587,7 @@ protected:
 		// A parameter is the caller's borrow: the counts the operand stack holds
 		// must survive the invoke, so each reference argument is parked in its
 		// own stack slot first and released from there afterwards.
-		const std::vector<asmjit::x86::Mem> keptArguments =
+		const std::vector<asmjit::ujit::Mem> keptArguments =
 				spillCallReferenceArguments(calledType, arguments);
 		if (calleeUsesFrameForm(typeIndex)) {
 			// Staging-frame ABI: pack the arguments, invoke (ctx, frame), read the
@@ -2595,9 +2595,9 @@ protected:
 			uint32_t argBytes = 0;
 			for (const WASM::StorageType& parameter : calledType.params)
 				argBytes += parameter.val.opcode == WASM::ValueTypeCode::V128 ? 16u : 8u;
-			asmjit::x86::Mem frameStorage = compiler.new_stack(
+			asmjit::ujit::Mem frameStorage = compiler.new_stack(
 					frameCallStorageBytes(calledType), 16, "refCallFrame");
-			asmjit::x86::Gp frameAddress = compiler.new_gp_ptr("refCallFrame");
+			asmjit::ujit::Gp frameAddress = compiler.new_gp_ptr("refCallFrame");
 			emitter.lea(frameAddress, frameStorage);
 			uint32_t offset = 0;
 			for (std::size_t i = 0; i < arguments.size(); ++i) {
@@ -2605,15 +2605,15 @@ protected:
 					for (int word = 0; word < 2; ++word) {
 						auto bits = compiler.new_gp64("refCallFrameWord");
 						emitter.mov(bits,
-								asmjit::x86::qword_ptr(arguments[i], word * 8));
+								asmjit::ujit::mem_ptr(arguments[i], word * 8));
 						emitter.mov(
-								asmjit::x86::qword_ptr(frameAddress, offset + word * 8), bits);
+								asmjit::ujit::mem_ptr(frameAddress, offset + word * 8), bits);
 					}
 					offset += 16;
 					continue;
 				}
 				emitter.mov(
-						asmjit::x86::Mem(frameAddress, offset, arguments[i].size()),
+						asmjit::ujit::Mem(frameAddress, offset, arguments[i].size()),
 						arguments[i]);
 				offset += 8;
 			}
@@ -2629,16 +2629,16 @@ protected:
 					for (int word = 0; word < 2; ++word) {
 						auto bits = compiler.new_gp64("callRefResultWord");
 						emitter.mov(bits,
-								asmjit::x86::qword_ptr(frameAddress, resultOffset + word * 8));
+								asmjit::ujit::mem_ptr(frameAddress, resultOffset + word * 8));
 						emitter.mov(
-								asmjit::x86::qword_ptr(buffer, word * 8), bits);
+								asmjit::ujit::mem_ptr(buffer, word * 8), bits);
 					}
 					values.push_back(buffer);
 					resultOffset += 16;
 				} else {
 					auto result = newIntegerRegister(compiler, resultType.val, "callRefResult");
 					emitter.mov(result,
-							asmjit::x86::Mem(frameAddress, resultOffset, result.size()));
+							asmjit::ujit::Mem(frameAddress, resultOffset, result.size()));
 					// A reference result arrives owning one count (the callee hands
 					// over the count its operand stack held).
 					if (isReferenceKind(resultType.val.opcode))
@@ -2683,7 +2683,7 @@ protected:
 			throw std::runtime_error("AsmJit call_ref operand stack underflow");
 		auto callable = values.back();
 		values.pop_back();
-		std::vector<asmjit::x86::Gp> arguments(calledType.params.size());
+		std::vector<asmjit::ujit::Gp> arguments(calledType.params.size());
 		for (size_t i = calledType.params.size(); i > 0; --i) {
 			arguments[i - 1] = values.back();
 			values.pop_back();
@@ -2704,7 +2704,7 @@ protected:
 			throw std::runtime_error("AsmJit return_call_ref has too few arguments");
 		auto callable = values.back();
 		values.pop_back();
-		std::vector<asmjit::x86::Gp> arguments(calledType.params.size());
+		std::vector<asmjit::ujit::Gp> arguments(calledType.params.size());
 		for (size_t i = calledType.params.size(); i > 0; --i) {
 			arguments[i - 1] = values.back();
 			values.pop_back();
@@ -2715,7 +2715,7 @@ protected:
 				: WASM::tailCallSlotsSupported(calledType);
 		if (WASM::tailCallTrampolinesEligible(module, frameByType) && refTailSupported) {
 			auto thunk = compiler.new_gp_ptr("tailThunk");
-			emitter.mov(thunk, asmjit::x86::ptr(callable,
+			emitter.mov(thunk, asmjit::ujit::mem_ptr(callable,
 					static_cast<int32_t>(offsetof(WASM::Callable, tailEntry))));
 			auto fallback = compiler.new_label();
 			emitter.j(fallback, asmjit::ujit::test_z(thunk, thunk));
@@ -2805,7 +2805,7 @@ protected:
 		if (values.size() < calledType.params.size())
 			throw std::runtime_error("AsmJit call operand stack underflow");
 
-		std::vector<asmjit::x86::Gp> arguments(calledType.params.size());
+		std::vector<asmjit::ujit::Gp> arguments(calledType.params.size());
 		for (size_t i = calledType.params.size(); i > 0; --i) {
 			arguments[i - 1] = values.back();
 			values.pop_back();
@@ -2817,7 +2817,7 @@ protected:
 		// materialised before the invoke node is appended.
 		WASM::VMContext* importedCallee = isInternal ? nullptr
 				: internals.importStorage[index].context;
-		asmjit::x86::Gp importedContext;
+		asmjit::ujit::Gp importedContext;
 		if (importedCallee != nullptr) {
 			importedContext = compiler.new_gp_ptr("importedVmContext");
 			emitter.mov(importedContext,
@@ -2827,7 +2827,7 @@ protected:
 		// A parameter is the caller's borrow: the counts the operand stack holds
 		// for reference arguments must survive the invoke, so each one is parked
 		// in its own stack slot here and released from there after the call.
-		const std::vector<asmjit::x86::Mem> keptArguments =
+		const std::vector<asmjit::ujit::Mem> keptArguments =
 				spillCallReferenceArguments(calledType, arguments);
 
 		if (calleeFrameForm) {
@@ -2866,26 +2866,26 @@ protected:
 			uint32_t argBytes = 0;
 			for (const WASM::StorageType& p : calledType.params)
 				argBytes += p.val.opcode == WASM::ValueTypeCode::V128 ? 16u : 8u;
-			asmjit::x86::Mem frameStorage = compiler.new_stack(
+			asmjit::ujit::Mem frameStorage = compiler.new_stack(
 					frameCallStorageBytes(calledType), 16, "callFrame");
-			asmjit::x86::Gp frameAddress = compiler.new_gp_ptr("callFrame");
+			asmjit::ujit::Gp frameAddress = compiler.new_gp_ptr("callFrame");
 			emitter.lea(frameAddress, frameStorage);
 			uint32_t offset = 0;
 			for (size_t i = 0; i < arguments.size(); ++i) {
 				const WASM::ValueType& declared = calledType.params[i].val;
 				if (declared.opcode == WASM::ValueTypeCode::V128) {
 					for (int word = 0; word < 2; ++word) {
-						asmjit::x86::Gp bits = compiler.new_gp64("callFrameWord");
+						asmjit::ujit::Gp bits = compiler.new_gp64("callFrameWord");
 						emitter.mov(bits,
-								asmjit::x86::qword_ptr(arguments[i], word * 8));
+								asmjit::ujit::mem_ptr(arguments[i], word * 8));
 						emitter.mov(
-								asmjit::x86::qword_ptr(frameAddress, offset + word * 8), bits);
+								asmjit::ujit::mem_ptr(frameAddress, offset + word * 8), bits);
 					}
 					offset += 16;
 					continue;
 				}
 				emitter.mov(
-						asmjit::x86::Mem(frameAddress, offset, arguments[i].size()),
+						asmjit::ujit::Mem(frameAddress, offset, arguments[i].size()),
 						arguments[i]);
 				offset += 8;
 			}
@@ -2902,21 +2902,21 @@ protected:
 			uint32_t resultOffset = offset;
 			for (const WASM::StorageType& resultType : calledType.results) {
 				if (resultType.val.opcode == WASM::ValueTypeCode::V128) {
-					asmjit::x86::Gp buffer = newVectorBuffer("callVectorResult");
+					asmjit::ujit::Gp buffer = newVectorBuffer("callVectorResult");
 					for (int word = 0; word < 2; ++word) {
-						asmjit::x86::Gp bits = compiler.new_gp64("callResultWord");
+						asmjit::ujit::Gp bits = compiler.new_gp64("callResultWord");
 						emitter.mov(bits,
-								asmjit::x86::qword_ptr(frameAddress, resultOffset + word * 8));
+								asmjit::ujit::mem_ptr(frameAddress, resultOffset + word * 8));
 						emitter.mov(
-								asmjit::x86::qword_ptr(buffer, word * 8), bits);
+								asmjit::ujit::mem_ptr(buffer, word * 8), bits);
 					}
 					values.push_back(buffer);
 					resultOffset += 16;
 				} else {
-					asmjit::x86::Gp resultRegister =
+					asmjit::ujit::Gp resultRegister =
 							newIntegerRegister(compiler, resultType.val, "callResult");
 					emitter.mov(resultRegister,
-							asmjit::x86::Mem(frameAddress, resultOffset, resultRegister.size()));
+							asmjit::ujit::Mem(frameAddress, resultOffset, resultRegister.size()));
 					// A reference result arrives owning one count.
 					if (isReferenceKind(resultType.val.opcode))
 						markReference(resultRegister);
@@ -2982,7 +2982,7 @@ protected:
 		auto slot = compiler.new_gp_ptr("postCallTrapSlot");
 		slotCall->set_ret(0, slot);
 		auto pending = compiler.new_gp32("postCallPending");
-		emitter.mov(pending, asmjit::x86::dword_ptr(slot,
+		emitter.mov(pending, asmjit::ujit::mem_ptr(slot,
 				static_cast<int32_t>(offsetof(WASM::TrapSlot, pending))));
 		auto noTrap = compiler.new_label();
 		emitter.j(noTrap, asmjit::ujit::test_z(pending, pending));
@@ -2998,7 +2998,7 @@ protected:
 			// signature and finalisation fails with error 25 at EVERY call site.
 			checkError(compiler.ret(), "AsmJit post-call void trap return failed");
 		} else if (isFloatKind(resultType)) {
-			auto zero = compiler.new_xmm("postCallTrapFloatResult");
+			auto zero = compiler.new_vec128("postCallTrapFloatResult");
 			emitter.vectorZero(zero);
 			checkError(compiler.ret(zero),
 					"AsmJit post-call trap float result return failed");
@@ -3053,12 +3053,12 @@ protected:
 			return;
 		}
 		if (isFloatKind(resultType)) {
-			auto zero = compiler.new_xmm("exceptionFloatResult");
+			auto zero = compiler.new_vec128("exceptionFloatResult");
 			emitter.vectorZero(zero);
 			checkError(compiler.ret(zero), "AsmJit exception-path float return failed");
 			return;
 		}
-		asmjit::x86::Gp zero = kindWidth(resultType) == 8
+		asmjit::ujit::Gp zero = kindWidth(resultType) == 8
 				? compiler.new_gp64("exceptionResult") : compiler.new_gp32("exceptionResult");
 		emitter.xor_(zero, zero);
 		checkError(compiler.ret(zero), "AsmJit exception-path result return failed");
@@ -3067,8 +3067,8 @@ protected:
 	//! Writes a pending tail call and returns a typed zero.
 	//! \param target Callable pointer to re-enter.
 	//! \param args Argument values, already popped from the operand stack.
-	void emitTailCallState(const asmjit::x86::Gp& target,
-			const std::vector<asmjit::x86::Gp>& args, const WASM::FuncType& type)
+	void emitTailCallState(const asmjit::ujit::Gp& target,
+			const std::vector<asmjit::ujit::Gp>& args, const WASM::FuncType& type)
 	{
 		asmjit::FuncSignature stateSignature(asmjit::CallConvId::kCDecl);
 		stateSignature.set_ret(asmjit::TypeId::kUIntPtr);
@@ -3078,7 +3078,7 @@ protected:
 				"AsmJit tail-call state call emission failed");
 		auto state = compiler.new_gp_ptr("tailState");
 		stateInvoke->set_ret(0, state);
-		emitter.mov(asmjit::x86::Mem(state,
+		emitter.mov(asmjit::ujit::Mem(state,
 				static_cast<int32_t>(offsetof(WASM::TailCallState, target)), 8),
 				target);
 		for (std::size_t i = 0; i < args.size(); ++i) {
@@ -3086,41 +3086,41 @@ protected:
 					+ i * WASM::kTailCallSlotBytes);
 			if (i < type.params.size() && !type.params[i].isPacked
 					&& type.params[i].val.opcode == WASM::ValueTypeCode::V128) {
-				auto vector = compiler.new_xmm("tailVector");
-				emitter.vectorLoad128(vector, asmjit::x86::ptr(args[i]));
-				emitter.vectorStore128(asmjit::x86::Mem(state, offset, 16), vector);
+				auto vector = compiler.new_vec128("tailVector");
+				emitter.vectorLoad128(vector, asmjit::ujit::mem_ptr(args[i]));
+				emitter.vectorStore128(asmjit::ujit::Mem(state, offset, 16), vector);
 			} else {
-				emitter.mov(asmjit::x86::Mem(state, offset, args[i].size()),
+				emitter.mov(asmjit::ujit::Mem(state, offset, args[i].size()),
 						args[i]);
 			}
 		}
-		emitter.mov(asmjit::x86::Mem(state,
+		emitter.mov(asmjit::ujit::Mem(state,
 				static_cast<int32_t>(offsetof(WASM::TailCallState, pending)), 4),
 				asmjit::Imm(1));
 		emitZeroReturn();
 	}
 
-	void emitFrameReturnValue(const asmjit::x86::Gp& value)
+	void emitFrameReturnValue(const asmjit::ujit::Gp& value)
 	{
 		// Staging-frame ABI: the result goes into the caller's result block and the
 		// signature returns void. A scalar float becomes host-observable here, so
 		// the deterministic profile canonicalises it first
 		// (docs/proposals/PROFILES.md PR-3).
-		const asmjit::x86::Gp stored = isFloatKind(resultType)
+		const asmjit::ujit::Gp stored = isFloatKind(resultType)
 				? canonicalizeFloatBits(value, kindWidth(resultType)) : value;
-		asmjit::x86::Gp destination = compiler.new_gp_ptr("frameResultAddress");
+		asmjit::ujit::Gp destination = compiler.new_gp_ptr("frameResultAddress");
 		emitter.lea(destination,
-				asmjit::x86::Mem(framePointer, frameResultOffset));
+				asmjit::ujit::Mem(framePointer, frameResultOffset));
 		if (resultType == WASM::ValueTypeCode::V128) {
 			for (int word = 0; word < 2; ++word) {
 				auto bits = compiler.new_gp64("frameResultWord");
-				emitter.mov(bits, asmjit::x86::qword_ptr(stored, word * 8));
+				emitter.mov(bits, asmjit::ujit::mem_ptr(stored, word * 8));
 				emitter.mov(
-						asmjit::x86::qword_ptr(destination, word * 8), bits);
+						asmjit::ujit::mem_ptr(destination, word * 8), bits);
 			}
 		} else {
 			emitter.mov(
-					asmjit::x86::Mem(destination, 0, stored.size()), stored);
+					asmjit::ujit::Mem(destination, 0, stored.size()), stored);
 		}
 		checkError(compiler.ret(), "AsmJit frame result return failed");
 	}
@@ -3233,25 +3233,25 @@ protected:
 		const ExceptionPayloadLayout layout = payloadCount != 0
 				? exceptionPayloadLayout(payload) : ExceptionPayloadLayout{};
 
-		std::vector<asmjit::x86::Gp> caught;
+		std::vector<asmjit::ujit::Gp> caught;
 		caught.reserve(carried);
 		for (std::size_t i = 0; i < payloadCount; ++i) {
 			const int width = kindWidth(payload.params[i].val.opcode);
 			if (width != 4 && width != 8)
 				throw std::runtime_error(
 						"AsmJit cannot route this catch payload to a function result");
-			asmjit::x86::Gp value = width == 8
+			asmjit::ujit::Gp value = width == 8
 					? compiler.new_gp64("caughtFunctionPayload")
 					: compiler.new_gp32("caughtFunctionPayload");
 			emitter.mov(value,
-					asmjit::x86::Mem(exn, static_cast<int32_t>(layout.fields[i].offset),
+					asmjit::ujit::Mem(exn, static_cast<int32_t>(layout.fields[i].offset),
 							value.size()));
 			caught.push_back(value);
 		}
 		if (carryExn)
 			caught.push_back(exn);
 
-		const std::vector<asmjit::x86::Gp> savedValues = values;
+		const std::vector<asmjit::ujit::Gp> savedValues = values;
 		values = std::move(caught);
 		emitFunctionReturnValues();
 		values = savedValues;
@@ -3287,21 +3287,21 @@ protected:
 				for (int word = 0; word < 2; ++word) {
 					auto bits = compiler.new_gp64("caughtPayloadWord");
 					emitter.mov(bits,
-							asmjit::x86::qword_ptr(exn, static_cast<int32_t>(layout.fields[i].offset)
+							asmjit::ujit::mem_ptr(exn, static_cast<int32_t>(layout.fields[i].offset)
 									+ word * 8));
 					emitter.mov(
-							asmjit::x86::qword_ptr(target.params[i], word * 8), bits);
+							asmjit::ujit::mem_ptr(target.params[i], word * 8), bits);
 				}
 				continue;
 			}
 			const int width = kindWidth(code);
 			if (width != 4 && width != 8)
 				throw std::runtime_error("AsmJit cannot route this catch payload yet");
-			asmjit::x86::Gp value = width == 8
+			asmjit::ujit::Gp value = width == 8
 					? compiler.new_gp64("caughtPayload")
 					: compiler.new_gp32("caughtPayload");
 			emitter.mov(value,
-					asmjit::x86::Mem(exn, static_cast<int32_t>(layout.fields[i].offset),
+					asmjit::ujit::Mem(exn, static_cast<int32_t>(layout.fields[i].offset),
 							value.size()));
 			if (loopTarget)
 				emitter.mov(target.params[i], value);
@@ -3328,7 +3328,7 @@ protected:
 // `wasm_atomic_*` ABI, so a target without its own atomic lowering still
 // executes these correctly.
 
-asmjit::x86::Gp atomicValue64(const asmjit::x86::Gp& value, int valueWidth)
+asmjit::ujit::Gp atomicValue64(const asmjit::ujit::Gp& value, int valueWidth)
 {
 if (valueWidth == 8)
 return value;
@@ -3617,7 +3617,7 @@ reinterpret_cast<uint64_t>(&::wasm_atomic_pause), signature),
 // slots need the GC barrier and are refused below, as are table slots.
 
 void emitSharedAtomicLoad(uint8_t ordering, uint32_t width, int valueWidth,
-const asmjit::x86::Gp& address, int signBits = 0)
+const asmjit::ujit::Gp& address, int signBits = 0)
 {
 asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
 signature.set_ret(asmjit::TypeId::kUInt64);
@@ -3653,7 +3653,7 @@ values.push_back(result);
 }
 
 void emitSharedAtomicStore(uint8_t ordering, uint32_t width, int valueWidth,
-const asmjit::x86::Gp& address, const asmjit::x86::Gp& value)
+const asmjit::ujit::Gp& address, const asmjit::ujit::Gp& value)
 {
 auto value64 = atomicValue64(value, valueWidth);
 asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
@@ -3674,7 +3674,7 @@ emitPendingTrapReturn();
 }
 
 void emitSharedAtomicRmw(uint8_t ordering, uint32_t width, uint32_t op, int valueWidth,
-const asmjit::x86::Gp& address, const asmjit::x86::Gp& value)
+const asmjit::ujit::Gp& address, const asmjit::ujit::Gp& value)
 {
 auto value64 = atomicValue64(value, valueWidth);
 asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
@@ -3705,8 +3705,8 @@ values.push_back(result);
 }
 }
 
-void emitSharedAtomicRefStore(uint8_t ordering, const asmjit::x86::Gp& address,
-        const asmjit::x86::Gp& value)
+void emitSharedAtomicRefStore(uint8_t ordering, const asmjit::ujit::Gp& address,
+        const asmjit::ujit::Gp& value)
 {
     asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
     signature.set_ret(asmjit::TypeId::kUIntPtr);
@@ -3725,8 +3725,8 @@ void emitSharedAtomicRefStore(uint8_t ordering, const asmjit::x86::Gp& address,
     emitPendingTrapReturn();
 }
 
-void emitSharedAtomicRefXchg(uint8_t ordering, const asmjit::x86::Gp& address,
-        const asmjit::x86::Gp& value)
+void emitSharedAtomicRefXchg(uint8_t ordering, const asmjit::ujit::Gp& address,
+        const asmjit::ujit::Gp& value)
 {
     asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
     signature.set_ret(asmjit::TypeId::kUIntPtr);
@@ -3748,8 +3748,8 @@ void emitSharedAtomicRefXchg(uint8_t ordering, const asmjit::x86::Gp& address,
     values.push_back(old);
 }
 
-void emitSharedAtomicRefCmpxchg(uint8_t ordering, const asmjit::x86::Gp& address,
-        const asmjit::x86::Gp& expected, const asmjit::x86::Gp& replacement)
+void emitSharedAtomicRefCmpxchg(uint8_t ordering, const asmjit::ujit::Gp& address,
+        const asmjit::ujit::Gp& expected, const asmjit::ujit::Gp& replacement)
 {
     asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
     signature.set_ret(asmjit::TypeId::kUIntPtr);
@@ -3774,8 +3774,8 @@ void emitSharedAtomicRefCmpxchg(uint8_t ordering, const asmjit::x86::Gp& address
 }
 
 void emitSharedAtomicCmpxchg(uint8_t ordering, uint32_t width, int valueWidth,
-const asmjit::x86::Gp& address, const asmjit::x86::Gp& expected,
-const asmjit::x86::Gp& replacement)
+const asmjit::ujit::Gp& address, const asmjit::ujit::Gp& expected,
+const asmjit::ujit::Gp& replacement)
 {
 auto expected64 = atomicValue64(expected, valueWidth);
 auto replacement64 = atomicValue64(replacement, valueWidth);
@@ -3807,7 +3807,7 @@ values.push_back(result);
 }
 }
 
-asmjit::x86::Gp emitStructAtomicAddress(const asmjit::x86::Gp& ref, uint32_t fieldOffset)
+asmjit::ujit::Gp emitStructAtomicAddress(const asmjit::ujit::Gp& ref, uint32_t fieldOffset)
 {
 auto notNull = compiler.new_label();
 emitter.j(notNull, asmjit::ujit::test_nz(ref, ref));
@@ -3825,8 +3825,8 @@ emitter.add(address, asmjit::Imm(fieldOffset));
 return address;
 }
 
-asmjit::x86::Gp emitArrayAtomicAddress(const asmjit::x86::Gp& ref,
-const asmjit::x86::Gp& index, uint32_t lengthOffset, uint32_t dataOffset,
+asmjit::ujit::Gp emitArrayAtomicAddress(const asmjit::ujit::Gp& ref,
+const asmjit::ujit::Gp& index, uint32_t lengthOffset, uint32_t dataOffset,
 uint32_t elementBytes)
 {
 auto notNull = compiler.new_label();
@@ -3841,7 +3841,7 @@ emitZeroReturn();
 checkError(compiler.bind(notNull), "AsmJit shared array null continuation failed");
 
 auto length = compiler.new_gp32("sharedArrayLength");
-emitter.headerLoad32(length, asmjit::x86::dword_ptr(ref, lengthOffset));
+emitter.headerLoad32(length, asmjit::ujit::mem_ptr(ref, lengthOffset));
 auto inBounds = compiler.new_label();
 emitter.j(inBounds, asmjit::ujit::ucmp_lt(index, length));
 asmjit::FuncSignature oobSignature(asmjit::CallConvId::kCDecl);
@@ -4727,7 +4727,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
         auto length = values.back(); values.pop_back();
         auto element = values.back(); values.pop_back();
         auto start = values.back(); values.pop_back();
-        auto widen = [&](const asmjit::x86::Gp& value) {
+        auto widen = [&](const asmjit::ujit::Gp& value) {
             if (value.size() == 8)
                 return value;
             auto wide = compiler.new_gp64("tableFillWord");
@@ -4814,7 +4814,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
         emitter.mov(index, static_cast<uint32_t>(tableIndex));
         // The core takes a 64-bit delta. For a 32-bit table, zero-extend the
         // i32 operand; a table64 operand is already 64-bit.
-        asmjit::x86::Gp delta64 = delta;
+        asmjit::ujit::Gp delta64 = delta;
         if (delta.size() != 8) {
             delta64 = compiler.new_gp64("tableGrowDelta");
             emitter.mov(delta64, delta);
@@ -4884,10 +4884,10 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		// x86, so storing a qword immediate straight into memory is lossy.
 		auto low = compiler.new_gp64("v128ConstLow");
 		emitter.mov(low, lo);
-		emitter.mov(asmjit::x86::qword_ptr(buffer, 0), low);
+		emitter.mov(asmjit::ujit::mem_ptr(buffer, 0), low);
 		auto high = compiler.new_gp64("v128ConstHigh");
 		emitter.mov(high, hi);
-		emitter.mov(asmjit::x86::qword_ptr(buffer, 8), high);
+		emitter.mov(asmjit::ujit::mem_ptr(buffer, 8), high);
 		values.push_back(buffer);
 	}
 
@@ -4897,7 +4897,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 			throw std::runtime_error("AsmJit v128.load address underflow");
 		auto address = values.back();
 		values.pop_back();
-		asmjit::x86::Gp pointer;
+		asmjit::ujit::Gp pointer;
 		if (arg.isArray) {
 			if (values.empty())
 				throw std::runtime_error("AsmJit GC-array v128.load reference underflow");
@@ -4920,7 +4920,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		values.pop_back();
 		auto address = values.back();
 		values.pop_back();
-		asmjit::x86::Gp pointer;
+		asmjit::ujit::Gp pointer;
 		if (arg.isArray) {
 			if (values.empty())
 				throw std::runtime_error("AsmJit GC-array v128.store reference underflow");
@@ -4955,7 +4955,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 	//! The value a scalar helper takes: the operand's bits at the helper's own
 	//! width. A width change goes through a register copy rather than a view, so
 	//! the argument is a register of exactly the declared size.
-	asmjit::x86::Gp scalarArgument(const asmjit::x86::Gp& value, uint32_t width)
+	asmjit::ujit::Gp scalarArgument(const asmjit::ujit::Gp& value, uint32_t width)
 	{
 		if ((width == 8) == (value.size() == 8))
 			return value;
@@ -5113,11 +5113,11 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 	{
 		if (values.size() < 3)
 			throw std::runtime_error("AsmJit v128.bitselect operand underflow");
-		asmjit::x86::Gp c = values.back();
+		asmjit::ujit::Gp c = values.back();
 		values.pop_back();
-		asmjit::x86::Gp b = values.back();
+		asmjit::ujit::Gp b = values.back();
 		values.pop_back();
-		asmjit::x86::Gp a = values.back();
+		asmjit::ujit::Gp a = values.back();
 		values.pop_back();
 		auto buffer = newVectorBuffer("v128Bitselect");
 		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
@@ -5143,8 +5143,8 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		values.pop_back();
 		auto low = compiler.new_gp64("v128AnyLow");
 		auto high = compiler.new_gp64("v128AnyHigh");
-		emitter.mov(low, asmjit::x86::qword_ptr(vector, 0));
-		emitter.mov(high, asmjit::x86::qword_ptr(vector, 8));
+		emitter.mov(low, asmjit::ujit::mem_ptr(vector, 0));
+		emitter.mov(high, asmjit::ujit::mem_ptr(vector, 8));
 		emitter.or_(low, high);
 		auto result = compiler.new_gp32("v128AnyResult");
 		// One universal `select` replaces the zero/test/setcc triple: it defines
@@ -5154,7 +5154,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 	}
 
 	//! Packs a constant high word and a register low word into one 64-bit value.
-	asmjit::x86::Gp packImmPair(uint32_t high, uint32_t low, const char* name)
+	asmjit::ujit::Gp packImmPair(uint32_t high, uint32_t low, const char* name)
 	{
 		auto packed = compiler.new_gp64(name);
 		emitter.mov(packed, asmjit::Imm(
@@ -5163,8 +5163,8 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 	}
 
 	//! Packs two 32-bit registers into one 64-bit value, high word from `high`.
-	asmjit::x86::Gp packRegPair(const asmjit::x86::Gp& high,
-			const asmjit::x86::Gp& low, const char* name)
+	asmjit::ujit::Gp packRegPair(const asmjit::ujit::Gp& high,
+			const asmjit::ujit::Gp& low, const char* name)
 	{
 		auto packed = compiler.new_gp64(name);
 		emitter.mov(packed, low);
@@ -5282,15 +5282,15 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		auto a = values.back();
 		values.pop_back();
 		auto result = newVectorBuffer("v128Result");
-		auto lhs = compiler.new_xmm("v128NativeA");
-		auto rhs = compiler.new_xmm("v128NativeB");
-		emitter.vectorLoad128(lhs, asmjit::x86::xmmword_ptr(a));
-		emitter.vectorLoad128(rhs, asmjit::x86::xmmword_ptr(b));
+		auto lhs = compiler.new_vec128("v128NativeA");
+		auto rhs = compiler.new_vec128("v128NativeB");
+		emitter.vectorLoad128(lhs, asmjit::ujit::mem_ptr(a));
+		emitter.vectorLoad128(rhs, asmjit::ujit::mem_ptr(b));
 		// Every comparison result is a per-lane all-ones mask, exactly wasm's, and
 		// the universal operation names the signedness, so neither the `pandn`
 		// destination trick nor the `pcmpgt` operand swap survives the conversion.
-		asmjit::x86::Vec out = lhs;
-		auto invert = [&](const asmjit::x86::Vec& mask) {
+		asmjit::ujit::Vec out = lhs;
+		auto invert = [&](const asmjit::ujit::Vec& mask) {
 			emitter.vectorNot(mask);
 		};
 		using Ops = asmjit::ujit::UniOpVVV;
@@ -5333,7 +5333,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		case 35: emitter.vector3(Ops::kCmpGeI32, lhs, lhs, rhs); break;
 		default: throw std::runtime_error("unknown AsmJit v128 native kind");
 		}
-		emitter.vectorStore128(asmjit::x86::xmmword_ptr(result), out);
+		emitter.vectorStore128(asmjit::ujit::mem_ptr(result), out);
 		values.push_back(result);
 	}
 
@@ -5452,9 +5452,13 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 	//! SSE2's packed shift by a vector reads a per-lane count from the low 64
 	//! bits and zeroes lanes when the count exceeds the lane width, so the count
 	//! is masked to `laneBits - 1` first -- wasm's `count mod laneBits`.
-	void emitVectorShiftNative(const char* name, int kind)
+	void emitVectorShiftNative(int kind)
 	{
-		if (!nativeSimdEnabled())
+		// The per-lane variable-count shift is the one wasm operation the
+		// universal vocabulary cannot express (it offers immediate counts only),
+		// so this build takes the portable helper path wherever the host has no
+		// such instruction, and the whole native path compiles out.
+		if (!nativeSimdEnabled() || !Emitter::hasVariableVectorShift())
 		{
 			emitVectorShift(helperForNativeShiftKind(kind));
 			return;
@@ -5466,10 +5470,10 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		auto a = values.back();
 		values.pop_back();
 		auto result = newVectorBuffer("v128Shift");
-		auto vector = compiler.new_xmm("v128ShiftValue");
-		auto laneCount = compiler.new_xmm("v128ShiftCount");
-		auto mask = compiler.new_xmm("v128ShiftMask");
-		emitter.vectorLoad128(vector, asmjit::x86::xmmword_ptr(a));
+		auto vector = compiler.new_vec128("v128ShiftValue");
+		auto laneCount = compiler.new_vec128("v128ShiftCount");
+		auto mask = compiler.new_vec128("v128ShiftMask");
+		emitter.vectorLoad128(vector, asmjit::ujit::mem_ptr(a));
 		// The count move zeroes the rest of the vector, and the mask leaves
 		// `count % laneBits` in every lane — what the per-lane shift expects.
 		// The mask itself is 15 (words) or 31 (dwords) in every lane.
@@ -5480,34 +5484,26 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		auto maskBuffer = newVectorBuffer("v128ShiftMaskBits");
 		auto maskValue = compiler.new_gp64("v128ShiftMaskValue");
 		emitter.mov(maskValue, maskBits);
-		emitter.mov(asmjit::x86::qword_ptr(maskBuffer, 0), maskValue);
-		emitter.mov(asmjit::x86::qword_ptr(maskBuffer, 8), maskValue);
-		emitter.vectorLoad128(mask, asmjit::x86::xmmword_ptr(maskBuffer));
+		emitter.mov(asmjit::ujit::mem_ptr(maskBuffer, 0), maskValue);
+		emitter.mov(asmjit::ujit::mem_ptr(maskBuffer, 8), maskValue);
+		emitter.vectorLoad128(mask, asmjit::ujit::mem_ptr(maskBuffer));
 		emitter.vector3(asmjit::ujit::UniOpVVV::kAndU32, laneCount, laneCount, mask);
-		// A per-lane variable-count shift has no universal operation: the
-		// vocabulary offers immediate counts only, so these six instructions are
-		// emitted through the host and listed in Asmjit.md "The host-specific set".
-		switch (kind) {
-		case 0: checkError(emitter.host().psllw(vector, laneCount), name); break;
-		case 1: checkError(emitter.host().psraw(vector, laneCount), name); break;
-		case 2: checkError(emitter.host().psrlw(vector, laneCount), name); break;
-		case 3: checkError(emitter.host().pslld(vector, laneCount), name); break;
-		case 4: checkError(emitter.host().psrad(vector, laneCount), name); break;
-		default: checkError(emitter.host().psrld(vector, laneCount), name); break;
-		}
-		emitter.vectorStore128(asmjit::x86::xmmword_ptr(result), vector);
+		// The seam owns the host spelling: only reached when it reported the
+		// capability a few lines above.
+		emitter.vectorShiftBy(static_cast<uint32_t>(kind), vector, laneCount);
+		emitter.vectorStore128(asmjit::ujit::mem_ptr(result), vector);
 		values.push_back(result);
 	}
 
 	void dispatchI8x16Shl() override { emitVectorShift(&wasm_i8x16_shl); }
 	void dispatchI8x16ShrS() override { emitVectorShift(&wasm_i8x16_shr_s); }
 	void dispatchI8x16ShrU() override { emitVectorShift(&wasm_i8x16_shr_u); }
-	void dispatchI16x8Shl() override { emitVectorShiftNative("AsmJit i16x8.shl failed", 0); }
-	void dispatchI16x8ShrS() override { emitVectorShiftNative("AsmJit i16x8.shr_s failed", 1); }
-	void dispatchI16x8ShrU() override { emitVectorShiftNative("AsmJit i16x8.shr_u failed", 2); }
-	void dispatchI32x4Shl() override { emitVectorShiftNative("AsmJit i32x4.shl failed", 3); }
-	void dispatchI32x4ShrS() override { emitVectorShiftNative("AsmJit i32x4.shr_s failed", 4); }
-	void dispatchI32x4ShrU() override { emitVectorShiftNative("AsmJit i32x4.shr_u failed", 5); }
+	void dispatchI16x8Shl() override { emitVectorShiftNative(0); }
+	void dispatchI16x8ShrS() override { emitVectorShiftNative(1); }
+	void dispatchI16x8ShrU() override { emitVectorShiftNative(2); }
+	void dispatchI32x4Shl() override { emitVectorShiftNative(3); }
+	void dispatchI32x4ShrS() override { emitVectorShiftNative(4); }
+	void dispatchI32x4ShrU() override { emitVectorShiftNative(5); }
 	void dispatchI64x2Shl() override { emitVectorShift(&wasm_i64x2_shl); }
 	void dispatchI64x2ShrS() override { emitVectorShift(&wasm_i64x2_shr_s); }
 	void dispatchI64x2ShrU() override { emitVectorShift(&wasm_i64x2_shr_u); }
@@ -5673,7 +5669,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 				"AsmJit v128 float extract helper call failed");
 		invoke->set_arg(0, vector);
 		invoke->set_arg(1, asmjit::Imm(lane));
-		auto result = compiler.new_xmm("v128FloatLane");
+		auto result = compiler.new_vec128("v128FloatLane");
 		invoke->set_ret(0, result);
 		values.push_back(bitsOfFloat(result, width));
 	}
@@ -5731,7 +5727,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		const auto emitOp = [&](uint64_t helper, int operands, int extra) {
 			if (values.size() < static_cast<std::size_t>(operands + extra))
 				throw std::runtime_error("AsmJit f16x8 helper operand underflow");
-			std::vector<asmjit::x86::Gp> sources(static_cast<std::size_t>(operands + extra));
+			std::vector<asmjit::ujit::Gp> sources(static_cast<std::size_t>(operands + extra));
 			for (int i = operands + extra; i > 0; --i) {
 				sources[static_cast<std::size_t>(i - 1)] = values.back();
 				values.pop_back();
@@ -6012,7 +6008,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		// consumes, releasing the inner reference with it. So the result takes the
 		// count *before* the operand gives its own up.
 		if (owned) {
-			const asmjit::x86::Gp kept = emitRefClone(result);
+			const asmjit::ujit::Gp kept = emitRefClone(result);
 			emitter.mov(result, kept);
 			markReference(result);
 		}
@@ -6075,7 +6071,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		emitter.j(skip, asmjit::ujit::test_nz(reference, reference));
 		// The null branch carries the values below the reference, not the ref.
 		const size_t first = refDepth - branchValues;
-		const std::vector<asmjit::x86::Gp>& destinations = loopTarget ? target.params : target.results;
+		const std::vector<asmjit::ujit::Gp>& destinations = loopTarget ? target.params : target.results;
 		const std::vector<WASM::ValueTypeCode>& codes = loopTarget
 				? target.paramTypes : target.resultTypes;
 		for (size_t i = 0; i < branchValues; ++i)
@@ -6107,7 +6103,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		auto skip = compiler.new_label();
 		emitter.j(skip, asmjit::ujit::test_z(reference, reference));
 		const size_t first = values.size() - branchValues;
-		const std::vector<asmjit::x86::Gp>& destinations = loopTarget ? target.params : target.results;
+		const std::vector<asmjit::ujit::Gp>& destinations = loopTarget ? target.params : target.results;
 		const std::vector<WASM::ValueTypeCode>& codes = loopTarget
 				? target.paramTypes : target.resultTypes;
 		for (size_t i = 0; i < branchValues; ++i)
@@ -6174,7 +6170,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		emitter.j(fallthrough, onFailure ? asmjit::ujit::test_nz(matches, matches)
 					: asmjit::ujit::test_z(matches, matches));
 		const size_t first = values.size() - branchValues;
-		const std::vector<asmjit::x86::Gp>& destinations = loopTarget ? frame.params : frame.results;
+		const std::vector<asmjit::ujit::Gp>& destinations = loopTarget ? frame.params : frame.results;
 		const std::vector<WASM::ValueTypeCode>& codes = loopTarget
 				? frame.paramTypes : frame.resultTypes;
 		for (size_t i = 0; i < branchValues; ++i)
@@ -6221,19 +6217,18 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 				// both, so it is one store of the field's own width.
 				const bool isI8 = fields[i].storage.packed == WASM::ValueTypeCode::I8;
 				if (isI8)
-					emitter.mov(asmjit::x86::byte_ptr(object, offset), asmjit::Imm(0));
+					emitter.store8(asmjit::ujit::mem_ptr(object, offset), asmjit::Imm(0));
 				else
-					emitter.mov(asmjit::x86::word_ptr(object, offset), asmjit::Imm(0));
+					emitter.store16(asmjit::ujit::mem_ptr(object, offset), asmjit::Imm(0));
 				continue;
 			}
 			const int width = kindWidth(fields[i].storage.value.opcode);
 			if (width != 4 && width != 8)
 				throw std::runtime_error("AsmJit struct.new_default does not lower this field type yet");
 			if (width == 4)
-				emitter.mov(asmjit::x86::dword_ptr(object, offset),
-						static_cast<uint32_t>(0));
+				emitter.store32(asmjit::ujit::mem_ptr(object, offset), asmjit::Imm(0));
 			else
-				emitter.mov(asmjit::x86::qword_ptr(object, offset),
+				emitter.mov(asmjit::ujit::mem_ptr(object, offset),
 						static_cast<uint64_t>(0));
 		}
 		// A fresh object is created unowned; the operand stack owns one count
@@ -6251,7 +6246,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		if (values.size() < fields.size())
 			throw std::runtime_error("AsmJit struct.new operand stack underflow");
 		// Fields are stacked in declaration order; store them in reverse.
-		std::vector<asmjit::x86::Gp> operands(fields.size());
+		std::vector<asmjit::ujit::Gp> operands(fields.size());
 		for (std::size_t i = fields.size(); i-- > 0;) {
 			operands[i] = values.back();
 			values.pop_back();
@@ -6278,10 +6273,10 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 			if (field.storage.isPacked) {
 				// A packed field keeps only its low byte or word.
 				if (field.storage.packed == WASM::ValueTypeCode::I8)
-					emitter.guestStore8(asmjit::x86::byte_ptr(object,
+					emitter.guestStore8(asmjit::ujit::mem_ptr(object,
 						static_cast<int32_t>(offset)), operands[i]);
 				else
-					emitter.guestStore16(asmjit::x86::word_ptr(object,
+					emitter.guestStore16(asmjit::ujit::mem_ptr(object,
 						static_cast<int32_t>(offset)), operands[i]);
 				continue;
 			}
@@ -6289,10 +6284,10 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 			if (width != 4 && width != 8)
 				throw std::runtime_error("AsmJit struct.new does not lower this field type yet");
 			if (width == 4)
-				emitter.guestStore32(asmjit::x86::dword_ptr(object,
+				emitter.guestStore32(asmjit::ujit::mem_ptr(object,
 					static_cast<int32_t>(offset)), operands[i]);
 			else
-				emitter.guestStore64(asmjit::x86::qword_ptr(object,
+				emitter.guestStore64(asmjit::ujit::mem_ptr(object,
 					static_cast<int32_t>(offset)), operands[i]);
 		}
 		// A fresh object is created unowned; the operand stack owns one count
@@ -6314,7 +6309,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		// The descriptor sits on top of the field operands.
 		auto descriptor = values.back();
 		values.pop_back();
-		std::vector<asmjit::x86::Gp> operands(fields.size());
+		std::vector<asmjit::ujit::Gp> operands(fields.size());
 		for (std::size_t i = fields.size(); i-- > 0;) {
 			operands[i] = values.back();
 			values.pop_back();
@@ -6342,10 +6337,10 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 			const std::size_t offset = WASM::gcStructFieldOffset(fields, i);
 			if (field.storage.isPacked) {
 				if (field.storage.packed == WASM::ValueTypeCode::I8)
-					emitter.guestStore8(asmjit::x86::byte_ptr(object,
+					emitter.guestStore8(asmjit::ujit::mem_ptr(object,
 						static_cast<int32_t>(offset)), operands[i]);
 				else
-					emitter.guestStore16(asmjit::x86::word_ptr(object,
+					emitter.guestStore16(asmjit::ujit::mem_ptr(object,
 						static_cast<int32_t>(offset)), operands[i]);
 				continue;
 			}
@@ -6353,10 +6348,10 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 			if (width != 4 && width != 8)
 				throw std::runtime_error("AsmJit struct.new_desc does not lower this field type yet");
 			if (width == 4)
-				emitter.guestStore32(asmjit::x86::dword_ptr(object,
+				emitter.guestStore32(asmjit::ujit::mem_ptr(object,
 					static_cast<int32_t>(offset)), operands[i]);
 			else
-				emitter.guestStore64(asmjit::x86::qword_ptr(object,
+				emitter.guestStore64(asmjit::ujit::mem_ptr(object,
 					static_cast<int32_t>(offset)), operands[i]);
 		}
 		// The new object retained the descriptor; the operand's own count goes,
@@ -6407,10 +6402,9 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 				throw std::runtime_error("AsmJit struct.new_default_desc does not lower this field type yet");
 			const auto offset = static_cast<int32_t>(WASM::gcStructFieldOffset(fields, i));
 			if (width == 4)
-				emitter.mov(asmjit::x86::dword_ptr(object, offset),
-						static_cast<uint32_t>(0));
+				emitter.store32(asmjit::ujit::mem_ptr(object, offset), asmjit::Imm(0));
 			else
-				emitter.mov(asmjit::x86::qword_ptr(object, offset),
+				emitter.mov(asmjit::ujit::mem_ptr(object, offset),
 						static_cast<uint64_t>(0));
 		}
 		// A fresh object is created unowned; the operand stack owns one count
@@ -6543,7 +6537,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		emitter.j(fallthrough, onFailure ? asmjit::ujit::test_nz(matches, matches)
 					: asmjit::ujit::test_z(matches, matches));
 		const size_t first = values.size() - branchValues;
-		const std::vector<asmjit::x86::Gp>& destinations = loopTarget ? frame.params : frame.results;
+		const std::vector<asmjit::ujit::Gp>& destinations = loopTarget ? frame.params : frame.results;
 		const std::vector<WASM::ValueTypeCode>& codes = loopTarget
 				? frame.paramTypes : frame.resultTypes;
 		for (size_t i = 0; i < branchValues; ++i)
@@ -6589,7 +6583,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		emitPendingTrapReturn();
 		checkError(compiler.bind(notNull), "AsmJit array.get_s/u null label binding failed");
 		auto length = compiler.new_gp32("arrayLength");
-		emitter.headerLoad32(length, asmjit::x86::dword_ptr(object,
+		emitter.headerLoad32(length, asmjit::ujit::mem_ptr(object,
 				static_cast<int32_t>(WASM::GcHeader::kArrayLengthOffset)));
 		asmjit::Label inBounds = compiler.new_label();
 		emitter.j(inBounds, asmjit::ujit::ucmp_lt(index, length));
@@ -6607,14 +6601,14 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		auto result = compiler.new_gp32("arrayPackedElement");
 		if (isI8) {
 			if (signExtend)
-				emitter.guestLoad8S(result, asmjit::x86::byte_ptr(object, byteOffset));
+				emitter.guestLoad8S(result, asmjit::ujit::mem_ptr(object, byteOffset));
 			else
-				emitter.guestLoad8Z(result, asmjit::x86::byte_ptr(object, byteOffset));
+				emitter.guestLoad8Z(result, asmjit::ujit::mem_ptr(object, byteOffset));
 		} else {
 			if (signExtend)
-				emitter.guestLoad16S(result, asmjit::x86::word_ptr(object, byteOffset));
+				emitter.guestLoad16S(result, asmjit::ujit::mem_ptr(object, byteOffset));
 			else
-				emitter.guestLoad16Z(result, asmjit::x86::word_ptr(object, byteOffset));
+				emitter.guestLoad16Z(result, asmjit::ujit::mem_ptr(object, byteOffset));
 		}
 		// The container operand was the operand stack's, so its count goes
 		// back. The element is already in a fresh register, so the drop cannot
@@ -6658,7 +6652,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		emitPendingTrapReturn();
 		checkError(compiler.bind(notNull), "AsmJit array.set null label binding failed");
 		auto length = compiler.new_gp32("arrayLength");
-		emitter.headerLoad32(length, asmjit::x86::dword_ptr(object,
+		emitter.headerLoad32(length, asmjit::ujit::mem_ptr(object,
 				static_cast<int32_t>(WASM::GcHeader::kArrayLengthOffset)));
 		asmjit::Label inBounds = compiler.new_label();
 		emitter.j(inBounds, asmjit::ujit::ucmp_lt(index, length));
@@ -6691,13 +6685,13 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		}
 		if (packed) {
 			if (packedI8)
-				emitter.guestStore8(asmjit::x86::byte_ptr(address), value);
+				emitter.guestStore8(asmjit::ujit::mem_ptr(address), value);
 			else
-				emitter.guestStore16(asmjit::x86::word_ptr(address), value);
+				emitter.guestStore16(asmjit::ujit::mem_ptr(address), value);
 		} else if (width == 4)
-			emitter.guestStore32(asmjit::x86::dword_ptr(address), value);
+			emitter.guestStore32(asmjit::ujit::mem_ptr(address), value);
 		else
-			emitter.guestStore64(asmjit::x86::qword_ptr(address), value);
+			emitter.guestStore64(asmjit::ujit::mem_ptr(address), value);
 		// The element holds no reference, so the container operand's count is
 		// the only one to give back.
 		emitRefDrop(object);
@@ -6732,7 +6726,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		emitPendingTrapReturn();
 		checkError(compiler.bind(notNull), "AsmJit array.get null label binding failed");
 		auto length = compiler.new_gp32("arrayLength");
-		emitter.headerLoad32(length, asmjit::x86::dword_ptr(object,
+		emitter.headerLoad32(length, asmjit::ujit::mem_ptr(object,
 				static_cast<int32_t>(WASM::GcHeader::kArrayLengthOffset)));
 		asmjit::Label inBounds = compiler.new_label();
 		emitter.j(inBounds, asmjit::ujit::ucmp_lt(index, length));
@@ -6752,9 +6746,9 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		auto result = width == 4 ? compiler.new_gp32("arrayElementValue")
 				: compiler.new_gp64("arrayElementValue");
 		if (width == 4)
-			emitter.guestLoad32Z(result, asmjit::x86::dword_ptr(object, byteOffset));
+			emitter.guestLoad32Z(result, asmjit::ujit::mem_ptr(object, byteOffset));
 		else
-			emitter.guestLoad64(result, asmjit::x86::qword_ptr(object, byteOffset));
+			emitter.guestLoad64(result, asmjit::ujit::mem_ptr(object, byteOffset));
 		// The container operand belonged to the operand stack, so its count goes
 		// back. The element is already in a fresh register, so no spill is
 		// needed, and the drop cannot invalidate it.
@@ -6988,7 +6982,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 			throw std::runtime_error("AsmJit array.new_default operand stack underflow");
 		// The length operand stays live across the allocation call, the same way
 		// array.new keeps its initialiser live.
-		asmjit::x86::Gp length = values.back();
+		asmjit::ujit::Gp length = values.back();
 		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
 		signature.set_ret(asmjit::TypeId::kUIntPtr);
 		signature.add_arg(asmjit::TypeId::kUIntPtr);
@@ -7014,19 +7008,19 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		// register would keep whatever garbage sits above bit 31 and turn the
 		// countdown into a runaway loop.
 		emitter.mov(counter, length);
-		emitter.lea(cursor, asmjit::x86::ptr(object, dataOffset));
+		emitter.lea(cursor, asmjit::ujit::mem_ptr(object, dataOffset));
 		asmjit::Label loopStart = compiler.new_label();
 		asmjit::Label loopDone = compiler.new_label();
 		checkError(compiler.bind(loopStart), "AsmJit array.new_default label bind failed");
 		emitter.j(loopDone, asmjit::ujit::test_z(counter, counter));
 		if (width == 1)
-			emitter.mov(asmjit::x86::byte_ptr(cursor), asmjit::Imm(0));
+			emitter.store8(asmjit::ujit::mem_ptr(cursor), asmjit::Imm(0));
 		else if (width == 2)
-			emitter.mov(asmjit::x86::word_ptr(cursor), asmjit::Imm(0));
+			emitter.store16(asmjit::ujit::mem_ptr(cursor), asmjit::Imm(0));
 		else if (width == 4)
-			emitter.mov(asmjit::x86::dword_ptr(cursor), asmjit::Imm(0));
+			emitter.store32(asmjit::ujit::mem_ptr(cursor), asmjit::Imm(0));
 		else
-			emitter.mov(asmjit::x86::qword_ptr(cursor), asmjit::Imm(0));
+			emitter.mov(asmjit::ujit::mem_ptr(cursor), asmjit::Imm(0));
 		emitter.add(cursor, asmjit::Imm(elementBytes));
 		emitter.dec(counter);
 		emitter.jmp(loopStart);
@@ -7053,7 +7047,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 			throw std::runtime_error("AsmJit array.new_fixed does not lower this element type yet");
 		if (values.size() < arg2)
 			throw std::runtime_error("AsmJit array.new_fixed operand stack underflow");
-		std::vector<asmjit::x86::Gp> operands(arg2);
+		std::vector<asmjit::ujit::Gp> operands(arg2);
 		for (uint32_t i = arg2; i-- > 0; ) {
 			operands[i] = values.back();
 			values.pop_back();
@@ -7079,15 +7073,15 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 			const auto offset = static_cast<int32_t>(dataOffset + static_cast<int32_t>(i) * elementBytes);
 			if (packed) {
 				if (packedI8)
-					emitter.guestStore8(asmjit::x86::byte_ptr(object, offset),
+					emitter.guestStore8(asmjit::ujit::mem_ptr(object, offset),
 					operands[i]);
 				else
-					emitter.guestStore16(asmjit::x86::word_ptr(object, offset),
+					emitter.guestStore16(asmjit::ujit::mem_ptr(object, offset),
 					operands[i]);
 			} else if (width == 4)
-				emitter.guestStore32(asmjit::x86::dword_ptr(object, offset), operands[i]);
+				emitter.guestStore32(asmjit::ujit::mem_ptr(object, offset), operands[i]);
 			else
-				emitter.guestStore64(asmjit::x86::qword_ptr(object, offset), operands[i]);
+				emitter.guestStore64(asmjit::ujit::mem_ptr(object, offset), operands[i]);
 		}
 		values.push_back(object);
 		// A fresh object is created unowned; the operand stack owns one count
@@ -7128,15 +7122,15 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 					"AsmJit array.copy trap emission failed");
 			emitPendingTrapReturn();
 		};
-		const auto nullCheck = [&](const asmjit::x86::Gp& object) {
+		const auto nullCheck = [&](const asmjit::ujit::Gp& object) {
 			asmjit::Label ok = compiler.new_label();
 			emitter.j(ok, asmjit::ujit::test_nz(object, object));
 			trapCall(&asmjitReportNullArray);
 			checkError(compiler.bind(ok), "AsmJit array.copy null label binding failed");
 		};
-		const auto rangeCheck = [&](const asmjit::x86::Gp& object, const asmjit::x86::Gp& index) {
+		const auto rangeCheck = [&](const asmjit::ujit::Gp& object, const asmjit::ujit::Gp& index) {
 			auto arrayLength = compiler.new_gp64("arrayLength");
-			emitter.headerLoad32(arrayLength, asmjit::x86::dword_ptr(object,
+			emitter.headerLoad32(arrayLength, asmjit::ujit::mem_ptr(object,
 					static_cast<int32_t>(WASM::GcHeader::kArrayLengthOffset)));
 			auto endIndex = compiler.new_gp64("arrayCopyEndIndex");
 			emitter.mov(endIndex, index);
@@ -7157,7 +7151,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		int shift = 0;
 		for (int bytes = elementBytes; bytes > 1; bytes >>= 1)
 			++shift;
-		const auto cursorFor = [&](const asmjit::x86::Gp& object, const asmjit::x86::Gp& index,
+		const auto cursorFor = [&](const asmjit::ujit::Gp& object, const asmjit::ujit::Gp& index,
 				const char* name) {
 			auto cursor = compiler.new_gp64(name);
 			emitter.mov(cursor, object);
@@ -7207,24 +7201,24 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 			emitRefDrop(srcObject);
 	}
 
-	void emitCopyTransfer(bool packed, bool packedI8, int width, const asmjit::x86::Gp& dst,
-			const asmjit::x86::Gp& src)
+	void emitCopyTransfer(bool packed, bool packedI8, int width, const asmjit::ujit::Gp& dst,
+			const asmjit::ujit::Gp& src)
 	{
 		auto value = compiler.new_gp64("arrayCopyValue");
 		if (packed) {
 			if (packedI8) {
-				emitter.mov(value, asmjit::x86::byte_ptr(src));
-				emitter.mov(asmjit::x86::byte_ptr(dst), value);
+				emitter.loadZ8(value, asmjit::ujit::mem_ptr(src));
+				emitter.store8(asmjit::ujit::mem_ptr(dst), value);
 			} else {
-				emitter.mov(value, asmjit::x86::word_ptr(src));
-				emitter.mov(asmjit::x86::word_ptr(dst), value);
+				emitter.loadZ16(value, asmjit::ujit::mem_ptr(src));
+				emitter.store16(asmjit::ujit::mem_ptr(dst), value);
 			}
 		} else if (width == 4) {
-			emitter.mov(value, asmjit::x86::dword_ptr(src));
-			emitter.mov(asmjit::x86::dword_ptr(dst), value);
+			emitter.loadZ32(value, asmjit::ujit::mem_ptr(src));
+			emitter.store32(asmjit::ujit::mem_ptr(dst), value);
 		} else {
-			emitter.mov(value, asmjit::x86::qword_ptr(src));
-			emitter.mov(asmjit::x86::qword_ptr(dst), value);
+			emitter.mov(value, asmjit::ujit::mem_ptr(src));
+			emitter.mov(asmjit::ujit::mem_ptr(dst), value);
 		}
 	}
 
@@ -7265,7 +7259,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		checkError(compiler.bind(notNull), "AsmJit array.fill null label binding failed");
 		// Bounds: (u64)index + (u64)length <= (u64)arrayLength.
 		auto arrayLength = compiler.new_gp64("arrayLength");
-		emitter.headerLoad32(arrayLength, asmjit::x86::dword_ptr(object,
+		emitter.headerLoad32(arrayLength, asmjit::ujit::mem_ptr(object,
 					static_cast<int32_t>(WASM::GcHeader::kArrayLengthOffset)));
 		auto endIndex = compiler.new_gp64("arrayFillEndIndex");
 		emitter.mov(endIndex, index);
@@ -7303,13 +7297,13 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		emitter.j(loopDone, asmjit::ujit::test_z(counter, counter));
 		if (packed) {
 			if (packedI8)
-				emitter.mov(asmjit::x86::byte_ptr(cursor), elementValue);
+				emitter.store8(asmjit::ujit::mem_ptr(cursor), elementValue);
 			else
-				emitter.mov(asmjit::x86::word_ptr(cursor), elementValue);
+				emitter.store16(asmjit::ujit::mem_ptr(cursor), elementValue);
 		} else if (width == 4)
-			emitter.mov(asmjit::x86::dword_ptr(cursor), elementValue);
+			emitter.store32(asmjit::ujit::mem_ptr(cursor), elementValue);
 		else
-			emitter.mov(asmjit::x86::qword_ptr(cursor), elementValue);
+			emitter.mov(asmjit::ujit::mem_ptr(cursor), elementValue);
 		emitter.add(cursor, asmjit::Imm(elementBytes));
 		emitter.dec(counter);
 		emitter.jmp(loopStart);
@@ -7371,13 +7365,13 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		emitter.j(fillDone, asmjit::ujit::test_z(fillCounter, fillCounter));
 		if (packed) {
 			if (packedI8)
-				emitter.mov(asmjit::x86::byte_ptr(fillCursor), elementValue);
+				emitter.store8(asmjit::ujit::mem_ptr(fillCursor), elementValue);
 			else
-				emitter.mov(asmjit::x86::word_ptr(fillCursor), elementValue);
+				emitter.store16(asmjit::ujit::mem_ptr(fillCursor), elementValue);
 		} else if (width == 4)
-			emitter.mov(asmjit::x86::dword_ptr(fillCursor), elementValue);
+			emitter.store32(asmjit::ujit::mem_ptr(fillCursor), elementValue);
 		else
-			emitter.mov(asmjit::x86::qword_ptr(fillCursor), elementValue);
+			emitter.mov(asmjit::ujit::mem_ptr(fillCursor), elementValue);
 		emitter.add(fillCursor, asmjit::Imm(elementBytes));
 		emitter.dec(fillCounter);
 		emitter.jmp(fillStart);
@@ -7406,7 +7400,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		emitPendingTrapReturn();
 		checkError(compiler.bind(notNull), "AsmJit array.len label binding failed");
 		auto length = compiler.new_gp32("arrayLength");
-		emitter.headerLoad32(length, asmjit::x86::dword_ptr(object,
+		emitter.headerLoad32(length, asmjit::ujit::mem_ptr(object,
 				static_cast<int32_t>(WASM::GcHeader::kArrayLengthOffset)));
 		// The array operand was the operand stack's and the result is an i32,
 		// so the stack gives its count up.
@@ -7444,14 +7438,14 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		const bool isI8 = fields[arg2].storage.packed == WASM::ValueTypeCode::I8;
 		if (isI8) {
 			if (signExtend)
-				emitter.guestLoad8S(result, asmjit::x86::byte_ptr(object, offset));
+				emitter.guestLoad8S(result, asmjit::ujit::mem_ptr(object, offset));
 			else
-				emitter.guestLoad8Z(result, asmjit::x86::byte_ptr(object, offset));
+				emitter.guestLoad8Z(result, asmjit::ujit::mem_ptr(object, offset));
 		} else {
 			if (signExtend)
-				emitter.guestLoad16S(result, asmjit::x86::word_ptr(object, offset));
+				emitter.guestLoad16S(result, asmjit::ujit::mem_ptr(object, offset));
 			else
-				emitter.guestLoad16Z(result, asmjit::x86::word_ptr(object, offset));
+				emitter.guestLoad16Z(result, asmjit::ujit::mem_ptr(object, offset));
 		}
 		// The container operand was the operand stack's, so its count goes
 		// back. The field value is already in a fresh register and a packed
@@ -7502,8 +7496,8 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 			// for the field and releases the one it held. The operand stack then
 			// gives up the counts it held for both operands -- the container and
 			// the value -- which is safe from the registers after the store.
-			asmjit::x86::Gp fieldAddress = compiler.new_gp_ptr("structSetField");
-			emitter.lea(fieldAddress, asmjit::x86::qword_ptr(object, offset));
+			asmjit::ujit::Gp fieldAddress = compiler.new_gp_ptr("structSetField");
+			emitter.lea(fieldAddress, asmjit::ujit::mem_ptr(object, offset));
 			emitRefStore(fieldAddress, value);
 			emitRefDrop(object);
 			emitRefDrop(value);
@@ -7511,13 +7505,13 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		}
 		if (packed) {
 			if (packedI8)
-				emitter.guestStore8(asmjit::x86::byte_ptr(object, offset), value);
+				emitter.guestStore8(asmjit::ujit::mem_ptr(object, offset), value);
 			else
-				emitter.guestStore16(asmjit::x86::word_ptr(object, offset), value);
+				emitter.guestStore16(asmjit::ujit::mem_ptr(object, offset), value);
 		} else if (width == 4)
-			emitter.guestStore32(asmjit::x86::dword_ptr(object, offset), value);
+			emitter.guestStore32(asmjit::ujit::mem_ptr(object, offset), value);
 		else
-			emitter.guestStore64(asmjit::x86::qword_ptr(object, offset), value);
+			emitter.guestStore64(asmjit::ujit::mem_ptr(object, offset), value);
 		// The field holds no reference, so the container operand's count is the
 		// only one to give back.
 		emitRefDrop(object);
@@ -7556,10 +7550,10 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		auto result = width == 4 ? compiler.new_gp32("structField")
 				: compiler.new_gp64("structField");
 		if (width == 4)
-			emitter.guestLoad32Z(result, asmjit::x86::dword_ptr(object,
+			emitter.guestLoad32Z(result, asmjit::ujit::mem_ptr(object,
 				static_cast<int32_t>(offset)));
 		else
-			emitter.guestLoad64(result, asmjit::x86::qword_ptr(object,
+			emitter.guestLoad64(result, asmjit::ujit::mem_ptr(object,
 				static_cast<int32_t>(offset)));
 		// The container operand belonged to the operand stack, so its count goes
 		// back. The field value is already in a fresh register, so no spill is
@@ -7585,7 +7579,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		values.pop_back();
 		auto table = compiler.new_gp32("tableGetIndex");
 		emitter.mov(table, static_cast<uint32_t>(tableIndex));
-		asmjit::x86::Gp index64 = index;
+		asmjit::ujit::Gp index64 = index;
 		if (index.size() == 4) {
 			index64 = compiler.new_gp64("tableGetElement");
 			emitter.mov(index64, index);
@@ -7624,7 +7618,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		values.pop_back();
 		auto table = compiler.new_gp32("tableSetIndex");
 		emitter.mov(table, static_cast<uint32_t>(tableIndex));
-		asmjit::x86::Gp index64 = index;
+		asmjit::ujit::Gp index64 = index;
 		if (index.size() == 4) {
 			index64 = compiler.new_gp64("tableSetElement");
 			emitter.mov(index64, index);
@@ -7661,7 +7655,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		values.pop_back();
 		auto table = compiler.new_gp32("tableAtomicGetIndex");
 		emitter.mov(table, static_cast<uint32_t>(tableIndex));
-		asmjit::x86::Gp index64 = index;
+		asmjit::ujit::Gp index64 = index;
 		if (index.size() == 4) {
 			index64 = compiler.new_gp64("tableAtomicGetElement");
 			emitter.mov(index64, index);
@@ -7700,7 +7694,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		values.pop_back();
 		auto table = compiler.new_gp32("tableAtomicSetIndex");
 		emitter.mov(table, static_cast<uint32_t>(tableIndex));
-		asmjit::x86::Gp index64 = index;
+		asmjit::ujit::Gp index64 = index;
 		if (index.size() == 4) {
 			index64 = compiler.new_gp64("tableAtomicSetElement");
 			emitter.mov(index64, index);
@@ -7734,7 +7728,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		values.pop_back();
 		auto table = compiler.new_gp32("tableAtomicXchgIndex");
 		emitter.mov(table, static_cast<uint32_t>(tableIndex));
-		asmjit::x86::Gp index64 = index;
+		asmjit::ujit::Gp index64 = index;
 		if (index.size() == 4) {
 			index64 = compiler.new_gp64("tableAtomicXchgElement");
 			emitter.mov(index64, index);
@@ -7773,7 +7767,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		values.pop_back();
 		auto table = compiler.new_gp32("tableAtomicCmpxchgIndex");
 		emitter.mov(table, static_cast<uint32_t>(tableIndex));
-		asmjit::x86::Gp index64 = index;
+		asmjit::ujit::Gp index64 = index;
 		if (index.size() == 4) {
 			index64 = compiler.new_gp64("tableAtomicCmpxchgElement");
 			emitter.mov(index64, index);
@@ -8112,7 +8106,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		} else if (resultCount == 1) {
 			const WASM::ValueTypeCode code = resultTypes.front();
 			if (isFloatKind(code)) {
-				auto zero = compiler.new_xmm("unreachableFloatResult");
+				auto zero = compiler.new_vec128("unreachableFloatResult");
 				emitter.vectorZero(zero);
 				checkError(compiler.ret(zero), "AsmJit unreachable float return emission failed");
 			} else {
@@ -8183,16 +8177,16 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		values.push_back(result);
 	}
 
-	void dispatchI64Eq() override { emitCompare(asmjit::x86::CondCode::kE); }
-	void dispatchI64Ne() override { emitCompare(asmjit::x86::CondCode::kNE); }
-	void dispatchI64LtS() override { emitCompare(asmjit::x86::CondCode::kL); }
-	void dispatchI64LtU() override { emitCompare(asmjit::x86::CondCode::kB); }
-	void dispatchI64GtS() override { emitCompare(asmjit::x86::CondCode::kG); }
-	void dispatchI64GtU() override { emitCompare(asmjit::x86::CondCode::kA); }
-	void dispatchI64LeS() override { emitCompare(asmjit::x86::CondCode::kLE); }
-	void dispatchI64LeU() override { emitCompare(asmjit::x86::CondCode::kBE); }
-	void dispatchI64GeS() override { emitCompare(asmjit::x86::CondCode::kGE); }
-	void dispatchI64GeU() override { emitCompare(asmjit::x86::CondCode::kAE); }
+	void dispatchI64Eq() override { emitCompare(Compare::Equal); }
+	void dispatchI64Ne() override { emitCompare(Compare::NotEqual); }
+	void dispatchI64LtS() override { emitCompare(Compare::LessS); }
+	void dispatchI64LtU() override { emitCompare(Compare::LessU); }
+	void dispatchI64GtS() override { emitCompare(Compare::GreaterS); }
+	void dispatchI64GtU() override { emitCompare(Compare::GreaterU); }
+	void dispatchI64LeS() override { emitCompare(Compare::LessEqS); }
+	void dispatchI64LeU() override { emitCompare(Compare::LessEqU); }
+	void dispatchI64GeS() override { emitCompare(Compare::GreaterEqS); }
+	void dispatchI64GeU() override { emitCompare(Compare::GreaterEqU); }
 
 	void dispatchStringConst(uint32_t idx) override
 	{
@@ -8233,7 +8227,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 					"AsmJit rounding unary helper failed");
 			invoke->set_arg(0, asmjit::Imm(sub));
 			invoke->set_arg(1, argument);
-			auto result = compiler.new_xmm("roundingResult");
+			auto result = compiler.new_vec128("roundingResult");
 			invoke->set_ret(0, result);
 			values.push_back(bitsOfFloat(result, width));
 		};
@@ -8258,7 +8252,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 			invoke->set_arg(0, asmjit::Imm(sub));
 			invoke->set_arg(1, a);
 			invoke->set_arg(2, b);
-			auto result = compiler.new_xmm("roundingResult");
+			auto result = compiler.new_vec128("roundingResult");
 			invoke->set_ret(0, result);
 			values.push_back(bitsOfFloat(result, width));
 		};
@@ -8277,7 +8271,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 					"AsmJit rounding conversion helper failed");
 			invoke->set_arg(0, asmjit::Imm(sub));
 			invoke->set_arg(1, source);
-			auto result = compiler.new_xmm("roundingResult");
+			auto result = compiler.new_vec128("roundingResult");
 			invoke->set_ret(0, result);
 			values.push_back(bitsOfFloat(result, floatWidth));
 		};
@@ -8297,7 +8291,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 					"AsmJit rounding float conversion failed");
 			invoke->set_arg(0, asmjit::Imm(sub));
 			invoke->set_arg(1, argument);
-			auto result = compiler.new_xmm("roundingResult");
+			auto result = compiler.new_vec128("roundingResult");
 			invoke->set_ret(0, result);
 			values.push_back(bitsOfFloat(result, resultWidth));
 		};
@@ -8341,7 +8335,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		auto destination = values.back(); values.pop_back();
 		const bool is64 = validateMemoryIndex(memory).indexType
 				== WASM::MemoryIndexType::I64;
-		auto widen = [&](const asmjit::x86::Gp& value) {
+		auto widen = [&](const asmjit::ujit::Gp& value) {
 			if (value.size() == 8)
 				return value;
 			auto wide = compiler.new_gp64("memoryDiscardOperand");
@@ -8957,8 +8951,8 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		emitPendingTrapReturn();
 	}
 
-	void emitContinuationFrameArguments(const asmjit::x86::Mem& frame,
-			const std::vector<asmjit::x86::Gp>& operands,
+	void emitContinuationFrameArguments(const asmjit::ujit::Mem& frame,
+			const std::vector<asmjit::ujit::Gp>& operands,
 			const WASM::FuncType& function)
 	{
 		auto at = [&](int32_t offset) {
@@ -8972,9 +8966,9 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 			if (width == 16) {
 				auto high = compiler.new_gp64("continuationVectorHigh");
 				emitter.mov(high,
-						asmjit::x86::qword_ptr(operands[i], 8));
+						asmjit::ujit::mem_ptr(operands[i], 8));
 				auto low = compiler.new_gp64("continuationVectorLow");
-				emitter.mov(low, asmjit::x86::qword_ptr(operands[i]));
+				emitter.mov(low, asmjit::ujit::mem_ptr(operands[i]));
 				emitter.mov(at(offset), low);
 				emitter.mov(at(offset + 8), high);
 			} else if (width == 8) {
@@ -8994,7 +8988,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		if (values.size() < payload.params.size() + 1)
 			throw std::runtime_error("AsmJit resume_throw operand stack underflow");
 		auto continuation = values.back(); values.pop_back();
-		std::vector<asmjit::x86::Gp> payloadValues(payload.params.size());
+		std::vector<asmjit::ujit::Gp> payloadValues(payload.params.size());
 		for (std::size_t i = payload.params.size(); i-- > 0;) {
 			payloadValues[i] = values.back();
 			values.pop_back();
@@ -9021,12 +9015,12 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 				for (int word = 0; word < 2; ++word) {
 					auto bits = compiler.new_gp64("resumeThrowPayloadWord");
 					emitter.mov(bits,
-							asmjit::x86::qword_ptr(payloadValues[i], word * 8));
+							asmjit::ujit::mem_ptr(payloadValues[i], word * 8));
 					emitter.mov(
-							asmjit::x86::qword_ptr(exn, offset + word * 8), bits);
+							asmjit::ujit::mem_ptr(exn, offset + word * 8), bits);
 				}
 			} else {
-				emitter.mov(asmjit::x86::qword_ptr(exn, offset),
+				emitter.mov(asmjit::ujit::mem_ptr(exn, offset),
 						payloadValues[i]);
 			}
 		}
@@ -9062,12 +9056,12 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		if (values.size() < function.params.size() + 1)
 			throw std::runtime_error("AsmJit resume operand stack underflow");
 		auto continuation = values.back(); values.pop_back();
-		std::vector<asmjit::x86::Gp> operands(function.params.size());
+		std::vector<asmjit::ujit::Gp> operands(function.params.size());
 		for (std::size_t i = function.params.size(); i-- > 0;) {
 			operands[i] = values.back();
 			values.pop_back();
 		}
-		asmjit::x86::Mem frame = compiler.new_stack(sizeof(WASM::ContinuationOpFrame), 16,
+		asmjit::ujit::Mem frame = compiler.new_stack(sizeof(WASM::ContinuationOpFrame), 16,
 				"continuationFrame");
 		auto at = [&](int32_t offset) {
 			auto memory = frame;
@@ -9141,7 +9135,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 				for (int word = 0; word < 2; ++word) {
 					auto bits = compiler.new_gp64("continuationResultWord");
 					emitter.mov(bits, at(offset + word * 8));
-					emitter.mov(asmjit::x86::qword_ptr(result, word * 8), bits);
+					emitter.mov(asmjit::ujit::mem_ptr(result, word * 8), bits);
 				}
 			} else {
 				emitter.mov(result, at(offset));
@@ -9217,7 +9211,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 				if (values.size() < branchValues)
 					throw std::runtime_error("AsmJit handler stack underflow");
 				const std::size_t first = values.size() - branchValues;
-				const std::vector<asmjit::x86::Gp>& destinations = loopTarget
+				const std::vector<asmjit::ujit::Gp>& destinations = loopTarget
 						? target.params : target.results;
 				const std::vector<WASM::ValueTypeCode>& codes = loopTarget
 						? target.paramTypes : target.resultTypes;
@@ -9246,12 +9240,12 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		if (values.size() < bound + 1)
 			throw std::runtime_error("AsmJit cont.bind operand stack underflow");
 		auto continuation = values.back(); values.pop_back();
-		std::vector<asmjit::x86::Gp> operands(bound);
+		std::vector<asmjit::ujit::Gp> operands(bound);
 		for (std::size_t i = bound; i-- > 0;) {
 			operands[i] = values.back();
 			values.pop_back();
 		}
-		asmjit::x86::Mem frame = compiler.new_stack(sizeof(WASM::ContinuationOpFrame), 16,
+		asmjit::ujit::Mem frame = compiler.new_stack(sizeof(WASM::ContinuationOpFrame), 16,
 				"continuationFrame");
 		WASM::FuncType boundFunction = fromType;
 		boundFunction.results.clear();
@@ -9292,12 +9286,12 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		const WASM::FuncType payload = tagPayloadType(tag);
 		if (values.size() < payload.params.size())
 			throw std::runtime_error("AsmJit suspend operand stack underflow");
-		std::vector<asmjit::x86::Gp> operands(payload.params.size());
+		std::vector<asmjit::ujit::Gp> operands(payload.params.size());
 		for (std::size_t i = payload.params.size(); i-- > 0;) {
 			operands[i] = values.back();
 			values.pop_back();
 		}
-		asmjit::x86::Mem frame = compiler.new_stack(sizeof(WASM::ContinuationOpFrame), 16,
+		asmjit::ujit::Mem frame = compiler.new_stack(sizeof(WASM::ContinuationOpFrame), 16,
 				"continuationFrame");
 		auto at = [&](int32_t offset) {
 			auto memory = frame;
@@ -9332,7 +9326,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 				for (int word = 0; word < 2; ++word) {
 					auto bits = compiler.new_gp64("continuationSuspendWord");
 					emitter.mov(bits, at(offset + word * 8));
-					emitter.mov(asmjit::x86::qword_ptr(result, word * 8), bits);
+					emitter.mov(asmjit::ujit::mem_ptr(result, word * 8), bits);
 				}
 			} else {
 				emitter.mov(result, at(offset));
@@ -9360,12 +9354,12 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		if (values.size() < argCount + 1)
 			throw std::runtime_error("AsmJit switch operand stack underflow");
 		auto continuation = values.back(); values.pop_back();
-		std::vector<asmjit::x86::Gp> operands(argCount);
+		std::vector<asmjit::ujit::Gp> operands(argCount);
 		for (std::size_t i = argCount; i-- > 0;) {
 			operands[i] = values.back();
 			values.pop_back();
 		}
-		asmjit::x86::Mem frame = compiler.new_stack(sizeof(WASM::ContinuationOpFrame), 16,
+		asmjit::ujit::Mem frame = compiler.new_stack(sizeof(WASM::ContinuationOpFrame), 16,
 				"continuationFrame");
 		auto at = [&](int32_t offset) {
 			auto memory = frame;
@@ -9646,16 +9640,16 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		values.push_back(result);
 	}
 
-	void dispatchI32Eq() override { emitCompare(asmjit::x86::CondCode::kE); }
-	void dispatchI32Ne() override { emitCompare(asmjit::x86::CondCode::kNE); }
-	void dispatchI32LtS() override { emitCompare(asmjit::x86::CondCode::kL); }
-	void dispatchI32LtU() override { emitCompare(asmjit::x86::CondCode::kB); }
-	void dispatchI32GtS() override { emitCompare(asmjit::x86::CondCode::kG); }
-	void dispatchI32GtU() override { emitCompare(asmjit::x86::CondCode::kA); }
-	void dispatchI32LeS() override { emitCompare(asmjit::x86::CondCode::kLE); }
-	void dispatchI32LeU() override { emitCompare(asmjit::x86::CondCode::kBE); }
-	void dispatchI32GeS() override { emitCompare(asmjit::x86::CondCode::kGE); }
-	void dispatchI32GeU() override { emitCompare(asmjit::x86::CondCode::kAE); }
+	void dispatchI32Eq() override { emitCompare(Compare::Equal); }
+	void dispatchI32Ne() override { emitCompare(Compare::NotEqual); }
+	void dispatchI32LtS() override { emitCompare(Compare::LessS); }
+	void dispatchI32LtU() override { emitCompare(Compare::LessU); }
+	void dispatchI32GtS() override { emitCompare(Compare::GreaterS); }
+	void dispatchI32GtU() override { emitCompare(Compare::GreaterU); }
+	void dispatchI32LeS() override { emitCompare(Compare::LessEqS); }
+	void dispatchI32LeU() override { emitCompare(Compare::LessEqU); }
+	void dispatchI32GeS() override { emitCompare(Compare::GreaterEqS); }
+	void dispatchI32GeU() override { emitCompare(Compare::GreaterEqU); }
 
 	void dispatchI32And() override { emitBinary(BinaryOp::And); }
 	void dispatchI32Or() override { emitBinary(BinaryOp::Or); }
@@ -9890,22 +9884,22 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 			uint32_t offset = frameResultOffset;
 			for (std::size_t i = 0; i < resultCount; ++i) {
 				const WASM::ValueTypeCode kind = resultTypes[i];
-				const asmjit::x86::Gp value = values[first + i];
+				const asmjit::ujit::Gp value = values[first + i];
 				if (kind == WASM::ValueTypeCode::V128) {
 					for (int word = 0; word < 2; ++word) {
 						auto bits = compiler.new_gp64("frameResultWord");
 						emitter.mov(bits,
-									asmjit::x86::qword_ptr(value, word * 8));
+									asmjit::ujit::mem_ptr(value, word * 8));
 						emitter.mov(
-									asmjit::x86::qword_ptr(framePointer, offset + word * 8), bits);
+									asmjit::ujit::mem_ptr(framePointer, offset + word * 8), bits);
 					}
 					offset += 16;
 				} else {
-					const asmjit::x86::Gp stored = isFloatKind(kind)
+					const asmjit::ujit::Gp stored = isFloatKind(kind)
 							? canonicalizeFloatBits(value, kindWidth(kind)) : value;
 					const int width = stored.size();
 					emitter.mov(
-								asmjit::x86::Mem(framePointer, offset, width), stored);
+								asmjit::ujit::Mem(framePointer, offset, width), stored);
 					offset += 8;
 				}
 			}
@@ -9948,12 +9942,12 @@ private:
 			//! Declared parameter types, in order (block/loop parameters).
 		std::vector<WASM::ValueTypeCode> paramTypes;
 		//! One register per declared parameter, the values the body starts with.
-		std::vector<asmjit::x86::Gp> params;
+		std::vector<asmjit::ujit::Gp> params;
 		std::size_t paramCount = 0;
 		//! Declared result types, in order (multi-value blocks included).
 		std::vector<WASM::ValueTypeCode> resultTypes;
 		//! One register per declared result, filled by a branch and read at `end`.
-		std::vector<asmjit::x86::Gp> results;
+		std::vector<asmjit::ujit::Gp> results;
 		asmjit::Label begin;
 		asmjit::Label alternate;
 		asmjit::Label end;
@@ -9980,9 +9974,9 @@ private:
 	// its block/select bookkeeping unchanged.
 
 	//! Moves a float bit pattern into an Xmm register.
-	asmjit::x86::Vec materializeFloat(const asmjit::x86::Gp& bits, int width)
+	asmjit::ujit::Vec materializeFloat(const asmjit::ujit::Gp& bits, int width)
 	{
-		asmjit::x86::Vec xmm = compiler.new_xmm("floatValue");
+		asmjit::ujit::Vec xmm = compiler.new_vec128("floatValue");
 		if (width == 4)
 			emitter.gpToVector32(xmm, bits);
 		else
@@ -9991,9 +9985,9 @@ private:
 	}
 
 	//! Copies a float value out of an Xmm into a fresh Gp slot.
-	asmjit::x86::Gp bitsOfFloat(const asmjit::x86::Vec& xmm, int width)
+	asmjit::ujit::Gp bitsOfFloat(const asmjit::ujit::Vec& xmm, int width)
 	{
-		asmjit::x86::Gp bits = width == 4
+		asmjit::ujit::Gp bits = width == 4
 				? compiler.new_gp32("floatBits") : compiler.new_gp64("floatBits");
 		if (width == 4)
 			emitter.vectorToGp32(bits, xmm);
@@ -10007,7 +10001,7 @@ private:
 	//! The operation is on the bits, not an Xmm value: a float move may quiet a
 	//! signalling NaN before it can be classified, and every non-NaN value must
 	//! stay bit-exact.
-	asmjit::x86::Gp canonicalizeFloatBits(const asmjit::x86::Gp& bits, int width)
+	asmjit::ujit::Gp canonicalizeFloatBits(const asmjit::ujit::Gp& bits, int width)
 	{
 		if (!deterministicFloats)
 			return bits;
@@ -10021,7 +10015,7 @@ private:
 		checkError(compiler.invoke(asmjit::Out(invoke), helper, signature),
 				"AsmJit deterministic NaN helper call emission failed");
 		invoke->set_arg(0, bits);
-		asmjit::x86::Gp result = width == 4
+		asmjit::ujit::Gp result = width == 4
 				? compiler.new_gp32("canonicalNaN") : compiler.new_gp64("canonicalNaN");
 		invoke->set_ret(0, result);
 		return result;
@@ -10038,7 +10032,7 @@ private:
 	}
 
 	//! Returns one value from the function, materialising a float result.
-	void emitFunctionReturn(const asmjit::x86::Gp& value)
+	void emitFunctionReturn(const asmjit::ujit::Gp& value)
 	{
 		if (isFloatKind(resultType)) {
 			const int width = kindWidth(resultType);
@@ -10058,9 +10052,9 @@ private:
 	// loop iterations (one buffer per emission, rewritten before each use).
 
 	//! Allocates a 16-byte stack buffer and returns its address.
-	asmjit::x86::Gp newVectorBuffer(const char* name)
+	asmjit::ujit::Gp newVectorBuffer(const char* name)
 	{
-		asmjit::x86::Mem storage = compiler.new_stack(16, 16, name);
+		asmjit::ujit::Mem storage = compiler.new_stack(16, 16, name);
 		auto address = compiler.new_gp_ptr(name);
 		emitter.lea(address, storage);
 		return address;
@@ -10088,13 +10082,13 @@ private:
 	}
 
 	//! Copies 16 bytes between two buffer addresses.
-	void copyVector(const asmjit::x86::Gp& destination, const asmjit::x86::Gp& source)
+	void copyVector(const asmjit::ujit::Gp& destination, const asmjit::ujit::Gp& source)
 	{
 		for (int word = 0; word < 2; ++word) {
 			auto value = compiler.new_gp64("v128Word");
 			emitter.mov(value,
-					asmjit::x86::qword_ptr(source, word * 8));
-			emitter.mov(asmjit::x86::qword_ptr(destination, word * 8), value);
+					asmjit::ujit::mem_ptr(source, word * 8));
+			emitter.mov(asmjit::ujit::mem_ptr(destination, word * 8), value);
 		}
 	}
 
@@ -10103,7 +10097,7 @@ private:
 	//! \param source Source buffer or register.
 	//! \param code Value type code.
 	//! \param description Error description.
-	void transferValue(const asmjit::x86::Gp& destination, const asmjit::x86::Gp& source,
+	void transferValue(const asmjit::ujit::Gp& destination, const asmjit::ujit::Gp& source,
 			WASM::ValueTypeCode code, const char* description)
 	{
 		if (code == WASM::ValueTypeCode::V128)
@@ -10113,10 +10107,10 @@ private:
 	}
 
 	//! Writes 16 zero bytes to a buffer.
-	void zeroVector(const asmjit::x86::Gp& buffer)
+	void zeroVector(const asmjit::ujit::Gp& buffer)
 	{
 		for (int word = 0; word < 2; ++word) {
-			emitter.mov(asmjit::x86::qword_ptr(buffer, word * 8),
+			emitter.mov(asmjit::ujit::mem_ptr(buffer, word * 8),
 					static_cast<uint64_t>(0));
 		}
 	}
@@ -10135,16 +10129,16 @@ private:
 	//! \param type Signature of the callee.
 	//! \param arguments Argument values, already popped from the operand stack.
 	//! \return One stack slot per reference argument, in argument order.
-	std::vector<asmjit::x86::Mem> spillCallReferenceArguments(const WASM::FuncType& type,
-			const std::vector<asmjit::x86::Gp>& arguments)
+	std::vector<asmjit::ujit::Mem> spillCallReferenceArguments(const WASM::FuncType& type,
+			const std::vector<asmjit::ujit::Gp>& arguments)
 	{
-		std::vector<asmjit::x86::Mem> kept;
+		std::vector<asmjit::ujit::Mem> kept;
 		for (std::size_t i = 0; i < arguments.size() && i < type.params.size(); ++i) {
 			// A packed parameter travels as a scalar; a v128 is 16 bytes and is
 			// not a reference either.
 			if (type.params[i].isPacked || !isReferenceKind(type.params[i].val.opcode))
 				continue;
-			asmjit::x86::Mem slot = compiler.new_stack(8, 8, "refArgKeep");
+			asmjit::ujit::Mem slot = compiler.new_stack(8, 8, "refArgKeep");
 			emitter.mov(slot, arguments[i]);
 			kept.push_back(slot);
 		}
@@ -10155,9 +10149,9 @@ private:
 	//! A parameter is the caller's borrow, so the caller gives its count back
 	//! once the callee has returned, having retained whatever it keeps.
 	//! \param kept Slots written by spillCallReferenceArguments().
-	void dropCallReferenceArguments(const std::vector<asmjit::x86::Mem>& kept)
+	void dropCallReferenceArguments(const std::vector<asmjit::ujit::Mem>& kept)
 	{
-		for (const asmjit::x86::Mem& slot : kept) {
+		for (const asmjit::ujit::Mem& slot : kept) {
 			auto value = compiler.new_gp64("refArgDrop");
 			emitter.mov(value, slot);
 			emitRefDrop(value);
@@ -10182,7 +10176,7 @@ private:
 
 	//! Materialises every call argument before the invoke node is appended.
 	std::vector<asmjit::Reg> prepareCallArguments(const WASM::FuncType& type,
-			const std::vector<asmjit::x86::Gp>& arguments)
+			const std::vector<asmjit::ujit::Gp>& arguments)
 	{
 		std::vector<asmjit::Reg> prepared;
 		prepared.reserve(arguments.size());
@@ -10205,7 +10199,7 @@ private:
 			return;
 		const WASM::ValueType& declared = type.results.front().val;
 		if (isFloatKind(declared.opcode)) {
-			auto result = compiler.new_xmm("callFloatResult");
+			auto result = compiler.new_vec128("callFloatResult");
 			invoke->set_ret(0, result);
 			values.push_back(bitsOfFloat(result, kindWidth(declared.opcode)));
 		} else {
@@ -10252,7 +10246,7 @@ private:
 		checkError(compiler.invoke(asmjit::Out(invoke), function, signature),
 				"AsmJit float helper call emission failed");
 		invoke->set_arg(0, argument);
-		auto result = compiler.new_xmm("floatHelperResult");
+		auto result = compiler.new_vec128("floatHelperResult");
 		invoke->set_ret(0, result);
 		values.push_back(bitsOfFloat(result, width));
 	}
@@ -10277,7 +10271,7 @@ private:
 				"AsmJit float helper call emission failed");
 		invoke->set_arg(0, firstArgument);
 		invoke->set_arg(1, secondArgument);
-		auto result = compiler.new_xmm("floatHelperResult");
+		auto result = compiler.new_vec128("floatHelperResult");
 		invoke->set_ret(0, result);
 		values.push_back(bitsOfFloat(result, width));
 	}
@@ -10300,7 +10294,7 @@ private:
 		// zero-before-compare rule — are gone. The mask becomes the i32 flag by
 		// taking its low lane and masking it to one bit.
 		using Ops = asmjit::ujit::UniOpVVV;
-		auto mask = compiler.new_xmm("floatMask");
+		auto mask = compiler.new_vec128("floatMask");
 		switch (operation) {
 		case FloatCompareOp::Eq:
 			emitter.vector3(width == 4 ? Ops::kCmpEqF32S : Ops::kCmpEqF64S, mask, lhs, rhs);
@@ -10417,7 +10411,7 @@ private:
 		checkError(compiler.invoke(asmjit::Out(invoke), function, signature),
 				"AsmJit int-to-float helper emission failed");
 		invoke->set_arg(0, source);
-		auto result = compiler.new_xmm("convertResult");
+		auto result = compiler.new_vec128("convertResult");
 		invoke->set_ret(0, result);
 		values.push_back(bitsOfFloat(result, floatWidth));
 	}
@@ -10438,7 +10432,7 @@ private:
 		checkError(compiler.invoke(asmjit::Out(invoke), function, signature),
 				"AsmJit float conversion helper emission failed");
 		invoke->set_arg(0, argument);
-		auto result = compiler.new_xmm("convertResult");
+		auto result = compiler.new_vec128("convertResult");
 		invoke->set_ret(0, result);
 		values.push_back(bitsOfFloat(result, resultWidth));
 	}
@@ -10698,9 +10692,9 @@ private:
 			return;
 		if (values.size() < 2)
 			throw std::runtime_error("AsmJit i32 binary operation stack underflow");
-		asmjit::x86::Gp rhs = values.back();
+		asmjit::ujit::Gp rhs = values.back();
 		values.pop_back();
-		asmjit::x86::Gp lhs = values.back();
+		asmjit::ujit::Gp lhs = values.back();
 		values.pop_back();
 		if (!lhs.is_valid() || !rhs.is_valid() || lhs.size() != rhs.size()) {
 			throw std::runtime_error("AsmJit i32 binary operand shape mismatch: lhs="
@@ -10749,14 +10743,14 @@ private:
 		return *type;
 	}
 
-	asmjit::x86::Gp emitGlobalCell(WASM::GlobalIdx index)
+	asmjit::ujit::Gp emitGlobalCell(WASM::GlobalIdx index)
 	{
 		(void)validateGlobalIndex(index);
 		auto globals = compiler.new_gp_ptr("globals");
-		emitter.mov(globals, asmjit::x86::ptr(vmContext,
+		emitter.mov(globals, asmjit::ujit::mem_ptr(vmContext,
 				static_cast<int32_t>(offsetof(WASM::VMContext, globals))));
 		auto cell = compiler.new_gp_ptr("globalCell");
-		emitter.mov(cell, asmjit::x86::ptr(globals,
+		emitter.mov(cell, asmjit::ujit::mem_ptr(globals,
 				static_cast<int32_t>(index * sizeof(WASM::Value*))));
 		return cell;
 	}
@@ -10769,19 +10763,19 @@ private:
 			auto buffer = newVectorBuffer("globalVector");
 			for (int word = 0; word < 2; ++word) {
 				auto bits = compiler.new_gp64("globalVectorWord");
-				emitter.mov(bits, asmjit::x86::qword_ptr(cell,
+				emitter.mov(bits, asmjit::ujit::mem_ptr(cell,
 						static_cast<int32_t>(offsetof(WASM::Value, v128) + word * 8)));
-				emitter.mov(asmjit::x86::qword_ptr(buffer, word * 8), bits);
+				emitter.mov(asmjit::ujit::mem_ptr(buffer, word * 8), bits);
 			}
 			values.push_back(buffer);
 			return;
 		}
 		auto value = newIntegerRegister(compiler, type.contentType, "globalValue");
 		if (kindWidth(type.contentType.opcode) == 8) {
-			emitter.mov(value, asmjit::x86::qword_ptr(cell,
+			emitter.mov(value, asmjit::ujit::mem_ptr(cell,
 					static_cast<int32_t>(offsetof(WASM::Value, i64))));
 		} else {
-			emitter.mov(value, asmjit::x86::dword_ptr(cell,
+			emitter.loadZ32(value, asmjit::ujit::mem_ptr(cell,
 					static_cast<int32_t>(offsetof(WASM::Value, i32))));
 		}
 		if (isReferenceKind(type.contentType.opcode)) {
@@ -10822,24 +10816,24 @@ private:
 		}
 		// An exported global is host-observable
 		// (docs/proposals/PROFILES.md PR-3).
-		const asmjit::x86::Gp stored = isFloatKind(type.contentType.opcode)
+		const asmjit::ujit::Gp stored = isFloatKind(type.contentType.opcode)
 				? canonicalizeFloatBits(value, kindWidth(type.contentType.opcode)) : value;
 		auto cell = emitGlobalCell(index);
 		if (type.contentType.opcode == WASM::ValueTypeCode::V128) {
 			for (int word = 0; word < 2; ++word) {
 				auto bits = compiler.new_gp64("globalVectorWord");
 				emitter.mov(bits,
-						asmjit::x86::qword_ptr(value, word * 8));
-				emitter.mov(asmjit::x86::qword_ptr(cell,
+						asmjit::ujit::mem_ptr(value, word * 8));
+				emitter.mov(asmjit::ujit::mem_ptr(cell,
 						static_cast<int32_t>(offsetof(WASM::Value, v128) + word * 8)), bits);
 			}
 			return;
 		}
 		if (kindWidth(type.contentType.opcode) == 8) {
-			emitter.mov(asmjit::x86::qword_ptr(cell,
+			emitter.mov(asmjit::ujit::mem_ptr(cell,
 					static_cast<int32_t>(offsetof(WASM::Value, i64))), stored);
 		} else {
-			emitter.mov(asmjit::x86::dword_ptr(cell,
+			emitter.store32(asmjit::ujit::mem_ptr(cell,
 					static_cast<int32_t>(offsetof(WASM::Value, i32))), stored);
 		}
 	}
@@ -10933,8 +10927,8 @@ private:
 	}
 
 	//! Computes a GC-array byte address through the shared bounds-checking helper.
-	asmjit::x86::Gp emitGcArrayAddress(const WASM::MemArg& arg, uint32_t width,
-			const asmjit::x86::Gp& reference, const asmjit::x86::Gp& address)
+	asmjit::ujit::Gp emitGcArrayAddress(const WASM::MemArg& arg, uint32_t width,
+			const asmjit::ujit::Gp& reference, const asmjit::ujit::Gp& address)
 	{
 		const WASM::CoreTypeView view = module.typeView(arg.arrayTypeIdx);
 		const uint32_t elementSize = static_cast<uint32_t>(
@@ -10967,8 +10961,8 @@ private:
 		return pointer;
 	}
 
-	asmjit::x86::Gp emitMemoryAddress(const WASM::MemArg& arg, uint32_t width,
-			const asmjit::x86::Gp& wasmAddress)
+	asmjit::ujit::Gp emitMemoryAddress(const WASM::MemArg& arg, uint32_t width,
+			const asmjit::ujit::Gp& wasmAddress)
 	{
 		validateMemoryArg(arg, width);
 		const bool is64 = validateMemoryIndex(arg.memidx).indexType
@@ -10987,7 +10981,7 @@ private:
 		emitter.mov(memoryIndex, static_cast<uint32_t>(arg.memidx));
 		auto accessWidth = compiler.new_gp32("memoryWidth");
 		emitter.mov(accessWidth, width);
-		asmjit::x86::Gp offset;
+		asmjit::ujit::Gp offset;
 		if (is64) {
 			offset = compiler.new_gp64("memoryOffset");
 			emitter.mov(offset, static_cast<uint64_t>(arg.offset));
@@ -11023,7 +11017,7 @@ private:
 			throw std::runtime_error("AsmJit f32.load_f16 operand stack underflow");
 		auto wasmAddress = values.back();
 		values.pop_back();
-		asmjit::x86::Gp pointer;
+		asmjit::ujit::Gp pointer;
 		if (arg.isArray) {
 			if (values.empty())
 				throw std::runtime_error("AsmJit GC-array f16 load reference underflow");
@@ -11041,7 +11035,7 @@ private:
 				reinterpret_cast<uint64_t>(&wasm_f32_load_f16), signature),
 				"AsmJit f32.load_f16 helper call failed");
 		invoke->set_arg(0, pointer);
-		auto result = compiler.new_xmm("f16Load");
+		auto result = compiler.new_vec128("f16Load");
 		invoke->set_ret(0, result);
 		values.push_back(bitsOfFloat(result, 4));
 	}
@@ -11056,7 +11050,7 @@ private:
 		values.pop_back();
 		auto wasmAddress = values.back();
 		values.pop_back();
-		asmjit::x86::Gp pointer;
+		asmjit::ujit::Gp pointer;
 		if (arg.isArray) {
 			if (values.empty())
 				throw std::runtime_error("AsmJit GC-array f16 store reference underflow");
@@ -11087,7 +11081,7 @@ private:
 			throw std::runtime_error("AsmJit memory.load operand stack underflow");
 		auto wasmAddress = values.back();
 		values.pop_back();
-		asmjit::x86::Gp pointer;
+		asmjit::ujit::Gp pointer;
 		if (arg.isArray) {
 			if (values.empty())
 				throw std::runtime_error("AsmJit GC-array load reference underflow");
@@ -11104,33 +11098,33 @@ private:
 		auto result = wide ? compiler.new_gp64("memoryLoad64") : compiler.new_gp32("memoryLoad32");
 		switch (kind) {
 		case LoadKind::I32:
-			emitter.guestLoad32Z(result, asmjit::x86::dword_ptr(pointer)); break;
+			emitter.guestLoad32Z(result, asmjit::ujit::mem_ptr(pointer)); break;
 		case LoadKind::I8Signed:
-			emitter.guestLoad8S(result, asmjit::x86::byte_ptr(pointer)); break;
+			emitter.guestLoad8S(result, asmjit::ujit::mem_ptr(pointer)); break;
 		case LoadKind::I8Unsigned:
-			emitter.guestLoad8Z(result, asmjit::x86::byte_ptr(pointer)); break;
+			emitter.guestLoad8Z(result, asmjit::ujit::mem_ptr(pointer)); break;
 		case LoadKind::I16Signed:
-			emitter.guestLoad16S(result, asmjit::x86::word_ptr(pointer)); break;
+			emitter.guestLoad16S(result, asmjit::ujit::mem_ptr(pointer)); break;
 		case LoadKind::I16Unsigned:
-			emitter.guestLoad16Z(result, asmjit::x86::word_ptr(pointer)); break;
+			emitter.guestLoad16Z(result, asmjit::ujit::mem_ptr(pointer)); break;
 		case LoadKind::I64:
-			emitter.guestLoad64(result, asmjit::x86::qword_ptr(pointer)); break;
+			emitter.guestLoad64(result, asmjit::ujit::mem_ptr(pointer)); break;
 		case LoadKind::I64I8Signed:
-			emitter.guestLoad8S(result, asmjit::x86::byte_ptr(pointer)); break;
+			emitter.guestLoad8S(result, asmjit::ujit::mem_ptr(pointer)); break;
 		case LoadKind::I64I8Unsigned:
-			emitter.guestLoad8Z(result, asmjit::x86::byte_ptr(pointer)); break;
+			emitter.guestLoad8Z(result, asmjit::ujit::mem_ptr(pointer)); break;
 		case LoadKind::I64I16Signed:
-			emitter.guestLoad16S(result, asmjit::x86::word_ptr(pointer)); break;
+			emitter.guestLoad16S(result, asmjit::ujit::mem_ptr(pointer)); break;
 		case LoadKind::I64I16Unsigned:
-			emitter.guestLoad16Z(result, asmjit::x86::word_ptr(pointer)); break;
+			emitter.guestLoad16Z(result, asmjit::ujit::mem_ptr(pointer)); break;
 		case LoadKind::I64I32Signed:
-			emitter.guestLoad32S(result, asmjit::x86::dword_ptr(pointer)); break;
+			emitter.guestLoad32S(result, asmjit::ujit::mem_ptr(pointer)); break;
 		case LoadKind::I64I32Unsigned:
-			emitter.guestLoad32Z(result, asmjit::x86::dword_ptr(pointer)); break;
+			emitter.guestLoad32Z(result, asmjit::ujit::mem_ptr(pointer)); break;
 		case LoadKind::F32:
-			emitter.guestLoad32Z(result, asmjit::x86::dword_ptr(pointer)); break;
+			emitter.guestLoad32Z(result, asmjit::ujit::mem_ptr(pointer)); break;
 		case LoadKind::F64:
-			emitter.guestLoad64(result, asmjit::x86::qword_ptr(pointer)); break;
+			emitter.guestLoad64(result, asmjit::ujit::mem_ptr(pointer)); break;
 		}
 		values.push_back(result);
 	}
@@ -11147,9 +11141,9 @@ private:
 		// Memory is an observability point for a scalar float
 		// (docs/proposals/PROFILES.md PR-3). Canonicalise before computing the
 		// address so the helper call cannot disturb the address register.
-		const asmjit::x86::Gp stored = canonicalizeFloat
+		const asmjit::ujit::Gp stored = canonicalizeFloat
 				? canonicalizeFloatBits(value, static_cast<int>(width)) : value;
-		asmjit::x86::Gp pointer;
+		asmjit::ujit::Gp pointer;
 		if (arg.isArray) {
 			if (values.empty())
 				throw std::runtime_error("AsmJit GC-array store reference underflow");
@@ -11161,13 +11155,13 @@ private:
 		}
 		switch (width) {
 		case 1:
-			emitter.guestStore8(asmjit::x86::byte_ptr(pointer), stored); break;
+			emitter.guestStore8(asmjit::ujit::mem_ptr(pointer), stored); break;
 		case 2:
-			emitter.guestStore16(asmjit::x86::word_ptr(pointer), stored); break;
+			emitter.guestStore16(asmjit::ujit::mem_ptr(pointer), stored); break;
 		case 4:
-			emitter.guestStore32(asmjit::x86::dword_ptr(pointer), stored); break;
+			emitter.guestStore32(asmjit::ujit::mem_ptr(pointer), stored); break;
 		case 8:
-			emitter.guestStore64(asmjit::x86::qword_ptr(pointer), stored); break;
+			emitter.guestStore64(asmjit::ujit::mem_ptr(pointer), stored); break;
 		default:
 			throw std::runtime_error("AsmJit internal error: unsupported memory-store width");
 		}
@@ -11328,8 +11322,20 @@ private:
 		values.push_back(result);
 	}
 
-	//! Emits `lhs <condition> rhs` as an i32 0/1.
-	void emitCompare(asmjit::x86::CondCode condition)
+	//! The ten integer relations a wasm comparison can ask for.
+	//!
+	//! The dispatcher's `dispatch*Eq`/`LtS`/`GtU`… hooks name a relation, not a
+	//! flag: the universal condition factories (`cmp_eq`, `scmp_lt`, `ucmp_ge`, …)
+	//! carry the signedness, so no host condition code is needed or named.
+	enum class Compare {
+		Equal, NotEqual,
+		LessS, LessU, LessEqS, LessEqU,
+		GreaterS, GreaterU, GreaterEqS, GreaterEqU,
+	};
+
+	//! Emits `lhs <relation> rhs` as an i32 0/1.
+	//! \param relation Integer relation to test.
+	void emitCompare(Compare relation)
 	{
 		if (inDeadCode())
 			return;
@@ -11340,11 +11346,23 @@ private:
 		auto result = compiler.new_gp32("comparison");
 		// The condition carries its own comparison, so one universal `select`
 		// replaces the zero/compare/setcc triple and defines the result on both
-		// paths. The condition code is asmjit's target-independent enum. A
-		// 64-bit comparison selects at its own width and is then narrowed,
-		// because `select` requires a destination as wide as its operands.
-		const asmjit::ujit::UniCondition test(asmjit::ujit::UniOpCond::kCompare,
-				condition, lhs, rhs);
+		// paths. A 64-bit comparison selects at its own width and is then
+		// narrowed, because `select` requires a destination as wide as its
+		// operands.
+		const asmjit::ujit::UniCondition test = [&] {
+			switch (relation) {
+			case Compare::Equal: return asmjit::ujit::cmp_eq(lhs, rhs);
+			case Compare::NotEqual: return asmjit::ujit::cmp_ne(lhs, rhs);
+			case Compare::LessS: return asmjit::ujit::scmp_lt(lhs, rhs);
+			case Compare::LessU: return asmjit::ujit::ucmp_lt(lhs, rhs);
+			case Compare::LessEqS: return asmjit::ujit::scmp_le(lhs, rhs);
+			case Compare::LessEqU: return asmjit::ujit::ucmp_le(lhs, rhs);
+			case Compare::GreaterS: return asmjit::ujit::scmp_gt(lhs, rhs);
+			case Compare::GreaterU: return asmjit::ujit::ucmp_gt(lhs, rhs);
+			case Compare::GreaterEqS: return asmjit::ujit::scmp_ge(lhs, rhs);
+			default: return asmjit::ujit::ucmp_ge(lhs, rhs);
+			}
+		}();
 		emitter.selectFlag(result, test);
 		values.push_back(result);
 	}
@@ -11445,7 +11463,7 @@ private:
 		values.push_back(shifted);
 	}
 
-	asmjit::x86::Compiler& compiler;
+	asmjit::ujit::BackendCompiler& compiler;
 	//! The emission seam: universal instructions through `asmjit::ujit`, the
 	//! host compiler for the sites `BE-7` has not converted yet. Every raw site
 	//! is listed in Asmjit.md "The host-specific set", a list that only shrinks.
@@ -11465,9 +11483,9 @@ private:
 	uint32_t parameterCount = 0;
 	//! Loop target of a direct self tail call.
 	asmjit::Label bodyStart;
-	asmjit::x86::Gp vmContext;
+	asmjit::ujit::Gp vmContext;
 	//! The frame pointer in frame mode (docs/ABI.md).
-	asmjit::x86::Gp framePointer;
+	asmjit::ujit::Gp framePointer;
 	//! Whether *this* function is compiled in the staging-frame form.
 	const bool frameMode = false;
 	//! Call form per module-local type index: a call site emits the *callee
@@ -11484,12 +11502,12 @@ private:
 	const bool deterministicFloats = false;
 	//! True while `dispatchResume` is driven by `resume_throw*`.
 	bool resumeThrowActive_ = false;
-	std::vector<asmjit::x86::Gp> locals;
+	std::vector<asmjit::ujit::Gp> locals;
 	//! Declared type of every local, for reference barriers.
 	std::vector<WASM::ValueTypeCode> localKinds;
 	//! Slot width of every local (4/8, or 16 for a v128 buffer).
 	std::vector<int> localWidths;
-	std::vector<asmjit::x86::Gp> values;
+	std::vector<asmjit::ujit::Gp> values;
 
 	//! Virtual-register ids of operand-stack values that own one reference of
 	//! any kind -- a GC object, a string or a view of one, a continuation handle,
@@ -11529,9 +11547,9 @@ private:
 	//! Byte offset of the result block in a staging frame.
 	uint32_t frameResultOffset = 0;
 	//! Stack slot holding the caller-supplied 16-byte buffer of a v128 result.
-	asmjit::x86::Mem v128ResultSlot;
+	asmjit::ujit::Mem v128ResultSlot;
 	//! Stack slot holding the exception currently being routed.
-	asmjit::x86::Mem exceptionPtrSlot;
+	asmjit::ujit::Mem exceptionPtrSlot;
 	//! True when the single result is a v128 returned through that buffer.
 	bool bufferedVectorResult = false;
 };
@@ -11664,7 +11682,7 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance,
 			code.set_logger(&dbgLogger);
 			code.set_error_handler(&dbgErrors);
 		}
-		asmjit::x86::Compiler compiler(&code);
+		asmjit::ujit::BackendCompiler compiler(&code);
 		// One Universal JIT layer for the whole code holder: `add_func`/`end_func`
 		// hook and unhook it per body, which is what makes `ujit` emission legal
 		// inside that body (docs/proposals/BIG_ENDIAN.md `BE-7`).
