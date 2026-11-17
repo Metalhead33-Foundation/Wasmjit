@@ -6,9 +6,9 @@ This directory contains a native WebAssembly backend built on AsmJit. It
 implements the four `ModuleInstantiator` hooks and executes the shared lowering
 slice with AsmJit’s register allocator.
 
-**Status (2026-11-12, working tree on `2a892f3`):** **production-ready within
+**Status (2026-11-17, working tree on `f5cbc75`):** **production-ready within
 the declared envelope** — `WASMJIT_BACKEND=asmjit ./Test/WasmJit --rng-seed
-12345 '~[tail]~[compilation-policy]'` reports **22,667 assertions in 822 cases,
+12345 '~[tail]~[compilation-policy]'` reports **23,087 assertions in 855 cases,
 green**, the same case set and assertion count as the reference backend. The envelope is x86-64 Linux / SysV AMD64 with the external
 AsmJit library available at build time, and the documented refusals are the same
 three as SLJIT’s (see `Sljit/Sljit.md` "Known limitations"). See
@@ -136,6 +136,91 @@ configure on such a host.
 The sources target the installed AsmJit 1.21 API (`asmjit::Out<>` for output
 parameters such as `invoke`'s `InvokeNode*`, and `ASMJIT_ARCH_X86` for the
 target-architecture check).
+
+## Byte order
+
+A big-endian host is **refused**, not served approximately: `translateTypes` stops
+the module with a named diagnostic before any body is compiled
+(docs/proposals/BIG_ENDIAN.md `BED4`). That is deliberate for this backend as it
+stands, and the reason is the emission model rather than the policy: the
+vocabulary was `asmjit::x86` — 681 raw instruction call sites on 415 lines that
+name `asmjit::x86` in `AsmjitModuleCompiler.cpp` before `BE-7` — so there was no
+byte reversal to emit, while the GC header's length word and the shared
+atomic helpers *are* little-endian on every host (`BED3`, `BE-4`). Emitting native accesses there would read every
+multi-byte value reversed, which is the corruption `docs/SAFETY.md` exists to
+prevent.
+
+The refusal is a property of the target, not of the byte-order policy: even
+`nonconformant` could not make this backend correct, so it is not consulted.
+`BE-7` is the milestone that removes the refusal: once the instruction emission
+is target-independent (`asmjit::ujit`), the backend can emit the same reversal
+SLJIT does and keep a big-endian host.
+
+## Emission model: `ujit` first, the host compiler second
+
+Instruction emission goes through **AsmJit's Universal JIT** (`asmjit::ujit`)
+rather than through `asmjit::x86` directly — milestone `BE-7` in
+[`docs/proposals/BIG_ENDIAN.md`](../docs/proposals/BIG_ENDIAN.md). The reason is
+portability, not style: `ujit` is the only part of AsmJit that abstracts x86 and
+AArch64, and a big-endian host can only be served once this backend's
+instruction vocabulary is target-independent.
+
+The shape of the seam is small because `ujit` was designed that way:
+
+- `ujit::UniCompiler` **wraps** the `asmjit::host::Compiler` this backend already
+  used, and `ujit::Gp`, `ujit::Vec`, `ujit::Mem` *are* the host's register and
+  memory types. Registers, stack slots, labels, function nodes and
+  `invoke`/`set_arg` therefore do not change at all.
+- One `UniCompiler` is constructed per `CodeHolder` in `compileFunctions`, and
+  `add_func`/`end_func` **hook and unhook** it per body. Emission inside a body
+  is legal only between those two calls, which is why the loop calls them through
+  the universal layer.
+- `AsmjitEmitter.hpp` is the only place an instruction is spelled. A site with a
+  universal instruction calls it and nothing else; a site without one emits
+  through `host()` and appears in the table below.
+
+### What is converted today
+
+| Family | Universal form | Slice |
+|---|---|---|
+| Integer immediates (`i32.const`, `i64.const`) | `Emitter::movImm` → `ujit::UniCompiler::mov` | S0, done |
+
+Everything else still emits through the host compiler: **681 call sites**, which
+`Test/AsmjitBackendTests.cpp` pins in
+`asmjit: the host-specific emission set only shrinks` (`[asmjit][ujit]`). The
+number is a **budget that only goes down** — each slice converts one family and
+rewrites it, and a new raw emission fails the case even if nobody edited the
+list.
+
+### The host-specific set
+
+Counted today, in `AsmjitModuleCompiler.cpp`, by family:
+
+| Family | Mnemonics | Sites |
+|---|---|---|
+| Moves and immediates | `mov`, `movsx`, `movzx`, `lea` | 347 |
+| Integer arithmetic and logic | `add`, `sub`, `imul`, `and_`, `or_`, `xor_`, `adc`, `sbb`, `dec` | 78 |
+| Shifts and rotates | `shl`, `shr`, `rol`, `ror` | 28 |
+| Comparisons, branches and `setcc` | `test`, `cmp`, `jz`, `jnz`, `je`, `jne`, `jb`, `jbe`, `jmp`, `set` | 157 |
+| Bit scans and float compares | `bsf`, `bsr`, `ucomiss`, `ucomisd` | 6 |
+| Vector moves and logic | `movdqu`, `movd`, `movq`, `xorps`, `pxor`, `pand`, `pandn`, `por` | 25 |
+| Vector arithmetic and compares | `padd*`, `psub*`, `pavg*`, `pmin*`, `pmax*`, `pcmp*`, `psll*`, `psr*` | 39 |
+| Raw instruction-id emission | `emit` (`Inst::kId*`) | 1 |
+
+Each family has a universal equivalent in `ujit`'s vocabulary
+(`kMov`/`kAdd`/`kSub`/`kShl`/`kRot`/`kAnd`/`kOr`/`kXor`/`kTest`/`kCompare`/
+`kCLZ`/`kCTZ`/`kBSwap`/`kMin`/`kMax`/`kAvgr`/`kCmpEqU8…`/`kLoadCvt*`/`kPacks`),
+with two recurring exceptions that will have to stay host-specific or be
+re-expressed as sequences: `adc`/`sbb` (carry-chain arithmetic for 64-bit
+emulation) and `Inst::kId*` where a specific encoding was chosen deliberately.
+
+### Error reporting
+
+`ujit`'s emit entry points return `void`, so a rejected emission is reported by
+`BackendCompiler::finalize()` rather than at the call site. The backend still
+checks `finalize()` and still refuses to install a module whose code did not
+finalise; what it loses is the per-site message. That is recorded rather than
+hidden, because it is a diagnostic regression, not a correctness one.
 
 ## Known limitations and next steps
 

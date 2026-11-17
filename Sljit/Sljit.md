@@ -2,10 +2,12 @@
 
 *The second code generator: vendored SLJIT, emitted surface and refusals*
 
-Status: **Snapshot (2026-11-10):** **production-ready within the declared
-envelope** — `WASMJIT_BACKEND=sljit ./Test/WasmJit --rng-seed 12345` reports
-**22,533 assertions in 824 cases, green**, the same case set and assertion count
-as the reference backend. The envelope is x86-64 Linux / SysV AMD64, and the
+Status: **Snapshot (2026-11-17, working tree on `f5cbc75`):** **production-ready
+within the declared envelope** — `WASMJIT_BACKEND=sljit ./Test/WasmJit
+--rng-seed 12345` reports **23,248 assertions in 872 cases, green**, the same
+case set and assertion count as the reference backend. It is also the **only
+backend that converts guest byte order**, so it is the one a big-endian port
+can be built on (see "Byte order" below). The envelope is x86-64 Linux / SysV AMD64, and the
 documented refusals are listed in "Known limitations" below. See
 [`docs/API_ABI_STABILITY.md`](../docs/API_ABI_STABILITY.md) §12 for the verdict
 and §8 for the open register and the defect ledger that closed the last
@@ -153,6 +155,29 @@ Nothing in `WasmBase/` had to change to add it. That is the point of the seam.
 Generated code **is** released on `Runtime::unload` and runtime teardown through
 `ModuleCompiler::releaseInstance`. The staged-import closures are process-lifetime
 and shared, like the rest of the process-wide helper caches.
+
+## Byte order
+
+SLJIT is the backend a big-endian host can actually use. Every 2-, 4- and 8-byte
+integer load and store, and every `f32`/`f64` one, reverses its value around the
+access when the runtime's decision says the host and the guest disagree
+(`emitGuestSwap`, docs/proposals/BIG_ENDIAN.md `BE-3`), using the `SLJIT_REV*`
+family that s390x compiles to one `lrv`-class instruction. A single-byte access
+passes `SLJIT_NOP`: there is nothing to reverse. The GC header's array-length
+word is read through `emitHeaderWordLoad`, which converts on a big-endian build
+**whatever the byte-order policy says**, because that word is little-endian on
+every host (`BED3`). Nothing extra is emitted when the host already agrees with
+the guest, so a little-endian build's instructions are unchanged (`BED5`,
+measured by `[byteorder]`).
+
+Atomic loads, stores, RMWs, `cmpxchg` and `wait` convert inside the shared
+helpers in `WasmBase/wasm_atomic.cpp`, not here (`BE-4`); `table.atomic.get`
+reads a pointer and deliberately does not convert.
+
+What is still missing on a big-endian host is SIMD: the `v128` register image is
+a 16-byte block whose lane convention is not pinned yet
+(docs/proposals/BIG_ENDIAN.md §5 `BE7`), and `v128.load`/`store` are emitted as
+plain 16-byte moves. A runner (`BE-5`) is what settles both.
 
 ## Next steps
 

@@ -15,6 +15,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
+#include <set>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -513,4 +516,80 @@ std::filesystem::path(WASM_TEST_DIR) / "wide_v128_indirect_probe.wasm");
 
 	CHECK(WASM::callCallable<std::int32_t>(call("indirect")) == 30);
 	CHECK(WASM::callCallable<std::int32_t>(call("host"), std::int32_t(41)) == 42);
+}
+
+namespace {
+
+//! The host-specific emission set, as `[asmjit][ujit]` enforces it.
+//!
+//! `docs/proposals/BIG_ENDIAN.md` `BE-7` moves this backend's instruction
+//! vocabulary from `asmjit::x86` to `asmjit::ujit` one family at a time. A site
+//! that has a universal instruction calls `Emitter` and disappears from the
+//! count below; a site that does not is listed in `Asmjit/Asmjit.md` "The
+//! host-specific set". The budget therefore only ever shrinks, and a *new* raw
+//! x86 emission fails this case even if nobody edited the list.
+const char* const kRawEmissionBudgetName = "raw host instruction limit";
+
+//! Mnemonics the backend still emits through the host compiler.
+//! `BE-7`'s slices convert them family by family (`mov` first, then integer
+//! arithmetic, control flow, and SIMD).
+const std::set<std::string>& hostMnemonics()
+{
+	static const std::set<std::string> names = {
+		"adc", "add", "and_", "bsf", "bsr", "cmp", "dec", "emit", "imul",
+		"jb", "jbe", "je", "jmp", "jne", "jnz", "jz", "lea", "mov",
+		"movd", "movdqu", "movq", "movsx", "movzx", "or_", "paddb", "paddd",
+		"paddq", "paddw", "pand", "pandn", "pavgb", "pavgw", "pcmpeqb",
+		"pcmpeqd", "pcmpeqw", "pcmpgtb", "pcmpgtd", "pcmpgtw", "pmaxsw",
+		"pmaxub", "pminsw", "pminub", "por", "pslld", "psllw", "psrad",
+		"psraw", "psrld", "psrlw", "psubb", "psubd", "psubq", "psubw",
+		"pxor", "rol", "ror", "sbb", "set", "shl", "shr", "sub", "test",
+		"ucomisd", "ucomiss", "xor_", "xorps",
+	};
+	return names;
+}
+
+//! The number of call sites the budget allows today. **Lower it, never raise
+//! it**: each `BE-7` slice converts a family and rewrites this number.
+constexpr std::size_t kRawEmissionBudget = 681;
+
+std::size_t countRawEmissions(const std::string& source)
+{
+	std::size_t count = 0;
+	for (const std::string& mnemonic : hostMnemonics()) {
+		const std::string needle = "compiler." + mnemonic + "(";
+		for (std::size_t at = 0; (at = source.find(needle, at)) != std::string::npos;
+				at += needle.size())
+			++count;
+	}
+	return count;
+}
+
+} // namespace
+
+TEST_CASE("asmjit: the host-specific emission set only shrinks", "[asmjit][ujit]")
+{
+	// `BE-7`: the backend emits through `asmjit::ujit`, and keeps the host
+	// compiler only where no universal instruction exists yet. This case is the
+	// ledger: it fails when a new raw x86 emission appears, and each migration
+	// slice lowers the budget as it converts a family.
+	const std::filesystem::path source = std::filesystem::path(WASM_TESTSUITE_SOURCE_DIR)
+			/ ".." / "Asmjit" / "AsmjitModuleCompiler.cpp";
+	REQUIRE(std::filesystem::exists(source));
+	const std::string text = [&source] {
+		std::ifstream stream(source, std::ios::binary);
+		REQUIRE(stream.good());
+		std::stringstream buffer;
+		buffer << stream.rdbuf();
+		return buffer.str();
+	}();
+
+	const std::size_t raw = countRawEmissions(text);
+	INFO("raw host emission sites: " << raw << " (" << kRawEmissionBudgetName << ' '
+			<< kRawEmissionBudget << ')');
+	CHECK(raw <= kRawEmissionBudget);
+
+	// A converted family must not creep back: the immediate moves are the first
+	// slice's evidence, and they are emitted through the universal layer.
+CHECK(text.find("emitter.movImm(") != std::string::npos);
 }

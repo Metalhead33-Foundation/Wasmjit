@@ -1,4 +1,5 @@
 #include "AsmjitModuleCompiler.hpp"
+#include "AsmjitEmitter.hpp"
 #include <cstdlib>
 #include <string_view>
 
@@ -1337,14 +1338,16 @@ private:
 	struct ControlFrame;
 
 public:
-	IntegerFunctionEmitter(asmjit::x86::Compiler& compiler, asmjit::FuncNode& function,
+	IntegerFunctionEmitter(asmjit::x86::Compiler& compiler, asmjit::ujit::UniCompiler& universal,
+			asmjit::FuncNode& function,
 			const WASM::FuncType& type, const WASM::FunctionBody& body,
 			const WASM::Module& module, WASM::ModuleInstanceInternals& internals,
 			const std::vector<asmjit::FuncNode*>& functions,
 			const std::vector<std::unique_ptr<asmjit::FuncSignature>>& signatures,
 			uint32_t functionIndex, bool ownFrameForm,
 			std::span<const std::uint8_t> frameByType, bool deterministicFloats)
-		: compiler(compiler), module(module), internals(internals),
+		: compiler(compiler), emitter(compiler, universal), module(module),
+		  internals(internals),
 		  functions(functions), signatures(signatures), functionIndex(functionIndex),
 		  frameMode(ownFrameForm), frameByType(frameByType),
 		  deterministicFloats(deterministicFloats)
@@ -1635,7 +1638,7 @@ protected:
 	void dispatchI32Const(int32_t value) override
 	{
 		asmjit::x86::Gp reg = compiler.new_gp32("constant");
-		checkError(compiler.mov(reg, value), "AsmJit i32.const emission failed");
+		emitter.movImm(reg, value);
 		values.push_back(reg);
 	}
 
@@ -8396,7 +8399,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 	void dispatchI64Const(int64_t value) override
 	{
 		auto reg = compiler.new_gp64("i64Constant");
-		checkError(compiler.mov(reg, value), "AsmJit i64.const emission failed");
+		emitter.movImm(reg, value);
 		values.push_back(reg);
 	}
 
@@ -11808,6 +11811,10 @@ private:
 	}
 
 	asmjit::x86::Compiler& compiler;
+	//! The emission seam: universal instructions through `asmjit::ujit`, the
+	//! host compiler for the sites `BE-7` has not converted yet. Every raw site
+	//! is listed in Asmjit.md "The host-specific set", a list that only shrinks.
+	Emitter emitter;
 	const WASM::Module& module;
 	WASM::ModuleInstanceInternals& internals;
 	const std::vector<asmjit::FuncNode*>& functions;
@@ -12005,6 +12012,11 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance,
 		checkError(code.init(context.environment(), context.cpuFeatures()),
 				"AsmJit CodeHolder initialisation failed");
 		asmjit::x86::Compiler compiler(&code);
+		// One Universal JIT layer for the whole code holder: `add_func`/`end_func`
+		// hook and unhook it per body, which is what makes `ujit` emission legal
+		// inside that body (docs/proposals/BIG_ENDIAN.md `BE-7`).
+		asmjit::ujit::UniCompiler universal(&compiler, context.cpuFeatures(),
+				asmjit::CpuHints{});
 
 		// Create every function node before emitting any body. Labels therefore
 		// exist for forward calls and mutual recursion as well as backward calls.
@@ -12018,13 +12030,14 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance,
 		}
 
 		for (uint32_t i = 0; i < module.functionBodies.size(); ++i) {
-			auto* function = compiler.add_func(functions[i]);
+			auto* function = universal.add_func(functions[i]);
 			if (function == nullptr)
 				throw std::runtime_error("AsmJit failed to begin an internal function body");
 			const uint32_t typeIndex = module.internalFunctionTypeIndices[i];
 			const WASM::FuncType type = module.funcTypeAt(typeIndex);
 			const bool ownFrameForm = instance.usesFrameForm(WASM::LocalTypeIdx{typeIndex});
-			IntegerFunctionEmitter emitter(compiler, *function, type, module.functionBodies[i],
+			IntegerFunctionEmitter emitter(compiler, universal, *function, type,
+					module.functionBodies[i],
 					module, internals, functions, signatures,
 					static_cast<uint32_t>(module.importFunctions.size() + i),
 					ownFrameForm, forms, profile().deterministic());
@@ -12033,7 +12046,8 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance,
 			} catch (const std::exception& error) {
 				throw std::runtime_error("AsmJit function " + std::to_string(i) + ": " + error.what());
 			}
-			checkError(compiler.end_func(), "AsmJit function finalisation failed");
+			// Through the universal layer: it unhooks the body before ending it.
+			checkError(universal.end_func(), "AsmJit function finalisation failed");
 		}
 
 		checkError(compiler.finalize(), "AsmJit compiler finalisation failed");
