@@ -589,7 +589,7 @@ bugs; the linked note owns the reasoning.
 | No step budget by default; budgets are process-wide; a small-stack thread runs unguarded; continuation use is serial | [`SAFETY.md`](SAFETY.md) §3.1, [`ABI.md`](ABI.md) “Limits an Embedder Must Know” |
 | The frame is **not** a GC-scanned root | [`ABI.md`](ABI.md) “Call forms” |
 | Trap **kind** and diagnostic **id** are stable; trap text is a hint | [`SAFETY.md`](SAFETY.md) `S5` |
-| Untested targets are *provisional*, not dropped; big-endian and ILP32 are unsupported by decision | [`ABI.md`](ABI.md) “The C ABI Contract” |
+| Untested targets are *provisional*, not dropped; big-endian and ILP32 are unsupported by decision — big-endian because the accesses a backend *emits* are native-order, not because it is untested | [`ABI.md`](ABI.md) “The C ABI Contract” |
 | No WAT parser, WASI runtime, linker, scheduler or package format in the engine | [`SCOPE.md`](SCOPE.md) |
 
 ### 8.3 Encoding-blocked and out of scope

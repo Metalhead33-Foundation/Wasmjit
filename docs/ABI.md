@@ -157,9 +157,34 @@ direct-vs-resolved calls are the backend's business.
 The four things that differ across ABIs are the integer/FP argument registers,
 aggregate/vector classification, and frame details (shadow space, red zone,
 stack alignment, callee-saved set). Everything except `v128` is portable without
-a per-target special case. Wasm linear memory and the GC heap are
-**little-endian** regardless of host; on big-endian a port would byte-swap at the
-boundary, which is why that target is unsupported rather than silently wrong.
+a per-target special case.
+
+**Why big-endian is unsupported rather than provisional.** The verdict is a
+statement about the code, not about testing. Linear memory, the canonical ABI and
+the GC heap are **little-endian by specification** (§[GC Object and Heap
+ABI](#abi_gc) below), so on a big-endian host every multi-byte access has to
+convert — and the places that would have to convert are:
+
+| Site | Today | A port needs |
+|---|---|---|
+| Binary decode and encode | byte-order-free already: every reader is an `Elv::Io::DataStream<Elv::Util::Endian::Little>`, and every integer on the wire is LEB128 | nothing |
+| Canonical ABI lift and lower | byte-wise already: `readUInt`/`writeUInt` assemble bytes by shift, WTF-16 and the SIMD lane accessors are explicit little-endian | nothing |
+| Global, table, exception and linear-memory access **emitted by a backend** | a native load or store — LibJIT `jit_insn_load_relative(…, jit_type_int)`, SLJIT `emitMemoryLoad(…, SLJIT_MOV_U32, …)` | a byte-reversed load/store per access, or a swap after it |
+| Atomic helpers ([`wasm_atomic.hpp`](../WasmBase/wasm_atomic.hpp)) | `__atomic_load_n(reinterpret_cast<T*>(address))` on a guest address | a converted read-modify-write |
+| GC object and heap layout | header fields stored natively, while §[GC Object and Heap ABI](#abi_gc) promises little-endian to embedders | either swap the header on every access or restate the promise as “native order of the host” |
+
+Two of the three backends cannot host such a port at all: the LibJIT this tree
+links selects one of `interp`, `alpha`, `arm`, `x86`, `x86-64` in its
+`jit-config.h` — no big-endian target, and no byte-reversal instruction in its IR
+— and [`Asmjit/`](../Asmjit/Asmjit.md) is written against `asmjit::x86` end to
+end. SLJIT is the one that could: it carries `s390x`, big-endian `ppc64` and
+big-endian MIPS backends, plus a public `SLJIT_REV*` family that s390x compiles to
+`lrv`/`lrvg`/`strvg` — one instruction, with the load or store fused.
+
+So a big-endian port is “SLJIT plus the emitted access sites plus the atomic
+helpers”; it becomes *provisional* the day one big-endian runner exists. Until
+then the row stays **unsupported**, because a provisional target is specified and
+untested, while this one would be wrong.
 
 **Per-backend status.** SLJIT and AsmJIT emit the canonical signature directly.
 LibJIT owns both sides of its calls through its driver entry, so its
