@@ -9,7 +9,7 @@ slice with AsmJit’s register allocator.
 
 **Status (2026-11-17, working tree on `d9d560b`+):** **production-ready within
 the declared envelope, and now a converting backend** — `WASMJIT_BACKEND=asmjit
-./Test/WasmJit --rng-seed 12345 '~[tail]~[compilation-policy]'` reports **23,118
+./Test/WasmJit --rng-seed 12345 '~[tail]~[compilation-policy]'` reports **23,132
 assertions in 857 cases, green**, and every emitted instruction goes through
 AsmJIT's Universal JIT, so the byte-order reversal SLJIT emits is available here
 too (`BE-7`). The envelope is x86-64 Linux / SysV AMD64 with the external
@@ -142,11 +142,17 @@ target-architecture check).
 
 ## Byte order
 
-A big-endian host is **served**, not refused: this backend emits the same byte
-reversal SLJIT does (docs/proposals/BIG_ENDIAN.md `BE-7`, closing `BED4`'s AsmJIT
-half). The reversal is decided once, while the code is generated, so a
-little-endian build emits nothing extra and its code is byte-identical to what it
-always was (`BED5`).
+A big-endian host is **served, not refused** — on any architecture this backend can
+compile for. This backend emits the same byte reversal SLJIT does
+(docs/proposals/BIG_ENDIAN.md `BE-7`, closing `BED4`'s AsmJIT half). The reversal
+is decided once, while the code is generated, so a little-endian build emits
+nothing extra and its code is byte-identical to what it always was (`BED5`).
+
+The qualifier matters and is not a formality: the *conversion* is complete, but
+the *reach* is currently x86-64 only, because the type names in this backend are
+still host-spelled ("what is still host-spelled" below). Every big-endian target
+AsmJIT could serve is AArch64 BE, so the two halves meet only once that residue
+is cleared.
 
 What converts, and what does not:
 
@@ -207,6 +213,8 @@ call, an unlisted `host().<instruction>(` call or an instruction id appears.
 Only the *structural* calls are allowed to stay — `new_gp32`, `new_xmm`,
 `new_stack`, `new_label`, `bind`, `ret`, `invoke`, `new_func`, `finalize` — and
 those are ABI and register plumbing, which `ujit` delegates rather than replaces.
+Two of them (`new_gp32`, `new_xmm`) are also the x86 spelling of a portable call;
+"what is still host-spelled" below is the residue the ledger does not see.
 
 The slices, in the order they landed:
 
@@ -257,6 +265,81 @@ instruction, one meaning:
 
 The first two are the whole remainder — six instructions and one address
 operation — and both are named in the ledger test, so they cannot grow silently.
+
+### Width discipline: no sub-register views
+
+The blocker the first audit found was the **81 sub-register views** (`.r32()`,
+`.r8()`, `.r16()`, `.r64()`) that survived in these files after the instruction
+conversion. They are gone — 0 in the compiler, 0 in the seam — because the rule
+they expressed ("reinterpret this register at another width") turned out not to
+exist in the universal vocabulary at all. Establishing that took two spikes
+against AsmJit 1.21, and the findings are the design:
+
+| Question | Answer |
+|---|---|
+| `mov r64, r32` (widen) | **rejected** — `InvalidInstruction` |
+| `mov r32, r64` (narrow) | **rejected**, too: ujit's register move is *same-width only* |
+| `shl r64, r32, imm` | asserts `dst.size() == a.size()` — shifts are same-width as well |
+| `store_u8/u16/u32(mem, reg)` with a wider `reg` | **legal**, truncates by the memory operand's size |
+| `load_u8/16/32` into a wider register | **legal**, zero-extends |
+| `select dst64, Imm, Imm, flag` from a 32-bit subject | **legal** — no temp and no view needed |
+
+So a width change is a **memory** operation in the universal vocabulary, and the
+seam says so once:
+
+- `Emitter::mov(Gp, Gp)` is *total*: same width is one `kMov`; a width change
+  stores at the narrower width and loads at that width, which truncates or
+  zero-extends exactly as the x86 view did. One store-forwarded pair, in one
+  place, so no call site reasons about widths.
+- **Sign extension is arithmetic, never a load.** A four-byte slot written once
+  and read once is *promoted* by the register allocator, and the promoted copy
+  loses the extension's sign — this cost one debugging cycle and a wrong
+  `i64.extend32_s`. `movsx32`/`movsx8`/`movsx16` therefore copy and then shift up
+  and back down at the destination's own width.
+- `selectFlag` lost its parameter: the condition already carries the tested
+  width, so the flag is selected straight into the destination at whatever width
+  it has.
+
+Two consequences worth knowing. `Emitter::mov` now allocates a stack slot when the
+widths differ, so a width-changing copy is two instructions instead of one — the
+price of expressing it portably, and exactly where a target with `uxtw`/`mov w, x`
+would do it in one. And `i64.load32_s`-style accesses are unaffected, because a
+widening *load* is a single universal instruction (`kLoadI32`).
+
+### What is still host-spelled
+
+With the views gone, what remains is a naming layer: the backend translation
+units still spell `asmjit::x86::` **416** times (`AsmjitModuleCompiler.cpp` 377,
+`AsmjitContext.cpp` 39). The ledger test cannot see it because it reads
+instructions rather than types. Nothing about it affects an x86-64 build — the
+universal aliases are the same types — but it is what would stop this file
+compiling for AArch64, so it is the honest statement of `BE-7`'s boundary:
+
+| Residue | Count | Portable spelling | Difficulty |
+|---|---|---|---|
+| `asmjit::x86::Gp` / `Mem` / `Vec` | 238 | `asmjit::ujit::Gp` / `Mem` / `Vec` (exact aliases) | rename |
+| `x86::qword_ptr` / `dword_ptr` / `word_ptr` / `byte_ptr` / `ptr` | 160 | `asmjit::ujit::mem_ptr(base, disp)` | rename, but `mem_ptr` carries no size — the one API difference to check |
+| `x86::xmmword_ptr` | 6 | `ujit::Mem(base, disp, 16)` | as above |
+| `x86::CondCode` (`kE`, `kNB`, …) | 21 | `ujit::Condition` (`kEq`, `kGtu`, …) | small mapping, values differ |
+| `asmjit::x86::Compiler` | 9 | `asmjit::ujit::BackendCompiler` | rename |
+| `new_xmm(...)` | 24 | `new_vec128(...)` | rename; the ledger's structural list should prefer the portable name |
+| `x86::Assembler` + `x86::eax` (`compileReturn42`) | 2 | a target probe, guarded per ISA | see "The host-specific set" |
+| ~~`.r32()` / `.r8()` / `.r16()` / `.r64()`~~ | ~~81~~ **0** | — | **done**: see "Width discipline" above |
+
+The last row is the interesting one, and it is not a rename. `ujit::Gp` *is*
+`host::Gp` (`ujitbase.h`), so a sub-register view is spelled in the host's
+vocabulary: `.r32()` on x86, `.w()`/`.x()` on AArch64. `ujit` replaces the
+instruction set, not the register type — allocation (`new_gp32`/`new_gp64`/
+`new_vec128`) is portable, but *narrowing an existing register* is not. A real
+second-target port has to keep operands at their declared width from allocation
+onwards, which is a design pass through `IntegerFunctionEmitter`'s helpers rather
+than a search-and-replace.
+
+So `BE-7`'s claim is precise and deliberately narrow: **the emitted instruction
+vocabulary is target-independent, and a big-endian host of a supported
+architecture can be served.** "Compiles for AArch64" is a further slice, and the
+first step of it is mechanical: the 415 → 0 rename plus a ledger rule that fails
+on `asmjit::x86::` in these two files.
 
 ### Error reporting
 

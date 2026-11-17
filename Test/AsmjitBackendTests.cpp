@@ -641,4 +641,20 @@ TEST_CASE("asmjit: the host-specific emission set only shrinks", "[asmjit][ujit]
 	CHECK(compiler.find("emitter.movImm(") != std::string::npos);
 	CHECK(compiler.find("emitter.j(") != std::string::npos);
 	CHECK(compiler.find("emitter.vector3(") != std::string::npos);
+
+	// No sub-register view anywhere: `ujit`'s register move is same-width only
+	// and it has no register extension at all, so a view is the one spelling that
+	// cannot be expressed portably. A width change goes through the seam's `mov`,
+	// which stores and reloads (Asmjit.md "Width discipline").
+	for (const char* view : { ".r8()", ".r16()", ".r32()", ".r64()" }) {
+		INFO("sub-register view: " << view);
+		CHECK(compiler.find(view) == std::string::npos);
+		CHECK(context.find(view) == std::string::npos);
+	}
+	const std::string emitter =
+			readBackendSource(root / "Asmjit" / "AsmjitEmitter.hpp");
+	for (const char* view : { ".r8()", ".r16()", ".r32()", ".r64()" }) {
+		INFO("sub-register view in the seam: " << view);
+		CHECK(emitter.find(view) == std::string::npos);
+	}
 }

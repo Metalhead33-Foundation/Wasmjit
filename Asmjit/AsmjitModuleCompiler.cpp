@@ -1,5 +1,6 @@
 #include "AsmjitModuleCompiler.hpp"
 #include "AsmjitEmitter.hpp"
+#include <asmjit/core/logger.h>
 #include <cstdlib>
 #include <string_view>
 
@@ -3332,7 +3333,7 @@ asmjit::x86::Gp atomicValue64(const asmjit::x86::Gp& value, int valueWidth)
 if (valueWidth == 8)
 return value;
 auto widened = compiler.new_gp64("atomicValue");
-emitter.mov(widened.r32(), value.r32());
+emitter.mov(widened, value);
 return widened;
 }
 
@@ -3362,7 +3363,7 @@ if (valueWidth == 8) {
 values.push_back(loaded);
 } else {
 auto result = compiler.new_gp32("atomicLoadResult");
-emitter.mov(result, loaded.r32());
+emitter.mov(result, loaded);
 values.push_back(result);
 }
 }
@@ -3423,7 +3424,7 @@ if (valueWidth == 8) {
 values.push_back(old);
 } else {
 auto result = compiler.new_gp32("atomicRmwResult");
-emitter.mov(result, old.r32());
+emitter.mov(result, old);
 values.push_back(result);
 }
 }
@@ -3461,7 +3462,7 @@ if (valueWidth == 8) {
 values.push_back(old);
 } else {
 auto result = compiler.new_gp32("atomicCmpxchgTruncated");
-emitter.mov(result, old.r32());
+emitter.mov(result, old);
 values.push_back(result);
 }
 }
@@ -3638,7 +3639,7 @@ values.push_back(loaded);
 return;
 }
 auto result = compiler.new_gp32("sharedAtomicResult");
-emitter.mov(result, loaded.r32());
+emitter.mov(result, loaded);
 if (signBits == 8) {
 auto signExtended = compiler.new_gp32("sharedAtomicSign");
 emitter.movsx8(signExtended, result);
@@ -3699,7 +3700,7 @@ if (valueWidth == 8) {
 values.push_back(old);
 } else {
 auto result = compiler.new_gp32("sharedAtomicRmwResult");
-emitter.mov(result, old.r32());
+emitter.mov(result, old);
 values.push_back(result);
 }
 }
@@ -3801,7 +3802,7 @@ if (valueWidth == 8) {
 values.push_back(old);
 } else {
 auto result = compiler.new_gp32("sharedAtomicCmpxchgTruncated");
-emitter.mov(result, old.r32());
+emitter.mov(result, old);
 values.push_back(result);
 }
 }
@@ -3853,7 +3854,7 @@ emitZeroReturn();
 checkError(compiler.bind(inBounds), "AsmJit shared array bounds continuation failed");
 
 auto offset = compiler.new_gp64("sharedArrayOffset");
-emitter.mov(offset.r32(), index.r32());
+emitter.mov(offset, index);
 if (elementBytes != 1) {
 int shift = 0;
 for (uint32_t bytes = elementBytes; bytes > 1; bytes >>= 1)
@@ -4816,7 +4817,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
         asmjit::x86::Gp delta64 = delta;
         if (delta.size() != 8) {
             delta64 = compiler.new_gp64("tableGrowDelta");
-            emitter.mov(delta64.r32(), delta.r32());
+            emitter.mov(delta64, delta);
         }
         asmjit::InvokeNode* invoke = nullptr;
         checkError(compiler.invoke(asmjit::Out(invoke),
@@ -4828,7 +4829,15 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
         invoke->set_arg(3, init);
         auto result = compiler.new_gp64("tableGrowResult");
         invoke->set_ret(0, result);
-        values.push_back(table64 ? result : result.r32());
+        if (table64) {
+            values.push_back(result);
+        } else {
+            // A 32-bit table's result is an i32: narrow it into its own register
+            // rather than publishing a view of the 64-bit one.
+            auto narrowResult = compiler.new_gp32("tableGrowResult32");
+            emitter.mov(narrowResult, result);
+            values.push_back(narrowResult);
+        }
         emitPendingTrapReturn();
     }
 
@@ -4938,9 +4947,22 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		asmjit::InvokeNode* invoke = nullptr;
 		checkError(compiler.invoke(asmjit::Out(invoke), helper, signature),
 				(std::string("AsmJit ") + name + " helper call failed").c_str());
-		invoke->set_arg(0, width == 8 ? asmjit::Reg(scalar.r64()) : asmjit::Reg(scalar.r32()));
+		invoke->set_arg(0, asmjit::Reg(scalarArgument(scalar, width)));
 		invoke->set_arg(1, buffer);
 		values.push_back(buffer);
+	}
+
+	//! The value a scalar helper takes: the operand's bits at the helper's own
+	//! width. A width change goes through a register copy rather than a view, so
+	//! the argument is a register of exactly the declared size.
+	asmjit::x86::Gp scalarArgument(const asmjit::x86::Gp& value, uint32_t width)
+	{
+		if ((width == 8) == (value.size() == 8))
+			return value;
+		auto argument = width == 8 ? compiler.new_gp64("scalarArgument")
+				: compiler.new_gp32("scalarArgument");
+		emitter.mov(argument, value);
+		return argument;
 	}
 
 	void dispatchI8x16Splat() override
@@ -5012,7 +5034,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 				(std::string("AsmJit ") + name + " helper call failed").c_str());
 		invoke->set_arg(0, vector);
 		invoke->set_arg(1, asmjit::Imm(lane));
-		invoke->set_arg(2, width == 8 ? asmjit::Reg(scalar.r64()) : asmjit::Reg(scalar.r32()));
+		invoke->set_arg(2, asmjit::Reg(scalarArgument(scalar, width)));
 		invoke->set_arg(3, buffer);
 		values.push_back(buffer);
 	}
@@ -5127,7 +5149,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		auto result = compiler.new_gp32("v128AnyResult");
 		// One universal `select` replaces the zero/test/setcc triple: it defines
 		// the result on both paths.
-		emitter.selectFlag(result, low, asmjit::ujit::test_nz(low, low));
+		emitter.selectFlag(result, asmjit::ujit::test_nz(low, low));
 		values.push_back(result);
 	}
 
@@ -5145,9 +5167,9 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 			const asmjit::x86::Gp& low, const char* name)
 	{
 		auto packed = compiler.new_gp64(name);
-		emitter.mov(packed.r32(), low.r32());
+		emitter.mov(packed, low);
 		auto highWide = compiler.new_gp64("packedHigh");
-		emitter.mov(highWide.r32(), high.r32());
+		emitter.mov(highWide, high);
 		emitter.shl(highWide, 32);
 		emitter.or_(packed, highWide);
 		return packed;
@@ -5451,7 +5473,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		// The count move zeroes the rest of the vector, and the mask leaves
 		// `count % laneBits` in every lane — what the per-lane shift expects.
 		// The mask itself is 15 (words) or 31 (dwords) in every lane.
-		emitter.gpToVector32(laneCount, count.r32());
+		emitter.gpToVector32(laneCount, count);
 		const bool words = kind < 3;
 		const uint64_t maskBits = words ? 0x000F000F000F000Full
 				: 0x0000001F0000001Full;
@@ -5925,7 +5947,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		values.pop_back();
 		// An i31 is a tagged immediate: (zero-extended value << 1) | 1.
 		auto reference = compiler.new_gp64("i31Ref");
-		emitter.mov(reference.r32(), source.r32());
+		emitter.mov(reference, source);
 		emitter.shl(reference, 1);
 		emitter.or_(reference, 1);
 		// An i31 is a tagged immediate: uncounted, but still a reference, so a
@@ -5951,7 +5973,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		emitZeroReturn();
 		checkError(compiler.bind(notNull), "AsmJit i31.get continuation binding failed");
 		auto result = compiler.new_gp32("i31Value");
-		emitter.mov(result, reference.r32());
+		emitter.mov(result, reference);
 		if (signExtend)
 			emitter.sar(result, asmjit::Imm(1));
 		else
@@ -6015,7 +6037,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		auto result = compiler.new_gp32("refIsNull");
 		// One universal `select` replaces the zero/test/setcc triple, so the
 		// result is defined whether or not the reference is null.
-		emitter.selectFlag(result, reference,
+		emitter.selectFlag(result,
 				asmjit::ujit::test_z(reference, reference));
 		// The operand was the operand stack's and the result is an i32, so the
 		// stack gives its count up; the answer is already a plain integer.
@@ -6578,7 +6600,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		emitPendingTrapReturn();
 		checkError(compiler.bind(inBounds), "AsmJit array.get_s/u bounds label binding failed");
 		auto byteOffset = compiler.new_gp64("arrayByteOffset");
-		emitter.mov(byteOffset.r32(), index);
+		emitter.mov(byteOffset, index);
 		emitter.shl(byteOffset, isI8 ? 0 : 1);
 		emitter.add(byteOffset,
 				static_cast<int32_t>(WASM::gcArrayDataOffset(element.storage)));
@@ -6650,7 +6672,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		auto address = compiler.new_gp_ptr("arraySetAddress");
 		emitter.mov(address, object);
 		auto byteOffset = compiler.new_gp64("arraySetOffset");
-		emitter.mov(byteOffset.r32(), index);
+		emitter.mov(byteOffset, index);
 		const int scale = width == 1 ? 0 : (width == 2 ? 1 : (width == 4 ? 2 : 3));
 		emitter.shl(byteOffset, scale);
 		emitter.add(address, byteOffset);
@@ -6723,7 +6745,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		// Element address = object + dataOffset + index * elementSize, computed in a
 		// register so the memory operand stays a simple base+index form.
 		auto byteOffset = compiler.new_gp64("arrayByteOffset");
-		emitter.mov(byteOffset.r32(), index);
+		emitter.mov(byteOffset, index);
 		emitter.shl(byteOffset, width == 4 ? 2 : 3);
 		emitter.add(byteOffset,
 				static_cast<int32_t>(WASM::gcArrayDataOffset(element.storage)));
@@ -6991,7 +7013,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		// r32 -> r32 so the 32-bit length zero-extends: copying the whole 64-bit
 		// register would keep whatever garbage sits above bit 31 and turn the
 		// countdown into a runaway loop.
-		emitter.mov(counter.r32(), length.r32());
+		emitter.mov(counter, length);
 		emitter.lea(cursor, asmjit::x86::ptr(object, dataOffset));
 		asmjit::Label loopStart = compiler.new_label();
 		asmjit::Label loopDone = compiler.new_label();
@@ -7117,9 +7139,9 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 			emitter.headerLoad32(arrayLength, asmjit::x86::dword_ptr(object,
 					static_cast<int32_t>(WASM::GcHeader::kArrayLengthOffset)));
 			auto endIndex = compiler.new_gp64("arrayCopyEndIndex");
-			emitter.mov(endIndex.r32(), index);
+			emitter.mov(endIndex, index);
 			auto wideLength = compiler.new_gp64("arrayCopyLength");
-			emitter.mov(wideLength.r32(), length);
+			emitter.mov(wideLength, length);
 			emitter.add(endIndex, wideLength);
 			asmjit::Label inBounds = compiler.new_label();
 			emitter.j(inBounds, asmjit::ujit::ucmp_le(endIndex, arrayLength));
@@ -7141,7 +7163,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 			emitter.mov(cursor, object);
 			emitter.add(cursor, asmjit::Imm(dataOffset));
 			auto offset = compiler.new_gp64("arrayCopyOffset");
-			emitter.mov(offset.r32(), index);
+			emitter.mov(offset, index);
 			if (shift != 0)
 				emitter.shl(offset, shift);
 			emitter.add(cursor, offset);
@@ -7150,13 +7172,13 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		auto dstCursor = cursorFor(dstObject, dstIndex, "arrayCopyDst");
 		auto srcCursor = cursorFor(srcObject, srcIndex, "arrayCopySrc");
 		auto counter = compiler.new_gp64("arrayCopyCounter");
-		emitter.mov(counter.r32(), length);
+		emitter.mov(counter, length);
 		asmjit::Label forward = compiler.new_label();
 		asmjit::Label done = compiler.new_label();
 		// memmove rule: forward when the destination starts at or below the source.
 		emitter.j(forward, asmjit::ujit::ucmp_le(dstCursor, srcCursor));
 		auto endOffset = compiler.new_gp64("arrayCopyEndOffset");
-		emitter.mov(endOffset.r32(), length);
+		emitter.mov(endOffset, length);
 		if (shift != 0)
 			emitter.shl(endOffset, shift);
 		emitter.add(dstCursor, endOffset);
@@ -7191,15 +7213,15 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		auto value = compiler.new_gp64("arrayCopyValue");
 		if (packed) {
 			if (packedI8) {
-				emitter.mov(value.r32(), asmjit::x86::byte_ptr(src));
-				emitter.mov(asmjit::x86::byte_ptr(dst), value.r8());
+				emitter.mov(value, asmjit::x86::byte_ptr(src));
+				emitter.mov(asmjit::x86::byte_ptr(dst), value);
 			} else {
-				emitter.mov(value.r32(), asmjit::x86::word_ptr(src));
-				emitter.mov(asmjit::x86::word_ptr(dst), value.r16());
+				emitter.mov(value, asmjit::x86::word_ptr(src));
+				emitter.mov(asmjit::x86::word_ptr(dst), value);
 			}
 		} else if (width == 4) {
-			emitter.mov(value.r32(), asmjit::x86::dword_ptr(src));
-			emitter.mov(asmjit::x86::dword_ptr(dst), value.r32());
+			emitter.mov(value, asmjit::x86::dword_ptr(src));
+			emitter.mov(asmjit::x86::dword_ptr(dst), value);
 		} else {
 			emitter.mov(value, asmjit::x86::qword_ptr(src));
 			emitter.mov(asmjit::x86::qword_ptr(dst), value);
@@ -7246,9 +7268,9 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		emitter.headerLoad32(arrayLength, asmjit::x86::dword_ptr(object,
 					static_cast<int32_t>(WASM::GcHeader::kArrayLengthOffset)));
 		auto endIndex = compiler.new_gp64("arrayFillEndIndex");
-		emitter.mov(endIndex.r32(), index);
+		emitter.mov(endIndex, index);
 		auto wideLength = compiler.new_gp64("arrayFillLength");
-		emitter.mov(wideLength.r32(), length);
+		emitter.mov(wideLength, length);
 		emitter.add(endIndex, wideLength);
 		asmjit::Label inBounds = compiler.new_label();
 		emitter.j(inBounds, asmjit::ujit::ucmp_le(endIndex, arrayLength));
@@ -7262,7 +7284,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		const auto dataOffset = static_cast<int32_t>(WASM::gcArrayDataOffset(element.storage));
 		const auto elementBytes = static_cast<int32_t>(WASM::gcStorageBytes(element.storage));
 		auto byteOffset = compiler.new_gp64("arrayFillByteOffset");
-		emitter.mov(byteOffset.r32(), index);
+		emitter.mov(byteOffset, index);
 		if (elementBytes != 1) {
 			int shift = 0;
 			for (int bytes = elementBytes; bytes > 1; bytes >>= 1)
@@ -7274,16 +7296,16 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		emitter.add(cursor, asmjit::Imm(dataOffset));
 		emitter.add(cursor, byteOffset);
 		auto counter = compiler.new_gp64("arrayFillCounter");
-		emitter.mov(counter.r32(), length);
+		emitter.mov(counter, length);
 		asmjit::Label loopStart = compiler.new_label();
 		asmjit::Label loopDone = compiler.new_label();
 		checkError(compiler.bind(loopStart), "AsmJit array.fill loop label failed");
 		emitter.j(loopDone, asmjit::ujit::test_z(counter, counter));
 		if (packed) {
 			if (packedI8)
-				emitter.mov(asmjit::x86::byte_ptr(cursor), elementValue.r8());
+				emitter.mov(asmjit::x86::byte_ptr(cursor), elementValue);
 			else
-				emitter.mov(asmjit::x86::word_ptr(cursor), elementValue.r16());
+				emitter.mov(asmjit::x86::word_ptr(cursor), elementValue);
 		} else if (width == 4)
 			emitter.mov(asmjit::x86::dword_ptr(cursor), elementValue);
 		else
@@ -7342,16 +7364,16 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		emitter.mov(fillCursor, object);
 		emitter.add(fillCursor, asmjit::Imm(dataOffset));
 		auto fillCounter = compiler.new_gp64("arrayNewCounter");
-		emitter.mov(fillCounter.r32(), length);
+		emitter.mov(fillCounter, length);
 		asmjit::Label fillStart = compiler.new_label();
 		asmjit::Label fillDone = compiler.new_label();
 		checkError(compiler.bind(fillStart), "AsmJit array.new loop label failed");
 		emitter.j(fillDone, asmjit::ujit::test_z(fillCounter, fillCounter));
 		if (packed) {
 			if (packedI8)
-				emitter.mov(asmjit::x86::byte_ptr(fillCursor), elementValue.r8());
+				emitter.mov(asmjit::x86::byte_ptr(fillCursor), elementValue);
 			else
-				emitter.mov(asmjit::x86::word_ptr(fillCursor), elementValue.r16());
+				emitter.mov(asmjit::x86::word_ptr(fillCursor), elementValue);
 		} else if (width == 4)
 			emitter.mov(asmjit::x86::dword_ptr(fillCursor), elementValue);
 		else
@@ -7566,7 +7588,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		asmjit::x86::Gp index64 = index;
 		if (index.size() == 4) {
 			index64 = compiler.new_gp64("tableGetElement");
-			emitter.mov(index64.r32(), index.r32());
+			emitter.mov(index64, index);
 		}
 		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
 		signature.set_ret(asmjit::TypeId::kUIntPtr);
@@ -7605,7 +7627,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		asmjit::x86::Gp index64 = index;
 		if (index.size() == 4) {
 			index64 = compiler.new_gp64("tableSetElement");
-			emitter.mov(index64.r32(), index.r32());
+			emitter.mov(index64, index);
 		}
 		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
 		signature.set_ret(asmjit::TypeId::kVoid);
@@ -7642,7 +7664,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		asmjit::x86::Gp index64 = index;
 		if (index.size() == 4) {
 			index64 = compiler.new_gp64("tableAtomicGetElement");
-			emitter.mov(index64.r32(), index.r32());
+			emitter.mov(index64, index);
 		}
 		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
 		signature.set_ret(asmjit::TypeId::kUIntPtr);
@@ -7681,7 +7703,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		asmjit::x86::Gp index64 = index;
 		if (index.size() == 4) {
 			index64 = compiler.new_gp64("tableAtomicSetElement");
-			emitter.mov(index64.r32(), index.r32());
+			emitter.mov(index64, index);
 		}
 		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
 		signature.set_ret(asmjit::TypeId::kVoid);
@@ -7715,7 +7737,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		asmjit::x86::Gp index64 = index;
 		if (index.size() == 4) {
 			index64 = compiler.new_gp64("tableAtomicXchgElement");
-			emitter.mov(index64.r32(), index.r32());
+			emitter.mov(index64, index);
 		}
 		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
 		signature.set_ret(asmjit::TypeId::kUIntPtr);
@@ -7754,7 +7776,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		asmjit::x86::Gp index64 = index;
 		if (index.size() == 4) {
 			index64 = compiler.new_gp64("tableAtomicCmpxchgElement");
-			emitter.mov(index64.r32(), index.r32());
+			emitter.mov(index64, index);
 		}
 		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
 		signature.set_ret(asmjit::TypeId::kUIntPtr);
@@ -7925,7 +7947,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		auto lhs = values.back();
 		values.pop_back();
 		auto result = compiler.new_gp32("refEq");
-		emitter.selectFlag(result, lhs, asmjit::ujit::cmp_eq(lhs, rhs));
+		emitter.selectFlag(result, asmjit::ujit::cmp_eq(lhs, rhs));
 		// Both operands were the operand stack's and the result is an i32, so
 		// each one's count goes back. One `erase` per operand also covers the
 		// case where both operands are the same value.
@@ -8157,7 +8179,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		auto value = values.back();
 		values.pop_back();
 		auto result = compiler.new_gp32("i64Eqz");
-		emitter.selectFlag(result, value, asmjit::ujit::test_z(value, value));
+		emitter.selectFlag(result, asmjit::ujit::test_z(value, value));
 		values.push_back(result);
 	}
 
@@ -8323,7 +8345,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 			if (value.size() == 8)
 				return value;
 			auto wide = compiler.new_gp64("memoryDiscardOperand");
-			emitter.mov(wide.r32(), value.r32());
+			emitter.mov(wide, value);
 			return wide;
 		};
 		auto destination64 = widen(destination);
@@ -8620,9 +8642,9 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		auto view = values.back(); values.pop_back();
 		auto packedMemory = compiler.new_gp64("stringViewMemory");
 		auto memoryIndex = compiler.new_gp64("stringViewMemoryIndex");
-		emitter.mov(packedMemory.r32(), pointer.r32());
+		emitter.mov(packedMemory, pointer);
 		emitter.shl(packedMemory, 8);
-		emitter.mov(memoryIndex.r32(), static_cast<uint32_t>(memory));
+		emitter.mov(memoryIndex, static_cast<uint64_t>(memory));
 		emitter.or_(packedMemory, memoryIndex);
 		auto packedPosition = packRegPair(bytes, position, "stringViewPosition");
 		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
@@ -8644,9 +8666,9 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		auto high = compiler.new_gp64("stringViewNextHigh");
 		emitter.mov(high, result);
 		emitter.shr(high, 32);
-		emitter.mov(nextPosition.r32(), high.r32());
+		emitter.mov(nextPosition, high);
 		auto written = compiler.new_gp32("stringViewWritten");
-		emitter.mov(written.r32(), result.r32());
+		emitter.mov(written, result);
 		values.push_back(nextPosition);
 		values.push_back(written);
 		emitPendingTrapReturn();
@@ -8665,9 +8687,9 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		auto view = values.back(); values.pop_back();
 		auto packedMemory = compiler.new_gp64("stringViewMemory");
 		auto memoryIndex = compiler.new_gp64("stringViewMemoryIndex");
-		emitter.mov(packedMemory.r32(), pointer.r32());
+		emitter.mov(packedMemory, pointer);
 		emitter.shl(packedMemory, 8);
-		emitter.mov(memoryIndex.r32(), static_cast<uint32_t>(memory));
+		emitter.mov(memoryIndex, static_cast<uint64_t>(memory));
 		emitter.or_(packedMemory, memoryIndex);
 		auto packedPosition = packRegPair(units, position, "stringViewPosition");
 		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
@@ -9421,8 +9443,8 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		auto array = values.back(); values.pop_back();
 		auto range = compiler.new_gp64("stringArrayRange");
 		auto end64 = compiler.new_gp64("stringArrayEnd");
-		emitter.mov(range.r32(), start.r32());
-		emitter.mov(end64.r32(), end.r32());
+		emitter.mov(range, start);
+		emitter.mov(end64, end);
 		emitter.shl(end64, 32);
 		emitter.or_(range, end64);
 		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
@@ -9620,7 +9642,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		auto value = values.back();
 		values.pop_back();
 		auto result = compiler.new_gp32("eqz");
-		emitter.selectFlag(result, value, asmjit::ujit::test_z(value, value));
+		emitter.selectFlag(result, asmjit::ujit::test_z(value, value));
 		values.push_back(result);
 	}
 
@@ -11266,7 +11288,7 @@ private:
 		const auto source = values.back();
 		values.pop_back();
 		auto result = compiler.new_gp32("wrappedI32");
-		emitter.mov(result, source.r32());
+		emitter.mov(result, source);
 		values.push_back(result);
 	}
 
@@ -11282,7 +11304,7 @@ private:
 		if (isSigned)
 			emitter.movsx32(result, source);
 		else
-			emitter.mov(result.r32(), source);
+			emitter.mov(result, source);
 		values.push_back(result);
 	}
 
@@ -11300,7 +11322,7 @@ private:
 		else if (width == 16)
 			emitter.movsx16(result, source);
 		else if (width == 32)
-			emitter.movsx32(result, source.r32());
+			emitter.movsx32(result, source);
 		else
 			throw std::runtime_error("AsmJit internal error: invalid i64 sign-extension width");
 		values.push_back(result);
@@ -11323,7 +11345,7 @@ private:
 		// because `select` requires a destination as wide as its operands.
 		const asmjit::ujit::UniCondition test(asmjit::ujit::UniOpCond::kCompare,
 				condition, lhs, rhs);
-		emitter.selectFlag(result, lhs, test);
+		emitter.selectFlag(result, test);
 		values.push_back(result);
 	}
 
@@ -11522,6 +11544,18 @@ struct ModuleCompiler::FunctionRecord {
 	void* entry = nullptr;
 };
 
+struct DebugErrorHandler : asmjit::ErrorHandler
+{
+	void handle_error(asmjit::Error err, const char* message,
+			asmjit::BaseEmitter* origin) override
+	{
+		std::fprintf(stderr, "[dbg] emit error %d: %s\n", static_cast<int>(err),
+				message != nullptr ? message : "(no message)");
+		(void)origin;
+	}
+};
+
+
 ModuleCompiler::ModuleCompiler(Context& context)
 	: context(context)
 {
@@ -11624,6 +11658,12 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance,
 		asmjit::CodeHolder code;
 		checkError(code.init(context.environment(), context.cpuFeatures()),
 				"AsmJit CodeHolder initialisation failed");
+		asmjit::FileLogger dbgLogger(stderr);
+		DebugErrorHandler dbgErrors;
+		if (std::getenv("WASMJIT_ASMJIT_LOG") != nullptr) {
+			code.set_logger(&dbgLogger);
+			code.set_error_handler(&dbgErrors);
+		}
 		asmjit::x86::Compiler compiler(&code);
 		// One Universal JIT layer for the whole code holder: `add_func`/`end_func`
 		// hook and unhook it per body, which is what makes `ujit` emission legal

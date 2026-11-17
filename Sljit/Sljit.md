@@ -181,11 +181,11 @@ plain 16-byte moves. A runner (`BE-5`) is what settles both.
 
 ## Next steps
 
-1. **Finish the reference-ownership model.** The paths the suites exercise are
-   exact, but a reference read out of a struct field or array element, the
-   unselected operand of `select`, and `drop` of a GC reference are still
-   borrows that nothing releases. Each is a leak, not a wrong result;
-   [`docs/backends/HISTORY.md`](../docs/backends/HISTORY.md) §6 names the sites.
+1. **Nothing in the byte-order path.** This backend is the reference converting
+   one: `emitGuestSwap`/`emitHeaderWordLoad` cover every guest access it emits, so
+   the remaining work there is the programme's, not the backend's — `BE-5` (a
+   big-endian runner) and `BE-6` (flipping the matrix), both
+   [`docs/proposals/BIG_ENDIAN.md`](../docs/proposals/BIG_ENDIAN.md) §7.
 2. **A frame-form tail trampoline.** `return_call_ref` above the register-form
    ceiling is a semantic call+return here
    ([`docs/API_ABI_STABILITY.md`](../docs/API_ABI_STABILITY.md)

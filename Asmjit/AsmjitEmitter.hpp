@@ -4,6 +4,7 @@
 #include <asmjit/ujit.h>
 
 #include <cstdint>
+#include <cstdio>
 #include <type_traits>
 
 #include "../WasmBase/WasmByteOrder.hpp"
@@ -159,13 +160,44 @@ public:
 	}
 
 	/*!
-	 * \brief Copies one register into another of the same width.
+	 * \brief Copies one register into another, of any width.
+	 *
+	 * `ujit`'s register move is **same-width only** — `mov eax, rax` is rejected,
+	 * as is `mov rax, eax` — and there is no register extension operation at all
+	 * (`uniop.h` has `kLoadU32`/`kLoadI32` but nothing for a register source). The
+	 * universal way to change a register's width is therefore through memory: the
+	 * store truncates to the narrower of the two widths and the load zero-extends
+	 * back out, which is exactly what x86's `mov eax, rax`/`mov rax, eax` idiom
+	 * meant. One store-forwarded pair, in one place, so no call site has to know.
 	 * \param dst Destination register.
 	 * \param src Source register.
 	 */
 	void mov(const asmjit::ujit::Gp& dst, const asmjit::ujit::Gp& src)
 	{
-		universal_.mov(dst, src);
+		if (dst.size() == src.size()) {
+			universal_.mov(dst, src);
+			return;
+		}
+		const std::uint32_t width = dst.size() < src.size() ? dst.size() : src.size();
+		auto slot = backend_.new_stack(width, width, "moveSlot");
+		switch (width) {
+		case 1:
+			universal_.store_u8(slot, src);
+			universal_.load_u8(dst, slot);
+			return;
+		case 2:
+			universal_.store_u16(slot, src);
+			universal_.load_u16(dst, slot);
+			return;
+		case 4:
+			universal_.store_u32(slot, src);
+			universal_.load_u32(dst, slot);
+			return;
+		default:
+			universal_.store_u64(slot, src);
+			universal_.load_u64(dst, slot);
+			return;
+		}
 	}
 
 	/*!
@@ -463,16 +495,11 @@ public:
 	void movsx8(const asmjit::ujit::Gp& dst, const asmjit::ujit::Gp& src)
 	{
 		// No register-to-register sign extension exists in the universal
-		// vocabulary; shift the byte up and back down instead, which is. A
-		// universal shift needs source and destination to be as wide, so a wide
-		// source is first copied through the destination's 32-bit view.
+		// vocabulary, and a universal shift needs both operands as wide, so the
+		// value is copied to the destination's width and shifted up and back down.
 		const std::uint32_t shift = static_cast<std::uint32_t>(dst.size() * 8 - 8);
-		if (src.size() >= 4) {
-			universal_.mov(dst.r32(), src.r32());
-			universal_.shl(dst, dst, asmjit::Imm(shift));
-		} else {
-			universal_.shl(dst, src, asmjit::Imm(shift));
-		}
+		mov(dst, src);
+		universal_.shl(dst, dst, asmjit::Imm(shift));
 		universal_.sar(dst, dst, asmjit::Imm(shift));
 	}
 
@@ -484,12 +511,8 @@ public:
 	void movsx16(const asmjit::ujit::Gp& dst, const asmjit::ujit::Gp& src)
 	{
 		const std::uint32_t shift = static_cast<std::uint32_t>(dst.size() * 8 - 16);
-		if (src.size() >= 4) {
-			universal_.mov(dst.r32(), src.r32());
-			universal_.shl(dst, dst, asmjit::Imm(shift));
-		} else {
-			universal_.shl(dst, src, asmjit::Imm(shift));
-		}
+		mov(dst, src);
+		universal_.shl(dst, dst, asmjit::Imm(shift));
 		universal_.sar(dst, dst, asmjit::Imm(shift));
 	}
 
@@ -501,12 +524,8 @@ public:
 	void movzx8(const asmjit::ujit::Gp& dst, const asmjit::ujit::Gp& src)
 	{
 		const std::uint32_t shift = static_cast<std::uint32_t>(dst.size() * 8 - 8);
-		if (src.size() >= 4) {
-			universal_.mov(dst.r32(), src.r32());
-			universal_.shl(dst, dst, asmjit::Imm(shift));
-		} else {
-			universal_.shl(dst, src, asmjit::Imm(shift));
-		}
+		mov(dst, src);
+		universal_.shl(dst, dst, asmjit::Imm(shift));
 		universal_.shr(dst, dst, asmjit::Imm(shift));
 	}
 
@@ -518,26 +537,24 @@ public:
 	void movzx16(const asmjit::ujit::Gp& dst, const asmjit::ujit::Gp& src)
 	{
 		const std::uint32_t shift = static_cast<std::uint32_t>(dst.size() * 8 - 16);
-		if (src.size() >= 4) {
-			universal_.mov(dst.r32(), src.r32());
-			universal_.shl(dst, dst, asmjit::Imm(shift));
-		} else {
-			universal_.shl(dst, src, asmjit::Imm(shift));
-		}
+		mov(dst, src);
+		universal_.shl(dst, dst, asmjit::Imm(shift));
 		universal_.shr(dst, dst, asmjit::Imm(shift));
 	}
 
 	/*!
-	 * \brief Zero-extends a 32-bit register into a 64-bit one.
+	 * \brief Zero-extends a 32-bit register into a 64-bit destination.
+	 *
+	 * A zero-extending copy: `mov` covers every width combination (a same-width
+	 * copy is one instruction, a width change goes through the slot), and the
+	 * load side zero-extends.
 	 * \param dst Destination register.
 	 * \param src Source register.
 	 */
 	void movzx32(const asmjit::ujit::Gp& dst, const asmjit::ujit::Gp& src)
 	{
-		// A 32-bit write already clears the upper half of a 64-bit register, so
-		// the copy goes through the 32-bit view of the destination: `mov r32,
-		// r32`, never `mov r64, r32`, which no target encodes.
-		universal_.mov(dst.r32(), src.r32());
+		// A width change zero-extends through the slot; see mov().
+		mov(dst, src);
 	}
 
 	/*!
@@ -551,17 +568,22 @@ public:
 	}
 
 	/*!
-	 * \brief Sign-extends a 32-bit register into a 64-bit one.
+	 * \brief Sign-extends a 32-bit register into a 64-bit destination.
 	 *
-	 * The widening happens first — a 32-bit write clears the upper half — so the
-	 * shifts run at the destination's own width, which is what a universal shift
-	 * requires of its source.
+	 * The extension is a widening load from a slot; at 32 bits there is nothing
+	 * to extend, so it is a plain move.
 	 * \param dst Destination register.
 	 * \param src Source register.
 	 */
 	void movsx32(const asmjit::ujit::Gp& dst, const asmjit::ujit::Gp& src)
 	{
-		universal_.mov(dst.r32(), src.r32());
+		mov(dst, src);
+		if (dst.size() == 4)
+			return;
+		// Sign-extend bit 31 of the copy with a shift pair at the destination's own
+		// width. This is arithmetic rather than a sign-extending load because a
+		// four-byte slot used by one store and one load is promoted by the register
+		// allocator, and the promoted copy would drop the extension's sign.
 		const std::uint32_t shift = static_cast<std::uint32_t>(dst.size() * 8 - 32);
 		universal_.shl(dst, dst, asmjit::Imm(shift));
 		universal_.sar(dst, dst, asmjit::Imm(shift));
@@ -978,7 +1000,8 @@ public:
 			return;
 		}
 		asmjit::ujit::Gp value = backend_.new_gp32("guestStoreValue");
-		universal_.mov(value, src.r32());
+		// A narrowing move is legal and needs no view; the store truncates.
+		universal_.mov(value, src);
 		reverse16(value);
 		universal_.store_u16(dst, value);
 	}
@@ -995,7 +1018,8 @@ public:
 			return;
 		}
 		asmjit::ujit::Gp value = backend_.new_gp32("guestStoreValue");
-		universal_.mov(value, src.r32());
+		// A narrowing move is legal and needs no view; the store truncates.
+		universal_.mov(value, src);
 		reverse32(value);
 		universal_.store_u32(dst, value);
 	}
@@ -1111,27 +1135,21 @@ public:
 	}
 
 	/*!
-	 * \brief Materialises a 0/1 flag from a condition over \p subject.
+	 * \brief Materialises a 0/1 flag from a condition.
 	 *
-	 * The universal `select` requires its destination to be as wide as the
-	 * operands the condition tests; a narrower flag register (an i32 result over
-	 * a 64-bit operand) is selected at the operand's width and then
-	 * zero-extended, which is still one condition and no branching.
+	 * The condition already carries the width of what it tested, so the
+	 * destination does **not** have to match it: a 64-bit result over a 32-bit
+	 * subject selects directly (`mov`+`test`+`cmov` at the destination's width),
+	 * which is one condition, no branching, and no temp register. The subject is
+	 * therefore not a parameter — the call site has already folded it into
+	 * \p condition.
 	 * \param dst Destination register, which receives 1 or 0.
-	 * \param subject Register the condition tests.
 	 * \param condition Condition to test.
 	 */
-	void selectFlag(const asmjit::ujit::Gp& dst, const asmjit::ujit::Gp& subject,
+	void selectFlag(const asmjit::ujit::Gp& dst,
 			const asmjit::ujit::UniCondition& condition)
 	{
-		if (dst.size() == subject.size()) {
-			universal_.select(dst, asmjit::Imm(1), asmjit::Imm(0), condition);
-			return;
-		}
-		asmjit::ujit::Gp value = subject.size() == 8
-				? backend_.new_gp64("flagValue") : backend_.new_gp32("flagValue");
-		universal_.select(value, asmjit::Imm(1), asmjit::Imm(0), condition);
-		universal_.mov(dst.r32(), value.r32());
+		universal_.select(dst, asmjit::Imm(1), asmjit::Imm(0), condition);
 	}
 
 	//! \}
@@ -1182,25 +1200,32 @@ private:
 	 * \brief Reverses the low halfword of a zero-extended value, in place.
 	 *
 	 * A halfword rotate is not expressible through this vocabulary — a 16-bit
-	 * operand is promoted to its 32-bit register — so the reversal is a
-	 * doubleword byte swap followed by a shift: `bswap` of `0x0000_AB` gives
-	 * `0xAB00_0000`, and shifting that down puts the reversed halfword in the low
-	 * half with zeros above, which is the shape the extension expects.
+	 * operand is promoted to its 32-bit register — so the reversal is a byte swap
+	 * followed by a shift down. The swap runs at the register's own width and the
+	 * shift drops the halfword it does not want: after `bswap` the reversed
+	 * halfword sits in the top 16 bits, so the count is the register width minus
+	 * 16.
 	 * \param value Register holding the value.
 	 */
 	void reverse16(const asmjit::ujit::Gp& value)
 	{
-		universal_.bswap(value.r32(), value.r32());
-		universal_.shr(value.r32(), value.r32(), asmjit::Imm(16));
+		universal_.bswap(value, value);
+		universal_.shr(value, value,
+				asmjit::Imm(static_cast<std::uint32_t>(value.size() * 8 - 16)));
 	}
 
 	/*!
 	 * \brief Reverses the low doubleword of a value, in place.
+	 *
+	 * At 32 bits the byte swap is the reversal; at 64 bits it reverses eight
+	 * bytes, so the result is shifted down to keep only the reversed doubleword.
 	 * \param value Register holding the value.
 	 */
 	void reverse32(const asmjit::ujit::Gp& value)
 	{
-		universal_.bswap(value.r32(), value.r32());
+		universal_.bswap(value, value);
+		if (value.size() == 8)
+			universal_.shr(value, value, asmjit::Imm(32));
 	}
 
 	/*!
