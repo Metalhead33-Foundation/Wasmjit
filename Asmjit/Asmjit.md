@@ -1,15 +1,18 @@
 # AsmJit backend {#backend_asmjit}
 
-*The third code generator: AsmJit registration, emitted surface and refusals*
+*The third code generator: AsmJit registration, the universal emission seam and
+the byte-order conversion*
 
 This directory contains a native WebAssembly backend built on AsmJit. It
 implements the four `ModuleInstantiator` hooks and executes the shared lowering
 slice with AsmJit’s register allocator.
 
-**Status (2026-11-17, working tree on `f5cbc75`):** **production-ready within
-the declared envelope** — `WASMJIT_BACKEND=asmjit ./Test/WasmJit --rng-seed
-12345 '~[tail]~[compilation-policy]'` reports **23,087 assertions in 855 cases,
-green**, the same case set and assertion count as the reference backend. The envelope is x86-64 Linux / SysV AMD64 with the external
+**Status (2026-11-17, working tree on `d9d560b`+):** **production-ready within
+the declared envelope, and now a converting backend** — `WASMJIT_BACKEND=asmjit
+./Test/WasmJit --rng-seed 12345 '~[tail]~[compilation-policy]'` reports **23,118
+assertions in 857 cases, green**, and every emitted instruction goes through
+AsmJIT's Universal JIT, so the byte-order reversal SLJIT emits is available here
+too (`BE-7`). The envelope is x86-64 Linux / SysV AMD64 with the external
 AsmJit library available at build time, and the documented refusals are the same
 three as SLJIT’s (see `Sljit/Sljit.md` "Known limitations"). See
 [`docs/API_ABI_STABILITY.md`](../docs/API_ABI_STABILITY.md) §12 for the verdict
@@ -139,30 +142,45 @@ target-architecture check).
 
 ## Byte order
 
-A big-endian host is **refused**, not served approximately: `translateTypes` stops
-the module with a named diagnostic before any body is compiled
-(docs/proposals/BIG_ENDIAN.md `BED4`). The reason is no longer the emission model
-— the vocabulary has been universal since `BE-7`'s conversion — but the
-*accesses*: no guest load or store is reversed yet, while the GC header's length
-word and the shared atomic helpers *are* little-endian on every host (`BED3`,
-`BE-4`). Emitting native accesses there would read every multi-byte value
-reversed, which is the corruption `docs/SAFETY.md` exists to prevent.
+A big-endian host is **served**, not refused: this backend emits the same byte
+reversal SLJIT does (docs/proposals/BIG_ENDIAN.md `BE-7`, closing `BED4`'s AsmJIT
+half). The reversal is decided once, while the code is generated, so a
+little-endian build emits nothing extra and its code is byte-identical to what it
+always was (`BED5`).
 
-The refusal is a property of the target, not of the byte-order policy: even
-`nonconformant` could not make this backend correct, so it is not consulted.
-`BE-7`'s remaining half removes the refusal: the same reversal SLJIT emits, at the
-two functions every guest access funnels through, plus a forced-policy test that
-runs it on this host. "Emission model" below records exactly what is and is not
-converted.
+What converts, and what does not:
+
+| Access | Rule |
+|---|---|
+| Every linear-memory and GC-array element load/store (`i32.load`, `i64.store`, the extending forms, `f32`/`f64` bit patterns) | converts when the instance's decision says so — one funnel, `emitMemoryLoad`/`emitMemoryStore` |
+| Packed array elements and struct fields (`array.get_u`, `struct.get`, `array.new_fixed`, `struct.set`, `struct.new`) | converts: they hold guest values like any other slot |
+| The GC header's length word | **always** little-endian on every host (`BED3`), so it converts by *target* rather than by policy, and emits nothing on a little-endian build |
+| `v128` loads and stores | not converted: the proposal leaves the lane convention to the implementation, and SLJIT does the same |
+| Globals, table slots, the VM context, stack slots | not converted: they are host-native storage the guest never sees as bytes |
+| Atomics, `memory.copy`/`fill`/`init`, data and element segments | already converted in the shared helpers (`BE-4`) and the host-side appliers (`BED3`) |
+
+`BE-7`'s remaining work therefore ended with the emission model: once the
+vocabulary was universal there was a place to put the reversal, and the same
+`Emitter` methods that emit a load now emit the conversion with it.
+
+One trap is worth recording, because it cost a test cycle: **a rotate with a
+16-bit operand is a 32-bit rotate here.** `ror r16, 8` — the natural halfword
+reversal — is promoted to its 32-bit register, so it rotates the whole doubleword
+and leaves the value at bits 16–31. `reverse16` is therefore a `bswap` of the low
+doubleword followed by a shift down, which is two universal instructions and no
+sub-register surprise. The `halfword_signed`/`halfword_unsigned` exports in
+`Test/wasm_wat/byte_order_roundtrip.wat` exist because of it: they fail if the
+reversal runs after the sign extension, widens the value, or rotates at the wrong
+width.
 
 ## Emission model: `ujit` first, the host compiler second
 
 Instruction emission goes through **AsmJit's Universal JIT** (`asmjit::ujit`)
 rather than through `asmjit::x86` directly — milestone `BE-7` in
-[`docs/proposals/BIG_ENDIAN.md`](../docs/proposals/BIG_ENDIAN.md). The reason is
+[`docs/proposals/BIG_ENDIAN.md`](../docs/proposals/BIG_ENDIAN.md). The reason was
 portability, not style: `ujit` is the only part of AsmJit that abstracts x86 and
-AArch64, and a big-endian host can only be served once this backend's
-instruction vocabulary is target-independent.
+AArch64, and the byte-order conversion could only be emitted once this backend's
+instruction vocabulary was target-independent.
 
 The shape of the seam is small because `ujit` was designed that way:
 
@@ -205,6 +223,7 @@ The slices, in the order they landed:
 | Scalar float binary and compares | `addss`…`divsd`, `ucomiss`/`ucomisd` → `kAddF32S`…`kDivF64S`, `kCmpEqF32S`…`kCmpGeF64S` | S4 |
 | Vector arithmetic, compares, moves | `p*` → `kAndU32`/`kAddU8`/`kAvgrU8`/`kMinU8`/`kCmpLtI8`/`kLoad128_U32`/`kStore128_U32`/`kMovU32`… | S5 |
 | Diagnostic probes (`AsmjitContext.cpp`) | the same vocabulary, through the same façade | S6 |
+| Guest accesses and the GC header word | `guestLoad*`/`guestStore*`, `headerLoad32` → `kLoad*`/`kStore*` plus `kBSwap`/`kRor` | S7 |
 
 ### What the conversion bought
 
@@ -247,19 +266,23 @@ checks `finalize()` and still refuses to install a module whose code did not
 finalise; what it loses is the per-site message. That is recorded rather than
 hidden, because it is a diagnostic regression, not a correctness one.
 
-### What is not done yet
+### What the conversion left open
 
-The vocabulary is target-independent but the **byte-order decision is not
-consulted**: `emitMemoryLoad`/`emitMemoryStore` still emit a plain load or store,
-so a big-endian host would misread guest memory. `translateTypes` therefore keeps
-refusing (`BED4`) and [`docs/proposals/BIG_ENDIAN.md`](../docs/proposals/BIG_ENDIAN.md)
-records the remaining work: a `swapsAccesses` flag reached from the module
-compiler into the emitter, a width-aware reversal at the two guest-access
-functions (8 → `bswap`, 4 → `bswap`, 2 → `ror 8`, 1 → nothing), the same rule for
-the header word, and a forced-policy test that runs the round-trip on this host
-the way `[byteorder]` does for SLJIT. Until that lands, AsmJIT is a
-target-independent *emitter* on a single-ISA runtime, not yet a second
-byte-order-converting backend.
+Nothing in the emission path: the vocabulary is universal, the ledger is empty of
+raw instructions, and the byte reversal rides on the same guest accessors. Two
+things are worth knowing rather than fixing:
+
+- **A per-lane variable-count vector shift** has no universal operation (the
+  vocabulary offers immediate counts only), so those six instructions still go
+  through `host()`. They are the whole host-specific instruction set, and the
+  ledger names them.
+- **A register-to-register sign extension** has no universal operation either, so
+  the façade re-expresses it as a shift pair. Two instructions instead of one, and
+  nothing target-specific.
+
+The byte-order half is closed for this backend; the port as a whole still needs a
+big-endian runner (docs/proposals/BIG_ENDIAN.md `BE-5`), which is a hardware and
+CI question rather than an emission one.
 
 ## Known limitations and next steps
 

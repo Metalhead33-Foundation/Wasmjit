@@ -6,6 +6,8 @@
 #include <cstdint>
 #include <type_traits>
 
+#include "../WasmBase/WasmByteOrder.hpp"
+
 /*!
   \file AsmjitEmitter.hpp
   \brief The one place this backend spells a generated instruction.
@@ -62,10 +64,16 @@ public:
 	 * \brief Binds the seam to one hooked function.
 	 * \param backend Host compiler that owns the current function.
 	 * \param universal Universal compiler hooked to \p backend.
+	 * \param swapsGuestAccesses True when this module's multi-byte guest
+	 *        accesses must be byte-reversed, which the instance's byte-order
+	 *        decision already resolved (docs/proposals/BIG_ENDIAN.md `BE-3`).
+	 *        False emits exactly the code a little-endian build always emitted.
 	 */
-	Emitter(asmjit::ujit::BackendCompiler& backend, asmjit::ujit::UniCompiler& universal) noexcept
+	Emitter(asmjit::ujit::BackendCompiler& backend, asmjit::ujit::UniCompiler& universal,
+			bool swapsGuestAccesses = false) noexcept
 		: backend_(backend)
 		, universal_(universal)
+		, swapsGuestAccesses_(swapsGuestAccesses)
 	{
 	}
 
@@ -845,6 +853,190 @@ public:
 
 	//! \}
 
+	//! \name Guest accesses
+	//! Every read or write of guest-visible storage goes through here, because
+	//! the byte reversal is decided **once, while the code is generated** — a
+	//! little-endian build emits nothing extra and its code stays byte-identical
+	//! to what it always was (docs/proposals/BIG_ENDIAN.md `BE-3`, `BED5`).
+	//! One helper covers both directions, so a converted load and a converted
+	//! store still round-trip.
+	//! \{
+
+	/*!
+	 * \brief Loads one byte and zero-extends it; a single byte has no order.
+	 * \param dst Destination register.
+	 * \param src Source memory operand.
+	 */
+	void guestLoad8Z(const asmjit::ujit::Gp& dst, const asmjit::ujit::Mem& src)
+	{
+		universal_.load_u8(dst, src);
+	}
+
+	/*!
+	 * \brief Loads one byte and sign-extends it; a single byte has no order.
+	 * \param dst Destination register.
+	 * \param src Source memory operand.
+	 */
+	void guestLoad8S(const asmjit::ujit::Gp& dst, const asmjit::ujit::Mem& src)
+	{
+		universal_.load_i8(dst, src);
+	}
+
+	/*!
+	 * \brief Loads a halfword and zero-extends it, reversing it when required.
+	 * \param dst Destination register.
+	 * \param src Source memory operand.
+	 */
+	void guestLoad16Z(const asmjit::ujit::Gp& dst, const asmjit::ujit::Mem& src)
+	{
+		universal_.load_u16(dst, src);
+		if (swapsGuestAccesses_)
+			reverse16(dst);
+	}
+
+	/*!
+	 * \brief Loads a halfword and sign-extends it.
+	 *
+	 * The reversal must happen on the raw halfword and *before* the extension,
+	 * or a negative value would carry the wrong sign.
+	 * \param dst Destination register.
+	 * \param src Source memory operand.
+	 */
+	void guestLoad16S(const asmjit::ujit::Gp& dst, const asmjit::ujit::Mem& src)
+	{
+		if (!swapsGuestAccesses_) {
+			universal_.load_i16(dst, src);
+			return;
+		}
+		universal_.load_u16(dst, src);
+		reverse16(dst);
+		extendS16(dst);
+	}
+
+	/*!
+	 * \brief Loads a doubleword and zero-extends it, reversing it when required.
+	 * \param dst Destination register.
+	 * \param src Source memory operand.
+	 */
+	void guestLoad32Z(const asmjit::ujit::Gp& dst, const asmjit::ujit::Mem& src)
+	{
+		universal_.load_u32(dst, src);
+		if (swapsGuestAccesses_)
+			reverse32(dst);
+	}
+
+	/*!
+	 * \brief Loads a doubleword and sign-extends it.
+	 * \param dst Destination register.
+	 * \param src Source memory operand.
+	 */
+	void guestLoad32S(const asmjit::ujit::Gp& dst, const asmjit::ujit::Mem& src)
+	{
+		if (!swapsGuestAccesses_) {
+			universal_.load_i32(dst, src);
+			return;
+		}
+		universal_.load_u32(dst, src);
+		reverse32(dst);
+		extendS32(dst);
+	}
+
+	/*!
+	 * \brief Loads a doubleword into a 64-bit register without extension.
+	 * \param dst Destination register.
+	 * \param src Source memory operand.
+	 */
+	void guestLoad64(const asmjit::ujit::Gp& dst, const asmjit::ujit::Mem& src)
+	{
+		universal_.load_u64(dst, src);
+		if (swapsGuestAccesses_)
+			reverse64(dst);
+	}
+
+	/*!
+	 * \brief Stores one byte; a single byte has no order.
+	 * \param dst Destination memory operand.
+	 * \param src Source register.
+	 */
+	void guestStore8(const asmjit::ujit::Mem& dst, const asmjit::ujit::Gp& src)
+	{
+		universal_.store_u8(dst, src);
+	}
+
+	/*!
+	 * \brief Stores a halfword, reversing a copy of the value when required.
+	 *
+	 * The source register is a live stack value, so the reversal happens on a
+	 * scratch copy rather than in place.
+	 * \param dst Destination memory operand.
+	 * \param src Source register.
+	 */
+	void guestStore16(const asmjit::ujit::Mem& dst, const asmjit::ujit::Gp& src)
+	{
+		if (!swapsGuestAccesses_) {
+			universal_.store_u16(dst, src);
+			return;
+		}
+		asmjit::ujit::Gp value = backend_.new_gp32("guestStoreValue");
+		universal_.mov(value, src.r32());
+		reverse16(value);
+		universal_.store_u16(dst, value);
+	}
+
+	/*!
+	 * \brief Stores a doubleword, reversing a copy of the value when required.
+	 * \param dst Destination memory operand.
+	 * \param src Source register.
+	 */
+	void guestStore32(const asmjit::ujit::Mem& dst, const asmjit::ujit::Gp& src)
+	{
+		if (!swapsGuestAccesses_) {
+			universal_.store_u32(dst, src);
+			return;
+		}
+		asmjit::ujit::Gp value = backend_.new_gp32("guestStoreValue");
+		universal_.mov(value, src.r32());
+		reverse32(value);
+		universal_.store_u32(dst, value);
+	}
+
+	/*!
+	 * \brief Stores a quadword, reversing a copy of the value when required.
+	 * \param dst Destination memory operand.
+	 * \param src Source register.
+	 */
+	void guestStore64(const asmjit::ujit::Mem& dst, const asmjit::ujit::Gp& src)
+	{
+		if (!swapsGuestAccesses_) {
+			universal_.store_u64(dst, src);
+			return;
+		}
+		asmjit::ujit::Gp value = backend_.new_gp64("guestStoreValue");
+		universal_.mov(value, src);
+		reverse64(value);
+		universal_.store_u64(dst, value);
+	}
+
+	/*!
+	 * \brief Loads one GC header word.
+	 *
+	 * The GC object header is little-endian on **every** host
+	 * (docs/proposals/BIG_ENDIAN.md `BED3`): it is our layout, not a quotation
+	 * of the proposal. This is therefore the one access that converts by
+	 * *target* rather than by policy, so it is decided at compile time and
+	 * emits nothing at all on a little-endian build.
+	 * \param dst Destination register.
+	 * \param src Source memory operand.
+	 */
+	void headerLoad32(const asmjit::ujit::Gp& dst, const asmjit::ujit::Mem& src)
+	{
+		universal_.load_u32(dst, src);
+		if constexpr (!WASM::hostMatchesGuestByteOrder())
+			reverse32(dst);
+	}
+
+	//! \}
+
 	//! \name Host-specific vocabulary
 	//! Each entry is a *decision* that the universal layer has no spelling for,
 	//! and `Asmjit.md` "The host-specific set" records the reason.
@@ -980,8 +1172,74 @@ public:
 	asmjit::ujit::UniCompiler& universal() noexcept { return universal_; }
 
 private:
+	//! \name Byte-order helpers
+	//! The four reversals one guest access can need, and the two in-place
+	//! extensions a reversed signed load finishes with. All of them work on the
+	//! value already in a register, so the same helper serves a load and a store.
+	//! \{
+
+	/*!
+	 * \brief Reverses the low halfword of a zero-extended value, in place.
+	 *
+	 * A halfword rotate is not expressible through this vocabulary — a 16-bit
+	 * operand is promoted to its 32-bit register — so the reversal is a
+	 * doubleword byte swap followed by a shift: `bswap` of `0x0000_AB` gives
+	 * `0xAB00_0000`, and shifting that down puts the reversed halfword in the low
+	 * half with zeros above, which is the shape the extension expects.
+	 * \param value Register holding the value.
+	 */
+	void reverse16(const asmjit::ujit::Gp& value)
+	{
+		universal_.bswap(value.r32(), value.r32());
+		universal_.shr(value.r32(), value.r32(), asmjit::Imm(16));
+	}
+
+	/*!
+	 * \brief Reverses the low doubleword of a value, in place.
+	 * \param value Register holding the value.
+	 */
+	void reverse32(const asmjit::ujit::Gp& value)
+	{
+		universal_.bswap(value.r32(), value.r32());
+	}
+
+	/*!
+	 * \brief Reverses a quadword, in place.
+	 * \param value Register holding the value.
+	 */
+	void reverse64(const asmjit::ujit::Gp& value)
+	{
+		universal_.bswap(value, value);
+	}
+
+	/*!
+	 * \brief Sign-extends the low halfword of a value, in place.
+	 * \param value Register holding the zero-extended value.
+	 */
+	void extendS16(const asmjit::ujit::Gp& value)
+	{
+		const std::uint32_t shift = static_cast<std::uint32_t>(value.size() * 8 - 16);
+		universal_.shl(value, value, asmjit::Imm(shift));
+		universal_.sar(value, value, asmjit::Imm(shift));
+	}
+
+	/*!
+	 * \brief Sign-extends the low doubleword of a value, in place.
+	 * \param value Register holding the zero-extended value.
+	 */
+	void extendS32(const asmjit::ujit::Gp& value)
+	{
+		const std::uint32_t shift = static_cast<std::uint32_t>(value.size() * 8 - 32);
+		universal_.shl(value, value, asmjit::Imm(shift));
+		universal_.sar(value, value, asmjit::Imm(shift));
+	}
+
+	//! \}
+
 	asmjit::ujit::BackendCompiler& backend_; //!< Owns the function; also the escape hatch.
 	asmjit::ujit::UniCompiler& universal_; //!< Emits the target-independent instructions.
+	//! True when this module's multi-byte guest accesses convert (`BE-3`).
+	bool swapsGuestAccesses_ = false;
 };
 
 } // namespace AsmJitBackend

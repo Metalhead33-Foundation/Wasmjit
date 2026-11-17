@@ -2,6 +2,7 @@
 #include <catch2/matchers/catch_matchers_string.hpp>
 
 #include "Sljit/SljitModuleCompiler.hpp"
+#include "Asmjit/AsmjitModuleCompiler.hpp"
 #include "TestBackend.hpp"
 #include "TestStore.hpp"
 
@@ -289,7 +290,7 @@ std::string fixturePath(const char* name)
 return std::string(WASM_TEST_DIR) + name + ".wasm";
 }
 
-//! Instantiates a fixture on the SLJIT backend and hands back the instance.
+//! Instantiates a fixture on one backend and hands back the instance.
 struct InstalledFixture {
 WASM::RuntimeConfig config;
 std::unique_ptr<WASM::Runtime> runtime;
@@ -297,10 +298,11 @@ std::shared_ptr<const WASM::Module> module;
 WASM::RegistryImportResolver imports;
 WASM::ModuleInstance* instance = nullptr;
 
-explicit InstalledFixture(const char* fixture, WASM::ByteOrderPolicy policy)
+explicit InstalledFixture(const char* fixture, WASM::ByteOrderPolicy policy,
+const char* backend = "sljit")
 {
 config.byteOrder = policy;
-runtime = WASM::Runtime::create("sljit", config);
+runtime = WASM::Runtime::create(backend, config);
 module = runtime->loadFile(fixturePath(fixture));
 instance = &runtime->instantiate(*module, imports);
 }
@@ -327,6 +329,37 @@ Euph::Io::File file(fixturePath(fixture).c_str(), Elv::Io::Mode::READ);
 module = std::make_unique<WASM::Module>();
 module->fromFile(file, store);
 auto* compiler = dynamic_cast<Sljit::ModuleCompiler*>(backend.instantiator.get());
+REQUIRE(compiler != nullptr);
+compiler->setByteOrderPolicy(policy);
+instance = backend.instantiator->instantiate(*module, imports);
+REQUIRE(instance != nullptr);
+entry = compiler->firstCodeEntry();
+bytes = compiler->firstCodeBytes();
+}
+};
+
+//! One direct compilation of a fixture through a fresh AsmJIT backend instance.
+//!
+//! The same shape as `CompiledBody`, for the second converting backend: the
+//! AsmJIT compiler records its first entry and the size of the code it belongs
+//! to, so a converting compilation can be told from a native one without reading
+//! the emitter (`BED5`, `BE-7`).
+struct CompiledAsmjitBody {
+WASM::Store store;
+std::unique_ptr<WASM::Module> module;
+WASM::BackendInstance backend;
+std::unique_ptr<WASM::ModuleInstance> instance;
+WASM::RegistryImportResolver imports;
+const void* entry = nullptr;
+std::size_t bytes = 0;
+
+explicit CompiledAsmjitBody(const char* fixture, WASM::ByteOrderPolicy policy)
+: backend(WASM::createBackendInstance("asmjit"))
+{
+Euph::Io::File file(fixturePath(fixture).c_str(), Elv::Io::Mode::READ);
+module = std::make_unique<WASM::Module>();
+module->fromFile(file, store);
+auto* compiler = dynamic_cast<AsmJitBackend::ModuleCompiler*>(backend.instantiator.get());
 REQUIRE(compiler != nullptr);
 compiler->setByteOrderPolicy(policy);
 instance = backend.instantiator->instantiate(*module, imports);
@@ -500,16 +533,16 @@ CHECK(adaptive.instance->byteOrderDecision().applied
 TEST_CASE("a backend that cannot convert refuses instead of degrading", "[byteorder]")
 {
 // `BED4`. On a host whose order matches the guest's, every backend is correct
-// and nothing is refused; with the host order claimed as big-endian, the two
-// backends without a byte reversal refuse the module and the one that converts
-// compiles it.
+// and nothing is refused; with the host order claimed as big-endian, the one
+// backend that still has no byte reversal refuses the module and the two that
+// convert compile it.
 if (!WASM::hostMatchesGuestByteOrder()) {
 SUCCEED("this build is big-endian: the refusal is the normal path");
 return;
 }
 HostOrderClaim claim("big");
 
-for (const char* backend : { "libjit", "asmjit" }) {
+for (const char* backend : { "libjit" }) {
 INFO("backend: " << backend);
 auto runtime = WASM::Runtime::create(backend);
 auto module = runtime->loadFile(fixturePath("byte_order_roundtrip"));
@@ -518,8 +551,63 @@ REQUIRE_THROWS_WITH(runtime->instantiate(*module, imports),
 Catch::Matchers::ContainsSubstring("big-endian"));
 }
 
-auto runtime = WASM::Runtime::create("sljit");
+for (const char* backend : { "sljit", "asmjit" }) {
+INFO("converting backend: " << backend);
+auto runtime = WASM::Runtime::create(backend);
 auto module = runtime->loadFile(fixturePath("byte_order_roundtrip"));
 WASM::RegistryImportResolver imports;
 REQUIRE_NOTHROW(runtime->instantiate(*module, imports));
+}
+}
+
+TEST_CASE("a claimed big-endian host makes the AsmJIT backend emit the conversion",
+"[byteorder][asmjit]")
+{
+// `BE-7`'s payoff. AsmJIT refused a big-endian host before the emission seam was
+// universal (`BED4`); now it converts like SLJIT, and the same diagnostic proves
+// it: under a claimed big-endian host the `Strict` body carries the reversal
+// instructions, the `Nonconformant` body is byte-for-byte the native one, and a
+// converted load followed by a converted store still round-trips.
+if (!WASM::hostMatchesGuestByteOrder()) {
+SUCCEED("this build is big-endian already: the conversion is not simulated");
+return;
+}
+
+const CompiledAsmjitBody native("byte_order_roundtrip", WASM::ByteOrderPolicy::Strict);
+REQUIRE(native.bytes > 0);
+REQUIRE(native.entry != nullptr);
+
+HostOrderClaim claim("big");
+CHECK(WASM::compilingHostSwapsAccesses());
+
+const CompiledAsmjitBody converted("byte_order_roundtrip", WASM::ByteOrderPolicy::Strict);
+const CompiledAsmjitBody refused("byte_order_roundtrip", WASM::ByteOrderPolicy::Nonconformant);
+CHECK(converted.instance->byteOrderDecision().swapsAccesses);
+CHECK_FALSE(refused.instance->byteOrderDecision().swapsAccesses);
+INFO("native " << native.bytes << " converted " << converted.bytes
+<< " refused " << refused.bytes);
+CHECK(converted.bytes > native.bytes);
+CHECK(refused.bytes == native.bytes);
+
+// The reversal is symmetric, so the converted code still answers correctly: a
+// value-level fixture cannot tell a big-endian host from a little one, which is
+// exactly why the round-trip has to hold (`BE-3`). The last four exports are the
+// sharp end — a halfword, a signed doubleword into an i64, and an f64 bit
+// pattern — because they fail if the reversal runs after the sign extension, or
+// widens the value.
+InstalledFixture strict("byte_order_evidence_closed", WASM::ByteOrderPolicy::Strict, "asmjit");
+CHECK(strict.instance->byteOrderDecision().swapsAccesses);
+CHECK(strict.runtime->callExport<std::int32_t>(*strict.instance, "scratch")
+== 0x11223344);
+
+InstalledFixture roundtrip("byte_order_roundtrip", WASM::ByteOrderPolicy::Strict, "asmjit");
+CHECK(roundtrip.instance->byteOrderDecision().swapsAccesses);
+CHECK(roundtrip.runtime->callExport<std::int32_t>(*roundtrip.instance, "halfword_signed")
+== -32767);
+CHECK(roundtrip.runtime->callExport<std::int32_t>(*roundtrip.instance, "halfword_unsigned")
+== 0x81FF);
+CHECK(roundtrip.runtime->callExport<std::int64_t>(*roundtrip.instance, "word64_signed")
+== -2147483647LL);
+CHECK(roundtrip.runtime->callExport<std::int64_t>(*roundtrip.instance, "float64_bits")
+== 0x3FF8000000000000LL);
 }

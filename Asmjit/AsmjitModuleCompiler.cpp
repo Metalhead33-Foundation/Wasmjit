@@ -1345,8 +1345,9 @@ public:
 			const std::vector<asmjit::FuncNode*>& functions,
 			const std::vector<std::unique_ptr<asmjit::FuncSignature>>& signatures,
 			uint32_t functionIndex, bool ownFrameForm,
-			std::span<const std::uint8_t> frameByType, bool deterministicFloats)
-		: compiler(compiler), emitter(compiler, universal), module(module),
+			std::span<const std::uint8_t> frameByType, bool deterministicFloats,
+			bool swapsGuestAccesses)
+		: compiler(compiler), emitter(compiler, universal, swapsGuestAccesses), module(module),
 		  internals(internals),
 		  functions(functions), signatures(signatures), functionIndex(functionIndex),
 		  frameMode(ownFrameForm), frameByType(frameByType),
@@ -3839,7 +3840,7 @@ emitZeroReturn();
 checkError(compiler.bind(notNull), "AsmJit shared array null continuation failed");
 
 auto length = compiler.new_gp32("sharedArrayLength");
-emitter.mov(length, asmjit::x86::dword_ptr(ref, lengthOffset));
+emitter.headerLoad32(length, asmjit::x86::dword_ptr(ref, lengthOffset));
 auto inBounds = compiler.new_label();
 emitter.j(inBounds, asmjit::ujit::ucmp_lt(index, length));
 asmjit::FuncSignature oobSignature(asmjit::CallConvId::kCDecl);
@@ -6255,22 +6256,22 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 			if (field.storage.isPacked) {
 				// A packed field keeps only its low byte or word.
 				if (field.storage.packed == WASM::ValueTypeCode::I8)
-					emitter.mov(asmjit::x86::byte_ptr(object,
-							static_cast<int32_t>(offset)), operands[i].r8());
+					emitter.guestStore8(asmjit::x86::byte_ptr(object,
+						static_cast<int32_t>(offset)), operands[i]);
 				else
-					emitter.mov(asmjit::x86::word_ptr(object,
-							static_cast<int32_t>(offset)), operands[i].r16());
+					emitter.guestStore16(asmjit::x86::word_ptr(object,
+						static_cast<int32_t>(offset)), operands[i]);
 				continue;
 			}
 			const int width = kindWidth(field.storage.value.opcode);
 			if (width != 4 && width != 8)
 				throw std::runtime_error("AsmJit struct.new does not lower this field type yet");
 			if (width == 4)
-				emitter.mov(asmjit::x86::dword_ptr(object,
-						static_cast<int32_t>(offset)), operands[i]);
+				emitter.guestStore32(asmjit::x86::dword_ptr(object,
+					static_cast<int32_t>(offset)), operands[i]);
 			else
-				emitter.mov(asmjit::x86::qword_ptr(object,
-						static_cast<int32_t>(offset)), operands[i]);
+				emitter.guestStore64(asmjit::x86::qword_ptr(object,
+					static_cast<int32_t>(offset)), operands[i]);
 		}
 		// A fresh object is created unowned; the operand stack owns one count
 		// per reference it holds, so the push takes one (RC-5).
@@ -6319,22 +6320,22 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 			const std::size_t offset = WASM::gcStructFieldOffset(fields, i);
 			if (field.storage.isPacked) {
 				if (field.storage.packed == WASM::ValueTypeCode::I8)
-					emitter.mov(asmjit::x86::byte_ptr(object,
-							static_cast<int32_t>(offset)), operands[i].r8());
+					emitter.guestStore8(asmjit::x86::byte_ptr(object,
+						static_cast<int32_t>(offset)), operands[i]);
 				else
-					emitter.mov(asmjit::x86::word_ptr(object,
-							static_cast<int32_t>(offset)), operands[i].r16());
+					emitter.guestStore16(asmjit::x86::word_ptr(object,
+						static_cast<int32_t>(offset)), operands[i]);
 				continue;
 			}
 			const int width = kindWidth(field.storage.value.opcode);
 			if (width != 4 && width != 8)
 				throw std::runtime_error("AsmJit struct.new_desc does not lower this field type yet");
 			if (width == 4)
-				emitter.mov(asmjit::x86::dword_ptr(object,
-						static_cast<int32_t>(offset)), operands[i]);
+				emitter.guestStore32(asmjit::x86::dword_ptr(object,
+					static_cast<int32_t>(offset)), operands[i]);
 			else
-				emitter.mov(asmjit::x86::qword_ptr(object,
-						static_cast<int32_t>(offset)), operands[i]);
+				emitter.guestStore64(asmjit::x86::qword_ptr(object,
+					static_cast<int32_t>(offset)), operands[i]);
 		}
 		// The new object retained the descriptor; the operand's own count goes,
 		// and the stack then owns one count of the new object.
@@ -6566,7 +6567,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		emitPendingTrapReturn();
 		checkError(compiler.bind(notNull), "AsmJit array.get_s/u null label binding failed");
 		auto length = compiler.new_gp32("arrayLength");
-		emitter.mov(length, asmjit::x86::dword_ptr(object,
+		emitter.headerLoad32(length, asmjit::x86::dword_ptr(object,
 				static_cast<int32_t>(WASM::GcHeader::kArrayLengthOffset)));
 		asmjit::Label inBounds = compiler.new_label();
 		emitter.j(inBounds, asmjit::ujit::ucmp_lt(index, length));
@@ -6584,14 +6585,14 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		auto result = compiler.new_gp32("arrayPackedElement");
 		if (isI8) {
 			if (signExtend)
-				emitter.loadS8(result, asmjit::x86::byte_ptr(object, byteOffset));
+				emitter.guestLoad8S(result, asmjit::x86::byte_ptr(object, byteOffset));
 			else
-				emitter.loadZ8(result, asmjit::x86::byte_ptr(object, byteOffset));
+				emitter.guestLoad8Z(result, asmjit::x86::byte_ptr(object, byteOffset));
 		} else {
 			if (signExtend)
-				emitter.loadS16(result, asmjit::x86::word_ptr(object, byteOffset));
+				emitter.guestLoad16S(result, asmjit::x86::word_ptr(object, byteOffset));
 			else
-				emitter.loadZ16(result, asmjit::x86::word_ptr(object, byteOffset));
+				emitter.guestLoad16Z(result, asmjit::x86::word_ptr(object, byteOffset));
 		}
 		// The container operand was the operand stack's, so its count goes
 		// back. The element is already in a fresh register, so the drop cannot
@@ -6635,7 +6636,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		emitPendingTrapReturn();
 		checkError(compiler.bind(notNull), "AsmJit array.set null label binding failed");
 		auto length = compiler.new_gp32("arrayLength");
-		emitter.mov(length, asmjit::x86::dword_ptr(object,
+		emitter.headerLoad32(length, asmjit::x86::dword_ptr(object,
 				static_cast<int32_t>(WASM::GcHeader::kArrayLengthOffset)));
 		asmjit::Label inBounds = compiler.new_label();
 		emitter.j(inBounds, asmjit::ujit::ucmp_lt(index, length));
@@ -6668,13 +6669,13 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		}
 		if (packed) {
 			if (packedI8)
-				emitter.mov(asmjit::x86::byte_ptr(address), value.r8());
+				emitter.guestStore8(asmjit::x86::byte_ptr(address), value);
 			else
-				emitter.mov(asmjit::x86::word_ptr(address), value.r16());
+				emitter.guestStore16(asmjit::x86::word_ptr(address), value);
 		} else if (width == 4)
-			emitter.mov(asmjit::x86::dword_ptr(address), value);
+			emitter.guestStore32(asmjit::x86::dword_ptr(address), value);
 		else
-			emitter.mov(asmjit::x86::qword_ptr(address), value);
+			emitter.guestStore64(asmjit::x86::qword_ptr(address), value);
 		// The element holds no reference, so the container operand's count is
 		// the only one to give back.
 		emitRefDrop(object);
@@ -6709,7 +6710,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		emitPendingTrapReturn();
 		checkError(compiler.bind(notNull), "AsmJit array.get null label binding failed");
 		auto length = compiler.new_gp32("arrayLength");
-		emitter.mov(length, asmjit::x86::dword_ptr(object,
+		emitter.headerLoad32(length, asmjit::x86::dword_ptr(object,
 				static_cast<int32_t>(WASM::GcHeader::kArrayLengthOffset)));
 		asmjit::Label inBounds = compiler.new_label();
 		emitter.j(inBounds, asmjit::ujit::ucmp_lt(index, length));
@@ -6729,9 +6730,9 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		auto result = width == 4 ? compiler.new_gp32("arrayElementValue")
 				: compiler.new_gp64("arrayElementValue");
 		if (width == 4)
-			emitter.mov(result, asmjit::x86::dword_ptr(object, byteOffset));
+			emitter.guestLoad32Z(result, asmjit::x86::dword_ptr(object, byteOffset));
 		else
-			emitter.mov(result, asmjit::x86::qword_ptr(object, byteOffset));
+			emitter.guestLoad64(result, asmjit::x86::qword_ptr(object, byteOffset));
 		// The container operand belonged to the operand stack, so its count goes
 		// back. The element is already in a fresh register, so no spill is
 		// needed, and the drop cannot invalidate it.
@@ -7056,15 +7057,15 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 			const auto offset = static_cast<int32_t>(dataOffset + static_cast<int32_t>(i) * elementBytes);
 			if (packed) {
 				if (packedI8)
-					emitter.mov(asmjit::x86::byte_ptr(object, offset),
-							operands[i].r8());
+					emitter.guestStore8(asmjit::x86::byte_ptr(object, offset),
+					operands[i]);
 				else
-					emitter.mov(asmjit::x86::word_ptr(object, offset),
-							operands[i].r16());
+					emitter.guestStore16(asmjit::x86::word_ptr(object, offset),
+					operands[i]);
 			} else if (width == 4)
-				emitter.mov(asmjit::x86::dword_ptr(object, offset), operands[i]);
+				emitter.guestStore32(asmjit::x86::dword_ptr(object, offset), operands[i]);
 			else
-				emitter.mov(asmjit::x86::qword_ptr(object, offset), operands[i]);
+				emitter.guestStore64(asmjit::x86::qword_ptr(object, offset), operands[i]);
 		}
 		values.push_back(object);
 		// A fresh object is created unowned; the operand stack owns one count
@@ -7113,7 +7114,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		};
 		const auto rangeCheck = [&](const asmjit::x86::Gp& object, const asmjit::x86::Gp& index) {
 			auto arrayLength = compiler.new_gp64("arrayLength");
-			emitter.mov(arrayLength.r32(), asmjit::x86::dword_ptr(object,
+			emitter.headerLoad32(arrayLength, asmjit::x86::dword_ptr(object,
 					static_cast<int32_t>(WASM::GcHeader::kArrayLengthOffset)));
 			auto endIndex = compiler.new_gp64("arrayCopyEndIndex");
 			emitter.mov(endIndex.r32(), index);
@@ -7242,8 +7243,8 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		checkError(compiler.bind(notNull), "AsmJit array.fill null label binding failed");
 		// Bounds: (u64)index + (u64)length <= (u64)arrayLength.
 		auto arrayLength = compiler.new_gp64("arrayLength");
-		emitter.mov(arrayLength.r32(), asmjit::x86::dword_ptr(object,
-				static_cast<int32_t>(WASM::GcHeader::kArrayLengthOffset)));
+		emitter.headerLoad32(arrayLength, asmjit::x86::dword_ptr(object,
+					static_cast<int32_t>(WASM::GcHeader::kArrayLengthOffset)));
 		auto endIndex = compiler.new_gp64("arrayFillEndIndex");
 		emitter.mov(endIndex.r32(), index);
 		auto wideLength = compiler.new_gp64("arrayFillLength");
@@ -7383,7 +7384,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		emitPendingTrapReturn();
 		checkError(compiler.bind(notNull), "AsmJit array.len label binding failed");
 		auto length = compiler.new_gp32("arrayLength");
-		emitter.mov(length, asmjit::x86::dword_ptr(object,
+		emitter.headerLoad32(length, asmjit::x86::dword_ptr(object,
 				static_cast<int32_t>(WASM::GcHeader::kArrayLengthOffset)));
 		// The array operand was the operand stack's and the result is an i32,
 		// so the stack gives its count up.
@@ -7421,14 +7422,14 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		const bool isI8 = fields[arg2].storage.packed == WASM::ValueTypeCode::I8;
 		if (isI8) {
 			if (signExtend)
-				emitter.loadS8(result, asmjit::x86::byte_ptr(object, offset));
+				emitter.guestLoad8S(result, asmjit::x86::byte_ptr(object, offset));
 			else
-				emitter.loadZ8(result, asmjit::x86::byte_ptr(object, offset));
+				emitter.guestLoad8Z(result, asmjit::x86::byte_ptr(object, offset));
 		} else {
 			if (signExtend)
-				emitter.loadS16(result, asmjit::x86::word_ptr(object, offset));
+				emitter.guestLoad16S(result, asmjit::x86::word_ptr(object, offset));
 			else
-				emitter.loadZ16(result, asmjit::x86::word_ptr(object, offset));
+				emitter.guestLoad16Z(result, asmjit::x86::word_ptr(object, offset));
 		}
 		// The container operand was the operand stack's, so its count goes
 		// back. The field value is already in a fresh register and a packed
@@ -7488,13 +7489,13 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		}
 		if (packed) {
 			if (packedI8)
-				emitter.mov(asmjit::x86::byte_ptr(object, offset), value.r8());
+				emitter.guestStore8(asmjit::x86::byte_ptr(object, offset), value);
 			else
-				emitter.mov(asmjit::x86::word_ptr(object, offset), value.r16());
+				emitter.guestStore16(asmjit::x86::word_ptr(object, offset), value);
 		} else if (width == 4)
-			emitter.mov(asmjit::x86::dword_ptr(object, offset), value);
+			emitter.guestStore32(asmjit::x86::dword_ptr(object, offset), value);
 		else
-			emitter.mov(asmjit::x86::qword_ptr(object, offset), value);
+			emitter.guestStore64(asmjit::x86::qword_ptr(object, offset), value);
 		// The field holds no reference, so the container operand's count is the
 		// only one to give back.
 		emitRefDrop(object);
@@ -7533,11 +7534,11 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		auto result = width == 4 ? compiler.new_gp32("structField")
 				: compiler.new_gp64("structField");
 		if (width == 4)
-			emitter.mov(result, asmjit::x86::dword_ptr(object,
-					static_cast<int32_t>(offset)));
+			emitter.guestLoad32Z(result, asmjit::x86::dword_ptr(object,
+				static_cast<int32_t>(offset)));
 		else
-			emitter.mov(result, asmjit::x86::qword_ptr(object,
-					static_cast<int32_t>(offset)));
+			emitter.guestLoad64(result, asmjit::x86::qword_ptr(object,
+				static_cast<int32_t>(offset)));
 		// The container operand belonged to the operand stack, so its count goes
 		// back. The field value is already in a fresh register, so no spill is
 		// needed and the drop cannot invalidate it.
@@ -11081,33 +11082,33 @@ private:
 		auto result = wide ? compiler.new_gp64("memoryLoad64") : compiler.new_gp32("memoryLoad32");
 		switch (kind) {
 		case LoadKind::I32:
-			emitter.mov(result, asmjit::x86::dword_ptr(pointer)); break;
+			emitter.guestLoad32Z(result, asmjit::x86::dword_ptr(pointer)); break;
 		case LoadKind::I8Signed:
-			emitter.loadS8(result, asmjit::x86::byte_ptr(pointer)); break;
+			emitter.guestLoad8S(result, asmjit::x86::byte_ptr(pointer)); break;
 		case LoadKind::I8Unsigned:
-			emitter.loadZ8(result, asmjit::x86::byte_ptr(pointer)); break;
+			emitter.guestLoad8Z(result, asmjit::x86::byte_ptr(pointer)); break;
 		case LoadKind::I16Signed:
-			emitter.loadS16(result, asmjit::x86::word_ptr(pointer)); break;
+			emitter.guestLoad16S(result, asmjit::x86::word_ptr(pointer)); break;
 		case LoadKind::I16Unsigned:
-			emitter.loadZ16(result, asmjit::x86::word_ptr(pointer)); break;
+			emitter.guestLoad16Z(result, asmjit::x86::word_ptr(pointer)); break;
 		case LoadKind::I64:
-			emitter.mov(result, asmjit::x86::qword_ptr(pointer)); break;
+			emitter.guestLoad64(result, asmjit::x86::qword_ptr(pointer)); break;
 		case LoadKind::I64I8Signed:
-			emitter.loadS8(result, asmjit::x86::byte_ptr(pointer)); break;
+			emitter.guestLoad8S(result, asmjit::x86::byte_ptr(pointer)); break;
 		case LoadKind::I64I8Unsigned:
-			emitter.loadZ8(result, asmjit::x86::byte_ptr(pointer)); break;
+			emitter.guestLoad8Z(result, asmjit::x86::byte_ptr(pointer)); break;
 		case LoadKind::I64I16Signed:
-			emitter.loadS16(result, asmjit::x86::word_ptr(pointer)); break;
+			emitter.guestLoad16S(result, asmjit::x86::word_ptr(pointer)); break;
 		case LoadKind::I64I16Unsigned:
-			emitter.loadZ16(result, asmjit::x86::word_ptr(pointer)); break;
+			emitter.guestLoad16Z(result, asmjit::x86::word_ptr(pointer)); break;
 		case LoadKind::I64I32Signed:
-			emitter.loadS32(result, asmjit::x86::dword_ptr(pointer)); break;
+			emitter.guestLoad32S(result, asmjit::x86::dword_ptr(pointer)); break;
 		case LoadKind::I64I32Unsigned:
-			emitter.mov(result.r32(), asmjit::x86::dword_ptr(pointer)); break;
+			emitter.guestLoad32Z(result, asmjit::x86::dword_ptr(pointer)); break;
 		case LoadKind::F32:
-			emitter.mov(result.r32(), asmjit::x86::dword_ptr(pointer)); break;
+			emitter.guestLoad32Z(result, asmjit::x86::dword_ptr(pointer)); break;
 		case LoadKind::F64:
-			emitter.mov(result, asmjit::x86::qword_ptr(pointer)); break;
+			emitter.guestLoad64(result, asmjit::x86::qword_ptr(pointer)); break;
 		}
 		values.push_back(result);
 	}
@@ -11138,13 +11139,13 @@ private:
 		}
 		switch (width) {
 		case 1:
-			emitter.mov(asmjit::x86::byte_ptr(pointer), stored.r8()); break;
+			emitter.guestStore8(asmjit::x86::byte_ptr(pointer), stored); break;
 		case 2:
-			emitter.mov(asmjit::x86::word_ptr(pointer), stored.r16()); break;
+			emitter.guestStore16(asmjit::x86::word_ptr(pointer), stored); break;
 		case 4:
-			emitter.mov(asmjit::x86::dword_ptr(pointer), stored.r32()); break;
+			emitter.guestStore32(asmjit::x86::dword_ptr(pointer), stored); break;
 		case 8:
-			emitter.mov(asmjit::x86::qword_ptr(pointer), stored); break;
+			emitter.guestStore64(asmjit::x86::qword_ptr(pointer), stored); break;
 		default:
 			throw std::runtime_error("AsmJit internal error: unsupported memory-store width");
 		}
@@ -11531,17 +11532,11 @@ ModuleCompiler::~ModuleCompiler() = default;
 void ModuleCompiler::translateTypes(WASM::ModuleInstance& instance, const WASM::Module& module,
 		WASM::ModuleInstanceInternals& internals)
 {
-	// BED4: `Asmjit/` is `asmjit::x86` end to end, so it has no byte reversal at
-	// all. On a big-endian host it refuses the module rather than emitting
-	// native-order accesses that would read every multi-byte value reversed.
-	// Unconditional, not policy-dependent: the GC header and array length words
-	// are little-endian on every host (`BED3`), so a `Nonconformant` request
-	// could not make this backend correct either.
-	if (WASM::compilingHostByteOrder() != WASM::guestByteOrder())
-		throw std::runtime_error("the asmjit backend cannot honour guest byte order"
-				" on a big-endian host: it targets asmjit::x86 only and has no byte"
-				" reversal (docs/proposals/BIG_ENDIAN.md BED4)");
-
+	// No byte-order refusal any more (`BE-7`, closing `BED4`'s AsmJIT half): every
+	// guest access this backend emits goes through `Emitter`'s guest helpers,
+	// which convert when the instance's decision says so, and every GC header
+	// word is read through the little-endian-on-every-host rule. The decision was
+	// reached before this call (`BE-2`), so `compileFunctions` can read it.
 	signatures.clear();
 	// Staging-frame ABI (docs/ABI.md): each type's form is decided before
 	// translation, because the signature itself changes shape. A module may mix
@@ -11618,6 +11613,12 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance,
 	for (uint32_t i = 0; i < module.typeCount(); ++i)
 		forms[i] = instance.usesFrameForm(WASM::LocalTypeIdx{i}) ? 1 : 0;
 
+	// The byte-order decision, reached once per module before any body was
+	// compiled (docs/proposals/BIG_ENDIAN.md `BE-2`): every guest access this
+	// module's code emits converts when it says so, and the code is otherwise
+	// byte-identical to what a little-endian build always emitted (`BED5`).
+	const bool swapsGuestAccesses = instance.byteOrderDecision().swapsAccesses;
+
 	const std::size_t allocationCheckpoint = context.allocationCheckpoint();
 	try {
 		asmjit::CodeHolder code;
@@ -11652,7 +11653,8 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance,
 					module.functionBodies[i],
 					module, internals, functions, signatures,
 					static_cast<uint32_t>(module.importFunctions.size() + i),
-					ownFrameForm, forms, profile().deterministic());
+					ownFrameForm, forms, profile().deterministic(),
+					swapsGuestAccesses);
 			try {
 				emitter.compile(module.functionBodies[i], type);
 			} catch (const std::exception& error) {
@@ -11663,14 +11665,28 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance,
 		}
 
 		checkError(compiler.finalize(), "AsmJit compiler finalisation failed");
+		const std::size_t codeBytes = code.code_size();
 		void* codeBase = context.install(code);
 		moduleBases.emplace_back(&instance, codeBase);
+		std::vector<uint64_t> offsets(functionRecords.size(), 0);
 		for (uint32_t i = 0; i < functionRecords.size(); ++i) {
 			const uint64_t offset = code.label_offset_from_base(functions[i]->label());
+			offsets[i] = offset;
 			functionRecords[i]->entry = static_cast<uint8_t*>(codeBase) + offset;
 			internals.internalCallables[i].rawFnPtr = functionRecords[i]->entry;
 			internals.internalCallables[i].fnPtr = functionRecords[i]->entry;
 			internals.compiledFunctions[i] = functionRecords[i]->entry;
+		}
+		// `BED5` diagnostics: the first body's entry and its own size — measured
+		// from its label to the next function's, because `code_size()` describes
+		// the whole holder and does not follow the layout changes a converted
+		// access makes. A test can therefore tell a converting compilation from a
+		// native one without reading the emitter.
+		if (!functionRecords.empty()) {
+			const uint64_t begin = offsets.front();
+			const uint64_t end = offsets.size() > 1 ? offsets[1] : codeBytes;
+			firstCodeEntry_ = functionRecords.front()->entry;
+			firstCodeBytes_ = static_cast<std::size_t>(end > begin ? end - begin : 0);
 		}
 		if (WASM::tailCallTrampolinesEligible(module, forms)
 				&& !WASM::installTailCallTrampolines(module, internals, forms))
