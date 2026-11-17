@@ -151,7 +151,8 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM
 		const bool ownFrameForm = typeIdx < forms.size() && forms[typeIdx] != 0;
 
 		OpcodeDispatcher dispatcher(module, funcType, module.functionBodies[i], functionIndex,
-				ownFrameForm, internals.tagIds, internals, forms, profile());
+				ownFrameForm, internals.tagIds, internals, forms, profile(),
+				byteOrderDecision().swapsAccesses);
 		void* entry = nullptr;
 		if (!dispatcher.compile(entry)) {
 			// No partial modules: an instantiable module must have every function
@@ -164,6 +165,12 @@ void ModuleCompiler::compileFunctions(WASM::ModuleInstance& instance, const WASM
 		}
 		internals.internalCallables[i].fnPtr = entry;
 		internals.internalCallables[i].rawFnPtr = entry;
+		if (i == 0) {
+			// Diagnostics for `BED5` (docs/proposals/BIG_ENDIAN.md §8): the first
+			// body's bytes are what a test compares across two policies.
+			firstCodeEntry_ = entry;
+			firstCodeBytes_ = dispatcher.codeBytes();
+		}
 	}
 	// Register-form modules with a tail call get one driver per internal function
 	// and one thunk per type, so a cross-function chain loops instead of growing

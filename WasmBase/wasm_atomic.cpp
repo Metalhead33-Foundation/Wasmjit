@@ -1,4 +1,5 @@
 #include "wasm_atomic.hpp"
+#include "WasmByteOrder.hpp"
 #include "WasmModuleInstance.hpp"
 #include "WasmTrap.hpp"
 
@@ -79,22 +80,38 @@ void badWidth() {
 	return true;
 }
 
+// -- The guest's byte order at this boundary (docs/proposals/BIG_ENDIAN.md BE-4) --
+//
+// A helper receives and returns *values*, not addresses, so the conversion is
+// one reversal of the access width around each atomic operation. The condition
+// is a compile-time property of the target, so a little-endian build compiles
+// every call below to the bare atomic it always was (`BED5`).
+constexpr bool kGuestWordsSwap = !WASM::hostMatchesGuestByteOrder();
+
+//! Converts one value of sizeof(T) bytes between the guest's order and the host's.
+template <typename T>
+constexpr uint64_t atomicValueOf(uint64_t value) {
+	return WASM::swapValue(kGuestWordsSwap, sizeof(T), value);
+}
+
 template <typename T>
 uint64_t loadAs(const void* address, uint32_t ordering) {
-	return static_cast<uint64_t>(__atomic_load_n(reinterpret_cast<const T*>(address),
-			ordering == WASM_ATOMIC_ACQREL ? __ATOMIC_ACQUIRE : __ATOMIC_SEQ_CST));
+	const T raw = __atomic_load_n(reinterpret_cast<const T*>(address),
+			ordering == WASM_ATOMIC_ACQREL ? __ATOMIC_ACQUIRE : __ATOMIC_SEQ_CST);
+	return atomicValueOf<T>(static_cast<uint64_t>(raw));
 }
 
 template <typename T>
 void storeAs(void* address, uint64_t value, uint32_t ordering) {
-	__atomic_store_n(reinterpret_cast<T*>(address), static_cast<T>(value),
+	__atomic_store_n(reinterpret_cast<T*>(address),
+			static_cast<T>(atomicValueOf<T>(value)),
 			ordering == WASM_ATOMIC_ACQREL ? __ATOMIC_RELEASE : __ATOMIC_SEQ_CST);
 }
 
 template <typename T>
 uint64_t rmwAs(void* address, uint64_t value, uint32_t op, uint32_t ordering) {
 	T* cell = reinterpret_cast<T*>(address);
-	const T operand = static_cast<T>(value);
+	const T operand = static_cast<T>(atomicValueOf<T>(value));
 	const int order = (ordering == WASM_ATOMIC_ACQREL) ? __ATOMIC_ACQ_REL : __ATOMIC_SEQ_CST;
 	T old;
 	switch (op) {
@@ -106,19 +123,20 @@ uint64_t rmwAs(void* address, uint64_t value, uint32_t op, uint32_t ordering) {
 	case WASM_ATOMIC_XCHG: old = __atomic_exchange_n(cell, operand, order); break;
 	default:               WASM::reportTrap(WASM::TrapKind::Internal, "unsupported atomic RMW op"); return 0;
 	}
-	return static_cast<uint64_t>(old);
+	return atomicValueOf<T>(static_cast<uint64_t>(old));
 }
 
 template <typename T>
 uint64_t cmpxchgAs(void* address, uint64_t expected, uint64_t replacement,
 				   uint32_t ordering) {
-	T current = static_cast<T>(expected);
+	T current = static_cast<T>(atomicValueOf<T>(expected));
 	const int success = (ordering == WASM_ATOMIC_ACQREL) ? __ATOMIC_ACQ_REL : __ATOMIC_SEQ_CST;
 	const int failure = (ordering == WASM_ATOMIC_ACQREL) ? __ATOMIC_ACQUIRE : __ATOMIC_SEQ_CST;
 	__atomic_compare_exchange_n(reinterpret_cast<T*>(address), &current,
-								static_cast<T>(replacement), false,
+								static_cast<T>(atomicValueOf<T>(replacement)), false,
 								success, failure);
-	return static_cast<uint64_t>(current); // the value actually observed
+	// The observation leaves in the guest's order, like every other result.
+	return atomicValueOf<T>(static_cast<uint64_t>(current));
 }
 
 } // namespace
@@ -240,6 +258,10 @@ uint32_t wasm_atomic_wait(const void* address, uint64_t expected, uint64_t timeo
 	// The immediate is an `i64`; a negative value means "never expires". The
 	// generated call widens it to 64 bits, so reinterpret the bit pattern.
 	const int64_t timeout = static_cast<int64_t>(timeoutNs);
+	// The re-read below converts what it loads, so the expectation is
+	// converted the same way before the two are compared
+	// (docs/proposals/BIG_ENDIAN.md `BE-4`).
+	const uint64_t expectation = WASM::swapValue(kGuestWordsSwap, width, expected);
 	try {
 		WaiterTable& table = waiterTable();
 		std::unique_lock<std::mutex> lock(table.mutex);
@@ -252,7 +274,7 @@ uint32_t wasm_atomic_wait(const void* address, uint64_t expected, uint64_t timeo
 		// the i32 expectation must still see `-1 == 0xFFFFFFFF`.
 		const uint64_t mask = (width == 8) ? ~uint64_t{0}
 										   : ((uint64_t{1} << (width * 8)) - 1);
-		if ((value & mask) != (expected & mask))
+		if ((value & mask) != (expectation & mask))
 			return 1; // not-equal: the wait "fails" immediately
 
 		Waiter waiter;

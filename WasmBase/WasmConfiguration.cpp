@@ -1,5 +1,6 @@
 #include "WasmCompilationPolicy.hpp"
 #include "WasmContinuation.hpp"
+#include "WasmByteOrder.hpp"
 #include "WasmParseOptions.hpp"
 #include "WasmProfile.hpp"
 #include "WasmRuntime.hpp"
@@ -313,6 +314,14 @@ RuntimeConfig RuntimeConfig::fromSection(const Euph::Conf::ConfigurationSection&
 	readEnum(working, "sConcurrency",
 			{ ConcurrencyModel::Single, ConcurrencyModel::Agents },
 			concurrencyModelName, config.concurrency);
+	// The byte-order policy (docs/proposals/BIG_ENDIAN.md `BE-2`). An absent key
+	// keeps the value `RuntimeConfig` was constructed with — which is what
+	// `WASMJIT_BYTE_ORDER` seeded — so a file overrides the environment and the
+	// environment overrides the conforming default.
+	readEnum(working, "sByteOrder",
+			{ ByteOrderPolicy::Strict, ByteOrderPolicy::Adaptive,
+					ByteOrderPolicy::Nonconformant },
+			byteOrderPolicyName, config.byteOrder);
 	config.memory = MemoryBudget::fromSection(working);
 	config.store = StoreLimits::fromSection(working);
 	config.execution = ExecutionLimits::fromSection(working);

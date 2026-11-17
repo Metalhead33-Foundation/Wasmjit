@@ -11912,6 +11912,17 @@ ModuleCompiler::~ModuleCompiler() = default;
 void ModuleCompiler::translateTypes(WASM::ModuleInstance& instance, const WASM::Module& module,
 		WASM::ModuleInstanceInternals& internals)
 {
+	// BED4: `Asmjit/` is `asmjit::x86` end to end, so it has no byte reversal at
+	// all. On a big-endian host it refuses the module rather than emitting
+	// native-order accesses that would read every multi-byte value reversed.
+	// Unconditional, not policy-dependent: the GC header and array length words
+	// are little-endian on every host (`BED3`), so a `Nonconformant` request
+	// could not make this backend correct either.
+	if (WASM::compilingHostByteOrder() != WASM::guestByteOrder())
+		throw std::runtime_error("the asmjit backend cannot honour guest byte order"
+				" on a big-endian host: it targets asmjit::x86 only and has no byte"
+				" reversal (docs/proposals/BIG_ENDIAN.md BED4)");
+
 	signatures.clear();
 	// Staging-frame ABI (docs/ABI.md): each type's form is decided before
 	// translation, because the signature itself changes shape. A module may mix

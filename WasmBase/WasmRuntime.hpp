@@ -17,6 +17,7 @@ WASMJIT_VISIBLE_BEGIN
 
 #include "WasmAgent.hpp"
 #include "WasmBackendRegistry.hpp"
+#include "WasmByteOrder.hpp"
 #include "WasmComponentInstance.hpp"
 #include "WasmConcurrency.hpp"
 #include "WasmDiagnostics.hpp"
@@ -94,6 +95,17 @@ struct RuntimeConfig {
 	//! `memory.totalBytes` is refused at `create()`.
 	std::uint64_t     allocationBudgetBytes = 0;
 
+	//! The byte-order policy every instantiation honours
+	//! (docs/proposals/BIG_ENDIAN.md `BE-2`). The default is the policy
+	//! `WASMJIT_BYTE_ORDER` names and `Strict` when it names none, so a build
+	//! that never asks for anything converts every multi-byte access whenever the
+	//! host's order differs from the guest's — the only behaviour that conforms.
+	//! The decision reached per module is readable from
+	//! `ModuleInstance::byteOrderDecision()`; on a little-endian host every policy
+	//! behaves identically (`BED5`), and a backend that cannot convert refuses the
+	//! module rather than degrading (`BED4`).
+	ByteOrderPolicy   byteOrder = byteOrderPolicyFromEnvironment();
+
 	//! \par Reading a runtime configuration from a configuration file
 	//! One section configures the whole struct, because every child keeps its own
 	//! keys and no key of one family collides with another:
@@ -101,6 +113,7 @@ struct RuntimeConfig {
 	//! [WasmJit]
 	//! sProfile              = scalar
 	//! sConcurrency          = single
+	//! sByteOrder            = adaptive
 	//! uTotalBytes           = 268435456
 	//! sLevel                = full
 	//! uFuel                 = 1000000

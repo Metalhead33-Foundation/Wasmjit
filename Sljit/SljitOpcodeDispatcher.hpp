@@ -78,13 +78,15 @@ public:
 	 * \param internals Instance callables, used to embed a direct tail-call target.
 	 * \param frameByType Call form per module-local type index, so a call site emits the callee type's form.
 	 * \param profileConfig The active profile; its `N` marker enables deterministic NaN canonicalisation at observable boundaries (docs/proposals/PROFILES.md PR-3).
+	 * \param swapsGuestAccesses True when this module's multi-byte guest accesses must be byte-reversed: the host's order differs from the guest's and the policy did not relax it (docs/proposals/BIG_ENDIAN.md `BE-3`). False emits exactly the code a little-endian build always emitted (`BED5`).
+
 	 */
 	OpcodeDispatcher(const WASM::Module& module, const WASM::FuncType& funcType,
 			const WASM::FunctionBody& body, std::uint32_t functionIndex,
 			bool frameCallAbi, const std::vector<WASM::TagId>& tagIds,
 			WASM::ModuleInstanceInternals& internals,
 			std::span<const std::uint8_t> frameByType,
-			WASM::ProfileConfig profileConfig);
+			WASM::ProfileConfig profileConfig, bool swapsGuestAccesses = false);
 
 	/*!
 	 * \brief Emits the function and hands back its executable entry point.
@@ -97,6 +99,17 @@ public:
 	 * \return true when the whole body was lowered to machine code.
 	 */
 	bool compile(void*& entry);
+
+	/*!
+	 * \brief Size of the machine code the last `compile()` emitted.
+	 *
+	 * Diagnostic only: a test compares two compilations byte for byte to show
+	 * that a little-endian build emits identical code for every byte-order
+	 * policy (docs/proposals/BIG_ENDIAN.md `BED5`).
+	 *
+	 * \return Bytes generated, or zero before a successful `compile()`.
+	 */
+	std::size_t codeBytes() const noexcept { return codeBytes_; }
 
 	/*!
 	 * \brief Why the last compile() refused the function.
@@ -949,6 +962,12 @@ private:
 	//! becomes observable must be replaced by the canonical NaN
 	//! (docs/proposals/PROFILES.md PR-3).
 	bool deterministicFloats_ = false;
+	//! True when this module's multi-byte guest accesses must be byte-reversed:
+	//! the host's order differs from the guest's and the policy did not relax it
+	//! (docs/proposals/BIG_ENDIAN.md `BE-3`). Read while *generating* code, never
+	//! by the guest, so `false` emits exactly what a little-endian build always
+	//! emitted (`BED5`).
+	bool swapsGuestAccesses_ = false;
 	//! True while `dispatchResume` is being driven by `resume_throw*`.
 	bool resumeThrowActive_ = false;
 	sljit_sw payloadSlotOffset(std::size_t index = 0) const;
@@ -1484,17 +1503,36 @@ private:
 	 * \param width Access width in bytes.
 	 * \param loadOp SLJIT load operation for the access.
 	 * \param resultWidth Width of the value pushed on the operand stack.
+	 * \param swapOp SLJIT byte-reversal op emitted after the load when the host order differs from the guest's; unused otherwise (docs/proposals/BIG_ENDIAN.md `BE-3`).
 	 */
 	void emitMemoryLoad(const WASM::MemArg& arg, std::uint32_t width,
-			sljit_s32 loadOp, int resultWidth);
+			sljit_s32 loadOp, int resultWidth, sljit_s32 swapOp);
 	/*!
 	 * \brief Emits one checked memory store.
 	 * \param arg Memory immediate.
 	 * \param width Access width in bytes.
 	 * \param storeOp SLJIT store operation for the access.
+	 * \param swapOp SLJIT byte-reversal op emitted before the store when the host order differs from the guest's; unused otherwise (docs/proposals/BIG_ENDIAN.md `BE-3`).
 	 */
 	void emitMemoryStore(const WASM::MemArg& arg, std::uint32_t width,
-			sljit_s32 storeOp);
+			sljit_s32 storeOp, sljit_s32 swapOp);
+	/*!
+	 * \brief Emits a byte reversal of one register when the host order differs from the guest's.
+	 * \param reg Register holding the value; it is also the destination.
+	 * \param swapOp SLJIT reversal op for the access width (unused when no swap is wanted).
+	 */
+	void emitGuestSwap(int reg, sljit_s32 swapOp);
+	/*!
+	 * \brief Emits the load of one GC header word.
+	 * \param dst Destination register.
+	 * \param base Register holding the object pointer.
+	 * \param offset Byte offset of the word inside the header.
+	 *
+	 * The GC object header is little-endian on every host (`BED3`), so this is the
+	 * one access that converts on a big-endian build regardless of the module's
+	 * byte-order policy. On a little-endian build it emits the plain load.
+	 */
+	void emitHeaderWordLoad(int dst, int base, sljit_sw offset);
 	/*!
 	 * \brief Emits one atomic load through the shared alignment-checked helper.
 	 * \param arg Memory immediate, including the ordering byte.
@@ -1726,6 +1764,7 @@ public:
 
 	sljit_compiler* compiler_ = nullptr; //!< Compiler for the emitting pass.
 	bool ok_ = true; //!< False once any SLJIT call has failed.
+	std::size_t codeBytes_ = 0; //!< Size of the code the last compile() generated.
 	bool supported_ = false; //!< True when the signature is inside the subset.
 	bool measureOnly_ = true; //!< True while measuring the operand-stack depth.
 	bool reachable_ = true; //!< True while the current instruction can execute.

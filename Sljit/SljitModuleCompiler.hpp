@@ -42,6 +42,20 @@ public:
 	const std::vector<std::string>& unsupportedFunctions() const { return unsupportedFunctions_; }
 
 	/*!
+ * \brief Entry point and size of the first body the last instantiation compiled.
+ *
+ * Diagnostic only, and internal to this backend: `BED5` is evidenced by
+ * comparing two compilations of one module byte for byte, because a
+ * little-endian build must emit identical code whatever byte-order policy the
+ * embedder asked for (docs/proposals/BIG_ENDIAN.md §8).
+ *
+ * \return The generated code, or null before a successful `compileFunctions`.
+ */
+	const void* firstCodeEntry() const noexcept { return firstCodeEntry_; }
+	//! Size of `firstCodeEntry()` in bytes; zero when nothing was compiled.
+	std::size_t firstCodeBytes() const noexcept { return firstCodeBytes_; }
+
+	/*!
 	 * \brief Resolves a module function index to its runtime callable.
 	 *
 	 * Generated code calls this helper before every direct `call`: the entry
@@ -116,6 +130,9 @@ protected:
 
 private:
 	std::vector<std::string> unsupportedFunctions_; //!< Refusal reasons, per function.
+	//! Diagnostics for `BED5`: the first compiled body and its size.
+	const void* firstCodeEntry_ = nullptr;
+	std::size_t firstCodeBytes_ = 0;
 };
 
 } // namespace Sljit

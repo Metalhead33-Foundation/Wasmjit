@@ -182,6 +182,7 @@ the core already agreed on.
 | 6.10 | If you implement the generalized trampoline, expose `Callable::rawFnPtr` (the entry behind your `fnPtr` driver) and a per-function-type `Callable::tailEntry` thunk `void(VMContext*, void* fn, uint64_t* args, uint64_t* results, void* resultBuffer)`; a callable with a null `tailEntry` must still be callable through `fnPtr`, because the core falls back |
 | 6.11 | Continuations: provide the `ContinuationInvokeFn` your `wasm_cont_new_ex` calls need, and call a target through its C ABI using the kind arrays ([`ABI.md`](ABI.md) "Continuations", `WasmContinuation.hpp`) |
 | 6.12 | `call_ref` / `call_indirect` type checks compare canonical `TypeId`s and surface `IndirectCallTypeMismatch` — never a silent call through a mismatched signature |
+| 6.13 | Linear memory is little-endian on every host, so a load or store you emit reverses its value when the host’s own order differs (and the GC header’s TypeId/refcount/array-length words are little-endian too, so a backend that reads the length word inline converts it as well). If your code generator cannot reverse, **refuse** the module rather than emit a native access — `ModuleInstantiator::byteOrderDecision()` tells you what the runtime decided, and `docs/proposals/BIG_ENDIAN.md` `BED4` says why a refusal is the supported answer |
 
 The C ABI of a compiled function is therefore
 `Ret fn(VMContext* ctx, Params…)` — which is exactly the shape
@@ -413,6 +414,13 @@ layering violation with extra steps.
 
 
 ## 11. The SLJIT backend — the worked example
+
+Two obligations are easy to miss on a little-endian development host because
+they are invisible there: **6.13** (byte order) costs nothing until the host
+disagrees with the guest, and *refusing* is the contract when your emitter has no
+byte reversal — `LibJit/LibjitModuleCompiler.cpp` and
+`Asmjit/AsmjitModuleCompiler.cpp` show the two-line form, and
+`Sljit/SljitOpcodeDispatcher.cpp` (`emitGuestSwap`) shows the converting one.
 
 `Sljit/` is the second executing backend, and the worked example this checklist
 was distilled from. It is **production-ready within the declared envelope**

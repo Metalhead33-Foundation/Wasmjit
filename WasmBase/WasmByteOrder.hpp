@@ -23,9 +23,10 @@
   whole policy matrix is then testable on a little-endian host, which is the only
   kind this tree has ever run on.
 
-  The header is **internal** until a backend honours the decision
-  (docs/proposals/BIG_ENDIAN.md `BE-2`): an option that changes nothing would be a
-  lie, so it joins the exported surface in the commit that enforces it.
+  The header is part of the embedder tier because a policy no backend honours
+  would be a lie (docs/proposals/BIG_ENDIAN.md `BE-2`): it joined the exported
+  surface in the commit that made one backend enforce it and the others refuse
+  (`BE-3`, `BE-4`, `BED4`).
 */
 
 WASMJIT_VISIBLE_BEGIN
@@ -69,6 +70,22 @@ constexpr bool hostMatchesGuestByteOrder() noexcept
 {
 	return nativeByteOrder() == guestByteOrder();
 }
+
+/** \brief The host byte order the code being compiled is compiled *for*.
+ \return `nativeByteOrder()`, unless the diagnostic override
+         `WASMJIT_BYTE_ORDER_HOST` names another order.
+
+ The override exists so the big-endian emission path can be *executed* on a
+ little-endian host, which is the only kind this tree has ever run on
+ (docs/proposals/BIG_ENDIAN.md §8). It changes what a backend emits and nothing
+ else: it is a diagnostic, never a conformance claim, and no embedder should set
+ it. An unnamed or unparsable value is ignored, exactly like an unnamed
+ `WASMJIT_BYTE_ORDER`. */
+ByteOrder compilingHostByteOrder() noexcept;
+
+/** \brief Tests whether compiled accesses must convert for this compilation.
+ \return true when `compilingHostByteOrder()` differs from the guest's order. */
+bool compilingHostSwapsAccesses() noexcept;
 
 /** \brief What a host does when its own byte order differs from the guest's. */
 enum class ByteOrderPolicy : std::uint8_t {
@@ -128,6 +145,48 @@ constexpr std::uint64_t byteSwap(std::uint64_t value) noexcept
 template <typename T> constexpr T byteSwapIf(bool convert, T value) noexcept
 {
 	return convert ? static_cast<T>(byteSwap(value)) : value;
+}
+
+/** \brief Converts one GC header word between the canonical and the host order.
+ \param swap true when the host stores the word in the opposite order.
+ \param value Word in whichever order it arrives in.
+ \return The word in the other order when `swap`, otherwise `value`.
+
+ The GC object header is little-endian on **every** host, including a
+ big-endian port (docs/proposals/BIG_ENDIAN.md `BED3`): it is our layout, not a
+ quotation of the proposal, and keeping one order preserves an ABI an embedder
+ may read. A port therefore converts at each header access rather than changing
+ the layout. The order is a parameter, not a lookup, so both directions of the
+ matrix are checkable on a little-endian host. */
+constexpr std::uint32_t headerWordFromGuest(bool swap, std::uint32_t value) noexcept
+{
+	return byteSwapIf(swap, value);
+}
+
+/** \brief Reverses a value whose in-memory width is `width` bytes.
+ \param swap true when the two byte orders disagree.
+ \param width Width of the value in memory: 1, 2, 4 or 8.
+ \param value Value in whichever order it arrives in.
+ \return The value in the other order when `swap`, otherwise `value`.
+
+ This is the shape every value-level conversion in the engine takes: a helper
+ that receives a *value* rather than an address (the atomic entry points,
+ docs/proposals/BIG_ENDIAN.md `BE-4`) and the data-segment boundary of a GC
+ array, which stores native values although the segment is a byte image
+ (`BED3`). A width that is not 2, 4 or 8 is a single byte or a 16-byte vector
+ image; neither needs reversing. */
+constexpr std::uint64_t swapValue(bool swap, std::uint32_t width,
+		std::uint64_t value) noexcept
+{
+	if (!swap)
+		return value;
+	if (width == 2)
+		return byteSwap(static_cast<std::uint16_t>(value));
+	if (width == 4)
+		return byteSwap(static_cast<std::uint32_t>(value));
+	if (width == 8)
+		return byteSwap(value);
+	return value;
 }
 
 //! What a module shows about the provenance of the bytes in its memory.

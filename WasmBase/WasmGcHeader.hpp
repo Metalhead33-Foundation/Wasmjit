@@ -12,10 +12,12 @@
 */
 
 WASMJIT_VISIBLE_BEGIN
+#include "WasmByteOrder.hpp"
 #include "WasmCanonicalType.hpp"
 #include "WasmType.hpp"
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 
 namespace WASM {
 
@@ -76,6 +78,44 @@ constexpr size_t kExternBoxInnerOffset = kTypeHeaderBytes;
 //! Total bytes of an extern box: the shared header plus the inner pointer.
 constexpr size_t kExternBoxBytes = kTypeHeaderBytes + sizeof(void*);
 
+
+//! \par Byte order of the header words: little-endian on every host
+//!
+//! The GC proposal fixes no object layout, so the header's order is **our** ABI
+//! rather than a quotation (docs/proposals/GC_EXTENSIONS.md `GXD7`), and it is
+//! stated in docs/ABI.md "GC Object and Heap ABI" as little-endian regardless
+//! of host. A big-endian port therefore converts at each header access instead
+//! of changing the layout, which is what keeps one heap layout everywhere
+//! (docs/proposals/BIG_ENDIAN.md `BED3`). On a little-endian host both helpers
+//! below compile to the plain access, so nothing changes for the only host this
+//! tree has run on (`BED5`).
+
+/** \brief Reads one canonical header word (TypeId, refcount or array length).
+ \param object Pointer to the object; must not be null.
+ \param offset Byte offset of the word inside the header (`kTypeIdOffset`,
+        `kRefcountOffset` or `kArrayLengthOffset`).
+ \return The word in the host's order.
+
+ A reference count that is modified rather than merely read needs more than this:
+ a byte-reversed word cannot be incremented in place, because reversing the sum
+ is not the sum of ascending byte-reversed terms. The runtime owns that path;
+ `readWord`/`writeWord` are for the words read and written whole. */
+inline uint32_t readWord(const void* object, uint32_t offset) noexcept
+{
+	uint32_t raw = 0;
+	std::memcpy(&raw, static_cast<const uint8_t*>(object) + offset, sizeof(raw));
+	return headerWordFromGuest(!hostMatchesGuestByteOrder(), raw);
+}
+
+/** \brief Writes one canonical header word in the layout's own byte order.
+ \param object Pointer to the object; must not be null.
+ \param offset Byte offset of the word inside the header.
+ \param value The word in the host's order. */
+inline void writeWord(void* object, uint32_t offset, uint32_t value) noexcept
+{
+	const uint32_t raw = headerWordFromGuest(!hostMatchesGuestByteOrder(), value);
+	std::memcpy(static_cast<uint8_t*>(object) + offset, &raw, sizeof(raw));
+}
 } // namespace GcHeader
 
 //! \par Storage layout helpers, shared so the runtime and the backend agree (H1)

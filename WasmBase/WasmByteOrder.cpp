@@ -96,6 +96,31 @@ ByteOrderPolicy byteOrderPolicyFromEnvironment() noexcept
 	return policy;
 }
 
+ByteOrder compilingHostByteOrder() noexcept
+{
+	// The override is a diagnostic for running the big-endian emission path on
+	// the only kind of host this tree has ever run on (docs/proposals/
+	// BIG_ENDIAN.md §8). It is read per call rather than cached so a test can
+	// switch it between two instantiations; `decideByteOrder` calls it once per
+	// instantiation, which is cold next to compilation.
+	const char* value = std::getenv("WASMJIT_BYTE_ORDER_HOST");
+	if (value != nullptr) {
+		const std::string_view name = normalizePolicyText(std::string_view(value));
+		// An unparsable value is ignored rather than refused: this is a
+		// diagnostic, and a typo must not change what the engine compiles.
+		if (equalsIgnoreCase(name, "big"))
+			return ByteOrder::Big;
+		if (equalsIgnoreCase(name, "little"))
+			return ByteOrder::Little;
+	}
+	return nativeByteOrder();
+}
+
+bool compilingHostSwapsAccesses() noexcept
+{
+	return compilingHostByteOrder() != guestByteOrder();
+}
+
 ByteOrderEvidence byteOrderEvidence(const Module& module) noexcept
 {
 	ByteOrderEvidence evidence;
@@ -177,7 +202,10 @@ ByteOrderDecision decideByteOrderFor(ByteOrderPolicy policy,
 ByteOrderDecision decideByteOrder(ByteOrderPolicy policy,
 		const ByteOrderEvidence& evidence) noexcept
 {
-	return decideByteOrderFor(policy, evidence, nativeByteOrder());
+	// The host order is a parameter of `decideByteOrderFor`, so a diagnostic
+	// that claims a big-endian host runs the whole table on a little-endian
+	// build (docs/proposals/BIG_ENDIAN.md §8).
+	return decideByteOrderFor(policy, evidence, compilingHostByteOrder());
 }
 
 } // namespace WASM

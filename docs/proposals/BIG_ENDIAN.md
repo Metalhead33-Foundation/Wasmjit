@@ -2,10 +2,13 @@
 
 *Implementation Notes, Spec Status, and Deliberate Deviations*
 
-Status: design note / implementation reference (revision 1 — 2026-11-17: the
-policy layer exists and is tested; every backend still emits native-order
-accesses, and no big-endian runner exists, so the target stays **unsupported**
-and this note is what a port follows, milestone by milestone).
+Status: design note / implementation reference (revision 2 — 2026-11-17: the
+policy is public and honoured. The SLJIT backend converts the accesses it emits,
+the atomic helpers convert the values they exchange, the GC header keeps one
+layout on every host, and LibJIT/AsmJIT refuse a big-endian host instead of
+misreading it. No big-endian runner exists, so the target stays **unsupported**
+and this note is what the remaining milestones — a runner, then the matrix —
+follow).
 Audience: anyone touching a backend's load/store emission, the atomic helpers,
 `WasmGcHeader`, `WasmMemory`, or the byte-order switch an embedder sees.
 
@@ -73,73 +76,99 @@ writes into guest memory. Nothing else in the engine needs to care.
 
 ## 4. What we have implemented today
 
-**Snapshot (2026-11-17, working tree on `dfabe47`):** the *decision* layer exists
-and is tested; the *conversion* does not exist anywhere.
+**Snapshot (2026-11-17, working tree on `f5cbc75`):** the policy is public and
+honoured. SLJIT converts the accesses it emits, the atomic helpers convert the
+values they exchange, the GC header keeps one layout on every host, and the two
+backends that cannot convert refuse the module instead of misreading it. No
+big-endian runner exists, so the target stays **unsupported** and tier 3 of §8
+is still what an authoritative answer needs.
 
 | Piece | Where | State |
 |---|---|---|
-| The policy: `Strict` / `Adaptive` / `Nonconformant` | `WasmBase/WasmByteOrder.hpp` | implemented, internal header (see `BE-2`) |
+| The policy: `Strict` / `Adaptive` / `Nonconformant` | `WasmBase/WasmByteOrder.hpp` | implemented, **embedder tier** (`BE-2`) |
 | Policy names, case-insensitive parsing, `WASMJIT_BYTE_ORDER` | `WasmBase/WasmByteOrder.cpp` | implemented; an unknown name stays `Strict` |
-| Conversion primitives (`byteSwap` 16/32/64, `byteSwapIf`) | same header | implemented as value-level functions; their involution and known-answer vectors are tested |
+| Conversion primitives (`byteSwap`, `byteSwapIf`, `headerWordFromGuest`, `swapValue`) | same header | implemented as value-level functions; involution and known-answer vectors tested |
 | Module evidence (`ByteOrderEvidence`, `byteOrderEvidence`) | same header/cpp | implemented: memories, import/export, shared flag, active and passive data segments |
 | The decision table (`decideByteOrderFor`) | same cpp | implemented for **both** host orders, so the big-endian matrix runs on a little-endian build |
-| Tests | `Test/ByteOrderTests.cpp` `[byteorder]` | 6 cases / 104 assertions; four fixtures `Test/wasm_wat/byte_order_evidence_*.wat` |
+| The runtime switch: `RuntimeConfig::byteOrder`, `sByteOrder`, the instance's report | `WasmRuntime.hpp`, `WasmConfiguration.cpp`, `WasmModuleInstance.hpp` | implemented: an embedder sets it, reads back `ModuleInstance::byteOrderDecision()` |
+| The diagnostic host order (`WASMJIT_BYTE_ORDER_HOST`) | `WasmByteOrder.cpp` | implemented; it changes what is emitted and nothing else (§8) |
+| Conversion in emitted scalar accesses | `Sljit/SljitOpcodeDispatcher.cpp` (`emitGuestSwap`) | implemented for every 2/4/8-byte integer and `f32`/`f64` load and store |
+| Conversion of the GC header's length word in emitted code | same file (`emitHeaderWordLoad`, 7 call sites) | implemented: converts on a big-endian build whatever the policy |
+| Converted atomic RMW | `WasmBase/wasm_atomic.cpp` | implemented at the helper's value boundary (load, store, RMW, cmpxchg, wait); `table.atomic` reads a *pointer* and deliberately does not convert |
+| The GC header's TypeId, refcount and array length | `WasmGcHeader.hpp` (`readWord`/`writeWord`), `WasmModuleInstance.cpp` (`GcRefcount`) | implemented: little-endian on every host, refcount through a coded-word CAS |
+| Data segment → array element | `WasmModuleInstance.cpp` (`copySegmentIntoElements`) | implemented: segment bytes are decoded into native element values once |
+| Refusal instead of degradation | `LibjitModuleCompiler.cpp`, `AsmjitModuleCompiler.cpp` | implemented (`BED4`): both refuse a big-endian host in `translateTypes` |
+| Tests | `Test/ByteOrderTests.cpp` `[byteorder]` | 13 cases / 161 assertions; five fixtures `Test/wasm_wat/byte_order_*.wat` |
 | Byte-order tripwire in the default suite | `Test/wast_supported.txt` | `endianness` and `endianness64` promoted (69 assertions each); `float_memory` was already there |
-| Conversion in emitted accesses | — | **absent**: a big-endian build would be silently wrong, which is why the target is *unsupported* rather than *provisional* |
-| Runtime switch reaching the backends | — | **absent on purpose** (`BE-2`): an option that changes nothing is a lie |
+| SIMD `v128` blocks and lanes | `WasmBase/wasm_simd_*` | **absent**: the vector image convention is not pinned, so no conversion is emitted for a 16-byte block (§5 `BE7`) |
 
-The engine's own decoding is already order-free: every reader is an
+Two consequences of `BED3` are worth naming because they are not obvious. The
+header's **refcount** cannot simply be byte-swapped around a read: a reversed
+*sum* is not the sum of reversed terms, so the runtime keeps the coded word for
+the CAS and the decoded value for the arithmetic (`GcRefcount`). And an **array
+element** holds a native value while a data segment is a byte image, so the
+decode happens once, at `array.new_data`/`array.init_data`, rather than at every
+later element access.
+
+The engine's own decoding was already order-free: every reader is an
 `Elv::Io::DataStream<Ev::Util::Endian::Little>`, and the canonical ABI's
-`readUInt`/`writeUInt` assemble bytes by shift, so the *host-side* half of a port
-is mostly written already. What is missing is the half the backends emit.
-
+`readUInt`/`writeUInt` assemble bytes by shift. What this revision added is the
+half the backends emit, plus the two places where the *host* writes bytes for a
+third-party guest to read.
 
 ## 5. Gaps
 
 | # | Gap | Evidence | Severity |
 |---|---|---|---|
-| BE1 | **No emitted access converts.** Both backends emit a native load/store, so a big-endian build reads every multi-byte value reversed | `LibJit/LibjitOpcodeDispatcher.cpp:5251-5280` (`jit_insn_load_relative(…, jit_type_int)`), `Sljit/SljitOpcodeDispatcher.cpp:10330-10357` (`emitMemoryLoad(…, SLJIT_MOV_U32, …)`) | Blocker for any BE target |
-| BE2 | **No runtime switch.** `decideByteOrder` is reachable only from tests, so no embedder can ask for a policy and no backend is handed one | `WasmByteOrder.hpp` is in `WASMJIT_INTERNAL_HEADERS`; `RuntimeConfig` has no field | High (deliberate, see §7) |
-| BE3 | **Atomics remain native.** The helpers type-pun the guest address, so an RMW swaps on BE | `WasmBase/wasm_atomic.cpp:84,90,96,118` | High |
-| BE4 | **The GC header promise is unqualified.** `ABI.md` promises little-endian to embedders while the header is stored natively | `../ABI.md` “GC Object and Heap ABI”; `GXD7` | Medium (an ABI decision at port time) |
-| BE5 | **Two of three backends cannot host the port.** The LibJIT this tree links has no big-endian target and no byte-reversal op; `Asmjit/` is `asmjit::x86` end to end | `jit-config.h` (interp/alpha/arm/x86/x86-64); `Asmjit/AsmjitModuleCompiler.cpp` | Blocker; the port is SLJIT-only |
+| ~~BE1~~ | ~~**No emitted access converts.** Both backends emit a native load/store, so a big-endian build reads every multi-byte value reversed~~ | `Sljit/SljitOpcodeDispatcher.cpp` `emitGuestSwap`/`emitHeaderWordLoad`; `LibjitModuleCompiler.cpp` and `AsmjitModuleCompiler.cpp` refuse instead | **Done (`BE-3`):** SLJIT emits the reversal for 2/4/8-byte integer and `f32`/`f64` accesses and for the header's length word; the other two backends refuse (`BED4`). The `v128` half is `BE7` below |
+| ~~BE2~~ | ~~**No runtime switch.** `decideByteOrder` is reachable only from tests, so no embedder can ask for a policy and no backend is handed one~~ | `RuntimeConfig::byteOrder`; `sByteOrder`; `ModuleInstantiator::setByteOrderPolicy`; `ModuleInstance::byteOrderDecision()`; the header is in the embedder tier | **Done (`BE-2`):** an embedder sets the policy in code, in a file or through `WASMJIT_BYTE_ORDER`, and reads the decision back per instance |
+| ~~BE3~~ | ~~**Atomics remain native.** The helpers type-pun the guest address, so an RMW swaps on BE~~ | `WasmBase/wasm_atomic.cpp` (`atomicValueOf`, `swapValue`), `WasmTable.cpp` | **Done (`BE-4`):** every value crossing the helper boundary is reversed on a big-endian build; a table slot is a pointer and keeps its native order |
+| ~~BE4~~ | ~~**The GC header promise is unqualified.** `ABI.md` promises little-endian to embedders while the header is stored natively~~ | `WasmGcHeader.hpp` `readWord`/`writeWord`; `GcRefcount`; `copySegmentIntoElements` | **Done (`BE-3`, as `BED3`):** the header is little-endian on every host, the refcount converts through a coded-word CAS, and the data-segment boundary decodes elements |
+| BE5 | **Two of three backends cannot host the port.** The LibJIT this tree links has no big-endian target and no byte-reversal op; `Asmjit/` is `asmjit::x86` end to end | `jit-config.h` (interp/alpha/arm/x86/x86-64); `Asmjit/AsmjitModuleCompiler.cpp` | Blocker; the port is SLJIT-only. Both now refuse (`BED4`), so the module fails visibly rather than misreading memory. The AsmJIT half is scheduled as `BE-7` |
 | BE6 | **No runner.** Nothing in this tree has ever executed on a big-endian host, and tier 3 of §8 needs one | — | Blocker for “supported” |
+| BE7 | **The vector image convention is unwritten.** `wasm_simd_scalar` reads and writes 16-bit/32-bit/64-bit lanes little-endian by shift, while the Highway path stores a vector's lanes in the host's order, so the two agree only on a little-endian host; nothing converts a 16-byte `v128.load` block, and the `v128` frame word order is likewise unpinned | `WasmBase/wasm_simd_scalar.cpp` (`laneU32`, `storeLane`), `WasmBase/wasm_simd_vector.hpp` (`StoreU`/`LoadU`), `ABI.md` “`v128` across the Boundary” | Blocker for SIMD on a port; it cannot be settled by review alone, because both conventions are self-consistent on the only host that runs |
 
 ## 6. Where we can and should play fast and loose
 
 | # | Deviation | Why it is safe | What it buys |
 |---|---|---|---|
-| BED1 | **`Nonconformant`: never convert, on a big-endian host** (implemented, off by default). | It is *not* safe under the specification, and it is documented as a non-conformance rather than a shortcut: data segments, byte-level guest code, `f32`/`i32` punning and any second reader of the memory all break. It is legitimate only in a closed world where the host knows every guest and every byte in every memory is produced and consumed at whole width. | Removes the conversion from a host that has measured it as noise. |
+| BED1 | **`Nonconformant`: never convert, on a big-endian host** (implemented, off by default). | It is *not* safe under the specification, and it is documented as a non-conformance rather than a shortcut: data segments, byte-level guest code, `f32`/`i32` punning and any second reader of the memory all break. It is legitimate only in a closed world where the host knows every guest and every byte in every memory is produced and consumed at whole width. **The relaxation covers emitted accesses only:** the atomic helpers convert unconditionally, because their ABI receives no policy and a process-wide switch would be wrong for a per-module decision. | Removes the conversion from a host that has measured it as noise. |
 | BED2 | **`Adaptive`: skip when the evidence is closed** (implemented). | §3 gives us no freedom here — the relaxation is a heuristic, not a proof, because no static check sees a guest that writes four bytes with `i32.store8` and reads them back with `i32.load`. The bar is deliberately high (private, unshared memory; no active or passive data segment) and the verdict is reported in `ByteOrderDecision::reason` so a host can log it. | Conformance by default, speed where the module demonstrates it is safe. |
-| BED3 | **Keep the GC header little-endian on a big-endian port** (the conservative reading of `GXD7`). | Nothing in the spec observes it, and keeping it preserves one heap layout everywhere, so `gcStructFieldOffset` readers and cross-host artifacts still agree. | No ABI fork between hosts. |
-| BED4 | **A backend that cannot convert must refuse to compile, not degrade.** | Silent corruption is the failure class [`../SAFETY.md`](../SAFETY.md) exists to avoid; a refusal is a diagnostic. | A BE build fails visibly on LibJIT and AsmJIT instead of misbehaving. |
-| BED5 | **The layer must cost nothing on a little-endian host.** | `byteSwapIf(false, v)` is `v`, and the conversion sits behind a compile-time `if constexpr` on the host order, so today's code generation is unchanged. | The policy cannot regress the only platform that works. |
+| BED3 | **Keep the GC header little-endian on a big-endian port** (**implemented**). | Nothing in the spec observes it, and keeping it preserves one heap layout everywhere, so `gcStructFieldOffset` readers and cross-host artifacts still agree. The words are read and written through `GcHeader::readWord`/`writeWord`, the count through `GcRefcount` (a CAS on the coded word, because a reversed sum is not the sum of reversed terms), and a data segment is decoded into elements at `array.new_data` rather than at every access. | No ABI fork between hosts. |
+| BED4 | **A backend that cannot convert must refuse to compile, not degrade** (**implemented**). | Silent corruption is the failure class [`../SAFETY.md`](../SAFETY.md) exists to avoid; a refusal is a diagnostic. The refusal is unconditional on a big-endian host — not policy-dependent — because those backends also read the GC header's little-endian length word, which no policy relaxes. | A BE build fails visibly on LibJIT and AsmJIT instead of misbehaving. |
+| BED5 | **The layer must cost nothing on a little-endian host** (**implemented and measured**). | The conversion is decided while the code is *generated*, so nothing is emitted when the host already agrees with the guest; the core's helpers are behind a compile-time `if constexpr` on the host order. `[byteorder]` measures it: one fixture compiles to the same code size under all three policies. | The policy cannot regress the only platform that works. |
 
-Guardrail: `Strict` is the default on every path (configuration file, environment,
-embedder default), a name the engine does not recognise resolves to `Strict`, and
-`Nonconformant`/`Adaptive` may only relax **linear-memory access conversion** —
-never the canonical ABI's byte order where the host is the writer and the guest is
-third-party, and never handle or resource semantics.
+Guardrail: `Strict` is the default on every path (the environment, a
+configuration file, the embedder's struct), a name the engine does not recognise
+resolves to `Strict`, and `Nonconformant`/`Adaptive` may only relax
+**linear-memory access conversion** — never the canonical ABI's byte order where
+the host is the writer and the guest is third-party, never the GC header's own
+order, and never handle or resource semantics.
 
 ## 7. Plan
 
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
-| `BE-1` | Policy layer: enum, names, environment, primitives, evidence, decision table, `[byteorder]` tests | — (done) | 6 cases / 104 assertions green; the BE matrix runs on LE |
-| `BE-2` | Plumb the policy into `RuntimeConfig` and the configuration-file reader, report the decision on the instance, promote `WasmByteOrder.hpp` to the public tier | BE2 | an embedder can set `WASMJIT_BYTE_ORDER=adaptive` and read back what was applied |
-| `BE-3` | Emit the conversion: one helper per backend around load/store (scalar widths, `f32`/`f64`, SIMD load/store); SLJIT first, using `SLJIT_REV*`, which s390x compiles to one instruction | BE1, and BE5's LibJIT/AsmJIT half by refusal | a fixture that stores with `store8`s and loads a word returns the same value on a BE host |
-| `BE-4` | Converted atomic RMW in `wasm_atomic.cpp` (swap inside the helper, which already receives the width) | BE3 | atomics pass the spec scripts on a BE host |
-| `BE-5` | A runner: `qemu-system-s390x` (whole system) or `qemu-user-static` plus an s390x rootfs; tier 3 of §8 wired to it | BE6 | the `[spec]` run is green on the runner |
-| `BE-6` | Flip the target matrix to *provisional*, state per-backend support, re-stamp `../ABI.md` | BE4 (with a decision), BE6 | `ABI.md` has a big-endian row with a runner behind it |
-| `BE-7` | **Deferred:** replace `Asmjit/`'s direct `asmjit::x86` emission with AsmJIT's Universal JIT (<https://asmjit.com/doc/group__asmjit__ujit.html>) so one backend can target other ISAs — the precondition for any AsmJIT big-endian path, since upstream supports big-endian AArch64 | — | recorded here, not scheduled |
+| `BE-1` ✅ | Policy layer: enum, names, environment, primitives, evidence, decision table, `[byteorder]` tests | — | 6 cases / 104 assertions green; the BE matrix runs on LE |
+| `BE-2` ✅ | Plumb the policy into `RuntimeConfig` and the configuration-file reader, report the decision on the instance, promote `WasmByteOrder.hpp` to the public tier | BE2 | an embedder can set `WASMJIT_BYTE_ORDER=adaptive` and read back what was applied |
+| `BE-3` ✅ | Emit the conversion: one helper per backend around load/store (scalar widths, `f32`/`f64`; the GC header's length word); SLJIT first, using `SLJIT_REV*`, which s390x compiles to one instruction. LibJIT and AsmJIT refuse (`BED4`) | BE1, BE4, and `BE5`'s LibJIT/AsmJIT half by refusal | a fixture that stores with `store8`s and loads a word returns the same value on a BE host; on LE the three policies emit one code size (`BED5`) |
+| `BE-4` ✅ | Converted atomic RMW in `wasm_atomic.cpp` (swap inside the helper, which already receives the width) | BE3 | atomics pass the spec scripts on a BE host |
+| `BE-7` ⏸ | **Deferred, and moved ahead of `BE-5`:** replace `Asmjit/`'s direct `asmjit::x86` emission with AsmJIT's c/group__asmjit__ujit.html>) so one backend can target other ISAs — the precondition for any AsmJIT big-endian path, since upstream supports big-endian AArch64 | — | recorded here, not scheduled. **Spike (2026-11-17):** a twenty-line program emitted and ran a function through `asmjit::ujit` against the installed 1.21, so the layer is usable — but it is a universal-op layer over the host compiler (`ujit::UniCompiler cc(host::Compiler*)`), and `Asmjit/` spells 458 `x86::` sites (43 in `AsmjitContext.cpp`, 415 in `AsmjitModuleCompiler.cpp`) with x86-only instructions; rewriting them into `Gp`/`Vec`/`Imm` universal ops is a port, not a rename, and no second ISA exists here to prove it portable |
+| `BE-5` | A runner: `qemu-system-s390x` (whole system) or `qemu-user-static` plus an s390x rootfs; tier 3 of §8 wired to it, and `BE7`'s vector convention pinned while it runs | BE6, BE7 | the `[spec]` run is green on the runner |
+| `BE-6` | Flip the target matrix to *provisional*, state per-backend support, re-stamp `../ABI.md` | BE6 | `ABI.md` has a big-endian row with a runner behind it |
 
 **Why `BE-2` did not ship with `BE-1`.** `BE-1` decides, `BE-2` advertises, `BE-3`
 honours. A `RuntimeConfig` field no backend reads is an option that silently does
 nothing: the embedder sets `nonconformant`, sees no change, and cannot tell
-whether the engine is honouring it or ignoring it. The switch lands in the commit
-that first changes emitted code, so “set the switch” and “the switch does
+whether the engine is honouring it or ignoring it. The switch landed in the
+commit that first changed emitted code, so “set the switch” and “the switch does
 something” are one release.
 
+**Why `BE-5` now follows `BE-7`.** A runner is the only thing that can turn any
+of this into a support claim, but it is also the only work here that cannot be
+validated on the development host at all — while `BE-7` is ordinary code that
+`[asmjit]` checks. Sequencing the unverifiable last keeps a red runner from
+blocking merges it cannot inform.
 
 ## 8. Indicative test survey
 
@@ -147,8 +176,9 @@ Three tiers, and an honest statement of what each can prove.
 
 | Tier | Runs on | Proves | Today |
 |---|---|---|---|
-| 1 — the decision | any host | the policy matrix, the evidence extraction, the primitive vectors and the parsing; the whole big-endian decision table via `decideByteOrderFor(…, ByteOrder::Big)` | `[byteorder]`: 6 cases / 104 assertions, green |
-| 2 — the no-op property | any host | on a little-endian host every policy behaves identically and the conversion compiles away; after `BE-3`, that the emitted code for a fixture is byte-identical under `Strict` and `Nonconformant` | the property is asserted; the code-identity half needs `BE-3` |
+| 1 — the decision | any host | the policy matrix, the evidence extraction, the primitive vectors, the parsing and the configuration key; the whole big-endian decision table via `decideByteOrderFor(…, ByteOrder::Big)` | `[byteorder]`: 13 cases / 161 assertions, green |
+| 2 — the no-op property | any host | that on a little-endian host every policy behaves identically, that the three policies compile one fixture to the same code size, and that the two backends which cannot convert refuse when the host order is claimed as big-endian | measured; the refusal is executed through `WASMJIT_BYTE_ORDER_HOST` |
+| 2.5 — the emission | any host | that the conversion is *emitted* when the decision asks for it: the claimed-host body is larger and the value round-trips | measured — see the limitation below |
 | 3 — end to end | a big-endian host only | that a backend actually converts, and that the guest sees the order the specification requires | `endianness` and `endianness64` (69 assertions each, default set) plus `float_memory` are the tripwire; nothing runs them on BE yet |
 
 **How to get a runner.** There is no big-endian image on the common forges, so the
@@ -157,12 +187,23 @@ two realistic routes are `qemu-system-s390x` (whole system, correct but slow) an
 binary itself: the core needs a C++ compiler, libffi and the JIT libraries, and
 `Test/` is the only part that wants Qt.
 
+**What tier 2.5 cannot prove, and why it exists anyway.** Adding a byte reversal
+to a little-endian CPU's loads and stores does **not** reproduce big-endian
+memory: the storage order stays little-endian, so a `store8`/`load` pair observed
+byte-wise would disagree with a real port. The claim therefore evidences the half
+that review used to carry alone — that the backend *emits* the reversal, and that
+the policy decides it — and leaves the semantics to tier 3. It also cannot
+compare two bodies byte for byte: x86-64 spells a helper call as a RIP-relative
+displacement, so the same instruction encodes differently in two code blocks.
+Code *size* is the address-independent measure, which is why `BED5` is stated as
+a size equality and the conversion as a size increase.
+
 **What tiers 1 and 2 are worth.** They pin everything a little-endian host *can*
 pin — that the policy is inert where it must be, that the decision matches the
-intended table, that the primitives are correct — and they cannot pin that a
-backend emits the conversion. That is tier 3's job, so until `BE-5` exists, `BE-3`
-is justified by review against `[byteorder]` and the spec scripts rather than by
-execution.
+intended table, that the primitives are correct, that a backend which cannot
+convert refuses — and they cannot pin that the guest sees the specification's
+order. That is tier 3's job, so `BE-3` remains justified by the emission evidence
+above plus review against the spec scripts rather than by execution.
 
 ## 9. References
 
@@ -179,9 +220,16 @@ execution.
   byte-order tripwire), [`GC_EXTENSIONS.md`](GC_EXTENSIONS.md) `GXD7`,
   [`../WRITING_A_BACKEND.md`](../WRITING_A_BACKEND.md);
   sources `WasmBase/WasmByteOrder.hpp` and `.cpp`,
-  `LibJit/LibjitOpcodeDispatcher.cpp`, `Sljit/SljitOpcodeDispatcher.cpp`,
-  `WasmBase/wasm_atomic.cpp`, `WasmBase/WasmGcHeader.hpp`,
-  `extern/sljit/sljit_src/sljitNativeS390X.c` (`lrv`/`lrvg`/`strvg`),
-  `Test/ByteOrderTests.cpp`, `Test/wasm_wat/byte_order_evidence_*.wat`,
-  `Test/wast_supported.txt`.
+  `WasmBase/WasmRuntime.hpp`, `WasmBase/WasmConfiguration.cpp`,
+  `WasmBase/WasmModuleInstance.cpp` (`GcRefcount`,
+  `copySegmentIntoElements`), `WasmBase/WasmGcHeader.hpp`
+  (`readWord`/`writeWord`), `WasmBase/wasm_atomic.cpp`,
+  `WasmBase/WasmTable.cpp` (a pointer slot is not a guest word),
+  `Sljit/SljitOpcodeDispatcher.cpp` (`emitGuestSwap`,
+  `emitHeaderWordLoad`), `Sljit/SljitModuleCompiler.cpp`,
+  `LibJit/LibjitModuleCompiler.cpp`, `Asmjit/AsmjitModuleCompiler.cpp`
+  (both refuse), `extern/sljit/sljit_src/sljitNativeS390X.c`
+  (`lrv`/`lrvg`/`strvg`), `Test/ByteOrderTests.cpp`,
+  `Test/wasm_wat/byte_order_evidence_*.wat`,
+  `Test/wasm_wat/byte_order_roundtrip.wat`, `Test/wast_supported.txt`.
 

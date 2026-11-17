@@ -256,6 +256,18 @@ ModuleCompiler::ModuleCompiler(jit_context_t context, Context* owner)
 
 void ModuleCompiler::translateTypes(WASM::ModuleInstance& instance, const WASM::Module& module, WASM::ModuleInstanceInternals& internals)
 {
+	// BED4: this backend emits native-order loads and stores and has no byte
+	// reversal in its IR, so on a big-endian host it refuses the module instead
+	// of letting every multi-byte value read back reversed. Refusing is the
+	// diagnostic; degrading is the corruption docs/SAFETY.md exists to prevent.
+	// The test is a property of the target, not of the policy: the GC header and
+	// the array length words are little-endian on every host (`BED3`), so even a
+	// `Nonconformant` request could not make this backend correct here.
+	if (WASM::compilingHostByteOrder() != WASM::guestByteOrder())
+		throw std::runtime_error("the libjit backend cannot honour guest byte order"
+				" on a big-endian host: it emits native accesses and its IR has no"
+				" byte reversal (docs/proposals/BIG_ENDIAN.md BED4)");
+
 	// ── Step 0: Translate all types ─────────────────────────────────
 	// We must do this before declaring any function, because each
 	// function's signature is expressed as a type index, and we need

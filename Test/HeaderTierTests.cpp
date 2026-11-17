@@ -37,7 +37,8 @@ const std::set<std::string>& embedderHeaders()
 {
 	static const std::set<std::string> headers = {
 		"WasmApi.hpp", "WasmJit.hpp", "WasmRuntime.hpp", "WasmVersion.hpp",
-		"WasmArtifact.hpp", "WasmCallCache.hpp", "WasmCompilationPolicy.hpp",
+		"WasmArtifact.hpp", "WasmByteOrder.hpp", "WasmCallCache.hpp",
+		"WasmCompilationPolicy.hpp",
 		"WasmModule.hpp", "WasmModuleInstance.hpp", "WasmValue.hpp", "WasmTrap.hpp",
 		"WasmException.hpp", "WasmImport.hpp", "WasmHostBridge.hpp",
 		"WasmNativeImport.hpp", "WasmProfile.hpp", "WasmConcurrency.hpp",
@@ -80,10 +81,6 @@ const std::set<std::string>& internalHeaders()
 		"WasmComponentValidation.hpp", "WasmComponentParser.inc",
 		"WasmLegacyEh.hpp",
 		"WasmTailTrampoline.hpp",
-		// Internal until a backend honours the decision it makes: an exported
-		// byte-order switch that changes nothing would be a lie
-		// (docs/proposals/BIG_ENDIAN.md `BE-2`).
-		"WasmByteOrder.hpp",
 	};
 	return headers;
 }
@@ -186,7 +183,7 @@ TEST_CASE("every public header has a compile-only translation unit", "[tiers]")
 			++checked;
 		}
 	}
-	REQUIRE(checked == 51); // one TU per public header; bump when a header lands
+	REQUIRE(checked == 52); // one TU per public header; bump when a header lands
 }
 
 

@@ -98,9 +98,16 @@ std::unique_ptr<ModuleInstance> ModuleInstantiator::instantiate(const Module& mo
 		module.validate(options);
 	}
 	activeProfile = profile;
+	// The byte-order decision is reached once per module, from the policy the
+	// runtime set, the evidence the module shows about its own bytes and the
+	// order this build compiles for (docs/proposals/BIG_ENDIAN.md `BE-2`). It is
+	// reached *before* any body is compiled, because that is when a backend reads
+	// it, and reported on the instance whether or not it relaxes anything.
+	activeByteOrder = decideByteOrder(requestedByteOrder, byteOrderEvidence(module));
 
 	// The constructor does all the backend-agnostic setup.
 	auto instance = std::make_unique<ModuleInstance>(module, resolver, hostBridge);
+	instance->setByteOrderDecision(activeByteOrder);
 
 	// A configured host stack reserve replaces the default the constructor
 	// installed (docs/proposals/CONFIGURATION.md `CFG-6`). Re-installing is
@@ -1096,8 +1103,8 @@ void ModuleInstance::resolveRefFuncsInObject(void* ref, std::vector<void*>& visi
 		const CanonFieldType& element = view.arrayElement();
 		const size_t dataOffset = gcArrayDataOffset(element.storage);
 		const size_t stride = gcStorageBytes(element.storage);
-		const uint32_t length = *reinterpret_cast<const uint32_t*>(
-				static_cast<uint8_t*>(ref) + GcHeader::kArrayLengthOffset);
+		const uint32_t length = GcHeader::readWord(
+				static_cast<uint8_t*>(ref), GcHeader::kArrayLengthOffset);
 		for (uint32_t i = 0; i < length; ++i)
 			rewriteSlot(static_cast<uint8_t*>(ref) + dataOffset + i * stride,
 					&element.storage);
@@ -1199,6 +1206,103 @@ namespace {
 constexpr size_t kGcHeaderBytes = GcHeader::kHeaderBytes;
 constexpr size_t kArrayLengthOffset = GcHeader::kArrayLengthOffset;
 
+//! Copies data-segment bytes into GC array elements.
+//!
+//! A data segment is a byte image in the guest's order, while an array element
+//! holds a native value: the guest only ever observes an element as a number, so
+//! the decoding happens once here rather than at every later element access
+//! (docs/proposals/BIG_ENDIAN.md `BED3`). A `v128` element is a 16-byte block
+//! either way, and a little-endian host copies the bytes unchanged.
+void copySegmentIntoElements(uint8_t* destination, const uint8_t* source,
+		std::size_t bytes, std::size_t elementBytes) noexcept
+{
+	if constexpr (WASM::hostMatchesGuestByteOrder()) {
+		std::memcpy(destination, source, bytes);
+		return;
+	} else {
+		if (elementBytes != 1 && elementBytes != 2 && elementBytes != 4
+				&& elementBytes != 8) {
+			std::memcpy(destination, source, bytes); // a 16-byte vector image
+			return;
+		}
+		for (std::size_t offset = 0; offset + elementBytes <= bytes;
+				offset += elementBytes) {
+			uint64_t value = 0;
+			std::memcpy(&value, source + offset, elementBytes);
+			value = WASM::swapValue(true, static_cast<uint32_t>(elementBytes), value);
+			std::memcpy(destination + offset, &value, elementBytes);
+		}
+	}
+}
+
+// The header's reference count is read-modify-written, not merely read, so it
+// cannot go through `GcHeader::readWord`: reversing a sum is not the sum of
+// reversing. The *coded* word is what the CAS compares and the decoded value is
+// what the caller reasons about, which is what keeps one heap layout on every
+// host (docs/proposals/BIG_ENDIAN.md `BED3`) without making the count
+// unmaintainable. On a little-endian host both words are the same word, so every
+// method below is the `std::atomic_ref` loop it always was (`BED5`).
+class GcRefcount
+{
+public:
+	explicit GcRefcount(uint32_t* coded) noexcept : coded_(*coded) {}
+
+	uint32_t load() const noexcept
+	{
+		return decode(coded_.load(std::memory_order_relaxed));
+	}
+
+	//! Saturating increment; returns the count the cell held (D19: a leak beats a wrap).
+	uint32_t increment() noexcept
+	{
+		uint32_t coded = coded_.load(std::memory_order_relaxed);
+		for (;;) {
+			const uint32_t value = decode(coded);
+			if (value == std::numeric_limits<uint32_t>::max())
+				return value;
+			if (coded_.compare_exchange_weak(coded, encode(value + 1),
+					std::memory_order_relaxed))
+				return value;
+		}
+	}
+
+	//! Decrement; returns the count the cell held, and flags underflow instead.
+	uint32_t decrement(bool& underflow) noexcept
+	{
+		underflow = false;
+		uint32_t coded = coded_.load(std::memory_order_relaxed);
+		for (;;) {
+			const uint32_t value = decode(coded);
+			if (value == 0) {
+				underflow = true;
+				return 0;
+			}
+			if (coded_.compare_exchange_weak(coded, encode(value - 1),
+					std::memory_order_relaxed))
+				return value;
+		}
+	}
+
+	//! Non-atomic adjustment, for the safepoint trial-deletion pass.
+	void adjust(int delta) noexcept
+	{
+		coded_.store(encode(load() + static_cast<uint32_t>(delta)),
+				std::memory_order_relaxed);
+	}
+
+private:
+	static uint32_t decode(uint32_t coded) noexcept
+	{
+		return headerWordFromGuest(!WASM::hostMatchesGuestByteOrder(), coded);
+	}
+	static uint32_t encode(uint32_t value) noexcept
+	{
+		return decode(value); // the reversal is its own inverse
+	}
+
+	std::atomic_ref<uint32_t> coded_; //!< The header word, in the layout's own order.
+};
+
 // Delegate to the shared helpers so the runtime and the backend cannot drift (H1).
 void* gcArrayByteAddressImpl(void* reference, uint32_t address, uint64_t offset,
 		uint32_t packed) noexcept
@@ -1222,7 +1326,7 @@ void* gcArrayByteAddressImpl(void* reference, uint32_t address, uint64_t offset,
 	}
 	const auto* bytes = static_cast<const uint8_t*>(reference);
 	uint32_t length = 0;
-	std::memcpy(&length, bytes + GcHeader::kArrayLengthOffset, sizeof(length));
+	length = GcHeader::readWord(bytes, GcHeader::kArrayLengthOffset);
 	const uint64_t bound = static_cast<uint64_t>(length) * elementSize;
 	if (end > bound) {
 		reportTrap(TrapKind::OutOfBoundsArrayAccess);
@@ -1636,8 +1740,7 @@ if (elemIdx >= module->elementSegments.size()) {
 		reportTrap(TrapKind::Internal, "array.new_elem requires a reference element type");
 		return;
 	}
-	const uint32_t length = *reinterpret_cast<const uint32_t*>(
-			static_cast<const std::uint8_t*>(array) + GcHeader::kArrayLengthOffset);
+	const uint32_t length = GcHeader::readWord(static_cast<const std::uint8_t*>(array), GcHeader::kArrayLengthOffset);
 	const uint32_t srcOffset = static_cast<uint32_t>(packedOffsetAndIndex & 0xFFFFFFFFu);
 
 	// Same rule as `table.init`: a dropped segment behaves as empty, and the source
@@ -1683,8 +1786,7 @@ void ModuleInstance::arrayInitFromData(void* array, uint32_t localTypeIdx, uint3
 	const CoreTypeView view = module->typeView(localTypeIdx);
 	const CanonFieldType& element = view.arrayElement();
 	const uint32_t storageBytes = static_cast<uint32_t>(gcStorageBytes(element.storage));
-	const uint32_t length = *reinterpret_cast<const uint32_t*>(
-			static_cast<const std::uint8_t*>(array) + GcHeader::kArrayLengthOffset);
+	const uint32_t length = GcHeader::readWord(static_cast<const std::uint8_t*>(array), GcHeader::kArrayLengthOffset);
 	const uint64_t byteLength = static_cast<uint64_t>(length) * storageBytes;
 
 	// Same rule as `memory.init`: a dropped segment behaves as empty, and the
@@ -1698,8 +1800,10 @@ void ModuleInstance::arrayInitFromData(void* array, uint32_t localTypeIdx, uint3
 	}
 	if (byteLength == 0)
 		return;
-	std::memcpy(static_cast<std::uint8_t*>(array) + gcArrayDataOffset(element.storage),
-			seg.data.data() + srcOffset, static_cast<std::size_t>(byteLength));
+	copySegmentIntoElements(
+			static_cast<std::uint8_t*>(array) + gcArrayDataOffset(element.storage),
+			seg.data.data() + srcOffset, static_cast<std::size_t>(byteLength),
+			storageBytes);
 }
 
 void ModuleInstance::arrayInitDataRange(void* array, uint32_t localTypeIdx,
@@ -1716,8 +1820,7 @@ void ModuleInstance::arrayInitDataRange(void* array, uint32_t localTypeIdx,
 	const CoreTypeView view = module->typeView(localTypeIdx);
 	const CanonFieldType& element = view.arrayElement();
 	const uint32_t storageBytes = static_cast<uint32_t>(gcStorageBytes(element.storage));
-	const uint32_t length = *reinterpret_cast<const uint32_t*>(
-			static_cast<const std::uint8_t*>(array) + GcHeader::kArrayLengthOffset);
+	const uint32_t length = GcHeader::readWord(static_cast<const std::uint8_t*>(array), GcHeader::kArrayLengthOffset);
 	// Destination first: a bad destination is an array-bounds failure even if
 	// the source segment is also short.
 	if (dstIndex > length || len > length - dstIndex) {
@@ -1735,9 +1838,11 @@ void ModuleInstance::arrayInitDataRange(void* array, uint32_t localTypeIdx,
 	}
 	if (byteLength == 0)
 		return;
-	std::memcpy(static_cast<std::uint8_t*>(array) + gcArrayDataOffset(element.storage)
+	copySegmentIntoElements(
+			static_cast<std::uint8_t*>(array) + gcArrayDataOffset(element.storage)
 					+ static_cast<std::size_t>(dstIndex) * storageBytes,
-			seg.data.data() + srcOffset, static_cast<std::size_t>(byteLength));
+			seg.data.data() + srcOffset, static_cast<std::size_t>(byteLength),
+			storageBytes);
 }
 
 void ModuleInstance::arrayInitElemRange(void* array, uint32_t localTypeIdx,
@@ -1757,8 +1862,7 @@ void ModuleInstance::arrayInitElemRange(void* array, uint32_t localTypeIdx,
 		reportTrap(TrapKind::Internal, "array.init_elem requires a reference element type");
 		return;
 	}
-	const uint32_t length = *reinterpret_cast<const uint32_t*>(
-			static_cast<const std::uint8_t*>(array) + GcHeader::kArrayLengthOffset);
+	const uint32_t length = GcHeader::readWord(static_cast<const std::uint8_t*>(array), GcHeader::kArrayLengthOffset);
 	if (dstIndex > length || len > length - dstIndex) {
 		reportTrap(TrapKind::OutOfBoundsArrayAccess);
 		return;
@@ -2016,11 +2120,11 @@ void* ModuleInstance::allocateStructObject(uint32_t size, uint32_t localTypeIdx,
 		reportTrap(TrapKind::OutOfMemory);
 		return nullptr;
 	}
-	*reinterpret_cast<uint32_t*>(object + GcHeader::kTypeIdOffset) = typeId.value;
+	GcHeader::writeWord(object, GcHeader::kTypeIdOffset, typeId.value);
 	// A fresh object is *unowned*: count 0 until a reference-typed slot retains
 	// it (docs/proposals/GC.md RC-1/RC-1b). A value on the operand stack is a
 	// borrow, so the creator does not own a reference.
-	*reinterpret_cast<uint32_t*>(object + GcHeader::kRefcountOffset) = 0;
+	GcHeader::writeWord(object, GcHeader::kRefcountOffset, 0);
 	// The RTT/descriptor slot is present in every struct header. An ordinary
 	// struct leaves it null; `struct.new_desc` supplies a reference and the new
 	// object owns a count on it, exactly like a reference field.
@@ -2110,10 +2214,10 @@ void* ModuleInstance::allocateArrayObject(uint32_t dataOffset, uint32_t elementS
 		return nullptr;
 	}
 
-	*reinterpret_cast<uint32_t*>(object + GcHeader::kTypeIdOffset) = typeId.value;
+	GcHeader::writeWord(object, GcHeader::kTypeIdOffset, typeId.value);
 	// Unowned at birth, like a struct (RC-5): the first owning slot retains it.
-	*reinterpret_cast<uint32_t*>(object + GcHeader::kRefcountOffset) = 0;
-	*reinterpret_cast<uint32_t*>(object + GcHeader::kArrayLengthOffset) = length;
+	GcHeader::writeWord(object, GcHeader::kRefcountOffset, 0);
+	GcHeader::writeWord(object, GcHeader::kArrayLengthOffset, length);
 	++internals.gcAllocatedObjects;
 	return object;
 }
@@ -2177,8 +2281,7 @@ void* ModuleInstance::arrayNewArray(uint32_t dstTypeIdx, uint32_t srcTypeIdx,
 	const size_t dstElementSize = gcStorageBytes(dstElement);
 
 	const auto* srcBytes = static_cast<const uint8_t*>(src);
-	const uint32_t srcLength = *reinterpret_cast<const uint32_t*>(
-			srcBytes + GcHeader::kArrayLengthOffset);
+	const uint32_t srcLength = GcHeader::readWord(srcBytes, GcHeader::kArrayLengthOffset);
 	if (start > srcLength || length > srcLength - start) {
 		reportTrap(TrapKind::OutOfBoundsArrayAccess);
 		return nullptr;
@@ -2282,7 +2385,7 @@ bool ModuleInstance::tryGetGcTypeId(const void* ref, TypeId& typeId) const
 	if (!store().gc().owns(ref))
 		return false;
 	const auto* bytes = static_cast<const uint8_t*>(ref);
-	typeId = TypeId{*reinterpret_cast<const uint32_t*>(bytes + GcHeader::kTypeIdOffset)};
+	typeId = TypeId{GcHeader::readWord(bytes, GcHeader::kTypeIdOffset)};
 	return true;
 }
 
@@ -2302,8 +2405,7 @@ bool ModuleInstance::isExternBox(const void* ref) const
 	if (!store().gc().owns(ref))
 		return false;
 	const auto* bytes = static_cast<const uint8_t*>(ref);
-	return *reinterpret_cast<const uint32_t*>(bytes + GcHeader::kTypeIdOffset)
-			== GcHeader::kExternBoxTypeId;
+	return GcHeader::readWord(bytes, GcHeader::kTypeIdOffset) == GcHeader::kExternBoxTypeId;
 }
 
 void* ModuleInstance::externBox(void* ref)
@@ -2319,9 +2421,8 @@ void* ModuleInstance::externBox(void* ref)
 		reportTrap(TrapKind::OutOfMemory);
 		return nullptr;
 	}
-	*reinterpret_cast<uint32_t*>(box + GcHeader::kTypeIdOffset) =
-			GcHeader::kExternBoxTypeId;
-	*reinterpret_cast<uint32_t*>(box + GcHeader::kRefcountOffset) = 0;
+	GcHeader::writeWord(box, GcHeader::kTypeIdOffset, GcHeader::kExternBoxTypeId);
+	GcHeader::writeWord(box, GcHeader::kRefcountOffset, 0);
 	*reinterpret_cast<void**>(box + GcHeader::kExternBoxInnerOffset) = ref;
 	// The box owns the inner reference until its own count reaches zero; the
 	// GC walker uses kExternBoxInnerOffset to release it then.
@@ -2475,7 +2576,7 @@ uint32_t ModuleInstance::gcRefCount(const void* ref) const
 		return 0;
 	auto* slot = const_cast<uint32_t*>(reinterpret_cast<const uint32_t*>(
 			static_cast<const uint8_t*>(ref) + GcHeader::kRefcountOffset));
-	return std::atomic_ref<uint32_t>(*slot).load(std::memory_order_relaxed);
+	return GcRefcount(slot).load();
 }
 
 bool ModuleInstance::isHostReference(const void* ref) const
@@ -2550,14 +2651,8 @@ void* ModuleInstance::refClone(void* ref)
 		retainHostReference(ref);
 		return ref;
 	}
-	std::atomic_ref<uint32_t> count(*slot);
-	uint32_t old = count.load(std::memory_order_relaxed);
-	for (;;) {
-		if (old == std::numeric_limits<uint32_t>::max())
-			break; // saturate: a leak is preferable to a wrapped count (D19)
-		if (count.compare_exchange_weak(old, old + 1, std::memory_order_relaxed))
-			break;
-	}
+	// Saturating increment: a leak is preferable to a wrapped count (D19).
+	GcRefcount(slot).increment();
 	return ref;
 }
 
@@ -2572,25 +2667,20 @@ void ModuleInstance::refDrop(void* ref)
 		releaseHostReference(ref);
 		return;
 	}
-	std::atomic_ref<uint32_t> count(*slot);
-	uint32_t old = count.load(std::memory_order_relaxed);
-	for (;;) {
-		if (old == 0) {
-			reportTrap(TrapKind::Internal, "GC reference count underflow"); // D19: trap, never wrap
-			// Host callers (this is a public API) get the exception; from
-			// generated code the slot stays pending and the caller's check
-			// returns the frame (`checkTrap` is a no-op at depth > 0).
-			checkTrap();
-			return;
-		}
-		if (count.compare_exchange_weak(old, old - 1, std::memory_order_relaxed)) {
-			if (old == 1)
-				reclaimGcObject(ref);
-			else
-				possibleCycleRoot(ref); // survived: maybe a cycle's last link out (RC-2)
-			break;
-		}
+	bool underflow = false;
+	const uint32_t old = GcRefcount(slot).decrement(underflow);
+	if (underflow) {
+		reportTrap(TrapKind::Internal, "GC reference count underflow"); // D19: trap, never wrap
+		// Host callers (this is a public API) get the exception; from
+		// generated code the slot stays pending and the caller's check
+		// returns the frame (`checkTrap` is a no-op at depth > 0).
+		checkTrap();
+		return;
 	}
+	if (old == 1)
+		reclaimGcObject(ref);
+	else
+		possibleCycleRoot(ref); // survived: maybe a cycle's last link out (RC-2)
 }
 
 void ModuleInstance::refStore(void** slot, void* newRef)
@@ -2715,14 +2805,13 @@ void ModuleInstance::reclaimGcObject(void* ref)
 	// and a frame is usually still live. Queue the object; gcCollect() releases
 	// its own references and recycles it at a safepoint where no frame is live.
 	uint8_t* bytes = static_cast<uint8_t*>(ref);
-	auto* typeIdSlot = reinterpret_cast<uint32_t*>(bytes + GcHeader::kTypeIdOffset);
-	if (*typeIdSlot == GcHeader::kReclaimedTypeId)
+	if (GcHeader::readWord(bytes, GcHeader::kTypeIdOffset) == GcHeader::kReclaimedTypeId)
 		return;                       // already queued
 	// The tag is stamped over so a duplicate queue entry is ignored, but the
 	// queue keeps it: the walker needs the layout, and a resurrection needs the
 	// tag back (RC-1b/RC-3).
-	const TypeId typeId{*typeIdSlot};
-	*typeIdSlot = GcHeader::kReclaimedTypeId;
+	const TypeId typeId{GcHeader::readWord(bytes, GcHeader::kTypeIdOffset)};
+	GcHeader::writeWord(bytes, GcHeader::kTypeIdOffset, GcHeader::kReclaimedTypeId);
 	internals.gcPending.push_back(PendingGcObject{ref, typeId});
 	++internals.gcReclaimedObjects;
 }
@@ -2772,7 +2861,7 @@ void ModuleInstance::childSlotsOf(void* ref, TypeId typeId, std::vector<uint8_t*
 	const CanonFieldType& element = subtype.arrayElement();
 	if (element.storage.isPacked || !isReferenceType(element.storage.value.opcode))
 		return;
-	const uint32_t length = *reinterpret_cast<const uint32_t*>(bytes + GcHeader::kArrayLengthOffset);
+	const uint32_t length = GcHeader::readWord(bytes, GcHeader::kArrayLengthOffset);
 	const size_t dataOffset = gcArrayDataOffset(element.storage);
 	const size_t stride = gcStorageBytes(element.storage);
 	for (uint32_t i = 0; i < length; ++i)
@@ -2797,17 +2886,13 @@ void ModuleInstance::releaseOutgoingRefs(void* ref, TypeId typeId,
 			continue;
 		}
 		// Read the child's tag before the queue can stamp it.
-		const TypeId childTypeId{*reinterpret_cast<const uint32_t*>(
-				static_cast<const uint8_t*>(child) + GcHeader::kTypeIdOffset)};
-		std::atomic_ref<uint32_t> refcount(*count);
-		uint32_t old = refcount.load(std::memory_order_relaxed);
-		for (;;) {
-			if (old == 0) {
-				reportTrap(TrapKind::Internal, "GC reference count underflow"); // D19
-				return;
-			}
-			if (refcount.compare_exchange_weak(old, old - 1, std::memory_order_relaxed))
-				break;
+		const TypeId childTypeId{GcHeader::readWord(
+				static_cast<const uint8_t*>(child), GcHeader::kTypeIdOffset)};
+		bool underflow = false;
+		const uint32_t old = GcRefcount(count).decrement(underflow);
+		if (underflow) {
+			reportTrap(TrapKind::Internal, "GC reference count underflow"); // D19
+			return;
 		}
 		if (old == 1) {
 			// The child died with its parent: hand it to the worklist rather than
@@ -2833,16 +2918,16 @@ uint32_t refcountOf(const void* ref)
 {
 	auto* count = const_cast<uint32_t*>(reinterpret_cast<const uint32_t*>(
 			static_cast<const uint8_t*>(ref) + WASM::GcHeader::kRefcountOffset));
-	return std::atomic_ref<uint32_t>(*count).load(std::memory_order_relaxed);
+	return GcRefcount(count).load();
 }
 
 void adjustRefcount(void* ref, int delta)
 {
 	auto* count = reinterpret_cast<uint32_t*>(
 			static_cast<uint8_t*>(ref) + WASM::GcHeader::kRefcountOffset);
-	std::atomic_ref<uint32_t> refcount(*count);
-	refcount.store(refcount.load(std::memory_order_relaxed) + static_cast<uint32_t>(delta),
-			std::memory_order_relaxed);
+	// The trial runs at a safepoint with no other agent inside the instance, so
+	// the read-modify-write stays the plain pair the count always used.
+	GcRefcount(count).adjust(delta);
 }
 
 // Counted GC objects only: null, i31 immediates, funcrefs and externrefs carry
@@ -2855,8 +2940,8 @@ bool isCountedRef(Store& store, const void* ref)
 
 WASM::TypeId typeIdOf(const void* ref)
 {
-	return WASM::TypeId{*reinterpret_cast<const uint32_t*>(
-			static_cast<const uint8_t*>(ref) + WASM::GcHeader::kTypeIdOffset)};
+	return WASM::TypeId{WASM::GcHeader::readWord(
+			static_cast<const uint8_t*>(ref), WASM::GcHeader::kTypeIdOffset)};
 }
 
 struct CycleTrial {
@@ -2898,8 +2983,8 @@ void ModuleInstance::possibleCycleRoot(void* ref)
 	std::lock_guard<std::recursive_mutex> lock(internals.gcMutex);
 	if (gcRefcountSlot(ref) == nullptr)
 		return;                              // not a counted GC object
-	const uint32_t tag = *reinterpret_cast<const uint32_t*>(
-			static_cast<const uint8_t*>(ref) + GcHeader::kTypeIdOffset);
+	const uint32_t tag = GcHeader::readWord(
+			static_cast<const uint8_t*>(ref), GcHeader::kTypeIdOffset);
 	if (tag == GcHeader::kReclaimedTypeId)
 		return;                              // already queued: the queue owns it
 	if (internals.gcCycleRoots.size() >= store().limits().gcCycleCandidates)
@@ -2994,11 +3079,11 @@ void ModuleInstance::gcCollect()
 				continue;
 			uint8_t* bytes = static_cast<uint8_t*>(ref);
 			auto* count = reinterpret_cast<uint32_t*>(bytes + GcHeader::kRefcountOffset);
-			if (std::atomic_ref<uint32_t>(*count).load(std::memory_order_relaxed) != 0) {
+			if (GcRefcount(count).load() != 0) {
 				// Resurrection: the object was retained again since it was queued
 				// (count 0 -> 1), so it is alive. Put its type tag back — the queue
 				// stamped over it — or later casts would stop recognising it.
-				*reinterpret_cast<uint32_t*>(bytes + GcHeader::kTypeIdOffset) = work[i].typeId.value;
+				GcHeader::writeWord(bytes, GcHeader::kTypeIdOffset, work[i].typeId.value);
 				continue;
 			}
 			releaseOutgoingRefs(ref, work[i].typeId, work, slots);
