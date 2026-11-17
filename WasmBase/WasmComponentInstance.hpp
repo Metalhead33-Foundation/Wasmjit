@@ -15,6 +15,7 @@
 */
 
 WASMJIT_VISIBLE_BEGIN
+#include "WasmByteOrder.hpp"
 #include "WasmCompilationPolicy.hpp"
 #include "WasmComponentExecutor.hpp"
 #include "WasmComponentFeature.hpp"
@@ -53,6 +54,12 @@ struct ComponentInstanceOptions {
 	ProfileConfig profile{};
 	//! Compilation policy requested from the backend for embedded modules.
 	CompilationPolicy compilation{};
+	//! Byte-order policy requested for embedded modules
+	//! (docs/proposals/BIG_ENDIAN.md `BE-2`). The default is `Strict`, which is
+	//! what a component's canonical ABI requires: its lift/lower is little-endian
+	//! by specification, so a relaxed policy may only ever cover the embedded
+	//! module's own linear-memory accesses.
+	ByteOrderPolicy byteOrder = ByteOrderPolicy::Strict;
 	//! Host stack reserve for embedded core instances; zero means the default.
 	std::uint64_t stackReserveBytes = 0;
 	//! True when several host threads may call this component concurrently.

@@ -45,6 +45,25 @@ public:
 	 */
 	~ModuleCompiler() override;
 
+	//! \name Byte-order diagnostics (`BED5`)
+	//! The first compiled body's entry and size, so a test can compare the code
+	//! two byte-order policies generate without reading the emitter's internals.
+	//! \{
+
+	/*!
+	 * \brief Returns the entry point of the first compiled body.
+	 * \return The entry, or nullptr when nothing was compiled.
+	 */
+	const void* firstCodeEntry() const noexcept { return firstCodeEntry_; }
+
+	/*!
+	 * \brief Returns the size of the code `firstCodeEntry()` belongs to.
+	 * \return Size in bytes, zero when nothing was compiled.
+	 */
+	std::size_t firstCodeBytes() const noexcept { return firstCodeBytes_; }
+
+	//! \}
+
 protected:
 	/*!
 	 * \brief Translates module-local function types into AsmJit signatures.
@@ -102,6 +121,9 @@ private:
 	//! Installed allocation base per instance, so `releaseInstance` frees exactly
 	//! that module's code.
 	std::vector<std::pair<const WASM::ModuleInstance*, void*>> moduleBases;
+	//! First compiled entry and its code size (`BED5` diagnostics).
+	const void* firstCodeEntry_ = nullptr;
+	std::size_t firstCodeBytes_ = 0;
 };
 
 } // namespace AsmJitBackend

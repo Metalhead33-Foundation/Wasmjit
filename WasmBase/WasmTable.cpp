@@ -102,8 +102,12 @@ extern "C" void* wasm_atomic_table_get(VMContext* context, uint32_t tableIndex,
 		WASM::reportTrap(WASM::TrapKind::OutOfBoundsTableAccess);
 		return nullptr;
 	}
-	return reinterpret_cast<void*>(wasm_atomic_load(&table->base[elementIndex], 8,
-			ordering));
+	// A table slot is a host pointer, not a guest word, so it is read with the
+	// compiler's atomic builtin directly: `wasm_atomic_load` converts the value
+	// to the guest's byte order, which would reverse a pointer on a big-endian
+	// host (docs/proposals/BIG_ENDIAN.md `BE-4`).
+	return __atomic_load_n(&table->base[elementIndex],
+			ordering == WASM_ATOMIC_ACQREL ? __ATOMIC_ACQUIRE : __ATOMIC_SEQ_CST);
 }
 
 extern "C" void wasm_atomic_table_set(VMContext* context, uint32_t tableIndex,

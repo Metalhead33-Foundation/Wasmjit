@@ -13,6 +13,7 @@ and the `[docs]` check fails ([`DOCUMENTATION.md`](../DOCUMENTATION.md) §9).
 |---|---|
 | \subpage prop_acquire_release_atomics | Acquire-release atomics and the `pause` hint |
 | \subpage prop_annotations | Custom annotation syntax for the text format |
+| \subpage prop_big_endian | Big-endian hosts: the byte-order policy, what the specification pins, and the port plan |
 | \subpage prop_bulk_memory | Bulk memory operations |
 | \subpage prop_call_tags | Call tags (the stack-switching companion proposal) |
 | \subpage prop_component_model | WIT and the Component Model |

@@ -1639,7 +1639,8 @@ void* stagedImportEntry(const WASM::FuncType& type)
 OpcodeDispatcher::OpcodeDispatcher(const WASM::Module& module, const WASM::FuncType& funcType,
 		const WASM::FunctionBody& body, std::uint32_t functionIndex, bool frameCallAbi,
 		const std::vector<WASM::TagId>& tagIds, WASM::ModuleInstanceInternals& internals,
-		std::span<const std::uint8_t> frameByType, WASM::ProfileConfig profileConfig)
+		std::span<const std::uint8_t> frameByType, WASM::ProfileConfig profileConfig,
+		bool swapsGuestAccesses)
 	: module_(module)
 	, funcType_(funcType)
 	, body_(body)
@@ -1649,6 +1650,7 @@ OpcodeDispatcher::OpcodeDispatcher(const WASM::Module& module, const WASM::FuncT
 	, frameByType_(frameByType)
 	, frameAbi_(frameCallAbi)
 	, deterministicFloats_(profileConfig.deterministic())
+	, swapsGuestAccesses_(swapsGuestAccesses)
 {
 	const std::string* name = module.findName(WASM::NameKind::Function, functionIndex);
 	if (name != nullptr)
@@ -2104,6 +2106,7 @@ bool OpcodeDispatcher::finish(void*& entry)
 		return false;
 	}
 	entry = code;
+	codeBytes_ = static_cast<std::size_t>(sljit_get_generated_code_size(compiler_));
 	return true;
 }
 
@@ -4864,6 +4867,8 @@ void OpcodeDispatcher::emitMemoryLoadFloat(const WASM::MemArg& arg, int width)
 		// signalling NaN, and the spec requires the exact payload.
 		emit(sljit_emit_op1(compiler_, width == 4 ? SLJIT_MOV_U32 : SLJIT_MOV,
 				SLJIT_R0, 0, SLJIT_MEM1(SLJIT_R0), 0));
+		// The reversal is by bit pattern, exactly like the load above.
+		emitGuestSwap(SLJIT_R0, width == 4 ? SLJIT_REV_U32 : SLJIT_REV);
 		storeSlot(SLJIT_R0, stackWidths_.size() - 1, width);
 	}
 	setTopOfStack(width, false);
@@ -4899,6 +4904,7 @@ void OpcodeDispatcher::emitMemoryStoreFloat(const WASM::MemArg& arg, int width)
 	emitCheckedMemoryAddress(arg, static_cast<std::uint32_t>(width), stackWidths_.size());
 	loadSlot(SLJIT_R1, stackWidths_.size() + 1, width);
 	// Bit-preserving store, for the same reason as the load path.
+	emitGuestSwap(SLJIT_R1, width == 4 ? SLJIT_REV_U32 : SLJIT_REV);
 	emit(sljit_emit_op1(compiler_, width == 4 ? SLJIT_MOV32 : SLJIT_MOV,
 			SLJIT_MEM1(SLJIT_R0), 0, SLJIT_R1, 0));
 }
@@ -6934,8 +6940,7 @@ void OpcodeDispatcher::emitArrayGetPacked(WASM::TypeIdx arg, bool signExtend)
 			sljit_set_label(notNull, afterNull);
 		loadSlot(SLJIT_R2, indexDepth, 4);
 		loadSlot(SLJIT_R1, refDepth, 8);
-		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R3, 0, SLJIT_MEM1(SLJIT_R1),
-				static_cast<sljit_sw>(WASM::GcHeader::kArrayLengthOffset)));
+		emitHeaderWordLoad(SLJIT_R3, SLJIT_R1, static_cast<sljit_sw>(WASM::GcHeader::kArrayLengthOffset));
 		sljit_jump* inBounds = sljit_emit_cmp(compiler_, SLJIT_LESS, SLJIT_R2, 0, SLJIT_R3, 0);
 		if (inBounds == nullptr)
 			ok_ = false;
@@ -7004,8 +7009,7 @@ void OpcodeDispatcher::dispatchArraySet(WASM::TypeIdx arg)
 			sljit_set_label(notNull, afterNull);
 		loadSlot(SLJIT_R1, refDepth, 8);
 		loadSlot(SLJIT_R2, indexDepth, 4);
-		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R3, 0, SLJIT_MEM1(SLJIT_R1),
-				static_cast<sljit_sw>(WASM::GcHeader::kArrayLengthOffset)));
+		emitHeaderWordLoad(SLJIT_R3, SLJIT_R1, static_cast<sljit_sw>(WASM::GcHeader::kArrayLengthOffset));
 		sljit_jump* inBounds = sljit_emit_cmp(compiler_, SLJIT_LESS, SLJIT_R2, 0, SLJIT_R3, 0);
 		if (inBounds == nullptr)
 			ok_ = false;
@@ -7079,8 +7083,7 @@ void OpcodeDispatcher::dispatchArrayGet(WASM::TypeIdx arg)
 			sljit_set_label(notNull, afterNull);
 		// Bounds: index must be below the length word (both unsigned).
 		loadSlot(SLJIT_R2, indexDepth, 4);
-		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R3, 0, SLJIT_MEM1(SLJIT_R1),
-				static_cast<sljit_sw>(WASM::GcHeader::kArrayLengthOffset)));
+		emitHeaderWordLoad(SLJIT_R3, SLJIT_R1, static_cast<sljit_sw>(WASM::GcHeader::kArrayLengthOffset));
 		sljit_jump* inBounds = sljit_emit_cmp(compiler_, SLJIT_LESS, SLJIT_R2, 0, SLJIT_R3, 0);
 		if (inBounds == nullptr)
 			ok_ = false;
@@ -7173,8 +7176,7 @@ void OpcodeDispatcher::dispatchArrayCopy(WASM::TypeIdx arg1, WASM::TypeIdx arg2)
 	};
 	const auto emitRangeCheck = [&](std::size_t arrayDepth, std::size_t indexDepth) {
 		loadSlot(SLJIT_R1, arrayDepth, 8);
-		emit(sljit_emit_op1(compiler_, SLJIT_MOV_U32, SLJIT_R2, 0, SLJIT_MEM1(SLJIT_R1),
-				static_cast<sljit_sw>(WASM::GcHeader::kArrayLengthOffset)));
+		emitHeaderWordLoad(SLJIT_R2, SLJIT_R1, static_cast<sljit_sw>(WASM::GcHeader::kArrayLengthOffset));
 		loadSlot(SLJIT_R0, indexDepth, 4);
 		loadSlot(SLJIT_R3, lenDepth, 4);
 		emit(sljit_emit_op2(compiler_, SLJIT_ADD, SLJIT_R0, 0, SLJIT_R0, 0, SLJIT_R3, 0));
@@ -7316,8 +7318,7 @@ void OpcodeDispatcher::dispatchArrayFill(WASM::TypeIdx arg)
 	// Bounds: (u64)index + (u64)len <= (u64)arrayLength. Both operands are
 	// zero-extended 32-bit values, so the 64-bit sum cannot wrap.
 	loadSlot(SLJIT_R1, arrayDepth, 8);
-	emit(sljit_emit_op1(compiler_, SLJIT_MOV_U32, SLJIT_R2, 0, SLJIT_MEM1(SLJIT_R1),
-			static_cast<sljit_sw>(WASM::GcHeader::kArrayLengthOffset)));
+	emitHeaderWordLoad(SLJIT_R2, SLJIT_R1, static_cast<sljit_sw>(WASM::GcHeader::kArrayLengthOffset));
 	loadSlot(SLJIT_R0, indexDepth, 4);
 	loadSlot(SLJIT_R3, lenDepth, 4);
 	emit(sljit_emit_op2(compiler_, SLJIT_ADD, SLJIT_R0, 0, SLJIT_R0, 0, SLJIT_R3, 0));
@@ -7802,8 +7803,7 @@ void OpcodeDispatcher::dispatchArrayLen()
 			ok_ = false;
 		else if (notNull != nullptr)
 			sljit_set_label(notNull, done);
-		emit(sljit_emit_op1(compiler_, SLJIT_MOV32, SLJIT_R2, 0, SLJIT_MEM1(SLJIT_R1),
-				static_cast<sljit_sw>(WASM::GcHeader::kArrayLengthOffset)));
+		emitHeaderWordLoad(SLJIT_R2, SLJIT_R1, static_cast<sljit_sw>(WASM::GcHeader::kArrayLengthOffset));
 		// The release is a helper call and clobbers R0-R3, so the length is
 		// parked in the scratch cell while the array is still in its slot.
 		emit(sljit_emit_op1(compiler_, SLJIT_MOV, SLJIT_MEM1(SLJIT_SP),
@@ -8928,8 +8928,33 @@ void OpcodeDispatcher::copyStackToLocal(std::size_t depth, std::size_t localInde
 	}
 }
 
+void OpcodeDispatcher::emitGuestSwap(int reg, sljit_s32 swapOp)
+{
+	// The conversion is decided while the code is *generated*, so a
+	// little-endian build emits nothing extra and its code stays byte-identical
+	// to what it always was (docs/proposals/BIG_ENDIAN.md `BED5`). The value is
+	// already in the register, so one reversal covers the load *and* the store
+	// direction, and s390x compiles it to a single `lrv`-class instruction.
+	// A single-byte access has nothing to reverse, and the call sites spell
+	// that as `SLJIT_NOP`.
+	if (!swapsGuestAccesses_ || swapOp == SLJIT_NOP)
+		return;
+	emit(sljit_emit_op1(compiler_, swapOp, reg, 0, reg, 0));
+}
+
+void OpcodeDispatcher::emitHeaderWordLoad(int dst, int base, sljit_sw offset)
+{
+	emit(sljit_emit_op1(compiler_, SLJIT_MOV32, dst, 0, SLJIT_MEM1(base), offset));
+	// The GC object header is little-endian on every host (BED3), so this is
+	// the one access that converts regardless of the module's policy. It is a
+	// compile-time property of the target, not a decision, which is why the
+	// reversal is not emitted at all on this build.
+	if constexpr (!WASM::hostMatchesGuestByteOrder())
+		emit(sljit_emit_op1(compiler_, SLJIT_REV_U32, dst, 0, dst, 0));
+}
+
 void OpcodeDispatcher::emitMemoryLoad(const WASM::MemArg& arg, std::uint32_t width,
-		sljit_s32 loadOp, int resultWidth)
+		sljit_s32 loadOp, int resultWidth, sljit_s32 swapOp)
 {
 	if (!reachable_)
 		return;
@@ -8949,13 +8974,17 @@ void OpcodeDispatcher::emitMemoryLoad(const WASM::MemArg& arg, std::uint32_t wid
 	if (!measureOnly_) {
 		emitCheckedMemoryAddress(arg, width, stackWidths_.size() - 1);
 		emit(sljit_emit_op1(compiler_, loadOp, SLJIT_R1, 0, SLJIT_MEM1(SLJIT_R0), 0));
+		// A linear-memory access carries the guest's byte order; a GC-array
+		// element carries a native value, because the data-segment boundary is
+		// where that order is interpreted with `array.new_data` (`BED3`).
+		emitGuestSwap(SLJIT_R1, swapOp);
 		storeSlot(SLJIT_R1, stackWidths_.size() - 1, resultWidth);
 	}
 	setTopOfStack(resultWidth, false);
 }
 
 void OpcodeDispatcher::emitMemoryStore(const WASM::MemArg& arg, std::uint32_t width,
-		sljit_s32 storeOp)
+		sljit_s32 storeOp, sljit_s32 swapOp)
 {
 	if (!reachable_)
 		return;
@@ -8977,6 +9006,8 @@ void OpcodeDispatcher::emitMemoryStore(const WASM::MemArg& arg, std::uint32_t wi
 		return;
 	emitCheckedMemoryAddress(arg, width, stackWidths_.size());
 	loadSlot(SLJIT_R1, stackWidths_.size() + 1, static_cast<int>(width));
+	// Same rule as the load: only a linear-memory access converts.
+	emitGuestSwap(SLJIT_R1, swapOp);
 	emit(sljit_emit_op1(compiler_, storeOp, SLJIT_MEM1(SLJIT_R0), 0, SLJIT_R1, 0));
 }
 
@@ -9388,8 +9419,9 @@ void OpcodeDispatcher::emitArrayAtomicAddress(std::size_t refDepth, std::size_t 
 	else if (notNull != nullptr)
 		sljit_set_label(notNull, afterNull);
 	loadSlot(SLJIT_R1, refDepth, 8);
-	emit(sljit_emit_op1(compiler_, SLJIT_MOV_U32, SLJIT_R2, 0, SLJIT_MEM1(SLJIT_R1),
-			static_cast<sljit_sw>(lengthOffset)));
+	// The length is a GC header word, so it converts on a big-endian build
+	// whatever the module's policy says (`BED3`).
+	emitHeaderWordLoad(SLJIT_R2, SLJIT_R1, static_cast<sljit_sw>(lengthOffset));
 	loadSlot(SLJIT_R3, indexDepth, 4);
 	sljit_jump* inBounds = sljit_emit_cmp(compiler_, SLJIT_LESS,
 			SLJIT_R3, 0, SLJIT_R2, 0);
@@ -10328,43 +10360,43 @@ void OpcodeDispatcher::dispatchArrayAtomicRmwCmpxchg(uint8_t ordering, WASM::Typ
 }
 
 void OpcodeDispatcher::dispatchI32Load(WASM::MemArg arg)
-{ emitMemoryLoad(arg, 4, SLJIT_MOV_U32, 4); }
+{ emitMemoryLoad(arg, 4, SLJIT_MOV_U32, 4, SLJIT_REV_U32); }
 void OpcodeDispatcher::dispatchI32Load8S(WASM::MemArg arg)
-{ emitMemoryLoad(arg, 1, SLJIT_MOV_S8, 4); }
+{ emitMemoryLoad(arg, 1, SLJIT_MOV_S8, 4, SLJIT_NOP); }
 void OpcodeDispatcher::dispatchI32Load8U(WASM::MemArg arg)
-{ emitMemoryLoad(arg, 1, SLJIT_MOV_U8, 4); }
+{ emitMemoryLoad(arg, 1, SLJIT_MOV_U8, 4, SLJIT_NOP); }
 void OpcodeDispatcher::dispatchI32Load16S(WASM::MemArg arg)
-{ emitMemoryLoad(arg, 2, SLJIT_MOV_S16, 4); }
+{ emitMemoryLoad(arg, 2, SLJIT_MOV_S16, 4, SLJIT_REV_S16); }
 void OpcodeDispatcher::dispatchI32Load16U(WASM::MemArg arg)
-{ emitMemoryLoad(arg, 2, SLJIT_MOV_U16, 4); }
+{ emitMemoryLoad(arg, 2, SLJIT_MOV_U16, 4, SLJIT_REV_U16); }
 void OpcodeDispatcher::dispatchI32Store(WASM::MemArg arg)
-{ emitMemoryStore(arg, 4, SLJIT_MOV32); }
+{ emitMemoryStore(arg, 4, SLJIT_MOV32, SLJIT_REV_U32); }
 void OpcodeDispatcher::dispatchI32Store8(WASM::MemArg arg)
-{ emitMemoryStore(arg, 1, SLJIT_MOV_U8); }
+{ emitMemoryStore(arg, 1, SLJIT_MOV_U8, SLJIT_NOP); }
 void OpcodeDispatcher::dispatchI32Store16(WASM::MemArg arg)
-{ emitMemoryStore(arg, 2, SLJIT_MOV_U16); }
+{ emitMemoryStore(arg, 2, SLJIT_MOV_U16, SLJIT_REV_U16); }
 void OpcodeDispatcher::dispatchI64Load(WASM::MemArg arg)
-{ emitMemoryLoad(arg, 8, SLJIT_MOV, 8); }
+{ emitMemoryLoad(arg, 8, SLJIT_MOV, 8, SLJIT_REV); }
 void OpcodeDispatcher::dispatchI64Load8S(WASM::MemArg arg)
-{ emitMemoryLoad(arg, 1, SLJIT_MOV_S8, 8); }
+{ emitMemoryLoad(arg, 1, SLJIT_MOV_S8, 8, SLJIT_NOP); }
 void OpcodeDispatcher::dispatchI64Load8U(WASM::MemArg arg)
-{ emitMemoryLoad(arg, 1, SLJIT_MOV_U8, 8); }
+{ emitMemoryLoad(arg, 1, SLJIT_MOV_U8, 8, SLJIT_NOP); }
 void OpcodeDispatcher::dispatchI64Load16S(WASM::MemArg arg)
-{ emitMemoryLoad(arg, 2, SLJIT_MOV_S16, 8); }
+{ emitMemoryLoad(arg, 2, SLJIT_MOV_S16, 8, SLJIT_REV_S16); }
 void OpcodeDispatcher::dispatchI64Load16U(WASM::MemArg arg)
-{ emitMemoryLoad(arg, 2, SLJIT_MOV_U16, 8); }
+{ emitMemoryLoad(arg, 2, SLJIT_MOV_U16, 8, SLJIT_REV_U16); }
 void OpcodeDispatcher::dispatchI64Load32S(WASM::MemArg arg)
-{ emitMemoryLoad(arg, 4, SLJIT_MOV_S32, 8); }
+{ emitMemoryLoad(arg, 4, SLJIT_MOV_S32, 8, SLJIT_REV_S32); }
 void OpcodeDispatcher::dispatchI64Load32U(WASM::MemArg arg)
-{ emitMemoryLoad(arg, 4, SLJIT_MOV_U32, 8); }
+{ emitMemoryLoad(arg, 4, SLJIT_MOV_U32, 8, SLJIT_REV_U32); }
 void OpcodeDispatcher::dispatchI64Store(WASM::MemArg arg)
-{ emitMemoryStore(arg, 8, SLJIT_MOV); }
+{ emitMemoryStore(arg, 8, SLJIT_MOV, SLJIT_REV); }
 void OpcodeDispatcher::dispatchI64Store8(WASM::MemArg arg)
-{ emitMemoryStore(arg, 1, SLJIT_MOV_U8); }
+{ emitMemoryStore(arg, 1, SLJIT_MOV_U8, SLJIT_NOP); }
 void OpcodeDispatcher::dispatchI64Store16(WASM::MemArg arg)
-{ emitMemoryStore(arg, 2, SLJIT_MOV_U16); }
+{ emitMemoryStore(arg, 2, SLJIT_MOV_U16, SLJIT_REV_U16); }
 void OpcodeDispatcher::dispatchI64Store32(WASM::MemArg arg)
-{ emitMemoryStore(arg, 4, SLJIT_MOV32); }
+{ emitMemoryStore(arg, 4, SLJIT_MOV32, SLJIT_REV_U32); }
 
 void OpcodeDispatcher::dispatchMemorySize(WASM::MemIdx arg)
 {

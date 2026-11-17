@@ -702,8 +702,8 @@ bool stringArrayLength(void* handle, uint32_t& length)
 		WASM::reportTrap(WASM::TrapKind::NullArrayReference, "null array reference");
 		return false;
 	}
-	length = *reinterpret_cast<const uint32_t*>(
-			static_cast<const uint8_t*>(handle) + WASM::GcHeader::kArrayLengthOffset);
+	length = WASM::GcHeader::readWord(static_cast<const uint8_t*>(handle),
+			WASM::GcHeader::kArrayLengthOffset);
 	return true;
 }
 

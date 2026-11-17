@@ -135,6 +135,7 @@ Runtime::Runtime(std::string backendName, BackendInstance backend, RuntimeConfig
 	rejectUnsupportedConfig(config_, backend_);
 	if (backend_.instantiator) {
 		backend_.instantiator->setCompilationPolicy(config_.compilation);
+		backend_.instantiator->setByteOrderPolicy(config_.byteOrder);
 		backend_.instantiator->setStackReserveBytes(config_.execution.stackReserveBytes);
 		backend_.instantiator->setFuelBudget(config_.execution.fuel);
 	}
@@ -229,6 +230,7 @@ ComponentInstanceHandle& Runtime::instantiateComponent(const LoadedComponent& co
 	options.hostBridge = config_.hostBridge;
 	options.profile = config_.profile;
 	options.compilation = config_.compilation;
+	options.byteOrder = config_.byteOrder;
 	options.stackReserveBytes = config_.execution.stackReserveBytes;
 	options.allowConcurrentCalls =
 			config_.concurrency == ConcurrencyModel::Agents;
@@ -255,6 +257,7 @@ ComponentInstanceHandle& Runtime::instantiateComponent(const LoadedComponent& co
 	if (!componentBackend.instantiator)
 		throw std::runtime_error("the runtime has no backend instantiator");
 	componentBackend.instantiator->setCompilationPolicy(options.compilation);
+	componentBackend.instantiator->setByteOrderPolicy(options.byteOrder);
 	componentBackend.instantiator->setStackReserveBytes(
 			options.stackReserveBytes);
 	componentBackend.instantiator->setFuelBudget(config_.execution.fuel);
@@ -341,6 +344,7 @@ ModuleInstance& Runtime::adoptInstance(const Module& module, ImportResolver& imp
 	if (!backend.instantiator)
 		throw std::runtime_error("the backend refused to create an instantiator");
 	backend.instantiator->setCompilationPolicy(policy);
+	backend.instantiator->setByteOrderPolicy(config_.byteOrder);
 	backend.instantiator->setStackReserveBytes(config_.execution.stackReserveBytes);
 	backend.instantiator->setFuelBudget(config_.execution.fuel);
 

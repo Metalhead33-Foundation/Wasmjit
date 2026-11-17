@@ -15,6 +15,7 @@ WASMJIT_VISIBLE_BEGIN
 
 #include "WasmApi.hpp"
 #include "WasmModule.hpp"
+#include "WasmByteOrder.hpp"
 #include "WasmCompilationPolicy.hpp"
 #include "WasmGcHeader.hpp"
 #include "WasmGcHeap.hpp"
@@ -217,6 +218,11 @@ private:
 	//! execute one instance at the same time, while `inCall()` must still mean
 	//! "anyone inside" for the GC safepoint's quiescence rule.
 	std::atomic<std::uint32_t> activeCalls{0};
+	//! What the runtime's byte-order policy came to for this module
+	//! (docs/proposals/BIG_ENDIAN.md `BE-2`). Reported to the embedder rather
+	//! than kept to the backend, because `Adaptive` is a heuristic and a host
+	//! has to be able to log which way it went (`BED2`).
+	ByteOrderDecision byteOrderDecision_{};
 	//! Resolves the module's value/function/table/global/tag imports.
 	void resolveImports(ImportResolver& importResolver);
 	//! Resolves the module's type imports into `importedTypeIds`.
@@ -315,6 +321,23 @@ public:
 	//! The store every entity of this instance lives in (from its module).
 	/** \brief Returns the Store that owns this instance's shared entities. \return Reference to the source module's Store. */
 	Store& store() const { return module->store(); }
+	//! \par Byte-order decision (docs/proposals/BIG_ENDIAN.md `BE-2`)
+	//! What the runtime's policy came to for *this* module: the requested policy,
+	//! the policy actually applied, and whether the emitted accesses convert.
+	//! Reported rather than silent, because `Adaptive` is a heuristic and a host
+	//! has to be able to log which way it went (`BED2`).
+	//! Records the byte-order decision this instance is compiled under.
+	//! Called by the instantiator before any body is compiled.
+	void setByteOrderDecision(const ByteOrderDecision& decision) noexcept
+	{
+		byteOrderDecision_ = decision;
+	}
+	//! The decision this instance's code was compiled under: `Strict` and
+	//! non-converting before any instantiation.
+	const ByteOrderDecision& byteOrderDecision() const noexcept
+	{
+		return byteOrderDecision_;
+	}
 	//! The optional host bridge installed for this instance, or nullptr for the
 	//! default dependency-free boundary.
 	/** \brief Returns the optional borrowed host bridge. \return Installed bridge, or nullptr when none was supplied. */
@@ -749,6 +772,26 @@ public:
 	/** \brief Returns the policy the next instantiation will report. \return The recorded policy. */
 	const CompilationPolicy& compilationPolicy() const noexcept { return requestedPolicy; }
 
+	//! \par Byte-order policy (docs/proposals/BIG_ENDIAN.md `BE-2`)
+	//! `Runtime` sets this from `RuntimeConfig::byteOrder` before it calls
+	//! `instantiate`, exactly as the profile and the compilation policy travel.
+	//! The core then reaches the *decision* from the module's evidence and the
+	//! host order, reports it on the instance, and a backend reads it during
+	//! `compileFunctions`. Setting it is additive: the default is `Strict`, the
+	//! only policy that can never be wrong on a little-endian host.
+	//! Records the byte-order policy the next instantiation must honour.
+	//! \param policy The host's request.
+	void setByteOrderPolicy(ByteOrderPolicy policy) noexcept
+	{
+		requestedByteOrder = policy;
+	}
+	//! The byte-order policy most recently set.
+	ByteOrderPolicy byteOrderPolicy() const noexcept { return requestedByteOrder; }
+	//! The decision reached for the module currently being instantiated: the
+	//! request unless `Adaptive` relaxed it. Read by a backend while it compiles.
+	//! \return The decision; `Strict` and non-converting before any instantiation.
+	const ByteOrderDecision& byteOrderDecision() const noexcept { return activeByteOrder; }
+
 	//! What this backend can actually honour, so an impossible request is
 	//! refused where it is set (`CPD6`). The default answer -- `Basic` only, no
 	//! interpreter -- is correct for a backend that never touched the policy,
@@ -834,6 +877,10 @@ private:
 	ProfileConfig activeProfile{};
 	//! The compilation policy `Runtime` last set (docs/proposals/COMPILER_POLICY.md).
 	CompilationPolicy requestedPolicy{};
+	//! The byte-order policy `Runtime` last set, and the decision it produced for
+	//! the module being instantiated (docs/proposals/BIG_ENDIAN.md `BE-2`).
+	ByteOrderPolicy requestedByteOrder = ByteOrderPolicy::Strict;
+	ByteOrderDecision activeByteOrder{};
 	//! Host stack reserve for created instances; `0` = `kDefaultStackReserveBytes`.
 	std::uint64_t stackReserve = 0;
 	//! Step-budget lowering switch; `0` = unmetered (CFG-8).

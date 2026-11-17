@@ -20,6 +20,7 @@ SOURCES += AsmjitContext.cpp \
     AsmjitModuleCompiler.cpp \
     AsmjitBackend.cpp
 HEADERS += AsmjitContext.hpp \
+    AsmjitEmitter.hpp \
     AsmjitTypeTranslator.hpp \
     AsmjitModuleCompiler.hpp
 

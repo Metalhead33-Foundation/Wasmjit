@@ -15,6 +15,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
+#include <set>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -513,4 +516,176 @@ std::filesystem::path(WASM_TEST_DIR) / "wide_v128_indirect_probe.wasm");
 
 	CHECK(WASM::callCallable<std::int32_t>(call("indirect")) == 30);
 	CHECK(WASM::callCallable<std::int32_t>(call("host"), std::int32_t(41)) == 42);
+}
+
+namespace {
+
+//! The host-specific emission set, as `[asmjit][ujit]` enforces it.
+//!
+//! `docs/proposals/BIG_ENDIAN.md` `BE-7` moved this backend's instruction
+//! vocabulary from `asmjit::x86` to `asmjit::ujit`. What remains on the host side
+//! is a *named* set (`Asmjit.md` "The host-specific set"), not a habit: every
+//! `compiler.` call that is still here builds the function, allocates a register
+//! or a label, or performs a call — and every instruction goes through the
+//! `Emitter` façade.
+//!
+//! The two counters below are the ledger. They only ever shrink, and a new raw
+//! instruction fails the case even if nobody edited the lists.
+
+//! Calls that *are* the structure rather than the instruction stream.
+//! `invoke`, `bind`, `ret` and the allocators are ABI and register plumbing, and
+//! the universal layer wraps the same host compiler, so they do not move.
+//! The structural calls the backend may make on the host compiler.
+//!
+//! These are ABI and register plumbing — allocation, frames, labels, function
+//! bodies — which `ujit` delegates rather than replaces. The *portable* spelling
+//! is the only one listed: `new_vec128`, not its x86-only synonym `new_xmm`.
+//! \return The allowed call names.
+const std::set<std::string>& structuralCalls()
+{
+	static const std::set<std::string> names = {
+		"bind", "finalize", "invoke", "new_func", "new_gp16", "new_gp32",
+		"new_gp64", "new_gp8", "new_gp_ptr", "new_label", "new_stack",
+		"new_vec128", "ret",
+	};
+	return names;
+}
+
+//! The instructions emitted through `host()`: a per-lane variable-count vector
+//! shift has no universal operation, so the six shifts are the whole remainder.
+const std::set<std::string>& hostOnlyInstructions()
+{
+	static const std::set<std::string> names = {
+		"pslld", "psllw", "psrad", "psraw", "psrld", "psrlw",
+	};
+	return names;
+}
+
+//! Every `compiler.<name>(` in \p source whose name is not structural.
+std::vector<std::string> rawCompilerCalls(const std::string& source)
+{
+	std::vector<std::string> offenders;
+	const std::string needle = "compiler.";
+	for (std::size_t at = 0; (at = source.find(needle, at)) != std::string::npos;
+			at += needle.size()) {
+		const std::size_t begin = at + needle.size();
+		std::size_t end = begin;
+		while (end < source.size()
+				&& (std::isalnum(static_cast<unsigned char>(source[end])) || source[end] == '_'))
+			++end;
+		if (end < source.size() && source[end] == '(' && !structuralCalls().count(source.substr(begin, end - begin)))
+			offenders.push_back(source.substr(begin, end - begin));
+	}
+	return offenders;
+}
+
+//! Every `host().<name>(` in \p source whose name is not in the host-only set.
+std::vector<std::string> unlistedHostCalls(const std::string& source)
+{
+	std::vector<std::string> offenders;
+	const std::string needle = "host().";
+	for (std::size_t at = 0; (at = source.find(needle, at)) != std::string::npos;
+			at += needle.size()) {
+		const std::size_t begin = at + needle.size();
+		std::size_t end = begin;
+		while (end < source.size()
+				&& (std::isalnum(static_cast<unsigned char>(source[end])) || source[end] == '_'))
+			++end;
+		if (end < source.size() && source[end] == '(' && !hostOnlyInstructions().count(source.substr(begin, end - begin)))
+			offenders.push_back(source.substr(begin, end - begin));
+	}
+	return offenders;
+}
+
+//! Reads one backend source file.
+std::string readBackendSource(const std::filesystem::path& source)
+{
+	REQUIRE(std::filesystem::exists(source));
+	std::ifstream stream(source, std::ios::binary);
+	REQUIRE(stream.good());
+	std::stringstream buffer;
+	buffer << stream.rdbuf();
+	return buffer.str();
+}
+
+} // namespace
+
+TEST_CASE("asmjit: the host-specific emission set only shrinks", "[asmjit][ujit]")
+{
+	// `BE-7`: every instruction is emitted through the `Emitter` façade, which
+	// speaks `asmjit::ujit`. This case is the ledger — it fails when a raw x86
+	// instruction reappears, and it names the only host-only instruction family
+	// the universal vocabulary cannot express.
+	const std::filesystem::path root = std::filesystem::path(WASM_TESTSUITE_SOURCE_DIR) / "..";
+	const std::string compiler = readBackendSource(root / "Asmjit" / "AsmjitModuleCompiler.cpp");
+	const std::string context = readBackendSource(root / "Asmjit" / "AsmjitContext.cpp");
+
+	const std::vector<std::string> raw = [&] {
+		std::vector<std::string> all = rawCompilerCalls(compiler);
+		for (const std::string& name : rawCompilerCalls(context))
+			all.push_back(name);
+		return all;
+	}();
+	INFO("non-structural compiler calls: " << raw.size());
+	CHECK(raw.empty());
+
+	const std::vector<std::string> unlisted = [&] {
+		std::vector<std::string> all = unlistedHostCalls(compiler);
+		for (const std::string& name : unlistedHostCalls(context))
+			all.push_back(name);
+		return all;
+	}();
+	INFO("host-only instructions outside the recorded set: " << unlisted.size());
+	CHECK(unlisted.empty());
+
+	// No instruction id may be spelled anywhere: that was the final raw path.
+	CHECK(compiler.find("Inst::kId") == std::string::npos);
+	CHECK(context.find("Inst::kId") == std::string::npos);
+
+	// The converted families must not creep back: the immediate move and the
+	// condition branch are the first two slices' evidence.
+	CHECK(compiler.find("emitter.movImm(") != std::string::npos);
+	CHECK(compiler.find("emitter.j(") != std::string::npos);
+	CHECK(compiler.find("emitter.vector3(") != std::string::npos);
+
+	// No sub-register view anywhere: `ujit`'s register move is same-width only
+	// and it has no register extension at all, so a view is the one spelling that
+	// cannot be expressed portably. A width change goes through the seam's `mov`,
+	// which stores and reloads (Asmjit.md "Width discipline").
+	for (const char* view : { ".r8()", ".r16()", ".r32()", ".r64()" }) {
+		INFO("sub-register view: " << view);
+		CHECK(compiler.find(view) == std::string::npos);
+		CHECK(context.find(view) == std::string::npos);
+	}
+	const std::string emitter =
+			readBackendSource(root / "Asmjit" / "AsmjitEmitter.hpp");
+	for (const char* view : { ".r8()", ".r16()", ".r32()", ".r64()" }) {
+		INFO("sub-register view in the seam: " << view);
+		CHECK(emitter.find(view) == std::string::npos);
+	}
+
+	// No host *type* either: the three files spell `asmjit::ujit::Gp`/`Mem`/`Vec`
+	// and nothing from the ISA namespace, so the same source compiles for a second
+	// target. This is the rule that closes `BE-7`'s residue (416 spellings).
+	for (const auto* source : { &compiler, &context, &emitter }) {
+		CHECK(source->find("asmjit::x86") == std::string::npos);
+	}
+
+	// The seam's escape hatch is unused: every instruction now has a universal
+	// operation, including `lea` and the GC object addresses it forms.
+	CHECK(compiler.find("emitter.host()") == std::string::npos);
+	CHECK(context.find("emitter.host()") == std::string::npos);
+
+	// One guarded exception remains, and only one: the per-lane variable-count
+	// vector shift, which the universal vocabulary cannot express (immediate
+	// counts only). It sits inside `ASMJIT_UJIT_X86` and the caller takes the
+	// portable helper path everywhere else, so this count is the whole host set.
+	const std::string guard = "#if defined(ASMJIT_UJIT_X86)";
+	CHECK(emitter.find(guard) != std::string::npos);
+	std::size_t hostShifts = 0;
+	for (std::size_t at = emitter.find("backend_.ps"); at != std::string::npos;
+			at = emitter.find("backend_.ps", at + 1))
+		++hostShifts;
+	INFO("guarded host vector shifts: " << hostShifts);
+	CHECK(hostShifts == 6);
 }

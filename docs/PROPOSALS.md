@@ -120,8 +120,8 @@ gaps → where we deliberately deviate → plan → test survey → references.
 
 ## 4. What the folder holds today
 
-**Snapshot (2026-11-13, working tree on `a2a361e`):** `docs/proposals/` holds **forty**
-notes — 41 `.md` files, one of which is `index.md`, which is navigation rather
+**Snapshot (2026-11-17, working tree on `dfabe47`):** `docs/proposals/` holds **forty-one**
+notes — 42 `.md` files, one of which is `index.md`, which is navigation rather
 than a note (it is what nests them in the generated site, and it is the one file
 exempt from the shape check below). Every note carries the §2.1 front matter and
 the nine slots of §2.2 in order (or the grouped variant of §3) with the references
@@ -132,6 +132,7 @@ throughout; the prefixes actually in the tree are:
 |---|---|---|---|
 | `ACQUIRE_RELEASE_ATOMICS.md` | `ARA<n>` | `ARAD<n>` | `ARA-<n>` |
 | `ANNOTATIONS.md` | `ANN<n>` | `ANND<n>` | `ANN-<n>` |
+| `BIG_ENDIAN.md` | `BE<n>` | `BED<n>` | `BE-<n>` |
 | `BULK_MEMORY.md` | `BM<n>` | `BMD<n>` | `BM-<n>` |
 | `CALL_TAGS.md` | `CTA<n>` | `CTAD<n>` | `CTA-<n>` |
 | `COMPILER_POLICY.md` | `CP<n>` | `CPD<n>` | `CP-<n>` |
@@ -236,6 +237,7 @@ authoritative per-item status is each note's §7 plan.
 | Note | §§ | Shape | Heading drift | Extra | Reading |
 |---|---:|---|---|---|---|
 | `ACQUIRE_RELEASE_ATOMICS.md` | 9 | canonical | none | — | conforms exactly |
+| `BIG_ENDIAN.md` | 9 | canonical | none | — | conforms exactly (a portability note: §2 quotes the two specifications that pin byte order) |
 | `ANNOTATIONS.md` | 9 | canonical | none | — | conforms exactly |
 | `BULK_MEMORY.md` | 9 | canonical | none | — | conforms exactly |
 | `CALL_TAGS.md` | 9 | canonical | none | — | conforms exactly |

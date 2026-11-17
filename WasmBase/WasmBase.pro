@@ -46,6 +46,7 @@ SOURCES += \
         WasmBackendRegistry.cpp \
         WasmCompilationPolicy.cpp \
         WasmConfiguration.cpp \
+        WasmByteOrder.cpp \
         WasmComponent.cpp \
         WasmCallCache.cpp \
         WasmComponentInstance.cpp \
@@ -87,6 +88,7 @@ SOURCES += \
 HEADERS += \
     WasmAgent.hpp \
     WasmBackendAbi.hpp \
+    WasmByteOrder.hpp \
     WasmBackendRegistry.hpp \
     WasmArtifact.hpp \
     WasmCallCache.hpp \

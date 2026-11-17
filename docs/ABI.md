@@ -182,29 +182,34 @@ legitimate where §3 of that note shows the spec leaves the freedom:
   Element order inside a GC array is *not* free, because `array.new_data` maps
   data-segment bytes into elements.
 
-Either way, on a big-endian host every multi-byte access has to convert, and the
-places that would have to convert are:
+Either way, on a big-endian host every multi-byte access has to convert. The
+sites are these, and the conversion now exists (docs/proposals/BIG_ENDIAN.md
+`BE-3`, `BE-4`, `BED3`):
 
-| Site | Today | A port needs |
+| Site | Where it stands | Remaining work |
 |---|---|---|
 | Binary decode and encode | byte-order-free already: every reader is an `Elv::Io::DataStream<Elv::Util::Endian::Little>`, and every integer on the wire is LEB128 | nothing |
 | Canonical ABI lift and lower | byte-wise already: `readUInt`/`writeUInt` assemble bytes by shift, WTF-16 and the SIMD lane accessors are explicit little-endian | nothing |
-| Global, table, exception and linear-memory access **emitted by a backend** | a native load or store — LibJIT `jit_insn_load_relative(…, jit_type_int)`, SLJIT `emitMemoryLoad(…, SLJIT_MOV_U32, …)` | a byte-reversed load/store per access, or a swap after it |
-| Atomic helpers ([`wasm_atomic.hpp`](../WasmBase/wasm_atomic.hpp)) | `__atomic_load_n(reinterpret_cast<T*>(address))` on a guest address | a converted read-modify-write |
-| GC object and heap layout | header fields stored natively, while §[GC Object and Heap ABI](#abi_gc) promises little-endian to embedders | either swap the header on every access or restate the promise as “native order of the host” |
+| Linear-memory access **emitted by a backend** | SLJIT reverses the value around each 2/4/8-byte integer and `f32`/`f64` load and store when the host's order differs from the guest's (`emitGuestSwap`); LibJIT and AsmJIT refuse such a host entirely | a `v128` block, once the vector image convention is pinned (`BE7`) |
+| The GC header's TypeId, refcount and array-length words, including the length word a backend reads inline | little-endian on **every** host: the runtime goes through `GcHeader::readWord`/`writeWord` and a coded-word CAS for the count, and SLJIT emits the reversal for the length word whatever the byte-order policy says | nothing |
+| Atomic helpers ([`wasm_atomic.hpp`](../WasmBase/wasm_atomic.hpp)) | the value crossing the helper boundary is reversed on a big-endian host; a `table.atomic` slot is a pointer and keeps the host's order | nothing |
+| GC object and heap layout | §[GC Object and Heap ABI](#abi_gc) promises little-endian, and the layout now keeps it on every host | nothing |
 
 Two of the three backends cannot host such a port at all: the LibJIT this tree
 links selects one of `interp`, `alpha`, `arm`, `x86`, `x86-64` in its
 `jit-config.h` — no big-endian target, and no byte-reversal instruction in its IR
 — and [`Asmjit/`](../Asmjit/Asmjit.md) is written against `asmjit::x86` end to
-end. SLJIT is the one that could: it carries `s390x`, big-endian `ppc64` and
-big-endian MIPS backends, plus a public `SLJIT_REV*` family that s390x compiles to
+end. Both now **refuse** a big-endian host in `translateTypes` rather than emit an
+access that would read every multi-byte value reversed (`BED4`). SLJIT is the one
+that converts: it carries `s390x`, big-endian `ppc64` and big-endian MIPS
+backends, plus a public `SLJIT_REV*` family that s390x compiles to
 `lrv`/`lrvg`/`strvg` — one instruction, with the load or store fused.
 
-So a big-endian port is “SLJIT plus the emitted access sites plus the atomic
-helpers”; it becomes *provisional* the day one big-endian runner exists. Until
-then the row stays **unsupported**, because a provisional target is specified and
-untested, while this one would be wrong.
+The row above stays **unsupported**, but for a different reason than before:
+the code now converts instead of being wrong on one, and what is missing is a
+runner — nothing in this tree has executed on a big-endian host
+(`BE-5`). *Provisional* is the label for a specified but untested target, so the
+flip is the runner's job, not the conversion's (`BE-6`).
 
 **Per-backend status.** SLJIT and AsmJIT emit the canonical signature directly.
 LibJIT owns both sides of its calls through its driver entry, so its
@@ -544,7 +549,7 @@ The layout and the allocation entry points are **ABI**, owned by
 | Array length | `u32` at offset 8 |
 | Array data | inline, element-aligned (`gcArrayDataOffset`) |
 | Element stride/alignment | packed `i8`=1, packed `i16`=2, `i32`/`f32`=4, `i64`/`f64`/reference=8, `v128`=16 |
-| Byte order | little-endian, regardless of host |
+| Byte order | little-endian, regardless of host: the TypeId, refcount and array-length words go through `GcHeader::readWord`/`writeWord`, the count through a coded-word compare-and-swap, and a data segment is decoded into element values at `array.new_data` |
 | Identity | address of the header; a reference is a `void*` to it |
 
 **Allocator call shape.** Backends call the type-derived forms only:

@@ -368,6 +368,15 @@ host satisfies all three for free; a backend that emitted native-order loads on 
 host would fail them immediately. They are the byte-order tripwire
 ([`ABI.md`](ABI.md) “The C ABI Contract”).
 
+The engine’s own byte-order evidence is the **`[byteorder]`** tag
+(`Test/ByteOrderTests.cpp`, 13 cases): the policy matrix, the evidence the
+`Adaptive` policy reads, the primitives, the runtime switch and its
+configuration key, the two backends that refuse a big-endian host, and the
+little-endian no-op property (one fixture compiles to the same code size under
+all three policies). `WASMJIT_BYTE_ORDER_HOST=big` claims a big-endian host for
+one case so the emission path runs here at all — a diagnostic, not a support
+claim ([`proposals/BIG_ENDIAN.md`](proposals/BIG_ENDIAN.md) §8).
+
 ### Every script is its own test case
 
 `Test/SpecSuite.cpp` registers one Catch2 test case per converted script, named **`spec: <script>`**

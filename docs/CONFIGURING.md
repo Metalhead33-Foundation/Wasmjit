@@ -54,7 +54,8 @@ default*. A value read from a file **is** the explicit argument: `fromConfigurat
 returns the struct the caller passes to `create()`, so nothing outranks it. What a
 file leaves out is exactly what a default-constructed struct leaves out — which is
 where the environment-seeded process defaults live (`WASMJIT_MAX_TOTAL_BYTES`,
-`WASMJIT_MAX_CONTINUATIONS`, `WASMJIT_CONT_STACK_BYTES`, `WASMJIT_LEGACY_EH`). That
+`WASMJIT_MAX_CONTINUATIONS`, `WASMJIT_CONT_STACK_BYTES`, `WASMJIT_LEGACY_EH`,
+`WASMJIT_BYTE_ORDER`). That
 is the whole point of the additive rule in §3: adding a settings file to an
 existing build cannot change the behaviour of a build that has none.
 
@@ -84,6 +85,7 @@ settings file has always used.
 | `sProfile` | `profile` | A named language profile, spelled as `profileName()` reports it: `full`, `deterministic`, `scalar`, `deterministic+scalar` (`docs/proposals/PROFILES.md`) | the full profile `{}` |
 | `uExcludedMarkers` | `profile.excludedMarkers` | A raw `ProfileMarker` bit set, **OR-ed into** the named profile: `1` nondeterministic (N), `2` threads (T), `4` vectors (V). It lets a file name the intersection `{N,V}`, which no named helper spells | nothing added |
 | `sConcurrency` | `concurrency` | `single` or `agents`; a per-instance entry discipline, not a scheduler (`docs/proposals/THREADS.md` `MF-6`) | `single` |
+| `sByteOrder` | `byteOrder` | `strict`, `adaptive` or `nonconformant`: how the engine treats a host whose byte order differs from the guest memory's (`docs/proposals/BIG_ENDIAN.md`). `strict` converts every multi-byte access, `adaptive` converts unless the module shows it cannot matter, `nonconformant` never converts — and an unrecognised spelling is refused, never treated as a policy | what `WASMJIT_BYTE_ORDER` names, else `strict` |
 | `uAllocationBudgetBytes` | `allocationBudgetBytes` | Compatibility spelling of the total budget. Prefer `uTotalBytes`; a value that disagrees with a non-zero `uTotalBytes` is refused at `create()` | unset |
 
 **A profile is a query, not a promise.** `sProfile = deterministic` names a real
@@ -91,6 +93,19 @@ profile that this engine does **not** claim alone — `{N,T}` without `V` needs
 `v128` NaN normalisation (`PRD2`). The reader maps the spelling faithfully;
 `supportsProfileConfig()` is the call that says whether the result is claimable, so
 a settings screen should disable the options it reports `false` for.
+
+**The byte-order key is inert where it must be.** A file that names any of the
+three policies changes nothing on a little-endian host, because the guest's
+order and the host's agree; the policy only decides whether a *big-endian* host
+converts (`BED5`). It is nevertheless refused where it is set, like every other
+named key: a typo must not silently select the conforming default.
+
+One environment variable per decision, and one diagnostic:
+
+| Variable | Meaning |
+|---|---|
+| `WASMJIT_BYTE_ORDER` | The process default for `sByteOrder`. An unnamed value stays `strict`. |
+| `WASMJIT_BYTE_ORDER_HOST` | **Diagnostic only.** Names `big` or `little` to make the compiler treat the host as that order, so the big-endian emission path can be run on a little-endian machine (`docs/proposals/BIG_ENDIAN.md` §8). It changes what generated code does and nothing else; no embedder should set it. |
 
 ### 3.2 The memory budget (`MemoryBudget`)
 
