@@ -1,4 +1,5 @@
 #include "AsmjitContext.hpp"
+#include "AsmjitEmitter.hpp"
 
 #include <stdexcept>
 #include <string>
@@ -124,7 +125,10 @@ Context::LaneWiseI32x4Entry Context::compileLaneWiseI32x4(bool multiply)
 			"AsmJit CodeHolder initialisation failed");
 
 	asmjit::x86::Compiler compiler(&code);
-	asmjit::FuncNode* function = compiler.add_func(
+	asmjit::ujit::UniCompiler universal(&compiler, runtime.cpu_features(),
+			asmjit::CpuHints{});
+	AsmJitBackend::Emitter emitter(compiler, universal);
+	asmjit::FuncNode* function = universal.add_func(
 			asmjit::FuncSignature::build<void, const std::uint32_t*,
 					const std::uint32_t*, std::uint32_t*>());
 	if (function == nullptr)
@@ -141,17 +145,16 @@ Context::LaneWiseI32x4Entry Context::compileLaneWiseI32x4(bool multiply)
 		const std::int32_t offset = lane * static_cast<std::int32_t>(sizeof(std::uint32_t));
 		asmjit::x86::Gp lhs = compiler.new_gp32();
 		asmjit::x86::Gp rhs = compiler.new_gp32();
-		checkError(compiler.mov(lhs, asmjit::x86::dword_ptr(a, offset)),
-				"AsmJit lane load emission failed");
-		checkError(compiler.mov(rhs, asmjit::x86::dword_ptr(b, offset)),
-				"AsmJit lane load emission failed");
-		checkError(multiply ? compiler.imul(lhs, rhs) : compiler.add(lhs, rhs),
-				"AsmJit lane arithmetic emission failed");
-		checkError(compiler.mov(asmjit::x86::dword_ptr(out, offset), lhs),
-				"AsmJit lane store emission failed");
+		emitter.mov(lhs, asmjit::x86::dword_ptr(a, offset));
+		emitter.mov(rhs, asmjit::x86::dword_ptr(b, offset));
+		if (multiply)
+			emitter.imul(lhs, rhs);
+		else
+			emitter.add(lhs, rhs);
+		emitter.mov(asmjit::x86::dword_ptr(out, offset), lhs);
 	}
 
-	checkError(compiler.end_func(), "AsmJit function finalisation failed");
+	checkError(universal.end_func(), "AsmJit function finalisation failed");
 	checkError(compiler.finalize(), "AsmJit compiler finalisation failed");
 
 	LaneWiseI32x4Entry entry = nullptr;
@@ -173,7 +176,10 @@ Context::V128I32x4AddEntry Context::compileV128I32x4Add()
 			"AsmJit CodeHolder initialisation failed");
 
 	asmjit::x86::Compiler compiler(&code);
-	asmjit::FuncNode* function = compiler.add_func(
+	asmjit::ujit::UniCompiler universal(&compiler, runtime.cpu_features(),
+			asmjit::CpuHints{});
+	AsmJitBackend::Emitter emitter(compiler, universal);
+	asmjit::FuncNode* function = universal.add_func(
 			asmjit::FuncSignature::build<void, const std::uint32_t*,
 					const std::uint32_t*, std::uint32_t*>());
 	if (function == nullptr)
@@ -188,16 +194,12 @@ Context::V128I32x4AddEntry Context::compileV128I32x4Add()
 
 	asmjit::x86::Vec lhs = compiler.new_vec128("lhs");
 	asmjit::x86::Vec rhs = compiler.new_vec128("rhs");
-	checkError(compiler.emit(asmjit::x86::Inst::kIdMovdqu, lhs, asmjit::x86::ptr(a)),
-			"AsmJit V128 first load emission failed");
-	checkError(compiler.emit(asmjit::x86::Inst::kIdMovdqu, rhs, asmjit::x86::ptr(b)),
-			"AsmJit V128 second load emission failed");
-	checkError(compiler.emit(asmjit::x86::Inst::kIdPaddd, lhs, rhs),
-			"AsmJit V128 packed addition emission failed");
-	checkError(compiler.emit(asmjit::x86::Inst::kIdMovdqu, asmjit::x86::ptr(out), lhs),
-			"AsmJit V128 result store emission failed");
+	emitter.vectorLoad128(lhs, asmjit::x86::ptr(a));
+	emitter.vectorLoad128(rhs, asmjit::x86::ptr(b));
+			emitter.vector3(asmjit::ujit::UniOpVVV::kAddU32, lhs, lhs, rhs);
+	emitter.vectorStore128(asmjit::x86::ptr(out), lhs);
 
-	checkError(compiler.end_func(), "AsmJit V128 function finalisation failed");
+	checkError(universal.end_func(), "AsmJit V128 function finalisation failed");
 	checkError(compiler.finalize(), "AsmJit V128 compiler finalisation failed");
 
 	V128I32x4AddEntry entry = nullptr;
@@ -219,7 +221,10 @@ Context::V128BitwiseEntry Context::compileV128Bitwise(V128BitwiseOp operation)
 			"AsmJit CodeHolder initialisation failed");
 
 	asmjit::x86::Compiler compiler(&code);
-	asmjit::FuncNode* function = compiler.add_func(
+	asmjit::ujit::UniCompiler universal(&compiler, runtime.cpu_features(),
+			asmjit::CpuHints{});
+	AsmJitBackend::Emitter emitter(compiler, universal);
+	asmjit::FuncNode* function = universal.add_func(
 			asmjit::FuncSignature::build<void, const std::uint8_t*,
 					const std::uint8_t*, std::uint8_t*>());
 	if (function == nullptr)
@@ -234,31 +239,25 @@ Context::V128BitwiseEntry Context::compileV128Bitwise(V128BitwiseOp operation)
 
 	asmjit::x86::Vec lhs = compiler.new_vec128("lhs");
 	asmjit::x86::Vec rhs = compiler.new_vec128("rhs");
-	checkError(compiler.emit(asmjit::x86::Inst::kIdMovdqu, lhs, asmjit::x86::ptr(a)),
-			"AsmJit V128 bitwise first load emission failed");
-	checkError(compiler.emit(asmjit::x86::Inst::kIdMovdqu, rhs, asmjit::x86::ptr(b)),
-			"AsmJit V128 bitwise second load emission failed");
+	emitter.vectorLoad128(lhs, asmjit::x86::ptr(a));
+	emitter.vectorLoad128(rhs, asmjit::x86::ptr(b));
 
 	switch (operation) {
 	case V128BitwiseOp::And:
-		checkError(compiler.emit(asmjit::x86::Inst::kIdPand, lhs, rhs),
-				"AsmJit V128 AND emission failed");
+				emitter.vector3(asmjit::ujit::UniOpVVV::kAndU32, lhs, lhs, rhs);
 		break;
 	case V128BitwiseOp::Or:
-		checkError(compiler.emit(asmjit::x86::Inst::kIdPor, lhs, rhs),
-				"AsmJit V128 OR emission failed");
+				emitter.vector3(asmjit::ujit::UniOpVVV::kOrU32, lhs, lhs, rhs);
 		break;
 	case V128BitwiseOp::Xor:
-		checkError(compiler.emit(asmjit::x86::Inst::kIdPxor, lhs, rhs),
-				"AsmJit V128 XOR emission failed");
+				emitter.vector3(asmjit::ujit::UniOpVVV::kXorU32, lhs, lhs, rhs);
 		break;
 	default:
 		throw std::invalid_argument("Unknown AsmJit V128 bitwise operation");
 	}
 
-	checkError(compiler.emit(asmjit::x86::Inst::kIdMovdqu, asmjit::x86::ptr(out), lhs),
-			"AsmJit V128 bitwise result store emission failed");
-	checkError(compiler.end_func(), "AsmJit V128 bitwise function finalisation failed");
+	emitter.vectorStore128(asmjit::x86::ptr(out), lhs);
+	checkError(universal.end_func(), "AsmJit V128 bitwise function finalisation failed");
 	checkError(compiler.finalize(), "AsmJit V128 bitwise compiler finalisation failed");
 
 	V128BitwiseEntry entry = nullptr;
@@ -280,21 +279,25 @@ Context::PackedI8ExtendEntry Context::compilePackedI8Extend(bool signExtend)
 			"AsmJit CodeHolder initialisation failed");
 
 	asmjit::x86::Compiler compiler(&code);
-	asmjit::FuncNode* function = compiler.add_func(
+	asmjit::ujit::UniCompiler universal(&compiler, runtime.cpu_features(),
+			asmjit::CpuHints{});
+	AsmJitBackend::Emitter emitter(compiler, universal);
+	asmjit::FuncNode* function = universal.add_func(
 			asmjit::FuncSignature::build<std::uint32_t, const std::uint8_t*>());
 	if (function == nullptr)
 		throw std::runtime_error("AsmJit failed to create the packed i8 extension function");
 
 	asmjit::x86::Gp input = compiler.new_gp_ptr("input");
-	asmjit::x86::Gp narrow = compiler.new_gp8("narrow");
 	asmjit::x86::Gp result = compiler.new_gp32("result");
 	function->set_arg(0, input);
-	checkError(compiler.mov(narrow, asmjit::x86::byte_ptr(input)),
-			"AsmJit packed i8 load emission failed");
-	checkError(signExtend ? compiler.movsx(result, narrow) : compiler.movzx(result, narrow),
-			"AsmJit packed i8 extension emission failed");
+	// The load itself carries the extension, which is the same universal path the
+	// module compiler uses for a packed struct field.
+	if (signExtend)
+		emitter.loadS8(result, asmjit::x86::byte_ptr(input));
+	else
+		emitter.loadZ8(result, asmjit::x86::byte_ptr(input));
 	checkError(compiler.ret(result), "AsmJit packed i8 return emission failed");
-	checkError(compiler.end_func(), "AsmJit packed i8 function finalisation failed");
+	checkError(universal.end_func(), "AsmJit packed i8 function finalisation failed");
 	checkError(compiler.finalize(), "AsmJit packed i8 compiler finalisation failed");
 
 	PackedI8ExtendEntry entry = nullptr;
@@ -316,21 +319,23 @@ Context::PackedI16ExtendEntry Context::compilePackedI16Extend(bool signExtend)
 			"AsmJit CodeHolder initialisation failed");
 
 	asmjit::x86::Compiler compiler(&code);
-	asmjit::FuncNode* function = compiler.add_func(
+	asmjit::ujit::UniCompiler universal(&compiler, runtime.cpu_features(),
+			asmjit::CpuHints{});
+	AsmJitBackend::Emitter emitter(compiler, universal);
+	asmjit::FuncNode* function = universal.add_func(
 			asmjit::FuncSignature::build<std::uint32_t, const std::uint16_t*>());
 	if (function == nullptr)
 		throw std::runtime_error("AsmJit failed to create the packed i16 extension function");
 
 	asmjit::x86::Gp input = compiler.new_gp_ptr("input");
-	asmjit::x86::Gp narrow = compiler.new_gp16("narrow");
 	asmjit::x86::Gp result = compiler.new_gp32("result");
 	function->set_arg(0, input);
-	checkError(compiler.mov(narrow, asmjit::x86::word_ptr(input)),
-			"AsmJit packed i16 load emission failed");
-	checkError(signExtend ? compiler.movsx(result, narrow) : compiler.movzx(result, narrow),
-			"AsmJit packed i16 extension emission failed");
+	if (signExtend)
+		emitter.loadS16(result, asmjit::x86::word_ptr(input));
+	else
+		emitter.loadZ16(result, asmjit::x86::word_ptr(input));
 	checkError(compiler.ret(result), "AsmJit packed i16 return emission failed");
-	checkError(compiler.end_func(), "AsmJit packed i16 function finalisation failed");
+	checkError(universal.end_func(), "AsmJit packed i16 function finalisation failed");
 	checkError(compiler.finalize(), "AsmJit packed i16 compiler finalisation failed");
 
 	PackedI16ExtendEntry entry = nullptr;

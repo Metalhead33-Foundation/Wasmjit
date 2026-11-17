@@ -1391,8 +1391,7 @@ public:
 			asmjit::x86::Gp bufferPointer = compiler.new_gp_ptr("v128ResultBufferIn");
 			function.set_arg(static_cast<uint32_t>(stack.parameterCount) + 1,
 					bufferPointer);
-			checkError(compiler.mov(v128ResultSlot, bufferPointer),
-					"AsmJit v128 result buffer capture failed");
+			emitter.mov(v128ResultSlot, bufferPointer);
 		}
 		exceptionPtrSlot = compiler.new_stack(8, 8, "pendingException");
 
@@ -1420,12 +1419,10 @@ public:
 		asmjit::x86::Gp trapSlot = compiler.new_gp_ptr("trapSlot");
 		trapSlotCall->set_ret(0, trapSlot);
 		asmjit::x86::Gp pending = compiler.new_gp32("pendingTrap");
-		checkError(compiler.mov(pending, asmjit::x86::dword_ptr(trapSlot,
-				static_cast<int32_t>(offsetof(WASM::TrapSlot, pending)))),
-				"AsmJit failed to load pending-trap state");
+		emitter.mov(pending, asmjit::x86::dword_ptr(trapSlot,
+				static_cast<int32_t>(offsetof(WASM::TrapSlot, pending))));
 		asmjit::Label bodyLabel = compiler.new_label();
-		checkError(compiler.test(pending, pending), "AsmJit pending-trap test emission failed");
-		checkError(compiler.jz(bodyLabel), "AsmJit pending-trap branch emission failed");
+		emitter.j(bodyLabel, asmjit::ujit::test_z(pending, pending));
 		if (frameMode || type.results.empty() || bufferedVectorResult) {
 			// Frame mode belongs here too: the signature returns void because the
 			// results travel in the frame, and on a trap they are undefined, so
@@ -1433,12 +1430,12 @@ public:
 			checkError(compiler.ret(), "AsmJit trap-path void return emission failed");
 		} else if (isFloatKind(resultType)) {
 			auto zero = compiler.new_xmm("trapFloatResult");
-			checkError(compiler.xorps(zero, zero), "AsmJit trap float result zeroing failed");
+			emitter.vectorZero(zero);
 			checkError(compiler.ret(zero), "AsmJit trap-path float return emission failed");
 		} else {
 			asmjit::x86::Gp zero = kindWidth(resultType) == 8
 					? compiler.new_gp64("trapResult") : compiler.new_gp32("trapResult");
-			checkError(compiler.xor_(zero, zero), "AsmJit trap-result zeroing failed");
+			emitter.xor_(zero, zero);
 			checkError(compiler.ret(zero), "AsmJit trap-path result return emission failed");
 		}
 		checkError(compiler.bind(bodyLabel), "AsmJit body label binding failed");
@@ -1456,8 +1453,7 @@ public:
 				if (declared.opcode == WASM::ValueTypeCode::V128) {
 					asmjit::x86::Gp buffer = newVectorBuffer("v128Param");
 					asmjit::x86::Gp source = compiler.new_gp_ptr("paramAddress");
-					checkError(compiler.lea(source, asmjit::x86::Mem(framePointer, offset)),
-							"AsmJit frame parameter address failed");
+					emitter.lea(source, asmjit::x86::Mem(framePointer, offset));
 					copyVector(buffer, source);
 					locals.push_back(buffer);
 					offset += 16;
@@ -1466,8 +1462,7 @@ public:
 				// Scalars -- integers and float bit patterns alike -- load
 				// straight out of the frame into their register.
 				asmjit::x86::Gp parameter = newIntegerRegister(compiler, declared, "parameter");
-				checkError(compiler.mov(parameter, asmjit::x86::Mem(framePointer, offset)),
-						"AsmJit frame parameter load failed");
+				emitter.mov(parameter, asmjit::x86::Mem(framePointer, offset));
 				locals.push_back(parameter);
 				offset += 8;
 			}
@@ -1483,11 +1478,9 @@ public:
 						? compiler.new_gp32("parameterBits")
 						: compiler.new_gp64("parameterBits");
 				if (width == 4)
-					checkError(compiler.movd(bits, parameter),
-							"AsmJit f32 parameter copy failed");
+					emitter.vectorToGp32(bits, parameter);
 				else
-					checkError(compiler.movq(bits, parameter),
-							"AsmJit f64 parameter copy failed");
+					emitter.vectorToGp64(bits, parameter);
 				locals.push_back(bits);
 			} else {
 				asmjit::x86::Gp parameter = newIntegerRegister(compiler, declared, "parameter");
@@ -1504,7 +1497,7 @@ public:
 			} else {
 				asmjit::x86::Gp local = newIntegerRegister(compiler,
 						stack.allLocals[stack.parameterCount + i], "local");
-				checkError(compiler.xor_(local, local), "AsmJit local zero-initialisation failed");
+				emitter.xor_(local, local);
 				locals.push_back(local);
 			}
 		}
@@ -1573,9 +1566,8 @@ public:
 				// result goes into the frame in declaration order, 8 bytes per scalar
 				// slot and 16 for a `v128` taken from its local buffer.
 				asmjit::x86::Gp destination = compiler.new_gp_ptr("resultAddress");
-				checkError(compiler.lea(destination,
-						asmjit::x86::Mem(framePointer, frameResultOffset)),
-						"AsmJit frame result address failed");
+				emitter.lea(destination,
+						asmjit::x86::Mem(framePointer, frameResultOffset));
 				const std::size_t firstResult = values.size() - resultCount;
 				uint32_t offset = 0;
 				for (uint32_t i = 0; i < resultCount; ++i) {
@@ -1584,21 +1576,18 @@ public:
 					if (code == WASM::ValueTypeCode::V128) {
 						for (int word = 0; word < 2; ++word) {
 							asmjit::x86::Gp bits = compiler.new_gp64("frameResultWord");
-							checkError(compiler.mov(bits,
-									asmjit::x86::qword_ptr(value, word * 8)),
-									"AsmJit frame vector result load failed");
-							checkError(compiler.mov(
-									asmjit::x86::qword_ptr(destination, offset + word * 8), bits),
-									"AsmJit frame vector result store failed");
+							emitter.mov(bits,
+									asmjit::x86::qword_ptr(value, word * 8));
+							emitter.mov(
+									asmjit::x86::qword_ptr(destination, offset + word * 8), bits);
 						}
 						offset += 16;
 						continue;
 					}
 					const asmjit::x86::Gp stored = isFloatKind(code)
 							? canonicalizeFloatBits(value, kindWidth(code)) : value;
-					checkError(compiler.mov(
-							asmjit::x86::Mem(destination, offset, stored.size()), stored),
-							"AsmJit frame result store failed");
+					emitter.mov(
+							asmjit::x86::Mem(destination, offset, stored.size()), stored);
 					offset += 8;
 				}
 				checkError(compiler.ret(), "AsmJit frame result return failed");
@@ -1613,18 +1602,13 @@ public:
 				// The value is the address of the vector 16-byte buffer; copy it into the
 				// caller buffer and return void.
 				asmjit::x86::Gp destination = compiler.new_gp_ptr("v128ResultOut");
-				checkError(compiler.mov(destination, v128ResultSlot),
-						"AsmJit v128 result buffer reload failed");
+				emitter.mov(destination, v128ResultSlot);
 				asmjit::x86::Gp source = values.back();
 				asmjit::x86::Gp word = compiler.new_gp64("v128ResultWord");
-				checkError(compiler.mov(word, asmjit::x86::qword_ptr(source, 0)),
-						"AsmJit v128 result low word load failed");
-				checkError(compiler.mov(asmjit::x86::qword_ptr(destination, 0), word),
-						"AsmJit v128 result low word store failed");
-				checkError(compiler.mov(word, asmjit::x86::qword_ptr(source, 8)),
-						"AsmJit v128 result high word load failed");
-				checkError(compiler.mov(asmjit::x86::qword_ptr(destination, 8), word),
-						"AsmJit v128 result high word store failed");
+				emitter.mov(word, asmjit::x86::qword_ptr(source, 0));
+				emitter.mov(asmjit::x86::qword_ptr(destination, 0), word);
+				emitter.mov(word, asmjit::x86::qword_ptr(source, 8));
+				emitter.mov(asmjit::x86::qword_ptr(destination, 8), word);
 				checkError(compiler.ret(), "AsmJit v128 result return emission failed");
 			} else {
 				checkError(compiler.ret(values.back()),
@@ -1655,7 +1639,7 @@ protected:
 		}
 		asmjit::x86::Gp copy = locals[i].size() == 8
 				? compiler.new_gp64("localCopy") : compiler.new_gp32("localCopy");
-		checkError(compiler.mov(copy, locals[i]), "AsmJit local.get emission failed");
+		emitter.mov(copy, locals[i]);
 		if (isReferenceKind(localKinds[i])) {
 			// The slot keeps its own count; the clone is the operand stack's.
 			copy = emitRefClone(copy);
@@ -1685,7 +1669,7 @@ protected:
 			emitRefDrop(value);
 			return;
 		}
-		checkError(compiler.mov(locals[i], value), "AsmJit local.set emission failed");
+		emitter.mov(locals[i], value);
 	}
 
 	void dispatchLocalTee(WASM::LocalIdx index) override
@@ -1708,8 +1692,8 @@ protected:
 		}
 		asmjit::x86::Gp copy = locals[i].size() == 8
 				? compiler.new_gp64("teeCopy") : compiler.new_gp32("teeCopy");
-		checkError(compiler.mov(copy, values.back()), "AsmJit local.tee emission failed");
-		checkError(compiler.mov(locals[i], copy), "AsmJit local.tee store emission failed");
+		emitter.mov(copy, values.back());
+		emitter.mov(locals[i], copy);
 		values.back() = copy;
 	}
 
@@ -1757,11 +1741,9 @@ protected:
 		// overwrites its virtual register, so a handle to it would read the new
 		// value afterwards.
 		const asmjit::x86::Gp old = compiler.new_gp64("localOldRef");
-		checkError(compiler.mov(old, locals[index]),
-				"AsmJit local reference barrier old-value copy failed");
+		emitter.mov(old, locals[index]);
 		const asmjit::x86::Gp kept = emitRefClone(value);
-		checkError(compiler.mov(locals[index], kept),
-				"AsmJit local reference barrier store failed");
+		emitter.mov(locals[index], kept);
 		emitRefDrop(old);
 	}
 
@@ -1775,8 +1757,7 @@ protected:
 			if (!isReferenceKind(localKinds[i]) || localWidths[i] != 8)
 				continue;
 			const asmjit::x86::Gp kept = emitRefClone(locals[i]);
-			checkError(compiler.mov(locals[i], kept),
-					"AsmJit reference parameter retain failed");
+			emitter.mov(locals[i], kept);
 		}
 	}
 
@@ -1925,8 +1906,7 @@ protected:
 		create->set_arg(2, asmjit::Imm(static_cast<uint32_t>(layout.size)));
 		create->set_ret(0, exn);
 		emitPendingTrapReturn();
-		checkError(compiler.mov(exceptionPtrSlot, exn),
-				"AsmJit thrown-exception slot store failed");
+		emitter.mov(exceptionPtrSlot, exn);
 
 		for (std::size_t i = 0; i < payloadValues.size(); ++i) {
 			const int32_t offset = static_cast<int32_t>(layout.fields[i].offset);
@@ -1934,18 +1914,16 @@ protected:
 			if (width == 16) {
 				for (int word = 0; word < 2; ++word) {
 					auto bits = compiler.new_gp64("thrownPayloadWord");
-					checkError(compiler.mov(bits,
-							asmjit::x86::qword_ptr(payloadValues[i], word * 8)),
-							"AsmJit thrown-payload vector load failed");
-					checkError(compiler.mov(
-							asmjit::x86::qword_ptr(exn, offset + word * 8), bits),
-							"AsmJit thrown-payload vector store failed");
+					emitter.mov(bits,
+							asmjit::x86::qword_ptr(payloadValues[i], word * 8));
+					emitter.mov(
+							asmjit::x86::qword_ptr(exn, offset + word * 8), bits);
 				}
 				continue;
 			}
-			checkError(compiler.mov(
+			emitter.mov(
 					asmjit::x86::Mem(exn, offset, payloadValues[i].size()),
-					payloadValues[i]), "AsmJit thrown-payload store failed");
+					payloadValues[i]);
 		}
 
 		asmjit::FuncSignature setSignature(asmjit::CallConvId::kCDecl);
@@ -1971,8 +1949,7 @@ protected:
 		auto exn = values.back();
 		values.pop_back();
 		auto notNull = compiler.new_label();
-		checkError(compiler.test(exn, exn), "AsmJit throw_ref null test failed");
-		checkError(compiler.jnz(notNull), "AsmJit throw_ref null branch failed");
+		emitter.j(notNull, asmjit::ujit::test_nz(exn, exn));
 		asmjit::FuncSignature reportSignature(asmjit::CallConvId::kCDecl);
 		reportSignature.set_ret(asmjit::TypeId::kVoid);
 		asmjit::InvokeNode* report = nullptr;
@@ -1981,8 +1958,7 @@ protected:
 				"AsmJit throw_ref null trap emission failed");
 		emitZeroReturn();
 		checkError(compiler.bind(notNull), "AsmJit throw_ref continuation binding failed");
-		checkError(compiler.mov(exceptionPtrSlot, exn),
-				"AsmJit throw_ref exception slot store failed");
+		emitter.mov(exceptionPtrSlot, exn);
 		asmjit::FuncSignature setSignature(asmjit::CallConvId::kCDecl);
 		setSignature.set_ret(asmjit::TypeId::kVoid);
 		setSignature.add_arg(asmjit::TypeId::kUIntPtr);
@@ -2020,8 +1996,7 @@ protected:
 		pushControlFrame(ControlKind::If, type);
 		auto& frame = controls.back();
 		frame.alternate = compiler.new_label();
-		checkError(compiler.test(condition, condition), "AsmJit if condition test failed");
-		checkError(compiler.jz(frame.alternate), "AsmJit if condition branch failed");
+		emitter.j(frame.alternate, asmjit::ujit::test_z(condition, condition));
 	}
 
 	void dispatchElse() override
@@ -2032,7 +2007,7 @@ protected:
 		frame.thenReachable = !armTerminated;
 		if (frame.thenReachable)
 			storeBlockResult(frame, "if then");
-		checkError(compiler.jmp(frame.end), "AsmJit if/else end jump failed");
+		emitter.jmp(frame.end);
 		checkError(compiler.bind(frame.alternate), "AsmJit else label binding failed");
 		values.resize(frame.stackHeight);
 		for (const asmjit::x86::Gp& param : frame.params)
@@ -2064,7 +2039,7 @@ protected:
 				// The true arm produced its result; store it before jumping over
 				// the implicit-else forwarding block.
 				storeBlockResult(frame, "implicit if");
-				checkError(compiler.jmp(frame.end), "AsmJit implicit-else end jump failed");
+				emitter.jmp(frame.end);
 			}
 			checkError(compiler.bind(frame.alternate), "AsmJit implicit else label binding failed");
 			for (std::size_t i = 0; i < frame.resultCount; ++i)
@@ -2101,8 +2076,7 @@ protected:
 				throw std::runtime_error("AsmJit conditional function branch has too few results");
 			}
 			auto skip = compiler.new_label();
-			checkError(compiler.test(condition, condition), "AsmJit conditional function branch test failed");
-			checkError(compiler.jz(skip), "AsmJit conditional function branch skip failed");
+			emitter.j(skip, asmjit::ujit::test_z(condition, condition));
 			emitFunctionReturnValues();
 			checkError(compiler.bind(skip), "AsmJit conditional function branch label binding failed");
 			return;
@@ -2122,8 +2096,7 @@ protected:
 		const asmjit::Label label = loopTarget ? target.begin : target.end;
 		if (branchValues != 0) {
 			auto skip = compiler.new_label();
-			checkError(compiler.test(condition, condition), "AsmJit br_if condition test failed");
-			checkError(compiler.jz(skip), "AsmJit br_if conditional skip emission failed");
+			emitter.j(skip, asmjit::ujit::test_z(condition, condition));
 			const size_t first = values.size() - branchValues;
 			const std::vector<asmjit::x86::Gp>& destinations = loopTarget ? target.params : target.results;
 			const std::vector<WASM::ValueTypeCode>& codes = loopTarget
@@ -2131,13 +2104,12 @@ protected:
 			for (size_t i = 0; i < branchValues; ++i)
 				transferValue(destinations[i], values[first + i], codes[i],
 						"AsmJit br_if result transfer failed");
-			checkError(compiler.jmp(label), "AsmJit br_if branch emission failed");
+			emitter.jmp(label);
 			if (!loopTarget)
 				target.endTargeted = true;
 			checkError(compiler.bind(skip), "AsmJit br_if skip label binding failed");
 		} else {
-			checkError(compiler.test(condition, condition), "AsmJit br_if condition test failed");
-			checkError(compiler.jnz(label), "AsmJit br_if branch emission failed");
+			emitter.j(label, asmjit::ujit::test_nz(condition, condition));
 			// A zero-arity branch still makes its target's `end` reachable:
 			// control continues after that block even though nothing is
 			// transferred. Without this, a `br_if` to an empty block leaves the
@@ -2184,7 +2156,7 @@ protected:
 						"AsmJit br result transfer failed");
 		}
 		const asmjit::Label label = loopTarget ? target.begin : target.end;
-		checkError(compiler.jmp(label), "AsmJit br emission failed");
+		emitter.jmp(label);
 		if (!loopTarget)
 			target.endTargeted = true;
 		armTerminated = true;
@@ -2259,16 +2231,15 @@ protected:
 							"AsmJit br_table result transfer failed");
 			}
 			const asmjit::Label label = loopTarget ? target.begin : target.end;
-			checkError(compiler.jmp(label), "AsmJit br_table branch emission failed");
+			emitter.jmp(label);
 			if (!loopTarget)
 				target.endTargeted = true;
 		};
 		for (size_t i = 0; i < depths.size(); ++i) {
 			auto matched = compiler.new_label();
 			auto next = compiler.new_label();
-			checkError(compiler.cmp(selector, static_cast<uint32_t>(i)), "AsmJit br_table selector comparison failed");
-			checkError(compiler.jz(matched), "AsmJit br_table match branch failed");
-			checkError(compiler.jmp(next), "AsmJit br_table next-case branch failed");
+			emitter.j(matched, asmjit::ujit::cmp_eq(selector, static_cast<uint32_t>(i)));
+			emitter.jmp(next);
 			checkError(compiler.bind(matched), "AsmJit br_table match label binding failed");
 			emitTarget(depths[i]);
 			checkError(compiler.bind(next), "AsmJit br_table next-case label binding failed");
@@ -2312,17 +2283,15 @@ protected:
 				if (localWidths[i] == 16)
 					copyVector(locals[i], selfArgs[i]);
 				else
-					checkError(compiler.mov(locals[i], selfArgs[i]),
-							"AsmJit self tail-call argument store failed");
+					emitter.mov(locals[i], selfArgs[i]);
 			}
 			for (std::size_t i = parameterCount; i < locals.size(); ++i) {
 				if (localWidths[i] == 16)
 					zeroVector(locals[i]);
 				else
-					checkError(compiler.xor_(locals[i], locals[i]),
-							"AsmJit self tail-call local reset failed");
+					emitter.xor_(locals[i], locals[i]);
 			}
-			checkError(compiler.jmp(bodyStart), "AsmJit self tail-call jump failed");
+			emitter.jmp(bodyStart);
 			emitUnreachablePlaceholders();
 			return;
 		}
@@ -2342,9 +2311,8 @@ protected:
 					? static_cast<const void*>(&internals.importStorage[index])
 					: static_cast<const void*>(&internals.internalCallables[index - imported]);
 			auto targetRegister = compiler.new_gp64("tailTarget");
-			checkError(compiler.mov(targetRegister,
-					asmjit::Imm(reinterpret_cast<uint64_t>(target))),
-					"AsmJit tail-call target materialisation failed");
+			emitter.mov(targetRegister,
+					asmjit::Imm(reinterpret_cast<uint64_t>(target)));
 			emitTailCallState(targetRegister, tailArgs, calledType);
 			emitUnreachablePlaceholders();
 			return;
@@ -2394,12 +2362,10 @@ protected:
 			if (WASM::tailCallTrampolinesEligible(module, frameByType) && tailFits) {
 				const ResolvedIndirect resolved = resolveIndirectTarget(typeIndex, tableIndex);
 				auto thunk = compiler.new_gp_ptr("tailThunk");
-				checkError(compiler.mov(thunk, asmjit::x86::ptr(resolved.callable,
-						static_cast<int32_t>(offsetof(WASM::Callable, tailEntry)))),
-						"AsmJit frame tail-call thunk load failed");
+				emitter.mov(thunk, asmjit::x86::ptr(resolved.callable,
+						static_cast<int32_t>(offsetof(WASM::Callable, tailEntry))));
 				auto fallback = compiler.new_label();
-				checkError(compiler.test(thunk, thunk), "AsmJit frame tail-call thunk test failed");
-				checkError(compiler.jz(fallback), "AsmJit frame tail-call fallback branch failed");
+				emitter.j(fallback, asmjit::ujit::test_z(thunk, thunk));
 				emitTailCallState(resolved.callable, resolved.arguments, calledType);
 				checkError(compiler.bind(fallback), "AsmJit frame tail-call fallback label failed");
 				emitIndirectInvocation(resolved, calledType, typeIndex);
@@ -2417,12 +2383,10 @@ protected:
 		if (WASM::tailCallTrampolinesEligible(module, frameByType) && tailFits) {
 			const ResolvedIndirect resolved = resolveIndirectTarget(typeIndex, tableIndex);
 			auto thunk = compiler.new_gp_ptr("tailThunk");
-			checkError(compiler.mov(thunk, asmjit::x86::ptr(resolved.callable,
-					static_cast<int32_t>(offsetof(WASM::Callable, tailEntry)))),
-					"AsmJit tail-call thunk load failed");
+			emitter.mov(thunk, asmjit::x86::ptr(resolved.callable,
+					static_cast<int32_t>(offsetof(WASM::Callable, tailEntry))));
 			auto fallback = compiler.new_label();
-			checkError(compiler.test(thunk, thunk), "AsmJit tail-call thunk test failed");
-			checkError(compiler.jz(fallback), "AsmJit tail-call fallback branch failed");
+			emitter.j(fallback, asmjit::ujit::test_z(thunk, thunk));
 			emitTailCallState(resolved.callable, resolved.arguments, calledType);
 			checkError(compiler.bind(fallback), "AsmJit tail-call fallback label binding failed");
 			emitIndirectInvocation(resolved, calledType, typeIndex);
@@ -2478,10 +2442,9 @@ protected:
 		resolverSignature.add_arg(asmjit::TypeId::kUInt32);
 		asmjit::InvokeNode* resolver = nullptr;
 		auto table = compiler.new_gp32("indirectTableIndex");
-		checkError(compiler.mov(table, static_cast<uint32_t>(tableIndex)), "AsmJit indirect table index materialisation failed");
+		emitter.mov(table, static_cast<uint32_t>(tableIndex));
 		auto expected = compiler.new_gp32("indirectExpectedType");
-		checkError(compiler.mov(expected, module.typeId(WASM::LocalTypeIdx{typeIndex}).value),
-				"AsmJit indirect-call type id materialisation failed");
+		emitter.mov(expected, module.typeId(WASM::LocalTypeIdx{typeIndex}).value);
 		checkError(compiler.invoke(asmjit::Out(resolver),
 				reinterpret_cast<uint64_t>(&asmjitResolveIndirectCallable), resolverSignature),
 				"AsmJit indirect-call resolver emission failed");
@@ -2501,17 +2464,14 @@ protected:
 			uint32_t typeIndex)
 	{
 		auto target = compiler.new_gp_ptr("indirectFunction");
-		checkError(compiler.mov(target, asmjit::x86::ptr(resolved.callable,
-				static_cast<int32_t>(offsetof(WASM::Callable, fnPtr)))),
-				"AsmJit indirect function pointer load failed");
+		emitter.mov(target, asmjit::x86::ptr(resolved.callable,
+				static_cast<int32_t>(offsetof(WASM::Callable, fnPtr))));
 		auto calleeContext = compiler.new_gp_ptr("indirectContext");
-		checkError(compiler.mov(calleeContext, asmjit::x86::ptr(resolved.callable,
-				static_cast<int32_t>(offsetof(WASM::Callable, context)))),
-				"AsmJit indirect VMContext load failed");
+		emitter.mov(calleeContext, asmjit::x86::ptr(resolved.callable,
+				static_cast<int32_t>(offsetof(WASM::Callable, context))));
 		auto callerContext = compiler.new_label();
-		checkError(compiler.test(calleeContext, calleeContext), "AsmJit indirect context test failed");
-		checkError(compiler.jnz(callerContext), "AsmJit indirect context branch failed");
-		checkError(compiler.mov(calleeContext, vmContext), "AsmJit native indirect context selection failed");
+		emitter.j(callerContext, asmjit::ujit::test_nz(calleeContext, calleeContext));
+		emitter.mov(calleeContext, vmContext);
 		checkError(compiler.bind(callerContext), "AsmJit indirect context label binding failed");
 		// A parameter is the caller's borrow: the counts the operand stack holds
 		// must survive the invoke, so each reference argument is parked in its
@@ -2525,26 +2485,23 @@ protected:
 			asmjit::x86::Mem frameStorage = compiler.new_stack(
 					frameCallStorageBytes(calledType), 16, "indirectFrame");
 			asmjit::x86::Gp frameAddress = compiler.new_gp_ptr("indirectFrame");
-			checkError(compiler.lea(frameAddress, frameStorage),
-					"AsmJit indirect frame address failed");
+			emitter.lea(frameAddress, frameStorage);
 			uint32_t offset = 0;
 			for (std::size_t i = 0; i < resolved.arguments.size(); ++i) {
 				if (calledType.params[i].val.opcode == WASM::ValueTypeCode::V128) {
 					for (int word = 0; word < 2; ++word) {
 						auto bits = compiler.new_gp64("indirectFrameWord");
-						checkError(compiler.mov(bits,
-								asmjit::x86::qword_ptr(resolved.arguments[i], word * 8)),
-								"AsmJit indirect frame vector load failed");
-						checkError(compiler.mov(
-								asmjit::x86::qword_ptr(frameAddress, offset + word * 8), bits),
-								"AsmJit indirect frame vector store failed");
+						emitter.mov(bits,
+								asmjit::x86::qword_ptr(resolved.arguments[i], word * 8));
+						emitter.mov(
+								asmjit::x86::qword_ptr(frameAddress, offset + word * 8), bits);
 					}
 					offset += 16;
 					continue;
 				}
-				checkError(compiler.mov(
+				emitter.mov(
 						asmjit::x86::Mem(frameAddress, offset, resolved.arguments[i].size()),
-						resolved.arguments[i]), "AsmJit indirect frame store failed");
+						resolved.arguments[i]);
 				offset += 8;
 			}
 			asmjit::InvokeNode* invoke = nullptr;
@@ -2558,20 +2515,17 @@ protected:
 					auto buffer = newVectorBuffer("indirectVectorResult");
 					for (int word = 0; word < 2; ++word) {
 						auto bits = compiler.new_gp64("indirectResultWord");
-						checkError(compiler.mov(bits,
-								asmjit::x86::qword_ptr(frameAddress, resultOffset + word * 8)),
-								"AsmJit indirect frame vector result load failed");
-						checkError(compiler.mov(
-								asmjit::x86::qword_ptr(buffer, word * 8), bits),
-								"AsmJit indirect frame vector result store failed");
+						emitter.mov(bits,
+								asmjit::x86::qword_ptr(frameAddress, resultOffset + word * 8));
+						emitter.mov(
+								asmjit::x86::qword_ptr(buffer, word * 8), bits);
 					}
 					values.push_back(buffer);
 					resultOffset += 16;
 				} else {
 					auto result = newIntegerRegister(compiler, resultType.val, "indirectResult");
-					checkError(compiler.mov(result,
-							asmjit::x86::Mem(frameAddress, resultOffset, result.size())),
-							"AsmJit indirect frame result load failed");
+					emitter.mov(result,
+							asmjit::x86::Mem(frameAddress, resultOffset, result.size()));
 					// A reference result arrives owning one count (the callee hands
 					// over the count its operand stack held).
 					if (isReferenceKind(resultType.val.opcode))
@@ -2602,8 +2556,7 @@ protected:
 	void emitNullRefCheck(const asmjit::x86::Gp& callable)
 	{
 		auto nonNull = compiler.new_label();
-		checkError(compiler.test(callable, callable), "AsmJit null-reference test failed");
-		checkError(compiler.jnz(nonNull), "AsmJit null-reference branch failed");
+		emitter.j(nonNull, asmjit::ujit::test_nz(callable, callable));
 		asmjit::FuncSignature reportSignature(asmjit::CallConvId::kCDecl);
 		reportSignature.set_ret(asmjit::TypeId::kVoid);
 		asmjit::InvokeNode* report = nullptr;
@@ -2620,17 +2573,14 @@ protected:
 			const WASM::FuncType& calledType, uint32_t typeIndex)
 	{
 		auto target = compiler.new_gp_ptr("refFunction");
-		checkError(compiler.mov(target, asmjit::x86::ptr(callable,
-				static_cast<int32_t>(offsetof(WASM::Callable, fnPtr)))),
-				"AsmJit call_ref function load failed");
+		emitter.mov(target, asmjit::x86::ptr(callable,
+				static_cast<int32_t>(offsetof(WASM::Callable, fnPtr))));
 		auto calleeContext = compiler.new_gp_ptr("refContext");
-		checkError(compiler.mov(calleeContext, asmjit::x86::ptr(callable,
-				static_cast<int32_t>(offsetof(WASM::Callable, context)))),
-				"AsmJit call_ref context load failed");
+		emitter.mov(calleeContext, asmjit::x86::ptr(callable,
+				static_cast<int32_t>(offsetof(WASM::Callable, context))));
 		auto callerContext = compiler.new_label();
-		checkError(compiler.test(calleeContext, calleeContext), "AsmJit call_ref context test failed");
-		checkError(compiler.jnz(callerContext), "AsmJit call_ref context branch failed");
-		checkError(compiler.mov(calleeContext, vmContext), "AsmJit call_ref native context selection failed");
+		emitter.j(callerContext, asmjit::ujit::test_nz(calleeContext, calleeContext));
+		emitter.mov(calleeContext, vmContext);
 		checkError(compiler.bind(callerContext), "AsmJit call_ref context label binding failed");
 		// A parameter is the caller's borrow: the counts the operand stack holds
 		// must survive the invoke, so each reference argument is parked in its
@@ -2646,26 +2596,23 @@ protected:
 			asmjit::x86::Mem frameStorage = compiler.new_stack(
 					frameCallStorageBytes(calledType), 16, "refCallFrame");
 			asmjit::x86::Gp frameAddress = compiler.new_gp_ptr("refCallFrame");
-			checkError(compiler.lea(frameAddress, frameStorage),
-					"AsmJit call_ref frame address failed");
+			emitter.lea(frameAddress, frameStorage);
 			uint32_t offset = 0;
 			for (std::size_t i = 0; i < arguments.size(); ++i) {
 				if (calledType.params[i].val.opcode == WASM::ValueTypeCode::V128) {
 					for (int word = 0; word < 2; ++word) {
 						auto bits = compiler.new_gp64("refCallFrameWord");
-						checkError(compiler.mov(bits,
-								asmjit::x86::qword_ptr(arguments[i], word * 8)),
-								"AsmJit call_ref frame vector load failed");
-						checkError(compiler.mov(
-								asmjit::x86::qword_ptr(frameAddress, offset + word * 8), bits),
-								"AsmJit call_ref frame vector store failed");
+						emitter.mov(bits,
+								asmjit::x86::qword_ptr(arguments[i], word * 8));
+						emitter.mov(
+								asmjit::x86::qword_ptr(frameAddress, offset + word * 8), bits);
 					}
 					offset += 16;
 					continue;
 				}
-				checkError(compiler.mov(
+				emitter.mov(
 						asmjit::x86::Mem(frameAddress, offset, arguments[i].size()),
-						arguments[i]), "AsmJit call_ref frame store failed");
+						arguments[i]);
 				offset += 8;
 			}
 			asmjit::InvokeNode* invoke = nullptr;
@@ -2679,20 +2626,17 @@ protected:
 					auto buffer = newVectorBuffer("callRefVectorResult");
 					for (int word = 0; word < 2; ++word) {
 						auto bits = compiler.new_gp64("callRefResultWord");
-						checkError(compiler.mov(bits,
-								asmjit::x86::qword_ptr(frameAddress, resultOffset + word * 8)),
-								"AsmJit call_ref frame vector result load failed");
-						checkError(compiler.mov(
-								asmjit::x86::qword_ptr(buffer, word * 8), bits),
-								"AsmJit call_ref frame vector result store failed");
+						emitter.mov(bits,
+								asmjit::x86::qword_ptr(frameAddress, resultOffset + word * 8));
+						emitter.mov(
+								asmjit::x86::qword_ptr(buffer, word * 8), bits);
 					}
 					values.push_back(buffer);
 					resultOffset += 16;
 				} else {
 					auto result = newIntegerRegister(compiler, resultType.val, "callRefResult");
-					checkError(compiler.mov(result,
-							asmjit::x86::Mem(frameAddress, resultOffset, result.size())),
-							"AsmJit call_ref frame result load failed");
+					emitter.mov(result,
+							asmjit::x86::Mem(frameAddress, resultOffset, result.size()));
 					// A reference result arrives owning one count (the callee hands
 					// over the count its operand stack held).
 					if (isReferenceKind(resultType.val.opcode))
@@ -2769,12 +2713,10 @@ protected:
 				: WASM::tailCallSlotsSupported(calledType);
 		if (WASM::tailCallTrampolinesEligible(module, frameByType) && refTailSupported) {
 			auto thunk = compiler.new_gp_ptr("tailThunk");
-			checkError(compiler.mov(thunk, asmjit::x86::ptr(callable,
-					static_cast<int32_t>(offsetof(WASM::Callable, tailEntry)))),
-					"AsmJit return_call_ref thunk load failed");
+			emitter.mov(thunk, asmjit::x86::ptr(callable,
+					static_cast<int32_t>(offsetof(WASM::Callable, tailEntry))));
 			auto fallback = compiler.new_label();
-			checkError(compiler.test(thunk, thunk), "AsmJit return_call_ref thunk test failed");
-			checkError(compiler.jz(fallback), "AsmJit return_call_ref fallback branch failed");
+			emitter.j(fallback, asmjit::ujit::test_z(thunk, thunk));
 			emitTailCallState(callable, arguments, calledType);
 			checkError(compiler.bind(fallback), "AsmJit return_call_ref fallback label failed");
 			emitCallRefInvocation(callable, arguments, calledType, typeIndex);
@@ -2876,9 +2818,8 @@ protected:
 		asmjit::x86::Gp importedContext;
 		if (importedCallee != nullptr) {
 			importedContext = compiler.new_gp_ptr("importedVmContext");
-			checkError(compiler.mov(importedContext,
-					reinterpret_cast<uint64_t>(importedCallee)),
-					"AsmJit imported VMContext materialisation failed");
+			emitter.mov(importedContext,
+					reinterpret_cast<uint64_t>(importedCallee));
 		}
 
 		// A parameter is the caller's borrow: the counts the operand stack holds
@@ -2926,27 +2867,24 @@ protected:
 			asmjit::x86::Mem frameStorage = compiler.new_stack(
 					frameCallStorageBytes(calledType), 16, "callFrame");
 			asmjit::x86::Gp frameAddress = compiler.new_gp_ptr("callFrame");
-			checkError(compiler.lea(frameAddress, frameStorage),
-					"AsmJit call frame address failed");
+			emitter.lea(frameAddress, frameStorage);
 			uint32_t offset = 0;
 			for (size_t i = 0; i < arguments.size(); ++i) {
 				const WASM::ValueType& declared = calledType.params[i].val;
 				if (declared.opcode == WASM::ValueTypeCode::V128) {
 					for (int word = 0; word < 2; ++word) {
 						asmjit::x86::Gp bits = compiler.new_gp64("callFrameWord");
-						checkError(compiler.mov(bits,
-								asmjit::x86::qword_ptr(arguments[i], word * 8)),
-								"AsmJit call frame vector load failed");
-						checkError(compiler.mov(
-								asmjit::x86::qword_ptr(frameAddress, offset + word * 8), bits),
-								"AsmJit call frame vector store failed");
+						emitter.mov(bits,
+								asmjit::x86::qword_ptr(arguments[i], word * 8));
+						emitter.mov(
+								asmjit::x86::qword_ptr(frameAddress, offset + word * 8), bits);
 					}
 					offset += 16;
 					continue;
 				}
-				checkError(compiler.mov(
+				emitter.mov(
 						asmjit::x86::Mem(frameAddress, offset, arguments[i].size()),
-						arguments[i]), "AsmJit call frame store failed");
+						arguments[i]);
 				offset += 8;
 			}
 			asmjit::InvokeNode* frameInvoke = nullptr;
@@ -2965,21 +2903,18 @@ protected:
 					asmjit::x86::Gp buffer = newVectorBuffer("callVectorResult");
 					for (int word = 0; word < 2; ++word) {
 						asmjit::x86::Gp bits = compiler.new_gp64("callResultWord");
-						checkError(compiler.mov(bits,
-								asmjit::x86::qword_ptr(frameAddress, resultOffset + word * 8)),
-								"AsmJit call frame vector result load failed");
-						checkError(compiler.mov(
-								asmjit::x86::qword_ptr(buffer, word * 8), bits),
-								"AsmJit call frame vector result store failed");
+						emitter.mov(bits,
+								asmjit::x86::qword_ptr(frameAddress, resultOffset + word * 8));
+						emitter.mov(
+								asmjit::x86::qword_ptr(buffer, word * 8), bits);
 					}
 					values.push_back(buffer);
 					resultOffset += 16;
 				} else {
 					asmjit::x86::Gp resultRegister =
 							newIntegerRegister(compiler, resultType.val, "callResult");
-					checkError(compiler.mov(resultRegister,
-							asmjit::x86::Mem(frameAddress, resultOffset, resultRegister.size())),
-							"AsmJit call frame result load failed");
+					emitter.mov(resultRegister,
+							asmjit::x86::Mem(frameAddress, resultOffset, resultRegister.size()));
 					// A reference result arrives owning one count.
 					if (isReferenceKind(resultType.val.opcode))
 						markReference(resultRegister);
@@ -3045,12 +2980,10 @@ protected:
 		auto slot = compiler.new_gp_ptr("postCallTrapSlot");
 		slotCall->set_ret(0, slot);
 		auto pending = compiler.new_gp32("postCallPending");
-		checkError(compiler.mov(pending, asmjit::x86::dword_ptr(slot,
-				static_cast<int32_t>(offsetof(WASM::TrapSlot, pending)))),
-				"AsmJit failed to load post-call pending-trap state");
+		emitter.mov(pending, asmjit::x86::dword_ptr(slot,
+				static_cast<int32_t>(offsetof(WASM::TrapSlot, pending))));
 		auto noTrap = compiler.new_label();
-		checkError(compiler.test(pending, pending), "AsmJit post-call trap test failed");
-		checkError(compiler.jz(noTrap), "AsmJit post-call trap branch failed");
+		emitter.j(noTrap, asmjit::ujit::test_z(pending, pending));
 		emitTrapSiteAnnotation();
 		// A trap leaves through the return below, so the frame's reference
 		// locals give their counts back here instead of at an epilogue that
@@ -3064,15 +2997,14 @@ protected:
 			checkError(compiler.ret(), "AsmJit post-call void trap return failed");
 		} else if (isFloatKind(resultType)) {
 			auto zero = compiler.new_xmm("postCallTrapFloatResult");
-			checkError(compiler.xorps(zero, zero),
-					"AsmJit post-call trap float result initialisation failed");
+			emitter.vectorZero(zero);
 			checkError(compiler.ret(zero),
 					"AsmJit post-call trap float result return failed");
 		} else {
 			auto zero = kindWidth(resultType) == 8
 					? compiler.new_gp64("postCallTrapResult")
 					: compiler.new_gp32("postCallTrapResult");
-			checkError(compiler.xor_(zero, zero), "AsmJit post-call trap result initialisation failed");
+			emitter.xor_(zero, zero);
 			checkError(compiler.ret(zero), "AsmJit post-call trap result return failed");
 		}
 		checkError(compiler.bind(noTrap), "AsmJit post-call continuation binding failed");
@@ -3120,15 +3052,13 @@ protected:
 		}
 		if (isFloatKind(resultType)) {
 			auto zero = compiler.new_xmm("exceptionFloatResult");
-			checkError(compiler.xorps(zero, zero),
-					"AsmJit exception-path float result initialisation failed");
+			emitter.vectorZero(zero);
 			checkError(compiler.ret(zero), "AsmJit exception-path float return failed");
 			return;
 		}
 		asmjit::x86::Gp zero = kindWidth(resultType) == 8
 				? compiler.new_gp64("exceptionResult") : compiler.new_gp32("exceptionResult");
-		checkError(compiler.xor_(zero, zero),
-				"AsmJit exception-path result initialisation failed");
+		emitter.xor_(zero, zero);
 		checkError(compiler.ret(zero), "AsmJit exception-path result return failed");
 	}
 
@@ -3146,27 +3076,25 @@ protected:
 				"AsmJit tail-call state call emission failed");
 		auto state = compiler.new_gp_ptr("tailState");
 		stateInvoke->set_ret(0, state);
-		checkError(compiler.mov(asmjit::x86::Mem(state,
+		emitter.mov(asmjit::x86::Mem(state,
 				static_cast<int32_t>(offsetof(WASM::TailCallState, target)), 8),
-				target), "AsmJit tail-call target store failed");
+				target);
 		for (std::size_t i = 0; i < args.size(); ++i) {
 			const int32_t offset = static_cast<int32_t>(offsetof(WASM::TailCallState, args)
 					+ i * WASM::kTailCallSlotBytes);
 			if (i < type.params.size() && !type.params[i].isPacked
 					&& type.params[i].val.opcode == WASM::ValueTypeCode::V128) {
 				auto vector = compiler.new_xmm("tailVector");
-				checkError(compiler.movdqu(vector, asmjit::x86::ptr(args[i])),
-						"AsmJit tail-call vector load failed");
-				checkError(compiler.movdqu(asmjit::x86::Mem(state, offset, 16), vector),
-						"AsmJit tail-call vector store failed");
+				emitter.vectorLoad128(vector, asmjit::x86::ptr(args[i]));
+				emitter.vectorStore128(asmjit::x86::Mem(state, offset, 16), vector);
 			} else {
-				checkError(compiler.mov(asmjit::x86::Mem(state, offset, args[i].size()),
-						args[i]), "AsmJit tail-call argument store failed");
+				emitter.mov(asmjit::x86::Mem(state, offset, args[i].size()),
+						args[i]);
 			}
 		}
-		checkError(compiler.mov(asmjit::x86::Mem(state,
+		emitter.mov(asmjit::x86::Mem(state,
 				static_cast<int32_t>(offsetof(WASM::TailCallState, pending)), 4),
-				asmjit::Imm(1)), "AsmJit tail-call pending store failed");
+				asmjit::Imm(1));
 		emitZeroReturn();
 	}
 
@@ -3179,22 +3107,18 @@ protected:
 		const asmjit::x86::Gp stored = isFloatKind(resultType)
 				? canonicalizeFloatBits(value, kindWidth(resultType)) : value;
 		asmjit::x86::Gp destination = compiler.new_gp_ptr("frameResultAddress");
-		checkError(compiler.lea(destination,
-				asmjit::x86::Mem(framePointer, frameResultOffset)),
-				"AsmJit frame result address failed");
+		emitter.lea(destination,
+				asmjit::x86::Mem(framePointer, frameResultOffset));
 		if (resultType == WASM::ValueTypeCode::V128) {
 			for (int word = 0; word < 2; ++word) {
 				auto bits = compiler.new_gp64("frameResultWord");
-				checkError(compiler.mov(bits, asmjit::x86::qword_ptr(stored, word * 8)),
-						"AsmJit frame vector result load failed");
-				checkError(compiler.mov(
-						asmjit::x86::qword_ptr(destination, word * 8), bits),
-						"AsmJit frame vector result store failed");
+				emitter.mov(bits, asmjit::x86::qword_ptr(stored, word * 8));
+				emitter.mov(
+						asmjit::x86::qword_ptr(destination, word * 8), bits);
 			}
 		} else {
-			checkError(compiler.mov(
-					asmjit::x86::Mem(destination, 0, stored.size()), stored),
-					"AsmJit frame result store failed");
+			emitter.mov(
+					asmjit::x86::Mem(destination, 0, stored.size()), stored);
 		}
 		checkError(compiler.ret(), "AsmJit frame result return failed");
 	}
@@ -3211,8 +3135,7 @@ protected:
 		values.resize(stackHeight);
 		for (std::size_t i = 0; i < placeholderCount; ++i) {
 			auto zero = compiler.new_gp32("exceptionStackPlaceholder");
-			checkError(compiler.xor_(zero, zero),
-					"AsmJit exception placeholder initialisation failed");
+			emitter.xor_(zero, zero);
 			values.push_back(zero);
 		}
 	}
@@ -3228,10 +3151,8 @@ protected:
 		auto exn = compiler.new_gp_ptr("pendingException");
 		call->set_ret(0, exn);
 		auto none = compiler.new_label();
-		checkError(compiler.test(exn, exn), "AsmJit pending-exception test failed");
-		checkError(compiler.jz(none), "AsmJit pending-exception branch failed");
-		checkError(compiler.mov(exceptionPtrSlot, exn),
-				"AsmJit pending-exception slot store failed");
+		emitter.j(none, asmjit::ujit::test_z(exn, exn));
+		emitter.mov(exceptionPtrSlot, exn);
 		emitExceptionPropagation();
 		checkError(compiler.bind(none), "AsmJit pending-exception continuation failed");
 	}
@@ -3239,8 +3160,7 @@ protected:
 	void emitExceptionPropagation()
 	{
 		auto exn = compiler.new_gp_ptr("routedException");
-		checkError(compiler.mov(exn, exceptionPtrSlot),
-				"AsmJit routed-exception slot load failed");
+		emitter.mov(exn, exceptionPtrSlot);
 		asmjit::FuncSignature tagSignature(asmjit::CallConvId::kCDecl);
 		tagSignature.set_ret(asmjit::TypeId::kInt32);
 		tagSignature.add_arg(asmjit::TypeId::kUIntPtr);
@@ -3276,9 +3196,7 @@ protected:
 				const WASM::FuncType payload = tagPayloadType(clause.tagIdx);
 				const WASM::TagId tagId = tagIdForClause(clause);
 				auto next = compiler.new_label();
-				checkError(compiler.cmp(tag, static_cast<uint32_t>(tagId)),
-						"AsmJit exception tag comparison failed");
-				checkError(compiler.jne(next), "AsmJit exception tag branch failed");
+				emitter.j(next, asmjit::ujit::cmp_ne(tag, static_cast<uint32_t>(tagId)));
 				if (functionLabel)
 					emitCatchReturn(payload, carryExn);
 				else
@@ -3309,8 +3227,7 @@ protected:
 				reinterpret_cast<uint64_t>(&::wasm_exn_clear_pending), clearSignature),
 				"AsmJit failed to emit pending-exception clear");
 		auto exn = compiler.new_gp_ptr("caughtFunctionException");
-		checkError(compiler.mov(exn, exceptionPtrSlot),
-				"AsmJit caught-function exception slot load failed");
+		emitter.mov(exn, exceptionPtrSlot);
 		const ExceptionPayloadLayout layout = payloadCount != 0
 				? exceptionPayloadLayout(payload) : ExceptionPayloadLayout{};
 
@@ -3324,10 +3241,9 @@ protected:
 			asmjit::x86::Gp value = width == 8
 					? compiler.new_gp64("caughtFunctionPayload")
 					: compiler.new_gp32("caughtFunctionPayload");
-			checkError(compiler.mov(value,
+			emitter.mov(value,
 					asmjit::x86::Mem(exn, static_cast<int32_t>(layout.fields[i].offset),
-							value.size())),
-					"AsmJit caught-function payload load failed");
+							value.size()));
 			caught.push_back(value);
 		}
 		if (carryExn)
@@ -3358,8 +3274,7 @@ protected:
 				reinterpret_cast<uint64_t>(&::wasm_exn_clear_pending), clearSignature),
 				"AsmJit failed to emit pending-exception clear");
 		auto exn = compiler.new_gp_ptr("caughtException");
-		checkError(compiler.mov(exn, exceptionPtrSlot),
-				"AsmJit caught-exception slot load failed");
+		emitter.mov(exn, exceptionPtrSlot);
 		const ExceptionPayloadLayout layout = payloadCount != 0
 				? exceptionPayloadLayout(payload) : ExceptionPayloadLayout{};
 		for (std::size_t i = 0; i < payloadCount; ++i) {
@@ -3369,13 +3284,11 @@ protected:
 					throw std::runtime_error("AsmJit cannot route a v128 catch payload to a block result");
 				for (int word = 0; word < 2; ++word) {
 					auto bits = compiler.new_gp64("caughtPayloadWord");
-					checkError(compiler.mov(bits,
+					emitter.mov(bits,
 							asmjit::x86::qword_ptr(exn, static_cast<int32_t>(layout.fields[i].offset)
-									+ word * 8)),
-							"AsmJit caught-payload vector load failed");
-					checkError(compiler.mov(
-							asmjit::x86::qword_ptr(target.params[i], word * 8), bits),
-							"AsmJit caught-payload vector transfer failed");
+									+ word * 8));
+					emitter.mov(
+							asmjit::x86::qword_ptr(target.params[i], word * 8), bits);
 				}
 				continue;
 			}
@@ -3385,32 +3298,26 @@ protected:
 			asmjit::x86::Gp value = width == 8
 					? compiler.new_gp64("caughtPayload")
 					: compiler.new_gp32("caughtPayload");
-			checkError(compiler.mov(value,
+			emitter.mov(value,
 					asmjit::x86::Mem(exn, static_cast<int32_t>(layout.fields[i].offset),
-							value.size())),
-					"AsmJit caught-payload load failed");
+							value.size()));
 			if (loopTarget)
-				checkError(compiler.mov(target.params[i], value),
-						"AsmJit caught-payload loop transfer failed");
+				emitter.mov(target.params[i], value);
 			else
-				checkError(compiler.mov(target.results[i], value),
-						"AsmJit caught-payload transfer failed");
+				emitter.mov(target.results[i], value);
 		}
 		if (carryExn) {
 			if (loopTarget)
-				checkError(compiler.mov(target.params[payloadCount], exn),
-						"AsmJit caught-exnref loop transfer failed");
+				emitter.mov(target.params[payloadCount], exn);
 			else
-				checkError(compiler.mov(target.results[payloadCount], exn),
-						"AsmJit caught-exnref transfer failed");
+				emitter.mov(target.results[payloadCount], exn);
 		}
 		// A catch is a branch to its target label. In particular, a block whose
 		// body always throws has its *end* reached only through this edge; without
 		// this flag the block's continuation is emitted as dead code.
 		if (!loopTarget)
 			target.endTargeted = true;
-		checkError(compiler.jmp(loopTarget ? target.begin : target.end),
-				"AsmJit catch-target jump failed");
+		emitter.jmp(loopTarget ? target.begin : target.end);
 	}
 
 // ── Memory atomics (docs/proposals/THREADS.md TH-1) ─────────────────────
@@ -3424,8 +3331,7 @@ asmjit::x86::Gp atomicValue64(const asmjit::x86::Gp& value, int valueWidth)
 if (valueWidth == 8)
 return value;
 auto widened = compiler.new_gp64("atomicValue");
-checkError(compiler.mov(widened.r32(), value.r32()),
-"AsmJit atomic value widening failed");
+emitter.mov(widened.r32(), value.r32());
 return widened;
 }
 
@@ -3455,8 +3361,7 @@ if (valueWidth == 8) {
 values.push_back(loaded);
 } else {
 auto result = compiler.new_gp32("atomicLoadResult");
-checkError(compiler.mov(result, loaded.r32()),
-"AsmJit atomic load truncation failed");
+emitter.mov(result, loaded.r32());
 values.push_back(result);
 }
 }
@@ -3517,8 +3422,7 @@ if (valueWidth == 8) {
 values.push_back(old);
 } else {
 auto result = compiler.new_gp32("atomicRmwResult");
-checkError(compiler.mov(result, old.r32()),
-"AsmJit atomic rmw truncation failed");
+emitter.mov(result, old.r32());
 values.push_back(result);
 }
 }
@@ -3556,8 +3460,7 @@ if (valueWidth == 8) {
 values.push_back(old);
 } else {
 auto result = compiler.new_gp32("atomicCmpxchgTruncated");
-checkError(compiler.mov(result, old.r32()),
-"AsmJit atomic cmpxchg truncation failed");
+emitter.mov(result, old.r32());
 values.push_back(result);
 }
 }
@@ -3734,17 +3637,14 @@ values.push_back(loaded);
 return;
 }
 auto result = compiler.new_gp32("sharedAtomicResult");
-checkError(compiler.mov(result, loaded.r32()),
-"AsmJit shared atomic load truncation failed");
+emitter.mov(result, loaded.r32());
 if (signBits == 8) {
 auto signExtended = compiler.new_gp32("sharedAtomicSign");
-checkError(compiler.movsx(signExtended, result.r8()),
-"AsmJit shared atomic sign extension failed");
+emitter.movsx8(signExtended, result);
 result = signExtended;
 } else if (signBits == 16) {
 auto signExtended = compiler.new_gp32("sharedAtomicSign");
-checkError(compiler.movsx(signExtended, result.r16()),
-"AsmJit shared atomic sign extension failed");
+emitter.movsx16(signExtended, result);
 result = signExtended;
 }
 values.push_back(result);
@@ -3798,8 +3698,7 @@ if (valueWidth == 8) {
 values.push_back(old);
 } else {
 auto result = compiler.new_gp32("sharedAtomicRmwResult");
-checkError(compiler.mov(result, old.r32()),
-"AsmJit shared atomic rmw truncation failed");
+emitter.mov(result, old.r32());
 values.push_back(result);
 }
 }
@@ -3901,8 +3800,7 @@ if (valueWidth == 8) {
 values.push_back(old);
 } else {
 auto result = compiler.new_gp32("sharedAtomicCmpxchgTruncated");
-checkError(compiler.mov(result, old.r32()),
-"AsmJit shared atomic cmpxchg truncation failed");
+emitter.mov(result, old.r32());
 values.push_back(result);
 }
 }
@@ -3910,8 +3808,7 @@ values.push_back(result);
 asmjit::x86::Gp emitStructAtomicAddress(const asmjit::x86::Gp& ref, uint32_t fieldOffset)
 {
 auto notNull = compiler.new_label();
-checkError(compiler.test(ref, ref), "AsmJit shared struct null test failed");
-checkError(compiler.jnz(notNull), "AsmJit shared struct null branch failed");
+emitter.j(notNull, asmjit::ujit::test_nz(ref, ref));
 asmjit::FuncSignature reportSignature(asmjit::CallConvId::kCDecl);
 reportSignature.set_ret(asmjit::TypeId::kVoid);
 asmjit::InvokeNode* report = nullptr;
@@ -3921,9 +3818,8 @@ reinterpret_cast<uint64_t>(&asmjitReportNullStructure), reportSignature),
 emitZeroReturn();
 checkError(compiler.bind(notNull), "AsmJit shared struct null continuation failed");
 auto address = compiler.new_gp_ptr("sharedStructAddress");
-checkError(compiler.mov(address, ref), "AsmJit shared struct address copy failed");
-checkError(compiler.add(address, asmjit::Imm(fieldOffset)),
-"AsmJit shared struct address offset failed");
+emitter.mov(address, ref);
+emitter.add(address, asmjit::Imm(fieldOffset));
 return address;
 }
 
@@ -3932,8 +3828,7 @@ const asmjit::x86::Gp& index, uint32_t lengthOffset, uint32_t dataOffset,
 uint32_t elementBytes)
 {
 auto notNull = compiler.new_label();
-checkError(compiler.test(ref, ref), "AsmJit shared array null test failed");
-checkError(compiler.jnz(notNull), "AsmJit shared array null branch failed");
+emitter.j(notNull, asmjit::ujit::test_nz(ref, ref));
 asmjit::FuncSignature nullSignature(asmjit::CallConvId::kCDecl);
 nullSignature.set_ret(asmjit::TypeId::kVoid);
 asmjit::InvokeNode* nullReport = nullptr;
@@ -3944,11 +3839,9 @@ emitZeroReturn();
 checkError(compiler.bind(notNull), "AsmJit shared array null continuation failed");
 
 auto length = compiler.new_gp32("sharedArrayLength");
-checkError(compiler.mov(length, asmjit::x86::dword_ptr(ref, lengthOffset)),
-"AsmJit shared array length load failed");
+emitter.mov(length, asmjit::x86::dword_ptr(ref, lengthOffset));
 auto inBounds = compiler.new_label();
-checkError(compiler.cmp(index, length), "AsmJit shared array bounds compare failed");
-checkError(compiler.jb(inBounds), "AsmJit shared array bounds branch failed");
+emitter.j(inBounds, asmjit::ujit::ucmp_lt(index, length));
 asmjit::FuncSignature oobSignature(asmjit::CallConvId::kCDecl);
 oobSignature.set_ret(asmjit::TypeId::kVoid);
 asmjit::InvokeNode* oobReport = nullptr;
@@ -3959,19 +3852,17 @@ emitZeroReturn();
 checkError(compiler.bind(inBounds), "AsmJit shared array bounds continuation failed");
 
 auto offset = compiler.new_gp64("sharedArrayOffset");
-checkError(compiler.mov(offset.r32(), index.r32()),
-"AsmJit shared array index widening failed");
+emitter.mov(offset.r32(), index.r32());
 if (elementBytes != 1) {
 int shift = 0;
 for (uint32_t bytes = elementBytes; bytes > 1; bytes >>= 1)
 ++shift;
-checkError(compiler.shl(offset, shift), "AsmJit shared array scaling failed");
+emitter.shl(offset, shift);
 }
 auto address = compiler.new_gp_ptr("sharedArrayAddress");
-checkError(compiler.mov(address, ref), "AsmJit shared array address copy failed");
-checkError(compiler.add(address, offset), "AsmJit shared array offset add failed");
-checkError(compiler.add(address, asmjit::Imm(dataOffset)),
-"AsmJit shared array data offset failed");
+emitter.mov(address, ref);
+emitter.add(address, offset);
+emitter.add(address, asmjit::Imm(dataOffset));
 return address;
 }
 
@@ -4765,7 +4656,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
         signature.add_arg(asmjit::TypeId::kUIntPtr);
         signature.add_arg(asmjit::TypeId::kUInt32);
         auto index = compiler.new_gp32("dataDropIndex");
-        checkError(compiler.mov(index, dataIndex), "AsmJit data.drop index materialisation failed");
+        emitter.mov(index, dataIndex);
         asmjit::InvokeNode* invoke = nullptr;
         checkError(compiler.invoke(asmjit::Out(invoke), reinterpret_cast<uint64_t>(&asmjitDataDrop), signature),
                 "AsmJit data.drop helper call emission failed");
@@ -4793,8 +4684,8 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
         asmjit::InvokeNode* invoke = nullptr;
         auto element = compiler.new_gp32("tableInitElementIndex");
         auto table = compiler.new_gp32("tableInitTableIndex");
-        checkError(compiler.mov(element, elementIndex), "AsmJit table.init element index failed");
-        checkError(compiler.mov(table, static_cast<uint32_t>(tableIndex)), "AsmJit table.init table index failed");
+        emitter.mov(element, elementIndex);
+        emitter.mov(table, static_cast<uint32_t>(tableIndex));
         checkError(compiler.invoke(asmjit::Out(invoke), reinterpret_cast<uint64_t>(&asmjitTableInit), signature),
                 "AsmJit table.init helper call emission failed");
         invoke->set_arg(0, vmContext);
@@ -4814,7 +4705,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
         signature.add_arg(asmjit::TypeId::kUInt32);
         asmjit::InvokeNode* invoke = nullptr;
         auto element = compiler.new_gp32("elementDropIndex");
-        checkError(compiler.mov(element, elementIndex), "AsmJit elem.drop index failed");
+        emitter.mov(element, elementIndex);
         checkError(compiler.invoke(asmjit::Out(invoke), reinterpret_cast<uint64_t>(&asmjitElemDrop), signature),
                 "AsmJit elem.drop helper call emission failed");
         invoke->set_arg(0, vmContext);
@@ -4838,32 +4729,28 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
             if (value.size() == 8)
                 return value;
             auto wide = compiler.new_gp64("tableFillWord");
-            checkError(compiler.movzx(wide, value.r32()), "AsmJit table.fill widening failed");
+            emitter.movzx32(wide, value);
             return wide;
         };
         auto packed = compiler.new_stack(48, 16, "tableFillArguments");
         auto packedPtr = compiler.new_gp_ptr("tableFillArgumentsPointer");
-        checkError(compiler.lea(packedPtr, packed), "AsmJit table.fill argument address failed");
+        emitter.lea(packedPtr, packed);
         const auto packedAt = [&](int offset) {
             auto slot = packed;
             slot.set_offset(offset);
             slot.set_size(8);
             return slot;
         };
-        checkError(compiler.mov(packedAt(0), widen(start)),
-                "AsmJit table.fill start store failed");
-        checkError(compiler.mov(packedAt(16), element),
-                "AsmJit table.fill element store failed");
-        checkError(compiler.mov(packedAt(32), widen(length)),
-                "AsmJit table.fill length store failed");
+        emitter.mov(packedAt(0), widen(start));
+        emitter.mov(packedAt(16), element);
+        emitter.mov(packedAt(32), widen(length));
         asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
         signature.set_ret(asmjit::TypeId::kVoid);
         signature.add_arg(asmjit::TypeId::kUIntPtr);
         signature.add_arg(asmjit::TypeId::kUInt32);
         signature.add_arg(asmjit::TypeId::kUIntPtr);
         auto tableReg = compiler.new_gp32("tableFillIndex");
-        checkError(compiler.mov(tableReg, static_cast<uint32_t>(tableIndex)),
-                "AsmJit table.fill table index failed");
+        emitter.mov(tableReg, static_cast<uint32_t>(tableIndex));
         asmjit::InvokeNode* invoke = nullptr;
         checkError(compiler.invoke(asmjit::Out(invoke),
                 reinterpret_cast<uint64_t>(&WASM::wasm_table_fill_args), signature),
@@ -4891,8 +4778,8 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
         asmjit::InvokeNode* invoke = nullptr;
         auto dstTable = compiler.new_gp32("tableCopyDestinationTable");
         auto srcTable = compiler.new_gp32("tableCopySourceTable");
-        checkError(compiler.mov(dstTable, static_cast<uint32_t>(destinationTable)), "AsmJit table.copy destination table index failed");
-        checkError(compiler.mov(srcTable, static_cast<uint32_t>(sourceTable)), "AsmJit table.copy source table index failed");
+        emitter.mov(dstTable, static_cast<uint32_t>(destinationTable));
+        emitter.mov(srcTable, static_cast<uint32_t>(sourceTable));
         checkError(compiler.invoke(asmjit::Out(invoke), reinterpret_cast<uint64_t>(&asmjitTableCopy), signature),
                 "AsmJit table.copy helper call emission failed");
         invoke->set_arg(0, vmContext);
@@ -4922,15 +4809,13 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
         signature.add_arg(asmjit::TypeId::kUInt64);
         signature.add_arg(asmjit::TypeId::kUIntPtr);
         auto index = compiler.new_gp32("tableGrowIndex");
-        checkError(compiler.mov(index, static_cast<uint32_t>(tableIndex)),
-                "AsmJit table.grow index materialisation failed");
+        emitter.mov(index, static_cast<uint32_t>(tableIndex));
         // The core takes a 64-bit delta. For a 32-bit table, zero-extend the
         // i32 operand; a table64 operand is already 64-bit.
         asmjit::x86::Gp delta64 = delta;
         if (delta.size() != 8) {
             delta64 = compiler.new_gp64("tableGrowDelta");
-            checkError(compiler.mov(delta64.r32(), delta.r32()),
-                    "AsmJit table.grow delta widening failed");
+            emitter.mov(delta64.r32(), delta.r32());
         }
         asmjit::InvokeNode* invoke = nullptr;
         checkError(compiler.invoke(asmjit::Out(invoke),
@@ -4959,7 +4844,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
         signature.add_arg(asmjit::TypeId::kUInt32);
         asmjit::InvokeNode* invoke = nullptr;
         auto index = compiler.new_gp32("tableSizeIndex");
-        checkError(compiler.mov(index, static_cast<uint32_t>(tableIndex)), "AsmJit table.size index materialisation failed");
+        emitter.mov(index, static_cast<uint32_t>(tableIndex));
         checkError(compiler.invoke(asmjit::Out(invoke), reinterpret_cast<uint64_t>(&asmjitTableSize), signature),
                 "AsmJit table.size helper call emission failed");
         invoke->set_arg(0, vmContext);
@@ -4988,13 +4873,11 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		// A 64-bit immediate needs a register: `mov r/m64, imm64` does not exist on
 		// x86, so storing a qword immediate straight into memory is lossy.
 		auto low = compiler.new_gp64("v128ConstLow");
-		checkError(compiler.mov(low, lo), "AsmJit v128.const low materialisation failed");
-		checkError(compiler.mov(asmjit::x86::qword_ptr(buffer, 0), low),
-				"AsmJit v128.const low word failed");
+		emitter.mov(low, lo);
+		emitter.mov(asmjit::x86::qword_ptr(buffer, 0), low);
 		auto high = compiler.new_gp64("v128ConstHigh");
-		checkError(compiler.mov(high, hi), "AsmJit v128.const high materialisation failed");
-		checkError(compiler.mov(asmjit::x86::qword_ptr(buffer, 8), high),
-				"AsmJit v128.const high word failed");
+		emitter.mov(high, hi);
+		emitter.mov(asmjit::x86::qword_ptr(buffer, 8), high);
 		values.push_back(buffer);
 	}
 
@@ -5237,17 +5120,13 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		values.pop_back();
 		auto low = compiler.new_gp64("v128AnyLow");
 		auto high = compiler.new_gp64("v128AnyHigh");
-		checkError(compiler.mov(low, asmjit::x86::qword_ptr(vector, 0)),
-				"AsmJit v128.any_true low word failed");
-		checkError(compiler.mov(high, asmjit::x86::qword_ptr(vector, 8)),
-				"AsmJit v128.any_true high word failed");
-		checkError(compiler.or_(low, high), "AsmJit v128.any_true merge failed");
+		emitter.mov(low, asmjit::x86::qword_ptr(vector, 0));
+		emitter.mov(high, asmjit::x86::qword_ptr(vector, 8));
+		emitter.or_(low, high);
 		auto result = compiler.new_gp32("v128AnyResult");
-		checkError(compiler.xor_(result, result),
-				"AsmJit v128.any_true result zeroing failed");
-		checkError(compiler.test(low, low), "AsmJit v128.any_true test failed");
-		checkError(compiler.set(asmjit::x86::CondCode::kNE, result.r8()),
-				"AsmJit v128.any_true set failed");
+		// One universal `select` replaces the zero/test/setcc triple: it defines
+		// the result on both paths.
+		emitter.selectFlag(result, low, asmjit::ujit::test_nz(low, low));
 		values.push_back(result);
 	}
 
@@ -5255,9 +5134,8 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 	asmjit::x86::Gp packImmPair(uint32_t high, uint32_t low, const char* name)
 	{
 		auto packed = compiler.new_gp64(name);
-		checkError(compiler.mov(packed, asmjit::Imm(
-				(static_cast<uint64_t>(high) << 32) | low)),
-				"AsmJit packed constant widening failed");
+		emitter.mov(packed, asmjit::Imm(
+				(static_cast<uint64_t>(high) << 32) | low));
 		return packed;
 	}
 
@@ -5266,13 +5144,11 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 			const asmjit::x86::Gp& low, const char* name)
 	{
 		auto packed = compiler.new_gp64(name);
-		checkError(compiler.mov(packed.r32(), low.r32()),
-				"AsmJit packed low-word widening failed");
+		emitter.mov(packed.r32(), low.r32());
 		auto highWide = compiler.new_gp64("packedHigh");
-		checkError(compiler.mov(highWide.r32(), high.r32()),
-				"AsmJit packed high-word widening failed");
-		checkError(compiler.shl(highWide, 32), "AsmJit packed high-word shift failed");
-		checkError(compiler.or_(packed, highWide), "AsmJit packed high-word merge failed");
+		emitter.mov(highWide.r32(), high.r32());
+		emitter.shl(highWide, 32);
+		emitter.or_(packed, highWide);
 		return packed;
 	}
 
@@ -5361,7 +5237,12 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		}
 	}
 
-	void emitVectorBinaryNative(const char* name, int kind)
+	//! Emits one native v128 binary operation.
+	//!
+	//! The description the dispatchers pass is kept at the call site as the
+	//! statement of what the operation is; the universal operation names the
+	//! lane width and signedness, so the emitter no longer needs it.
+	void emitVectorBinaryNative(const char* /*description*/, int kind)
 	{
 		if (!nativeSimdEnabled())
 		{
@@ -5380,63 +5261,56 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		auto result = newVectorBuffer("v128Result");
 		auto lhs = compiler.new_xmm("v128NativeA");
 		auto rhs = compiler.new_xmm("v128NativeB");
-		checkError(compiler.movdqu(lhs, asmjit::x86::xmmword_ptr(a)),
-				"AsmJit v128 native load failed");
-		checkError(compiler.movdqu(rhs, asmjit::x86::xmmword_ptr(b)),
-				"AsmJit v128 native load failed");
-		// `pandn` writes `~dst & src`, so `a & ~b` is `pandn(b, a)` and the
-		// result lives in the operand that played the destination.
+		emitter.vectorLoad128(lhs, asmjit::x86::xmmword_ptr(a));
+		emitter.vectorLoad128(rhs, asmjit::x86::xmmword_ptr(b));
+		// Every comparison result is a per-lane all-ones mask, exactly wasm's, and
+		// the universal operation names the signedness, so neither the `pandn`
+		// destination trick nor the `pcmpgt` operand swap survives the conversion.
 		asmjit::x86::Vec out = lhs;
-		// Every comparison result is a per-lane all-ones mask, exactly wasm's.
-		// `ne`/`le_s`/`ge_s` invert one with a register of all ones (`pcmpeqd
-		// r, r`), and `lt_s`/`le_s` swap the `pcmpgt*` operands: `pcmpgt dst,
-		// src` is `dst > src`, so `b > a` is `a < b`.
 		auto invert = [&](const asmjit::x86::Vec& mask) {
-			auto ones = compiler.new_xmm("v128AllOnes");
-			checkError(compiler.pcmpeqd(ones, ones), name);
-			checkError(compiler.pxor(mask, ones), name);
+			emitter.vectorNot(mask);
 		};
+		using Ops = asmjit::ujit::UniOpVVV;
 		switch (kind) {
-		case 0: checkError(compiler.pand(lhs, rhs), name); break;
-		case 1: checkError(compiler.pandn(rhs, lhs), name); out = rhs; break;
-		case 2: checkError(compiler.por(lhs, rhs), name); break;
-		case 3: checkError(compiler.pxor(lhs, rhs), name); break;
-		case 4: checkError(compiler.paddb(lhs, rhs), name); break;
-		case 5: checkError(compiler.paddw(lhs, rhs), name); break;
-		case 6: checkError(compiler.paddd(lhs, rhs), name); break;
-		case 7: checkError(compiler.paddq(lhs, rhs), name); break;
-		case 8: checkError(compiler.psubb(lhs, rhs), name); break;
-		case 9: checkError(compiler.psubw(lhs, rhs), name); break;
-		case 10: checkError(compiler.psubd(lhs, rhs), name); break;
-		case 11: checkError(compiler.psubq(lhs, rhs), name); break;
-		case 12: checkError(compiler.pavgb(lhs, rhs), name); break;
-		case 13: checkError(compiler.pavgw(lhs, rhs), name); break;
-		case 14: checkError(compiler.pminub(lhs, rhs), name); break;
-		case 15: checkError(compiler.pminsw(lhs, rhs), name); break;
-		case 16: checkError(compiler.pmaxub(lhs, rhs), name); break;
-		case 17: checkError(compiler.pmaxsw(lhs, rhs), name); break;
-		case 18: checkError(compiler.pcmpeqb(lhs, rhs), name); break;
-		case 19: checkError(compiler.pcmpeqw(lhs, rhs), name); break;
-		case 20: checkError(compiler.pcmpeqd(lhs, rhs), name); break;
-		case 21: checkError(compiler.pcmpeqb(lhs, rhs), name); invert(lhs); break;
-		case 22: checkError(compiler.pcmpeqw(lhs, rhs), name); invert(lhs); break;
-		case 23: checkError(compiler.pcmpeqd(lhs, rhs), name); invert(lhs); break;
-		case 24: checkError(compiler.pcmpgtb(rhs, lhs), name); out = rhs; break;
-		case 25: checkError(compiler.pcmpgtw(rhs, lhs), name); out = rhs; break;
-		case 26: checkError(compiler.pcmpgtd(rhs, lhs), name); out = rhs; break;
-		case 27: checkError(compiler.pcmpgtb(lhs, rhs), name); break;
-		case 28: checkError(compiler.pcmpgtw(lhs, rhs), name); break;
-		case 29: checkError(compiler.pcmpgtd(lhs, rhs), name); break;
-		case 30: checkError(compiler.pcmpgtb(lhs, rhs), name); invert(lhs); break;
-		case 31: checkError(compiler.pcmpgtw(lhs, rhs), name); invert(lhs); break;
-		case 32: checkError(compiler.pcmpgtd(lhs, rhs), name); invert(lhs); break;
-		case 33: checkError(compiler.pcmpgtb(rhs, lhs), name); invert(rhs); out = rhs; break;
-		case 34: checkError(compiler.pcmpgtw(rhs, lhs), name); invert(rhs); out = rhs; break;
-		case 35: checkError(compiler.pcmpgtd(rhs, lhs), name); invert(rhs); out = rhs; break;
+		case 0: emitter.vector3(Ops::kAndU32, lhs, lhs, rhs); break;
+		case 1: emitter.vector3(Ops::kBicU32, lhs, lhs, rhs); break;
+		case 2: emitter.vector3(Ops::kOrU32, lhs, lhs, rhs); break;
+		case 3: emitter.vector3(Ops::kXorU32, lhs, lhs, rhs); break;
+		case 4: emitter.vector3(Ops::kAddU8, lhs, lhs, rhs); break;
+		case 5: emitter.vector3(Ops::kAddU16, lhs, lhs, rhs); break;
+		case 6: emitter.vector3(Ops::kAddU32, lhs, lhs, rhs); break;
+		case 7: emitter.vector3(Ops::kAddU64, lhs, lhs, rhs); break;
+		case 8: emitter.vector3(Ops::kSubU8, lhs, lhs, rhs); break;
+		case 9: emitter.vector3(Ops::kSubU16, lhs, lhs, rhs); break;
+		case 10: emitter.vector3(Ops::kSubU32, lhs, lhs, rhs); break;
+		case 11: emitter.vector3(Ops::kSubU64, lhs, lhs, rhs); break;
+		case 12: emitter.vector3(Ops::kAvgrU8, lhs, lhs, rhs); break;
+		case 13: emitter.vector3(Ops::kAvgrU16, lhs, lhs, rhs); break;
+		case 14: emitter.vector3(Ops::kMinU8, lhs, lhs, rhs); break;
+		case 15: emitter.vector3(Ops::kMinI16, lhs, lhs, rhs); break;
+		case 16: emitter.vector3(Ops::kMaxU8, lhs, lhs, rhs); break;
+		case 17: emitter.vector3(Ops::kMaxI16, lhs, lhs, rhs); break;
+		case 18: emitter.vector3(Ops::kCmpEqU8, lhs, lhs, rhs); break;
+		case 19: emitter.vector3(Ops::kCmpEqU16, lhs, lhs, rhs); break;
+		case 20: emitter.vector3(Ops::kCmpEqU32, lhs, lhs, rhs); break;
+		case 21: emitter.vector3(Ops::kCmpEqU8, lhs, lhs, rhs); invert(lhs); break;
+		case 22: emitter.vector3(Ops::kCmpEqU16, lhs, lhs, rhs); invert(lhs); break;
+		case 23: emitter.vector3(Ops::kCmpEqU32, lhs, lhs, rhs); invert(lhs); break;
+		case 24: emitter.vector3(Ops::kCmpLtI8, lhs, lhs, rhs); break;
+		case 25: emitter.vector3(Ops::kCmpLtI16, lhs, lhs, rhs); break;
+		case 26: emitter.vector3(Ops::kCmpLtI32, lhs, lhs, rhs); break;
+		case 27: emitter.vector3(Ops::kCmpGtI8, lhs, lhs, rhs); break;
+		case 28: emitter.vector3(Ops::kCmpGtI16, lhs, lhs, rhs); break;
+		case 29: emitter.vector3(Ops::kCmpGtI32, lhs, lhs, rhs); break;
+		case 30: emitter.vector3(Ops::kCmpLeI8, lhs, lhs, rhs); break;
+		case 31: emitter.vector3(Ops::kCmpLeI16, lhs, lhs, rhs); break;
+		case 32: emitter.vector3(Ops::kCmpLeI32, lhs, lhs, rhs); break;
+		case 33: emitter.vector3(Ops::kCmpGeI8, lhs, lhs, rhs); break;
+		case 34: emitter.vector3(Ops::kCmpGeI16, lhs, lhs, rhs); break;
+		case 35: emitter.vector3(Ops::kCmpGeI32, lhs, lhs, rhs); break;
 		default: throw std::runtime_error("unknown AsmJit v128 native kind");
 		}
-		checkError(compiler.movdqu(asmjit::x86::xmmword_ptr(result), out),
-				"AsmJit v128 native store failed");
+		emitter.vectorStore128(asmjit::x86::xmmword_ptr(result), out);
 		values.push_back(result);
 	}
 
@@ -5572,38 +5446,33 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		auto vector = compiler.new_xmm("v128ShiftValue");
 		auto laneCount = compiler.new_xmm("v128ShiftCount");
 		auto mask = compiler.new_xmm("v128ShiftMask");
-		checkError(compiler.movdqu(vector, asmjit::x86::xmmword_ptr(a)),
-				"AsmJit v128 shift load failed");
-		// `movd` zeroes the rest of the Xmm, and `pand` with the lane mask
-		// leaves `count % laneBits` in every lane -- what `psllw`/`psraw`/...
-		// expect. The mask itself is 15 (words) or 31 (dwords) in every lane.
-		checkError(compiler.movd(laneCount, count.r32()),
-				"AsmJit v128 shift count materialisation failed");
+		emitter.vectorLoad128(vector, asmjit::x86::xmmword_ptr(a));
+		// The count move zeroes the rest of the vector, and the mask leaves
+		// `count % laneBits` in every lane — what the per-lane shift expects.
+		// The mask itself is 15 (words) or 31 (dwords) in every lane.
+		emitter.gpToVector32(laneCount, count.r32());
 		const bool words = kind < 3;
 		const uint64_t maskBits = words ? 0x000F000F000F000Full
 				: 0x0000001F0000001Full;
 		auto maskBuffer = newVectorBuffer("v128ShiftMaskBits");
 		auto maskValue = compiler.new_gp64("v128ShiftMaskValue");
-		checkError(compiler.mov(maskValue, maskBits),
-				"AsmJit v128 shift mask materialisation failed");
-		checkError(compiler.mov(asmjit::x86::qword_ptr(maskBuffer, 0), maskValue),
-				"AsmJit v128 shift mask store failed");
-		checkError(compiler.mov(asmjit::x86::qword_ptr(maskBuffer, 8), maskValue),
-				"AsmJit v128 shift mask store failed");
-		checkError(compiler.movdqu(mask, asmjit::x86::xmmword_ptr(maskBuffer)),
-				"AsmJit v128 shift mask load failed");
-		checkError(compiler.pand(laneCount, mask),
-				"AsmJit v128 shift count masking failed");
+		emitter.mov(maskValue, maskBits);
+		emitter.mov(asmjit::x86::qword_ptr(maskBuffer, 0), maskValue);
+		emitter.mov(asmjit::x86::qword_ptr(maskBuffer, 8), maskValue);
+		emitter.vectorLoad128(mask, asmjit::x86::xmmword_ptr(maskBuffer));
+		emitter.vector3(asmjit::ujit::UniOpVVV::kAndU32, laneCount, laneCount, mask);
+		// A per-lane variable-count shift has no universal operation: the
+		// vocabulary offers immediate counts only, so these six instructions are
+		// emitted through the host and listed in Asmjit.md "The host-specific set".
 		switch (kind) {
-		case 0: checkError(compiler.psllw(vector, laneCount), name); break;
-		case 1: checkError(compiler.psraw(vector, laneCount), name); break;
-		case 2: checkError(compiler.psrlw(vector, laneCount), name); break;
-		case 3: checkError(compiler.pslld(vector, laneCount), name); break;
-		case 4: checkError(compiler.psrad(vector, laneCount), name); break;
-		default: checkError(compiler.psrld(vector, laneCount), name); break;
+		case 0: checkError(emitter.host().psllw(vector, laneCount), name); break;
+		case 1: checkError(emitter.host().psraw(vector, laneCount), name); break;
+		case 2: checkError(emitter.host().psrlw(vector, laneCount), name); break;
+		case 3: checkError(emitter.host().pslld(vector, laneCount), name); break;
+		case 4: checkError(emitter.host().psrad(vector, laneCount), name); break;
+		default: checkError(emitter.host().psrld(vector, laneCount), name); break;
 		}
-		checkError(compiler.movdqu(asmjit::x86::xmmword_ptr(result), vector),
-				"AsmJit v128 shift store failed");
+		emitter.vectorStore128(asmjit::x86::xmmword_ptr(result), vector);
 		values.push_back(result);
 	}
 
@@ -6043,7 +5912,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 	{
 		// A reference is one null word: the backend does not model typed nulls.
 		auto reference = compiler.new_gp64("nullRef");
-		checkError(compiler.xor_(reference, reference), "AsmJit ref.null zeroing failed");
+		emitter.xor_(reference, reference);
 		values.push_back(reference);
 	}
 
@@ -6055,10 +5924,9 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		values.pop_back();
 		// An i31 is a tagged immediate: (zero-extended value << 1) | 1.
 		auto reference = compiler.new_gp64("i31Ref");
-		checkError(compiler.mov(reference.r32(), source.r32()),
-				"AsmJit ref.i31 widening failed");
-		checkError(compiler.shl(reference, 1), "AsmJit ref.i31 shift failed");
-		checkError(compiler.or_(reference, 1), "AsmJit ref.i31 tag failed");
+		emitter.mov(reference.r32(), source.r32());
+		emitter.shl(reference, 1);
+		emitter.or_(reference, 1);
 		// An i31 is a tagged immediate: uncounted, but still a reference, so a
 		// consumer must not treat it as a scalar.
 		markReference(reference);
@@ -6072,8 +5940,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		auto reference = values.back();
 		values.pop_back();
 		auto notNull = compiler.new_label();
-		checkError(compiler.test(reference, reference), "AsmJit i31.get null test failed");
-		checkError(compiler.jnz(notNull), "AsmJit i31.get null branch failed");
+		emitter.j(notNull, asmjit::ujit::test_nz(reference, reference));
 		asmjit::FuncSignature reportSignature(asmjit::CallConvId::kCDecl);
 		reportSignature.set_ret(asmjit::TypeId::kVoid);
 		asmjit::InvokeNode* report = nullptr;
@@ -6083,9 +5950,11 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		emitZeroReturn();
 		checkError(compiler.bind(notNull), "AsmJit i31.get continuation binding failed");
 		auto result = compiler.new_gp32("i31Value");
-		checkError(compiler.mov(result, reference.r32()), "AsmJit i31.get load failed");
-		checkError(signExtend ? compiler.sar(result, 1) : compiler.shr(result, 1),
-				"AsmJit i31.get untag failed");
+		emitter.mov(result, reference.r32());
+		if (signExtend)
+			emitter.sar(result, asmjit::Imm(1));
+		else
+			emitter.shr(result, asmjit::Imm(1));
 		values.push_back(result);
 	}
 
@@ -6121,8 +5990,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		// count *before* the operand gives its own up.
 		if (owned) {
 			const asmjit::x86::Gp kept = emitRefClone(result);
-			checkError(compiler.mov(result, kept),
-					"AsmJit extern conversion retain failed");
+			emitter.mov(result, kept);
 			markReference(result);
 		}
 		values.push_back(result);
@@ -6143,12 +6011,11 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 			throw std::runtime_error("AsmJit ref.is_null operand underflow");
 		auto reference = values.back();
 		values.pop_back();
-		// The result is zeroed before the flags are set (the P3 lesson).
 		auto result = compiler.new_gp32("refIsNull");
-		checkError(compiler.xor_(result, result), "AsmJit ref.is_null zeroing failed");
-		checkError(compiler.test(reference, reference), "AsmJit ref.is_null test failed");
-		checkError(compiler.set(asmjit::x86::CondCode::kE, result.r8()),
-				"AsmJit ref.is_null set failed");
+		// One universal `select` replaces the zero/test/setcc triple, so the
+		// result is defined whether or not the reference is null.
+		emitter.selectFlag(result, reference,
+				asmjit::ujit::test_z(reference, reference));
 		// The operand was the operand stack's and the result is an i32, so the
 		// stack gives its count up; the answer is already a plain integer.
 		if (referenceValues.erase(reference.id()) != 0)
@@ -6169,8 +6036,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 			if (resultCount != 0)
 				throw std::runtime_error("AsmJit br_on_null to the function label requires a void result");
 			auto skip = compiler.new_label();
-			checkError(compiler.test(reference, reference), "AsmJit br_on_null test failed");
-			checkError(compiler.jnz(skip), "AsmJit br_on_null skip failed");
+			emitter.j(skip, asmjit::ujit::test_nz(reference, reference));
 			checkError(compiler.ret(), "AsmJit br_on_null return failed");
 			checkError(compiler.bind(skip), "AsmJit br_on_null label binding failed");
 			return;
@@ -6183,8 +6049,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 			throw std::runtime_error("AsmJit br_on_null operand stack does not match its target label");
 		const asmjit::Label label = loopTarget ? target.begin : target.end;
 		auto skip = compiler.new_label();
-		checkError(compiler.test(reference, reference), "AsmJit br_on_null test failed");
-		checkError(compiler.jnz(skip), "AsmJit br_on_null skip failed");
+		emitter.j(skip, asmjit::ujit::test_nz(reference, reference));
 		// The null branch carries the values below the reference, not the ref.
 		const size_t first = refDepth - branchValues;
 		const std::vector<asmjit::x86::Gp>& destinations = loopTarget ? target.params : target.results;
@@ -6193,7 +6058,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		for (size_t i = 0; i < branchValues; ++i)
 			transferValue(destinations[i], values[first + i], codes[i],
 					"AsmJit br_on_null result transfer failed");
-		checkError(compiler.jmp(label), "AsmJit br_on_null branch failed");
+		emitter.jmp(label);
 		if (!loopTarget)
 			target.endTargeted = true;
 		checkError(compiler.bind(skip), "AsmJit br_on_null skip binding failed");
@@ -6217,8 +6082,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 			throw std::runtime_error("AsmJit br_on_non_null operand stack does not match its target label");
 		const asmjit::Label label = loopTarget ? target.begin : target.end;
 		auto skip = compiler.new_label();
-		checkError(compiler.test(reference, reference), "AsmJit br_on_non_null test failed");
-		checkError(compiler.jz(skip), "AsmJit br_on_non_null skip failed");
+		emitter.j(skip, asmjit::ujit::test_z(reference, reference));
 		const size_t first = values.size() - branchValues;
 		const std::vector<asmjit::x86::Gp>& destinations = loopTarget ? target.params : target.results;
 		const std::vector<WASM::ValueTypeCode>& codes = loopTarget
@@ -6226,7 +6090,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		for (size_t i = 0; i < branchValues; ++i)
 			transferValue(destinations[i], values[first + i], codes[i],
 					"AsmJit br_on_non_null result transfer failed");
-		checkError(compiler.jmp(label), "AsmJit br_on_non_null branch failed");
+		emitter.jmp(label);
 		if (!loopTarget)
 			target.endTargeted = true;
 		checkError(compiler.bind(skip), "AsmJit br_on_non_null skip binding failed");
@@ -6272,9 +6136,8 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 			if (values.size() < resultCount)
 				throw std::runtime_error("AsmJit br_on_cast function branch has too few results");
 			auto fallthrough = compiler.new_label();
-			checkError(compiler.test(matches, matches), "AsmJit br_on_cast test failed");
-			checkError(onFailure ? compiler.jnz(fallthrough) : compiler.jz(fallthrough),
-					"AsmJit br_on_cast function fallthrough failed");
+			emitter.j(fallthrough, onFailure ? asmjit::ujit::test_nz(matches, matches)
+					: asmjit::ujit::test_z(matches, matches));
 			emitFunctionReturnValues();
 			checkError(compiler.bind(fallthrough), "AsmJit br_on_cast function label binding failed");
 			return;
@@ -6285,9 +6148,8 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		if (branchValues > values.size() || values.size() - branchValues < frame.stackHeight)
 			throw std::runtime_error("AsmJit br_on_cast operand stack does not match its target label");
 		auto fallthrough = compiler.new_label();
-		checkError(compiler.test(matches, matches), "AsmJit br_on_cast test failed");
-		checkError(onFailure ? compiler.jnz(fallthrough) : compiler.jz(fallthrough),
-				"AsmJit br_on_cast fallthrough branch failed");
+		emitter.j(fallthrough, onFailure ? asmjit::ujit::test_nz(matches, matches)
+					: asmjit::ujit::test_z(matches, matches));
 		const size_t first = values.size() - branchValues;
 		const std::vector<asmjit::x86::Gp>& destinations = loopTarget ? frame.params : frame.results;
 		const std::vector<WASM::ValueTypeCode>& codes = loopTarget
@@ -6295,8 +6157,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		for (size_t i = 0; i < branchValues; ++i)
 			transferValue(destinations[i], values[first + i], codes[i],
 					"AsmJit br_on_cast result transfer failed");
-		checkError(compiler.jmp(loopTarget ? frame.begin : frame.end),
-				"AsmJit br_on_cast branch failed");
+		emitter.jmp(loopTarget ? frame.begin : frame.end);
 		if (!loopTarget)
 			frame.endTargeted = true;
 		checkError(compiler.bind(fallthrough), "AsmJit br_on_cast fallthrough binding failed");
@@ -6336,21 +6197,21 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 				// A packed field is one or two bytes and its default value is zero for
 				// both, so it is one store of the field's own width.
 				const bool isI8 = fields[i].storage.packed == WASM::ValueTypeCode::I8;
-				checkError(isI8
-						? compiler.mov(asmjit::x86::byte_ptr(object, offset), static_cast<uint8_t>(0))
-						: compiler.mov(asmjit::x86::word_ptr(object, offset), static_cast<uint16_t>(0)),
-						"AsmJit struct.new_default packed zeroing failed");
+				if (isI8)
+					emitter.mov(asmjit::x86::byte_ptr(object, offset), asmjit::Imm(0));
+				else
+					emitter.mov(asmjit::x86::word_ptr(object, offset), asmjit::Imm(0));
 				continue;
 			}
 			const int width = kindWidth(fields[i].storage.value.opcode);
 			if (width != 4 && width != 8)
 				throw std::runtime_error("AsmJit struct.new_default does not lower this field type yet");
 			if (width == 4)
-				checkError(compiler.mov(asmjit::x86::dword_ptr(object, offset),
-						static_cast<uint32_t>(0)), "AsmJit struct.new_default zeroing failed");
+				emitter.mov(asmjit::x86::dword_ptr(object, offset),
+						static_cast<uint32_t>(0));
 			else
-				checkError(compiler.mov(asmjit::x86::qword_ptr(object, offset),
-						static_cast<uint64_t>(0)), "AsmJit struct.new_default zeroing failed");
+				emitter.mov(asmjit::x86::qword_ptr(object, offset),
+						static_cast<uint64_t>(0));
 		}
 		// A fresh object is created unowned; the operand stack owns one count
 		// per reference it holds, so the push takes one (RC-5).
@@ -6394,26 +6255,22 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 			if (field.storage.isPacked) {
 				// A packed field keeps only its low byte or word.
 				if (field.storage.packed == WASM::ValueTypeCode::I8)
-					checkError(compiler.mov(asmjit::x86::byte_ptr(object,
-							static_cast<int32_t>(offset)), operands[i].r8()),
-							"AsmJit struct.new packed field store failed");
+					emitter.mov(asmjit::x86::byte_ptr(object,
+							static_cast<int32_t>(offset)), operands[i].r8());
 				else
-					checkError(compiler.mov(asmjit::x86::word_ptr(object,
-							static_cast<int32_t>(offset)), operands[i].r16()),
-							"AsmJit struct.new packed field store failed");
+					emitter.mov(asmjit::x86::word_ptr(object,
+							static_cast<int32_t>(offset)), operands[i].r16());
 				continue;
 			}
 			const int width = kindWidth(field.storage.value.opcode);
 			if (width != 4 && width != 8)
 				throw std::runtime_error("AsmJit struct.new does not lower this field type yet");
 			if (width == 4)
-				checkError(compiler.mov(asmjit::x86::dword_ptr(object,
-						static_cast<int32_t>(offset)), operands[i]),
-						"AsmJit struct.new field store failed");
+				emitter.mov(asmjit::x86::dword_ptr(object,
+						static_cast<int32_t>(offset)), operands[i]);
 			else
-				checkError(compiler.mov(asmjit::x86::qword_ptr(object,
-						static_cast<int32_t>(offset)), operands[i]),
-						"AsmJit struct.new field store failed");
+				emitter.mov(asmjit::x86::qword_ptr(object,
+						static_cast<int32_t>(offset)), operands[i]);
 		}
 		// A fresh object is created unowned; the operand stack owns one count
 		// per reference it holds, so the push takes one (RC-5).
@@ -6462,26 +6319,22 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 			const std::size_t offset = WASM::gcStructFieldOffset(fields, i);
 			if (field.storage.isPacked) {
 				if (field.storage.packed == WASM::ValueTypeCode::I8)
-					checkError(compiler.mov(asmjit::x86::byte_ptr(object,
-							static_cast<int32_t>(offset)), operands[i].r8()),
-							"AsmJit struct.new_desc packed field store failed");
+					emitter.mov(asmjit::x86::byte_ptr(object,
+							static_cast<int32_t>(offset)), operands[i].r8());
 				else
-					checkError(compiler.mov(asmjit::x86::word_ptr(object,
-							static_cast<int32_t>(offset)), operands[i].r16()),
-							"AsmJit struct.new_desc packed field store failed");
+					emitter.mov(asmjit::x86::word_ptr(object,
+							static_cast<int32_t>(offset)), operands[i].r16());
 				continue;
 			}
 			const int width = kindWidth(field.storage.value.opcode);
 			if (width != 4 && width != 8)
 				throw std::runtime_error("AsmJit struct.new_desc does not lower this field type yet");
 			if (width == 4)
-				checkError(compiler.mov(asmjit::x86::dword_ptr(object,
-						static_cast<int32_t>(offset)), operands[i]),
-						"AsmJit struct.new_desc field store failed");
+				emitter.mov(asmjit::x86::dword_ptr(object,
+						static_cast<int32_t>(offset)), operands[i]);
 			else
-				checkError(compiler.mov(asmjit::x86::qword_ptr(object,
-						static_cast<int32_t>(offset)), operands[i]),
-						"AsmJit struct.new_desc field store failed");
+				emitter.mov(asmjit::x86::qword_ptr(object,
+						static_cast<int32_t>(offset)), operands[i]);
 		}
 		// The new object retained the descriptor; the operand's own count goes,
 		// and the stack then owns one count of the new object.
@@ -6531,13 +6384,11 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 				throw std::runtime_error("AsmJit struct.new_default_desc does not lower this field type yet");
 			const auto offset = static_cast<int32_t>(WASM::gcStructFieldOffset(fields, i));
 			if (width == 4)
-				checkError(compiler.mov(asmjit::x86::dword_ptr(object, offset),
-						static_cast<uint32_t>(0)),
-						"AsmJit struct.new_default_desc zeroing failed");
+				emitter.mov(asmjit::x86::dword_ptr(object, offset),
+						static_cast<uint32_t>(0));
 			else
-				checkError(compiler.mov(asmjit::x86::qword_ptr(object, offset),
-						static_cast<uint64_t>(0)),
-						"AsmJit struct.new_default_desc zeroing failed");
+				emitter.mov(asmjit::x86::qword_ptr(object, offset),
+						static_cast<uint64_t>(0));
 		}
 		// A fresh object is created unowned; the operand stack owns one count
 		// per reference it holds, so the push takes one (RC-5).
@@ -6602,8 +6453,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		auto matches = compiler.new_gp32("descEqMatch");
 		invoke->set_ret(0, matches);
 		asmjit::Label afterCast = compiler.new_label();
-		checkError(compiler.test(matches, matches), "AsmJit cast_desc_eq test failed");
-		checkError(compiler.jnz(afterCast), "AsmJit cast_desc_eq match branch failed");
+		emitter.j(afterCast, asmjit::ujit::test_nz(matches, matches));
 		asmjit::InvokeNode* failCall = nullptr;
 		checkError(compiler.invoke(asmjit::Out(failCall),
 				reinterpret_cast<uint64_t>(&asmjitReportCastFailure), voidSignature),
@@ -6654,9 +6504,8 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 			if (values.size() < resultCount)
 				throw std::runtime_error("AsmJit br_on_cast_desc_eq function branch has too few results");
 			auto fallthrough = compiler.new_label();
-			checkError(compiler.test(matches, matches), "AsmJit br_on_cast_desc_eq test failed");
-			checkError(onFailure ? compiler.jnz(fallthrough) : compiler.jz(fallthrough),
-					"AsmJit br_on_cast_desc_eq function fallthrough failed");
+			emitter.j(fallthrough, onFailure ? asmjit::ujit::test_nz(matches, matches)
+					: asmjit::ujit::test_z(matches, matches));
 			emitFunctionReturnValues();
 			checkError(compiler.bind(fallthrough),
 					"AsmJit br_on_cast_desc_eq fallthrough binding failed");
@@ -6668,9 +6517,8 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		if (branchValues > values.size() || values.size() - branchValues < frame.stackHeight)
 			throw std::runtime_error("AsmJit br_on_cast_desc_eq operand stack does not match its target label");
 		auto fallthrough = compiler.new_label();
-		checkError(compiler.test(matches, matches), "AsmJit br_on_cast_desc_eq test failed");
-		checkError(onFailure ? compiler.jnz(fallthrough) : compiler.jz(fallthrough),
-				"AsmJit br_on_cast_desc_eq fallthrough branch failed");
+		emitter.j(fallthrough, onFailure ? asmjit::ujit::test_nz(matches, matches)
+					: asmjit::ujit::test_z(matches, matches));
 		const size_t first = values.size() - branchValues;
 		const std::vector<asmjit::x86::Gp>& destinations = loopTarget ? frame.params : frame.results;
 		const std::vector<WASM::ValueTypeCode>& codes = loopTarget
@@ -6678,8 +6526,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		for (size_t i = 0; i < branchValues; ++i)
 			transferValue(destinations[i], values[first + i], codes[i],
 					"AsmJit br_on_cast_desc_eq result transfer failed");
-		checkError(compiler.jmp(loopTarget ? frame.begin : frame.end),
-				"AsmJit br_on_cast_desc_eq branch failed");
+		emitter.jmp(loopTarget ? frame.begin : frame.end);
 		if (!loopTarget)
 			frame.endTargeted = true;
 		checkError(compiler.bind(fallthrough),
@@ -6711,8 +6558,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		asmjit::FuncSignature voidSignature(asmjit::CallConvId::kCDecl);
 		voidSignature.set_ret(asmjit::TypeId::kVoid);
 		asmjit::Label notNull = compiler.new_label();
-		checkError(compiler.test(object, object), "AsmJit array.get_s/u null test failed");
-		checkError(compiler.jnz(notNull), "AsmJit array.get_s/u null branch failed");
+		emitter.j(notNull, asmjit::ujit::test_nz(object, object));
 		asmjit::InvokeNode* nullCall = nullptr;
 		checkError(compiler.invoke(asmjit::Out(nullCall),
 				reinterpret_cast<uint64_t>(&asmjitReportNullArray), voidSignature),
@@ -6720,12 +6566,10 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		emitPendingTrapReturn();
 		checkError(compiler.bind(notNull), "AsmJit array.get_s/u null label binding failed");
 		auto length = compiler.new_gp32("arrayLength");
-		checkError(compiler.mov(length, asmjit::x86::dword_ptr(object,
-				static_cast<int32_t>(WASM::GcHeader::kArrayLengthOffset))),
-				"AsmJit array.get_s/u length load failed");
+		emitter.mov(length, asmjit::x86::dword_ptr(object,
+				static_cast<int32_t>(WASM::GcHeader::kArrayLengthOffset)));
 		asmjit::Label inBounds = compiler.new_label();
-		checkError(compiler.cmp(index, length), "AsmJit array.get_s/u bounds compare failed");
-		checkError(compiler.jb(inBounds), "AsmJit array.get_s/u bounds branch failed");
+		emitter.j(inBounds, asmjit::ujit::ucmp_lt(index, length));
 		asmjit::InvokeNode* oobCall = nullptr;
 		checkError(compiler.invoke(asmjit::Out(oobCall),
 				reinterpret_cast<uint64_t>(&asmjitReportArrayOob), voidSignature),
@@ -6733,27 +6577,21 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		emitPendingTrapReturn();
 		checkError(compiler.bind(inBounds), "AsmJit array.get_s/u bounds label binding failed");
 		auto byteOffset = compiler.new_gp64("arrayByteOffset");
-		checkError(compiler.mov(byteOffset.r32(), index), "AsmJit array.get_s/u index widening failed");
-		checkError(compiler.shl(byteOffset, isI8 ? 0 : 1),
-				"AsmJit array.get_s/u index scaling failed");
-		checkError(compiler.add(byteOffset,
-				static_cast<int32_t>(WASM::gcArrayDataOffset(element.storage))),
-				"AsmJit array.get_s/u data offset failed");
+		emitter.mov(byteOffset.r32(), index);
+		emitter.shl(byteOffset, isI8 ? 0 : 1);
+		emitter.add(byteOffset,
+				static_cast<int32_t>(WASM::gcArrayDataOffset(element.storage)));
 		auto result = compiler.new_gp32("arrayPackedElement");
 		if (isI8) {
 			if (signExtend)
-				checkError(compiler.movsx(result, asmjit::x86::byte_ptr(object, byteOffset)),
-						"AsmJit array.get_s byte load failed");
+				emitter.loadS8(result, asmjit::x86::byte_ptr(object, byteOffset));
 			else
-				checkError(compiler.movzx(result, asmjit::x86::byte_ptr(object, byteOffset)),
-						"AsmJit array.get_u byte load failed");
+				emitter.loadZ8(result, asmjit::x86::byte_ptr(object, byteOffset));
 		} else {
 			if (signExtend)
-				checkError(compiler.movsx(result, asmjit::x86::word_ptr(object, byteOffset)),
-						"AsmJit array.get_s word load failed");
+				emitter.loadS16(result, asmjit::x86::word_ptr(object, byteOffset));
 			else
-				checkError(compiler.movzx(result, asmjit::x86::word_ptr(object, byteOffset)),
-						"AsmJit array.get_u word load failed");
+				emitter.loadZ16(result, asmjit::x86::word_ptr(object, byteOffset));
 		}
 		// The container operand was the operand stack's, so its count goes
 		// back. The element is already in a fresh register, so the drop cannot
@@ -6789,8 +6627,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		asmjit::FuncSignature voidSignature(asmjit::CallConvId::kCDecl);
 		voidSignature.set_ret(asmjit::TypeId::kVoid);
 		asmjit::Label notNull = compiler.new_label();
-		checkError(compiler.test(object, object), "AsmJit array.set null test failed");
-		checkError(compiler.jnz(notNull), "AsmJit array.set null branch failed");
+		emitter.j(notNull, asmjit::ujit::test_nz(object, object));
 		asmjit::InvokeNode* nullCall = nullptr;
 		checkError(compiler.invoke(asmjit::Out(nullCall),
 				reinterpret_cast<uint64_t>(&asmjitReportNullArray), voidSignature),
@@ -6798,12 +6635,10 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		emitPendingTrapReturn();
 		checkError(compiler.bind(notNull), "AsmJit array.set null label binding failed");
 		auto length = compiler.new_gp32("arrayLength");
-		checkError(compiler.mov(length, asmjit::x86::dword_ptr(object,
-				static_cast<int32_t>(WASM::GcHeader::kArrayLengthOffset))),
-				"AsmJit array.set length load failed");
+		emitter.mov(length, asmjit::x86::dword_ptr(object,
+				static_cast<int32_t>(WASM::GcHeader::kArrayLengthOffset)));
 		asmjit::Label inBounds = compiler.new_label();
-		checkError(compiler.cmp(index, length), "AsmJit array.set bounds compare failed");
-		checkError(compiler.jb(inBounds), "AsmJit array.set bounds branch failed");
+		emitter.j(inBounds, asmjit::ujit::ucmp_lt(index, length));
 		asmjit::InvokeNode* oobCall = nullptr;
 		checkError(compiler.invoke(asmjit::Out(oobCall),
 				reinterpret_cast<uint64_t>(&asmjitReportArrayOob), voidSignature),
@@ -6812,16 +6647,14 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		checkError(compiler.bind(inBounds), "AsmJit array.set bounds label binding failed");
 		// Fold the offset into one register, exactly as the read path does.
 		auto address = compiler.new_gp_ptr("arraySetAddress");
-		checkError(compiler.mov(address, object), "AsmJit array.set base copy failed");
+		emitter.mov(address, object);
 		auto byteOffset = compiler.new_gp64("arraySetOffset");
-		checkError(compiler.mov(byteOffset.r32(), index), "AsmJit array.set index widening failed");
+		emitter.mov(byteOffset.r32(), index);
 		const int scale = width == 1 ? 0 : (width == 2 ? 1 : (width == 4 ? 2 : 3));
-		checkError(compiler.shl(byteOffset, scale),
-				"AsmJit array.set index scaling failed");
-		checkError(compiler.add(address, byteOffset), "AsmJit array.set address add failed");
-		checkError(compiler.add(address,
-				static_cast<int32_t>(WASM::gcArrayDataOffset(element.storage))),
-				"AsmJit array.set data offset failed");
+		emitter.shl(byteOffset, scale);
+		emitter.add(address, byteOffset);
+		emitter.add(address,
+				static_cast<int32_t>(WASM::gcArrayDataOffset(element.storage)));
 		if (!packed && isReferenceKind(element.storage.value.opcode)) {
 			// A reference element is store-owned: the barrier retains the new
 			// value for the element and releases the one it held. The operand
@@ -6835,17 +6668,13 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		}
 		if (packed) {
 			if (packedI8)
-				checkError(compiler.mov(asmjit::x86::byte_ptr(address), value.r8()),
-						"AsmJit array.set packed store failed");
+				emitter.mov(asmjit::x86::byte_ptr(address), value.r8());
 			else
-				checkError(compiler.mov(asmjit::x86::word_ptr(address), value.r16()),
-						"AsmJit array.set packed store failed");
+				emitter.mov(asmjit::x86::word_ptr(address), value.r16());
 		} else if (width == 4)
-			checkError(compiler.mov(asmjit::x86::dword_ptr(address), value),
-					"AsmJit array.set element store failed");
+			emitter.mov(asmjit::x86::dword_ptr(address), value);
 		else
-			checkError(compiler.mov(asmjit::x86::qword_ptr(address), value),
-					"AsmJit array.set element store failed");
+			emitter.mov(asmjit::x86::qword_ptr(address), value);
 		// The element holds no reference, so the container operand's count is
 		// the only one to give back.
 		emitRefDrop(object);
@@ -6870,8 +6699,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		values.pop_back();
 		// Null reference first, then bounds.
 		asmjit::Label notNull = compiler.new_label();
-		checkError(compiler.test(object, object), "AsmJit array.get null test failed");
-		checkError(compiler.jnz(notNull), "AsmJit array.get null branch failed");
+		emitter.j(notNull, asmjit::ujit::test_nz(object, object));
 		asmjit::FuncSignature voidSignature(asmjit::CallConvId::kCDecl);
 		voidSignature.set_ret(asmjit::TypeId::kVoid);
 		asmjit::InvokeNode* nullCall = nullptr;
@@ -6881,12 +6709,10 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		emitPendingTrapReturn();
 		checkError(compiler.bind(notNull), "AsmJit array.get null label binding failed");
 		auto length = compiler.new_gp32("arrayLength");
-		checkError(compiler.mov(length, asmjit::x86::dword_ptr(object,
-				static_cast<int32_t>(WASM::GcHeader::kArrayLengthOffset))),
-				"AsmJit array.get length load failed");
+		emitter.mov(length, asmjit::x86::dword_ptr(object,
+				static_cast<int32_t>(WASM::GcHeader::kArrayLengthOffset)));
 		asmjit::Label inBounds = compiler.new_label();
-		checkError(compiler.cmp(index, length), "AsmJit array.get bounds compare failed");
-		checkError(compiler.jb(inBounds), "AsmJit array.get bounds branch failed");
+		emitter.j(inBounds, asmjit::ujit::ucmp_lt(index, length));
 		asmjit::InvokeNode* oobCall = nullptr;
 		checkError(compiler.invoke(asmjit::Out(oobCall),
 				reinterpret_cast<uint64_t>(&asmjitReportArrayOob), voidSignature),
@@ -6896,20 +6722,16 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		// Element address = object + dataOffset + index * elementSize, computed in a
 		// register so the memory operand stays a simple base+index form.
 		auto byteOffset = compiler.new_gp64("arrayByteOffset");
-		checkError(compiler.mov(byteOffset.r32(), index), "AsmJit array.get index widening failed");
-		checkError(compiler.shl(byteOffset, width == 4 ? 2 : 3),
-				"AsmJit array.get index scaling failed");
-		checkError(compiler.add(byteOffset,
-				static_cast<int32_t>(WASM::gcArrayDataOffset(element.storage))),
-				"AsmJit array.get data offset failed");
+		emitter.mov(byteOffset.r32(), index);
+		emitter.shl(byteOffset, width == 4 ? 2 : 3);
+		emitter.add(byteOffset,
+				static_cast<int32_t>(WASM::gcArrayDataOffset(element.storage)));
 		auto result = width == 4 ? compiler.new_gp32("arrayElementValue")
 				: compiler.new_gp64("arrayElementValue");
 		if (width == 4)
-			checkError(compiler.mov(result, asmjit::x86::dword_ptr(object, byteOffset)),
-					"AsmJit array.get element load failed");
+			emitter.mov(result, asmjit::x86::dword_ptr(object, byteOffset));
 		else
-			checkError(compiler.mov(result, asmjit::x86::qword_ptr(object, byteOffset)),
-					"AsmJit array.get element load failed");
+			emitter.mov(result, asmjit::x86::qword_ptr(object, byteOffset));
 		// The container operand belonged to the operand stack, so its count goes
 		// back. The element is already in a fresh register, so no spill is
 		// needed, and the drop cannot invalidate it.
@@ -7168,31 +6990,23 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		// r32 -> r32 so the 32-bit length zero-extends: copying the whole 64-bit
 		// register would keep whatever garbage sits above bit 31 and turn the
 		// countdown into a runaway loop.
-		checkError(compiler.mov(counter.r32(), length.r32()),
-				"AsmJit array.new_default counter load failed");
-		checkError(compiler.lea(cursor, asmjit::x86::ptr(object, dataOffset)),
-				"AsmJit array.new_default cursor setup failed");
+		emitter.mov(counter.r32(), length.r32());
+		emitter.lea(cursor, asmjit::x86::ptr(object, dataOffset));
 		asmjit::Label loopStart = compiler.new_label();
 		asmjit::Label loopDone = compiler.new_label();
 		checkError(compiler.bind(loopStart), "AsmJit array.new_default label bind failed");
-		checkError(compiler.test(counter, counter), "AsmJit array.new_default loop test failed");
-		checkError(compiler.jz(loopDone), "AsmJit array.new_default loop exit failed");
+		emitter.j(loopDone, asmjit::ujit::test_z(counter, counter));
 		if (width == 1)
-			checkError(compiler.mov(asmjit::x86::byte_ptr(cursor), asmjit::Imm(0)),
-					"AsmJit array.new_default zero store failed");
+			emitter.mov(asmjit::x86::byte_ptr(cursor), asmjit::Imm(0));
 		else if (width == 2)
-			checkError(compiler.mov(asmjit::x86::word_ptr(cursor), asmjit::Imm(0)),
-					"AsmJit array.new_default zero store failed");
+			emitter.mov(asmjit::x86::word_ptr(cursor), asmjit::Imm(0));
 		else if (width == 4)
-			checkError(compiler.mov(asmjit::x86::dword_ptr(cursor), asmjit::Imm(0)),
-					"AsmJit array.new_default zero store failed");
+			emitter.mov(asmjit::x86::dword_ptr(cursor), asmjit::Imm(0));
 		else
-			checkError(compiler.mov(asmjit::x86::qword_ptr(cursor), asmjit::Imm(0)),
-					"AsmJit array.new_default zero store failed");
-		checkError(compiler.add(cursor, asmjit::Imm(elementBytes)),
-				"AsmJit array.new_default cursor advance failed");
-		checkError(compiler.dec(counter), "AsmJit array.new_default counter step failed");
-		checkError(compiler.jmp(loopStart), "AsmJit array.new_default back edge failed");
+			emitter.mov(asmjit::x86::qword_ptr(cursor), asmjit::Imm(0));
+		emitter.add(cursor, asmjit::Imm(elementBytes));
+		emitter.dec(counter);
+		emitter.jmp(loopStart);
 		checkError(compiler.bind(loopDone), "AsmJit array.new_default label bind failed");
 		values.pop_back();
 		values.push_back(object);
@@ -7242,17 +7056,15 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 			const auto offset = static_cast<int32_t>(dataOffset + static_cast<int32_t>(i) * elementBytes);
 			if (packed) {
 				if (packedI8)
-					checkError(compiler.mov(asmjit::x86::byte_ptr(object, offset),
-							operands[i].r8()), "AsmJit array.new_fixed packed store failed");
+					emitter.mov(asmjit::x86::byte_ptr(object, offset),
+							operands[i].r8());
 				else
-					checkError(compiler.mov(asmjit::x86::word_ptr(object, offset),
-							operands[i].r16()), "AsmJit array.new_fixed packed store failed");
+					emitter.mov(asmjit::x86::word_ptr(object, offset),
+							operands[i].r16());
 			} else if (width == 4)
-				checkError(compiler.mov(asmjit::x86::dword_ptr(object, offset), operands[i]),
-						"AsmJit array.new_fixed element store failed");
+				emitter.mov(asmjit::x86::dword_ptr(object, offset), operands[i]);
 			else
-				checkError(compiler.mov(asmjit::x86::qword_ptr(object, offset), operands[i]),
-						"AsmJit array.new_fixed element store failed");
+				emitter.mov(asmjit::x86::qword_ptr(object, offset), operands[i]);
 		}
 		values.push_back(object);
 		// A fresh object is created unowned; the operand stack owns one count
@@ -7295,24 +7107,21 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		};
 		const auto nullCheck = [&](const asmjit::x86::Gp& object) {
 			asmjit::Label ok = compiler.new_label();
-			checkError(compiler.test(object, object), "AsmJit array.copy null test failed");
-			checkError(compiler.jnz(ok), "AsmJit array.copy null branch failed");
+			emitter.j(ok, asmjit::ujit::test_nz(object, object));
 			trapCall(&asmjitReportNullArray);
 			checkError(compiler.bind(ok), "AsmJit array.copy null label binding failed");
 		};
 		const auto rangeCheck = [&](const asmjit::x86::Gp& object, const asmjit::x86::Gp& index) {
 			auto arrayLength = compiler.new_gp64("arrayLength");
-			checkError(compiler.mov(arrayLength.r32(), asmjit::x86::dword_ptr(object,
-					static_cast<int32_t>(WASM::GcHeader::kArrayLengthOffset))),
-					"AsmJit array.copy length load failed");
+			emitter.mov(arrayLength.r32(), asmjit::x86::dword_ptr(object,
+					static_cast<int32_t>(WASM::GcHeader::kArrayLengthOffset)));
 			auto endIndex = compiler.new_gp64("arrayCopyEndIndex");
-			checkError(compiler.mov(endIndex.r32(), index), "AsmJit array.copy index widening failed");
+			emitter.mov(endIndex.r32(), index);
 			auto wideLength = compiler.new_gp64("arrayCopyLength");
-			checkError(compiler.mov(wideLength.r32(), length), "AsmJit array.copy length widening failed");
-			checkError(compiler.add(endIndex, wideLength), "AsmJit array.copy range sum failed");
+			emitter.mov(wideLength.r32(), length);
+			emitter.add(endIndex, wideLength);
 			asmjit::Label inBounds = compiler.new_label();
-			checkError(compiler.cmp(endIndex, arrayLength), "AsmJit array.copy range compare failed");
-			checkError(compiler.jbe(inBounds), "AsmJit array.copy range branch failed");
+			emitter.j(inBounds, asmjit::ujit::ucmp_le(endIndex, arrayLength));
 			trapCall(&asmjitReportArrayOob);
 			checkError(compiler.bind(inBounds), "AsmJit array.copy range label binding failed");
 		};
@@ -7328,48 +7137,44 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		const auto cursorFor = [&](const asmjit::x86::Gp& object, const asmjit::x86::Gp& index,
 				const char* name) {
 			auto cursor = compiler.new_gp64(name);
-			checkError(compiler.mov(cursor, object), "AsmJit array.copy cursor setup failed");
-			checkError(compiler.add(cursor, asmjit::Imm(dataOffset)),
-					"AsmJit array.copy data offset failed");
+			emitter.mov(cursor, object);
+			emitter.add(cursor, asmjit::Imm(dataOffset));
 			auto offset = compiler.new_gp64("arrayCopyOffset");
-			checkError(compiler.mov(offset.r32(), index), "AsmJit array.copy offset widening failed");
+			emitter.mov(offset.r32(), index);
 			if (shift != 0)
-				checkError(compiler.shl(offset, shift), "AsmJit array.copy offset scaling failed");
-			checkError(compiler.add(cursor, offset), "AsmJit array.copy index offset failed");
+				emitter.shl(offset, shift);
+			emitter.add(cursor, offset);
 			return cursor;
 		};
 		auto dstCursor = cursorFor(dstObject, dstIndex, "arrayCopyDst");
 		auto srcCursor = cursorFor(srcObject, srcIndex, "arrayCopySrc");
 		auto counter = compiler.new_gp64("arrayCopyCounter");
-		checkError(compiler.mov(counter.r32(), length), "AsmJit array.copy counter setup failed");
+		emitter.mov(counter.r32(), length);
 		asmjit::Label forward = compiler.new_label();
 		asmjit::Label done = compiler.new_label();
 		// memmove rule: forward when the destination starts at or below the source.
-		checkError(compiler.cmp(dstCursor, srcCursor), "AsmJit array.copy direction compare failed");
-		checkError(compiler.jbe(forward), "AsmJit array.copy direction branch failed");
+		emitter.j(forward, asmjit::ujit::ucmp_le(dstCursor, srcCursor));
 		auto endOffset = compiler.new_gp64("arrayCopyEndOffset");
-		checkError(compiler.mov(endOffset.r32(), length), "AsmJit array.copy end offset failed");
+		emitter.mov(endOffset.r32(), length);
 		if (shift != 0)
-			checkError(compiler.shl(endOffset, shift), "AsmJit array.copy end scaling failed");
-		checkError(compiler.add(dstCursor, endOffset), "AsmJit array.copy dst end failed");
-		checkError(compiler.add(srcCursor, endOffset), "AsmJit array.copy src end failed");
+			emitter.shl(endOffset, shift);
+		emitter.add(dstCursor, endOffset);
+		emitter.add(srcCursor, endOffset);
 		asmjit::Label back = compiler.new_label();
 		checkError(compiler.bind(back), "AsmJit array.copy back label failed");
-		checkError(compiler.test(counter, counter), "AsmJit array.copy back test failed");
-		checkError(compiler.jz(done), "AsmJit array.copy back exit failed");
-		checkError(compiler.sub(dstCursor, asmjit::Imm(elementBytes)), "AsmJit array.copy dst step failed");
-		checkError(compiler.sub(srcCursor, asmjit::Imm(elementBytes)), "AsmJit array.copy src step failed");
+		emitter.j(done, asmjit::ujit::test_z(counter, counter));
+		emitter.sub(dstCursor, asmjit::Imm(elementBytes));
+		emitter.sub(srcCursor, asmjit::Imm(elementBytes));
 		emitCopyTransfer(packed, packedI8, width, dstCursor, srcCursor);
-		checkError(compiler.dec(counter), "AsmJit array.copy back counter failed");
-		checkError(compiler.jmp(back), "AsmJit array.copy back edge failed");
+		emitter.dec(counter);
+		emitter.jmp(back);
 		checkError(compiler.bind(forward), "AsmJit array.copy forward label failed");
-		checkError(compiler.test(counter, counter), "AsmJit array.copy forward test failed");
-		checkError(compiler.jz(done), "AsmJit array.copy forward exit failed");
+		emitter.j(done, asmjit::ujit::test_z(counter, counter));
 		emitCopyTransfer(packed, packedI8, width, dstCursor, srcCursor);
-		checkError(compiler.add(dstCursor, asmjit::Imm(elementBytes)), "AsmJit array.copy dst advance failed");
-		checkError(compiler.add(srcCursor, asmjit::Imm(elementBytes)), "AsmJit array.copy src advance failed");
-		checkError(compiler.dec(counter), "AsmJit array.copy forward counter failed");
-		checkError(compiler.jmp(forward), "AsmJit array.copy forward edge failed");
+		emitter.add(dstCursor, asmjit::Imm(elementBytes));
+		emitter.add(srcCursor, asmjit::Imm(elementBytes));
+		emitter.dec(counter);
+		emitter.jmp(forward);
 		checkError(compiler.bind(done), "AsmJit array.copy done label failed");
 		// Both containers were the operand stack's; the copy loop only read one
 		// and wrote the other, so each one's count goes back.
@@ -7385,26 +7190,18 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		auto value = compiler.new_gp64("arrayCopyValue");
 		if (packed) {
 			if (packedI8) {
-				checkError(compiler.mov(value.r32(), asmjit::x86::byte_ptr(src)),
-						"AsmJit array.copy packed load failed");
-				checkError(compiler.mov(asmjit::x86::byte_ptr(dst), value.r8()),
-						"AsmJit array.copy packed store failed");
+				emitter.mov(value.r32(), asmjit::x86::byte_ptr(src));
+				emitter.mov(asmjit::x86::byte_ptr(dst), value.r8());
 			} else {
-				checkError(compiler.mov(value.r32(), asmjit::x86::word_ptr(src)),
-						"AsmJit array.copy packed load failed");
-				checkError(compiler.mov(asmjit::x86::word_ptr(dst), value.r16()),
-						"AsmJit array.copy packed store failed");
+				emitter.mov(value.r32(), asmjit::x86::word_ptr(src));
+				emitter.mov(asmjit::x86::word_ptr(dst), value.r16());
 			}
 		} else if (width == 4) {
-			checkError(compiler.mov(value.r32(), asmjit::x86::dword_ptr(src)),
-					"AsmJit array.copy element load failed");
-			checkError(compiler.mov(asmjit::x86::dword_ptr(dst), value.r32()),
-					"AsmJit array.copy element store failed");
+			emitter.mov(value.r32(), asmjit::x86::dword_ptr(src));
+			emitter.mov(asmjit::x86::dword_ptr(dst), value.r32());
 		} else {
-			checkError(compiler.mov(value, asmjit::x86::qword_ptr(src)),
-					"AsmJit array.copy element load failed");
-			checkError(compiler.mov(asmjit::x86::qword_ptr(dst), value),
-					"AsmJit array.copy element store failed");
+			emitter.mov(value, asmjit::x86::qword_ptr(src));
+			emitter.mov(asmjit::x86::qword_ptr(dst), value);
 		}
 	}
 
@@ -7436,8 +7233,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		voidSignature.set_ret(asmjit::TypeId::kVoid);
 		// Null first, then the range, so a null array reports the array kind.
 		asmjit::Label notNull = compiler.new_label();
-		checkError(compiler.test(object, object), "AsmJit array.fill null test failed");
-		checkError(compiler.jnz(notNull), "AsmJit array.fill null branch failed");
+		emitter.j(notNull, asmjit::ujit::test_nz(object, object));
 		asmjit::InvokeNode* nullCall = nullptr;
 		checkError(compiler.invoke(asmjit::Out(nullCall),
 				reinterpret_cast<uint64_t>(&asmjitReportNullArray), voidSignature),
@@ -7446,17 +7242,15 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		checkError(compiler.bind(notNull), "AsmJit array.fill null label binding failed");
 		// Bounds: (u64)index + (u64)length <= (u64)arrayLength.
 		auto arrayLength = compiler.new_gp64("arrayLength");
-		checkError(compiler.mov(arrayLength.r32(), asmjit::x86::dword_ptr(object,
-				static_cast<int32_t>(WASM::GcHeader::kArrayLengthOffset))),
-				"AsmJit array.fill length load failed");
+		emitter.mov(arrayLength.r32(), asmjit::x86::dword_ptr(object,
+				static_cast<int32_t>(WASM::GcHeader::kArrayLengthOffset)));
 		auto endIndex = compiler.new_gp64("arrayFillEndIndex");
-		checkError(compiler.mov(endIndex.r32(), index), "AsmJit array.fill index widening failed");
+		emitter.mov(endIndex.r32(), index);
 		auto wideLength = compiler.new_gp64("arrayFillLength");
-		checkError(compiler.mov(wideLength.r32(), length), "AsmJit array.fill length widening failed");
-		checkError(compiler.add(endIndex, wideLength), "AsmJit array.fill range sum failed");
+		emitter.mov(wideLength.r32(), length);
+		emitter.add(endIndex, wideLength);
 		asmjit::Label inBounds = compiler.new_label();
-		checkError(compiler.cmp(endIndex, arrayLength), "AsmJit array.fill range compare failed");
-		checkError(compiler.jbe(inBounds), "AsmJit array.fill range branch failed");
+		emitter.j(inBounds, asmjit::ujit::ucmp_le(endIndex, arrayLength));
 		asmjit::InvokeNode* oobCall = nullptr;
 		checkError(compiler.invoke(asmjit::Out(oobCall),
 				reinterpret_cast<uint64_t>(&asmjitReportArrayOob), voidSignature),
@@ -7467,41 +7261,35 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		const auto dataOffset = static_cast<int32_t>(WASM::gcArrayDataOffset(element.storage));
 		const auto elementBytes = static_cast<int32_t>(WASM::gcStorageBytes(element.storage));
 		auto byteOffset = compiler.new_gp64("arrayFillByteOffset");
-		checkError(compiler.mov(byteOffset.r32(), index), "AsmJit array.fill offset widening failed");
+		emitter.mov(byteOffset.r32(), index);
 		if (elementBytes != 1) {
 			int shift = 0;
 			for (int bytes = elementBytes; bytes > 1; bytes >>= 1)
 				++shift;
-			checkError(compiler.shl(byteOffset, shift), "AsmJit array.fill offset scaling failed");
+			emitter.shl(byteOffset, shift);
 		}
 		auto cursor = compiler.new_gp64("arrayFillCursor");
-		checkError(compiler.mov(cursor, object), "AsmJit array.fill cursor setup failed");
-		checkError(compiler.add(cursor, asmjit::Imm(dataOffset)), "AsmJit array.fill data offset failed");
-		checkError(compiler.add(cursor, byteOffset), "AsmJit array.fill index offset failed");
+		emitter.mov(cursor, object);
+		emitter.add(cursor, asmjit::Imm(dataOffset));
+		emitter.add(cursor, byteOffset);
 		auto counter = compiler.new_gp64("arrayFillCounter");
-		checkError(compiler.mov(counter.r32(), length), "AsmJit array.fill counter setup failed");
+		emitter.mov(counter.r32(), length);
 		asmjit::Label loopStart = compiler.new_label();
 		asmjit::Label loopDone = compiler.new_label();
 		checkError(compiler.bind(loopStart), "AsmJit array.fill loop label failed");
-		checkError(compiler.test(counter, counter), "AsmJit array.fill loop test failed");
-		checkError(compiler.jz(loopDone), "AsmJit array.fill loop exit failed");
+		emitter.j(loopDone, asmjit::ujit::test_z(counter, counter));
 		if (packed) {
 			if (packedI8)
-				checkError(compiler.mov(asmjit::x86::byte_ptr(cursor), elementValue.r8()),
-						"AsmJit array.fill packed store failed");
+				emitter.mov(asmjit::x86::byte_ptr(cursor), elementValue.r8());
 			else
-				checkError(compiler.mov(asmjit::x86::word_ptr(cursor), elementValue.r16()),
-						"AsmJit array.fill packed store failed");
+				emitter.mov(asmjit::x86::word_ptr(cursor), elementValue.r16());
 		} else if (width == 4)
-			checkError(compiler.mov(asmjit::x86::dword_ptr(cursor), elementValue),
-					"AsmJit array.fill element store failed");
+			emitter.mov(asmjit::x86::dword_ptr(cursor), elementValue);
 		else
-			checkError(compiler.mov(asmjit::x86::qword_ptr(cursor), elementValue),
-					"AsmJit array.fill element store failed");
-		checkError(compiler.add(cursor, asmjit::Imm(elementBytes)),
-				"AsmJit array.fill cursor advance failed");
-		checkError(compiler.dec(counter), "AsmJit array.fill counter step failed");
-		checkError(compiler.jmp(loopStart), "AsmJit array.fill back edge failed");
+			emitter.mov(asmjit::x86::qword_ptr(cursor), elementValue);
+		emitter.add(cursor, asmjit::Imm(elementBytes));
+		emitter.dec(counter);
+		emitter.jmp(loopStart);
 		checkError(compiler.bind(loopDone), "AsmJit array.fill loop label binding failed");
 		// The array operand was the operand stack's and the fill only wrote
 		// through it, so its count goes back. The fill value is left alone: a
@@ -7550,34 +7338,26 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		const auto dataOffset = static_cast<int32_t>(WASM::gcArrayDataOffset(element.storage));
 		const auto elementBytes = static_cast<int32_t>(WASM::gcStorageBytes(element.storage));
 		auto fillCursor = compiler.new_gp64("arrayNewCursor");
-		checkError(compiler.mov(fillCursor, object), "AsmJit array.new cursor setup failed");
-		checkError(compiler.add(fillCursor, asmjit::Imm(dataOffset)),
-				"AsmJit array.new data offset failed");
+		emitter.mov(fillCursor, object);
+		emitter.add(fillCursor, asmjit::Imm(dataOffset));
 		auto fillCounter = compiler.new_gp64("arrayNewCounter");
-		checkError(compiler.mov(fillCounter.r32(), length),
-				"AsmJit array.new counter setup failed");
+		emitter.mov(fillCounter.r32(), length);
 		asmjit::Label fillStart = compiler.new_label();
 		asmjit::Label fillDone = compiler.new_label();
 		checkError(compiler.bind(fillStart), "AsmJit array.new loop label failed");
-		checkError(compiler.test(fillCounter, fillCounter), "AsmJit array.new loop test failed");
-		checkError(compiler.jz(fillDone), "AsmJit array.new loop exit failed");
+		emitter.j(fillDone, asmjit::ujit::test_z(fillCounter, fillCounter));
 		if (packed) {
 			if (packedI8)
-				checkError(compiler.mov(asmjit::x86::byte_ptr(fillCursor), elementValue.r8()),
-						"AsmJit array.new packed store failed");
+				emitter.mov(asmjit::x86::byte_ptr(fillCursor), elementValue.r8());
 			else
-				checkError(compiler.mov(asmjit::x86::word_ptr(fillCursor), elementValue.r16()),
-						"AsmJit array.new packed store failed");
+				emitter.mov(asmjit::x86::word_ptr(fillCursor), elementValue.r16());
 		} else if (width == 4)
-			checkError(compiler.mov(asmjit::x86::dword_ptr(fillCursor), elementValue),
-					"AsmJit array.new element store failed");
+			emitter.mov(asmjit::x86::dword_ptr(fillCursor), elementValue);
 		else
-			checkError(compiler.mov(asmjit::x86::qword_ptr(fillCursor), elementValue),
-					"AsmJit array.new element store failed");
-		checkError(compiler.add(fillCursor, asmjit::Imm(elementBytes)),
-				"AsmJit array.new cursor advance failed");
-		checkError(compiler.dec(fillCounter), "AsmJit array.new counter step failed");
-		checkError(compiler.jmp(fillStart), "AsmJit array.new back edge failed");
+			emitter.mov(asmjit::x86::qword_ptr(fillCursor), elementValue);
+		emitter.add(fillCursor, asmjit::Imm(elementBytes));
+		emitter.dec(fillCounter);
+		emitter.jmp(fillStart);
 		checkError(compiler.bind(fillDone), "AsmJit array.new loop label binding failed");
 		values.push_back(object);
 		// A fresh object is created unowned; the operand stack owns one count
@@ -7593,8 +7373,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		auto object = values.back();
 		values.pop_back();
 		asmjit::Label notNull = compiler.new_label();
-		checkError(compiler.test(object, object), "AsmJit array.len null test failed");
-		checkError(compiler.jnz(notNull), "AsmJit array.len null branch failed");
+		emitter.j(notNull, asmjit::ujit::test_nz(object, object));
 		asmjit::FuncSignature nullSignature(asmjit::CallConvId::kCDecl);
 		nullSignature.set_ret(asmjit::TypeId::kVoid);
 		asmjit::InvokeNode* nullCall = nullptr;
@@ -7604,9 +7383,8 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		emitPendingTrapReturn();
 		checkError(compiler.bind(notNull), "AsmJit array.len label binding failed");
 		auto length = compiler.new_gp32("arrayLength");
-		checkError(compiler.mov(length, asmjit::x86::dword_ptr(object,
-				static_cast<int32_t>(WASM::GcHeader::kArrayLengthOffset))),
-				"AsmJit array.len load failed");
+		emitter.mov(length, asmjit::x86::dword_ptr(object,
+				static_cast<int32_t>(WASM::GcHeader::kArrayLengthOffset)));
 		// The array operand was the operand stack's and the result is an i32,
 		// so the stack gives its count up.
 		if (referenceValues.erase(object.id()) != 0)
@@ -7630,8 +7408,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		values.pop_back();
 		const auto offset = static_cast<int32_t>(WASM::gcStructFieldOffset(fields, arg2));
 		asmjit::Label notNull = compiler.new_label();
-		checkError(compiler.test(object, object), "AsmJit struct.get_s/u null test failed");
-		checkError(compiler.jnz(notNull), "AsmJit struct.get_s/u null branch failed");
+		emitter.j(notNull, asmjit::ujit::test_nz(object, object));
 		asmjit::FuncSignature nullSignature(asmjit::CallConvId::kCDecl);
 		nullSignature.set_ret(asmjit::TypeId::kVoid);
 		asmjit::InvokeNode* nullCall = nullptr;
@@ -7644,18 +7421,14 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		const bool isI8 = fields[arg2].storage.packed == WASM::ValueTypeCode::I8;
 		if (isI8) {
 			if (signExtend)
-				checkError(compiler.movsx(result, asmjit::x86::byte_ptr(object, offset)),
-						"AsmJit struct.get_s byte load failed");
+				emitter.loadS8(result, asmjit::x86::byte_ptr(object, offset));
 			else
-				checkError(compiler.movzx(result, asmjit::x86::byte_ptr(object, offset)),
-						"AsmJit struct.get_u byte load failed");
+				emitter.loadZ8(result, asmjit::x86::byte_ptr(object, offset));
 		} else {
 			if (signExtend)
-				checkError(compiler.movsx(result, asmjit::x86::word_ptr(object, offset)),
-						"AsmJit struct.get_s word load failed");
+				emitter.loadS16(result, asmjit::x86::word_ptr(object, offset));
 			else
-				checkError(compiler.movzx(result, asmjit::x86::word_ptr(object, offset)),
-						"AsmJit struct.get_u word load failed");
+				emitter.loadZ16(result, asmjit::x86::word_ptr(object, offset));
 		}
 		// The container operand was the operand stack's, so its count goes
 		// back. The field value is already in a fresh register and a packed
@@ -7692,8 +7465,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		values.pop_back();
 		const auto offset = static_cast<int32_t>(WASM::gcStructFieldOffset(fields, arg2));
 		asmjit::Label notNull = compiler.new_label();
-		checkError(compiler.test(object, object), "AsmJit struct.set null test failed");
-		checkError(compiler.jnz(notNull), "AsmJit struct.set null branch failed");
+		emitter.j(notNull, asmjit::ujit::test_nz(object, object));
 		asmjit::FuncSignature nullSignature(asmjit::CallConvId::kCDecl);
 		nullSignature.set_ret(asmjit::TypeId::kVoid);
 		asmjit::InvokeNode* nullCall = nullptr;
@@ -7708,8 +7480,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 			// gives up the counts it held for both operands -- the container and
 			// the value -- which is safe from the registers after the store.
 			asmjit::x86::Gp fieldAddress = compiler.new_gp_ptr("structSetField");
-			checkError(compiler.lea(fieldAddress, asmjit::x86::qword_ptr(object, offset)),
-					"AsmJit struct.set field address failed");
+			emitter.lea(fieldAddress, asmjit::x86::qword_ptr(object, offset));
 			emitRefStore(fieldAddress, value);
 			emitRefDrop(object);
 			emitRefDrop(value);
@@ -7717,17 +7488,13 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		}
 		if (packed) {
 			if (packedI8)
-				checkError(compiler.mov(asmjit::x86::byte_ptr(object, offset), value.r8()),
-						"AsmJit struct.set packed store failed");
+				emitter.mov(asmjit::x86::byte_ptr(object, offset), value.r8());
 			else
-				checkError(compiler.mov(asmjit::x86::word_ptr(object, offset), value.r16()),
-						"AsmJit struct.set packed store failed");
+				emitter.mov(asmjit::x86::word_ptr(object, offset), value.r16());
 		} else if (width == 4)
-			checkError(compiler.mov(asmjit::x86::dword_ptr(object, offset), value),
-					"AsmJit struct.set field store failed");
+			emitter.mov(asmjit::x86::dword_ptr(object, offset), value);
 		else
-			checkError(compiler.mov(asmjit::x86::qword_ptr(object, offset), value),
-					"AsmJit struct.set field store failed");
+			emitter.mov(asmjit::x86::qword_ptr(object, offset), value);
 		// The field holds no reference, so the container operand's count is the
 		// only one to give back.
 		emitRefDrop(object);
@@ -7754,8 +7521,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		const std::size_t offset = WASM::gcStructFieldOffset(fields, arg2);
 		// A null object traps, exactly as ref.as_non_null does.
 		asmjit::Label notNull = compiler.new_label();
-		checkError(compiler.test(object, object), "AsmJit struct.get null test failed");
-		checkError(compiler.jnz(notNull), "AsmJit struct.get null branch failed");
+		emitter.j(notNull, asmjit::ujit::test_nz(object, object));
 		asmjit::FuncSignature nullSignature(asmjit::CallConvId::kCDecl);
 		nullSignature.set_ret(asmjit::TypeId::kVoid);
 		asmjit::InvokeNode* nullCall = nullptr;
@@ -7767,11 +7533,11 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		auto result = width == 4 ? compiler.new_gp32("structField")
 				: compiler.new_gp64("structField");
 		if (width == 4)
-			checkError(compiler.mov(result, asmjit::x86::dword_ptr(object,
-					static_cast<int32_t>(offset))), "AsmJit struct.get field load failed");
+			emitter.mov(result, asmjit::x86::dword_ptr(object,
+					static_cast<int32_t>(offset)));
 		else
-			checkError(compiler.mov(result, asmjit::x86::qword_ptr(object,
-					static_cast<int32_t>(offset))), "AsmJit struct.get field load failed");
+			emitter.mov(result, asmjit::x86::qword_ptr(object,
+					static_cast<int32_t>(offset)));
 		// The container operand belonged to the operand stack, so its count goes
 		// back. The field value is already in a fresh register, so no spill is
 		// needed and the drop cannot invalidate it.
@@ -7795,13 +7561,11 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		auto index = values.back();
 		values.pop_back();
 		auto table = compiler.new_gp32("tableGetIndex");
-		checkError(compiler.mov(table, static_cast<uint32_t>(tableIndex)),
-				"AsmJit table.get index materialisation failed");
+		emitter.mov(table, static_cast<uint32_t>(tableIndex));
 		asmjit::x86::Gp index64 = index;
 		if (index.size() == 4) {
 			index64 = compiler.new_gp64("tableGetElement");
-			checkError(compiler.mov(index64.r32(), index.r32()),
-					"AsmJit table.get index widening failed");
+			emitter.mov(index64.r32(), index.r32());
 		}
 		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
 		signature.set_ret(asmjit::TypeId::kUIntPtr);
@@ -7836,13 +7600,11 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		auto index = values.back();
 		values.pop_back();
 		auto table = compiler.new_gp32("tableSetIndex");
-		checkError(compiler.mov(table, static_cast<uint32_t>(tableIndex)),
-				"AsmJit table.set index materialisation failed");
+		emitter.mov(table, static_cast<uint32_t>(tableIndex));
 		asmjit::x86::Gp index64 = index;
 		if (index.size() == 4) {
 			index64 = compiler.new_gp64("tableSetElement");
-			checkError(compiler.mov(index64.r32(), index.r32()),
-					"AsmJit table.set index widening failed");
+			emitter.mov(index64.r32(), index.r32());
 		}
 		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
 		signature.set_ret(asmjit::TypeId::kVoid);
@@ -7875,13 +7637,11 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		auto index = values.back();
 		values.pop_back();
 		auto table = compiler.new_gp32("tableAtomicGetIndex");
-		checkError(compiler.mov(table, static_cast<uint32_t>(tableIndex)),
-				"AsmJit table.atomic.get index materialisation failed");
+		emitter.mov(table, static_cast<uint32_t>(tableIndex));
 		asmjit::x86::Gp index64 = index;
 		if (index.size() == 4) {
 			index64 = compiler.new_gp64("tableAtomicGetElement");
-			checkError(compiler.mov(index64.r32(), index.r32()),
-					"AsmJit table.atomic.get index widening failed");
+			emitter.mov(index64.r32(), index.r32());
 		}
 		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
 		signature.set_ret(asmjit::TypeId::kUIntPtr);
@@ -7916,13 +7676,11 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		auto index = values.back();
 		values.pop_back();
 		auto table = compiler.new_gp32("tableAtomicSetIndex");
-		checkError(compiler.mov(table, static_cast<uint32_t>(tableIndex)),
-				"AsmJit table.atomic.set index materialisation failed");
+		emitter.mov(table, static_cast<uint32_t>(tableIndex));
 		asmjit::x86::Gp index64 = index;
 		if (index.size() == 4) {
 			index64 = compiler.new_gp64("tableAtomicSetElement");
-			checkError(compiler.mov(index64.r32(), index.r32()),
-					"AsmJit table.atomic.set index widening failed");
+			emitter.mov(index64.r32(), index.r32());
 		}
 		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
 		signature.set_ret(asmjit::TypeId::kVoid);
@@ -7952,13 +7710,11 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		auto index = values.back();
 		values.pop_back();
 		auto table = compiler.new_gp32("tableAtomicXchgIndex");
-		checkError(compiler.mov(table, static_cast<uint32_t>(tableIndex)),
-				"AsmJit table.atomic.xchg index materialisation failed");
+		emitter.mov(table, static_cast<uint32_t>(tableIndex));
 		asmjit::x86::Gp index64 = index;
 		if (index.size() == 4) {
 			index64 = compiler.new_gp64("tableAtomicXchgElement");
-			checkError(compiler.mov(index64.r32(), index.r32()),
-					"AsmJit table.atomic.xchg index widening failed");
+			emitter.mov(index64.r32(), index.r32());
 		}
 		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
 		signature.set_ret(asmjit::TypeId::kUIntPtr);
@@ -7993,13 +7749,11 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		auto index = values.back();
 		values.pop_back();
 		auto table = compiler.new_gp32("tableAtomicCmpxchgIndex");
-		checkError(compiler.mov(table, static_cast<uint32_t>(tableIndex)),
-				"AsmJit table.atomic.cmpxchg index materialisation failed");
+		emitter.mov(table, static_cast<uint32_t>(tableIndex));
 		asmjit::x86::Gp index64 = index;
 		if (index.size() == 4) {
 			index64 = compiler.new_gp64("tableAtomicCmpxchgElement");
-			checkError(compiler.mov(index64.r32(), index.r32()),
-					"AsmJit table.atomic.cmpxchg index widening failed");
+			emitter.mov(index64.r32(), index.r32());
 		}
 		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
 		signature.set_ret(asmjit::TypeId::kUIntPtr);
@@ -8042,9 +7796,8 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 						|| internals.importStorage[index].fnPtr == nullptr))
 			throw std::runtime_error("AsmJit ref.func references an unresolved function import");
 		auto reference = compiler.new_gp_ptr("funcRef");
-		checkError(compiler.mov(reference,
-				asmjit::Imm(reinterpret_cast<uint64_t>(referencePtr))),
-				"AsmJit ref.func materialisation failed");
+		emitter.mov(reference,
+				asmjit::Imm(reinterpret_cast<uint64_t>(referencePtr)));
 		// The Callable is store-owned by the instance; the operand stack takes
 		// its own count so a later `drop` cannot release the instance's.
 		markReference(reference);
@@ -8071,12 +7824,10 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		voidSignature.set_ret(asmjit::TypeId::kVoid);
 		asmjit::Label afterCast = compiler.new_label();
 		if (nullable) {
-			checkError(compiler.test(reference, reference), "AsmJit ref.cast null test failed");
-			checkError(compiler.jz(afterCast), "AsmJit ref.cast null pass failed");
+			emitter.j(afterCast, asmjit::ujit::test_z(reference, reference));
 		} else {
 			asmjit::Label notNull = compiler.new_label();
-			checkError(compiler.test(reference, reference), "AsmJit ref.cast null test failed");
-			checkError(compiler.jnz(notNull), "AsmJit ref.cast null branch failed");
+			emitter.j(notNull, asmjit::ujit::test_nz(reference, reference));
 			asmjit::InvokeNode* nullCall = nullptr;
 			checkError(compiler.invoke(asmjit::Out(nullCall),
 					reinterpret_cast<uint64_t>(&asmjitReportCastFailure), voidSignature),
@@ -8094,8 +7845,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		castCall->set_arg(3, asmjit::Imm(0));
 		auto matches = compiler.new_gp32("refCastMatch");
 		castCall->set_ret(0, matches);
-		checkError(compiler.test(matches, matches), "AsmJit ref.cast match test failed");
-		checkError(compiler.jnz(afterCast), "AsmJit ref.cast match branch failed");
+		emitter.j(afterCast, asmjit::ujit::test_nz(matches, matches));
 		asmjit::InvokeNode* failCall = nullptr;
 		checkError(compiler.invoke(asmjit::Out(failCall),
 				reinterpret_cast<uint64_t>(&asmjitReportCastFailure), voidSignature),
@@ -8152,8 +7902,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 			throw std::runtime_error("AsmJit ref.as_non_null operand underflow");
 		auto reference = values.back();
 		asmjit::Label notNull = compiler.new_label();
-		checkError(compiler.test(reference, reference), "AsmJit ref.as_non_null test failed");
-		checkError(compiler.jnz(notNull), "AsmJit ref.as_non_null branch failed");
+		emitter.j(notNull, asmjit::ujit::test_nz(reference, reference));
 		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
 		signature.set_ret(asmjit::TypeId::kVoid);
 		asmjit::InvokeNode* invoke = nullptr;
@@ -8175,10 +7924,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		auto lhs = values.back();
 		values.pop_back();
 		auto result = compiler.new_gp32("refEq");
-		checkError(compiler.xor_(result, result), "AsmJit ref.eq zeroing failed");
-		checkError(compiler.cmp(lhs, rhs), "AsmJit ref.eq compare failed");
-		checkError(compiler.set(asmjit::x86::CondCode::kE, result.r8()),
-				"AsmJit ref.eq set failed");
+		emitter.selectFlag(result, lhs, asmjit::ujit::cmp_eq(lhs, rhs));
 		// Both operands were the operand stack's and the result is an i32, so
 		// each one's count goes back. One `erase` per operand also covers the
 		// case where both operands are the same value.
@@ -8344,15 +8090,13 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 			const WASM::ValueTypeCode code = resultTypes.front();
 			if (isFloatKind(code)) {
 				auto zero = compiler.new_xmm("unreachableFloatResult");
-				checkError(compiler.xorps(zero, zero),
-						"AsmJit unreachable float result initialisation failed");
+				emitter.vectorZero(zero);
 				checkError(compiler.ret(zero), "AsmJit unreachable float return emission failed");
 			} else {
 				auto zero = kindWidth(code) == 8
 						? compiler.new_gp64("unreachableResult")
 						: compiler.new_gp32("unreachableResult");
-				checkError(compiler.xor_(zero, zero),
-						"AsmJit unreachable result initialisation failed");
+				emitter.xor_(zero, zero);
 				checkError(compiler.ret(zero), "AsmJit unreachable result return emission failed");
 			}
 		} else {
@@ -8360,7 +8104,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		}
 		for (size_t i = 0; i < placeholderCount; ++i) {
 			auto placeholder = compiler.new_gp32("unreachableStackPlaceholder");
-			checkError(compiler.xor_(placeholder, placeholder), "AsmJit unreachable placeholder initialisation failed");
+			emitter.xor_(placeholder, placeholder);
 			values.push_back(placeholder);
 		}
 	}
@@ -8412,10 +8156,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		auto value = values.back();
 		values.pop_back();
 		auto result = compiler.new_gp32("i64Eqz");
-		checkError(compiler.xor_(result, result), "AsmJit i64.eqz result initialisation failed");
-		checkError(compiler.test(value, value), "AsmJit i64.eqz test emission failed");
-		checkError(compiler.set(asmjit::x86::CondCode::kE, result.r8()),
-				"AsmJit i64.eqz condition emission failed");
+		emitter.selectFlag(result, value, asmjit::ujit::test_z(value, value));
 		values.push_back(result);
 	}
 
@@ -8437,9 +8178,8 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		if (idx >= internals.stringLiterals.size())
 			throw std::runtime_error("AsmJit string.const index is out of range");
 		auto result = compiler.new_gp_ptr("stringConstant");
-		checkError(compiler.mov(result,
-				reinterpret_cast<uint64_t>(internals.stringLiterals[idx])),
-				"AsmJit string.const emission failed");
+		emitter.mov(result,
+				reinterpret_cast<uint64_t>(internals.stringLiterals[idx]));
 		values.push_back(result);
 	}
 
@@ -8582,15 +8322,13 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 			if (value.size() == 8)
 				return value;
 			auto wide = compiler.new_gp64("memoryDiscardOperand");
-			checkError(compiler.mov(wide.r32(), value.r32()),
-					"AsmJit memory.discard widening failed");
+			emitter.mov(wide.r32(), value.r32());
 			return wide;
 		};
 		auto destination64 = widen(destination);
 		auto length64 = widen(length);
 		auto memoryIndex = compiler.new_gp32("memoryDiscardIndex");
-		checkError(compiler.mov(memoryIndex, static_cast<uint32_t>(memory)),
-				"AsmJit memory.discard index materialisation failed");
+		emitter.mov(memoryIndex, static_cast<uint32_t>(memory));
 		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
 		signature.set_ret(asmjit::TypeId::kVoid);
 		signature.add_arg(asmjit::TypeId::kUIntPtr);
@@ -8737,8 +8475,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		auto length = values.back(); values.pop_back();
 		auto pointer = values.back(); values.pop_back();
 		auto memoryIndex = compiler.new_gp32("stringMemoryIndex");
-		checkError(compiler.mov(memoryIndex, static_cast<uint32_t>(memory)),
-				"AsmJit string.new memory index materialisation failed");
+		emitter.mov(memoryIndex, static_cast<uint32_t>(memory));
 		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
 		signature.set_ret(asmjit::TypeId::kUIntPtr);
 		signature.add_arg(asmjit::TypeId::kUIntPtr);
@@ -8767,8 +8504,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		auto pointer = values.back(); values.pop_back();
 		auto string = values.back(); values.pop_back();
 		auto memoryIndex = compiler.new_gp32("stringMemoryIndex");
-		checkError(compiler.mov(memoryIndex, static_cast<uint32_t>(memory)),
-				"AsmJit string.encode memory index materialisation failed");
+		emitter.mov(memoryIndex, static_cast<uint32_t>(memory));
 		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
 		signature.set_ret(asmjit::TypeId::kInt32);
 		signature.add_arg(asmjit::TypeId::kUIntPtr);
@@ -8883,14 +8619,10 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		auto view = values.back(); values.pop_back();
 		auto packedMemory = compiler.new_gp64("stringViewMemory");
 		auto memoryIndex = compiler.new_gp64("stringViewMemoryIndex");
-		checkError(compiler.mov(packedMemory.r32(), pointer.r32()),
-				"AsmJit stringview pointer materialisation failed");
-		checkError(compiler.shl(packedMemory, 8),
-				"AsmJit stringview pointer shift failed");
-		checkError(compiler.mov(memoryIndex.r32(), static_cast<uint32_t>(memory)),
-				"AsmJit stringview memory index materialisation failed");
-		checkError(compiler.or_(packedMemory, memoryIndex),
-				"AsmJit stringview memory pack failed");
+		emitter.mov(packedMemory.r32(), pointer.r32());
+		emitter.shl(packedMemory, 8);
+		emitter.mov(memoryIndex.r32(), static_cast<uint32_t>(memory));
+		emitter.or_(packedMemory, memoryIndex);
 		auto packedPosition = packRegPair(bytes, position, "stringViewPosition");
 		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
 		signature.set_ret(asmjit::TypeId::kUInt64);
@@ -8909,15 +8641,11 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		invoke->set_ret(0, result);
 		auto nextPosition = compiler.new_gp32("stringViewNext");
 		auto high = compiler.new_gp64("stringViewNextHigh");
-		checkError(compiler.mov(high, result),
-				"AsmJit stringview result copy failed");
-		checkError(compiler.shr(high, 32),
-				"AsmJit stringview next-position shift failed");
-		checkError(compiler.mov(nextPosition.r32(), high.r32()),
-				"AsmJit stringview next-position materialisation failed");
+		emitter.mov(high, result);
+		emitter.shr(high, 32);
+		emitter.mov(nextPosition.r32(), high.r32());
 		auto written = compiler.new_gp32("stringViewWritten");
-		checkError(compiler.mov(written.r32(), result.r32()),
-				"AsmJit stringview written-width materialisation failed");
+		emitter.mov(written.r32(), result.r32());
 		values.push_back(nextPosition);
 		values.push_back(written);
 		emitPendingTrapReturn();
@@ -8936,14 +8664,10 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		auto view = values.back(); values.pop_back();
 		auto packedMemory = compiler.new_gp64("stringViewMemory");
 		auto memoryIndex = compiler.new_gp64("stringViewMemoryIndex");
-		checkError(compiler.mov(packedMemory.r32(), pointer.r32()),
-				"AsmJit stringview32 pointer materialisation failed");
-		checkError(compiler.shl(packedMemory, 8),
-				"AsmJit stringview32 pointer shift failed");
-		checkError(compiler.mov(memoryIndex.r32(), static_cast<uint32_t>(memory)),
-				"AsmJit stringview32 memory index materialisation failed");
-		checkError(compiler.or_(packedMemory, memoryIndex),
-				"AsmJit stringview32 memory pack failed");
+		emitter.mov(packedMemory.r32(), pointer.r32());
+		emitter.shl(packedMemory, 8);
+		emitter.mov(memoryIndex.r32(), static_cast<uint32_t>(memory));
+		emitter.or_(packedMemory, memoryIndex);
 		auto packedPosition = packRegPair(units, position, "stringViewPosition");
 		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
 		signature.set_ret(asmjit::TypeId::kInt32);
@@ -9224,22 +8948,16 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 			const int32_t offset = static_cast<int32_t>(i * WASM::kContinuationValueStride);
 			if (width == 16) {
 				auto high = compiler.new_gp64("continuationVectorHigh");
-				checkError(compiler.mov(high,
-						asmjit::x86::qword_ptr(operands[i], 8)),
-						"AsmJit continuation vector high copy failed");
+				emitter.mov(high,
+						asmjit::x86::qword_ptr(operands[i], 8));
 				auto low = compiler.new_gp64("continuationVectorLow");
-				checkError(compiler.mov(low, asmjit::x86::qword_ptr(operands[i])),
-						"AsmJit continuation vector low copy failed");
-				checkError(compiler.mov(at(offset), low),
-						"AsmJit continuation vector low store failed");
-				checkError(compiler.mov(at(offset + 8), high),
-						"AsmJit continuation vector high store failed");
+				emitter.mov(low, asmjit::x86::qword_ptr(operands[i]));
+				emitter.mov(at(offset), low);
+				emitter.mov(at(offset + 8), high);
 			} else if (width == 8) {
-				checkError(compiler.mov(at(offset), operands[i]),
-						"AsmJit continuation argument copy failed");
+				emitter.mov(at(offset), operands[i]);
 			} else {
-				checkError(compiler.mov(at(offset), operands[i]),
-						"AsmJit continuation argument copy failed");
+				emitter.mov(at(offset), operands[i]);
 			}
 		}
 	}
@@ -9279,21 +8997,17 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 			if (kindWidth(payload.params[i].val.opcode) == 16) {
 				for (int word = 0; word < 2; ++word) {
 					auto bits = compiler.new_gp64("resumeThrowPayloadWord");
-					checkError(compiler.mov(bits,
-							asmjit::x86::qword_ptr(payloadValues[i], word * 8)),
-							"AsmJit resume_throw payload load failed");
-					checkError(compiler.mov(
-							asmjit::x86::qword_ptr(exn, offset + word * 8), bits),
-							"AsmJit resume_throw payload store failed");
+					emitter.mov(bits,
+							asmjit::x86::qword_ptr(payloadValues[i], word * 8));
+					emitter.mov(
+							asmjit::x86::qword_ptr(exn, offset + word * 8), bits);
 				}
 			} else {
-				checkError(compiler.mov(asmjit::x86::qword_ptr(exn, offset),
-						payloadValues[i]),
-						"AsmJit resume_throw payload store failed");
+				emitter.mov(asmjit::x86::qword_ptr(exn, offset),
+						payloadValues[i]);
 			}
 		}
-		checkError(compiler.mov(exceptionPtrSlot, exn),
-				"AsmJit resume_throw exception slot store failed");
+		emitter.mov(exceptionPtrSlot, exn);
 		values.push_back(continuation);
 		resumeThrowActive_ = true;
 		dispatchResume(type, std::move(handlers));
@@ -9309,8 +9023,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 			throw std::runtime_error("AsmJit resume_throw_ref operand stack underflow");
 		auto continuation = values.back(); values.pop_back();
 		auto exn = values.back(); values.pop_back();
-		checkError(compiler.mov(exceptionPtrSlot, exn),
-				"AsmJit resume_throw_ref exception slot store failed");
+		emitter.mov(exceptionPtrSlot, exn);
 		values.push_back(continuation);
 		resumeThrowActive_ = true;
 		dispatchResume(type, std::move(handlers));
@@ -9341,25 +9054,21 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		emitContinuationFrameArguments(frame, operands, function);
 		if (resumeThrowActive_) {
 			auto exception = compiler.new_gp_ptr("resumeException");
-			checkError(compiler.mov(exception, exceptionPtrSlot),
-					"AsmJit resume exception load failed");
+			emitter.mov(exception, exceptionPtrSlot);
 			auto exceptionSlot = frame;
 			exceptionSlot.set_offset(frame.offset() + static_cast<int32_t>(
 					offsetof(WASM::ContinuationOpFrame, exception)));
 			exceptionSlot.set_size(8);
-			checkError(compiler.mov(exceptionSlot, exception),
-					"AsmJit resume exception store failed");
+			emitter.mov(exceptionSlot, exception);
 		} else {
 			auto exceptionSlot = frame;
 			exceptionSlot.set_offset(frame.offset() + static_cast<int32_t>(
 					offsetof(WASM::ContinuationOpFrame, exception)));
 			exceptionSlot.set_size(8);
-			checkError(compiler.mov(exceptionSlot, asmjit::Imm(0)),
-					"AsmJit resume exception clear failed");
+			emitter.mov(exceptionSlot, asmjit::Imm(0));
 		}
 		auto frameAddress = compiler.new_gp_ptr("continuationFrameAddress");
-		checkError(compiler.lea(frameAddress, frame),
-				"AsmJit continuation frame address failed");
+		emitter.lea(frameAddress, frame);
 		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
 		signature.set_ret(asmjit::TypeId::kVoid);
 		signature.add_arg(asmjit::TypeId::kUIntPtr);
@@ -9378,21 +9087,16 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		emitRefDrop(continuation);
 		emitPendingTrapReturn();
 		auto status = compiler.new_gp32("continuationStatus");
-		checkError(compiler.mov(status, at(static_cast<int32_t>(
+		emitter.mov(status, at(static_cast<int32_t>(
 				offsetof(WASM::ContinuationOpFrame, result)
-				+ offsetof(WASM::ContinuationResumeResult, status)))),
-				"AsmJit continuation status load failed");
+				+ offsetof(WASM::ContinuationResumeResult, status))));
 		asmjit::Label completed = compiler.new_label();
 		asmjit::Label suspended = compiler.new_label();
 		asmjit::Label done = compiler.new_label();
-		checkError(compiler.cmp(status,
-				static_cast<int32_t>(WASM::ContinuationStatus::Completed)),
-				"AsmJit continuation status comparison failed");
-		checkError(compiler.je(completed), "AsmJit continuation completed branch failed");
-		checkError(compiler.cmp(status,
-				static_cast<int32_t>(WASM::ContinuationStatus::Suspended)),
-				"AsmJit continuation suspended comparison failed");
-		checkError(compiler.je(suspended), "AsmJit continuation suspended branch failed");
+		emitter.j(completed, asmjit::ujit::cmp_eq(status,
+				static_cast<int32_t>(WASM::ContinuationStatus::Completed)));
+		emitter.j(suspended, asmjit::ujit::cmp_eq(status,
+				static_cast<int32_t>(WASM::ContinuationStatus::Suspended)));
 		asmjit::FuncSignature reportSignature(asmjit::CallConvId::kCDecl);
 		reportSignature.set_ret(asmjit::TypeId::kVoid);
 		reportSignature.add_arg(asmjit::TypeId::kUIntPtr);
@@ -9413,25 +9117,21 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 			if (kindWidth(function.results[i].val.opcode) == 16) {
 				for (int word = 0; word < 2; ++word) {
 					auto bits = compiler.new_gp64("continuationResultWord");
-					checkError(compiler.mov(bits, at(offset + word * 8)),
-							"AsmJit continuation result load failed");
-					checkError(compiler.mov(asmjit::x86::qword_ptr(result, word * 8), bits),
-							"AsmJit continuation result store failed");
+					emitter.mov(bits, at(offset + word * 8));
+					emitter.mov(asmjit::x86::qword_ptr(result, word * 8), bits);
 				}
 			} else {
-				checkError(compiler.mov(result, at(offset)),
-						"AsmJit continuation scalar result load failed");
+				emitter.mov(result, at(offset));
 			}
 			values.push_back(result);
 		}
-		checkError(compiler.jmp(done), "AsmJit continuation completed jump failed");
+		emitter.jmp(done);
 		checkError(compiler.bind(suspended), "AsmJit continuation suspended label failed");
 		auto dropSuspended = [&]() {
 			auto next = compiler.new_gp_ptr("suspendedContinuation");
-			checkError(compiler.mov(next, at(static_cast<int32_t>(
+			emitter.mov(next, at(static_cast<int32_t>(
 					offsetof(WASM::ContinuationOpFrame, result)
-					+ offsetof(WASM::ContinuationResumeResult, continuation)))),
-					"AsmJit suspended continuation load failed");
+					+ offsetof(WASM::ContinuationResumeResult, continuation))));
 			emitRefDrop(next);
 		};
 		if (handlers.empty()) {
@@ -9445,20 +9145,16 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 			emitPendingTrapReturn();
 		} else {
 			auto tagId = compiler.new_gp32("continuationTagId");
-			checkError(compiler.mov(tagId, at(static_cast<int32_t>(
+			emitter.mov(tagId, at(static_cast<int32_t>(
 					offsetof(WASM::ContinuationOpFrame, result)
-					+ offsetof(WASM::ContinuationResumeResult, tagId)))),
-					"AsmJit continuation tag id load failed");
+					+ offsetof(WASM::ContinuationResumeResult, tagId))));
 			std::vector<asmjit::Label> handlerLabels(handlers.size());
 			for (std::size_t i = 0; i < handlers.size(); ++i) {
 				handlerLabels[i] = compiler.new_label();
 				if (handlers[i].isSwitch)
 					continue;
-				checkError(compiler.cmp(tagId, static_cast<int32_t>(
-						internals.tagIds[handlers[i].tag])),
-						"AsmJit handler tag comparison failed");
-				checkError(compiler.je(handlerLabels[i]),
-						"AsmJit handler tag branch failed");
+				emitter.j(handlerLabels[i], asmjit::ujit::cmp_eq(tagId, static_cast<int32_t>(
+						internals.tagIds[handlers[i].tag])));
 			}
 			dropSuspended();
 			asmjit::InvokeNode* unhandled = nullptr;
@@ -9485,15 +9181,13 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 					const int32_t offset = static_cast<int32_t>(
 							offsetof(WASM::ContinuationOpFrame, tags)
 							+ j * WASM::kContinuationValueStride);
-					checkError(compiler.mov(value, at(offset)),
-							"AsmJit handler payload load failed");
+					emitter.mov(value, at(offset));
 					values.push_back(value);
 				}
 				auto next = compiler.new_gp_ptr("handlerContinuation");
-				checkError(compiler.mov(next, at(static_cast<int32_t>(
+				emitter.mov(next, at(static_cast<int32_t>(
 						offsetof(WASM::ContinuationOpFrame, result)
-						+ offsetof(WASM::ContinuationResumeResult, continuation)))),
-						"AsmJit handler continuation load failed");
+						+ offsetof(WASM::ContinuationResumeResult, continuation))));
 				values.push_back(next);
 				const std::size_t branchValues = loopTarget ? target.paramCount
 						: target.resultCount;
@@ -9507,8 +9201,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 				for (std::size_t j = 0; j < branchValues; ++j)
 					transferValue(destinations[j], values[first + j], codes[j],
 							"AsmJit handler value transfer failed");
-				checkError(compiler.jmp(loopTarget ? target.begin : target.end),
-						"AsmJit handler branch failed");
+				emitter.jmp(loopTarget ? target.begin : target.end);
 				if (!loopTarget)
 					target.endTargeted = true;
 				values.resize(saved);
@@ -9542,8 +9235,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		boundFunction.params.resize(bound);
 		emitContinuationFrameArguments(frame, operands, boundFunction);
 		auto frameAddress = compiler.new_gp_ptr("continuationFrameAddress");
-		checkError(compiler.lea(frameAddress, frame),
-				"AsmJit cont.bind frame address failed");
+		emitter.lea(frameAddress, frame);
 		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
 		signature.set_ret(asmjit::TypeId::kUIntPtr);
 		signature.add_arg(asmjit::TypeId::kUIntPtr);
@@ -9591,8 +9283,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		};
 		emitContinuationFrameArguments(frame, operands, payload);
 		auto frameAddress = compiler.new_gp_ptr("continuationFrameAddress");
-		checkError(compiler.lea(frameAddress, frame),
-				"AsmJit suspend frame address failed");
+		emitter.lea(frameAddress, frame);
 		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
 		signature.set_ret(asmjit::TypeId::kVoid);
 		signature.add_arg(asmjit::TypeId::kUIntPtr);
@@ -9617,14 +9308,11 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 			if (kindWidth(payload.results[i].val.opcode) == 16) {
 				for (int word = 0; word < 2; ++word) {
 					auto bits = compiler.new_gp64("continuationSuspendWord");
-					checkError(compiler.mov(bits, at(offset + word * 8)),
-							"AsmJit suspend result load failed");
-					checkError(compiler.mov(asmjit::x86::qword_ptr(result, word * 8), bits),
-							"AsmJit suspend result store failed");
+					emitter.mov(bits, at(offset + word * 8));
+					emitter.mov(asmjit::x86::qword_ptr(result, word * 8), bits);
 				}
 			} else {
-				checkError(compiler.mov(result, at(offset)),
-						"AsmJit suspend scalar result load failed");
+				emitter.mov(result, at(offset));
 			}
 			values.push_back(result);
 		}
@@ -9665,8 +9353,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		argumentFunction.params.resize(argCount);
 		emitContinuationFrameArguments(frame, operands, argumentFunction);
 		auto frameAddress = compiler.new_gp_ptr("continuationFrameAddress");
-		checkError(compiler.lea(frameAddress, frame),
-				"AsmJit switch frame address failed");
+		emitter.lea(frameAddress, frame);
 		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
 		signature.set_ret(asmjit::TypeId::kVoid);
 		signature.add_arg(asmjit::TypeId::kUIntPtr);
@@ -9684,15 +9371,12 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		emitRefDrop(continuation);
 		emitPendingTrapReturn();
 		auto status = compiler.new_gp32("switchStatus");
-		checkError(compiler.mov(status, at(static_cast<int32_t>(
+		emitter.mov(status, at(static_cast<int32_t>(
 				offsetof(WASM::ContinuationOpFrame, result)
-				+ offsetof(WASM::ContinuationResumeResult, status)))),
-				"AsmJit switch status load failed");
+				+ offsetof(WASM::ContinuationResumeResult, status))));
 		asmjit::Label completed = compiler.new_label();
-		checkError(compiler.cmp(status,
-				static_cast<int32_t>(WASM::ContinuationStatus::Completed)),
-				"AsmJit switch status comparison failed");
-		checkError(compiler.je(completed), "AsmJit switch completed branch failed");
+		emitter.j(completed, asmjit::ujit::cmp_eq(status,
+				static_cast<int32_t>(WASM::ContinuationStatus::Completed)));
 		asmjit::FuncSignature reportSignature(asmjit::CallConvId::kCDecl);
 		reportSignature.set_ret(asmjit::TypeId::kVoid);
 		reportSignature.add_arg(asmjit::TypeId::kUIntPtr);
@@ -9710,8 +9394,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 			const int32_t offset = static_cast<int32_t>(
 					offsetof(WASM::ContinuationOpFrame, results)
 					+ i * WASM::kContinuationValueStride);
-			checkError(compiler.mov(result, at(offset)),
-					"AsmJit switch result load failed");
+			emitter.mov(result, at(offset));
 			values.push_back(result);
 		}
 	}
@@ -9737,12 +9420,10 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		auto array = values.back(); values.pop_back();
 		auto range = compiler.new_gp64("stringArrayRange");
 		auto end64 = compiler.new_gp64("stringArrayEnd");
-		checkError(compiler.mov(range.r32(), start.r32()),
-				"AsmJit string array start materialisation failed");
-		checkError(compiler.mov(end64.r32(), end.r32()),
-				"AsmJit string array end materialisation failed");
-		checkError(compiler.shl(end64, 32), "AsmJit string array range shift failed");
-		checkError(compiler.or_(range, end64), "AsmJit string array range pack failed");
+		emitter.mov(range.r32(), start.r32());
+		emitter.mov(end64.r32(), end.r32());
+		emitter.shl(end64, 32);
+		emitter.or_(range, end64);
 		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
 		signature.set_ret(asmjit::TypeId::kUIntPtr);
 		signature.add_arg(asmjit::TypeId::kUIntPtr);
@@ -9817,12 +9498,18 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		auto aHi = values.back(); values.pop_back();
 		auto aLo = values.back(); values.pop_back();
 		auto lo = compiler.new_gp64("add128Low");
-		checkError(compiler.mov(lo, aLo), "AsmJit i64.add128 low copy failed");
-		checkError(compiler.add(lo, bLo), "AsmJit i64.add128 low add failed");
+		emitter.mov(lo, aLo);
+		emitter.add(lo, bLo);
 		auto hi = compiler.new_gp64("add128High");
-		checkError(compiler.mov(hi, aHi), "AsmJit i64.add128 high copy failed");
-		// `mov` does not touch flags: the carry from the low add is still live.
-		checkError(compiler.adc(hi, bHi), "AsmJit i64.add128 high adc failed");
+		emitter.mov(hi, aHi);
+		emitter.add(hi, bHi);
+		// The universal layer has no carry chain, so the carry out of the low
+		// half is detected as that add's unsigned wraparound and applied to the
+		// high half explicitly — the same value `adc` would have added.
+		auto incremented = compiler.new_gp64("add128Carry");
+		emitter.mov(incremented, hi);
+		emitter.add(incremented, asmjit::Imm(1));
+		emitter.select(hi, incremented, hi, asmjit::ujit::ucmp_lt(lo, aLo));
 		values.push_back(lo);
 		values.push_back(hi);
 	}
@@ -9838,11 +9525,17 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		auto aHi = values.back(); values.pop_back();
 		auto aLo = values.back(); values.pop_back();
 		auto lo = compiler.new_gp64("sub128Low");
-		checkError(compiler.mov(lo, aLo), "AsmJit i64.sub128 low copy failed");
-		checkError(compiler.sub(lo, bLo), "AsmJit i64.sub128 low subtract failed");
+		emitter.mov(lo, aLo);
+		emitter.sub(lo, bLo);
 		auto hi = compiler.new_gp64("sub128High");
-		checkError(compiler.mov(hi, aHi), "AsmJit i64.sub128 high copy failed");
-		checkError(compiler.sbb(hi, bHi), "AsmJit i64.sub128 high sbb failed");
+		emitter.mov(hi, aHi);
+		emitter.sub(hi, bHi);
+		// The borrow out of the low half, detected as its unsigned wraparound and
+		// subtracted from the high half — the same value `sbb` would have taken.
+		auto decremented = compiler.new_gp64("sub128Borrow");
+		emitter.mov(decremented, hi);
+		emitter.sub(decremented, asmjit::Imm(1));
+		emitter.select(hi, decremented, hi, asmjit::ujit::ucmp_lt(aLo, bLo));
 		values.push_back(lo);
 		values.push_back(hi);
 	}
@@ -9860,8 +9553,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		auto a = values.back(); values.pop_back();
 		auto storage = compiler.new_stack(16, 8, "mulWideResult");
 		auto out = compiler.new_gp_ptr("mulWideResultPointer");
-		checkError(compiler.lea(out, storage),
-				"AsmJit i64.mul_wide result address failed");
+		emitter.lea(out, storage);
 		asmjit::FuncSignature signature(asmjit::CallConvId::kCDecl);
 		signature.set_ret(asmjit::TypeId::kVoid);
 		signature.add_arg(asmjit::TypeId::kUIntPtr);
@@ -9883,9 +9575,9 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		highSlot.set_size(8);
 		highSlot.set_offset(storage.offset() + 8);
 		auto lo = compiler.new_gp64("mulWideLow");
-		checkError(compiler.mov(lo, lowSlot), "AsmJit i64.mul_wide low load failed");
+		emitter.mov(lo, lowSlot);
 		auto hi = compiler.new_gp64("mulWideHigh");
-		checkError(compiler.mov(hi, highSlot), "AsmJit i64.mul_wide high load failed");
+		emitter.mov(hi, highSlot);
 		values.push_back(lo);
 		values.push_back(hi);
 	}
@@ -9927,10 +9619,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		auto value = values.back();
 		values.pop_back();
 		auto result = compiler.new_gp32("eqz");
-		checkError(compiler.xor_(result, result), "AsmJit i32.eqz result initialisation failed");
-		checkError(compiler.test(value, value), "AsmJit i32.eqz test emission failed");
-		checkError(compiler.set(asmjit::x86::CondCode::kE, result.r8()),
-				"AsmJit i32.eqz condition emission failed");
+		emitter.selectFlag(result, value, asmjit::ujit::test_z(value, value));
 		values.push_back(result);
 	}
 
@@ -9963,7 +9652,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		uint32_t bits = 0;
 		std::memcpy(&bits, &value, sizeof(bits));
 		auto reg = compiler.new_gp32("f32Constant");
-		checkError(compiler.mov(reg, bits), "AsmJit f32.const emission failed");
+		emitter.mov(reg, bits);
 		values.push_back(reg);
 	}
 
@@ -9972,7 +9661,7 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 		uint64_t bits = 0;
 		std::memcpy(&bits, &value, sizeof(bits));
 		auto reg = compiler.new_gp64("f64Constant");
-		checkError(compiler.mov(reg, bits), "AsmJit f64.const emission failed");
+		emitter.mov(reg, bits);
 		values.push_back(reg);
 	}
 
@@ -9989,13 +9678,13 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 	void dispatchF32Nearest() override
 	{ emitFloatHelper1(reinterpret_cast<uint64_t>(&asmjitF32Nearest), 4); }
 	void dispatchF32Add() override
-	{ emitFloatBinary(asmjit::x86::Inst::kIdAddss, asmjit::x86::Inst::kIdAddsd, 4); }
+	{ emitFloatBinary(asmjit::ujit::UniOpVVV::kAddF32S, asmjit::ujit::UniOpVVV::kAddF64S, 4); }
 	void dispatchF32Sub() override
-	{ emitFloatBinary(asmjit::x86::Inst::kIdSubss, asmjit::x86::Inst::kIdSubsd, 4); }
+	{ emitFloatBinary(asmjit::ujit::UniOpVVV::kSubF32S, asmjit::ujit::UniOpVVV::kSubF64S, 4); }
 	void dispatchF32Mul() override
-	{ emitFloatBinary(asmjit::x86::Inst::kIdMulss, asmjit::x86::Inst::kIdMulsd, 4); }
+	{ emitFloatBinary(asmjit::ujit::UniOpVVV::kMulF32S, asmjit::ujit::UniOpVVV::kMulF64S, 4); }
 	void dispatchF32Div() override
-	{ emitFloatBinary(asmjit::x86::Inst::kIdDivss, asmjit::x86::Inst::kIdDivsd, 4); }
+	{ emitFloatBinary(asmjit::ujit::UniOpVVV::kDivF32S, asmjit::ujit::UniOpVVV::kDivF64S, 4); }
 	void dispatchF32Min() override
 	{ emitFloatHelper2(reinterpret_cast<uint64_t>(&asmjitF32Min), 4); }
 	void dispatchF32Max() override
@@ -10015,13 +9704,13 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 	void dispatchF64Nearest() override
 	{ emitFloatHelper1(reinterpret_cast<uint64_t>(&asmjitF64Nearest), 8); }
 	void dispatchF64Add() override
-	{ emitFloatBinary(asmjit::x86::Inst::kIdAddss, asmjit::x86::Inst::kIdAddsd, 8); }
+	{ emitFloatBinary(asmjit::ujit::UniOpVVV::kAddF32S, asmjit::ujit::UniOpVVV::kAddF64S, 8); }
 	void dispatchF64Sub() override
-	{ emitFloatBinary(asmjit::x86::Inst::kIdSubss, asmjit::x86::Inst::kIdSubsd, 8); }
+	{ emitFloatBinary(asmjit::ujit::UniOpVVV::kSubF32S, asmjit::ujit::UniOpVVV::kSubF64S, 8); }
 	void dispatchF64Mul() override
-	{ emitFloatBinary(asmjit::x86::Inst::kIdMulss, asmjit::x86::Inst::kIdMulsd, 8); }
+	{ emitFloatBinary(asmjit::ujit::UniOpVVV::kMulF32S, asmjit::ujit::UniOpVVV::kMulF64S, 8); }
 	void dispatchF64Div() override
-	{ emitFloatBinary(asmjit::x86::Inst::kIdDivss, asmjit::x86::Inst::kIdDivsd, 8); }
+	{ emitFloatBinary(asmjit::ujit::UniOpVVV::kDivF32S, asmjit::ujit::UniOpVVV::kDivF64S, 8); }
 	void dispatchF64Min() override
 	{ emitFloatHelper2(reinterpret_cast<uint64_t>(&asmjitF64Min), 8); }
 	void dispatchF64Max() override
@@ -10182,21 +9871,18 @@ emitSharedAtomicCmpxchg(ordering, width, valueWidth, address, expected, replacem
 				if (kind == WASM::ValueTypeCode::V128) {
 					for (int word = 0; word < 2; ++word) {
 						auto bits = compiler.new_gp64("frameResultWord");
-						checkError(compiler.mov(bits,
-									asmjit::x86::qword_ptr(value, word * 8)),
-								"AsmJit frame multi-result vector load failed");
-						checkError(compiler.mov(
-									asmjit::x86::qword_ptr(framePointer, offset + word * 8), bits),
-								"AsmJit frame multi-result vector store failed");
+						emitter.mov(bits,
+									asmjit::x86::qword_ptr(value, word * 8));
+						emitter.mov(
+									asmjit::x86::qword_ptr(framePointer, offset + word * 8), bits);
 					}
 					offset += 16;
 				} else {
 					const asmjit::x86::Gp stored = isFloatKind(kind)
 							? canonicalizeFloatBits(value, kindWidth(kind)) : value;
 					const int width = stored.size();
-					checkError(compiler.mov(
-								asmjit::x86::Mem(framePointer, offset, width), stored),
-							"AsmJit frame multi-result store failed");
+					emitter.mov(
+								asmjit::x86::Mem(framePointer, offset, width), stored);
 					offset += 8;
 				}
 			}
@@ -10275,9 +9961,9 @@ private:
 	{
 		asmjit::x86::Vec xmm = compiler.new_xmm("floatValue");
 		if (width == 4)
-			checkError(compiler.movd(xmm, bits), "AsmJit f32 materialisation failed");
+			emitter.gpToVector32(xmm, bits);
 		else
-			checkError(compiler.movq(xmm, bits), "AsmJit f64 materialisation failed");
+			emitter.gpToVector64(xmm, bits);
 		return xmm;
 	}
 
@@ -10287,9 +9973,9 @@ private:
 		asmjit::x86::Gp bits = width == 4
 				? compiler.new_gp32("floatBits") : compiler.new_gp64("floatBits");
 		if (width == 4)
-			checkError(compiler.movd(bits, xmm), "AsmJit f32 result move failed");
+			emitter.vectorToGp32(bits, xmm);
 		else
-			checkError(compiler.movq(bits, xmm), "AsmJit f64 result move failed");
+			emitter.vectorToGp64(bits, xmm);
 		return bits;
 	}
 
@@ -10353,7 +10039,7 @@ private:
 	{
 		asmjit::x86::Mem storage = compiler.new_stack(16, 16, name);
 		auto address = compiler.new_gp_ptr(name);
-		checkError(compiler.lea(address, storage), "AsmJit v128 buffer address failed");
+		emitter.lea(address, storage);
 		return address;
 	}
 
@@ -10383,11 +10069,9 @@ private:
 	{
 		for (int word = 0; word < 2; ++word) {
 			auto value = compiler.new_gp64("v128Word");
-			checkError(compiler.mov(value,
-					asmjit::x86::qword_ptr(source, word * 8)),
-					"AsmJit v128 word load failed");
-			checkError(compiler.mov(asmjit::x86::qword_ptr(destination, word * 8), value),
-					"AsmJit v128 word store failed");
+			emitter.mov(value,
+					asmjit::x86::qword_ptr(source, word * 8));
+			emitter.mov(asmjit::x86::qword_ptr(destination, word * 8), value);
 		}
 	}
 
@@ -10402,15 +10086,15 @@ private:
 		if (code == WASM::ValueTypeCode::V128)
 			copyVector(destination, source);
 		else
-			checkError(compiler.mov(destination, source), description);
+			emitter.mov(destination, source);
 	}
 
 	//! Writes 16 zero bytes to a buffer.
 	void zeroVector(const asmjit::x86::Gp& buffer)
 	{
 		for (int word = 0; word < 2; ++word) {
-			checkError(compiler.mov(asmjit::x86::qword_ptr(buffer, word * 8),
-					static_cast<uint64_t>(0)), "AsmJit v128 zeroing failed");
+			emitter.mov(asmjit::x86::qword_ptr(buffer, word * 8),
+					static_cast<uint64_t>(0));
 		}
 	}
 
@@ -10438,8 +10122,7 @@ private:
 			if (type.params[i].isPacked || !isReferenceKind(type.params[i].val.opcode))
 				continue;
 			asmjit::x86::Mem slot = compiler.new_stack(8, 8, "refArgKeep");
-			checkError(compiler.mov(slot, arguments[i]),
-					"AsmJit reference argument spill failed");
+			emitter.mov(slot, arguments[i]);
 			kept.push_back(slot);
 		}
 		return kept;
@@ -10453,8 +10136,7 @@ private:
 	{
 		for (const asmjit::x86::Mem& slot : kept) {
 			auto value = compiler.new_gp64("refArgDrop");
-			checkError(compiler.mov(value, slot),
-					"AsmJit reference argument reload failed");
+			emitter.mov(value, slot);
 			emitRefDrop(value);
 		}
 	}
@@ -10514,7 +10196,7 @@ private:
 			values.push_back(result);
 		}
 	}
-	void emitFloatBinary(asmjit::x86::Inst::Id op32, asmjit::x86::Inst::Id op64, int width)
+	void emitFloatBinary(asmjit::ujit::UniOpVVV op32, asmjit::ujit::UniOpVVV op64, int width)
 	{
 		if (inDeadCode())
 			return;
@@ -10524,8 +10206,7 @@ private:
 		const auto first = values.back(); values.pop_back();
 		const auto lhs = materializeFloat(first, width);
 		const auto rhs = materializeFloat(second, width);
-		checkError(compiler.emit(width == 4 ? op32 : op64, lhs, rhs),
-				"AsmJit float binary emission failed");
+		emitter.vector3(width == 4 ? op32 : op64, lhs, lhs, rhs);
 		values.push_back(bitsOfFloat(lhs, width));
 	}
 
@@ -10590,56 +10271,37 @@ private:
 		const auto lhs = materializeFloat(first, width);
 		const auto rhs = materializeFloat(second, width);
 
-		// Zero the flag registers *before* the compare: `xor_` sets flags, and
-		// `setcc` must read the comparison's flags, not the zeroing's.
-		auto primary = compiler.new_gp32("floatFlag");
-		auto secondary = compiler.new_gp32("floatFlag");
-		checkError(compiler.xor_(primary, primary), "AsmJit float flag zeroing failed");
-		checkError(compiler.xor_(secondary, secondary), "AsmJit float flag zeroing failed");
-		checkError(width == 4 ? compiler.ucomiss(lhs, rhs) : compiler.ucomisd(lhs, rhs),
-				"AsmJit float compare emission failed");
-		const auto set = [&](asmjit::x86::CondCode condition, asmjit::x86::Gp& reg) {
-			checkError(compiler.set(condition, reg.r8()),
-					"AsmJit float condition emission failed");
-		};
+		// The universal comparison is the IEEE-754 predicate itself: it yields a
+		// per-lane all-ones mask and already answers "false" for a NaN operand,
+		// so the parity (`kP`/`kNP`) juggling the host sequence needed — and its
+		// zero-before-compare rule — are gone. The mask becomes the i32 flag by
+		// taking its low lane and masking it to one bit.
+		using Ops = asmjit::ujit::UniOpVVV;
+		auto mask = compiler.new_xmm("floatMask");
 		switch (operation) {
 		case FloatCompareOp::Eq:
-			set(asmjit::x86::CondCode::kE, primary);
-			set(asmjit::x86::CondCode::kNP, secondary);
-			checkError(compiler.and_(primary, secondary),
-					"AsmJit float eq ordered mask failed");
-			values.push_back(primary);
+			emitter.vector3(width == 4 ? Ops::kCmpEqF32S : Ops::kCmpEqF64S, mask, lhs, rhs);
 			break;
 		case FloatCompareOp::Ne:
-			set(asmjit::x86::CondCode::kNE, primary);
-			set(asmjit::x86::CondCode::kP, secondary);
-			checkError(compiler.or_(primary, secondary),
-					"AsmJit float ne unordered mask failed");
-			values.push_back(primary);
+			emitter.vector3(width == 4 ? Ops::kCmpNeF32S : Ops::kCmpNeF64S, mask, lhs, rhs);
 			break;
 		case FloatCompareOp::Lt:
-			set(asmjit::x86::CondCode::kB, primary);
-			set(asmjit::x86::CondCode::kNP, secondary);
-			checkError(compiler.and_(primary, secondary),
-					"AsmJit float lt ordered mask failed");
-			values.push_back(primary);
+			emitter.vector3(width == 4 ? Ops::kCmpLtF32S : Ops::kCmpLtF64S, mask, lhs, rhs);
 			break;
 		case FloatCompareOp::Le:
-			set(asmjit::x86::CondCode::kBE, primary);
-			set(asmjit::x86::CondCode::kNP, secondary);
-			checkError(compiler.and_(primary, secondary),
-					"AsmJit float le ordered mask failed");
-			values.push_back(primary);
+			emitter.vector3(width == 4 ? Ops::kCmpLeF32S : Ops::kCmpLeF64S, mask, lhs, rhs);
 			break;
 		case FloatCompareOp::Gt:
-			set(asmjit::x86::CondCode::kA, primary);
-			values.push_back(primary);
+			emitter.vector3(width == 4 ? Ops::kCmpGtF32S : Ops::kCmpGtF64S, mask, lhs, rhs);
 			break;
 		case FloatCompareOp::Ge:
-			set(asmjit::x86::CondCode::kAE, primary);
-			values.push_back(primary);
+			emitter.vector3(width == 4 ? Ops::kCmpGeF32S : Ops::kCmpGeF64S, mask, lhs, rhs);
 			break;
 		}
+		auto flag = compiler.new_gp32("floatFlag");
+		emitter.vectorToGp32(flag, mask);
+		emitter.and_(flag, asmjit::Imm(1));
+		values.push_back(flag);
 	}
 
 	//! Absolute value as a bit operation (clear the sign bit).
@@ -10650,8 +10312,8 @@ private:
 		if (values.empty())
 			throw std::runtime_error("AsmJit f32.abs operand stack underflow");
 		const auto bits = values.back(); values.pop_back();
-		checkError(compiler.shl(bits, 1), "AsmJit float abs shift failed");
-		checkError(compiler.shr(bits, 1), "AsmJit float abs restore failed");
+		emitter.shl(bits, 1);
+		emitter.shr(bits, 1);
 		values.push_back(bits);
 	}
 
@@ -10665,10 +10327,9 @@ private:
 		const auto bits = values.back(); values.pop_back();
 		const auto sign = width == 4
 				? compiler.new_gp32("floatSign") : compiler.new_gp64("floatSign");
-		checkError(compiler.mov(sign, 1), "AsmJit float sign initialisation failed");
-		checkError(compiler.shl(sign, width == 4 ? 31 : 63),
-				"AsmJit float sign shift failed");
-		checkError(compiler.xor_(bits, sign), "AsmJit float neg emission failed");
+		emitter.mov(sign, 1);
+		emitter.shl(sign, width == 4 ? 31 : 63);
+		emitter.xor_(bits, sign);
 		values.push_back(bits);
 	}
 
@@ -10683,14 +10344,13 @@ private:
 				? compiler.new_gp32("copySign") : compiler.new_gp64("copySign");
 		const auto mask = width == 4
 				? compiler.new_gp32("signMask") : compiler.new_gp64("signMask");
-		checkError(compiler.mov(mask, 1), "AsmJit copysign mask initialisation failed");
-		checkError(compiler.shl(mask, width == 4 ? 31 : 63),
-				"AsmJit copysign mask shift failed");
-		checkError(compiler.mov(sign, y), "AsmJit copysign sign copy failed");
-		checkError(compiler.and_(sign, mask), "AsmJit copysign sign extraction failed");
-		checkError(compiler.shl(x, 1), "AsmJit copysign magnitude shift failed");
-		checkError(compiler.shr(x, 1), "AsmJit copysign magnitude restore failed");
-		checkError(compiler.or_(x, sign), "AsmJit copysign combine failed");
+		emitter.mov(mask, 1);
+		emitter.shl(mask, width == 4 ? 31 : 63);
+		emitter.mov(sign, y);
+		emitter.and_(sign, mask);
+		emitter.shl(x, 1);
+		emitter.shr(x, 1);
+		emitter.or_(x, sign);
 		values.push_back(x);
 	}
 
@@ -10789,18 +10449,15 @@ private:
                 ? compiler.new_gp64("selectLoser") : compiler.new_gp32("selectLoser");
         auto chooseSecond = compiler.new_label();
         auto done = compiler.new_label();
-        checkError(compiler.mov(result, first), "AsmJit select first-value copy failed");
+        emitter.mov(result, first);
         if (referenceArms)
-            checkError(compiler.mov(loser, second),
-                    "AsmJit select losing-arm copy failed");
-        checkError(compiler.test(condition, condition), "AsmJit select condition test failed");
-        checkError(compiler.jz(chooseSecond), "AsmJit select condition branch failed");
-        checkError(compiler.jmp(done), "AsmJit select completion jump failed");
+            emitter.mov(loser, second);
+        emitter.j(chooseSecond, asmjit::ujit::test_z(condition, condition));
+        emitter.jmp(done);
         checkError(compiler.bind(chooseSecond), "AsmJit select second-value label failed");
-        checkError(compiler.mov(result, second), "AsmJit select second-value copy failed");
+        emitter.mov(result, second);
         if (referenceArms)
-            checkError(compiler.mov(loser, first),
-                    "AsmJit select losing-arm copy failed");
+            emitter.mov(loser, first);
         checkError(compiler.bind(done), "AsmJit select completion label failed");
         if (referenceArms) {
             // Release the arm the condition did not pick. Dropping a null
@@ -10835,8 +10492,8 @@ private:
         asmjit::InvokeNode* invoke = nullptr;
         auto dstMemory = compiler.new_gp32("copyDestinationMemory");
         auto srcMemory = compiler.new_gp32("copySourceMemory");
-        checkError(compiler.mov(dstMemory, static_cast<uint32_t>(destination)), "AsmJit memory.copy destination index failed");
-        checkError(compiler.mov(srcMemory, static_cast<uint32_t>(source)), "AsmJit memory.copy source index failed");
+        emitter.mov(dstMemory, static_cast<uint32_t>(destination));
+        emitter.mov(srcMemory, static_cast<uint32_t>(source));
         checkError(compiler.invoke(asmjit::Out(invoke),
                 reinterpret_cast<uint64_t>(is64
                 ? reinterpret_cast<void*>(&asmjitMemoryCopy64)
@@ -10871,8 +10528,8 @@ private:
         asmjit::InvokeNode* invoke = nullptr;
         auto data = compiler.new_gp32("memoryInitDataIndex");
         auto memory = compiler.new_gp32("memoryInitMemoryIndex");
-        checkError(compiler.mov(data, dataIndex), "AsmJit memory.init data index materialisation failed");
-        checkError(compiler.mov(memory, static_cast<uint32_t>(memoryIndex)), "AsmJit memory.init memory index materialisation failed");
+        emitter.mov(data, dataIndex);
+        emitter.mov(memory, static_cast<uint32_t>(memoryIndex));
         checkError(compiler.invoke(asmjit::Out(invoke),
                 reinterpret_cast<uint64_t>(is64
                 ? reinterpret_cast<void*>(&asmjitMemoryInit64)
@@ -10904,7 +10561,7 @@ private:
         signature.add_arg(is64 ? asmjit::TypeId::kUInt64 : asmjit::TypeId::kUInt32);
         asmjit::InvokeNode* invoke = nullptr;
         auto memoryIndex = compiler.new_gp32("fillMemoryIndex");
-        checkError(compiler.mov(memoryIndex, static_cast<uint32_t>(index)), "AsmJit memory.fill index failed");
+        emitter.mov(memoryIndex, static_cast<uint32_t>(index));
         checkError(compiler.invoke(asmjit::Out(invoke),
                 reinterpret_cast<uint64_t>(is64
                 ? reinterpret_cast<void*>(&asmjitMemoryFill64)
@@ -11028,22 +10685,22 @@ private:
 		}
 		switch (operation) {
 		case BinaryOp::Add:
-			checkError(compiler.add(lhs, rhs), "AsmJit i32.add emission failed");
+			emitter.add(lhs, rhs);
 			break;
 		case BinaryOp::Sub:
-			checkError(compiler.sub(lhs, rhs), "AsmJit i32.sub emission failed");
+			emitter.sub(lhs, rhs);
 			break;
 		case BinaryOp::Mul:
-			checkError(compiler.imul(lhs, rhs), "AsmJit i32.mul emission failed");
+			emitter.imul(lhs, rhs);
 			break;
 		case BinaryOp::And:
-			checkError(compiler.and_(lhs, rhs), "AsmJit i32.and emission failed");
+			emitter.and_(lhs, rhs);
 			break;
 		case BinaryOp::Or:
-			checkError(compiler.or_(lhs, rhs), "AsmJit i32.or emission failed");
+			emitter.or_(lhs, rhs);
 			break;
 		case BinaryOp::Xor:
-			checkError(compiler.xor_(lhs, rhs), "AsmJit i32.xor emission failed");
+			emitter.xor_(lhs, rhs);
 			break;
 		}
 		values.push_back(lhs);
@@ -11073,13 +10730,11 @@ private:
 	{
 		(void)validateGlobalIndex(index);
 		auto globals = compiler.new_gp_ptr("globals");
-		checkError(compiler.mov(globals, asmjit::x86::ptr(vmContext,
-				static_cast<int32_t>(offsetof(WASM::VMContext, globals)))),
-				"AsmJit VMContext globals load failed");
+		emitter.mov(globals, asmjit::x86::ptr(vmContext,
+				static_cast<int32_t>(offsetof(WASM::VMContext, globals))));
 		auto cell = compiler.new_gp_ptr("globalCell");
-		checkError(compiler.mov(cell, asmjit::x86::ptr(globals,
-				static_cast<int32_t>(index * sizeof(WASM::Value*)))),
-				"AsmJit global cell lookup failed");
+		emitter.mov(cell, asmjit::x86::ptr(globals,
+				static_cast<int32_t>(index * sizeof(WASM::Value*))));
 		return cell;
 	}
 
@@ -11091,24 +10746,20 @@ private:
 			auto buffer = newVectorBuffer("globalVector");
 			for (int word = 0; word < 2; ++word) {
 				auto bits = compiler.new_gp64("globalVectorWord");
-				checkError(compiler.mov(bits, asmjit::x86::qword_ptr(cell,
-						static_cast<int32_t>(offsetof(WASM::Value, v128) + word * 8))),
-						"AsmJit v128 global.get load failed");
-				checkError(compiler.mov(asmjit::x86::qword_ptr(buffer, word * 8), bits),
-						"AsmJit v128 global.get store failed");
+				emitter.mov(bits, asmjit::x86::qword_ptr(cell,
+						static_cast<int32_t>(offsetof(WASM::Value, v128) + word * 8)));
+				emitter.mov(asmjit::x86::qword_ptr(buffer, word * 8), bits);
 			}
 			values.push_back(buffer);
 			return;
 		}
 		auto value = newIntegerRegister(compiler, type.contentType, "globalValue");
 		if (kindWidth(type.contentType.opcode) == 8) {
-			checkError(compiler.mov(value, asmjit::x86::qword_ptr(cell,
-					static_cast<int32_t>(offsetof(WASM::Value, i64)))),
-					"AsmJit 64-bit global.get load failed");
+			emitter.mov(value, asmjit::x86::qword_ptr(cell,
+					static_cast<int32_t>(offsetof(WASM::Value, i64))));
 		} else {
-			checkError(compiler.mov(value, asmjit::x86::dword_ptr(cell,
-					static_cast<int32_t>(offsetof(WASM::Value, i32)))),
-					"AsmJit 32-bit global.get load failed");
+			emitter.mov(value, asmjit::x86::dword_ptr(cell,
+					static_cast<int32_t>(offsetof(WASM::Value, i32))));
 		}
 		if (isReferenceKind(type.contentType.opcode)) {
 			// The global cell keeps its own count; the clone is the stack's.
@@ -11154,23 +10805,19 @@ private:
 		if (type.contentType.opcode == WASM::ValueTypeCode::V128) {
 			for (int word = 0; word < 2; ++word) {
 				auto bits = compiler.new_gp64("globalVectorWord");
-				checkError(compiler.mov(bits,
-						asmjit::x86::qword_ptr(value, word * 8)),
-						"AsmJit v128 global.set load failed");
-				checkError(compiler.mov(asmjit::x86::qword_ptr(cell,
-						static_cast<int32_t>(offsetof(WASM::Value, v128) + word * 8)), bits),
-						"AsmJit v128 global.set store failed");
+				emitter.mov(bits,
+						asmjit::x86::qword_ptr(value, word * 8));
+				emitter.mov(asmjit::x86::qword_ptr(cell,
+						static_cast<int32_t>(offsetof(WASM::Value, v128) + word * 8)), bits);
 			}
 			return;
 		}
 		if (kindWidth(type.contentType.opcode) == 8) {
-			checkError(compiler.mov(asmjit::x86::qword_ptr(cell,
-					static_cast<int32_t>(offsetof(WASM::Value, i64))), stored),
-					"AsmJit 64-bit global.set store failed");
+			emitter.mov(asmjit::x86::qword_ptr(cell,
+					static_cast<int32_t>(offsetof(WASM::Value, i64))), stored);
 		} else {
-			checkError(compiler.mov(asmjit::x86::dword_ptr(cell,
-					static_cast<int32_t>(offsetof(WASM::Value, i32))), stored),
-					"AsmJit 32-bit global.set store failed");
+			emitter.mov(asmjit::x86::dword_ptr(cell,
+					static_cast<int32_t>(offsetof(WASM::Value, i32))), stored);
 		}
 	}
 
@@ -11199,8 +10846,7 @@ private:
 		signature.add_arg(asmjit::TypeId::kUInt32);
 		asmjit::InvokeNode* invoke = nullptr;
 		auto memoryIndex = compiler.new_gp32("memorySizeIndex");
-		checkError(compiler.mov(memoryIndex, static_cast<uint32_t>(index)),
-				"AsmJit memory.size index materialisation failed");
+		emitter.mov(memoryIndex, static_cast<uint32_t>(index));
 		if (is64)
 			checkError(compiler.invoke(asmjit::Out(invoke),
 					reinterpret_cast<uint64_t>(&asmjitMemorySize64), signature),
@@ -11234,8 +10880,7 @@ private:
 		signature.add_arg(is64 ? asmjit::TypeId::kUInt64 : asmjit::TypeId::kUInt32);
 		asmjit::InvokeNode* invoke = nullptr;
 		auto memoryIndex = compiler.new_gp32("memoryGrowIndex");
-		checkError(compiler.mov(memoryIndex, static_cast<uint32_t>(index)),
-				"AsmJit memory.grow index materialisation failed");
+		emitter.mov(memoryIndex, static_cast<uint32_t>(index));
 		if (is64)
 			checkError(compiler.invoke(asmjit::Out(invoke),
 					reinterpret_cast<uint64_t>(&asmjitMemoryGrow64), signature),
@@ -11282,11 +10927,9 @@ private:
 		signature.add_arg(asmjit::TypeId::kUInt64);
 		signature.add_arg(asmjit::TypeId::kUInt32);
 		auto offset = compiler.new_gp64("arrayOffset");
-		checkError(compiler.mov(offset, arg.offset),
-				"AsmJit GC-array offset materialisation failed");
+		emitter.mov(offset, arg.offset);
 		auto packedValue = compiler.new_gp32("arrayPacked");
-		checkError(compiler.mov(packedValue, packed),
-				"AsmJit GC-array descriptor materialisation failed");
+		emitter.mov(packedValue, packed);
 		asmjit::InvokeNode* invoke = nullptr;
 		checkError(compiler.invoke(asmjit::Out(invoke),
 				reinterpret_cast<uint64_t>(&WASM::gcArrayByteAddress), signature),
@@ -11318,19 +10961,16 @@ private:
 		// operand must be defined at the call site, not after it, or the
 		// register allocator hands the callee whatever the register held.
 		auto memoryIndex = compiler.new_gp32("memoryIndex");
-		checkError(compiler.mov(memoryIndex, static_cast<uint32_t>(arg.memidx)),
-				"AsmJit memory-index materialisation failed");
+		emitter.mov(memoryIndex, static_cast<uint32_t>(arg.memidx));
 		auto accessWidth = compiler.new_gp32("memoryWidth");
-		checkError(compiler.mov(accessWidth, width), "AsmJit memory-width materialisation failed");
+		emitter.mov(accessWidth, width);
 		asmjit::x86::Gp offset;
 		if (is64) {
 			offset = compiler.new_gp64("memoryOffset");
-			checkError(compiler.mov(offset, static_cast<uint64_t>(arg.offset)),
-					"AsmJit memory64-offset materialisation failed");
+			emitter.mov(offset, static_cast<uint64_t>(arg.offset));
 		} else {
 			offset = compiler.new_gp32("memoryOffset");
-			checkError(compiler.mov(offset, static_cast<uint32_t>(arg.offset)),
-					"AsmJit memory32-offset materialisation failed");
+			emitter.mov(offset, static_cast<uint32_t>(arg.offset));
 		}
 		asmjit::InvokeNode* invoke = nullptr;
 		if (is64)
@@ -11441,33 +11081,33 @@ private:
 		auto result = wide ? compiler.new_gp64("memoryLoad64") : compiler.new_gp32("memoryLoad32");
 		switch (kind) {
 		case LoadKind::I32:
-			checkError(compiler.mov(result, asmjit::x86::dword_ptr(pointer)), "AsmJit i32.load emission failed"); break;
+			emitter.mov(result, asmjit::x86::dword_ptr(pointer)); break;
 		case LoadKind::I8Signed:
-			checkError(compiler.movsx(result, asmjit::x86::byte_ptr(pointer)), "AsmJit i32.load8_s emission failed"); break;
+			emitter.loadS8(result, asmjit::x86::byte_ptr(pointer)); break;
 		case LoadKind::I8Unsigned:
-			checkError(compiler.movzx(result, asmjit::x86::byte_ptr(pointer)), "AsmJit i32.load8_u emission failed"); break;
+			emitter.loadZ8(result, asmjit::x86::byte_ptr(pointer)); break;
 		case LoadKind::I16Signed:
-			checkError(compiler.movsx(result, asmjit::x86::word_ptr(pointer)), "AsmJit i32.load16_s emission failed"); break;
+			emitter.loadS16(result, asmjit::x86::word_ptr(pointer)); break;
 		case LoadKind::I16Unsigned:
-			checkError(compiler.movzx(result, asmjit::x86::word_ptr(pointer)), "AsmJit i32.load16_u emission failed"); break;
+			emitter.loadZ16(result, asmjit::x86::word_ptr(pointer)); break;
 		case LoadKind::I64:
-			checkError(compiler.mov(result, asmjit::x86::qword_ptr(pointer)), "AsmJit i64.load emission failed"); break;
+			emitter.mov(result, asmjit::x86::qword_ptr(pointer)); break;
 		case LoadKind::I64I8Signed:
-			checkError(compiler.movsx(result, asmjit::x86::byte_ptr(pointer)), "AsmJit i64.load8_s emission failed"); break;
+			emitter.loadS8(result, asmjit::x86::byte_ptr(pointer)); break;
 		case LoadKind::I64I8Unsigned:
-			checkError(compiler.movzx(result, asmjit::x86::byte_ptr(pointer)), "AsmJit i64.load8_u emission failed"); break;
+			emitter.loadZ8(result, asmjit::x86::byte_ptr(pointer)); break;
 		case LoadKind::I64I16Signed:
-			checkError(compiler.movsx(result, asmjit::x86::word_ptr(pointer)), "AsmJit i64.load16_s emission failed"); break;
+			emitter.loadS16(result, asmjit::x86::word_ptr(pointer)); break;
 		case LoadKind::I64I16Unsigned:
-			checkError(compiler.movzx(result, asmjit::x86::word_ptr(pointer)), "AsmJit i64.load16_u emission failed"); break;
+			emitter.loadZ16(result, asmjit::x86::word_ptr(pointer)); break;
 		case LoadKind::I64I32Signed:
-			checkError(compiler.movsxd(result, asmjit::x86::dword_ptr(pointer)), "AsmJit i64.load32_s emission failed"); break;
+			emitter.loadS32(result, asmjit::x86::dword_ptr(pointer)); break;
 		case LoadKind::I64I32Unsigned:
-			checkError(compiler.mov(result.r32(), asmjit::x86::dword_ptr(pointer)), "AsmJit i64.load32_u emission failed"); break;
+			emitter.mov(result.r32(), asmjit::x86::dword_ptr(pointer)); break;
 		case LoadKind::F32:
-			checkError(compiler.mov(result.r32(), asmjit::x86::dword_ptr(pointer)), "AsmJit f32.load emission failed"); break;
+			emitter.mov(result.r32(), asmjit::x86::dword_ptr(pointer)); break;
 		case LoadKind::F64:
-			checkError(compiler.mov(result, asmjit::x86::qword_ptr(pointer)), "AsmJit f64.load emission failed"); break;
+			emitter.mov(result, asmjit::x86::qword_ptr(pointer)); break;
 		}
 		values.push_back(result);
 	}
@@ -11498,13 +11138,13 @@ private:
 		}
 		switch (width) {
 		case 1:
-			checkError(compiler.mov(asmjit::x86::byte_ptr(pointer), stored.r8()), "AsmJit store8 emission failed"); break;
+			emitter.mov(asmjit::x86::byte_ptr(pointer), stored.r8()); break;
 		case 2:
-			checkError(compiler.mov(asmjit::x86::word_ptr(pointer), stored.r16()), "AsmJit store16 emission failed"); break;
+			emitter.mov(asmjit::x86::word_ptr(pointer), stored.r16()); break;
 		case 4:
-			checkError(compiler.mov(asmjit::x86::dword_ptr(pointer), stored.r32()), "AsmJit store32 emission failed"); break;
+			emitter.mov(asmjit::x86::dword_ptr(pointer), stored.r32()); break;
 		case 8:
-			checkError(compiler.mov(asmjit::x86::qword_ptr(pointer), stored), "AsmJit i64.store emission failed"); break;
+			emitter.mov(asmjit::x86::qword_ptr(pointer), stored); break;
 		default:
 			throw std::runtime_error("AsmJit internal error: unsupported memory-store width");
 		}
@@ -11515,46 +11155,27 @@ private:
 		if (values.empty())
 			throw std::runtime_error("AsmJit i32 bit-count operand stack underflow");
 		auto source = values.back(); values.pop_back();
+		// The universal bit count is defined for zero as the register width, so
+		// the host's zero branch and its scan-era `^ 31` adjustment are both gone.
 		auto result = compiler.new_gp32("bitCount");
-		auto nonZero = compiler.new_label();
-		auto done = compiler.new_label();
-		checkError(compiler.test(source, source), "AsmJit bit-count zero test failed");
-		checkError(compiler.jnz(nonZero), "AsmJit bit-count nonzero branch failed");
-		checkError(compiler.mov(result, 32), "AsmJit bit-count zero result failed");
-		checkError(compiler.jmp(done), "AsmJit bit-count completion jump failed");
-		checkError(compiler.bind(nonZero), "AsmJit bit-count nonzero label failed");
-		if (operation == BitCountOp::LeadingZeros) {
-			checkError(compiler.bsr(result, source), "AsmJit i32.clz scan failed");
-			checkError(compiler.xor_(result, 31), "AsmJit i32.clz adjustment failed");
-		} else {
-			checkError(compiler.bsf(result, source), "AsmJit i32.ctz scan failed");
-		}
-		checkError(compiler.bind(done), "AsmJit bit-count result label failed");
+		if (operation == BitCountOp::LeadingZeros)
+			emitter.clz(result, source);
+		else
+			emitter.ctz(result, source);
 		values.push_back(result);
 	}
 
-	//! The 64-bit counterpart of `emitBitCount`. `bsr`/`bsf` write a 64-bit
-	//! destination, and the zero result is 64, not 32.
+	//! The 64-bit counterpart of `emitBitCount`, whose zero result is 64.
 	void emitBitCount64(BitCountOp operation)
 	{
 		if (values.empty())
 			throw std::runtime_error("AsmJit i64 bit-count operand stack underflow");
 		auto source = values.back(); values.pop_back();
 		auto result = compiler.new_gp64("bitCount64");
-		auto nonZero = compiler.new_label();
-		auto done = compiler.new_label();
-		checkError(compiler.test(source, source), "AsmJit i64 bit-count zero test failed");
-		checkError(compiler.jnz(nonZero), "AsmJit i64 bit-count nonzero branch failed");
-		checkError(compiler.mov(result, 64), "AsmJit i64 bit-count zero result failed");
-		checkError(compiler.jmp(done), "AsmJit i64 bit-count completion jump failed");
-		checkError(compiler.bind(nonZero), "AsmJit i64 bit-count nonzero label failed");
-		if (operation == BitCountOp::LeadingZeros) {
-			checkError(compiler.bsr(result, source), "AsmJit i64.clz scan failed");
-			checkError(compiler.xor_(result, 63), "AsmJit i64.clz adjustment failed");
-		} else {
-			checkError(compiler.bsf(result, source), "AsmJit i64.ctz scan failed");
-		}
-		checkError(compiler.bind(done), "AsmJit i64 bit-count result label failed");
+		if (operation == BitCountOp::LeadingZeros)
+			emitter.clz(result, source);
+		else
+			emitter.ctz(result, source);
 		values.push_back(result);
 	}
 
@@ -11627,9 +11248,9 @@ private:
 		values.pop_back();
 		auto result = compiler.new_gp32("signExtended");
 		if (width == 8)
-			checkError(compiler.movsx(result, source.r8()), "AsmJit i32.extend8_s emission failed");
+			emitter.movsx8(result, source);
 		else if (width == 16)
-			checkError(compiler.movsx(result, source.r16()), "AsmJit i32.extend16_s emission failed");
+			emitter.movsx16(result, source);
 		else
 			throw std::runtime_error("AsmJit internal error: invalid sign-extension width");
 		values.push_back(result);
@@ -11644,7 +11265,7 @@ private:
 		const auto source = values.back();
 		values.pop_back();
 		auto result = compiler.new_gp32("wrappedI32");
-		checkError(compiler.mov(result, source.r32()), "AsmJit i32.wrap_i64 emission failed");
+		emitter.mov(result, source.r32());
 		values.push_back(result);
 	}
 
@@ -11658,9 +11279,9 @@ private:
 		values.pop_back();
 		auto result = compiler.new_gp64("extendedI64");
 		if (isSigned)
-			checkError(compiler.movsxd(result, source), "AsmJit i64.extend_i32_s emission failed");
+			emitter.movsx32(result, source);
 		else
-			checkError(compiler.mov(result.r32(), source), "AsmJit i64.extend_i32_u emission failed");
+			emitter.mov(result.r32(), source);
 		values.push_back(result);
 	}
 
@@ -11674,16 +11295,17 @@ private:
 		values.pop_back();
 		auto result = compiler.new_gp64("signExtendedI64");
 		if (width == 8)
-			checkError(compiler.movsx(result, source.r8()), "AsmJit i64.extend8_s emission failed");
+			emitter.movsx8(result, source);
 		else if (width == 16)
-			checkError(compiler.movsx(result, source.r16()), "AsmJit i64.extend16_s emission failed");
+			emitter.movsx16(result, source);
 		else if (width == 32)
-			checkError(compiler.movsxd(result, source.r32()), "AsmJit i64.extend32_s emission failed");
+			emitter.movsx32(result, source.r32());
 		else
 			throw std::runtime_error("AsmJit internal error: invalid i64 sign-extension width");
 		values.push_back(result);
 	}
 
+	//! Emits `lhs <condition> rhs` as an i32 0/1.
 	void emitCompare(asmjit::x86::CondCode condition)
 	{
 		if (inDeadCode())
@@ -11693,9 +11315,14 @@ private:
 		auto rhs = values.back(); values.pop_back();
 		auto lhs = values.back(); values.pop_back();
 		auto result = compiler.new_gp32("comparison");
-		checkError(compiler.xor_(result, result), "AsmJit comparison result initialisation failed");
-		checkError(compiler.cmp(lhs, rhs), "AsmJit comparison emission failed");
-		checkError(compiler.set(condition, result.r8()), "AsmJit comparison condition emission failed");
+		// The condition carries its own comparison, so one universal `select`
+		// replaces the zero/compare/setcc triple and defines the result on both
+		// paths. The condition code is asmjit's target-independent enum. A
+		// 64-bit comparison selects at its own width and is then narrowed,
+		// because `select` requires a destination as wide as its operands.
+		const asmjit::ujit::UniCondition test(asmjit::ujit::UniOpCond::kCompare,
+				condition, lhs, rhs);
+		emitter.selectFlag(result, lhs, test);
 		values.push_back(result);
 	}
 
@@ -11708,12 +11335,12 @@ private:
 		auto rhs = values.back(); values.pop_back();
 		auto lhs = values.back(); values.pop_back();
 		switch (operation) {
-		case BinaryOp::Add: checkError(compiler.add(lhs, rhs), "AsmJit i64.add emission failed"); break;
-		case BinaryOp::Sub: checkError(compiler.sub(lhs, rhs), "AsmJit i64.sub emission failed"); break;
-		case BinaryOp::Mul: checkError(compiler.imul(lhs, rhs), "AsmJit i64.mul emission failed"); break;
-		case BinaryOp::And: checkError(compiler.and_(lhs, rhs), "AsmJit i64.and emission failed"); break;
-		case BinaryOp::Or: checkError(compiler.or_(lhs, rhs), "AsmJit i64.or emission failed"); break;
-		case BinaryOp::Xor: checkError(compiler.xor_(lhs, rhs), "AsmJit i64.xor emission failed"); break;
+		case BinaryOp::Add: emitter.add(lhs, rhs); break;
+		case BinaryOp::Sub: emitter.sub(lhs, rhs); break;
+		case BinaryOp::Mul: emitter.imul(lhs, rhs); break;
+		case BinaryOp::And: emitter.and_(lhs, rhs); break;
+		case BinaryOp::Or: emitter.or_(lhs, rhs); break;
+		case BinaryOp::Xor: emitter.xor_(lhs, rhs); break;
 		}
 		values.push_back(lhs);
 	}
@@ -11726,26 +11353,19 @@ private:
 			throw std::runtime_error("AsmJit i64 shift operand stack underflow");
 		auto count = values.back(); values.pop_back();
 		auto value = values.back(); values.pop_back();
-		auto maskedCount = compiler.new_gp32("i64ShiftCount");
-		checkError(compiler.mov(maskedCount, count.r32()), "AsmJit i64 shift-count copy failed");
-		checkError(compiler.and_(maskedCount, 63), "AsmJit i64 shift-count mask failed");
-		// Shift through a stack slot: the count must live in CL, and keeping the
-		// value in memory avoids any collision with a virtual register.
-		asmjit::x86::Mem shiftSlot = compiler.new_stack(8, 8, "i64ShiftSlot");
-		shiftSlot.set_size(8);
-		checkError(compiler.mov(shiftSlot, value),
-				"AsmJit i64 shift-value store failed");
-		checkError(compiler.mov(asmjit::x86::ecx, maskedCount), "AsmJit i64 shift-count setup failed");
-		switch (operation) {
-		case ShiftOp::Left: checkError(compiler.shl(shiftSlot, asmjit::x86::cl), "AsmJit i64.shl emission failed"); break;
-		case ShiftOp::ArithmeticRight: checkError(compiler.sar(shiftSlot, asmjit::x86::cl), "AsmJit i64.shr_s emission failed"); break;
-		case ShiftOp::LogicalRight: checkError(compiler.shr(shiftSlot, asmjit::x86::cl), "AsmJit i64.shr_u emission failed"); break;
-		case ShiftOp::RotateLeft: checkError(compiler.rol(shiftSlot, asmjit::x86::cl), "AsmJit i64.rotl emission failed"); break;
-		case ShiftOp::RotateRight: checkError(compiler.ror(shiftSlot, asmjit::x86::cl), "AsmJit i64.rotr emission failed"); break;
-		}
+		auto maskedCount = compiler.new_gp64("i64ShiftCount");
+		emitter.mov(maskedCount, count);
+		emitter.and_(maskedCount, asmjit::Imm(63));
+		// The count is an ordinary operand in the universal vocabulary: the fixed
+		// count register and the stack round-trip the host lowering needed are gone.
 		auto shifted = compiler.new_gp64("i64ShiftValue");
-		checkError(compiler.mov(shifted, shiftSlot),
-				"AsmJit i64 shift-result load failed");
+		switch (operation) {
+		case ShiftOp::Left: emitter.shl(shifted, value, maskedCount); break;
+		case ShiftOp::ArithmeticRight: emitter.sar(shifted, value, maskedCount); break;
+		case ShiftOp::LogicalRight: emitter.shr(shifted, value, maskedCount); break;
+		case ShiftOp::RotateLeft: emitter.rol(shifted, value, maskedCount); break;
+		case ShiftOp::RotateRight: emitter.ror(shifted, value, maskedCount); break;
+		}
 		values.push_back(shifted);
 	}
 
@@ -11779,34 +11399,26 @@ private:
 			throw std::runtime_error("AsmJit i32 shift operand stack underflow");
 		auto count = values.back(); values.pop_back();
 		auto value = values.back(); values.pop_back();
-		// x86 variable shifts/rotates take their count from CL. The low five
-		// bits are used by WebAssembly; masking explicitly also documents the
-		// semantic rule for the generated instruction sequence.
+		// The low five bits are used by WebAssembly; masking explicitly also
+		// documents the semantic rule for the generated sequence.
 		auto maskedCount = compiler.new_gp32("shiftCount");
-		checkError(compiler.mov(maskedCount, count), "AsmJit shift-count copy failed");
-		checkError(compiler.and_(maskedCount, 31), "AsmJit shift-count mask failed");
-		// Shift through a stack slot: the count must live in CL, and keeping the
-		// value in memory avoids any collision with a virtual register.
-		asmjit::x86::Mem shiftSlot = compiler.new_stack(4, 4, "shiftSlot");
-		shiftSlot.set_size(4);
-		checkError(compiler.mov(shiftSlot, value),
-				"AsmJit shift-value store failed");
-		checkError(compiler.mov(asmjit::x86::ecx, maskedCount), "AsmJit shift-count setup failed");
+		emitter.mov(maskedCount, count);
+		emitter.and_(maskedCount, asmjit::Imm(31));
+		// The count is an ordinary operand in the universal vocabulary: the fixed
+		// count register and the stack round-trip the host lowering needed are gone.
+		auto shifted = compiler.new_gp32("shiftValue");
 		switch (operation) {
 		case ShiftOp::Left:
-			checkError(compiler.shl(shiftSlot, asmjit::x86::cl), "AsmJit i32.shl emission failed"); break;
+			emitter.shl(shifted, value, maskedCount); break;
 		case ShiftOp::ArithmeticRight:
-			checkError(compiler.sar(shiftSlot, asmjit::x86::cl), "AsmJit i32.shr_s emission failed"); break;
+			emitter.sar(shifted, value, maskedCount); break;
 		case ShiftOp::LogicalRight:
-			checkError(compiler.shr(shiftSlot, asmjit::x86::cl), "AsmJit i32.shr_u emission failed"); break;
+			emitter.shr(shifted, value, maskedCount); break;
 		case ShiftOp::RotateLeft:
-			checkError(compiler.rol(shiftSlot, asmjit::x86::cl), "AsmJit i32.rotl emission failed"); break;
+			emitter.rol(shifted, value, maskedCount); break;
 		case ShiftOp::RotateRight:
-			checkError(compiler.ror(shiftSlot, asmjit::x86::cl), "AsmJit i32.rotr emission failed"); break;
+			emitter.ror(shifted, value, maskedCount); break;
 		}
-		auto shifted = compiler.new_gp32("shiftValue");
-		checkError(compiler.mov(shifted, shiftSlot),
-				"AsmJit shift-result load failed");
 		values.push_back(shifted);
 	}
 

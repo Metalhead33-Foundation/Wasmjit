@@ -141,20 +141,19 @@ target-architecture check).
 
 A big-endian host is **refused**, not served approximately: `translateTypes` stops
 the module with a named diagnostic before any body is compiled
-(docs/proposals/BIG_ENDIAN.md `BED4`). That is deliberate for this backend as it
-stands, and the reason is the emission model rather than the policy: the
-vocabulary was `asmjit::x86` — 681 raw instruction call sites on 415 lines that
-name `asmjit::x86` in `AsmjitModuleCompiler.cpp` before `BE-7` — so there was no
-byte reversal to emit, while the GC header's length word and the shared
-atomic helpers *are* little-endian on every host (`BED3`, `BE-4`). Emitting native accesses there would read every
-multi-byte value reversed, which is the corruption `docs/SAFETY.md` exists to
-prevent.
+(docs/proposals/BIG_ENDIAN.md `BED4`). The reason is no longer the emission model
+— the vocabulary has been universal since `BE-7`'s conversion — but the
+*accesses*: no guest load or store is reversed yet, while the GC header's length
+word and the shared atomic helpers *are* little-endian on every host (`BED3`,
+`BE-4`). Emitting native accesses there would read every multi-byte value
+reversed, which is the corruption `docs/SAFETY.md` exists to prevent.
 
 The refusal is a property of the target, not of the byte-order policy: even
 `nonconformant` could not make this backend correct, so it is not consulted.
-`BE-7` is the milestone that removes the refusal: once the instruction emission
-is target-independent (`asmjit::ujit`), the backend can emit the same reversal
-SLJIT does and keep a big-endian host.
+`BE-7`'s remaining half removes the refusal: the same reversal SLJIT emits, at the
+two functions every guest access funnels through, plus a forced-policy test that
+runs it on this host. "Emission model" below records exactly what is and is not
+converted.
 
 ## Emission model: `ujit` first, the host compiler second
 
@@ -179,40 +178,66 @@ The shape of the seam is small because `ujit` was designed that way:
   universal instruction calls it and nothing else; a site without one emits
   through `host()` and appears in the table below.
 
-### What is converted today
+### What was converted
+
+The conversion is finished: **every instruction this backend emits goes through
+`AsmjitEmitter.hpp`**, and no file spells an x86 instruction or an `Inst::kId*`
+any more. `Test/AsmjitBackendTests.cpp` holds the ledger
+(`asmjit: the host-specific emission set only shrinks`, `[asmjit][ujit]`): it
+reads both backend translation units and fails if a `compiler.<instruction>(`
+call, an unlisted `host().<instruction>(` call or an instruction id appears.
+Only the *structural* calls are allowed to stay — `new_gp32`, `new_xmm`,
+`new_stack`, `new_label`, `bind`, `ret`, `invoke`, `new_func`, `finalize` — and
+those are ABI and register plumbing, which `ujit` delegates rather than replaces.
+
+The slices, in the order they landed:
 
 | Family | Universal form | Slice |
 |---|---|---|
-| Integer immediates (`i32.const`, `i64.const`) | `Emitter::movImm` → `ujit::UniCompiler::mov` | S0, done |
+| Integer immediates, moves, loads and stores | `mov`/`movImm` → `kMov`, `kLoad*`, `kStore*`, `kStoreZero*` | S1 |
+| Integer arithmetic and logic | `add`/`sub`/`and_`/`or_`/`xor_`/`imul`/`dec` → `kAdd`/`kSub`/`kAnd`/`kOr`/`kXor`/`kMul` | S1 |
+| Shifts and rotates | `shl`/`shr`/`sar`/`rol`/`ror` → `kSll`/`kSrl`/`kSra`/`kRol`/`kRor` | S1 |
+| Sign and zero extension | `movsx*`/`movzx*` → `kLoadI8/I16/I32`, `kLoadU8/U16/U32`, `kSll`+`kSra` | S1 |
+| Bit counts | `bsf`/`bsr` → `clz`/`ctz` (`kCLZ`/`kCTZ`) | S1 |
+| Carry chains (`i64.add128`/`sub128`) | `adc`/`sbb` → `kAdd` + `ucmp_lt` + `select` | S1 |
+| Comparisons, branches, `setcc` | `test`/`cmp`/`jcc`/`set` → `UniCondition` + `j`/`select` | S2 |
+| Address formation | `lea` → host `lea` **by decision** (see below) | S3 |
+| Scalar float binary and compares | `addss`…`divsd`, `ucomiss`/`ucomisd` → `kAddF32S`…`kDivF64S`, `kCmpEqF32S`…`kCmpGeF64S` | S4 |
+| Vector arithmetic, compares, moves | `p*` → `kAndU32`/`kAddU8`/`kAvgrU8`/`kMinU8`/`kCmpLtI8`/`kLoad128_U32`/`kStore128_U32`/`kMovU32`… | S5 |
+| Diagnostic probes (`AsmjitContext.cpp`) | the same vocabulary, through the same façade | S6 |
 
-Everything else still emits through the host compiler: **681 call sites**, which
-`Test/AsmjitBackendTests.cpp` pins in
-`asmjit: the host-specific emission set only shrinks` (`[asmjit][ujit]`). The
-number is a **budget that only goes down** — each slice converts one family and
-rewrites it, and a new raw emission fails the case even if nobody edited the
-list.
+### What the conversion bought
+
+This was not a rename. Four site families came out *shorter and simpler*, and the
+simplification is the same property that makes the port possible — one
+instruction, one meaning:
+
+- **Variable shifts need no fixed register.** The host lowering stored the value
+  to a stack slot, moved the count into `CL`, shifted the slot and loaded it
+  back. The universal form is one instruction: `shl dst, src, count`
+  (`kSll` → `shlx` on this host).
+- **Bit counts need no zero branch.** `bsr`/`bsf` are undefined for zero, so the
+  code branched around a zero and adjusted the result with `^ 31`. `clz`/`ctz`
+  are defined for zero as the register width, which is exactly wasm's answer, so
+  the branch and the adjustment are gone.
+- **Float compares need no parity game.** `ucomiss` + two `setcc` + `and`/`or`
+  per predicate became one IEEE-754 predicate (`kCmpEqF32S`…) plus a lane move;
+  NaN behaviour comes from the operation instead of from `kP`/`kNP`.
+- **Vector compares need no operand swap.** `pandn`'s destination trick, the
+  `pcmpgt` operand swap for `lt_s`/`ge_s`, and the all-ones register used to
+  invert a mask all disappeared, because `kCmpLtI8`/`kCmpGeI8` name the
+  predicate and the signedness.
 
 ### The host-specific set
 
-Counted today, in `AsmjitModuleCompiler.cpp`, by family:
+| Entry | Why it stays host-side |
+|---|---|
+| `lea` | no address-formation operation exists, and a frame-relative operand's displacement is rewritten during frame finalisation, so extracting base and offset would read the pre-layout value |
+| `psllw`/`psraw`/`psrlw`/`pslld`/`psrad`/`psrld` by a per-lane count (6 sites) | the universal shift vocabulary is immediate-count only; a vector-count shift has no universal operation at all |
+| `asmjit::x86::Assembler` in `compileReturn42` | a target probe, not generated code: it asks whether this CPU can execute what AsmJit produces, so it is deliberately spelled in the host ISA and would be rewritten per target |
 
-| Family | Mnemonics | Sites |
-|---|---|---|
-| Moves and immediates | `mov`, `movsx`, `movzx`, `lea` | 347 |
-| Integer arithmetic and logic | `add`, `sub`, `imul`, `and_`, `or_`, `xor_`, `adc`, `sbb`, `dec` | 78 |
-| Shifts and rotates | `shl`, `shr`, `rol`, `ror` | 28 |
-| Comparisons, branches and `setcc` | `test`, `cmp`, `jz`, `jnz`, `je`, `jne`, `jb`, `jbe`, `jmp`, `set` | 157 |
-| Bit scans and float compares | `bsf`, `bsr`, `ucomiss`, `ucomisd` | 6 |
-| Vector moves and logic | `movdqu`, `movd`, `movq`, `xorps`, `pxor`, `pand`, `pandn`, `por` | 25 |
-| Vector arithmetic and compares | `padd*`, `psub*`, `pavg*`, `pmin*`, `pmax*`, `pcmp*`, `psll*`, `psr*` | 39 |
-| Raw instruction-id emission | `emit` (`Inst::kId*`) | 1 |
-
-Each family has a universal equivalent in `ujit`'s vocabulary
-(`kMov`/`kAdd`/`kSub`/`kShl`/`kRot`/`kAnd`/`kOr`/`kXor`/`kTest`/`kCompare`/
-`kCLZ`/`kCTZ`/`kBSwap`/`kMin`/`kMax`/`kAvgr`/`kCmpEqU8…`/`kLoadCvt*`/`kPacks`),
-with two recurring exceptions that will have to stay host-specific or be
-re-expressed as sequences: `adc`/`sbb` (carry-chain arithmetic for 64-bit
-emulation) and `Inst::kId*` where a specific encoding was chosen deliberately.
+The first two are the whole remainder — six instructions and one address
+operation — and both are named in the ledger test, so they cannot grow silently.
 
 ### Error reporting
 
@@ -221,6 +246,20 @@ emulation) and `Inst::kId*` where a specific encoding was chosen deliberately.
 checks `finalize()` and still refuses to install a module whose code did not
 finalise; what it loses is the per-site message. That is recorded rather than
 hidden, because it is a diagnostic regression, not a correctness one.
+
+### What is not done yet
+
+The vocabulary is target-independent but the **byte-order decision is not
+consulted**: `emitMemoryLoad`/`emitMemoryStore` still emit a plain load or store,
+so a big-endian host would misread guest memory. `translateTypes` therefore keeps
+refusing (`BED4`) and [`docs/proposals/BIG_ENDIAN.md`](../docs/proposals/BIG_ENDIAN.md)
+records the remaining work: a `swapsAccesses` flag reached from the module
+compiler into the emitter, a width-aware reversal at the two guest-access
+functions (8 → `bswap`, 4 → `bswap`, 2 → `ror 8`, 1 → nothing), the same rule for
+the header word, and a forced-policy test that runs the round-trip on this host
+the way `[byteorder]` does for SLJIT. Until that lands, AsmJIT is a
+target-independent *emitter* on a single-ISA runtime, not yet a second
+byte-order-converting backend.
 
 ## Known limitations and next steps
 

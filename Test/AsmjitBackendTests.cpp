@@ -522,74 +522,123 @@ namespace {
 
 //! The host-specific emission set, as `[asmjit][ujit]` enforces it.
 //!
-//! `docs/proposals/BIG_ENDIAN.md` `BE-7` moves this backend's instruction
-//! vocabulary from `asmjit::x86` to `asmjit::ujit` one family at a time. A site
-//! that has a universal instruction calls `Emitter` and disappears from the
-//! count below; a site that does not is listed in `Asmjit/Asmjit.md` "The
-//! host-specific set". The budget therefore only ever shrinks, and a *new* raw
-//! x86 emission fails this case even if nobody edited the list.
-const char* const kRawEmissionBudgetName = "raw host instruction limit";
+//! `docs/proposals/BIG_ENDIAN.md` `BE-7` moved this backend's instruction
+//! vocabulary from `asmjit::x86` to `asmjit::ujit`. What remains on the host side
+//! is a *named* set (`Asmjit.md` "The host-specific set"), not a habit: every
+//! `compiler.` call that is still here builds the function, allocates a register
+//! or a label, or performs a call — and every instruction goes through the
+//! `Emitter` façade.
+//!
+//! The two counters below are the ledger. They only ever shrink, and a new raw
+//! instruction fails the case even if nobody edited the lists.
 
-//! Mnemonics the backend still emits through the host compiler.
-//! `BE-7`'s slices convert them family by family (`mov` first, then integer
-//! arithmetic, control flow, and SIMD).
-const std::set<std::string>& hostMnemonics()
+//! Calls that *are* the structure rather than the instruction stream.
+//! `invoke`, `bind`, `ret` and the allocators are ABI and register plumbing, and
+//! the universal layer wraps the same host compiler, so they do not move.
+const std::set<std::string>& structuralCalls()
 {
 	static const std::set<std::string> names = {
-		"adc", "add", "and_", "bsf", "bsr", "cmp", "dec", "emit", "imul",
-		"jb", "jbe", "je", "jmp", "jne", "jnz", "jz", "lea", "mov",
-		"movd", "movdqu", "movq", "movsx", "movzx", "or_", "paddb", "paddd",
-		"paddq", "paddw", "pand", "pandn", "pavgb", "pavgw", "pcmpeqb",
-		"pcmpeqd", "pcmpeqw", "pcmpgtb", "pcmpgtd", "pcmpgtw", "pmaxsw",
-		"pmaxub", "pminsw", "pminub", "por", "pslld", "psllw", "psrad",
-		"psraw", "psrld", "psrlw", "psubb", "psubd", "psubq", "psubw",
-		"pxor", "rol", "ror", "sbb", "set", "shl", "shr", "sub", "test",
-		"ucomisd", "ucomiss", "xor_", "xorps",
+		"bind", "finalize", "invoke", "new_func", "new_gp16", "new_gp32",
+		"new_gp64", "new_gp8", "new_gp_ptr", "new_label", "new_stack",
+		"new_vec128", "new_xmm", "ret",
 	};
 	return names;
 }
 
-//! The number of call sites the budget allows today. **Lower it, never raise
-//! it**: each `BE-7` slice converts a family and rewrites this number.
-constexpr std::size_t kRawEmissionBudget = 681;
-
-std::size_t countRawEmissions(const std::string& source)
+//! The instructions emitted through `host()`: a per-lane variable-count vector
+//! shift has no universal operation, so the six shifts are the whole remainder.
+const std::set<std::string>& hostOnlyInstructions()
 {
-	std::size_t count = 0;
-	for (const std::string& mnemonic : hostMnemonics()) {
-		const std::string needle = "compiler." + mnemonic + "(";
-		for (std::size_t at = 0; (at = source.find(needle, at)) != std::string::npos;
-				at += needle.size())
-			++count;
+	static const std::set<std::string> names = {
+		"pslld", "psllw", "psrad", "psraw", "psrld", "psrlw",
+	};
+	return names;
+}
+
+//! Every `compiler.<name>(` in \p source whose name is not structural.
+std::vector<std::string> rawCompilerCalls(const std::string& source)
+{
+	std::vector<std::string> offenders;
+	const std::string needle = "compiler.";
+	for (std::size_t at = 0; (at = source.find(needle, at)) != std::string::npos;
+			at += needle.size()) {
+		const std::size_t begin = at + needle.size();
+		std::size_t end = begin;
+		while (end < source.size()
+				&& (std::isalnum(static_cast<unsigned char>(source[end])) || source[end] == '_'))
+			++end;
+		if (end < source.size() && source[end] == '(' && !structuralCalls().count(source.substr(begin, end - begin)))
+			offenders.push_back(source.substr(begin, end - begin));
 	}
-	return count;
+	return offenders;
+}
+
+//! Every `host().<name>(` in \p source whose name is not in the host-only set.
+std::vector<std::string> unlistedHostCalls(const std::string& source)
+{
+	std::vector<std::string> offenders;
+	const std::string needle = "host().";
+	for (std::size_t at = 0; (at = source.find(needle, at)) != std::string::npos;
+			at += needle.size()) {
+		const std::size_t begin = at + needle.size();
+		std::size_t end = begin;
+		while (end < source.size()
+				&& (std::isalnum(static_cast<unsigned char>(source[end])) || source[end] == '_'))
+			++end;
+		if (end < source.size() && source[end] == '(' && !hostOnlyInstructions().count(source.substr(begin, end - begin)))
+			offenders.push_back(source.substr(begin, end - begin));
+	}
+	return offenders;
+}
+
+//! Reads one backend source file.
+std::string readBackendSource(const std::filesystem::path& source)
+{
+	REQUIRE(std::filesystem::exists(source));
+	std::ifstream stream(source, std::ios::binary);
+	REQUIRE(stream.good());
+	std::stringstream buffer;
+	buffer << stream.rdbuf();
+	return buffer.str();
 }
 
 } // namespace
 
 TEST_CASE("asmjit: the host-specific emission set only shrinks", "[asmjit][ujit]")
 {
-	// `BE-7`: the backend emits through `asmjit::ujit`, and keeps the host
-	// compiler only where no universal instruction exists yet. This case is the
-	// ledger: it fails when a new raw x86 emission appears, and each migration
-	// slice lowers the budget as it converts a family.
-	const std::filesystem::path source = std::filesystem::path(WASM_TESTSUITE_SOURCE_DIR)
-			/ ".." / "Asmjit" / "AsmjitModuleCompiler.cpp";
-	REQUIRE(std::filesystem::exists(source));
-	const std::string text = [&source] {
-		std::ifstream stream(source, std::ios::binary);
-		REQUIRE(stream.good());
-		std::stringstream buffer;
-		buffer << stream.rdbuf();
-		return buffer.str();
+	// `BE-7`: every instruction is emitted through the `Emitter` façade, which
+	// speaks `asmjit::ujit`. This case is the ledger — it fails when a raw x86
+	// instruction reappears, and it names the only host-only instruction family
+	// the universal vocabulary cannot express.
+	const std::filesystem::path root = std::filesystem::path(WASM_TESTSUITE_SOURCE_DIR) / "..";
+	const std::string compiler = readBackendSource(root / "Asmjit" / "AsmjitModuleCompiler.cpp");
+	const std::string context = readBackendSource(root / "Asmjit" / "AsmjitContext.cpp");
+
+	const std::vector<std::string> raw = [&] {
+		std::vector<std::string> all = rawCompilerCalls(compiler);
+		for (const std::string& name : rawCompilerCalls(context))
+			all.push_back(name);
+		return all;
 	}();
+	INFO("non-structural compiler calls: " << raw.size());
+	CHECK(raw.empty());
 
-	const std::size_t raw = countRawEmissions(text);
-	INFO("raw host emission sites: " << raw << " (" << kRawEmissionBudgetName << ' '
-			<< kRawEmissionBudget << ')');
-	CHECK(raw <= kRawEmissionBudget);
+	const std::vector<std::string> unlisted = [&] {
+		std::vector<std::string> all = unlistedHostCalls(compiler);
+		for (const std::string& name : unlistedHostCalls(context))
+			all.push_back(name);
+		return all;
+	}();
+	INFO("host-only instructions outside the recorded set: " << unlisted.size());
+	CHECK(unlisted.empty());
 
-	// A converted family must not creep back: the immediate moves are the first
-	// slice's evidence, and they are emitted through the universal layer.
-CHECK(text.find("emitter.movImm(") != std::string::npos);
+	// No instruction id may be spelled anywhere: that was the final raw path.
+	CHECK(compiler.find("Inst::kId") == std::string::npos);
+	CHECK(context.find("Inst::kId") == std::string::npos);
+
+	// The converted families must not creep back: the immediate move and the
+	// condition branch are the first two slices' evidence.
+	CHECK(compiler.find("emitter.movImm(") != std::string::npos);
+	CHECK(compiler.find("emitter.j(") != std::string::npos);
+	CHECK(compiler.find("emitter.vector3(") != std::string::npos);
 }
