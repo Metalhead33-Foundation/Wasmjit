@@ -46,6 +46,7 @@ SOURCES += \
         WasmBackendRegistry.cpp \
         WasmCompilationPolicy.cpp \
         WasmConfiguration.cpp \
+        WasmByteOrder.cpp \
         WasmComponent.cpp \
         WasmCallCache.cpp \
         WasmComponentInstance.cpp \
@@ -87,6 +88,7 @@ SOURCES += \
 HEADERS += \
     WasmAgent.hpp \
     WasmBackendAbi.hpp \
+    WasmByteOrder.hpp \
     WasmBackendRegistry.hpp \
     WasmArtifact.hpp \
     WasmCallCache.hpp \
@@ -160,6 +162,7 @@ isEmpty(PREFIX): PREFIX = /usr/local
 # §6.1.1), so the tier lists stay the single source of truth.
 WASMJIT_INTERNAL_HEADERS = \
     $$PWD/WasmSection.hpp \
+    $$PWD/WasmByteOrder.hpp \
     $$PWD/WasmLegacyEh.hpp \
     $$PWD/WasmTypeStore.hpp \
     $$PWD/WasmCanonicalType.hpp \

@@ -80,6 +80,10 @@ const std::set<std::string>& internalHeaders()
 		"WasmComponentValidation.hpp", "WasmComponentParser.inc",
 		"WasmLegacyEh.hpp",
 		"WasmTailTrampoline.hpp",
+		// Internal until a backend honours the decision it makes: an exported
+		// byte-order switch that changes nothing would be a lie
+		// (docs/proposals/BIG_ENDIAN.md `BE-2`).
+		"WasmByteOrder.hpp",
 	};
 	return headers;
 }

@@ -173,6 +173,7 @@ SOURCES += main.cpp \
     ../Tools/Bindings/frontend/wit/WitFrontend.cpp \
     BindingSchemaTests.cpp \
     CallCacheTests.cpp \
+    ByteOrderTests.cpp \
     WasiStubTests.cpp
 HEADERS +=  \
     helper.hpp \
