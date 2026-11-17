@@ -35,6 +35,8 @@ bulk64
 call
 call_indirect64
 custom
+endianness
+endianness64
 exports0
 f32_bitwise
 f32_cmp

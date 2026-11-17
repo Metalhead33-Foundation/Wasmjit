@@ -361,6 +361,13 @@ unparsable upstream file must not break the build.
 
 The result on this revision is **257** scripts (the 256 core ones plus `proposals/threads/atomic.wast`) and roughly 6 000 `.wasm` modules.
 
+`endianness` and `endianness64` are in the default set on purpose: they build a value
+byte-by-byte with `i8` stores and read it back as a whole word, and `float_memory` reads the
+same four data-segment bytes as an `i32` and as an `f32`. Every engine on a little-endian
+host satisfies all three for free; a backend that emitted native-order loads on a big-endian
+host would fail them immediately. They are the byte-order tripwire
+([`ABI.md`](ABI.md) “The C ABI Contract”).
+
 ### Every script is its own test case
 
 `Test/SpecSuite.cpp` registers one Catch2 test case per converted script, named **`spec: <script>`**
