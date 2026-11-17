@@ -160,10 +160,30 @@ stack alignment, callee-saved set). Everything except `v128` is portable without
 a per-target special case.
 
 **Why big-endian is unsupported rather than provisional.** The verdict is a
-statement about the code, not about testing. Linear memory, the canonical ABI and
-the GC heap are **little-endian by specification** (§[GC Object and Heap
-ABI](#abi_gc) below), so on a big-endian host every multi-byte access has to
-convert — and the places that would have to convert are:
+statement about the code, not about testing. Of the byte orders involved, two are
+**mandated by the specifications we implement** and one is **ours** — and the
+difference matters, because a proposal note's §6 “fast and loose” row is only
+legitimate where §3 of that note shows the spec leaves the freedom:
+
+- **Linear memory is little-endian by the core specification, not by our
+  choice.** Loads and stores are defined through its `il`/`bytes` byte
+  interpretations (§4.3.3 “Bytes”), and the binary format states it in words for
+  constants: “Floating-point values are encoded directly by their IEEE 754 bit
+  pattern **in little endian byte order**.” A guest binary from LLVM, Go or .NET
+  was emitted against that rule, so there is no freedom to play with.
+- **The canonical ABI is little-endian by the component-model specification.**
+  Its `load_int`/`store_int` convert with `'little'` and its string lowering
+  writes `utf-16-le`.
+- **The GC object header and the `v128` frame order are ours.** The GC proposal
+  defines no object layout, and the frame form is host-internal, so
+  §[GC Object and Heap ABI](#abi_gc) “little-endian, regardless of host” is an
+  **ABI promise this tree makes**, not a quotation; a port could restate it, and
+  [`GC_EXTENSIONS.md`](proposals/GC_EXTENSIONS.md) `GXD7` records that latitude.
+  Element order inside a GC array is *not* free, because `array.new_data` maps
+  data-segment bytes into elements.
+
+Either way, on a big-endian host every multi-byte access has to convert, and the
+places that would have to convert are:
 
 | Site | Today | A port needs |
 |---|---|---|
@@ -1126,4 +1146,17 @@ Universal function reference stored in tables and import storage.
 | `LibJit/LibjitOpcodeDispatcher.cpp` | `dispatchCall` (line ~1027), `dispatchCallIndirect` (~1061), `dispatchCallThroughCallable` (~612) |
 | `LibJit/LibjitModuleCompiler.cpp` | `declareFunctions` sets internal `Callable::context` |
 | `WasmBase/WasmModuleInstance.cpp` | `resolveImports` stores resolved `Callable`s |
+
 | `Test/main.cpp` | `native_debug` demonstrates native import pattern; host-bridge tests use no JS engine |
+
+Specifications cited in “The C ABI Contract”:
+
+- *WebAssembly Core Specification* 3.0, §4.3.3 “Bytes” — the `bytes`/`il` byte
+  interpretations every load and store rule goes through:
+  <https://webassembly.github.io/spec/core/exec/numerics.html>
+- *WebAssembly Core Specification* 3.0, “Binary Format — Values”, the float rule
+  quoted there:
+  <https://webassembly.github.io/spec/core/binary/values.html>
+- *Component Model*, “Canonical ABI” — `load_int`/`store_int` and the string
+  encodings:
+  <https://github.com/WebAssembly/component-model/blob/main/design/mvp/CanonicalABI.md>

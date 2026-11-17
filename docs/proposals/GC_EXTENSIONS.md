@@ -162,6 +162,7 @@ not be treated as a stable binary feature yet.
 | GXD4 | **Defer Frozen Values until its encoding and phase model stabilize.** | §3: exploratory proposal; no stable binary. | Avoids baking a moving type clause into `TYPE_IDENTITY`. |
 | GXD5 | **Use the same GC-5 trap order** (range check before allocation) for all new constructors. | `GC.md` GC-5; the spec requires the out-of-bounds trap before an allocation failure. | Consistent, testable error behaviour. |
 | GXD6 | **Report the existing GC trap kinds** (`NullArrayReference`, `OutOfBoundsArrayAccess`, `OutOfBoundsMemoryAccess`, `OutOfBoundsTableAccess`). | The proposals only require *a* trap; `array.get` and `array.new_data` already use these kinds. | Consistent error behaviour without new trap codes. |
+| GXD7 | **Pin the object header and heap byte order to little-endian on every host** (`../ABI.md` “GC Object and Heap ABI”, implemented). | §3: the GC proposal fixes no object layout, so the *header* is a degree of freedom — it is an ABI promise this tree makes, not a spec quotation. The *element* order is not free: `array.new_data` maps data-segment bytes into elements and multibyte array access (GXD1) keeps the memory rules. | One heap layout for every host and embedder, so `gcStructFieldOffset` readers and cross-host artifacts agree. A big-endian port may swap the header on access; it may not swap the element order. |
 
 Guardrail: a multibyte access must not be mistaken for a linear-memory access
 when bit 5 is set, and an array access must trap on null before it reads the
