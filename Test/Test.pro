@@ -153,6 +153,7 @@ SOURCES += main.cpp \
     ConcurrencyTests.cpp \
     PluginTests.cpp \
     HeaderTierTests.cpp \
+    HostObjectTests.cpp \
     AsmjitBackendTests.cpp \
     AsmjitTypeTranslatorTests.cpp \
     AsmjitModuleCompilerTests.cpp \

@@ -57,6 +57,7 @@ SOURCES += \
         WasmException.cpp \
         WasmExn.cpp \
         WasmGcHeap.cpp \
+        WasmHostType.cpp \
         WasmLegacyEh.cpp \
         WasmMemory.cpp \
         WasmModule.cpp \
@@ -110,6 +111,8 @@ HEADERS += \
     WasmExn.hpp \
     WasmGcHeader.hpp \
     WasmGcHeap.hpp \
+    WasmHostObject.hpp \
+    WasmHostType.hpp \
     WasmCanonicalType.hpp \
     WasmHostBridge.hpp \
     WasmImport.hpp \

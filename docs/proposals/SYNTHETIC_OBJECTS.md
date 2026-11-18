@@ -383,8 +383,8 @@ and the descriptor supplies the name.
 
 **Snapshot (2026-11-18, working tree on `dcec0a7`):** the *primitives* below are
 shipped and measured; the host-registration seam of D1/D2 is **not** — it is
-`SO-1`. The snapshot is what lets the note price the mechanism instead of
-promising it.
+`SO-1`, and its interface is scaffolded in §4.4. The snapshot is what lets the
+note price the mechanism instead of promising it.
 
 ### 4.1 The primitives
 
@@ -420,6 +420,23 @@ originate a type that no module declared**: `internModule` consumes a parser's
 The last two rows are the boundary that survives revision 2. The first four are
 gaps with IDs, not boundaries (§5).
 
+### 4.4 The scaffolding (2026-11-18)
+
+`SO-1`'s interface is in the tree, so the shape can be reviewed and used before
+the implementation exists:
+
+| Header | What is there | What is not |
+|---|---|---|
+| [`../WasmBase/WasmHostType.hpp`](../../WasmBase/WasmHostType.hpp) | `HostTypeDefinition`/`HostFieldDefinition` (the Wasm storage vocabulary, no names), `HostTypeLayout`/`HostFieldLayout`, `hostTypeSupportAvailable()`, and `layoutHostType()` — **implemented** over `gcStructFieldOffset`/`gcStructSize`/`gcArrayDataOffset`, so it agrees with the GC heap by construction | `internHostType`, `allocateHostStruct`, `allocateHostArray`: declared, documented, and throwing `std::logic_error`. `retainHostObject`/`releaseHostObject` are non-throwing no-ops until an object can exist. |
+| [`../WasmBase/WasmHostObject.hpp`](../../WasmBase/WasmHostObject.hpp) | `HostType` (definition + layout + optional `TypeId`) and `HostObject` (move-only, one engine count, scalar/`v128` field access by index) | `HostType::intern`, `HostObject::createStruct`, `HostObject::createArray` reach the throwing seam. A reference field is refused by the accessors, because reading its word as data would bypass `refClone`/`refDrop`. |
+
+Both are embedder-tier headers (`EMBEDDING_SURFACE.md` §6.1.1), carry no name or
+descriptor (`SO-2`), and are pinned by `Test/HostObjectTests.cpp` (`[hostobject]`):
+the mixed-field layout equals the GC contract, an illegal definition is refused
+before any state changes, and the stubs throw rather than pretending to succeed.
+This is what §4.3 calls “not shipped, yet”: the interface is shipped, the
+implementation is not.
+
 ## 5. Gaps
 
 Every row below is either a **claim that has not been demonstrated** or a missing
@@ -442,7 +459,7 @@ product ship this?”), not against the engine's completeness meter
 | SO10 | **No arena-ownership test**: the arena allocator and a host count must never both free one object, and a borrow must not outlive its owner | same gate as SO9 | Medium; host-side |
 | SO11 | **No descriptor registry and no generator output exists** for the object case; the emitter work is §11/§14 of [`../EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) for functions and values, not for objects | closed by `SO-2` | High; tool-side |
 | SO12 | **No transport for a host object that is not an `externref`** beyond the integer handle; `externref` is available in two of the tested toolchains (§8) | measured, §8 | Low; the `i64` wire covers all six |
-| SO13 | **No public way to register a host-originated type.** `TypeRegistry::internModule`/`internGroup` take a parser `Subtype` span and a group descriptor; `allocateStructObject` resolves a `LocalTypeIdx` through the module. A host therefore cannot intern a type, and cannot allocate an object of one | [`../WasmTypeRegistry.hpp`](../../WasmBase/WasmTypeRegistry.hpp), [`../WasmModuleInstance.cpp`](../../WasmBase/WasmModuleInstance.cpp) (`allocateStructObject`) | **High — engine; it is the gate on D1/D2** (`SO-1`) |
+| SO13 | **No public way to register a host-originated type *yet*.** The interface exists ([`../WasmBase/WasmHostType.hpp`](../../WasmBase/WasmHostType.hpp), §4.4) and `internHostType` throws; behind it, `TypeRegistry::internModule`/`internGroup` take a parser `Subtype` span and `allocateStructObject` resolves a `LocalTypeIdx` through the module | [`../WasmHostType.hpp`](../../WasmBase/WasmHostType.hpp), [`../WasmModuleInstance.cpp`](../../WasmBase/WasmModuleInstance.cpp) (`allocateStructObject`) | **High — engine; it is the gate on D1/D2** (`SO-1`) |
 | SO14 | **No object descriptor in the binding schema.** The envelope (`wasmjit.binding/1`) carries `imports`/`exports`; there is no `types`/`objects` section, so the generator cannot emit a typed reference or a resource for an object | [`../EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) §11.8; `Tools/Bindings/BindingModel.hpp` | High; tool-side (`SO-2`) |
 | SO15 | **No dual-surface test.** One object, two spellings: a `(ref $T)` export and an `i64` handle export of the same operation must reach the same object and the same count; dropping the last handle must not free an object the guest still holds | A.14.4; nothing in the tree | High; engine + tool (`SO-3`) |
 | SO16 | **No structural-dedup test for host types.** Two descriptors with the same shape must intern to one `TypeId`; two versions of one name must intern to two; a guest declaring the shape must match without knowing the descriptor | A.14.2; [`../TYPE_IDENTITY.md`](../TYPE_IDENTITY.md) §6.2 | **High — it is the evidence for D1** (`SO-1`) |
@@ -530,6 +547,11 @@ host-side work gated on the sharing study and is **not** an engine milestone.
 | **SO-3 — The handle table and the dual surface** | A host-side handle table whose entry holds one `refClone` root, generated `i64` accessors, and the rule that a GC guest may pass the same object as `(ref $T)`. Explicit release, stale-handle rejection, no second count (A.14.4). | SO1, SO2, SO6, SO8, SO12, SO15 | one object is reached by a `(ref $T)` export and an `i64` export in the same run; dropping the handle does not free an object the guest still holds, and dropping the last guest reference does not free one the table still roots |
 | **SO-4 — Component packaging, GC-language façade** | A WIT resource version of the same API, plus the generated wrapper for a GC language (Kotlin/Wasm or MoonBit) and a Dart/Kotlin-style façade holding the handle. | SO3, SO4 | `resource.drop` runs the host release once; a wrapper's drop reaches one decrement; a cycle through the wrapper is collected or documented as a host cycle |
 | **SO-5 — The arena backing** | Objects as `i32` offsets in the shared memory of [`SHARING_LINEAR_MEMORY.md`](SHARING_LINEAR_MEMORY.md) A.13, gated on `SLM-1`…`SLM-4`. | SO9, SO10 | the object survives the writer's unload and re-instantiation, and a forged offset is a clean error |
+
+**Scaffolding landed 2026-11-18.** `SO-1`'s interface is in the tree (§4.4:
+`WasmHostType.hpp`/`WasmHostObject.hpp`, plus the `[hostobject]` test). The row
+stays open and its `Done when` is unchanged: an interface that throws is not the
+milestone.
 
 Ordering, and why it is not negotiable: `SO-1` is the only engine row and
 everything else is written against it — generating bindings for a type the engine
