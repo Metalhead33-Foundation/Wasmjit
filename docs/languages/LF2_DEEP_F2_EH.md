@@ -49,7 +49,7 @@ catch 0
 The `delegate 6` says: an exception raised by the inner body is delivered six
 label-levels out, **skipping** the enclosing legacy `try` that has catch arms.
 
-The engine's rewrite ([`WasmLegacyEh.cpp`](../WasmBase/WasmLegacyEh.cpp)) lowers
+The engine's rewrite ([`WasmLegacyEh.cpp`](../../WasmBase/WasmLegacyEh.cpp)) lowers
 a delegate-only legacy `try` to a plain `block`:
 
 ```cpp

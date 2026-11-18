@@ -221,7 +221,7 @@ Guardrails (things that must stay true):
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
 | **PM-0 — Re-cut this document** | ✅ Rewrite `PROPOSALS.md` into the §2 shape: front matter, §1 map, §2–§9, IDs. | PG1, PG2, PG3, PG4 | Done: this file's §1 map matches its own §2–§9, and §4/§8 match the folder. |
-| **PM-1 — Record the aliases** | ✅ List the sanctioned heading and section-count variants in §3/§6/§8. | PG5, PG6, PG7 | Done: §8 classifies every note (all forty). |
+| **PM-1 — Record the aliases** | ✅ List the sanctioned heading and section-count variants in §3/§6/§8. | PG5, PG6, PG7 | Done: §8 classifies every note (all forty-two). |
 | **PM-2 — Keep the survey current** | Update §4's prefix table and §8's matrix whenever a note is added or a section appears. | PG5, PG9 | A new note appears in both tables in the same change that adds it. |
 | **PM-3 — Optional structural lint** | ✅ `Test/ProposalDocsTests.cpp` (`[docs]`) checks front matter, §1 map ↔ headings and References; documented in `TESTING.md`. The map-based rule admits every §3 exception without a hard-coded list. | PG8 | Done: `./Test/WasmJit '[docs]'` runs and passes. |
 | **PM-4 — Put References last, and keep it there** | ✅ Move every appendix/log/status section that trailed References to sit before it (eight proposals, `API_ABI_STABILITY.md`, `EMBEDDING_SURFACE.md`, `WRITING_A_BACKEND.md`), renumber the affected sections and their citations, and state the rule in §2.2/§2.3 and `DOCUMENTATION.md` §9. | PG10 | Done 2026-11-13: `[docs][references]` passes, and the rule is enforced rather than remembered. |
@@ -280,12 +280,13 @@ authoritative per-item status is each note's §7 plan.
 | `TYPE_IMPORTS.md` | 9 | canonical | none | — | conforms exactly |
 | `TYPE_MODEL.md` | 9 | canonical | §2 "What a unified type store must guarantee"; §3 "What the type store is free to choose" | — | conforms exactly (internal design note) |
 
-Reading (re-checked 2026-11-18, working tree on `dcec0a7`): **twenty-nine**notes match §2 exactly; **two** reword §2/§3 and keep the nine slots
+Reading (re-checked 2026-11-18, working tree on `dcec0a7`): **twenty-nine** notes match §2 exactly; **two** reword §2/§3 and keep the nine slots
 (`SIMD.md`, `THREADS.md`); **ten** put a section before the references
 (`COMPILER_POLICY.md`, `COMPONENT_MODEL.md`, `CONFIGURATION.md`, `GC.md`,
 `JS_INTEGRATION.md`, `LEGACY_EXCEPTIONS.md`, `MEMORY_PROVIDER.md`,
 `SHARING_LINEAR_MEMORY.md`, `STACK_SWITCHING.md`, `SYNTHETIC_OBJECTS.md`), so
-their References is §10, §11, §16 or §17 rather than §9 — `JS_INTEGRATION.md`
+their References is §10, §11 or §16 rather than §9 (the one unnumbered appendix,
+`SYNTHETIC_OBJECTS.md` Appendix A, keeps §9) — `JS_INTEGRATION.md`
 among them also surveys seven proposals; and **one** uses the grouped variant
 (`SMALL_PROPOSALS.md`). That is all forty-two notes. No note is missing a slot,
 none is missing its front matter, and no note puts anything after its references.

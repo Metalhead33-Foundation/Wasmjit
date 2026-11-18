@@ -248,7 +248,7 @@ The staged history is worth keeping because it is how the change was verified:
 | Stage | What changed | Result |
 |---|---|---|
 | **C** (earlier) | `Runtime` owns a `Store`; `Store::current()` reads a thread-local `Scope`, falling back to the global | Two runtimes already had independent heaps, but a process-wide fallback remained |
-| **B1** | Every parser entry point takes `Store&`; artifacts carry the reference (44 + 21 + 6 call sites) | Behaviour-preserving, 11,345 assertions at the time (the suite's *current* tally is owned by [`TESTING.md`](TESTING.md), not repeated here) |
+| **B1** | Every parser entry point takes `Store&`; artifacts carry the reference (44 + 21 + 6 call sites) | Behaviour-preserving, 11,345 assertions at the time (the suite's tally has one home, [`TESTING.md`](TESTING.md), whose snapshot is dated; it is not repeated here) |
 | **B2** | Instances, components, continuation workers, the GC heap, strings, the resolver and `wasm_exn_create` read the carrier object; the `Runtime` stops installing scopes | The only remaining callers were the backend's string helpers |
 | **B3** | Backend helpers take the `VMContext`; the singleton and the thread-local are deleted | No `Store::current()`/`global()`/`Scope` anywhere in `WasmBase/` or `LibJit/` |
 
@@ -803,7 +803,7 @@ check. The embedding surface is what the installed `wasmjit/wasmjit.hpp` exposes
 
 **Snapshot (2026-11-18, working tree on `dcec0a7`):** the default suite is
 23,354 assertions in 877 cases; `[bindings]` is 957/44, `[docs]` is 1119/4,
-`[runtime]` 180/22, `[backendabi]` 71/6, `[tiers]` 258/3, and Doxygen is
+`[runtime]` 180/22, `[backendabi]` 71/6, `[tiers]` 263/3, and Doxygen is
 warning-free. Re-run the tagged cases after changing a schema, emitter or this
 note's code paths.
 
@@ -819,7 +819,7 @@ note's code paths.
 | `[backendabi]` (**2026-11-13**) | 71 assertions / 6 cases, green | The POD signature/layout views (`WasmBackendAbi.hpp`) match `ABI.md`'s tuple rule, and the C views in `wasmjit_backend.h` round-trip to and from them (`BACKEND_PLUGIN_ABI.md` §4.4). |
 | `[plugin]` | 50 assertions / 9 cases, green | Load by path and by name, a real example plugin, and every refusal path (missing file, no query symbol, unknown name, descriptor ABI, core ABI, failing `create`). |
 | `[compilation-policy]` | 30 assertions / 3 cases, green | The policy vocabulary, the capability query, and the ladder's ordering (`COMPILER_POLICY.md` §8.2). |
-| `[tiers]` (**2026-11-13**) | 258 assertions / 3 cases, green | Every header is classified exactly once, the umbrella matches the embedder tier, and every public header has a compile-only TU (`.inc` fragments excepted). |
+| `[tiers]` (**2026-11-18**) | 263 assertions / 3 cases, green | Every header is classified exactly once, the umbrella matches the embedder tier, and every public header has a compile-only TU (`.inc` fragments excepted). |
 | Public-header self-containment test | **Present** (2026-11-13) | **51** TUs under `Test/headers/`, enforced by `[tiers]`. |
 | Install / out-of-tree consumer test | **Present** (2026-10-29) | `Test/install-check.sh`: `make install INSTALL_ROOT=...`, then a consumer built through `wasmjit.pc` runs. |
 | Symbol-hygiene check | **3,239 exported symbols, 2,110 strong** (2026-11-13, `build/Desktop-Debug`) | `-fvisibility=hidden` + `WASMJIT_API`; the remaining count is the header-declared surface. `Test/abi-check.sh` freezes the strong-symbol set in `Test/abi/libWasmBase.exports` and fails on a removal. |

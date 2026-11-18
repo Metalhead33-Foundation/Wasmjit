@@ -304,7 +304,7 @@ a flat tree is. The hierarchy is therefore built by four index pages:
 
 | Index page | Id | Children |
 |---|---|---|
-| [`index.md`](index.md) | `docs_index` | the 19 notes in `docs/`, plus the three child folders and the ABI-baseline page |
+| [`index.md`](index.md) | `docs_index` | the 20 notes in `docs/` (every `.md` but `index.md`), plus the `proposals/`, `languages/` and `backends/` folders |
 | [`proposals/index.md`](proposals/index.md) | `proposals_index` | the 40 proposal notes |
 | [`languages/index.md`](languages/index.md) | `languages_index` | the 17 language notes (the `LF-1` set and the `LF-2` reports) |
 | [`backends/index.md`](backends/index.md) | `backends_index` | the one frozen backend history note, plus the two backend pages |
@@ -323,13 +323,13 @@ which produces:
 WasmJit            (README.md, the main page)
 ├── Direction, Feature completeness, …   (the README's own sections)
 └── docs                                 (docs/index.md)
-    ├── ABI, API/ABI stability, …        (19 notes, each with its own sections)
+    ├── ABI, API/ABI stability, …        (20 notes, each with its own sections)
     ├── backends                         (docs/backends/index.md)
     │   └── Backend history             (1 frozen record)
     ├── languages                        (docs/languages/index.md)
-    │   └── Triage, Clustering, Charters, Evidence, LF-2 …   (17 study notes)
+    │   └── Triage, Clustering, Charters, Evidence, LF-2 …   (24 study notes)
     └── proposals                        (docs/proposals/index.md)
-        └── GC, SIMD, THREADS, …         (40 notes)
+        └── GC, SIMD, THREADS, …         (42 notes)
 ```
 
 **Adding a note** takes three steps: create the file; append `{#doc_what_it_is}`
@@ -372,7 +372,7 @@ it cannot resolve. The two backend pages and the ABI-baseline page are therefore
 **Why the ids are explicit.** Doxygen derives an id from the path when it has to
 (`md_docs_2TESTING`): it changes when the file moves and reads like a hash. An
 explicit `{#doc_testing}` is stable, greppable, and is what a cross-note link can
-target (`[the tree](DOCUMENTATION.md#doc_documentation)`, `[GC](../proposals/GC.md)`
+target (`[the tree](DOCUMENTATION.md#doc_documentation)`, `[GC](proposals/GC.md)`
 style links keep working because the file links resolve to the page).
 
 **Enforced, not remembered.** `./Test/WasmJit '[docs]'` fails when

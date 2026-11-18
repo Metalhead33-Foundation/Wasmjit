@@ -230,8 +230,8 @@ this revision did about them:
 
 | Claim | Was | Now |
 |---|---|---|
-| `PROPOSALS.md` §7 `PM-1` "Done: §8 classifies every note (all thirty-six)" | 36 | 39, matching its own §4/§8 |
-| `DOCUMENTATION.md` §9 tree diagram "21 notes / 15 study notes / 36 proposals" | 21/15/36 | 21 in `docs/`, 16 in `languages/`, 39 in `proposals/`, matching its own §9 table |
+| `PROPOSALS.md` §7 `PM-1` "Done: §8 classifies every note (all thirty-six)" | 36 | 39 at the time, re-measured 2026-11-18 as **42** (`§4`/`§8`) |
+| `DOCUMENTATION.md` §9 tree diagram "21 notes / 15 study notes / 36 proposals" | 21/15/36 | re-measured 2026-11-18: **20** in `docs/`, **24** in `languages/`, **42** in `proposals/`, with the convention stated ("every `.md` but `index.md`") |
 | `DOCUMENTATION.md` §8 and `README.md` "all 69 headers" | 69 | a predicate ("every header outside `extern/`") plus the measured count |
 | `DOCUMENTATION.md` §6 "the strict pass reports the gap counted in §8" vs §8's "0 undocumented declarations" | two contradictory claims | both replaced by the measured split: default render 0 warnings (the gate); strict pass 1,810 items (1,477 `\param`, 322 `\return`, 11 no-block, all `Asmjit/`) |
 | `README.md` "the default suite is 11,011 assertions / 442 cases" | 11,011 / 442 | the current run, dated |
