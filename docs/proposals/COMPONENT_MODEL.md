@@ -906,17 +906,21 @@ external prerequisite is needed for the tooling-side milestones.
   flat and memory representations. Lowering a component call *serialises* those
   values into a buffer; it must not allocate GC objects. Sharing the `TypeRegistry`
   (CMD9) is about interning, not about unifying the two ASTs.
-- **[`SYNTHETIC_OBJECTS.md`](SYNTHETIC_OBJECTS.md)** — a feasibility study of a
-  GObject-shaped host object runtime, whose unit is the *synthetic object*: the
-  object-side analogue of §4.6's synthetic module (a host-defined class reached
-  through an integer, described by a host descriptor, with no engine object). Its
-  wire half is this note's `resource` + `own`/`borrow` + `resource.drop`; the
-  non-redundant half is a dynamic object model (properties, signals, reflection,
-  interfaces), which belongs in a WIT package plus a host implementation, not in
-  `WasmBase/`.
-- **[`../TYPE_IDENTITY.md`](../TYPE_IDENTITY.md) §13** — why a host type registry
-  is a third identity domain, and why nominal GType-style types cannot join
-  Wasm’s structural `match`.
+- **[`SYNTHETIC_OBJECTS.md`](SYNTHETIC_OBJECTS.md)** — a study **and, since
+  revision 2, a plan** of a GObject-shaped host object runtime, whose unit is the
+  *synthetic object*: an object of a host-registered Wasm type, reached as
+  `(ref $T)` where the toolchain emits GC refs and through an integer handle
+  everywhere else, described by a host descriptor. Revision 2 moves the identity
+  and the allocation into the engine (`TypeId` + `GcHeap`, `SO-1`) and keeps the
+  object model out (`SOD6`). Its wire half is this note's `resource` + `own`/`borrow`
+  + `resource.drop`; the non-redundant half is a dynamic object model (properties,
+  signals, reflection, interfaces), which belongs in a WIT package plus a host
+  implementation, not in `WasmBase/`.
+- **[`../TYPE_IDENTITY.md`](../TYPE_IDENTITY.md) §13** — why a host **opaque**
+  type registry is a third identity domain, and why nominal GType-style types
+  cannot join Wasm’s structural `match`. Its 2026-11-18 amendment excludes a
+  *host-registered Wasm type* from that domain: it interns into the core one
+  (`SYNTHETIC_OBJECTS.md` A.14.2).
 - **[`../ABI.md`](../ABI.md)** — component host calls are the one place where the
   "no trampolines, bake the `VMContext*`" stance has to give: a lifted/lowered
   function is a generated adapter even though a plain cross-module `call` is not.

@@ -45,7 +45,7 @@ applies to `proposals/`, `languages/` and `backends/`.
 | check whether a second code generator may begin | \subpage doc_readiness_audit | `G3` and `LF-0a` in one sweep, the seam inventory, the pinned snapshot |
 | decide whether something is an engine gap or an out-of-scope boundary | \subpage doc_scope | the triage rule, the embedder/text/encoding-blocked tables, the recorded deviations |
 | find a per-proposal note | \subpage proposals_index | the per-proposal notes: spec demands → shipped state → gaps → deviations → plan → tests |
-| design a cross-language object model, or ask whether “C can use a Wasm GC object” is a gap | [proposals/SYNTHETIC_OBJECTS.md](proposals/SYNTHETIC_OBJECTS.md) | the synthetic-object convention, the GObject precedent, the measured wire, and what the Component Model already owns |
+| design a cross-language object model, or ask whether “C can use a Wasm GC object” is a gap | [proposals/SYNTHETIC_OBJECTS.md](proposals/SYNTHETIC_OBJECTS.md) | the host-registered object type, the GObject precedent, the measured wire, what the Component Model already owns, and `SO-1`…`SO-5` |
 | find a backend slice, defect or measurement | \subpage backends_index | the current backend facts, the two backend pages, and the frozen `HISTORY.md` |
 | find a language study | \subpage languages_index | the `LF-1` triage, the `LF-2` arms, the `LF-4` component arms, the verdicts and engine findings |
 
@@ -62,7 +62,7 @@ and a document that mixes kinds names the one home each fact has
 | **Contract / reference** | a timeless statement about shipped behaviour; a change needs a milestone decision, not a commit | [`ABI.md`](ABI.md), [`LAYERING.md`](LAYERING.md), [`SAFETY.md`](SAFETY.md), [`THREADSAFETY.md`](THREADSAFETY.md), [`VALIDATION.md`](VALIDATION.md), [`DIAGNOSTICS.md`](DIAGNOSTICS.md), [`CONFIGURING.md`](CONFIGURING.md), [`WRITING_A_BACKEND.md`](WRITING_A_BACKEND.md), [`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md) |
 | **Contract + dated snapshot** | the same, plus a measured number that is stamped with a date and a commit | [`TESTING.md`](TESTING.md), [`EMBEDDING_SURFACE.md`](EMBEDDING_SURFACE.md) §4.7/§17, [`TYPE_IDENTITY.md`](TYPE_IDENTITY.md), [`TRAP_CLEANUP.md`](TRAP_CLEANUP.md), [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §6/§11, [`READINESS_AUDIT.md`](READINESS_AUDIT.md) |
 | **Plan** | an ID, a `Done when`, and a named owner; a milestone nobody opened is not a plan | `proposals/*.md` §7, [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §10, [`LANGUAGE_FEASIBILITY.md`](LANGUAGE_FEASIBILITY.md) |
-| **Study** | a question answered with evidence; **it opens no engine work**, and its verdict may be “boundary” | [`proposals/SYNTHETIC_OBJECTS.md`](proposals/SYNTHETIC_OBJECTS.md), [`proposals/SHARING_LINEAR_MEMORY.md`](proposals/SHARING_LINEAR_MEMORY.md) §10/§12, [`TYPE_IDENTITY.md`](TYPE_IDENTITY.md) §13, [`proposals/LEGACY_EXCEPTIONS.md`](proposals/LEGACY_EXCEPTIONS.md), [`languages/`](languages/index.md) |
+| **Study** | a question answered with evidence; **it opens no engine work**, and its verdict may be “boundary” | [`proposals/SHARING_LINEAR_MEMORY.md`](proposals/SHARING_LINEAR_MEMORY.md) §10/§12, [`TYPE_IDENTITY.md`](TYPE_IDENTITY.md) §13, [`proposals/LEGACY_EXCEPTIONS.md`](proposals/LEGACY_EXCEPTIONS.md), [`languages/`](languages/index.md) |
 | **Non-goal** | a deliberate boundary: not debt, not counted in a completeness meter | [`SCOPE.md`](SCOPE.md) §3–§6, including §3.1/§3.2's synthetic modules and objects |
 
 Two consequences worth stating, because both were live ambiguities:
@@ -76,6 +76,11 @@ Two consequences worth stating, because both were live ambiguities:
   idea was studied and refused, the owner of that verdict is
   [`SCOPE.md`](SCOPE.md) §6 or the study itself — never the gap register, which
   counts only what the engine owes.
+- **A note may stop being only a study.** `SYNTHETIC_OBJECTS.md` revision 2 is the
+  first: its Appendix A is still the study (the wire measurement, the backings, the
+  arena), and its §7 now opens `SO-1`…`SO-5`, so the note is read as a **plan**
+  whose evidence is the appendix. The kind a sentence belongs to is the section's,
+  not the file's.
 
 ## 3. What is deliberately *not* a separate document
 

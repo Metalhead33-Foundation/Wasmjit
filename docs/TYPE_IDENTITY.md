@@ -718,6 +718,16 @@ core/component identity is **ENG**; a host registry and its descriptors are
 **EMB**; generated descriptors and bindings are **TOOL**; C’s inability to
 declare a typed `(ref $T)` is **LANG**.
 
+**Amendment (2026-11-18, `proposals/SYNTHETIC_OBJECTS.md` revision 2).** This
+section distinguishes a *host object type* (nominal, host-side, §13.3's third
+domain) from a Wasm core type. That distinction stands for a **native or opaque**
+host object, which is what §13 studies. It does **not** apply to a
+**host-registered Wasm type**: when the host supplies a canonical `struct`/`array`
+that the Store interns (`SO-1`), the type belongs to the core domain, dedup is
+`TypeRegistry`'s, and `ref.test`/`ref.cast` work; the descriptor then holds the
+name→`TypeId` map, not an identity (that note's A.14.2). Read §13.3's “third
+domain” as the domain of an opaque host object, not of everything a host defines.
+
 ### 13.1 The question
 
 [`proposals/SYNTHETIC_OBJECTS.md`](proposals/SYNTHETIC_OBJECTS.md) studies a
