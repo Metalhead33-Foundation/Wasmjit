@@ -454,6 +454,16 @@ public:
 	// backend compiled for it, and keeps the Module loaded so it can be
 	// instantiated again. Refused while a call is in flight on that instance.
 	bool unload(const Module& module);
+	// Unload the image (the *unmap* half), added 2026-11-18: drops the runtime's
+	// reference to the parsed Module, so the image dies with the embedder's last
+	// handle. Refused while an instance exists — an instance points into its
+	// image — and while the store retains one from a failed instantiation (that
+	// record owns the image, so the bytes survive either way; the refusal says
+	// so). `loadBytes`/`loadFile` return that handle; `instance.sourceModule()`
+	// is the same image from the instance side.
+	bool unloadImage(const Module& module);
+	bool hasImage(const Module& module) const noexcept;
+	std::size_t imageCount() const noexcept;
 
 	// Calls: the lookup happens once; the ABI does not change.
 	template <typename Ret, typename... Args>
@@ -507,7 +517,7 @@ private:
 | `create(backendName)` rather than `create(JitBackend)` | A plugin-loaded backend cannot be added to a frontend enum without recompiling the frontend ([`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md) §4) |
 | `std::unique_ptr<Runtime>` | The runtime owns the store and every instance; sharing it by value would make ownership ambiguous, and there are no cross-runtime handles to share (§4.4) |
 | `ModuleInstance&`, not `unique_ptr<ModuleInstance>` or `ModuleInstance*` | The runtime owns the instance (§4.1), so an owning pointer would contradict the ownership table; a reference states the borrow |
-| `std::shared_ptr<const Module>` | An instance refers to its module for its whole life; the runtime keeps it alive and may cache by content hash. `const` because a validated module is immutable |
+| `std::shared_ptr<const Module>` | An instance refers to its module for its whole life; the runtime keeps it alive and may cache by content hash. `const` because a validated module is immutable. It is also the teardown handle: `unloadImage` drops the runtime's reference, so the image is freed when the embedder's last `shared_ptr` goes, and `instance.sourceModule()` is the same image seen from the instance |
 | No `Result<T>` | The engine's error channels are `WASM::Trap` and standard exceptions; a third would be a frozen-surface decision, not a convenience |
 | `callExport<Ret>` over `callCallable` | The typed path *is* the ABI (§2 step 6); `callExport` is a lookup plus `callCallable`, never a second convention, and the multi-result buffer keeps its explicit form |
 | `createAgent()` on the runtime | Agents are per thread, not per runtime, but the runtime is where an embedder looks; it is the role §3.2 row 4 names |
@@ -790,18 +800,19 @@ check. The embedding surface is what the installed `wasmjit/wasmjit.hpp` exposes
 
 ## 10. Test survey
 
-**Snapshot (2026-11-13, working tree on `a2a361e`):** the default suite is
-22,881 assertions in 843 cases; `[bindings]` is 957/44, `[docs]` is 1055/4,
-`[backendabi]` 71/6, `[tiers]` 258/3, and Doxygen is warning-free. Re-run the
-tagged cases after changing a schema, emitter or this note's code paths.
+**Snapshot (2026-11-18, working tree on `dcec0a7`):** the default suite is
+23,331 assertions in 877 cases; `[bindings]` is 957/44, `[docs]` is 1096/4,
+`[runtime]` 180/22, `[backendabi]` 71/6, `[tiers]` 258/3, and Doxygen is
+warning-free. Re-run the tagged cases after changing a schema, emitter or this
+note's code paths.
 
 | Evidence | Result | Reading |
 |---|---|---|
-| Default suite (**2026-11-13**, `a2a361e`) | **22,881 assertions in 843 cases, green** | Supersedes the 2026-11-05 run (18,572 / 661). The 2026-10-29 run (11,454 / 481) in the milestone notes remains the historical baseline for `ES-1`. |
-| `[docs]` lint (**2026-11-13**) | **1055 assertions / 4 cases, green** | Note shape for `docs/proposals/` **and** the note tree for all four folders (§9 of `DOCUMENTATION.md`), plus `[references]`: no document under `docs/` puts a section after References. |
+| Default suite (**2026-11-18**, `dcec0a7` + the §4.7 image change) | **23,331 assertions in 877 cases, green** | Supersedes the 2026-11-13 run (22,881 / 843). The 2026-10-29 run (11,454 / 481) in the milestone notes remains the historical baseline for `ES-1`. |
+| `[docs]` lint (**2026-11-18**) | **1096 assertions / 4 cases, green** | Note shape for `docs/proposals/` **and** the note tree for all four folders (§9 of `DOCUMENTATION.md`), plus `[references]`: no document under `docs/` puts a section after References. |
 | `[callcache]` (**2026-11-04**) | **18 assertions / 4 cases, green** | `ModuleCallCache` ffi calls, `v128` by value, multi-result calls and `ComponentCallCache` flat calls. |
 | `[bindings]` (**2026-11-13**) | **957 assertions / 44 cases, green** | The §11.8 tool: descriptor→schema, direction-specific module/component imports/exports (G2H/H2G/G2G), complete-schema export/re-import and editorial name/description fields, opaque reference spelling, `stringref` through every emitter, C header (compiled as C11 and C++23), Rust, TypeScript, AssemblyScript, Zig, Kotlin, MoonBit, Go, Dart, Java, C#, F#, Python, Ruby, Lua, Swift, D, Nim, Crystal, Ada, Pascal and Haskell emission, a compiled C++ adapter (call/trap/import/reference/multi-value/retain-drop), SWIG and Glue candidate validation, `VMContext*` candidate schemas, WIT JSON/text input and world projection, direction-aware C++ typedefs/source, non-function entry comments, producer toolchain evidence, defined-reference kind naming, exact-reference flags, GC struct/array definitions, Rust `#[link(wasm_import_module)]`/`#[link_name]` declarations and export skeletons, C `WASMJIT_WASM_IMPORT` annotations, per-toolchain compile checks, and a `wasm-opt --all-features -O2` signature comparison on five fixtures. |
-| `[runtime]` (**2026-11-13**) | 151 assertions / 19 cases, green | Load → instantiate → call, idempotence, named errors, the `MF-2` guard, agents, the store-scoping proof (two stores, two heaps, an artifact records its store), and the unloader (one instance destroyed, the module re-instantiated, a provisional backend's code freed twice over). |
+| `[runtime]` (**2026-11-18**) | 180 assertions / 22 cases, green | Load → instantiate → call, idempotence, named errors, the `MF-2` guard, agents, the store-scoping proof (two stores, two heaps, an artifact records its store), the unloader (one instance destroyed, the module re-instantiated, a provisional backend's code freed twice over), and the three image-teardown cases: `unloadImage` refused while an instance exists, the runtime's pin released so the last handle frees the parse, a released image refused by `instantiate` while another runtime's image stays foreign, and a retained failed instance owning its image, so dropping the embedder's handle frees nothing until the store does. |
 | `[concurrency]` | 80 assertions / 13 cases, green | The model claim, the `Single` refusal, re-entrant invocation across threads, the `MF-2` guard, the `MF-3`/`MF-4` safepoint rules and the multi-agent suite. |
 | `[multiagent]` | 51 assertions / 6 cases, green | Two agents on one instance: acquire-release, wait/notify, shared-global RMW, traps, GC stress, reference barrier. |
 | `[backendabi]` (**2026-11-13**) | 71 assertions / 6 cases, green | The POD signature/layout views (`WasmBackendAbi.hpp`) match `ABI.md`'s tuple rule, and the C views in `wasmjit_backend.h` round-trip to and from them (`BACKEND_PLUGIN_ABI.md` §4.4). |
@@ -2559,7 +2570,9 @@ Status: feasibility study (2026-11-12; implementation snapshot `9b2ca92`),
 revision 2 (2026-11-18) adds §16.12 — the wire claim measured in seven
 toolchains — and §16.13, the bridge to shared linear memory: what an object
 runtime looks like when the objects live in an arena two modules both address.
-It records no engine code, no header and no frozen-surface change. It
+Revision 3 records the other half of module teardown in code (§4.7: `unloadImage`
+for the parsed image, next to `unload` for the instance). This section itself
+proposes no engine code, no header and no frozen-surface change. It
 answers the question left by §12 and
 [`languages/LF2_ABI_INTEROP.md`](languages/LF2_ABI_INTEROP.md)
 §6: could a GObject/GLib-shaped host runtime be the common object model that

@@ -284,7 +284,8 @@ through qmake:
 - [`WasmBase/WasmJit.hpp`](WasmBase/WasmJit.hpp) is the umbrella header over the
   embedder tier, [`WasmBase/WasmRuntime.hpp`](WasmBase/WasmRuntime.hpp) is the
   engine instance (`WASM::Runtime`: load, instantiate, call, safepoint, agents,
-  profile), and [`WasmBase/WasmVersion.hpp`](WasmBase/WasmVersion.hpp) carries
+  profile, and the two unload halves — `unload` for an instance, `unloadImage`
+  for the parsed image), and [`WasmBase/WasmVersion.hpp`](WasmBase/WasmVersion.hpp) carries
   `WASMJIT_VERSION_*`, `WASMJIT_ABI_VERSION` and the `WASM::versionString()` /
   `WASM::abiVersion()` runtime queries. Backends are selected by name
   (`Runtime::create("libjit")`) through `WasmBase/WasmBackendRegistry.hpp`; a

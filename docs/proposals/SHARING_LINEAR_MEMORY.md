@@ -14,7 +14,10 @@ coexistence is now per language — C, C++, Rust, Zig and AssemblyScript can
 import a shared memory; Go and TinyGo cannot. It also corrects revision 3's
 `dlclose` claim (§12.2 — unloading shipped on 2026-11-01) and connects the note
 to the host object runtime: objects that live in the arena are
-[`EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) §16.13. Contains no engine code.
+[`EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) §16.13. **Revision 5
+(2026-11-18) closes the other half of rung 8 in code**: `Runtime::unloadImage`,
+`hasImage` and `imageCount` release the parsed image once no instance holds it,
+so §12.2's table is now an asymmetry of *guest teardown* only.
 Audience: anyone writing the embedding host for a product that mixes one big
 module with many small ones (`WASM::Runtime`, `RegistryImportResolver`, the
 `HostBridge` boundary), anyone touching `Store`/`LinearMemory`/`MemoryBudget`, and
@@ -894,17 +897,17 @@ back, and leaves the `Module` parsed so the next `instantiate` is the reload
 
 What remains is the *asymmetry*, and a host will trip over it:
 
-| `dlclose` does | `Runtime::unload` does | Where it is decided |
+| `dlclose` does | `Runtime::unload` / `unloadImage` do | Where it is decided |
 |---|---|---|
-| unmap the image | keeps the parsed `Module` in `Runtime::modules_` for the runtime's lifetime: the *instance* goes, the *image* stays | `WasmRuntime.hpp` “Unloading” |
-| run the library's destructors | runs nothing in the guest — a module that needs a finaliser must export one, and the host must call it **before** `unload` | §14's initializer contract is its natural `fini` half |
-| — (a live caller is undefined behaviour) | **refuses** to unload while `ModuleInstance::inCall()` is true | `WasmRuntime.cpp` |
+| unmap the image | `unload` drops the *instance*, `unloadImage` (2026-11-18) drops the runtime's reference to the parsed *image* — which is freed with the embedder's last handle, since `loadBytes`/`loadFile` return exactly that handle | `WasmRuntime.hpp` “Image lifetime” |
+| run the library's destructors | runs nothing in the guest — a module that needs a finaliser must export one, and the host must call it **before** either unload | §14's initializer contract is its natural `fini` half |
+| — (a live caller is undefined behaviour) | **refuses** to unload an instance while `ModuleInstance::inCall()` is true, and refuses to release an image while it still has an instance *or* while the store retains one from a failed instantiation | `WasmRuntime.cpp` |
 | forget the symbol pointers | does not detect a stale `Callable`, `ModuleInstance&` or reference — a documented precondition, not a check | `WasmRuntime.hpp` |
 | unmap the code generator as well | never unmaps a backend plugin: “once used, never unload at all” | [`../BACKEND_PLUGIN_ABI.md`](../BACKEND_PLUGIN_ABI.md) rule 8 |
 
-So the DLL analogy is honest up to and including unloading. What it does not
-cover is the *guest's own teardown* and the *plugin's own image* — and “unload”
-stays the one thing a linker cannot give you either.
+So the DLL analogy is honest up to and including unloading. What it still does
+not cover is the *guest's own teardown* and the *plugin's own image* — and the
+engine cannot give you either, because neither is a linker's job.
 
 ### 12.3 What the engine would have to provide: a capability ladder
 
@@ -922,15 +925,15 @@ A/B/C/E vocabulary.
 | 5 | **assign data/stack/heap layout across modules** | ❌ build-time only (`wasm-ld --global-base`, `--initial-memory`) | a representation of a module the engine can *rewrite*: data-segment offsets and global initialisers, before validation | **E** |
 | 6 | **rebind an already-built module to that layout** | ❌ | the same rewrite, plus arithmetic on every active data segment and every `i32.const`/`global.set` that seeds a base | **E** |
 | 7 | lazy binding / `PLT`-style call fixups | ❌ (not needed: a `Callable` is bound before the first call) | an indirection table the engine owns | B |
-| 8 | unload / reload a module | ✅ **since 2026-11-01**: `Runtime::unload` destroys one instance and calls `ModuleInstantiator::releaseInstance` so the backend gives its executable memory back; the `Module` stays loaded, so `instantiate` again is the reload | — (shipped) | A |
+| 8 | unload / reload a module | ✅ **since 2026-11-01**, both halves since 2026-11-18: `Runtime::unload` destroys one instance and calls `ModuleInstantiator::releaseInstance` so the backend gives its executable memory back; `Runtime::unloadImage` then drops the runtime's reference to the parsed image, which frees it with the embedder's last handle. With the image kept, `instantiate` again is the reload | — (shipped) | A |
 | 9 | per-tenant accounting | ❌ | §7 `SLM-5` | C |
 
 **Rungs 5–6 are the whole question, and they are explicitly out of scope for
 the short term** (a decision, not an omission — §12.7 keeps the trigger that
 would reopen it). Everything below them is the resolver we already have; rung 7
-buys little (the binding is already eager and cheap); **rung 8 shipped**, which is
-what makes "the engine has no `dlclose`" no longer true: an instance can be given
-back without touching its siblings, and re-instantiating the same `Module` is the
+buys little (the binding is already eager and cheap); **rung 8 shipped**, both
+halves: an instance can be given back without touching its siblings, an image can
+be released once no instance holds it, and re-instantiating a kept `Module` is the
 reload. Rung 9 is a separate decision that a linker does not solve. So the honest
 phrasing of "should the engine link?" is:
 
@@ -952,7 +955,7 @@ rather than leaving the phrase "grow a linker" to imply something cheaper.
 | "no unresolved symbols at load" | **no, already there** | `UnresolvedImportException` at instantiation |
 | "one canonical type across modules" | **no, already there** | store-scoped `TypeId` |
 | "reload a script without restarting" | **no** — that is teardown, not linking | **shipped 2026-11-01**: `Runtime::unload` then `instantiate` again (the `Module` stays loaded) |
-| "unload a library" | **no** — a linker is not a loader | **shipped 2026-11-01** for the instance and its code; the *Module* object and a plugin's mapped image still live until the runtime dies |
+| "unload a library" | **no** — a linker is not a loader | **shipped 2026-11-01** for the instance and its code, and **2026-11-18** for the parsed image (`Runtime::unloadImage`); a backend *plugin*'s mapped image still lives until the process ends (`BACKEND_PLUGIN_ABI.md` rule 8) |
 | "a smaller artifact, deduped functions" | **no** — that is link-time optimisation, i.e. the *build's* job | `wasm-ld` (`--gc-sections`, `-r`) |
 | "ship modules without needing a toolchain" | **yes** | the embedder runs `wasm-ld` today |
 

@@ -357,10 +357,12 @@ ModuleInstance& Runtime::adoptInstance(const Module& module, ImportResolver& imp
 		// A segment or start failure can leave `ref.func` values in a
 		// store-owned imported table. Retain the partially built instance and
 		// the backend state its code lives in until the store dies, so those
-		// references stay callable (the spec's failed-instantiation rule).
+		// references stay callable (the spec's failed-instantiation rule). The
+		// record owns the image too: the instance borrows it, and the embedder's
+		// handle may be gone by the time the store releases it.
 		if (failed)
 			store_.retainFailedInstance(std::move(failed), backend.instantiator,
-					backend.keepAlive);
+					backend.keepAlive, imageOf(module));
 		throw;
 	}
 	if (!instance)
@@ -401,6 +403,48 @@ bool Runtime::unload(const Module& module)
 	return true;
 }
 
+bool Runtime::unloadImage(const Module& module)
+{
+	// The instance points into the image — its `module` back-reference, the
+	// interned type ids, the active segments — so the image may not go first.
+	// Unlike a stale `Callable`, this one the runtime *can* check, so it does.
+	if (instanceOf(module) != nullptr)
+		throw std::runtime_error("cannot unload a module image while its instance"
+				" exists; unload the instance first (Runtime::unloadImage)");
+
+	// A failed instantiation can be retained by the store (a `ref.func` written
+	// into a shared table before the trap keeps its instance callable), and that
+	// instance borrows this image. The retention owns the image itself, so the
+	// memory would survive anyway; refusing says so instead of leaving
+	// `hasImage` false while the bytes are still here.
+	if (store_.retainsInstanceOf(module))
+		throw std::runtime_error("cannot unload a module image while the store"
+				" retains an instance of it; a failed instantiation keeps one alive"
+				" for the table slots that name its functions"
+				" (Store::retainFailedInstance)");
+
+	for (auto it = modules_.begin(); it != modules_.end(); ++it) {
+		if (it->get() != &module)
+			continue;
+		// Dropping the runtime's reference is the whole operation: when this was
+		// the last reference the image dies here, which is why the caller keeps
+		// its own handle alive across the call.
+		modules_.erase(it);
+		return true;
+	}
+	return false;
+}
+
+bool Runtime::hasImage(const Module& module) const noexcept
+{
+	return ownsModule(module);
+}
+
+std::size_t Runtime::imageCount() const noexcept
+{
+	return modules_.size();
+}
+
 BackendCompilationCapabilities Runtime::compilationCapabilities() const
 {
 	if (!backend_.instantiator)
@@ -419,11 +463,16 @@ bool Runtime::owns(const ModuleInstance& instance) const noexcept
 
 bool Runtime::ownsModule(const Module& module) const noexcept
 {
+	return imageOf(module) != nullptr;
+}
+
+std::shared_ptr<const Module> Runtime::imageOf(const Module& module) const noexcept
+{
 	for (const std::shared_ptr<const Module>& loaded : modules_) {
 		if (loaded.get() == &module)
-			return true;
+			return loaded;
 	}
-	return false;
+	return nullptr;
 }
 
 ModuleInstance* Runtime::instanceOf(const Module& module) noexcept

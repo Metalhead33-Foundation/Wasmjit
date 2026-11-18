@@ -554,10 +554,24 @@ public:
 	//! together with the backend state its compiled code lives in. This is a
 	//! deliberate retention, not a leak: there is no earlier safe release point
 	//! while the table slot can still be called.
-	/** \brief Retains a partially instantiated instance and its backend state. \param instance The instance that failed after segment/start work began. \param instantiator The backend seam that compiled it. \param keepAlive Opaque backend compilation state. */
+	//! The record owns `image`, so the borrowed `Module*` inside the instance
+	//! cannot outlive its source: a failed instance is released at Store
+	//! teardown, which may be after the embedder dropped its own handle. The
+	//! three-argument form below leaves the image borrowed — it is what a caller
+	//! that already owns the image uses, and keeping it keeps the exported symbol
+	//! set additive (`docs/API_ABI_STABILITY.md` G2, `Test/abi-check.sh`).
+	/** \brief Retains a partially instantiated instance, its backend state and its image. \param instance The instance that failed after segment/start work began. \param instantiator The backend seam that compiled it. \param keepAlive Opaque backend compilation state. \param image The parsed module the instance borrows; the store keeps it alive. */
+	void retainFailedInstance(std::unique_ptr<ModuleInstance> instance,
+			std::shared_ptr<ModuleInstantiator> instantiator,
+			std::shared_ptr<void> keepAlive,
+			std::shared_ptr<const Module> image);
+	/** \brief Retains a partially instantiated instance and its backend state, leaving its image borrowed. \param instance The instance that failed after segment/start work began. \param instantiator The backend seam that compiled it. \param keepAlive Opaque backend compilation state. */
 	void retainFailedInstance(std::unique_ptr<ModuleInstance> instance,
 			std::shared_ptr<ModuleInstantiator> instantiator,
 			std::shared_ptr<void> keepAlive);
+	//! True when a retained failed instance was built from `module`.
+	/** \brief Tests whether a retained failed instantiation belongs to a module. \param module Candidate module. \return true when a retained instance borrows that module. */
+	bool retainsInstanceOf(const Module& module) const noexcept;
 
 private:
 	//! The counter a category charges, or nullptr for `MemoryCategory::Other`.
@@ -659,6 +673,9 @@ private:
 	//! memories, tables, GC heap and callable registry above are still alive;
 	//! each record destroys its instance before releasing the backend keep-alive.
 	struct RetainedInstance {
+		//! Declared first so it outlives the instance that borrows it (members
+		//! are destroyed in reverse declaration order).
+		std::shared_ptr<const Module> image; //!< the parsed module, owned
 		std::shared_ptr<void> keepAlive; //!< backend compilation state
 		std::shared_ptr<ModuleInstantiator> instantiator; //!< the backend seam
 		std::unique_ptr<ModuleInstance> instance; //!< the partially built instance
