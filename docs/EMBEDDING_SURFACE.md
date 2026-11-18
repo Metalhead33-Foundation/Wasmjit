@@ -33,11 +33,12 @@ Four deliverables, in the order the questions were asked:
 4. **Versioning, soname and install** — the shipped policy (`ES-4`/`ES-5`) and how
    it ties to the frozen surfaces of `API_ABI_STABILITY.md` §2.2.
 
-Revision 32 moves References to the end (§17), which is where every note keeps
-it, and re-derives §11–§16 from the shipped tree: §2 lists the closures of P1–P6,
-§4.7 quotes the real header, and §10 re-measures the suite. Revision 31's addition
-— §16, a feasibility study of a GObject-shaped host object runtime — still records
-no implementation and opens no engine work.
+Revision 33 (2026-11-18) moves the GObject-shaped host object study out: it is
+[`proposals/SYNTHETIC_OBJECTS.md`](proposals/SYNTHETIC_OBJECTS.md) now, and §16
+keeps only the surface an embedder is handed plus the boundary. It also records
+the image half of module teardown in §4.7 (`Runtime::unloadImage`) and refreshes
+the snapshot. Revision 32 moved References to the end (§17), which is where every
+note keeps it, and re-derived §11–§16 from the shipped tree.
 
 The earlier `JitRuntime`/`JitContext`/`ModuleInstance` sketch from a different
 repository is reviewed in §5 as a **salvage list**, not a template; its
@@ -61,7 +62,7 @@ provenance and the reason its two names do not survive here are in §3.
 | §13 | What do importing modules and generated headers see when a GC module exports struct, array or string references? |
 | §14 | Can host-to-guest templates, class bridges, SWIG or Glue replace an engine reflection system? |
 | §15 | Who owns each remaining problem: engine, embedder, tooling or source language? |
-| §16 | Could a GObject-shaped host object runtime give C-family languages a common object model, how much of it is already the Component Model, what the handle wire measures in six toolchains (§16.12) — and what changes when the objects live in a shared linear memory (§16.13)? |
+| §16 | What does the engine hand an embedder who wants host objects, what is the measured wire, and where does the object model live instead? |
 | §17 | References |
 
 ## 2. What the embedder has today
@@ -801,15 +802,15 @@ check. The embedding surface is what the installed `wasmjit/wasmjit.hpp` exposes
 ## 10. Test survey
 
 **Snapshot (2026-11-18, working tree on `dcec0a7`):** the default suite is
-23,331 assertions in 877 cases; `[bindings]` is 957/44, `[docs]` is 1096/4,
+23,354 assertions in 877 cases; `[bindings]` is 957/44, `[docs]` is 1119/4,
 `[runtime]` 180/22, `[backendabi]` 71/6, `[tiers]` 258/3, and Doxygen is
 warning-free. Re-run the tagged cases after changing a schema, emitter or this
 note's code paths.
 
 | Evidence | Result | Reading |
 |---|---|---|
-| Default suite (**2026-11-18**, `dcec0a7` + the §4.7 image change) | **23,331 assertions in 877 cases, green** | Supersedes the 2026-11-13 run (22,881 / 843). The 2026-10-29 run (11,454 / 481) in the milestone notes remains the historical baseline for `ES-1`. |
-| `[docs]` lint (**2026-11-18**) | **1096 assertions / 4 cases, green** | Note shape for `docs/proposals/` **and** the note tree for all four folders (§9 of `DOCUMENTATION.md`), plus `[references]`: no document under `docs/` puts a section after References. |
+| Default suite (**2026-11-18**, `dcec0a7` + the §4.7 image change) | **23,354 assertions in 877 cases, green** | Supersedes the 2026-11-13 run (22,881 / 843). The 2026-10-29 run (11,454 / 481) in the milestone notes remains the historical baseline for `ES-1`. |
+| `[docs]` lint (**2026-11-18**) | **1119 assertions / 4 cases, green** | Note shape for `docs/proposals/` **and** the note tree for all four folders (§9 of `DOCUMENTATION.md`), plus `[references]`: no document under `docs/` puts a section after References. |
 | `[callcache]` (**2026-11-04**) | **18 assertions / 4 cases, green** | `ModuleCallCache` ffi calls, `v128` by value, multi-result calls and `ComponentCallCache` flat calls. |
 | `[bindings]` (**2026-11-13**) | **957 assertions / 44 cases, green** | The §11.8 tool: descriptor→schema, direction-specific module/component imports/exports (G2H/H2G/G2G), complete-schema export/re-import and editorial name/description fields, opaque reference spelling, `stringref` through every emitter, C header (compiled as C11 and C++23), Rust, TypeScript, AssemblyScript, Zig, Kotlin, MoonBit, Go, Dart, Java, C#, F#, Python, Ruby, Lua, Swift, D, Nim, Crystal, Ada, Pascal and Haskell emission, a compiled C++ adapter (call/trap/import/reference/multi-value/retain-drop), SWIG and Glue candidate validation, `VMContext*` candidate schemas, WIT JSON/text input and world projection, direction-aware C++ typedefs/source, non-function entry comments, producer toolchain evidence, defined-reference kind naming, exact-reference flags, GC struct/array definitions, Rust `#[link(wasm_import_module)]`/`#[link_name]` declarations and export skeletons, C `WASMJIT_WASM_IMPORT` annotations, per-toolchain compile checks, and a `wasm-opt --all-features -O2` signature comparison on five fixtures. |
 | `[runtime]` (**2026-11-18**) | 180 assertions / 22 cases, green | Load → instantiate → call, idempotence, named errors, the `MF-2` guard, agents, the store-scoping proof (two stores, two heaps, an artifact records its store), the unloader (one instance destroyed, the module re-instantiated, a provisional backend's code freed twice over), and the three image-teardown cases: `unloadImage` refused while an instance exists, the runtime's pin released so the last handle frees the parse, a released image refused by `instantiate` while another runtime's image stays foreign, and a retained failed instance owning its image, so dropping the embedder's handle frees nothing until the store does. |
@@ -2559,609 +2560,52 @@ The one-line summary is:
 > express.
 
 
-## 16. A host-provided object runtime: the GObject-shaped option (study)
+## 16. Host objects: the surface, and where the study lives
 
 Owner labels: the wire primitive (`externref`, `HostBridge`, `GcHeap`, component
 resources) is **ENG**; the object runtime, its table and its lifetime policy are
 **EMB**; the C header and the language bindings are **TOOL**; the fact that C
-cannot declare a typed `(ref $T)` is **LANG**. **No engine change is proposed.**
+cannot declare a typed `(ref $T)` is **LANG**.
 
-Status: feasibility study (2026-11-12; implementation snapshot `9b2ca92`),
-revision 2 (2026-11-18) adds §16.12 — the wire claim measured in seven
-toolchains — and §16.13, the bridge to shared linear memory: what an object
-runtime looks like when the objects live in an arena two modules both address.
-Revision 3 records the other half of module teardown in code (§4.7: `unloadImage`
-for the parsed image, next to `unload` for the instance). This section itself
-proposes no engine code, no header and no frozen-surface change. It
-answers the question left by §12 and
-[`languages/LF2_ABI_INTEROP.md`](languages/LF2_ABI_INTEROP.md)
-§6: could a GObject/GLib-shaped host runtime be the common object model that
-C-family languages use manually and GC languages wrap silently?
+This section used to carry a six-hundred-line study of a GObject-shaped host
+object runtime. The study now has its own note,
+[`proposals/SYNTHETIC_OBJECTS.md`](proposals/SYNTHETIC_OBJECTS.md), because its
+question is proposal-shaped — does the scenario demand an engine object, what shape
+does the embedder give it, and what does the Component Model already own? — while
+this document is an implementation reference. What stays here is the surface an
+embedder is actually handed, and the boundary that keeps it out of `WasmBase/`.
 
-### 16.1 Three layers, often conflated
+### 16.1 The primitive an embedder gets
 
-The question “can C use a typed `(ref $T)`?” mixes three decisions:
-
-| Layer | What it decides | Who can change it |
+| Need | What the engine ships | Anchor |
 |---|---|---|
-| **Wire representation** | one pointer-sized word per reference, or a `u32`/`u64` handle | the engine/backend ABI ([`ABI.md`](ABI.md)); already fixed |
-| **Wasm type relation** | whether the value is `(ref $T)`, `externref`, `anyref`, a resource, and whether it `match`es | the Wasm spec and the guest toolchain |
-| **Object model** | creation, fields, methods, identity, inheritance, lifetime, threading | a host runtime, an embedder, or a language runtime |
-
-A host object runtime can own the third layer. It cannot change the second for a
-C guest: a C compiler that does not emit GC reference types cannot declare a
-typed `(ref $T)` import, no matter what the host provides. What it *can* do is
-make the **value** usable: the guest carries an opaque handle and calls
-functions that the runtime implements. That is a change of API, not of type
-system.
-
-This is why the honest target is not “C understands a Wasm GC object”. It is
-“C can use a host object through a documented handle ABI, and a GC language can
-use the same object through a generated wrapper”. The two statements have
-different strengths; §16.6 separates them.
-
-**If a C compiler did gain a typed `(ref $T)` extension**, three things would
-still be true: the C code would need GC rooting/barriers at every local and
-store; field access would have to follow the Wasm GC layout, not a C `struct`;
-and the type would be the canonical Wasm type, not a C tag. The host runtime
-would become an implementation detail, not the mechanism that makes the object
-usable. That is a **LANG**/**TOOL** project, not an engine or HOR feature.
-
-“Everyone understands it” is likewise not a property a runtime can grant. It is
-either a **shared canonical Wasm type** (structural, same Store) or a **shared
-IDL/resource convention** (nominal, via WIT or a descriptor name). §16.6
-separates those two meanings; §16.8 measures the Component Model overlap.
-
-### 16.2 What GObject contributes, and what transfers
-
-GObject is the closest prior art for a C-first cross-language object system. Its
-type system is built on `GType`; its object model adds reference counting,
-properties/`GValue`, signals, interfaces and boxed types. The
-[GObject tutorial](https://docs.gtk.org/gobject/tutorial.html) and the
-[type-system concepts](https://docs.gtk.org/gobject/concepts.html) are the
-reference; the table is the judgement this study makes, not a claim that GObject
-is defective.
-
-| GObject mechanism | What it gives | Verdict for a WasmJit host runtime | Why |
-|---|---|---|---|
-| `GType` registration, names, single inheritance, interfaces | runtime type discovery and dynamic dispatch | **Adapt, do not copy** | useful as a host-side descriptor registry; GType ids are process-local registration handles, not a serialized identity |
-| `GObject` base + `g_object_ref`/`g_object_unref` | explicit shared ownership | **Adapt** | maps to a handle-table count or `HostBridge` retain/release; do not make it implicit |
-| floating references (`GInitiallyUnowned`, `g_object_ref_sink`) | construction convenience for container-owned objects | **Reject** | the ownership ambiguity is exactly what WasmJit’s “unowned at birth, first owning slot retains” rule avoids (`GC.md` RC-1) |
-| properties + `GValue`, `g_object_get`/`set` | dynamic, introspectable field access | **Optional host layer** | every access becomes a call and a type check; a typed getter/setter is cheaper and safer |
-| signals | synchronous multi-listener notification | **Optional host layer** | not an engine mechanism; re-entrancy, callback identity and thread affinity are host policy |
-| interfaces | nominal method contracts | **Adapt as a capability query** | Wasm GC has no interface types; `query_interface(handle, name) -> handle` is a host call, not a `(ref $I)` |
-| boxed types | copyable non-object data | **Map to canonical records** | a host `struct` layout must not cross; a record is the portable spelling |
-| weak references (`GWeakRef`, `g_object_weak_ref`) | non-owning observation | **Adapt as a generation-checked weak handle** | never a raw pointer; the table can null or invalidate on final release |
-| `dispose`/`finalize` two-phase destruction | manual cycle breaking | **Adapt as a host convention** | the engine has no finalizer (`ABI.md` `HostBridge`); `dispose` is useful, not an engine hook |
-| thread safety | atomic refcount, but object state/signals are caller-synchronised | **Carry the caveat** | a WasmJit instance can run on several agents; per-object affinity or an external lock is required |
-
-GLib contributes more than GObject, and most of the rest already has a
-counterpart here: `GError` maps to a Wasm exception or a `result`; `GValue` maps
-to `ComponentValue`/a canonical variant; `GMainLoop` maps to the
-`ComponentExecutor` seam; `GVariant`/`GBytes`/`GArray` map to canonical
-records/lists/byte arrays. The piece with no counterpart is the **dynamic,
-introspectable object model** — GType registration, properties, signals and
-interface queries. That is the non-redundant core of this proposal, not the
-container types or the main loop.
-
-### 16.3 The shape of a host object runtime
-
-Working name: **the host object runtime (HOR)**. No header or symbol is proposed
-by this study; the name is only a placeholder for the design.
-
-The runtime has three layers:
-
-1. **Wire layer** — a `u64`/`u32` handle, or an `externref` where the toolchain
-   can spell it. The guest treats it as opaque. A handle is not a pointer and
-   must not be dereferenced.
-2. **Object layer** — a host table entry `{type, generation, count, owner,
-   payload}` (or a Wasm GC object with a `GcHeader` `TypeId`). The table owns the
-   type descriptor and the lifetime policy.
-3. **Binding layer** — a C header, C++ RAII wrapper, Rust/Zig/Go/TinyGo wrapper,
-   and GC-language façades. Generation is a convenience; the handle ABI is
-   usable by hand.
-
-There are also three deployment choices, and they are not interchangeable:
-
-| Deployment | Where the runtime runs | What it can own | Best for |
-|---|---|---|---|
-| **Host library** | in the embedder process, reached through native imports | native host objects; `externref` payloads | existing C++ objects, OS/runtime integration |
-| **Guest Wasm module** | compiled into the same Store, in linear memory or the GC heap | guest-memory objects only; no host pointers | portability, no host imports, one implementation for every guest |
-| **Component package** | host implementation behind WIT resources | host objects, with `own`/`borrow` lifetimes | the standard cross-language contract, generated bindings |
-
-A guest-side runtime is the most portable and the least powerful: every guest
-can import the same module, but it cannot touch a host `std::string` or a native
-handle, and it must bring its own allocator. A host-side runtime reaches native
-objects but needs a per-language binding and a host ABI. A component package is
-the host-side runtime with the Component Model as its contract. This study's
-“HOR” means the host-side or component variant unless it says otherwise.
-
-The minimum operation set is deliberately small:
-
-| Operation | Contract |
-|---|---|
-| `create(type, ...)` | returns a handle, or null/typed error; type must be registered |
-| `retain(handle)` / `release(handle)` | explicit ownership; release at zero runs the host deleter |
-| `get_field(handle, field)` / `set_field(handle, field, value)` | validates type, field and generation before touching the object |
-| `call_method(handle, method, ...)` | a host function table entry; no C++ vtable crosses |
-| `type_of(handle)` / `is_a(handle, type)` | a runtime check against the host descriptor, not `ref.test` |
-| `query_interface(handle, name)` | returns a handle for the interface, or null; no Wasm interface type |
-| `weak(handle)` / `upgrade(weak)` | generation-checked; upgrade returns null after release |
-| `drop(handle)` | releases one count; a component resource uses `resource.drop` instead |
-
-The table is the host’s, not the engine’s. It must validate a handle before every
-access (generation, type, thread). A forged integer is a normal C mistake and
-must be a clean error, not a wild pointer.
-
-### 16.4 Two backing strategies, and the one-owner rule
-
-A HOR can own objects in two different ways, and the choice must be visible in
-the handle:
-
-| Strategy | Where the object lives | Who owns the lifetime | Best for |
-|---|---|---|---|
-| **Host-owned** | native host memory, referenced by a table entry | the HOR’s reference count (or `HostBridge` for an `externref` payload) | existing C++ objects, GObject-like hosts, objects that must survive across instances |
-| **Guest-GC-owned** | a Wasm GC `struct`/`array` in a Store’s `GcHeap` | the engine’s RC + cycle collector (`GC.md` RC-1…RC-5) | objects created by GC languages, objects that need `ref.test`/`ref.cast` |
-
-The rule is **one owner per object graph**. A host count and a GC count on the
-same object is a double-free waiting for the first missed barrier. If an object
-must cross, transfer ownership (`own`) or use a scoped borrow; never add a
-second count. A handle-table entry therefore records which strategy it uses,
-and an accessor checks that the handle’s strategy matches the operation.
-
-Collection is not a HOR operation either. A guest-GC graph is collected at the
-engine’s safepoint (`Runtime::safepoint()`); a host-owned graph follows the
-HOR’s release/`dispose` policy. The runtime must not run a second collector over
-the engine’s heap, and it must not treat a guest GC pointer as a host object.
-
-The host *can* allocate a Wasm GC struct through the `ModuleInstance` allocation
-entry points (`allocateStructObject`/`allocateArrayObject`, `ABI.md` “GC Object
-and Heap ABI”), but that object belongs to the instance’s Store and needs the
-instance’s module-local type index; it is not a general host heap. A host-owned
-object is host memory; a guest-GC-owned object can also be created by a guest
-factory and returned as an `externref`, or by a component resource. This is a
-deliberate boundary, not a missing hook.
-
-A **third** strategy becomes reachable once the memory is *shared*: the object
-lives in the imported `LinearMemory`, the handle is an `i32` offset and the tag
-is written by the host — the GcHeader without the collector. It is §16.13's
-subject, and the sharing study measured which toolchains can take part
-([`proposals/SHARING_LINEAR_MEMORY.md`](proposals/SHARING_LINEAR_MEMORY.md) §10.3,
-Q1).
-
-### 16.5 What each language actually gets
-
-| Target | What it sees | How it calls the runtime | Limit |
-|---|---|---|---|
-| **C** | an opaque `hor_object` typedef, or a `uint64_t` handle | generated/header functions; manual calls are first-class | no `sizeof`, no field offset, no typed `(ref $T)` |
-| **C++** | the same handle in an RAII wrapper | wrapper calls `retain`/`release`; no exceptions or RTTI cross | the C++ class never crosses; no `shared_ptr` in the ABI |
-| **Rust** | `#[repr(transparent)]` handle | `Drop` calls `release`; no `Deref` | no Rust `Drop` across the boundary; no `String`/`Vec` layout |
-| **Zig** | `*anyopaque` or `u64` | explicit `deinit` | no guest finalizer |
-| **Go / TinyGo** | `uint64` handle | `Close`/`release`; `//go:wasmimport` | Go’s GC does not trace the host object; no Go pointer crosses |
-| **GC language** | its own object/class, or a generated resource wrapper | the wrapper holds the handle and forwards | “silent” only at the source level; see §16.6 |
-
-This is **B** in §12.4: a typed handle table with generated ergonomics. It is a
-standardised version of the B recipe, not a new C in the LF2 scale. Calling it
-“C solved” is accurate only in the sense that C can use the object; the C type
-system still has no typed GC reference.
-
-### 16.6 What “silently wrapped in a GC language” can mean
-
-There are three distinct cases, and only one of them is truly shared:
-
-| Case | What the GC language sees | What the wrapper does | Shared object? |
-|---|---|---|---|
-| **1. Same canonical Wasm GC type** | a real `(ref $T)` / `(ref null $T)` emitted by its compiler | nothing at runtime; the host runtime only supplies factories/accessors | **yes** — same `TypeId` in the same Store; `ref.cast` and field access work |
-| **2. Language object wrapping a handle** | a Kotlin/MoonBit/Dart class whose private field is an `externref` or `u64` | every method forwards to the HOR; identity is the wrapper’s identity | **no** — the Wasm types differ; the host object is behind the handle |
-| **3. Component resource binding** | a generated `own`/`borrow` resource type | the component toolchain generates the wrapper; the host runtime is the `rep` | **at the component boundary** — nominal resource identity, not a core `(ref $T)` |
-
-Case 1 is the only one where C and the GC language can share a **Wasm-typed**
-object. It requires the C side to be a host adapter (not a C guest), or a C
-toolchain extension that emits GC types; the ordinary C guest is not in this
-case. Case 2 is the usual “silent” wrapper, and it is an adapter, not a shared
-object model. Case 3 is the Component Model’s version of the same idea and is
-the most portable of the three; §16.8 measures the overlap.
-
-“Silent” can therefore mean **the generated binding hides the handle from the
-application programmer**. It cannot mean **two language runtimes agree on what
-the object is**. Kotlin’s dispatch, MoonBit’s runtime and Dart’s object model
-remain their own; only the handle and the exported functions are common.
-
-### 16.7 Type identity is the hard part, and it is already owned
-
-A GObject-shaped runtime wants a runtime type registry: register a type, give it
-a name and a parent, query it, cast to it. WasmJit already has a type identity
-system, and it is not a candidate for replacement:
-
-- **`TypeId` is Store-scoped**, dense, structural over closed Wasm types, and
-  assigned by `TypeRegistry` ([`TYPE_IDENTITY.md`](TYPE_IDENTITY.md) §6.1/§6.2).
-  It is not a name, not a process-global handle, and not stable across Stores or
-  runs.
-- **A GC object’s header stores that `TypeId`**; `ref.test`/`ref.cast` read it
-  ([`ABI.md`](ABI.md) “GC Object and Heap ABI”, [`GC.md`](proposals/GC.md) §4.3).
-- **Component types have their own identity domain**: Store `TypeId`s for
-  closed definitions, `SchemeId` for alpha-equivalent open types, and nominal
-  resource identity per component instance ([`TYPE_IDENTITY.md`](TYPE_IDENTITY.md)
-  §10, [`proposals/TYPE_MODEL.md`](proposals/TYPE_MODEL.md) §7.11).
-
-A host runtime therefore needs a **third domain**: a host type registry keyed by
-a stable name and a versioned descriptor, with its own ids. It may *map* a host
-type to a Store `TypeId` when the object is a Wasm GC type, but it must not
-reuse `TypeId` as a global key. A handle must say which domain it belongs to;
-comparing a host handle with a `TypeId`, or moving a handle between Stores, is
-invalid. The full argument and the descriptor shape are in
-[`TYPE_IDENTITY.md`](TYPE_IDENTITY.md) §13.
-
-### 16.8 How much is redundant with the Component Model?
-
-The Component Model already specifies the wire contract this idea needs:
-**nominal resource types**, `own`/`borrow` handles, `resource.drop` with a
-destructor, `resource.rep`, canonical lift/lower, and generated bindings from
-WIT. The engine’s component runtime has host-created resource handles
-(`newResourceHandle`/`resourceRepresentation`/`dropResourceHandle`, snapshot
-2026-11-12 on `9b2ca92`) and validates stale, mistyped and out-of-scope handles.
-That changes the redundancy answer from “conceptually similar” to “already
-implemented at the wire level”.
-
-| Capability | Component Model | A HOR without components | Overlap |
-|---|---|---|---|
-| opaque typed handle | `resource` + `own`/`borrow` | `u64`/`externref` + table tag | **redundant** |
-| destructor on last release | `resource.drop` / declared destructor | `release`/`drop` calls host deleter | **redundant** |
-| cross-language bindings | WIT + toolchain (`wit-bindgen`-style) | generated C/Rust/… headers | **mostly redundant**; the generator is the same kind of tool |
-| records/variants/lists/strings | Canonical ABI | canonical records plus host functions | **redundant** |
-| method calls | WIT functions over a resource | host function table | **redundant as wire protocol** |
-| field get/set | WIT functions over a resource | typed accessors | **redundant as wire protocol**; useful as generated ergonomics |
-| dynamic properties/`GValue` | not specified | host registry + `get/set_property(name)` | **not redundant** |
-| signals/events | not specified; streams/futures are a different abstraction | host signal table | **not redundant**, but expressible as functions/function-typed parameters |
-| interfaces/inheritance | resources are nominal and have no subtyping | host `query_interface`/`is_a` | **not redundant**; still host-side, not Wasm types |
-| runtime reflection | component types are structural; no object introspection | host type descriptors | **not redundant** |
-| cross-instance identity | `own` moves, `borrow` is scoped; each instance has its own table | HOR table | **partly redundant**; the HOR must define its own scope |
-| C guest declares `(ref $T)` | no; C gets a resource handle and functions | no; C gets a handle and functions | **neither solves the type-level question**; both solve the practical one |
-
-“C gets a resource handle” above means C **compiled to a component** with
-generated bindings; a plain core C module must go through a canonical lift/lower
-adapter or a synthetic module, which is the same handle-plus-functions shape.
-Whether a given GC toolchain has component bindings is a **TOOL**/**LANG**
-question; case 2 of §16.6 (an `externref`/integer handle in a language object)
-is the fallback wherever the toolchain can hold one.
-
-**Verdict.** If the goal is “a C guest can create, use and release a host object
-through a typed interface”, the Component Model already owns the contract and
-the host runtime is an **implementation behind a WIT resource**, not a second
-ABI. If the goal is a **dynamic object model** (properties by name, signals,
-reflection, interface queries, a class hierarchy), the Component Model does not
-standardise it; a HOR is a legitimate optional host library. But even then the
-right shape is a WIT package plus a host implementation, with the C header as
-one generated binding — not a new primitive in `WasmBase/`.
-
-So: **the wire surface is largely redundant; the object model is not; neither
-belongs in the engine.**
-
-### 16.9 Feasibility verdict
-
-| Question | Verdict | Why |
-|---|---|---|
-| Can a host runtime give C/C++/Rust/Zig/Go/TinyGo a usable object API? | **Yes** | all can call C-linkage imports with integer/handle arguments; `HostBridge` and native imports already exist |
-| Does it give them a typed `(ref $T)`? | **No** | that is a source-language/toolchain feature (`LG-1`); a handle is not a Wasm reference type |
-| Can a GC language wrap it silently? | **Yes, as an adapter** | a wrapper object holds the handle; the wrapper’s methods forward. It is not a shared object identity |
-| Can C and Kotlin share the *same* object? | **Only in case 1 or 3 of §16.6** | same canonical Wasm GC type in one Store, or a component resource handle; not by both having a class named `Widget` |
-| Can the Component Model replace the wire half? | **Yes** | resources + `own`/`borrow` + destructor + WIT bindings are the same contract, already implemented |
-| Can the Component Model replace the object model? | **No** | no dynamic properties, signals, reflection, interfaces or class hierarchy |
-| Is this an engine feature? | **No** | §12.8 and [`LAYERING.md`](LAYERING.md): the engine owns the opaque primitive, not a product object model |
-| Is a first-party optional library feasible? | **Yes** | outside `WasmBase/`, versioned separately, built on `HostBridge`/`externref` or on component resources |
-
-The cost is not in the handle table; it is in the **descriptor format, the
-generator and the lifetime policy**. GObject’s own history is the evidence:
-GType made C objects introspectable, but cross-language use needed GObject
-Introspection and per-language bindings. A HOR would need the same second half,
-and WIT already is that second half for components.
-
-**Recommendation.** If this is pursued:
-
-1. Write the contract as a **WIT package** with resource types and functions;
-   let `wit-bindgen`-style tooling generate C/Rust/Go bindings.
-2. Implement the objects in an **optional host library** (or a guest factory for
-   GC-owned objects), not in `WasmBase/`.
-3. Use component `own`/`borrow` as the lifetime vocabulary; use `HostBridge`
-   only for `externref` payloads that are not resources.
-4. Keep a **stable type name/version** and a host descriptor; never put a
-   `TypeId`, a C++ RTTI name or a raw offset in a generated header.
-5. Do not add a second refcount to a GC-owned graph; pick one owner.
-6. Keep the door open for a future C compiler extension that can emit typed GC
-   references (`LANG`/`TOOL`); if it arrives, the HOR becomes an implementation
-   detail rather than the only way to use an object.
-
-If built incrementally, the order is: (1) the WIT package, host implementation
-and C bindings; (2) Rust/Zig/Go/TinyGo bindings; (3) `externref` wrappers for
-Kotlin/MoonBit/Dart; (4) dynamic properties and signals only if a product needs
-them. Do not start with (4): it is the part with no standard contract, and it is
-the part most likely to become a language-specific runtime.
-
-**Decision:** study accepted; **engine implementation rejected**; optional
-host library / component package recommended; no milestone opened. This is the
-same boundary as §12.8, not a reversal of it.
-
-### 16.10 What would make this a tested claim
-
-In increasing cost:
-
-1. **C handle lifetime.** Create, use, release, reuse the slot, then use the
-   stale handle. It must be rejected; a wrong-type handle must be rejected before
-   the host touches the object.
-2. **C++/Rust/Zig RAII.** The wrapper releases exactly once, including on an
-   error path; no exception or panic crosses the ABI.
-3. **GC-language wrapper.** Kotlin or MoonBit holds the handle in a language
-   object, calls a method, drops the wrapper, and the host count reaches zero
-   once. A cycle through the wrapper must be either collected or documented as
-   a host cycle.
-4. **Component resource parity.** The same operation set as a WIT resource:
-   `own` moves, `borrow` is scoped, `resource.drop` runs the destructor once, and
-   a handle from another instance is rejected. This is the redundancy test, not
-   a second implementation.
-5. **Type identity.** Two Stores with the same stable type name have different
-   `TypeId`s but the same host descriptor; a handle from one Store is rejected
-   by the other. A Wasm GC object and a host object with the same fields are not
-   the same type.
-6. **Ownership.** `HostBridge` retain/release counts match the handle table; no
-   double free on `instanceDestroying`; a host object shared by two instances
-   has one host count, not two.
-7. **Thread affinity.** Two agents call the same object without synchronisation;
-   the runtime refuses or serialises according to its documented policy.
-8. **Negative.** A forged handle, a use-after-release, a raw pointer and a
-   cross-runtime handle are all clean errors, not crashes.
-9. **Arena object (§16.13).** Instance A creates an object in the shared memory,
-   instance B reads it through the same offset, A is unloaded and
-   re-instantiated and the object is still there; a forged offset, a freed slot
-   and a tag from another `Store` are clean errors, not wild pointers.
-10. **Arena ownership (§16.13).** One owner per arena object: the arena's
-    allocator and a HOR count never both free it, and a module holding only a
-    borrow cannot outlive the owner.
-
-Until (1)–(4) exist, the correct statement is: **the engine provides the opaque
-primitive and the component resource contract; the HOR is an optional host
-design, not a tested feature.** §16.12 measured the *compile* half of (1) — the
-handle crosses an import and an export in every tested toolchain — and nothing
-beyond it; (9) and (10) are the cases the arena of §16.13 would have to pass.
-
-### 16.11 Ownership register
-
-| Item | Owner | Status | Where |
-|---|---|---|---|
-| `externref` payload, `HostBridge`, GC object header, component resources | **ENG** | implemented; no change proposed | [`ABI.md`](ABI.md), [`GC.md`](proposals/GC.md), [`COMPONENT_MODEL.md`](proposals/COMPONENT_MODEL.md) |
-| HOR handle table, type registry, lifetime/thread policy | **EMB** | proposed, optional | this section |
-| C/C++/Rust/Zig/Go/TinyGo headers and GC-language bindings | **TOOL** | proposed | §11/§14 generator plan |
-| The handle **wire**, per toolchain (four `i64` imports + one export) | **TOOL** | **measured 2026-11-18** in six arms; `externref` only in C and AssemblyScript | §16.12 |
-| C has no typed `(ref $T)` | **LANG** | accepted (`LG-1`) | §15.6 |
-| Dynamic properties/signals/reflection | **EMB** | optional; not an engine feature | §12.7.3, §16.8 |
-| Component resource contract | **ENG** + **TOOL** | engine side installed; WIT/bindings are tooling | [`COMPONENT_MODEL.md`](proposals/COMPONENT_MODEL.md) §2.3/§4.3 |
-
-No engine work is opened by this study. If a product later needs a host object
-model, the first implementation should be a WIT package and a host library; the
-engine should be asked only for a missing primitive that cannot be expressed
-through `externref`/`HostBridge`/resources, not for a reflection system.
-
-
-### 16.12 The wire claim, measured
-
-**Snapshot (2026-11-18, `6f2a391`).** §16.3's operation set is a specification,
-not an implementation; the layer below it *can* be checked without writing the
-runtime — whether each language can carry the handle §16.3 layer 1 describes. A
-GObject-shaped design fails here first when it fails at all: a C ABI a toolchain
-cannot spell is not available, however good the table behind it is.
-
-Seven fixtures over six languages — C appears twice, because the two clangs
-disagree about `externref` — each declaring the same four imports —
-`env.hor_create(i32) -> i64`, `env.hor_retain(i64) -> i64`,
-`env.hor_field(i64, i32) -> i64`, `env.hor_release(i64)` — and exporting
-`use_handle(n) -> i64`, which creates, retains, reads a field and releases. A
-second fixture, where the language can express it, carries the object as
-`externref` instead of `i64`. They were built in the same lab, with the same
-pinned toolchains, as [`proposals/SHARING_LINEAR_MEMORY.md`](proposals/SHARING_LINEAR_MEMORY.md)
-§10 (whose §15 is the evidence log).
-
-| Language | Toolchain (pinned) | Opaque 64-bit handle | `externref` | Artifact |
-|---|---|---|---|---|
-| C | clang 23.1.6, `--target=wasm32 -nostdlib` | **yes** — `long long` across all four imports and the export | **yes** — `__externref_t`, accepted by default | 355 B handle, 296 B `externref` |
-| C | clang 20.1.8 (the one Zig 0.15.2 ships) | yes, the same C source | **only** with `-mreference-types`; without it: `unknown type name '__externref_t'` | size not recorded |
-| Rust | rustc 1.99.1, `wasm32-unknown-unknown` | **yes** — `#[link(wasm_import_module = "env")]`, `u64`/`i64` | **no such type** on stable Rust | 1,633,391 B |
-| Zig | zig 0.15.2, `wasm32-freestanding` | **yes** — `extern "env" fn … (u64)` | **no such type** | 191 B |
-| Go | go 1.27.4, `wasip1` | **yes** — `//go:wasmimport env hor_create`, `uint64` | **no such type** | 1,910,747 B |
-| TinyGo | tinygo 0.40.1, `wasip1`, `GOTOOLCHAIN=go1.25.6` | **yes** — the same directive | **no such type** | 102,349 B |
-| AssemblyScript | asc 0.28.19 | **yes** — `@external("env", "hor_create")`, `u64` | **yes** — only with `--enable reference-types` | 160 B handle, 105 B `externref` |
-
-The import sections are the interesting artefact, because they are the contract a
-host would have to implement:
-
-```
-;; h-c-handle.wasm (excerpt)
-(import "env" "hor_create"    (func (;0;) (type 0)))   ;; (i32) -> i64
-(import "env" "hor_retain"    (func (;1;) (type 1)))   ;; (i64) -> i64
-(import "env" "hor_field"     (func (;2;) (type 2)))   ;; (i64, i32) -> i64
-(import "env" "hor_release"   (func (;3;) (type 3)))   ;; (i64) -> ()
-(export "use_handle" (func 4))
-```
-
-Four readings, and they are §16.5's table with measurements behind it:
-
-- **The wire layer is universal.** Every tested toolchain declares the four
-  imports and the export with exactly these signatures, so §16.3 layer 1 is
-  available everywhere and case 2 of §16.6 (a language object wrapping a handle)
-  has a working wire in all six. The imports are ordinary `i64` functions — the
-  surface `HostBridge` and native imports already resolve (§4.2, §11) — so the
-  HOR still needs **no engine change**, which is what §16.9 said and what this
-  run did not alter.
-- **`externref` is not universal, and it follows the toolchain.** clang 23 has
-  `__externref_t` by default, clang 20.1.8 only behind a flag, AssemblyScript only
-  behind `--enable reference-types`, and Rust, Zig, Go and TinyGo cannot name an
-  `externref` at all at these pins. That is §16.1's second layer measured: the
-  Wasm type relation is the *guest's* to give, not something a host runtime can
-  grant, and `LG-1`'s "no typed `(ref $T)` in C" has a sibling — most languages
-  cannot even spell the untyped reference.
-- **`i64` is the fallback, and it is enough for the wire.** Five of the six arms
-  carry the object as `u64`/`i64`. That is the practical shape §16.5 called
-  "B in §12.4", and nothing in §16.6 case 2 depends on the reference type.
-- **Size is not the cost.** The smallest handle fixtures are 160 B
-  (AssemblyScript), 191 B (Zig) and 355 B (C), and the `externref` ones are
-  105 B (AssemblyScript) and 296 B (C); the megabyte-sized artifacts are fixtures
-  that linked a language runtime, not the handle ABI. The cost stays
-  where §16.9 put it: descriptors, bindings and lifetime policy.
-
-What this run does **not** establish — and §16.10 remains the list:
-
-- **No host table.** Nothing was implemented, so there is no generation check, no
-  stale-handle rejection and no thread-affinity policy (§16.10 (1), (7), (8)).
-- **No lifetime.** `retain`/`release` were declared and linked against a stub;
-  the release-exactly-once, error-path and double-free cases (§16.10 (2), (6))
-  are unrun.
-- **No component parity.** §16.10 (4) belongs to the component surface, which
-  [`languages/LF4_INDEX.md`](languages/LF4_INDEX.md) §4 now shows green on all
-  seven arms (after `GAP-20`–`GAP-25`): resources, `own`/`borrow` and
-  `resource.drop` are the tested form of the same wire, and a HOR built as a WIT
-  package would ride them instead of re-testing them.
-- **No engine round-trip.** The modules were never instantiated by WasmJit, so
-  "the resolver links them" rests on §4.2's existing surface, not on this run.
-
-**Reproduction.** The fixtures are 20–30 lines each; the commands are the
-`SHARING_LINEAR_MEMORY.md` §15.2 pattern with a different source, and the two that
-are not `clang`/`rustc` shaped are:
-
-```
-# externref behind a flag, on the two clangs that have the type
-zig cc -target wasm32-wasi -mreference-types -mexec-model=reactor -O2 \
-      -Wl,--import-memory -o OUT/h-c-externref.wasm SRC/handle_ref.c
-
-# AssemblyScript, with reference types enabled
-asc SRC/handle_ref.ts --outFile OUT/h-as-externref.wasm --optimize --enable reference-types
-```
-### 16.13 Objects in the arena: where this section meets shared linear memory
-
-**Status: a bridge between two studies, not a new feature.**
-[`proposals/SHARING_LINEAR_MEMORY.md`](proposals/SHARING_LINEAR_MEMORY.md) asks
-whether many modules can share one address space; this section asks whether many
-languages can share one object graph. They are the two halves of the
-**library** shape that note's §2.4 already implies — the *loader* and the *class
-library* — and ELF/PE has both (`ld.so` **and** `libgobject`), while this tree
-puts the first inside the engine (§4.1, `resolveMemory`) and the second outside
-it (§16.9, §16.11). Neither belongs in `WasmBase/`, and that is the same answer
-[`LAYERING.md`](LAYERING.md) gives from the other side.
-
-The intersection is one question: **can the HOR's objects live in the shared
-linear memory instead of the host's heap?** §16.4 lists two backing strategies;
-shared memory makes a third reachable, and the third is the only one that gives
-C, C++, Rust, Zig and AssemblyScript a zero-copy object *and* object identity at
-the same time.
-
-#### 16.13.1 The two studies line up, axis by axis
-
-| Axis | `SHARING_LINEAR_MEMORY.md` | `EMBEDDING_SURFACE.md` §16 |
-|---|---|---|
-| **The wire** | an `i32` byte offset that denotes the same bytes in every instance (§2.1) | a `u64`/`externref` handle that denotes the same object in every language (§16.3, measured in §16.12) |
-| **The layout** | data, stack and heap bases per module — `--global-base`, `--initial-memory`, `--memoryBase` (§10.4) | field offsets, `sizeof` prohibition, the type tag and its descriptor (§16.3, §16.7, §14.4) |
-| **The owner** | who created the memory; the creator outlives every importer (`SLM2`) | one owner per object graph — a host count *or* a GC count, never both (§16.4, [`proposals/GC.md`](proposals/GC.md) `RC-1`) |
-| **The budget** | one `MemoryBudget` per `Store`, no per-tenant number (`SLM5`, `SLMD2`) | the HOR's own arena/table quota, an **EMB** decision (§16.11) |
-
-Read across: *aliasing* is what makes an object **addressable by two modules**;
-the *object model* is what makes those bytes an **object**. A design that solves
-only the first gets raw structs (the sharing note's §11.4 exchange); one that
-solves only the second gets handles to host memory (§16.4 strategy 1). The pair
-solves both.
-
-#### 16.13.2 The third backing strategy
-
-| Strategy | Where the object lives | Handle | Type tag | Lifetime | Who can use it |
-|---|---|---|---|---|---|
-| **Host-owned** (§16.4) | host memory | `u64`, or `externref` where the toolchain spells it | host descriptor registry | the HOR's count / `HostBridge` | every language — including Go and TinyGo, which cannot import a memory |
-| **Guest-GC-owned** (§16.4) | a `Store`'s `GcHeap` | `(ref $T)`, or `externref` behind a façade | the GC header's `TypeId` | the engine's RC + cycle collector | tools that emit reference types; others via a handle |
-| **Arena-owned** | the shared `LinearMemory` | an `i32` offset (plus a generation slot) | a host descriptor id, or the `Store`'s `TypeId` while that store lives | the arena's allocator — manual, or RC with the header in the arena | **only** modules that import the memory: C, C++, Rust, Zig, AssemblyScript (§10.3, Q1) |
-
-What the third row buys:
-
-- **Zero copy *and* identity.** The bytes are the object; every tenant reads the
-  same fields at the same offsets, and a method is a function that takes the
-  offset. The closest analogue in §16.6 is its **case 1** — both sides see the
-  same object — with the host descriptor standing in for the Wasm GC type that a
-  C compiler cannot declare; it is not case 2, because no language object wraps
-  the handle.
-- **It survives a reload.** The object lives in the arena, not in the instance's
-  heap, so `Runtime::unload` and re-instantiation do not destroy it — which is
-  what a product that hot-reloads a mod actually wants. (`SLM7` still warns that
-  the reloaded module re-runs its data segments; the arena object is outside
-  them.)
-- **No new type system.** The wire is an `i32`, which every toolchain already
-  has; §16.12 measured `externref` to exist only in C and AssemblyScript, so the
-  reference-typed wire is the *narrow* option here, not the general one.
-
-What it costs — and each cost already has an owner:
-
-| Cost | Why the arena has it | Owner |
-|---|---|---|
-| **One allocator** | two `malloc`s over one heap hand out the same block (§9.1); the arena must be handed out by exactly one allocator | `SLM-3`'s contract; `SLM-12`/§13 for the pass that could enforce it |
-| **A layout** | the arena is a region, so each tenant needs a base and a heap that starts above it | §10.4's per-toolchain flags; `SLM-1` |
-| **A growth policy** | a grow is invisible to the engine (every access reloads the base) but not to a partition plan | `SLMD3`; one nominated grower |
-| **A tag that means something** | `TypeId` is `Store`-scoped and structural (§16.7), so it is usable *inside one store* — the one `Runtime` owns — and meaningless after persistence, a reload in another process, or a cross-`Store` copy | [`TYPE_IDENTITY.md`](TYPE_IDENTITY.md) §6.1; §16.7's third domain |
-| **Cheap rejection** | a forged offset must be a clean error, not a wild pointer (§16.3), which needs the generation slot the host table would have given for free | this section; `EM-13` |
-| **The languages outside** | Go and TinyGo cannot import a memory (§10.3, Q1), so their objects cannot be *in* the arena | host-owned handles (§16.4 strategy 1) — the HOR is how a GC module uses arena objects without living in it |
-
-That last row is the honest summary of "can everyone share the same object?":
-C-family modules can share the arena, GC modules reach it through handles, and
-only a **component resource** gives both sides one object *type* (§16.6 case 3,
-[`languages/LF4_INDEX.md`](languages/LF4_INDEX.md) §4).
-
-This is **not** §12.7.1's rejected option, and the difference is the whole
-design. §12.7.1 rules out a *host pointer plus `sizeof(T)`*: a C++ class layout
-the engine cannot enforce and a guest cannot dereference. An arena object is the
-opposite — guest-addressable bytes, a layout fixed by a descriptor and generated
-accessors, no host pointer anywhere. What it still cannot do is put a C++
-*class* (vtable, RTTI, `std::string`) in the arena; a C++ tenant wraps the
-offset, and that wrapper is a handle by another name (§16.5).
-
-#### 16.13.3 Where the desugaring precedent fits
-
-The arena needs **allocation** to be host-controlled, and that is exactly the
-front-end pass [`proposals/SHARING_LINEAR_MEMORY.md`](proposals/SHARING_LINEAR_MEMORY.md)
-§13 scopes: import the host allocator, rebind the call sites, re-validate. Its
-precedent is [`proposals/LEGACY_EXCEPTIONS.md`](proposals/LEGACY_EXCEPTIONS.md),
-and the precedent transfers its shape *and* its limits:
-
-| `LEGACY_EXCEPTIONS.md` | The arena pass |
-|---|---|
-| rewrote five legacy opcodes into their final form | would rebind allocator **symbols** to host imports |
-| the rewrite is mechanical; the semantics are fixed by the specification | the symbol names are per-toolchain and unstable — `malloc`/`emmalloc_malloc`/`dlmalloc`/`__new` (§10.3, Q5) — so an unknown module must be left alone |
-| re-validate the rewritten module, prove nothing else changed, own a test suite | the same three obligations, and the same failure mode: a rewrite that changes behaviour |
-| one old encoding, one new encoding, one table | one table per toolchain, plus a fallback |
-
-What the pass **cannot** supply is the object itself: the header, the field
-offsets and the dispatch are IDL, not opcode rewriting. That half is the HOR's
-(§16.3, §16.9). The honest boundary is:
-
-> a desugaring pass can put the arena's **memory** under host control; it can
-> never put the arena's **semantics** there.
-
-#### 16.13.4 The verdict
-
-The two ideas compose into one design, and it is the embedder's:
-
-- a **host-owned arena** — one `LinearMemory`, created by the host and imported by
-  every tenant (`SHARING_LINEAR_MEMORY.md` §4.2, R2), with one allocator over it
-  and one nominated grower;
-- **objects as offsets**, each with a host-written header
-  `{descriptor, generation, count}` — a `GcHeader` without the collector;
-- a **descriptor registry** keyed by stable name and version (§16.7's third
-  domain), spelled as WIT where a component boundary exists (§16.8);
-- a **generated façade per language** (§16.5), because the wire is an `i32` and
-  the ergonomics never are.
-
-The engine's part is already there and unchanged: aliasing (`resolveMemory`), the
-opaque primitive (`externref`, `HostBridge`, `GcHeap`, resources), and the
-resolver/publisher (`RegistryImportResolver`). Everything else is **EMB** and
-**TOOL**, which is the split §16.11's register already records — so this bridge
-opens no engine work, no new note and no new milestone. A product would execute
-it with the two studies' existing plans: `SLM-1`…`SLM-4` for the address space and
-§16.9's recipe for the object model.
-
-Two cases would turn this from a bridge into a claim, and they are §16.10's (9)
-and (10): an arena object surviving a writer's unload, and one owner between the
-arena allocator and the HOR's count.
+| hold an opaque host value in a guest | `externref` plus `HostBridge` retain/release | `WasmHostBridge.hpp`; [`ABI.md`](ABI.md) “Host boundary” |
+| create a Wasm GC object from the host | `allocateStructObject`/`allocateArrayObject` on the instance | [`ABI.md`](ABI.md) “GC Object and Heap ABI” |
+| a cross-language object *type* | component resources (`own`/`borrow`, `resource.drop`, `resource.rep`) | [`proposals/COMPONENT_MODEL.md`](proposals/COMPONENT_MODEL.md) §2.3/§4.3 |
+| a function namespace for the object's methods | synthetic modules and native imports | [`SCOPE.md`](SCOPE.md) §3.1 |
+
+No object model ships: no handle table, no descriptor registry, no properties and
+no signals. That is the boundary (§16.3), not an omission.
+
+### 16.2 The measured wire
+
+The handle wire — four `i64` imports and one export carrying an opaque handle —
+compiles in all six tested languages, while `externref` compiles only in C and
+AssemblyScript. The arm table, artifact sizes and the reading are
+[`proposals/SYNTHETIC_OBJECTS.md`](proposals/SYNTHETIC_OBJECTS.md) §8 and A.12; the
+lab is the one the sharing study used
+([`proposals/SHARING_LINEAR_MEMORY.md`](proposals/SHARING_LINEAR_MEMORY.md) §10,
+§15). The consequence for an embedder is one sentence: **design the wire as an
+integer handle, and treat `externref` as an optimisation where the toolchain offers
+it.**
+
+### 16.3 The boundary
+
+The engine owns the transport and the resource contract; the class model,
+descriptors, generated headers and lifetime policy are the embedder's
+([`SCOPE.md`](SCOPE.md) §3.2, [`LAYERING.md`](LAYERING.md) §4). A component package
+behind WIT is the recommended shape of that model, and the note says why the
+Component Model already owns half of it.
 
 ## 17. References
 
@@ -3191,12 +2635,16 @@ arena allocator and the HOR's count.
   is not in the core, which is what keeps the "realm" mapping (§3) honest.
 - [`proposals/SHARING_LINEAR_MEMORY.md`](proposals/SHARING_LINEAR_MEMORY.md) —
   the layout-negotiation problem that rules out putting arbitrary C++ object
-  images in linear memory (§12.7.1), and — from §16.13 — the address-space half
-  of the library model: aliasing, the per-toolchain layout flags (§10.4), the
+  images in linear memory (§12.7.1), and the address-space half of the library
+  model §16 now points at: aliasing, the per-toolchain layout flags (§10.4), the
   allocator contract (`SLM-3`) and the front-end pass (§13).
+- [`proposals/SYNTHETIC_OBJECTS.md`](proposals/SYNTHETIC_OBJECTS.md) — the study
+  §16 used to carry: the synthetic-object convention, the GObject precedent, the
+  measured handle wire (§8/A.12) and the arena backing (A.13). Its Appendix A is
+  the material this note's §16 had as §16.1–§16.13.
 - [`proposals/LEGACY_EXCEPTIONS.md`](proposals/LEGACY_EXCEPTIONS.md) — the
-  front-end rewrite precedent §16.13.3 borrows: rewrite, re-validate, prove
-  nothing else changed, own a test suite.
+  front-end rewrite precedent the allocator pass borrows: rewrite, re-validate,
+  prove nothing else changed, own a test suite.
 - Source anchors for §12: `WasmBase/WasmHostBridge.hpp` (the opaque-reference
   contract), `WasmBase/WasmGcHeap.hpp` (guest-only GC regions),
   `WasmBase/WasmComponentRuntime.hpp` / `WasmBase/WasmComponentValue.hpp`
@@ -3207,11 +2655,12 @@ arena allocator and the HOR's count.
 - [`proposals/GC.md`](proposals/GC.md) and
   [`proposals/STRINGREF.md`](proposals/STRINGREF.md) — the GC object header,
   `ref.test`/`ref.cast` identity, and the Store-owned `StringObject` bridge.
-- **GObject**, the shape §16 studies (a reference, not a dependency): the
+- **GObject**, the shape the study borrowed (a reference, not a dependency): the
   tutorial at https://docs.gtk.org/gobject/tutorial.html — fundamental-type
   registration, the `GTypeInstance`/`GObjectClass` pair, and the property system
-  are the parts §16 borrows, and the parts the Component Model already covers for
-  the engine's own import/export surface
+  are the parts [`proposals/SYNTHETIC_OBJECTS.md`](proposals/SYNTHETIC_OBJECTS.md)
+  §2.3 keeps, and the parts the Component Model already covers for the engine's
+  own import/export surface
   ([`proposals/COMPONENT_MODEL.md`](proposals/COMPONENT_MODEL.md)).
 - Source anchors for §13/§14: `WasmBase/WasmTypeIdentity.hpp` and
   `WasmBase/WasmTypeRegistry.hpp` (Store-scoped `TypeId`, interning and

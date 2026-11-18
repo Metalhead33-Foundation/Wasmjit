@@ -291,13 +291,13 @@ clearly right and rejected where the section is evidence rather than a claim:
   one question) and `UNMODELLED_VALUE_TYPES.md` into
   [`VALIDATION.md`](VALIDATION.md) (its outcome is a validation rule; the
   backtrace stayed in git history). Both are recorded in
-  [`index.md`](index.md) §2 so a reader does not go looking for them.
+  [`index.md`](index.md) §3 so a reader does not go looking for them.
 - **Merged away (2026-11-10):** `SIMD_BACKENDS.md` + `SIMD_LIBJIT.md` into
   [`proposals/SIMD.md`](proposals/SIMD.md); the backend status and gap notes into
   [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §8/§12; the fifteen slice
   reports, probes and handoff into [`backends/HISTORY.md`](backends/HISTORY.md);
   the ABI refactor study + post-mortem into [`backends/HISTORY.md`](backends/HISTORY.md).
-  [`index.md`](index.md) §2 records every merge so a reader does not go looking
+  [`index.md`](index.md) §3 records every merge so a reader does not go looking
   for a deleted file.
 
 ### 5.5 The remaining structural risk

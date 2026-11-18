@@ -120,8 +120,8 @@ gaps → where we deliberately deviate → plan → test survey → references.
 
 ## 4. What the folder holds today
 
-**Snapshot (2026-11-17, working tree on `dfabe47`):** `docs/proposals/` holds **forty-one**
-notes — 42 `.md` files, one of which is `index.md`, which is navigation rather
+**Snapshot (2026-11-18, working tree on `dcec0a7`):** `docs/proposals/` holds **forty-two**
+notes — 43 `.md` files, one of which is `index.md`, which is navigation rather
 than a note (it is what nests them in the generated site, and it is the one file
 exempt from the shape check below). Every note carries the §2.1 front matter and
 the nine slots of §2.2 in order (or the grouped variant of §3) with the references
@@ -167,6 +167,7 @@ throughout; the prefixes actually in the tree are:
 | `SMALL_PROPOSALS.md` | (embedded) | `SPD<n>` | `SP-<n>` |
 | `STACK_SWITCHING.md` | `SS<n>` | `SSD<n>` | `SS-<n>` |
 | `STRINGREF.md` | `STR<n>` | `STRD<n>` | `STR-<n>` |
+| `SYNTHETIC_OBJECTS.md` | `SO<n>` | `SOD<n>` | `SO-<n>` |
 | `TAILCALLS.md` | `TC<n>` | `TCD<n>` | `TC-<n>` |
 | `THREADS.md` | `T<n>` | `TD<n>` | `TH-<n>` |
 | `TYPE_IMPORTS.md` | `TI<n>` | `TID<n>` | `TI-<n>` |
@@ -273,24 +274,26 @@ authoritative per-item status is each note's §7 plan.
 | `SMALL_PROPOSALS.md` | 8 | grouped (3-in-1) | §2 "Sign-extension Operators"; §3 "Non-trapping Float→Int Conversions" | — | conforms (grouped variant, PD1) |
 | `STACK_SWITCHING.md` | 10 | canonical + appendix | none | §9 "Feasibility against the three backends"; before §10 References | conforms (appended backend feasibility study, PD3) |
 | `STRINGREF.md` | 9 | canonical | none | — | conforms exactly |
+| `SYNTHETIC_OBJECTS.md` | 9 | canonical + appendix | none | Appendix A "the GObject-shaped option, in full"; before §9 References | conforms (one appendix: the study the note was extracted from, kept at its original section numbers) |
 | `TAILCALLS.md` | 9 | canonical | none | — | conforms exactly |
 | `THREADS.md` | 9 | canonical slots | §2 "The proposal's model and what it demands" | — | conforms (wording) |
 | `TYPE_IMPORTS.md` | 9 | canonical | none | — | conforms exactly |
 | `TYPE_MODEL.md` | 9 | canonical | §2 "What a unified type store must guarantee"; §3 "What the type store is free to choose" | — | conforms exactly (internal design note) |
 
-Reading (re-checked 2026-11-13, `a2a361e`): **twenty-eight** notes match §2
-exactly; **two** reword §2/§3 and keep the nine slots (`SIMD.md`, `THREADS.md`);
-**eight** add a section before the references (`COMPILER_POLICY.md`,
-`CONFIGURATION.md`, `GC.md`, `LEGACY_EXCEPTIONS.md`, `MEMORY_PROVIDER.md`,
-`STACK_SWITCHING.md`, `COMPONENT_MODEL.md`, `SHARING_LINEAR_MEMORY.md`), so their
-References is §10, §11 or §16 rather than §9; **one** surveys seven proposals
-while keeping the slots (`JS_INTEGRATION.md`); and **one** uses the grouped
-variant (`SMALL_PROPOSALS.md`). That accounts for all forty. No note is missing a
-slot, none is missing its front matter, and no note puts anything after its
-references. `TYPE_MODEL.md` conforms to the nine slots but is an internal
-type-store design note, not a WebAssembly feature proposal; `MEMORY_PROVIDER.md`,
+Reading (re-checked 2026-11-18, working tree on `dcec0a7`): **twenty-nine**notes match §2 exactly; **two** reword §2/§3 and keep the nine slots
+(`SIMD.md`, `THREADS.md`); **ten** put a section before the references
+(`COMPILER_POLICY.md`, `COMPONENT_MODEL.md`, `CONFIGURATION.md`, `GC.md`,
+`JS_INTEGRATION.md`, `LEGACY_EXCEPTIONS.md`, `MEMORY_PROVIDER.md`,
+`SHARING_LINEAR_MEMORY.md`, `STACK_SWITCHING.md`, `SYNTHETIC_OBJECTS.md`), so
+their References is §10, §11, §16 or §17 rather than §9 — `JS_INTEGRATION.md`
+among them also surveys seven proposals; and **one** uses the grouped variant
+(`SMALL_PROPOSALS.md`). That is all forty-two notes. No note is missing a slot,
+none is missing its front matter, and no note puts anything after its references.
+`TYPE_MODEL.md` conforms to the nine slots but is an internal type-store design
+note, not a WebAssembly feature proposal; `MEMORY_PROVIDER.md`,
 `CONFIGURATION.md` and `COMPILER_POLICY.md` are similarly engine-seam studies
-rather than feature proposals.
+rather than feature proposals, and `SYNTHETIC_OBJECTS.md` is an engine-seam study
+of a host-side object model.
 
 ## 9. References
 

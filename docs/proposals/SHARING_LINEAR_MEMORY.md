@@ -14,7 +14,7 @@ coexistence is now per language — C, C++, Rust, Zig and AssemblyScript can
 import a shared memory; Go and TinyGo cannot. It also corrects revision 3's
 `dlclose` claim (§12.2 — unloading shipped on 2026-11-01) and connects the note
 to the host object runtime: objects that live in the arena are
-[`EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) §16.13. **Revision 5
+[`SYNTHETIC_OBJECTS.md`](SYNTHETIC_OBJECTS.md) A.13. **Revision 5
 (2026-11-18) closes the other half of rung 8 in code**: `Runtime::unloadImage`,
 `hasImage` and `imageCount` release the parsed image once no instance holds it,
 so §12.2's table is now an asymmetry of *guest teardown* only.
@@ -143,9 +143,9 @@ A library brings two things, and this note only owns one of them. It brings its
 **address space** — which is §4.1, §9 and §12 — and it brings its **class
 library**: the objects, their methods and their lifetimes. ELF separates them
 (`ld.so` and `libgobject`); so does this tree, because the object-model half lives
-in [`../EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) §16 and the bridge between
-the two — objects that live *in* the shared arena and are reached by an `i32`
-offset — is that note's §16.13. Reading this note alone gives a module a place to
+in [`SYNTHETIC_OBJECTS.md`](SYNTHETIC_OBJECTS.md) and the bridge between the two —
+objects that live *in* the shared arena and are reached by an `i32` offset — is
+that note's A.13. Reading this note alone gives a module a place to
 put its bytes; the pair gives it something to put there.
 
 The QVM lineage matters here. The engine is the spiritual successor of **Quake 3's
@@ -807,8 +807,8 @@ no lifetime beyond the call. Make it an **object** — typed, with methods, a
 lifetime and a tag that tells one type from another — and the recipe is no longer
 this note's alone: the offset is still an `i32`, but the header, the tag, the
 ownership rule and the generated façade belong to the host object runtime of
-[`../EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) §16, whose §16.13 is this
-section continued. The three constraints carry over unchanged: one allocator over
+[`SYNTHETIC_OBJECTS.md`](SYNTHETIC_OBJECTS.md), whose A.13 is this section
+continued. The three constraints carry over unchanged: one allocator over
 the arena (`SLM-3`), a layout per tenant (§10.4), one owner per object graph.
 
 ## 12. Appendix D: if the engine grew a linker
@@ -1113,7 +1113,7 @@ until a §12.7 trigger fires.
 allocator; it cannot invent an object model. The header, the field offsets and
 the dispatch are **IDL**, not opcode rewriting, so the injectable half ends
 exactly where the arena of
-[`../EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) §16.13 begins: the pass puts
+[`SYNTHETIC_OBJECTS.md`](SYNTHETIC_OBJECTS.md) A.13 begins: the pass puts
 the arena's **memory** under host control, and the host object runtime supplies
 its **semantics**. The two are designed to meet, and neither is proposed here.
 
