@@ -268,7 +268,7 @@ authoritative per-item status is each note's §7 plan.
 | `PROFILES.md` | 9 | canonical | none | — | conforms exactly |
 | `REFERENCE_TYPES.md` | 9 | canonical | none | — | conforms exactly |
 | `SHARED_EVERYTHING_THREADS.md` | 9 | canonical | none | — | conforms exactly |
-| `SHARING_LINEAR_MEMORY.md` | 15 | canonical + appendix | §2 "What the scenario demands"; §3 "What the scenario does not demand" | §9 "Appendix A: the options, and the pitfall each one buys", §10 "Appendix B: the language-memory-layout study", §11 "Appendix C: pseudocode", §12 "Appendix D: if the engine grew a linker", §13 "Appendix E: frontend-only "runtime patching" (a documented option, no code)", §14 "Appendix F: the embedder-imposed initializer contract"; before §15 References | conforms (six appendices; an engine-seam study of a cross-module scenario, not a feature proposal) |
+| `SHARING_LINEAR_MEMORY.md` | 16 | canonical + appendix | §2 "What the scenario demands"; §3 "What the scenario does not demand" | §9 "Appendix A: the options, and the pitfall each one buys", §10 "Appendix B: the language-memory-layout study, run", §11 "Appendix C: pseudocode", §12 "Appendix D: if the engine grew a linker", §13 "Appendix E: frontend-only "runtime patching" (a documented option, no code)", §14 "Appendix F: the embedder-imposed initializer contract", §15 "Appendix G: the evidence log"; before §16 References | conforms (seven appendices; an engine-seam study of a cross-module scenario, not a feature proposal) |
 | `SIMD.md` | 9 | canonical slots | §2 "What the spec demands"; §3 "What the spec does not demand" | — | conforms (wording) |
 | `SMALL_PROPOSALS.md` | 8 | grouped (3-in-1) | §2 "Sign-extension Operators"; §3 "Non-trapping Float→Int Conversions" | — | conforms (grouped variant, PD1) |
 | `STACK_SWITCHING.md` | 10 | canonical + appendix | none | §9 "Feasibility against the three backends"; before §10 References | conforms (appended backend feasibility study, PD3) |
@@ -283,7 +283,7 @@ exactly; **two** reword §2/§3 and keep the nine slots (`SIMD.md`, `THREADS.md`
 **eight** add a section before the references (`COMPILER_POLICY.md`,
 `CONFIGURATION.md`, `GC.md`, `LEGACY_EXCEPTIONS.md`, `MEMORY_PROVIDER.md`,
 `STACK_SWITCHING.md`, `COMPONENT_MODEL.md`, `SHARING_LINEAR_MEMORY.md`), so their
-References is §10, §11 or §15 rather than §9; **one** surveys seven proposals
+References is §10, §11 or §16 rather than §9; **one** surveys seven proposals
 while keeping the slots (`JS_INTEGRATION.md`); and **one** uses the grouped
 variant (`SMALL_PROPOSALS.md`). That accounts for all forty. No note is missing a
 slot, none is missing its front matter, and no note puts anything after its

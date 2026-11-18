@@ -2,13 +2,16 @@
 
 *Sharing a Linear Memory Between Instances*
 
-Status: engine-seam study, revision 3 (2026-11-01, `8c87f5f`). It answers
+Status: engine-seam study, revision 4 (2026-11-18, `6f2a391`). It answers
 whether a large monolithic module and a set of small scripts can share one
 linear memory: aliasing is **yes**, coexistence is **yes with build-side work**,
 and accounting is **no, not today**. `Runtime::unload` and the
 `ModuleInstantiator::releaseInstance` hook shipped; layout and re-binding stay
 out of scope for the short term, with an allocator-injection pass and an
-embedder initializer contract written up instead. Contains no code.
+embedder initializer contract written up instead. **Revision 4 ran `SLM-6`**: §10
+is no longer a plan but ten measured toolchain arms, and the answer to
+coexistence is now per language — C, C++, Rust, Zig and AssemblyScript can
+import a shared memory; Go and TinyGo cannot. Contains no engine code.
 Audience: anyone writing the embedding host for a product that mixes one big
 module with many small ones (`WASM::Runtime`, `RegistryImportResolver`, the
 `HostBridge` boundary), anyone touching `Store`/`LinearMemory`/`MemoryBudget`, and
@@ -17,9 +20,10 @@ anyone reading [`MEMORY_PROVIDER.md`](MEMORY_PROVIDER.md),
 
 Follows the same split as [`MEMORY_PROVIDER.md`](MEMORY_PROVIDER.md) and
 [`CONFIGURATION.md`](CONFIGURATION.md): §2 demands → §3 non-demands → §4 tree →
-§5 gaps → §6 deviations → §7 plan → §8 tests → §15 references, with §9–§12 as
-appendices (the option matrix, the language-layout study, the pseudocode, and the
-linker question).
+§5 gaps → §6 deviations → §7 plan → §8 tests → §16 references, with §9–§15 as
+appendices (the option matrix, the language-layout study, the pseudocode, the
+linker question, the allocator-injection option, the initializer contract, and
+the evidence log).
 
 This note is **not a proposal for an engine feature**. Sharing an imported memory
 is what the WebAssembly specification already permits and what this engine
@@ -38,12 +42,13 @@ already implements; what is missing is a *recipe*, a *contract* and
 | §7 | Plan (`SLM-0`…`SLM-7`) with the break class of each |
 | §8 | Test survey — what pins the mechanism, what would pin the recipe |
 | §9 | Appendix A: the options, and the pitfall each one buys |
-| §10 | Appendix B: the language-memory-layout study (what to measure) |
+| §10 | Appendix B: the language-memory-layout study — **run** 2026-11-18: ten arms, the Q1–Q9 matrix, and a two-module sharing probe |
 | §11 | Appendix C: pseudocode — the wiring, the layout, the allocator contract |
 | §12 | Appendix D: what a linker is, what it would buy, and what it would cost — if the engine grew one |
 | §13 | Appendix E: a front-end allocator-injection pass (documented option, no code) |
 | §14 | Appendix F: the embedder-imposed initializer contract |
-| §15 | References |
+| §15 | Appendix G: the evidence log — toolchains, commands, artifacts, what was not run |
+| §16 | References |
 
 
 ## 2. What the scenario demands
@@ -268,13 +273,14 @@ Three things the engine must not decide, and which the toolchain and host must:
 | `SLM8` | **No test coverage.** No case has two instances share one memory, none has B grow it and A observe the new size, none covers the lifetime rule | `Test/main.cpp` has a page-size *import* case and `WastScript.cpp` registers `spectest.memory`, but no sharing case | **Medium** — the mechanism is untested as a *feature* |
 | `SLM9` | **`Runtime` has no first-class sharing surface.** The host builds a `RegistryImportResolver` by hand and keeps it alive; there is no `Runtime::sharedMemory()` or "register this memory for import" convenience | `WasmRuntime.hpp` | **Low** — ergonomics, not correctness |
 | `SLM10` | **Table sharing has the same shape and less support.** Cross-module indirect calls need a shared table *and* a non-overlapping index allocation; the engine aliases imported tables correctly but nothing assigns indices | `resolveTable`; `JS_INTEGRATION.md` | **Medium** — a shared memory without a shared table half-solves the scenario |
-| `SLM11` | **No language/toolchain evidence.** Which of the tested languages can emit `--import-memory`, where each puts its stack, and whether it exports `__heap_base` are unmeasured for every pinned version | [`../languages/LF2_INDEX.md`](../languages/LF2_INDEX.md); §10 | **Medium** — the recipe is unrunnable without it |
-| `SLM12` | **No study of front-end hooks.** A memory rewrite (forcing `--import-memory`, injecting allocator imports, relocating data segments) is plausible but unstudied; `LEGACY_EXCEPTIONS.md` is the precedent for a desugaring pass | `LEGACY_EXCEPTIONS.md`; `PARSER_PROPOSALS.md` | **Low** — an option, not a need |
+| `SLM11` | ~~**No language/toolchain evidence.**~~ **Measured 2026-11-18** (`SLM-6`): ten arms answered Q1–Q9 for their pinned versions. C, C++, Rust, Zig and AssemblyScript import a memory; **Go and TinyGo do not**. The numbers are §10.3/§10.4, the evidence is §15 | [`../languages/LF2_INDEX.md`](../languages/LF2_INDEX.md); §10; §15 | **Closed** — and it produced a per-language answer rather than a single one |
+| `SLM12` | **No study of front-end hooks.** A memory rewrite (forcing `--import-memory`, injecting allocator imports, relocating data segments) is plausible but unstudied; `LEGACY_EXCEPTIONS.md` is the precedent for a desugaring pass. `SLM-6` supplied half of its input — the per-toolchain allocator symbols (`malloc`/`free`/`realloc`, `emmalloc_malloc`, `dlmalloc`, `sbrk`, `__new`) — but not the pass | `LEGACY_EXCEPTIONS.md`; `PARSER_PROPOSALS.md`; §10.3 Q5 | **Low** — an option, not a need |
 | `SLM13` | **Determinism and debuggability.** With a shared heap, one module's allocation pattern changes another's addresses, so a script's behaviour depends on what ran before it; nothing documents that, and no tool attributes an address to a tenant | consequence of `SLM5` | **Low** — documentation, but it bites during debugging |
 
 Reading: **`SLM1`–`SLM5` are the note.** The first four are "write it down and pin
 it with a test"; the fifth may need an engine decision, and §7 prices it rather
-than assuming it (`SLM-5`). `SLM9`, `SLM12` and `SLM13` are recorded so a reader
+than assuming it (`SLM-5`). `SLM11` is closed by `SLM-6` and its row is kept so
+the numbers have a home; `SLM9`, `SLM12` and `SLM13` are recorded so a reader
 knows they were considered, not forgotten.
 
 ## 6. Where we may deliberately stay as we are
@@ -302,20 +308,23 @@ would be if it ever were.
 | **SLM-3 — The allocator contract** | Document the three supported shapes: one allocator module; disjoint partitions with one allocator each; the toolchain's main/side dynamic-linking story. Add the partition-overlap assertion a host can run at load time | `SLM3`, `SLM4`, `SLM6` | A | §9.1's trap is described as a *check* the host can perform, and §10's table says which shape each toolchain can produce |
 | **SLM-4 — The test set** | Four cases: cross-instance store/load; B grows and A observes (size *and* a load above A's old end); imported-memory lifetime; a layout assertion that the two modules' `__heap_base` ranges are disjoint | `SLM8` | A | The four cases run in the default suite under a new tag (`[shared-memory]`) and fail if the mechanism regresses |
 | **SLM-5 — Per-tenant accounting (priced, not proposed)** | What attribution would take: a per-instance charge at `memory.grow`, a `MemoryBudget` field for it, and the interaction with `MP-4` and `CFG-2`. Include the honest answer that it may be worth *nothing* to an embedder who already treats the memory as one tenant | `SLM5`, `SLM13` | C (would need an engine decision) | A written decision — implement or decline — with the cost of both. **No code in this milestone.** |
-| **SLM-6 — The language/toolchain study** | Run §10's matrix: build one minimal module per pinned toolchain with `--import-memory` (or its equivalent), record where the stack, heap and data land, and whether the toolchain emits or consumes `__heap_base` | `SLM11`, `SLM12` | A (measurement) | The table has a measured value or an explicit "not possible" per row, per pinned version — the standard the `LF-2` reports use |
+| **SLM-6 — The language/toolchain study** ✅ | Ran §10's matrix: one minimal module per pinned toolchain, `--import-memory` or its equivalent, the stack/heap/data values recorded, and `__heap_base`/`__data_end` probed with and without the export flags. Ten arms, plus a two-module sharing probe | `SLM11`, half of `SLM12` | A (measurement) | **Done 2026-11-18** (`6f2a391`): §10.3/§10.4 carry a measured value or an explicit "not possible" per arm and version, and §15 carries the commands, sizes and hashes. Go and TinyGo answer Q1 "no" |
 | **SLM-7 — The linker question (a watch item)** | §12 is the scoping: the five jobs a linker does, the DLL experiment, the capability ladder, and what only a linker could buy. Rungs 5–6 (assign the layout, then re-bind an already-built module) are the whole question, and they are **class E** | — (a decision, not a gap) | — / **E** if ever attempted | A trigger from §12.7 fires *and* §12's ladder shows the trigger cannot be met by the build-side recipe. Until then this row exists so the question stays answerable |
 
 Ordering: `SLM-1` and `SLM-2` first (one document, one rule); `SLM-4` next (it
 makes `SLM-1`'s example executable); `SLM-3` after the test exists, because a
-contract is only worth writing when a test can check it; `SLM-6` independently,
-whenever a language matters; `SLM-5` last and never as code by default; `SLM-7`
-never starts without a §12.7 trigger.
+contract is only worth writing when a test can check it; `SLM-6` is **done**, and
+its numbers are what `SLM-1` to `SLM-3` now quote; `SLM-5` last and never as code
+by default; `SLM-7` never starts without a §12.7 trigger.
 
 Stop conditions:
 
-- If `SLM-6` shows that no toolchain in the set can emit `--import-memory`, the
+- ~~If `SLM-6` shows that no toolchain in the set can emit `--import-memory`, the
   recommendation flips to "partition or build-time merge" and `SLM-1` documents
-  that instead. The mechanism does not change; the recipe does.
+  that instead.~~ **Partly fired, per language (2026-11-18):** the set as a whole
+  can import a memory, but **Go and TinyGo cannot**, so for those two the
+  recommendation *is* option A or F, and `SLM-1` must say so per language rather
+  than for "a script" (§10.3, Q1). The mechanism does not change; the recipe does.
 - If `SLM-4`'s grow case shows a backend that *does* cache the base, `SLM-1`
   records the backend limitation and the note stops recommending cross-module
   growth for that backend.
@@ -399,6 +408,12 @@ Three shapes avoid it, and they are the only three this note recommends:
 preferred because it makes `SLM2` structural; E when the toolchain already
 supports it and the modules are third-party; F when the "scripts" are known at
 build time; A for anything untrusted; G as the long-term story, not the near one.
+**`SLM-6` added the condition that matters in practice:** B and C are available
+only to toolchains that can import a memory, which at the measured pins are C,
+C++, Rust, Zig and AssemblyScript; a **Go or TinyGo** module is option **A** or
+**F** until its linker grows the flag (§10.3, Q1). For the five that can import,
+the recipe's first cost is the stack: a wasi C/C++ module declares 512 pages by
+default (§10.4).
 
 ### 9.3 The fourteen pitfalls
 
@@ -408,14 +423,22 @@ Numbered so §9.2 can refer to them; each is a *behaviour*, not a suspicion.
 2. **Data-segment overwrite** — every instantiation runs the module's active
    segments; a reload re-initialises shared bytes (`SLM7`).
 3. **Stack collision** — `__stack_pointer` is a module-local global; two
-   independently linked modules choose overlapping stacks.
-4. **Layout collision** — the same, for statics and the initial heap.
+   independently linked modules choose overlapping stacks. **Measured defaults**
+   (§10.4): 16 MiB for wasi C/C++, 1 MiB for Rust and Zig, 64 KiB for
+   freestanding C and TinyGo, runtime-owned for Go. `-z stack-size` (C/C++/Rust)
+   and `--stack` (Zig) are the knobs; a 3-page tenant is possible in all four.
+4. **Layout collision** — the same, for statics and the initial heap. The bases
+   are readable only when the build exports them: `__heap_base`/`__data_end` are
+   opt-in in every arm, and Go, TinyGo and AssemblyScript have no such symbols at
+   all (§10.4).
 5. **Growth bookkeeping divergence** — an allocator that caches `memory.size()`
    is wrong the moment another module grows the memory. (This engine reloads the
    base per access, so *addresses* stay right; the allocator's own bookkeeping
    does not.)
 6. **Growth permission** — any importer may grow; a partition plan is
-   unenforceable by the engine (`SLM6`).
+   unenforceable by the engine (`SLM6`). **Measured** (§10.3, Q6): every libc or
+   runtime arm contains `memory.grow` — in `sbrk`, in `dlmalloc`, in Go's
+   `growMemory`, in AssemblyScript's heap — so there is no quiet tenant to assume.
 7. **Link-time mismatch** — index type, `shared` flag, page size, min and max are
    matched exactly; the failure is a loud `UnresolvedImportException`, which is
    the *good* outcome, but it means the build must agree with the host's memory
@@ -423,7 +446,10 @@ Numbered so §9.2 can refer to them; each is a *behaviour*, not a suspicion.
 8. **Lifetime** — the creator's `~ModuleInstance` releases the memory; importers
    are left with a borrowed pointer the engine does not track (`SLM2`).
 9. **Table sharing** — indirect calls across modules need a shared table *and* a
-   non-overlapping index allocation (`SLM10`).
+   non-overlapping index allocation (`SLM10`). The per-module tables measured
+   (§10.3, Q8) range from 1 entry (C/C++/Zig) through 4 (TinyGo), 20 (Rust) and
+   59 (Rust-wasip1) to 5,355 (Go), and AssemblyScript emits none — so "a shared
+   table" is a different amount of work per language.
 10. **Budget attribution** — one counter for N tenants (`SLM5`).
 11. **Re-instantiation semantics** — see 2; `Runtime` is idempotent per `Module`,
     so a reload is a new parse and a new resolution (`SLM7`).
@@ -434,12 +460,16 @@ Numbered so §9.2 can refer to them; each is a *behaviour*, not a suspicion.
 14. **Component expectations** — the canonical ABI *does* marshal, so moving to
     components does not by itself remove copies (option G).
 
-## 10. Appendix B: the language-memory-layout study
+## 10. Appendix B: the language-memory-layout study, run
 
-`SLM-6` is a measurement, not an assertion, so this appendix is a **plan** for
-it: a list of questions with a column to fill, not a table of claims. Every cell
-below is `verify`, and the standard is the one the `LF-2` reports use — a pinned
-toolchain version, a command, and the value it printed (or "not possible").
+**Snapshot (2026-11-18, `6f2a391`, branch `study/slm6-toolchain-layout`).**
+Revisions 1–3 carried this appendix as a *plan*; `SLM-6` executed it. Ten
+toolchain arms built one minimal module each, the artifacts were inspected with
+`wasm-tools` 1.252.0, and every arm that can import its memory was instantiated
+two-at-a-time against one host memory (§10.5). §15 is the evidence log: versions,
+commands, artifact sizes, and what was not run. The two rules the plan stated
+still hold, and the matrix obeys them — **a row with no measurement is not a
+row**, and **a pinned version is part of the answer**.
 
 ### 10.1 The questions
 
@@ -455,31 +485,191 @@ toolchain version, a command, and the value it printed (or "not possible").
 | Q8 | Does it emit an **indirect-call table** per module? | decides the table-sharing work (pitfall 9) |
 | Q9 | Does it support **dynamic linking / PIC**? | decides whether option E is available (pitfall 14's sibling) |
 
-### 10.2 The candidate rows
+### 10.2 The arms
 
-The arms the `LF-2` study already built and ran are the natural first rows
-(`../languages/LF2_S1_C_CPP.md`, `LF2_S2_LLVM.md`, `LF2_S3_AS.md`,
-`LF2_S5_GUEST_VMS.md`), plus the two the language triage flagged as
-single-memory-assuming. The table starts empty on purpose:
+One fixture per language — a 1 KiB static buffer, a 64-byte stack frame, an
+allocation through the language's own allocator, and a `poke`/`peek` pair that
+writes and reads an address the caller chooses (the pair is what §10.5 uses).
 
-| Language / toolchain | Version | Q1 | Q2 | Q3 | Q4 | Q5 | Q6 | Q7 | Q8 | Q9 |
-|---|---|---|---|---|---|---|---|---|---|---|
-| C/C++ (clang + `wasm-ld`) | *pin* | verify | verify | verify | verify | verify | verify | verify | verify | partial |
+| Arm | Language | Pinned toolchain | What the arm is |
+|---|---|---|---|
+| `C-bare` | C | clang 23.1.6 + wasm-ld (LLVM 23), `--target=wasm32 -nostdlib` | no libc, no allocator: the smallest possible tenant |
+| `C-wasi` | C | `zig cc -target wasm32-wasi -mexec-model=reactor` (clang 20.1.8, Zig 0.15.2's wasi-libc) | a reactor module with `emmalloc` and `sbrk` |
+| `C++-wasi` | C++ | `zig c++`, same target | adds a static constructor, i.e. the `_initialize` path |
+| `Rust` | Rust | rustc 1.99.1 (2026-10-13), `wasm32-unknown-unknown`, `-O --crate-type cdylib` | `std` + `dlmalloc`, a 20-entry table |
+| `Rust-wasi` | Rust | the same rustc, `wasm32-wasip1` | `std` + `dlmalloc` + `sbrk`, four WASI imports, a 59-entry table |
+| `Zig-bare` | Zig | zig 0.15.2, `-target wasm32-freestanding -fno-entry` | `page_allocator`, a 1-entry table |
+| `Zig-wasi` | Zig | zig 0.15.2, `-target wasm32-wasi` | libc and a `_start` export |
+| `Go` | Go | go 1.27.4, `GOOS=wasip1 GOARCH=wasm` | the runtime owns memory, stack and heap |
+| `TinyGo` | Go (TinyGo) | tinygo 0.40.1 (LLVM 20.1.1), `GOTOOLCHAIN=go1.25.6` | TinyGo's runtime, with `malloc`/`free`/`calloc`/`realloc` exported |
+| `AS` | AssemblyScript | asc 0.28.19, `--optimize` | the AS runtime heap (`__new`) over `memory.grow` |
 
-Two rules for the study, both borrowed from `../FRESHNESS.md`:
+Two version notes a re-run needs, both of them the `LF-4` study's:
 
-- **A row with no measurement is not a row.** "Probably works" is exactly the
-  claim this note exists to avoid.
-- **A pinned version is part of the answer.** "Rust can do it" is not a fact
-  about Rust; "the pinned Rust toolchain emits X for this command" is.
+- **TinyGo 0.40.1 refuses a Go 1.27 front end** ("requires go version 1.19
+  through 1.25, got go1.27"). The arm was built with `GOTOOLCHAIN=go1.25.6` and a
+  `go 1.25` directive in `go.mod` ([`../languages/LF4_EVIDENCE.md`](../languages/LF4_EVIDENCE.md) §2).
+- The C/C++ arms' libc is **the wasi-libc Zig ships**, whose allocator is
+  `emmalloc`, not wasi-sdk's `dlmalloc`. The two are different answers to Q5, and
+  the numbers below are Zig's; a wasi-sdk arm would answer Q3 and Q6 the same way
+  and Q5 differently.
 
-### 10.3 What the study would change
+### 10.3 The capability answers
 
-Nothing in §5's mechanism table — the engine does not care which toolchain
-produced the module. It changes **§4.2's recommendation**: if a language cannot
-import a memory (Q1 = no), that language's modules can only participate through
-option A (copy) or F (build-time merge), and `SLM-1` must say so rather than
-suggesting a recipe that will not build.
+| Arm | Q1 imported memory | Q2 exports memory | Q5 allocator | Q6 grows | Q7 initial size | Q8 table | Q9 PIC / dynamic linking |
+|---|---|---|---|---|---|---|---|
+| `C-bare` | **yes** `-Wl,--import-memory` (declared min 2 pages, no max) | **yes** by default | none (no libc) | **no** (`memory.grow` count 0) | `--initial-memory`, `--max-memory` | none (no indirect calls) | **yes** `-fPIC -Wl,--experimental-pic -shared` |
+| `C-wasi` | **yes**, the same flag | **yes** by default | `emmalloc` + `sbrk`, internal, not exported | **yes** (`memory.grow` inside `sbrk`) | `--initial-memory`, `--max-memory`; 2 MiB is *rejected* while the default stack is 16 MiB | 1 entry | not measured for the reactor arm |
+| `C++-wasi` | **yes** | **yes** | as `C-wasi`; `_initialize` runs the static constructor | **yes** | as `C-wasi` | 1 entry | not measured |
+| `Rust` | **yes** `-C link-arg=--import-memory` | **yes** by default | `dlmalloc`, internal | **yes** (`dlmalloc`'s sys allocator) | `-C link-arg=--initial-memory`; `--global-base` must be covered by it | 20 entries | **no** (no PIC mode for the wasm targets at this pin) |
+| `Rust-wasi` | **yes** | **yes** | `dlmalloc` + `sbrk` | **yes** | as `Rust` | 59 entries | **no** |
+| `Zig-bare` | **yes** `--import-memory` | **yes** unless imported (`--export-memory` is the default) | whatever the source names (the fixture used `page_allocator`) | **no** | `--initial-memory`, `--max-memory` | 1 entry | accepted `-fPIC`, but **no** PIC shape: no `__memory_base`, only `env.memory` |
+| `Zig-wasi` | **yes** | **yes** unless imported | libc `malloc` (`emmalloc`) + `sbrk` | **yes** | as `Zig-bare` | 1 entry | not measured |
+| `Go` | **no** — `-ldflags=-import-memory` is rejected ("flag provided but not defined"), and there is no other flag | **yes** — it defines and exports `memory` | the runtime's own heap (`mallocgc`), no `malloc` symbol | **yes** (`runtime.growMemory`) | **no** flag (32 pages declared) | 5,355 entries | **no** |
+| `TinyGo` | **no** — the same rejection | **yes** | its own `malloc`/`free`/`calloc`/`realloc`, **exported** | **yes** | **no** flag (2 pages declared) | 4 entries | **no** |
+| `AS` | **yes** `--importMemory` (imports `env.memory`; still exports it) | **yes** | `__new` over `heap.alloc` + `memory.grow` | **yes** (three `memory.grow` sites) | `--initialMemory`, `--maximumMemory` (pages) | none | **no** |
+
+Three answers carry more weight than the rest: **Q1 splits the set** (Go and
+TinyGo cannot join a shared memory at all), **Q5 names the one trap** (every libc
+allocator is statically inside its module and none is exported), and **Q9 is a
+C-only story** at these pins.
+
+### 10.4 The layout numbers
+
+Default builds first — what a module looks like when nobody passes a layout flag.
+Pages are 64 KiB.
+
+| Arm (default build) | memory | `__stack_pointer` global | data segment(s) |
+|---|---|---|---|
+| `C-bare` | 2 pages, defined + exported | **none** — the stack address (65,472) is folded into the code as a constant | 1, at 65,536 |
+| `C-wasi` | 257 pages, defined + exported | 16,777,216 (16 MiB) | 1, at 16,777,216 |
+| `C++-wasi` | 257 pages | 16,777,216 | 1, at 16,777,216 |
+| `Rust` | 17 pages | 1,048,576 (1 MiB) | 2, 1,048,576–1,049,356 |
+| `Rust-wasi` | 17 pages | 1,048,576 | 2, 1,048,576–1,053,692 |
+| `Zig-bare` | 17 pages | 1,048,576 (the stack sits *below* the data) | 1, at 1,048,576 |
+| `Zig-wasi` | 257 pages | 16,777,216 | 1, at 16,777,216 |
+| `Go` | 32 pages | none (`__stack_pointer` is not a linker symbol here) | 21,078, 20,160–936,513 |
+| `TinyGo` | 2 pages | 65,536 (64 KiB) | 2, 65,536–65,820 |
+| `AS` | 1 page | none | 21, 2,060–2,768 |
+
+Now the layout builds — the flags that make a module a *tenant*, and what the
+linker wrote.
+
+| Arm (layout flags) | memory (pages) | `__stack_pointer` | `__heap_base` | `__data_end` | data |
+|---|---|---|---|---|---|
+| `C-bare` `--import-memory --initial-memory=2 MiB --max-memory=4 MiB --global-base=1 MiB --stack-first` + exports | 32–64, imported | 65,536 | 1,049,600 | 1,049,600 | 1,048,576 |
+| `C-bare` `-z stack-size=131072` (with `--import-memory`) | 3, imported | 131,072 | — | — | 131,072 |
+| `C-wasi` `--import-memory --initial-memory=32 MiB --max-memory=64 MiB` | 512–1024, imported | 16,777,216 | — | — | 16,777,216 |
+| `C-wasi` `--global-base=1 MiB -z stack-size=1 MiB --initial-memory=4 MiB` + exports | 64–128, imported | 2,099,232 | 2,099,232 | 1,050,644 | 1,048,576–1,050,624 |
+| `C-wasi` `-z stack-size=131072` | 3, imported | 131,072 | — | — | 131,072–133,120 |
+| `Rust` `--import-memory --initial-memory=2 MiB` | 32, imported | 1,048,576 | — | — | 1,048,576–1,049,356 |
+| `Rust` `--global-base=2 MiB --initial-memory=4 MiB` + exports | 64, imported | 1,048,576 | 2,099,456 | 2,099,446 | 2,097,152–2,097,932 |
+| `Rust` `-zstack-size=131072` | 3, imported | 131,072 | — | — | 131,072–131,852 |
+| `Zig-bare` `--import-memory --initial-memory=2 MiB` + exports | 48–64, imported (Zig raises the declared minimum to fit its 1 MiB stack: 2,098,176 bytes need 48 pages) | 1,048,576 | 1,049,600 | 1,049,600 | 1,048,576 |
+| `Zig-bare` `--global-base=2 MiB --initial-memory=8 MiB` + exports | 128–256, imported | 3,146,752 | 3,146,752 | 2,098,176 | 2,097,152 |
+| `Zig-bare` `--stack 131072` | 3, imported | 131,072 | — | — | 131,072 |
+| `Zig-wasi` `--import-memory --stack 1 MiB --initial-memory=3 MiB` + exports | 48–64, imported | 1,048,576 | 1,049,632 | 1,049,632 | 1,048,576–1,049,600 |
+| `Zig-wasi` `--stack 131072` | 3, imported | 131,072 | — | — | 131,072–132,096 |
+| `AS` `--importMemory --initialMemory 33 --maximumMemory 64 --memoryBase 1024` | 33–64, imported | — | — | — | 1,024–2,640 |
+| `AS` the same with `--memoryBase 8192` | 33–64, imported | — | — | — | 8,192–9,808 |
+
+Four readings that a recipe has to absorb:
+
+- **The default stack is the surprise, not the base.** wasi C/C++ wants a 16 MiB
+  stack, so a build that declares `--initial-memory` below 16,778,272 bytes
+  *fails the link* (measured: a 2 MiB declaration is rejected), and a module that
+  imports the memory declares 512 pages the host memory must satisfy. Rust and
+  Zig default to 1 MiB, freestanding C to 64 KiB, TinyGo to 64 KiB of low memory,
+  and Go's stack is the runtime's, not the linker's. `-z stack-size`
+  (C/C++/Rust) and `--stack` (Zig) bring a tenant down to 3 pages.
+- **`--global-base` moves different things in different toolchains.** C/C++ move
+  the data (and, with `--stack-first`, the stack to the bottom); Rust moves the
+  data but leaves the stack at 1 MiB unless `-zstack-size` changes it; Zig moves
+  both data and stack (the flag is accepted although `zig build-exe --help` does
+  not list it); AssemblyScript has `--memoryBase`; Go and TinyGo have nothing.
+- **`__heap_base`/`__data_end` are opt-in everywhere.** No arm exports them by
+  default; `--export=__heap_base --export=__data_end` works for C, C++, Rust and
+  Zig (`-C link-arg=…` for Rust), and the values above are what a host reads.
+  Go, TinyGo and AssemblyScript have no such symbols at all, so the `SLM-4`
+  overlap assertion can only be written for the first four.
+- **Data is not one segment.** Go emits 21,078 active segments and TinyGo two;
+  a load-time rewrite (rung 6, §12.3) would have to walk all of them, which is
+  one more reason it stays class E.
+
+### 10.5 The sharing demonstration
+
+A layout table proves that a module *says* it imports `env.memory`; it does not
+prove the artifact works against one. So the importable arms were also
+instantiated **two at a time against a single host memory** — 64 pages, with the
+maximum set to the smallest maximum the pair declares (64 for most pairs, 128 for
+the `C-wasi` pair) — in Node 24.16.0, which is a plain spec host and deliberately
+*not* this engine: call `_initialize` where the module has one, call `entry(1)` on
+both, then have module A write `42` at `0x8000` through `poke` and module B read
+that byte back through `peek`.
+
+| Pair | `entry(1)` | byte A wrote | byte B read | byte the host read |
+|---|---|---|---|---|
+| `C-bare` importer + `C-bare` at `--global-base=1 MiB` | 8, 8 | 42 | 42 | 42 |
+| `C-wasi` at `--global-base=1 MiB` + `C-wasi` at `-z stack-size=128 KiB` | 8, 8 | 42 | 42 | 42 |
+| `Rust` importer + `Rust` at `--global-base=2 MiB` | 9, 9 | 42 | 42 | 42 |
+| `Zig-bare` importer + `Zig-bare` at `--stack 128 KiB` | 9, 9 | 42 | 42 | 42 |
+| `AS` at `--memoryBase 1024` + `AS` at `--memoryBase 8192` | 8, 8 | 42 | 42 | 42 |
+
+One thing this buys the note and three it does not:
+
+- **Bought:** the flags in §10.4 produce artifacts that really alias one memory —
+  the peer's `peek` returns the byte the writer stored, with no copy anywhere —
+  and a wasi reactor with `emmalloc` takes part in it once `_initialize` is
+  called.
+- **Not bought — the allocator question.** The two modules' heaps cannot collide
+  *in this fixture* only because `entry` never allocates. §9.1's trap stands
+  untouched, and `SLM-3` is still the contract that answers it.
+- **Not bought — the Go and TinyGo rows.** Neither can be in a pair: both define
+  their memory and reject `-import-memory` (§10.3, Q1). A Go tenant is option
+  **A** (copy) or option **F** (build-time merge) until the toolchain grows the
+  flag.
+- **Not bought — anything about WasmJit.** This is a spec host, not the engine.
+  The engine's own aliasing — one `LinearMemory*` under two `VMContext`s with the
+  base reloaded per access — is §4.1's shipped behaviour, and the test that pins
+  it is `SLM-4`'s. Nothing here is added to the suite.
+
+### 10.6 What the numbers change
+
+Nothing in §5's mechanism table: the engine still does not care which toolchain
+produced the module. What changes is the *recommendation* and the milestones that
+carry it.
+
+| Effect | Where | What it now says |
+|---|---|---|
+| The shared group is named | §9.2 recommendation, `SLM-1` | **C, C++, Rust, Zig and AssemblyScript** can be R2 tenants at these pins. **Go and TinyGo cannot**, so `SLM-1` must say so instead of implying that "a script" is language-neutral. |
+| The build recipe grows a column | `SLM-1`, §11.2 | the flags per arm are §10.3/§10.4's, and the 16 MiB wasi stack is the first thing a host gets wrong: shrink it (`-z stack-size`, `--stack`) or budget 512 pages for every C/C++ tenant. |
+| The overlap assertion is partial | `SLM-3`, `SLM-4` | `__heap_base`/`__data_end` are opt-in everywhere and absent for Go, TinyGo and AS. The assertion is available for four arms, and the other three are "the module owns its memory" cases. |
+| The allocator table exists | `SLM-3`, `SLM-12`, §13 | `malloc`/`free`/`realloc`, `emmalloc_malloc`, `dlmalloc`, `sbrk`, `__new` — the symbols an injection pass would rebind are now a measured list per toolchain, which is what §13 said it needed. The *pass* is still unstarted, and still carries [`LEGACY_EXCEPTIONS.md`](LEGACY_EXCEPTIONS.md)'s obligation: rewrite, re-validate, prove nothing else changed. |
+| Growth is confirmed | §9.3 pitfall 6 | every libc or runtime arm contains `memory.grow` (in `sbrk`, in `dlmalloc`, in Go's `growMemory`, in AS's heap). The partition plan cannot assume a quiet tenant. |
+| Table sharing is per language | `SLM10` | 5,355 entries for Go, 59 for Rust-wasip1, 20 for Rust, 4 for TinyGo, 1 for C/C++/Zig, none for AS. A shared table is not one problem but one per toolchain. |
+| Option E is narrower than it looked | §9.2 option E, §12.6 | only C produced a PIC artifact (`env.memory`, `env.__memory_base`, and a *mutable* `env.__stack_pointer` global). Rust, Go, TinyGo and AS have no dynamic-linking mode at these pins, and Zig accepts `-fPIC` without emitting one. |
+
+The §7 stop condition — *if no toolchain can emit `--import-memory`, the
+recommendation flips to partition or build-time merge* — did **not** fire for the
+set as a whole. It fired **per language**, for Go and TinyGo, and `SLM-1` is where
+that is written down.
+
+### 10.7 What was not verified
+
+- **Emscripten was not run** (`emcc` is not installed). Its memory is normally
+  owned by its JavaScript glue, which this engine does not load
+  ([`../SCOPE.md`](../SCOPE.md) §3, [`JS_INTEGRATION.md`](JS_INTEGRATION.md)), so
+  its row needs the standalone shape and is left for a run that has the toolchain.
+- **Kotlin/Wasm, Dart, MoonBit, .NET, Swift and the guest VMs were not attempted**
+  here; their producers are mapped in [`../languages/TOOLCHAINS.md`](../languages/TOOLCHAINS.md),
+  and `LF-4` measured their *component* output, not these flags.
+- **The wasi arms were not all instantiated**: `Rust-wasip1` and `Zig-wasi` were
+  inspected but not put in a sharing pair, because their `_start`/`_initialize`
+  paths want a WASI surface this probe does not implement.
+- **Threads flags were not measured** (`--shared-memory`, `-matomics`); this note
+  does not depend on them ([`THREADS.md`](THREADS.md), [`SHARED_EVERYTHING_THREADS.md`](SHARED_EVERYTHING_THREADS.md)).
+- **The engine was not in the loop for the numbers.** §10.5 is a spec host; the
+  WasmJit-side assertion is `SLM-4`'s test, not this appendix's.
 
 ## 11. Appendix C: pseudocode
 
@@ -543,6 +733,13 @@ build(scriptB)  with  --global-base=285212672           // 0x1100_0000, same pat
 assert_disjoint(  exports(monolith).__heap_base, exports(scriptA).__heap_base,
                   exports(scriptB).__heap_base )        // see SLM-4
 ```
+
+Three numbers in that sketch are now measured rather than assumed (§10.4): the
+`__heap_base`/`__data_end` exports are **opt-in** in every toolchain, so the build
+must ask for them; `--global-base` moves the data in C/C++/Rust and the data *and*
+stack in Zig; and `--initial-memory` must cover the module's **default stack**,
+which is 16 MiB for wasi C/C++ — a 2 MiB declaration fails the link instead of
+overlapping a neighbour, which is the good failure but a surprising one.
 
 ### 11.3 The allocator contract
 
@@ -925,7 +1122,113 @@ modules' memory *addressable* and the layout *unconstrained*; the embedder's job
 is to impose a layout on the modules it controls. The two compose without a line
 of engine code.
 
-## 15. References
+## 15. Appendix G: the evidence log
+
+**Snapshot (2026-11-18, `6f2a391`, branch `study/slm6-toolchain-layout`).**
+Every number in §10 comes from this log. Nothing in the engine was patched: the
+fixtures and artifacts lived in a gitignored study workspace (`build/slm6/` in
+the working tree), inspection used `wasm-tools` 1.252.0, and the sharing probe
+used Node 24.16.0 as a plain spec host. Tool installation directories are not
+recorded; versions, flags, sizes and hashes are.
+
+### 15.1 The toolchains
+
+| Arm | Version, as measured | How it was pinned |
+|---|---|---|
+| `C-bare`, `C-wasi`, `C++-wasi` | clang 23.1.6 (system LLVM 23) for the freestanding arm; **clang 20.1.8** for `zig cc`/`zig c++` (Zig 0.15.2 bundles it) | `clang --target=wasm32`, or `zig cc -target wasm32-wasi -mexec-model=reactor` |
+| `Rust`, `Rust-wasi` | rustc 1.99.1 (58cf8f9c3 2026-10-13) | `--target wasm32-unknown-unknown` / `wasm32-wasip1`, `-O --crate-type cdylib` |
+| `Zig-bare`, `Zig-wasi` | zig 0.15.2 | `zig build-exe -target wasm32-freestanding` / `wasm32-wasi` |
+| `Go` | go 1.27.4 (X:nodwarf5) | `GOOS=wasip1 GOARCH=wasm` |
+| `TinyGo` | tinygo 0.40.1 (LLVM 20.1.1) | `-target=wasip1`, with `GOTOOLCHAIN=go1.25.6` and `go 1.25` in `go.mod` |
+| `AS` | AssemblyScript 0.28.19 (`asc`) | `--optimize`, `--exportRuntime` where the heap helpers are wanted |
+| inspection | wasm-tools 1.252.0 | `wasm-tools print`, plus a regex reader for globals, exports, data segments and `memory.grow` counts |
+| sharing probe | Node 24.16.0 | `WebAssembly.Module` / `Instance` against one `WebAssembly.Memory` |
+
+### 15.2 The commands
+
+One command per arm, wrapped for width; every flag that matters is in
+§10.3/§10.4. `OUT` is the arm's artifact directory, `SRC` the fixture.
+
+```
+# C, freestanding
+clang --target=wasm32 -nostdlib -O2 -Wl,--no-entry -Wl,--export=entry \
+      -Wl,--export=poke -Wl,--export=peek -Wl,--import-memory \
+      -Wl,--initial-memory=2097152 -Wl,--max-memory=4194304 \
+      -Wl,--global-base=1048576 -Wl,--stack-first \
+      -Wl,--export=__heap_base -Wl,--export=__data_end -Wl,--export=__stack_pointer \
+      -o OUT/c-bare-layout.wasm SRC/layout.c
+
+# C and C++, wasi reactor (emmalloc)
+zig cc -target wasm32-wasi -mexec-model=reactor -O2 \
+      -Wl,--import-memory -Wl,--initial-memory=4194304 -Wl,--max-memory=8388608 \
+      -Wl,-z,stack-size=1048576 -Wl,--global-base=1048576 \
+      -Wl,--export=__heap_base -Wl,--export=__data_end -Wl,--export=__stack_pointer \
+      -o OUT/c-wasi-layout.wasm SRC/layout_libc.c
+zig c++ -target wasm32-wasi -mexec-model=reactor -O2 \
+      -Wl,--import-memory -Wl,--initial-memory=33554432 -o OUT/cpp-wasi-import.wasm SRC/layout.cpp
+
+# Rust
+rustc --target wasm32-unknown-unknown -O --crate-type cdylib \
+      -C link-arg=--import-memory -C link-arg=--initial-memory=4194304 \
+      -C link-arg=--global-base=2097152 \
+      -C link-arg=--export=__heap_base -C link-arg=--export=__data_end \
+      -C link-arg=--export=__stack_pointer -o OUT/rust-unknown-layout.wasm SRC/layout.rs
+rustc --target wasm32-wasip1 -O --crate-type cdylib \
+      -C link-arg=--import-memory -C link-arg=--initial-memory=2097152 \
+      -o OUT/rust-wasip1-import.wasm SRC/layout.rs
+
+# Zig
+zig build-exe -target wasm32-freestanding -fno-entry -O ReleaseSmall \
+      --export=entry --export=poke --export=peek \
+      --export=__heap_base --export=__data_end --export=__stack_pointer \
+      --global-base=2097152 --import-memory --initial-memory=8388608 --max-memory=16777216 \
+      -femit-bin=OUT/zig-bare-layout.wasm SRC/layout.zig
+zig build-exe -target wasm32-wasi -lc -O ReleaseSmall \
+      --import-memory --stack 131072 --export=__stack_pointer \
+      -femit-bin=OUT/zig-wasi-stack.wasm SRC/layout_wasi.zig
+
+# Go and TinyGo (neither has an import-memory flag)
+cd SRC/golayout   && GOOS=wasip1 GOARCH=wasm go build -o OUT/go-wasip1-default.wasm .
+cd SRC/tinygolayout && GOTOOLCHAIN=go1.25.6 tinygo build -target=wasip1 \
+      -o OUT/tinygo-wasip1-default.wasm .
+
+# AssemblyScript
+asc SRC/layout.ts --outFile OUT/as-import-a.wasm --optimize \
+      --importMemory --initialMemory 33 --maximumMemory 64 --memoryBase 1024
+```
+
+### 15.3 The artifacts
+
+Sizes in bytes, hashes SHA-256. The twelve below are the artifacts `SLM-6`
+kept a hash for — the ones §10.4 and §10.5 quote; every other arm named in
+§10.3 or §10.4 was built and inspected the same way, from the commands in
+§15.2.
+
+| Artifact | Size | SHA-256 |
+|---|---:|---|
+| `c-bare-import.wasm` | 1568 | `b81d093fb5cb38be435dd635dc27d9691c3811d7364d5b496d95986dd72e670a` |
+| `c-bare-layout.wasm` | 1603 | `a586b0d4e531e5fc0ed630e2d5d503d3f4ec1e854dfc60169674b15de9baf228` |
+| `c-wasi-layout.wasm` | 4987 | `1fface6a3ace1fc8f01d3f1a0658f2616f9f6c2dcb1200d782fe503b42f378d7` |
+| `c-wasi-stack.wasm` | 4939 | `82714eaff592b931d11b4e6394f1f531e05ed66c9c705de546b942aa8cc0b4de` |
+| `rust-unknown-import.wasm` | 1654688 | `eea10b2205315caaff6033d49859b952e4744eb88f734c05b84ddac13f447463` |
+| `rust-unknown-layout.wasm` | 1654749 | `7d9278213a51f163e96edc8697551bbd840f196f5ec1e0fb39b2763e15fbbd9d` |
+| `zig-bare-import.wasm` | 1359 | `e11a99d4d648a8bfc471fd9a3d4ead43949dac17bc5a325ce73c974f7e924d8c` |
+| `zig-bare-stack.wasm` | 1313 | `b0779333836333c3cdd241e64471b76c0e44def676e489520ee90d68f19d8782` |
+| `as-import-a.wasm` | 5469 | `6aa1fc1aca79e24f31c4f385c2524ec3d205763d6faebfc61024d5e35a57a8e5` |
+| `as-import-b.wasm` | 5541 | `89992b3001e1327f1de1731901368c0a840bfb785441e478c27d101b7ce2fa73` |
+| `go-wasip1-default.wasm` | 1912271 | `5de31a118290b663f9b8f2e16b57b6b85a7f746880fecdccf9b547d2080db13c` |
+| `tinygo-wasip1-default.wasm` | 102993 | `a463c9bbe1164f15b0488022574d2e62fdac501b1362dcfd7b9fbbe8f79a02d0` |
+
+### 15.4 The fixture, so a re-run measures the same thing
+
+One source file per arm, semantically identical: a 1 KiB static buffer
+initialised to `1`s, a 64-byte frame written and read in a loop, an allocation
+through the language's own allocator, `entry(n) = stack_probe(n) + 1`, and
+`poke(ptr, value)` / `peek(ptr)` writing and reading one byte at an address the
+caller chooses. The stack frame is what makes Q3 measurable; the allocation is
+what makes Q5 and Q6 measurable; `poke`/`peek` are what §10.5 uses.
+
+## 16. References
 
 - The mechanism: `WasmBase/WasmModuleInstance.cpp` (`resolveImports`,
   `initializeMemories`, `~ModuleInstance`), `WasmBase/WasmImport.hpp`
@@ -949,6 +1252,16 @@ of engine code.
   toolchain flags), [`../FRESHNESS.md`](../FRESHNESS.md) §2.4 (why §4 is stamped).
 - Evidence for the language matrix: [`../languages/LF2_INDEX.md`](../languages/LF2_INDEX.md)
   and its `LF2_S*` arms; [`../languages/EVIDENCE.md`](../languages/EVIDENCE.md).
+- The `SLM-6` run's toolchains, all pinned in §15.1: clang/LLVM 23.1.6 and
+  `wasm-ld`; Zig 0.15.2, including the clang 20.1.8, wasi-libc and `emmalloc` it
+  bundles; rustc 1.99.1 with `wasm32-unknown-unknown` and `wasm32-wasip1`; Go
+  1.27.4; TinyGo 0.40.1 with `GOTOOLCHAIN=go1.25.6`; AssemblyScript 0.28.19;
+  `wasm-tools` 1.252.0 for inspection; Node 24.16.0 as the spec host of §10.5.
+  Sizes and hashes are §15.3.
+- The study protocol this appendix borrowed: [`../languages/LF4_EVIDENCE.md`](../languages/LF4_EVIDENCE.md)
+  §2 (one pinned toolchain per arm) and §8 (what was not verified);
+  [`../LANGUAGE_FEASIBILITY.md`](../LANGUAGE_FEASIBILITY.md) §8.4 (“a finding
+  without a reproducible artefact is an opinion”).
 - The DLL model, for §2.4 and §12: `man 3 dlopen`, `man 3 dlsym`, the ELF
   System V ABI (relocations, `GOT`/`PLT`, `RTLD_GLOBAL`/`RTLD_LOCAL`) — and the
   linked-library guidance every libc ships ("do not statically link a second

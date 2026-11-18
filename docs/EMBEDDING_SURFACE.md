@@ -61,7 +61,7 @@ provenance and the reason its two names do not survive here are in §3.
 | §13 | What do importing modules and generated headers see when a GC module exports struct, array or string references? |
 | §14 | Can host-to-guest templates, class bridges, SWIG or Glue replace an engine reflection system? |
 | §15 | Who owns each remaining problem: engine, embedder, tooling or source language? |
-| §16 | Could a GObject-shaped host object runtime give C-family languages a common object model, and how much of it is already the Component Model? |
+| §16 | Could a GObject-shaped host object runtime give C-family languages a common object model, how much of it is already the Component Model — and what the handle wire measures in six toolchains (§16.12)? |
 | §17 | References |
 
 ## 2. What the embedder has today
@@ -2555,9 +2555,11 @@ resources) is **ENG**; the object runtime, its table and its lifetime policy are
 **EMB**; the C header and the language bindings are **TOOL**; the fact that C
 cannot declare a typed `(ref $T)` is **LANG**. **No engine change is proposed.**
 
-Status: feasibility study (2026-11-12; implementation snapshot `9b2ca92`). It
-records no code, no header and no frozen-surface change. It answers the question
-left by §12 and [`languages/LF2_ABI_INTEROP.md`](languages/LF2_ABI_INTEROP.md)
+Status: feasibility study (2026-11-12; implementation snapshot `9b2ca92`),
+revision 2 (2026-11-18) adds §16.12 — the wire claim measured in seven
+toolchains. It records no engine code, no header and no frozen-surface change. It
+answers the question left by §12 and
+[`languages/LF2_ABI_INTEROP.md`](languages/LF2_ABI_INTEROP.md)
 §6: could a GObject/GLib-shaped host runtime be the common object model that
 C-family languages use manually and GC languages wrap silently?
 
@@ -2888,7 +2890,9 @@ In increasing cost:
 
 Until (1)–(4) exist, the correct statement is: **the engine provides the opaque
 primitive and the component resource contract; the HOR is an optional host
-design, not a tested feature.**
+design, not a tested feature.** §16.12 measured the *compile* half of (1) — the
+handle crosses an import and an export in every tested toolchain — and nothing
+beyond it.
 
 ### 16.11 Ownership register
 
@@ -2897,6 +2901,7 @@ design, not a tested feature.**
 | `externref` payload, `HostBridge`, GC object header, component resources | **ENG** | implemented; no change proposed | [`ABI.md`](ABI.md), [`GC.md`](proposals/GC.md), [`COMPONENT_MODEL.md`](proposals/COMPONENT_MODEL.md) |
 | HOR handle table, type registry, lifetime/thread policy | **EMB** | proposed, optional | this section |
 | C/C++/Rust/Zig/Go/TinyGo headers and GC-language bindings | **TOOL** | proposed | §11/§14 generator plan |
+| The handle **wire**, per toolchain (four `i64` imports + one export) | **TOOL** | **measured 2026-11-18** in six arms; `externref` only in C and AssemblyScript | §16.12 |
 | C has no typed `(ref $T)` | **LANG** | accepted (`LG-1`) | §15.6 |
 | Dynamic properties/signals/reflection | **EMB** | optional; not an engine feature | §12.7.3, §16.8 |
 | Component resource contract | **ENG** + **TOOL** | engine side installed; WIT/bindings are tooling | [`COMPONENT_MODEL.md`](proposals/COMPONENT_MODEL.md) §2.3/§4.3 |
@@ -2907,6 +2912,98 @@ engine should be asked only for a missing primitive that cannot be expressed
 through `externref`/`HostBridge`/resources, not for a reflection system.
 
 
+### 16.12 The wire claim, measured
+
+**Snapshot (2026-11-18, `6f2a391`).** §16.3's operation set is a specification,
+not an implementation; the layer below it *can* be checked without writing the
+runtime — whether each language can carry the handle §16.3 layer 1 describes. A
+GObject-shaped design fails here first when it fails at all: a C ABI a toolchain
+cannot spell is not available, however good the table behind it is.
+
+Seven fixtures over six languages — C appears twice, because the two clangs
+disagree about `externref` — each declaring the same four imports —
+`env.hor_create(i32) -> i64`, `env.hor_retain(i64) -> i64`,
+`env.hor_field(i64, i32) -> i64`, `env.hor_release(i64)` — and exporting
+`use_handle(n) -> i64`, which creates, retains, reads a field and releases. A
+second fixture, where the language can express it, carries the object as
+`externref` instead of `i64`. They were built in the same lab, with the same
+pinned toolchains, as [`proposals/SHARING_LINEAR_MEMORY.md`](proposals/SHARING_LINEAR_MEMORY.md)
+§10 (whose §15 is the evidence log).
+
+| Language | Toolchain (pinned) | Opaque 64-bit handle | `externref` | Artifact |
+|---|---|---|---|---|
+| C | clang 23.1.6, `--target=wasm32 -nostdlib` | **yes** — `long long` across all four imports and the export | **yes** — `__externref_t`, accepted by default | 355 B handle, 296 B `externref` |
+| C | clang 20.1.8 (the one Zig 0.15.2 ships) | yes, the same C source | **only** with `-mreference-types`; without it: `unknown type name '__externref_t'` | size not recorded |
+| Rust | rustc 1.99.1, `wasm32-unknown-unknown` | **yes** — `#[link(wasm_import_module = "env")]`, `u64`/`i64` | **no such type** on stable Rust | 1,633,391 B |
+| Zig | zig 0.15.2, `wasm32-freestanding` | **yes** — `extern "env" fn … (u64)` | **no such type** | 191 B |
+| Go | go 1.27.4, `wasip1` | **yes** — `//go:wasmimport env hor_create`, `uint64` | **no such type** | 1,910,747 B |
+| TinyGo | tinygo 0.40.1, `wasip1`, `GOTOOLCHAIN=go1.25.6` | **yes** — the same directive | **no such type** | 102,349 B |
+| AssemblyScript | asc 0.28.19 | **yes** — `@external("env", "hor_create")`, `u64` | **yes** — only with `--enable reference-types` | 160 B handle, 105 B `externref` |
+
+The import sections are the interesting artefact, because they are the contract a
+host would have to implement:
+
+```
+;; h-c-handle.wasm (excerpt)
+(import "env" "hor_create"    (func (;0;) (type 0)))   ;; (i32) -> i64
+(import "env" "hor_retain"    (func (;1;) (type 1)))   ;; (i64) -> i64
+(import "env" "hor_field"     (func (;2;) (type 2)))   ;; (i64, i32) -> i64
+(import "env" "hor_release"   (func (;3;) (type 3)))   ;; (i64) -> ()
+(export "use_handle" (func 4))
+```
+
+Four readings, and they are §16.5's table with measurements behind it:
+
+- **The wire layer is universal.** Every tested toolchain declares the four
+  imports and the export with exactly these signatures, so §16.3 layer 1 is
+  available everywhere and case 2 of §16.6 (a language object wrapping a handle)
+  has a working wire in all six. The imports are ordinary `i64` functions — the
+  surface `HostBridge` and native imports already resolve (§4.2, §11) — so the
+  HOR still needs **no engine change**, which is what §16.9 said and what this
+  run did not alter.
+- **`externref` is not universal, and it follows the toolchain.** clang 23 has
+  `__externref_t` by default, clang 20.1.8 only behind a flag, AssemblyScript only
+  behind `--enable reference-types`, and Rust, Zig, Go and TinyGo cannot name an
+  `externref` at all at these pins. That is §16.1's second layer measured: the
+  Wasm type relation is the *guest's* to give, not something a host runtime can
+  grant, and `LG-1`'s "no typed `(ref $T)` in C" has a sibling — most languages
+  cannot even spell the untyped reference.
+- **`i64` is the fallback, and it is enough for the wire.** Five of the six arms
+  carry the object as `u64`/`i64`. That is the practical shape §16.5 called
+  "B in §12.4", and nothing in §16.6 case 2 depends on the reference type.
+- **Size is not the cost.** The smallest handle fixtures are 160 B
+  (AssemblyScript), 191 B (Zig) and 355 B (C), and the `externref` ones are
+  105 B (AssemblyScript) and 296 B (C); the megabyte-sized artifacts are fixtures
+  that linked a language runtime, not the handle ABI. The cost stays
+  where §16.9 put it: descriptors, bindings and lifetime policy.
+
+What this run does **not** establish — and §16.10 remains the list:
+
+- **No host table.** Nothing was implemented, so there is no generation check, no
+  stale-handle rejection and no thread-affinity policy (§16.10 (1), (7), (8)).
+- **No lifetime.** `retain`/`release` were declared and linked against a stub;
+  the release-exactly-once, error-path and double-free cases (§16.10 (2), (6))
+  are unrun.
+- **No component parity.** §16.10 (4) belongs to the component surface, which
+  [`languages/LF4_INDEX.md`](languages/LF4_INDEX.md) §4 now shows green on all
+  seven arms (after `GAP-20`–`GAP-25`): resources, `own`/`borrow` and
+  `resource.drop` are the tested form of the same wire, and a HOR built as a WIT
+  package would ride them instead of re-testing them.
+- **No engine round-trip.** The modules were never instantiated by WasmJit, so
+  "the resolver links them" rests on §4.2's existing surface, not on this run.
+
+**Reproduction.** The fixtures are 20–30 lines each; the commands are the
+`SHARING_LINEAR_MEMORY.md` §15.2 pattern with a different source, and the two that
+are not `clang`/`rustc` shaped are:
+
+```
+# externref behind a flag, on the two clangs that have the type
+zig cc -target wasm32-wasi -mreference-types -mexec-model=reactor -O2 \
+      -Wl,--import-memory -o OUT/h-c-externref.wasm SRC/handle_ref.c
+
+# AssemblyScript, with reference types enabled
+asc SRC/handle_ref.ts --outFile OUT/h-as-externref.wasm --optimize --enable reference-types
+```
 ## 17. References
 
 - [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) — the gates, the frozen surfaces
