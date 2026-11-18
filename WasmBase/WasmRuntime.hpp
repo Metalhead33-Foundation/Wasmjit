@@ -242,7 +242,7 @@ public:
 	//! Destroys the instance of `module` and gives back everything it owned: the
 	//! backend's compiled code, its callable range, its memories, tables and GC
 	//! regions. The `Module` itself stays loaded (`modules_`), so the same module
-	//! can be instantiated again afterwards.
+	//! can be instantiated again afterwards — that half is `unloadImage`.
 	//!
 	//! What unload *invalidates*, and the host must therefore drop first: every
 	//! `Callable` obtained from the instance (`callExport` handles, exports
@@ -253,6 +253,36 @@ public:
 	//! is re-entrancy: an instance with a call in flight is refused.
 	/** \brief Unloads one module's instance and its backend resources. \param module Module whose instance is destroyed; it must have been instantiated by this runtime. \return true when an instance was unloaded, false when there was none. \throws std::runtime_error when a call is in flight on that instance. */
 	bool unload(const Module& module);
+
+	//! \par Image lifetime — the *unmap* half of the module-lifetime model
+	//! `loadBytes`/`loadFile` return the image handle: the shared pointer is both
+	//! identity (the runtime keys instances by it) and ownership (the parsed
+	//! image lives exactly as long as one handle does). The runtime takes its own
+	//! reference so an instance can outlive the embedder's handle; `unloadImage`
+	//! gives that reference back, and the image is freed with the last handle.
+	//!
+	//! The two halves are not interchangeable. An instance points into its image
+	//! (`sourceModule()`, the interned type ids, the active segments), so an image
+	//! that still has an instance is refused with a named error instead of being
+	//! destroyed underneath it — and so is an image the store still retains for a
+	//! *failed* instantiation, whose record keeps the image alive for the table
+	//! slots that name its functions (`Store::retainFailedInstance`). After the
+	//! call the runtime no longer owns the image: `hasImage` is false, a later
+	//! `instantiate` refuses it with the existing “not loaded by this runtime”
+	//! error, and loading the same bytes again produces a new image.
+	//!
+	//! Two things outlive it by design: the store interns the module's types, so
+	//! their `TypeId`s and canonical forms stay for the store's lifetime
+	//! (docs/TYPE_IDENTITY.md §6.1); and a *component* definition follows its own
+	//! `LoadedComponent` lifetime, not this one.
+	/** \brief Releases this runtime's reference to a parsed core module image. \param module Image to release; the caller must keep a live reference for the duration of the call. \return true when the runtime held the image and dropped it, false when it did not. \throws std::runtime_error when the module still has an instance, or when the store retains one from a failed instantiation. */
+	bool unloadImage(const Module& module);
+	//! True while this runtime still holds the parsed image of `module`.
+	/** \brief Tests whether this runtime holds a module image. \param module Candidate image. \return true while the runtime keeps the image alive. */
+	bool hasImage(const Module& module) const noexcept;
+	//! Number of parsed core module images this runtime holds.
+	/** \brief Returns the number of core module images the runtime holds. \return Image count. */
+	std::size_t imageCount() const noexcept;
 
 	//! \brief Calls
 	//! The lookup happens once; the calling convention does not change
@@ -341,6 +371,9 @@ private:
 	//! True when `module` was loaded (or otherwise registered) by this runtime.
 	/** \brief Tests whether a module is loaded or registered with this runtime. \param module Candidate module. \return true when this runtime owns its lifetime. */
 	bool ownsModule(const Module& module) const noexcept;
+	//! The handle this runtime holds for `module`, or null when it holds none.
+	/** \brief Looks up the owned handle of a loaded module image. \param module Module to look up. \return Shared handle, or nullptr when this runtime does not own the image. */
+	std::shared_ptr<const Module> imageOf(const Module& module) const noexcept;
 
 	//! Creates (adopts) the instance for one compile attempt at `policy`.
 	/** \brief Runs one instantiation attempt and adopts its instance. \param module Module to instantiate. \param imports Resolver for the module's imports. \param policy The policy this attempt compiles under. \return The adopted instance. */

@@ -906,11 +906,14 @@ external prerequisite is needed for the tooling-side milestones.
   flat and memory representations. Lowering a component call *serialises* those
   values into a buffer; it must not allocate GC objects. Sharing the `TypeRegistry`
   (CMD9) is about interning, not about unifying the two ASTs.
-- **[`../EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) §16** — a feasibility
-  study of a GObject-shaped host object runtime. Its wire half is the Component
-  Model’s `resource` + `own`/`borrow` + `resource.drop`; the non-redundant half
-  is a dynamic object model (properties, signals, reflection, interfaces), which
-  belongs in a WIT package plus a host implementation, not in `WasmBase/`.
+- **[`SYNTHETIC_OBJECTS.md`](SYNTHETIC_OBJECTS.md)** — a feasibility study of a
+  GObject-shaped host object runtime, whose unit is the *synthetic object*: the
+  object-side analogue of §4.6's synthetic module (a host-defined class reached
+  through an integer, described by a host descriptor, with no engine object). Its
+  wire half is this note's `resource` + `own`/`borrow` + `resource.drop`; the
+  non-redundant half is a dynamic object model (properties, signals, reflection,
+  interfaces), which belongs in a WIT package plus a host implementation, not in
+  `WasmBase/`.
 - **[`../TYPE_IDENTITY.md`](../TYPE_IDENTITY.md) §13** — why a host type registry
   is a third identity domain, and why nominal GType-style types cannot join
   Wasm’s structural `match`.

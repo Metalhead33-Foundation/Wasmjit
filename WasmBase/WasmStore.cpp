@@ -753,13 +753,35 @@ const Callable* Store::callableAt(const void* ref) const
 
 void Store::retainFailedInstance(std::unique_ptr<ModuleInstance> instance,
 		std::shared_ptr<ModuleInstantiator> instantiator,
-		std::shared_ptr<void> keepAlive)
+		std::shared_ptr<void> keepAlive,
+		std::shared_ptr<const Module> image)
 {
 	if (!instance)
 		return;
 	std::scoped_lock lock(storeMutex_);
-	retainedInstances_.push_back(RetainedInstance{
+	retainedInstances_.push_back(RetainedInstance{ std::move(image),
 			std::move(keepAlive), std::move(instantiator), std::move(instance) });
+}
+
+void Store::retainFailedInstance(std::unique_ptr<ModuleInstance> instance,
+		std::shared_ptr<ModuleInstantiator> instantiator,
+		std::shared_ptr<void> keepAlive)
+{
+	// The borrowing form, kept so the exported symbol set stays additive
+	// (docs/API_ABI_STABILITY.md G2): the caller owns the image itself, which is
+	// what every caller had to do before the owning overload existed.
+	retainFailedInstance(std::move(instance), std::move(instantiator),
+			std::move(keepAlive), nullptr);
+}
+
+bool Store::retainsInstanceOf(const Module& module) const noexcept
+{
+	std::scoped_lock lock(storeMutex_);
+	for (const RetainedInstance& retained : retainedInstances_) {
+		if (retained.instance && &retained.instance->sourceModule() == &module)
+			return true;
+	}
+	return false;
 }
 
 

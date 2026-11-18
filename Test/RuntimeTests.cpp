@@ -17,6 +17,7 @@
 #include <fstream>
 #include <future>
 #include <iterator>
+#include <memory>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -567,4 +568,111 @@ TEST_CASE("runtime: unload frees a provisional backend's generated code", "[runt
 		REQUIRE(runtime->callExport<std::int32_t>(again, "answer") == 42);
 		REQUIRE(runtime->unload(*module));
 	}
+}
+
+TEST_CASE("runtime: unloadImage releases the parsed image", "[runtime]")
+{
+	auto runtime = WASM::Runtime::create("libjit");
+	REQUIRE(runtime->imageCount() == 0);
+
+	std::shared_ptr<const WASM::Module> module =
+			runtime->loadBytes(TestFixtures::answerModuleBytes());
+	REQUIRE(module != nullptr);
+	REQUIRE(runtime->imageCount() == 1);
+	REQUIRE(runtime->hasImage(*module));
+
+	// The handle the embedder holds is a second owner, not a view: the image
+	// outlives the runtime's reference until this one goes.
+std::weak_ptr<const WASM::Module> observer = module;
+
+WASM::RegistryImportResolver imports;
+WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+REQUIRE(&instance.sourceModule() == module.get());
+REQUIRE(runtime->callExport<std::int32_t>(instance, "answer") == 42);
+
+// An instance points into its image, so the image may not go first. The
+// refusal is a check, not a precondition, and it leaves the image loaded.
+REQUIRE_THROWS_WITH(runtime->unloadImage(*module),
+Catch::Matchers::ContainsSubstring("unload the instance first"));
+REQUIRE(runtime->hasImage(*module));
+REQUIRE(runtime->imageCount() == 1);
+
+// Instance first (the `dlclose` half), image second (the unmap half).
+REQUIRE(runtime->unload(*module));
+REQUIRE(runtime->unloadImage(*module));
+REQUIRE_FALSE(runtime->hasImage(*module));
+REQUIRE(runtime->imageCount() == 0);
+
+// Releasing an image the runtime does not hold is a no-op, like `unload`.
+REQUIRE_FALSE(runtime->unloadImage(*module));
+
+// Nothing was freed while the embedder's handle lived...
+	REQUIRE_FALSE(observer.expired());
+	// ...and the runtime no longer pins it, so the last handle frees the parse.
+	module.reset();
+	REQUIRE(observer.expired());
+}
+
+TEST_CASE("runtime: a released image is no longer instantiable", "[runtime]")
+{
+	auto runtime = WASM::Runtime::create("libjit");
+	std::shared_ptr<const WASM::Module> module =
+			runtime->loadBytes(TestFixtures::answerModuleBytes());
+	REQUIRE(runtime->unloadImage(*module));
+
+	// The runtime forgot the image, so the existing ownership check refuses it
+	// rather than compiling against types from a store entry nobody owns.
+	WASM::RegistryImportResolver imports;
+	REQUIRE_THROWS_WITH(runtime->instantiate(*module, imports),
+			Catch::Matchers::ContainsSubstring("was not loaded by this runtime"));
+
+	// Another runtime's image is not ours either: the handle is per runtime.
+auto other = WASM::Runtime::create("libjit");
+std::shared_ptr<const WASM::Module> foreign =
+other->loadBytes(TestFixtures::answerModuleBytes());
+REQUIRE_FALSE(runtime->hasImage(*foreign));
+REQUIRE_FALSE(runtime->unloadImage(*foreign));
+REQUIRE(other->hasImage(*foreign));
+
+// Loading the same bytes again produces a new image, not the released one.
+std::shared_ptr<const WASM::Module> reloaded =
+runtime->loadBytes(TestFixtures::answerModuleBytes());
+REQUIRE(reloaded.get() != module.get());
+REQUIRE(runtime->hasImage(*reloaded));
+WASM::ModuleInstance& instance = runtime->instantiate(*reloaded, imports);
+REQUIRE(runtime->callExport<std::int32_t>(instance, "answer") == 42);
+}
+
+TEST_CASE("runtime: a retained failed instance pins its image", "[runtime]")
+{
+	auto runtime = WASM::Runtime::create("libjit");
+	std::shared_ptr<const WASM::Module> module =
+			runtime->loadBytes(TestFixtures::answerModuleBytes());
+	std::weak_ptr<const WASM::Module> observer = module;
+
+	// What a segment or start failure leaves behind: a partially built instance
+	// kept by the store so the `ref.func` values already written into a shared
+	// table stay callable (the spec's failed-instantiation rule). Building one
+// directly is the cheapest way to reach that state from the public API.
+WASM::RegistryImportResolver imports;
+auto partial = std::make_unique<WASM::ModuleInstance>(*module, imports);
+runtime->store().retainFailedInstance(std::move(partial), nullptr, nullptr,
+module);
+
+REQUIRE(runtime->store().retainsInstanceOf(*module));
+REQUIRE(runtime->hasImage(*module));
+
+// The image cannot be released while the store still holds an instance that
+// borrows it, and the retention is what says so.
+REQUIRE_THROWS_WITH(runtime->unloadImage(*module),
+Catch::Matchers::ContainsSubstring("retains an instance of it"));
+
+// The retention *owns* the image, so dropping the embedder's handle does not
+// free it — the borrow inside the retained instance stays valid.
+module.reset();
+	REQUIRE_FALSE(observer.expired());
+
+	// It is released with the store, not before.
+	runtime.reset();
+	REQUIRE(observer.expired());
 }

@@ -720,10 +720,11 @@ declare a typed `(ref $T)` is **LANG**.
 
 ### 13.1 The question
 
-[`EMBEDDING_SURFACE.md`](EMBEDDING_SURFACE.md) §16 studies a GObject-shaped host
-object runtime. This section answers only the identity half: could a `GType`-like
-registry give C-family guests a typed object identity, and could GC languages
-share it silently?
+[`proposals/SYNTHETIC_OBJECTS.md`](proposals/SYNTHETIC_OBJECTS.md) studies a
+GObject-shaped host object runtime and calls its unit a *synthetic object*. This
+section answers only the identity half: could a `GType`-like registry give
+C-family guests a typed object identity, and could GC languages share it
+silently?
 
 Three things must stay separate:
 

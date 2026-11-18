@@ -388,7 +388,9 @@ shape.
    SLJIT backend is the worked example: it keeps no context and frees each entry
    point explicitly. `releaseInstance` must not throw, must be idempotent (clear
    what you free), and must not touch the instance's memories — the destructor
-   does that afterwards.
+   does that afterwards. **Image teardown never reaches you:** `Runtime::unloadImage`
+   releases a *parsed* module, which owns no generated code, so the hook stays
+   per instance and there is no second teardown path to implement.
 
 ## 10. Helpers: what you call, what you bring
 
