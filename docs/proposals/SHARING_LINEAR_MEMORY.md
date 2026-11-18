@@ -11,7 +11,10 @@ out of scope for the short term, with an allocator-injection pass and an
 embedder initializer contract written up instead. **Revision 4 ran `SLM-6`**: §10
 is no longer a plan but ten measured toolchain arms, and the answer to
 coexistence is now per language — C, C++, Rust, Zig and AssemblyScript can
-import a shared memory; Go and TinyGo cannot. Contains no engine code.
+import a shared memory; Go and TinyGo cannot. It also corrects revision 3's
+`dlclose` claim (§12.2 — unloading shipped on 2026-11-01) and connects the note
+to the host object runtime: objects that live in the arena are
+[`EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) §16.13. Contains no engine code.
 Audience: anyone writing the embedding host for a product that mixes one big
 module with many small ones (`WASM::Runtime`, `RegistryImportResolver`, the
 `HostBridge` boundary), anyone touching `Store`/`LinearMemory`/`MemoryBudget`, and
@@ -132,6 +135,15 @@ shape a library's memory (shared, one allocator, a layout) and give the script
 shape a script's memory (private, disposable).** A product that uses both at once
 — one monolith plus many scripts — is asking for *both* shapes in one process,
 which is exactly why §4.2 exists and why §12 asks the awkward follow-up question.
+
+A library brings two things, and this note only owns one of them. It brings its
+**address space** — which is §4.1, §9 and §12 — and it brings its **class
+library**: the objects, their methods and their lifetimes. ELF separates them
+(`ld.so` and `libgobject`); so does this tree, because the object-model half lives
+in [`../EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) §16 and the bridge between
+the two — objects that live *in* the shared arena and are reached by an `i32`
+offset — is that note's §16.13. Reading this note alone gives a module a place to
+put its bytes; the pair gives it something to put there.
 
 The QVM lineage matters here. The engine is the spiritual successor of **Quake 3's
 QVM** ([`../API_ABI_STABILITY.md`](../API_ABI_STABILITY.md) §2.1, gate `G1`), and
@@ -787,6 +799,15 @@ and every module must be prepared for the base to move — which this engine
 handles (the base is reloaded per access, §4.1) but an allocator's cached
 `memory.size()` does not (§9.3 pitfall 5).
 
+The exchange above is a **struct**: bytes with an agreed layout, no identity and
+no lifetime beyond the call. Make it an **object** — typed, with methods, a
+lifetime and a tag that tells one type from another — and the recipe is no longer
+this note's alone: the offset is still an `i32`, but the header, the tag, the
+ownership rule and the generated façade belong to the host object runtime of
+[`../EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) §16, whose §16.13 is this
+section continued. The three constraints carry over unchanged: one allocator over
+the arena (`SLM-3`), a layout per tenant (§10.4), one owner per object graph.
+
 ## 12. Appendix D: if the engine grew a linker
 
 **Status: a study, not a plan.** §3 says the engine does not grow a linker, and
@@ -864,12 +885,26 @@ is already ~80% implemented here — by the resolver and the descriptor, not by 
 linker.** What is missing is exactly L3: nothing computes the offsets, because in
 WebAssembly they are baked in before the module ships.
 
-And one row has no analogue at all: **`dlclose`.** A `.so` can be unloaded; a
-module's code here is never freed (`WRITING_A_BACKEND.md` §11 lists "generated
-code is never freed" as a documented limitation, because `ModuleInstantiator` has
-no teardown hook). So the DLL analogy is honest up to *unloading* and stops there
-— which matters below, because "unload" is the one thing a linker cannot give you
-either.
+And one row **used** to have no analogue at all: **`dlclose`.** It has had one
+since 2026-11-01 — `Runtime::unload` destroys the instance, calls
+`ModuleInstantiator::releaseInstance` so the backend gives its executable memory
+back, and leaves the `Module` parsed so the next `instantiate` is the reload
+(rung 8, §12.3; `[runtime]` pins it, including SLJIT's explicit
+`sljit_free_code` path).
+
+What remains is the *asymmetry*, and a host will trip over it:
+
+| `dlclose` does | `Runtime::unload` does | Where it is decided |
+|---|---|---|
+| unmap the image | keeps the parsed `Module` in `Runtime::modules_` for the runtime's lifetime: the *instance* goes, the *image* stays | `WasmRuntime.hpp` “Unloading” |
+| run the library's destructors | runs nothing in the guest — a module that needs a finaliser must export one, and the host must call it **before** `unload` | §14's initializer contract is its natural `fini` half |
+| — (a live caller is undefined behaviour) | **refuses** to unload while `ModuleInstance::inCall()` is true | `WasmRuntime.cpp` |
+| forget the symbol pointers | does not detect a stale `Callable`, `ModuleInstance&` or reference — a documented precondition, not a check | `WasmRuntime.hpp` |
+| unmap the code generator as well | never unmaps a backend plugin: “once used, never unload at all” | [`../BACKEND_PLUGIN_ABI.md`](../BACKEND_PLUGIN_ABI.md) rule 8 |
+
+So the DLL analogy is honest up to and including unloading. What it does not
+cover is the *guest's own teardown* and the *plugin's own image* — and “unload”
+stays the one thing a linker cannot give you either.
 
 ### 12.3 What the engine would have to provide: a capability ladder
 
@@ -1071,6 +1106,14 @@ and the one with the clearest failure mode (a rewrite that changes behaviour), s
 it belongs behind the same gate as the rest: written down, scoped, not started
 until a §12.7 trigger fires.
 
+**What the pass cannot do — and who owns the rest.** A pass can rebind an
+allocator; it cannot invent an object model. The header, the field offsets and
+the dispatch are **IDL**, not opcode rewriting, so the injectable half ends
+exactly where the arena of
+[`../EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) §16.13 begins: the pass puts
+the arena's **memory** under host control, and the host object runtime supplies
+its **semantics**. The two are designed to meet, and neither is proposed here.
+
 ## 14. Appendix F: the embedder-imposed initializer contract
 
 The engine stays agnostic about data model, memory model and layout. An
@@ -1116,6 +1159,12 @@ make an allocator safe by itself — two modules can still both `malloc` into on
 heap unless the contract also names the allocator (§9.1). And it is
 *unverifiable by the engine*: the engine sees a call to an export and a store into
 a global, and cannot tell a negotiated layout from any other store.
+
+Its missing half is the **exit**: the contract has an `init` and no `fini`,
+because nothing in the engine calls a module's destructor on `Runtime::unload`
+either (§12.2). A module that holds a resource — a file, a lock, an arena
+allocation — needs the `fini` counterpart, and it is the embedder's to define and
+call, exactly like `init`.
 
 That is why this appendix is documentation: the engine's job is to keep the
 modules' memory *addressable* and the layout *unconstrained*; the embedder's job

@@ -61,7 +61,7 @@ provenance and the reason its two names do not survive here are in §3.
 | §13 | What do importing modules and generated headers see when a GC module exports struct, array or string references? |
 | §14 | Can host-to-guest templates, class bridges, SWIG or Glue replace an engine reflection system? |
 | §15 | Who owns each remaining problem: engine, embedder, tooling or source language? |
-| §16 | Could a GObject-shaped host object runtime give C-family languages a common object model, how much of it is already the Component Model — and what the handle wire measures in six toolchains (§16.12)? |
+| §16 | Could a GObject-shaped host object runtime give C-family languages a common object model, how much of it is already the Component Model, what the handle wire measures in six toolchains (§16.12) — and what changes when the objects live in a shared linear memory (§16.13)? |
 | §17 | References |
 
 ## 2. What the embedder has today
@@ -2557,7 +2557,9 @@ cannot declare a typed `(ref $T)` is **LANG**. **No engine change is proposed.**
 
 Status: feasibility study (2026-11-12; implementation snapshot `9b2ca92`),
 revision 2 (2026-11-18) adds §16.12 — the wire claim measured in seven
-toolchains. It records no engine code, no header and no frozen-surface change. It
+toolchains — and §16.13, the bridge to shared linear memory: what an object
+runtime looks like when the objects live in an arena two modules both address.
+It records no engine code, no header and no frozen-surface change. It
 answers the question left by §12 and
 [`languages/LF2_ABI_INTEROP.md`](languages/LF2_ABI_INTEROP.md)
 §6: could a GObject/GLib-shaped host runtime be the common object model that
@@ -2706,6 +2708,13 @@ instance’s module-local type index; it is not a general host heap. A host-owne
 object is host memory; a guest-GC-owned object can also be created by a guest
 factory and returned as an `externref`, or by a component resource. This is a
 deliberate boundary, not a missing hook.
+
+A **third** strategy becomes reachable once the memory is *shared*: the object
+lives in the imported `LinearMemory`, the handle is an `i32` offset and the tag
+is written by the host — the GcHeader without the collector. It is §16.13's
+subject, and the sharing study measured which toolchains can take part
+([`proposals/SHARING_LINEAR_MEMORY.md`](proposals/SHARING_LINEAR_MEMORY.md) §10.3,
+Q1).
 
 ### 16.5 What each language actually gets
 
@@ -2887,12 +2896,19 @@ In increasing cost:
    the runtime refuses or serialises according to its documented policy.
 8. **Negative.** A forged handle, a use-after-release, a raw pointer and a
    cross-runtime handle are all clean errors, not crashes.
+9. **Arena object (§16.13).** Instance A creates an object in the shared memory,
+   instance B reads it through the same offset, A is unloaded and
+   re-instantiated and the object is still there; a forged offset, a freed slot
+   and a tag from another `Store` are clean errors, not wild pointers.
+10. **Arena ownership (§16.13).** One owner per arena object: the arena's
+    allocator and a HOR count never both free it, and a module holding only a
+    borrow cannot outlive the owner.
 
 Until (1)–(4) exist, the correct statement is: **the engine provides the opaque
 primitive and the component resource contract; the HOR is an optional host
 design, not a tested feature.** §16.12 measured the *compile* half of (1) — the
 handle crosses an import and an export in every tested toolchain — and nothing
-beyond it.
+beyond it; (9) and (10) are the cases the arena of §16.13 would have to pass.
 
 ### 16.11 Ownership register
 
@@ -3004,6 +3020,136 @@ zig cc -target wasm32-wasi -mreference-types -mexec-model=reactor -O2 \
 # AssemblyScript, with reference types enabled
 asc SRC/handle_ref.ts --outFile OUT/h-as-externref.wasm --optimize --enable reference-types
 ```
+### 16.13 Objects in the arena: where this section meets shared linear memory
+
+**Status: a bridge between two studies, not a new feature.**
+[`proposals/SHARING_LINEAR_MEMORY.md`](proposals/SHARING_LINEAR_MEMORY.md) asks
+whether many modules can share one address space; this section asks whether many
+languages can share one object graph. They are the two halves of the
+**library** shape that note's §2.4 already implies — the *loader* and the *class
+library* — and ELF/PE has both (`ld.so` **and** `libgobject`), while this tree
+puts the first inside the engine (§4.1, `resolveMemory`) and the second outside
+it (§16.9, §16.11). Neither belongs in `WasmBase/`, and that is the same answer
+[`LAYERING.md`](LAYERING.md) gives from the other side.
+
+The intersection is one question: **can the HOR's objects live in the shared
+linear memory instead of the host's heap?** §16.4 lists two backing strategies;
+shared memory makes a third reachable, and the third is the only one that gives
+C, C++, Rust, Zig and AssemblyScript a zero-copy object *and* object identity at
+the same time.
+
+#### 16.13.1 The two studies line up, axis by axis
+
+| Axis | `SHARING_LINEAR_MEMORY.md` | `EMBEDDING_SURFACE.md` §16 |
+|---|---|---|
+| **The wire** | an `i32` byte offset that denotes the same bytes in every instance (§2.1) | a `u64`/`externref` handle that denotes the same object in every language (§16.3, measured in §16.12) |
+| **The layout** | data, stack and heap bases per module — `--global-base`, `--initial-memory`, `--memoryBase` (§10.4) | field offsets, `sizeof` prohibition, the type tag and its descriptor (§16.3, §16.7, §14.4) |
+| **The owner** | who created the memory; the creator outlives every importer (`SLM2`) | one owner per object graph — a host count *or* a GC count, never both (§16.4, [`proposals/GC.md`](proposals/GC.md) `RC-1`) |
+| **The budget** | one `MemoryBudget` per `Store`, no per-tenant number (`SLM5`, `SLMD2`) | the HOR's own arena/table quota, an **EMB** decision (§16.11) |
+
+Read across: *aliasing* is what makes an object **addressable by two modules**;
+the *object model* is what makes those bytes an **object**. A design that solves
+only the first gets raw structs (the sharing note's §11.4 exchange); one that
+solves only the second gets handles to host memory (§16.4 strategy 1). The pair
+solves both.
+
+#### 16.13.2 The third backing strategy
+
+| Strategy | Where the object lives | Handle | Type tag | Lifetime | Who can use it |
+|---|---|---|---|---|---|
+| **Host-owned** (§16.4) | host memory | `u64`, or `externref` where the toolchain spells it | host descriptor registry | the HOR's count / `HostBridge` | every language — including Go and TinyGo, which cannot import a memory |
+| **Guest-GC-owned** (§16.4) | a `Store`'s `GcHeap` | `(ref $T)`, or `externref` behind a façade | the GC header's `TypeId` | the engine's RC + cycle collector | tools that emit reference types; others via a handle |
+| **Arena-owned** | the shared `LinearMemory` | an `i32` offset (plus a generation slot) | a host descriptor id, or the `Store`'s `TypeId` while that store lives | the arena's allocator — manual, or RC with the header in the arena | **only** modules that import the memory: C, C++, Rust, Zig, AssemblyScript (§10.3, Q1) |
+
+What the third row buys:
+
+- **Zero copy *and* identity.** The bytes are the object; every tenant reads the
+  same fields at the same offsets, and a method is a function that takes the
+  offset. The closest analogue in §16.6 is its **case 1** — both sides see the
+  same object — with the host descriptor standing in for the Wasm GC type that a
+  C compiler cannot declare; it is not case 2, because no language object wraps
+  the handle.
+- **It survives a reload.** The object lives in the arena, not in the instance's
+  heap, so `Runtime::unload` and re-instantiation do not destroy it — which is
+  what a product that hot-reloads a mod actually wants. (`SLM7` still warns that
+  the reloaded module re-runs its data segments; the arena object is outside
+  them.)
+- **No new type system.** The wire is an `i32`, which every toolchain already
+  has; §16.12 measured `externref` to exist only in C and AssemblyScript, so the
+  reference-typed wire is the *narrow* option here, not the general one.
+
+What it costs — and each cost already has an owner:
+
+| Cost | Why the arena has it | Owner |
+|---|---|---|
+| **One allocator** | two `malloc`s over one heap hand out the same block (§9.1); the arena must be handed out by exactly one allocator | `SLM-3`'s contract; `SLM-12`/§13 for the pass that could enforce it |
+| **A layout** | the arena is a region, so each tenant needs a base and a heap that starts above it | §10.4's per-toolchain flags; `SLM-1` |
+| **A growth policy** | a grow is invisible to the engine (every access reloads the base) but not to a partition plan | `SLMD3`; one nominated grower |
+| **A tag that means something** | `TypeId` is `Store`-scoped and structural (§16.7), so it is usable *inside one store* — the one `Runtime` owns — and meaningless after persistence, a reload in another process, or a cross-`Store` copy | [`TYPE_IDENTITY.md`](TYPE_IDENTITY.md) §6.1; §16.7's third domain |
+| **Cheap rejection** | a forged offset must be a clean error, not a wild pointer (§16.3), which needs the generation slot the host table would have given for free | this section; `EM-13` |
+| **The languages outside** | Go and TinyGo cannot import a memory (§10.3, Q1), so their objects cannot be *in* the arena | host-owned handles (§16.4 strategy 1) — the HOR is how a GC module uses arena objects without living in it |
+
+That last row is the honest summary of "can everyone share the same object?":
+C-family modules can share the arena, GC modules reach it through handles, and
+only a **component resource** gives both sides one object *type* (§16.6 case 3,
+[`languages/LF4_INDEX.md`](languages/LF4_INDEX.md) §4).
+
+This is **not** §12.7.1's rejected option, and the difference is the whole
+design. §12.7.1 rules out a *host pointer plus `sizeof(T)`*: a C++ class layout
+the engine cannot enforce and a guest cannot dereference. An arena object is the
+opposite — guest-addressable bytes, a layout fixed by a descriptor and generated
+accessors, no host pointer anywhere. What it still cannot do is put a C++
+*class* (vtable, RTTI, `std::string`) in the arena; a C++ tenant wraps the
+offset, and that wrapper is a handle by another name (§16.5).
+
+#### 16.13.3 Where the desugaring precedent fits
+
+The arena needs **allocation** to be host-controlled, and that is exactly the
+front-end pass [`proposals/SHARING_LINEAR_MEMORY.md`](proposals/SHARING_LINEAR_MEMORY.md)
+§13 scopes: import the host allocator, rebind the call sites, re-validate. Its
+precedent is [`proposals/LEGACY_EXCEPTIONS.md`](proposals/LEGACY_EXCEPTIONS.md),
+and the precedent transfers its shape *and* its limits:
+
+| `LEGACY_EXCEPTIONS.md` | The arena pass |
+|---|---|
+| rewrote five legacy opcodes into their final form | would rebind allocator **symbols** to host imports |
+| the rewrite is mechanical; the semantics are fixed by the specification | the symbol names are per-toolchain and unstable — `malloc`/`emmalloc_malloc`/`dlmalloc`/`__new` (§10.3, Q5) — so an unknown module must be left alone |
+| re-validate the rewritten module, prove nothing else changed, own a test suite | the same three obligations, and the same failure mode: a rewrite that changes behaviour |
+| one old encoding, one new encoding, one table | one table per toolchain, plus a fallback |
+
+What the pass **cannot** supply is the object itself: the header, the field
+offsets and the dispatch are IDL, not opcode rewriting. That half is the HOR's
+(§16.3, §16.9). The honest boundary is:
+
+> a desugaring pass can put the arena's **memory** under host control; it can
+> never put the arena's **semantics** there.
+
+#### 16.13.4 The verdict
+
+The two ideas compose into one design, and it is the embedder's:
+
+- a **host-owned arena** — one `LinearMemory`, created by the host and imported by
+  every tenant (`SHARING_LINEAR_MEMORY.md` §4.2, R2), with one allocator over it
+  and one nominated grower;
+- **objects as offsets**, each with a host-written header
+  `{descriptor, generation, count}` — a `GcHeader` without the collector;
+- a **descriptor registry** keyed by stable name and version (§16.7's third
+  domain), spelled as WIT where a component boundary exists (§16.8);
+- a **generated façade per language** (§16.5), because the wire is an `i32` and
+  the ergonomics never are.
+
+The engine's part is already there and unchanged: aliasing (`resolveMemory`), the
+opaque primitive (`externref`, `HostBridge`, `GcHeap`, resources), and the
+resolver/publisher (`RegistryImportResolver`). Everything else is **EMB** and
+**TOOL**, which is the split §16.11's register already records — so this bridge
+opens no engine work, no new note and no new milestone. A product would execute
+it with the two studies' existing plans: `SLM-1`…`SLM-4` for the address space and
+§16.9's recipe for the object model.
+
+Two cases would turn this from a bridge into a claim, and they are §16.10's (9)
+and (10): an arena object surviving a writer's unload, and one owner between the
+arena allocator and the HOR's count.
+
 ## 17. References
 
 - [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) — the gates, the frozen surfaces
@@ -3032,7 +3178,12 @@ asc SRC/handle_ref.ts --outFile OUT/h-as-externref.wasm --optimize --enable refe
   is not in the core, which is what keeps the "realm" mapping (§3) honest.
 - [`proposals/SHARING_LINEAR_MEMORY.md`](proposals/SHARING_LINEAR_MEMORY.md) —
   the layout-negotiation problem that rules out putting arbitrary C++ object
-  images in linear memory (§12.7.1).
+  images in linear memory (§12.7.1), and — from §16.13 — the address-space half
+  of the library model: aliasing, the per-toolchain layout flags (§10.4), the
+  allocator contract (`SLM-3`) and the front-end pass (§13).
+- [`proposals/LEGACY_EXCEPTIONS.md`](proposals/LEGACY_EXCEPTIONS.md) — the
+  front-end rewrite precedent §16.13.3 borrows: rewrite, re-validate, prove
+  nothing else changed, own a test suite.
 - Source anchors for §12: `WasmBase/WasmHostBridge.hpp` (the opaque-reference
   contract), `WasmBase/WasmGcHeap.hpp` (guest-only GC regions),
   `WasmBase/WasmComponentRuntime.hpp` / `WasmBase/WasmComponentValue.hpp`
