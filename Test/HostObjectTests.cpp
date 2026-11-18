@@ -1,13 +1,21 @@
 #include <catch2/catch_all.hpp>
 
 #include <cstdint>
+#include <filesystem>
 #include <stdexcept>
 #include <utility>
 
 #include "WasmBase/WasmGcHeader.hpp"
 #include "WasmBase/WasmHostObject.hpp"
 #include "WasmBase/WasmHostType.hpp"
+#include "WasmBase/WasmRegistryImportResolver.hpp"
+#include "WasmBase/WasmRuntime.hpp"
 #include "WasmBase/WasmStore.hpp"
+
+#ifndef WASM_TEST_DIR
+//! Fixture directory; the build defines it, this keeps a standalone compile honest.
+#define WASM_TEST_DIR ""
+#endif
 
 namespace {
 
@@ -23,6 +31,16 @@ WASM::HostTypeDefinition mixedStruct()
 		WASM::hostValueField(WASM::ValueTypeCode::V128),
 		WASM::hostReferenceField(WASM::ValueTypeCode::ExternRef),
 		WASM::hostPackedField(WASM::ValueTypeCode::I8),
+	});
+}
+
+//! A leaf struct: the shape the probe module declares and the host interns.
+//! `SO17` refuses a reference field for now, so the end-to-end case is a leaf.
+WASM::HostTypeDefinition leafStruct()
+{
+	return WASM::hostStruct({
+		WASM::hostValueField(WASM::ValueTypeCode::I32),
+		WASM::hostValueField(WASM::ValueTypeCode::I32),
 	});
 }
 
@@ -127,33 +145,92 @@ TEST_CASE("a definition outside the Wasm vocabulary is refused", "[hostobject][l
 					std::invalid_argument);
 }
 
-// The capability query is the honest half of scaffolding: a host can ask, and a
-// test can pin that the answer flips only when SO-1 lands.
-TEST_CASE("the state-changing seam reports itself unavailable", "[hostobject]")
+// The seam is available (`SO-1`), and its one staging restriction is stated by
+// the interner rather than discovered from a silently leaking object (`SO17`).
+TEST_CASE("the host-type seam is available and refuses reference fields", "[hostobject]")
 {
-	CHECK_FALSE(WASM::hostTypeSupportAvailable());
+	CHECK(WASM::hostTypeSupportAvailable());
 
 	WASM::Store store;
+	// A reference field is the leaf-only restriction: the layout knows it, the
+	// interner refuses it until the Store-level graph walk exists.
 	CHECK_THROWS_AS(WASM::internHostType(store, mixedStruct()), std::logic_error);
-	CHECK_THROWS_AS(WASM::allocateHostStruct(store, WASM::TypeId{0}), std::logic_error);
-	CHECK_THROWS_AS(WASM::allocateHostArray(store, WASM::TypeId{0}, 4), std::logic_error);
+	CHECK_THROWS_AS(WASM::HostType::intern(store, mixedStruct()), std::logic_error);
+
+	// An id the registry does not know is not a core type.
+	CHECK_THROWS_AS(WASM::allocateHostStruct(store, WASM::TypeId{0}), std::invalid_argument);
+	CHECK_THROWS_AS(WASM::allocateHostArray(store, WASM::TypeId{0}, 4), std::invalid_argument);
+
+	const WASM::TypeId leaf = WASM::internHostType(store, leafStruct());
+	// The wrong composite is refused, in both directions.
+	CHECK_THROWS_AS(WASM::allocateHostArray(store, leaf, 4), std::invalid_argument);
+	const WASM::TypeId array = WASM::internHostType(store,
+			WASM::hostArray(WASM::hostValueField(WASM::ValueTypeCode::I32)));
+	CHECK_THROWS_AS(WASM::allocateHostStruct(store, array), std::invalid_argument);
 }
 
-TEST_CASE("HostType describes a type before it is interned", "[hostobject]")
+TEST_CASE("HostType describes a type and interns it", "[hostobject]")
 {
-	WASM::HostType type(mixedStruct());
-	CHECK_FALSE(type.isInterned());
-	CHECK(type.id().isNone());
-	CHECK(type.layout().totalBytes == 64);
-	CHECK(type.fieldOffset(1) == 24);
-	CHECK(type.field(2).bytes == 16);
-	CHECK_THROWS_AS(type.field(5), std::out_of_range);
+	// A description needs no Store: the layout is derived from the definition.
+	WASM::HostType described(leafStruct());
+	CHECK_FALSE(described.isInterned());
+	CHECK(described.id().isNone());
+	CHECK(described.layout().totalBytes == 24);
+	CHECK(described.fieldOffset(0) == 16);
+	CHECK(described.fieldOffset(1) == 20);
+	CHECK_THROWS_AS(described.field(2), std::out_of_range);
 
 	WASM::Store store;
-	CHECK_THROWS_AS(WASM::HostType::intern(store, mixedStruct()), std::logic_error);
+	const WASM::HostType type = WASM::HostType::intern(store, leafStruct());
+	REQUIRE(type.isInterned());
+	CHECK_FALSE(type.id().isNone());
+
+	// Structural identity (SOD2): the same shape is the same `TypeId`, and a
+	// changed shape -- a field mutability counts -- is a different one.
+	CHECK(WASM::internHostType(store, leafStruct()) == type.id());
+	WASM::HostTypeDefinition mutableDefinition = leafStruct();
+	mutableDefinition.fields[0].isMutable = true;
+	CHECK(WASM::internHostType(store, mutableDefinition) != type.id());
 }
 
-TEST_CASE("HostObject is a safe empty handle until creation works", "[hostobject]")
+// The ergonomic array surface: the element base and stride come from the same
+// layout a module's `array.*` lowering uses, so a host element and a guest
+// element are the same bytes.
+TEST_CASE("a host array carries its elements", "[hostobject]")
+{
+	WASM::Store store;
+	const WASM::HostType type = WASM::HostType::intern(store,
+			WASM::hostArray(WASM::hostValueField(WASM::ValueTypeCode::I32)));
+	REQUIRE(type.isInterned());
+
+	WASM::HostObject array = WASM::HostObject::createArray(store, type, 4);
+	REQUIRE(array.isValid());
+	CHECK(array.length() == 4);
+	// `i32` array: the 12-byte header is already 4-byte aligned, so the elements
+	// start at 12 and each is 4 bytes.
+	CHECK(array.fieldOffset(0) == 12);
+	CHECK(array.elementOffset(0) == 12);
+	CHECK(array.elementOffset(3) == 24);
+	CHECK_THROWS_AS(array.elementOffset(4), std::out_of_range);
+
+	array.writeElement<std::int32_t>(0, 11);
+	array.writeElement<std::int32_t>(3, 33);
+	CHECK(array.readElement<std::int32_t>(0) == 11);
+	CHECK(array.readElement<std::int32_t>(3) == 33);
+	// A wrong-sized type is refused by the same check a field uses.
+	CHECK_THROWS_AS(array.readElement<std::int64_t>(0), std::logic_error);
+
+	// A struct is not an array, and an empty handle is not either.
+	const WASM::HostType structType = WASM::HostType::intern(store, leafStruct());
+	WASM::HostObject object = WASM::HostObject::createStruct(store, structType);
+	REQUIRE(object.isValid());
+	CHECK_THROWS_AS(object.elementOffset(0), std::logic_error);
+	array.reset();
+	CHECK_FALSE(array.isValid());
+	CHECK_THROWS_AS(array.elementOffset(0), std::logic_error);
+}
+
+TEST_CASE("HostObject is a safe empty handle", "[hostobject]")
 {
 	WASM::HostObject object;
 	CHECK_FALSE(object.isValid());
@@ -180,4 +257,57 @@ TEST_CASE("HostObject is a safe empty handle until creation works", "[hostobject
 	WASM::Store store;
 	WASM::HostType type(mixedStruct());
 	CHECK_THROWS_AS(WASM::HostObject::createStruct(store, type), std::invalid_argument);
+}
+
+// `SO-1`'s acceptance case: the host interns the same shape a module declares,
+// allocates the object, and the guest both reads it and keeps it alive by
+// storing it. The counts are the engine's, so `liveObjectCount()` pins them.
+TEST_CASE("a host-created object is a guest object (SO-1)", "[hostobject][gc]")
+{
+	auto runtime = WASM::Runtime::create("libjit");
+	REQUIRE(runtime != nullptr);
+	WASM::Store& store = runtime->store();
+
+	const std::filesystem::path path =
+			std::filesystem::path(WASM_TEST_DIR) / "host_object_probe.wasm";
+	auto module = runtime->loadFile(path);
+	REQUIRE(module != nullptr);
+	WASM::RegistryImportResolver imports;
+	WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+
+	const WASM::HostType type = WASM::HostType::intern(store, leafStruct());
+	REQUIRE(type.isInterned());
+	// Dedup across the boundary: the host's type *is* the module's type. `$pair`
+	// is the module's first declared type, so its local index is 0.
+	CHECK(type.id() == module->typeId(WASM::LocalTypeIdx{0}));
+
+	const std::size_t before = store.gc().liveObjectCount();
+	{
+		WASM::HostObject object = WASM::HostObject::createStruct(store, type);
+		REQUIRE(object.isValid());
+		CHECK(object.store() == &store);
+		CHECK(object.typeId() == type.id());
+		CHECK(object.fieldOffset(0) == 16);
+		CHECK(object.field(1).bytes == 4);
+		object.writeField<std::int32_t>(0, 20);
+		object.writeField<std::int32_t>(1, 22);
+		CHECK(object.readField<std::int32_t>(1) == 22);
+
+		// `ref.test`, `struct.get` and the write barrier all see the object the
+		// host allocated, under the module's own type identity.
+		CHECK(runtime->callExport<std::int32_t>(instance, "sum_pair", object.raw()) == 42);
+		CHECK(runtime->callExport<std::int32_t>(instance, "is_pair", object.raw()) == 1);
+
+		// The guest stores it, so its global takes a count: releasing the host
+		// root below must not recycle the object.
+		CHECK(runtime->callExport<std::int32_t>(instance, "save", object.raw()) == 1);
+	}
+	runtime->safepoint();
+	CHECK(store.gc().liveObjectCount() == before + 1);
+
+	// The guest drops its count; the instance queues the object at `refDrop` and
+	// its own safepoint recycles it.
+	CHECK(runtime->callExport<std::int32_t>(instance, "drop_saved") == 1);
+	runtime->safepoint();
+	CHECK(store.gc().liveObjectCount() == before);
 }

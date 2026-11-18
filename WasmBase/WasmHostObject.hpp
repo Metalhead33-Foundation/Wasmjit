@@ -22,11 +22,11 @@
   deliberately the *unnamed* half, which is why it can live in `WasmBase/`
   (`SOD6`).
 
-  **Scaffolding (2026-11-18).** `HostType` and the layout/offset accessors are
-  implemented. `HostType::intern`, `HostObject::createStruct` and
-  `HostObject::createArray` reach the `SO-1` stubs and throw `std::logic_error`;
-  no object can be created yet, so the accessors and the destructor are exercised
-  only on an empty instance.
+  **Status (`SO-1`, 2026-11-18).** `HostType` and `HostObject` are usable:
+  interning, allocation, the layout/offset accessors and the RAII count work
+  through `WasmHostType.hpp`. One staging restriction carries over — a type with a
+  reference field cannot be interned yet (`SO17`), so a `HostObject` is a leaf;
+  the data accessors refuse a reference field in any case.
 
   This header is part of the exported surface: every declaration in it
   is exported (docs/EMBEDDING_SURFACE.md ES-4).
@@ -65,7 +65,7 @@ public:
 	  \param store The store whose type registry receives the type.
 	  \param definition The struct or array definition to intern.
 	  \return The described, interned type.
-	  \throws std::logic_error until `SO-1` implements the engine entry point.
+	  \throws std::logic_error when the definition has a reference field (`SO17`).
 	  \throws std::invalid_argument when the definition is not a legal Wasm struct or array.
 	*/
 	static HostType intern(Store& store, const HostTypeDefinition& definition);
@@ -141,7 +141,7 @@ public:
 	  \return The object; an allocation the engine refuses yields an empty handle,
 	          so check `isValid()` before use.
 	  \throws std::invalid_argument when `type` is not interned or is not a struct.
-	  \throws std::logic_error until `SO-1` implements the allocation entry point.
+	  \throws std::bad_alloc when the GC budget refuses the allocation.
 	*/
 	static HostObject createStruct(Store& store, const HostType& type);
 	//! Creates an array object of an interned type and owns one count on it.
@@ -153,7 +153,7 @@ public:
 	  \return The object; an allocation the engine refuses yields an empty handle,
 	          so check `isValid()` before use.
 	  \throws std::invalid_argument when `type` is not interned or is not an array.
-	  \throws std::logic_error until `SO-1` implements the allocation entry point.
+	  \throws std::bad_alloc when the GC budget refuses the allocation.
 	*/
 	static HostObject createArray(Store& store, const HostType& type, std::uint32_t length);
 
@@ -191,6 +191,15 @@ public:
 	  \throws std::out_of_range when `field` is not a declared field.
 	*/
 	std::uint32_t fieldOffset(std::uint32_t field) const;
+	//! The byte offset of one array element.
+	/*!
+	  \brief Returns the byte offset of one array element.
+	  \param index Zero-based element index.
+	  \return The element's offset from the object's base, header included.
+	  \throws std::logic_error when the object is empty or is not an array.
+	  \throws std::out_of_range when `index` is not below `length()`.
+	*/
+	std::uint32_t elementOffset(std::uint32_t index) const;
 
 	//! Releases the owned count and leaves an empty instance; safe to call twice.
 	/** \brief Releases the owned count. */
@@ -220,6 +229,31 @@ public:
 	*/
 	template <class T>
 	void writeField(std::uint32_t field, T value);
+
+	//! Reads a scalar or `v128` array element whose storage size is exactly `sizeof(T)`.
+	/*!
+	  \brief Reads one non-reference array element.
+	  \tparam T The element's exact storage type (a trivially copyable value).
+	  \param index Zero-based element index.
+	  \return The element's value, copied out of the GC object.
+	  \throws std::logic_error when the object is empty, is not an array, the
+	          element is a reference, or `sizeof(T)` is not the element's size.
+	  \throws std::out_of_range when `index` is not below `length()`.
+	*/
+	template <class T>
+	T readElement(std::uint32_t index) const;
+	//! Writes a scalar or `v128` array element whose storage size is exactly `sizeof(T)`.
+	/*!
+	  \brief Writes one non-reference array element.
+	  \tparam T The element's exact storage type (a trivially copyable value).
+	  \param index Zero-based element index.
+	  \param value The value to copy into the GC object.
+	  \throws std::logic_error when the object is empty, is not an array, the
+	          element is a reference, or `sizeof(T)` is not the element's size.
+	  \throws std::out_of_range when `index` is not below `length()`.
+	*/
+	template <class T>
+	void writeElement(std::uint32_t index, T value);
 
 private:
 	//! Resolves one field, rejecting an empty object first.
@@ -345,6 +379,19 @@ inline std::uint32_t HostObject::fieldOffset(std::uint32_t field) const
 	return fieldAt(field).offset;
 }
 
+inline std::uint32_t HostObject::elementOffset(std::uint32_t index) const
+{
+	if (object_ == nullptr)
+		throw std::logic_error("HostObject: the handle is empty");
+	if (layout_.elementBytes == 0 || layout_.fields.empty())
+		throw std::logic_error("HostObject: the object is not an array");
+	if (index >= length_)
+		throw std::out_of_range("HostObject: array index out of range");
+	const std::uint64_t offset = static_cast<std::uint64_t>(layout_.fields.front().offset)
+			+ static_cast<std::uint64_t>(index) * layout_.elementBytes;
+	return static_cast<std::uint32_t>(offset);
+}
+
 inline void HostObject::reset() noexcept
 {
 	if (store_ != nullptr && object_ != nullptr)
@@ -390,6 +437,40 @@ void HostObject::writeField(std::uint32_t field, T value)
 		throw std::logic_error(
 				"HostObject::writeField: sizeof(T) is not the field's storage size");
 	std::memcpy(static_cast<std::uint8_t*>(object_) + entry.offset, &value, sizeof(T));
+}
+
+template <class T>
+T HostObject::readElement(std::uint32_t index) const
+{
+	static_assert(std::is_trivially_copyable<T>::value,
+				  "HostObject::readElement requires a trivially copyable element type");
+	const std::uint32_t offset = elementOffset(index);
+	const HostFieldLayout& element = layout_.fields.front();
+	if (element.isReference)
+		throw std::logic_error(
+				"HostObject::readElement: a reference element is not readable as data");
+	if (element.bytes != sizeof(T))
+		throw std::logic_error(
+				"HostObject::readElement: sizeof(T) is not the element's storage size");
+	T value{};
+	std::memcpy(&value, static_cast<const std::uint8_t*>(object_) + offset, sizeof(T));
+	return value;
+}
+
+template <class T>
+void HostObject::writeElement(std::uint32_t index, T value)
+{
+	static_assert(std::is_trivially_copyable<T>::value,
+				  "HostObject::writeElement requires a trivially copyable element type");
+	const std::uint32_t offset = elementOffset(index);
+	const HostFieldLayout& element = layout_.fields.front();
+	if (element.isReference)
+		throw std::logic_error(
+				"HostObject::writeElement: a reference element is not writable as data");
+	if (element.bytes != sizeof(T))
+		throw std::logic_error(
+				"HostObject::writeElement: sizeof(T) is not the element's storage size");
+	std::memcpy(static_cast<std::uint8_t*>(object_) + offset, &value, sizeof(T));
 }
 
 } // namespace WASM

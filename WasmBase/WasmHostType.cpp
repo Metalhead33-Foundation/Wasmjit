@@ -2,9 +2,11 @@
 
 #include "WasmCanonicalType.hpp"
 #include "WasmGcHeader.hpp"
+#include "WasmStore.hpp"
 
 #include <limits>
 #include <string>
+#include <utility>
 
 /*!
   \file WasmHostType.cpp
@@ -108,12 +110,39 @@ std::vector<CanonFieldType> canonicalFields(const HostTypeDefinition& definition
 	return fields;
 }
 
-//! The single place a scaffold says "not yet": the message names the milestone
-//! and the note, so a caller never mistakes a stub for a silent success.
-[[noreturn]] void notImplemented(const char* entry)
+//! True when the definition contains a reference-valued field, which the
+//! Store-level release path cannot walk yet (`SO17`).
+bool hasReferenceField(const HostTypeDefinition& definition)
 {
-	throw std::logic_error(std::string(entry)
-			+ " is not implemented yet: SO-1 (docs/proposals/SYNTHETIC_OBJECTS.md).");
+	if (definition.kind == HostTypeKind::Array)
+		return isReferenceStorage(definition.element.storage);
+	for (const HostFieldDefinition& field : definition.fields) {
+		if (isReferenceStorage(field.storage))
+			return true;
+	}
+	return false;
+}
+
+//! Converts one field to the parser's `FieldType`, the form the canonicalizer
+//! accepts (a shorthand reference uses `heapType = -1`, like the binary reader).
+FieldType toParserField(const HostFieldDefinition& field)
+{
+	FieldType out{};
+	out.isMutable = field.isMutable;
+	out.storageType.isPacked = field.isPacked;
+	out.storageType.val.opcode = field.storage;
+	out.storageType.val.heapType = -1;
+	out.storageType.val.isExact = false;
+	out.storageType.val.isShared = false;
+	return out;
+}
+
+//! The single place a scaffold says "not yet": the message names the milestone
+//! and the note, so a caller never mistakes a staging limitation for a bug.
+[[noreturn]] void notImplemented(const char* entry, const char* detail)
+{
+	throw std::logic_error(std::string(entry) + ": " + detail
+			+ " (docs/proposals/SYNTHETIC_OBJECTS.md).");
 }
 
 //! Narrows a layout size, refusing a definition the object model cannot hold.
@@ -128,7 +157,7 @@ std::uint32_t toLayoutWord(std::size_t value)
 
 bool hostTypeSupportAvailable() noexcept
 {
-	return false;
+	return true;
 }
 
 HostTypeLayout layoutHostType(const HostTypeDefinition& definition)
@@ -167,41 +196,60 @@ HostTypeLayout layoutHostType(const HostTypeDefinition& definition)
 
 TypeId internHostType(Store& store, const HostTypeDefinition& definition)
 {
-	(void)store;
-	// Validate first: a malformed definition is a host bug even while the
-	// interning path is a stub, and the layout function is the shared validator.
+	// Validate first: the layout function is the shared validator, so a malformed
+	// definition is rejected before the registry sees it.
 	(void)layoutHostType(definition);
-	notImplemented("internHostType");
+	// Leaf-only staging: a reference field would need a Store-level graph walk on
+	// release, and a half-walk would leak the children's counts (`SO17`).
+	if (hasReferenceField(definition))
+		notImplemented("internHostType",
+				"host types with a reference field are not supported yet (SO17)");
+
+	Subtype subtype{};
+	subtype.isFinal = definition.isFinal;
+	subtype.isShared = false;
+	if (definition.kind == HostTypeKind::Struct) {
+		StructType structure;
+		structure.fields.reserve(definition.fields.size());
+		for (const HostFieldDefinition& field : definition.fields)
+			structure.fields.push_back(toParserField(field));
+		subtype.composite = std::move(structure);
+	} else {
+		ArrayType array;
+		array.elementType = toParserField(definition.element);
+		subtype.composite = std::move(array);
+	}
+
+	// One group of one member: a bare type is a `rec` group of one (TYPE_IDENTITY
+	// §2.2), and `internGroup` is the same entry point the component parser uses.
+	std::vector<Subtype> scratch;
+	scratch.push_back(std::move(subtype));
+	const TypeGroup group{LocalTypeIdx{0}, 1};
+	const std::vector<TypeId> ids =
+			store.types().internGroup(scratch, group, std::span<const TypeId>());
+	if (ids.size() != 1)
+		throw std::logic_error("internHostType: the registry did not return one identity");
+	return ids.front();
 }
 
 void* allocateHostStruct(Store& store, TypeId type)
 {
-	(void)store;
-	(void)type;
-	notImplemented("allocateHostStruct");
+	return store.allocateHostStruct(type);
 }
 
 void* allocateHostArray(Store& store, TypeId type, std::uint32_t length)
 {
-	(void)store;
-	(void)type;
-	(void)length;
-	notImplemented("allocateHostArray");
+	return store.allocateHostArray(type, length);
 }
 
 void* retainHostObject(Store& store, void* object) noexcept
 {
-	// No object can be allocated until `SO-1` lands, so this is only reachable
-	// for an object the engine already owns. Retaining is the raw `refClone`
-	// contract; the stub keeps the ergonomics layer's destructor non-throwing.
-	(void)store;
-	return object;
+	return store.retainHostObject(object);
 }
 
 void releaseHostObject(Store& store, void* object) noexcept
 {
-	(void)store;
-	(void)object;
+	store.releaseHostObject(object);
 }
 
 } // namespace WASM

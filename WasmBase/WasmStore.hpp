@@ -256,6 +256,45 @@ public:
 	/** \brief Returns read-only access to the Store-owned GC heap. \return Const reference to the GC heap. */
 	const GcHeap& gc() const { return gcHeap; }
 
+	//! \par Host-created GC objects (docs/proposals/SYNTHETIC_OBJECTS.md `SO-1`)
+	//! A synthetic object belongs to the Store, not to an instance: its type is
+	//! interned into `types()` (the same canonicalizer a module uses), its
+	//! storage comes from this Store's GC heap, and its count is the engine's
+	//! one count (A.14.3/A.14.4). These are the unergonomic entry points;
+	//! `WasmHostObject.hpp` wraps them in `HostType`/`HostObject`.
+	//!
+	//! **Leaf types only, for now.** Interning refuses a type with a reference
+	//! field (`SO17`): releasing such a graph needs a Store-level walk, and a
+	//! half-walk would leak the children's counts. The definition and the layout
+	//! still describe references; allocation does not accept such a type.
+	//!
+	//! A fresh object is **unowned** (count 0), exactly like the instance path:
+	//! the caller retains it once to hold a root, and a guest that stores it
+	//! retains it through the normal barriers.
+
+	/** \brief Allocates an unowned struct object of an interned core type. \param type Canonical identity of a struct type. \return The object, with its `TypeId` stamped and its count at zero. \throws std::invalid_argument when `type` is not a canonical struct type. \throws std::bad_alloc when the GC budget refuses the allocation. */
+	void* allocateHostStruct(TypeId type);
+	/** \brief Allocates an unowned array object of an interned core type. \param type Canonical identity of an array type. \param length The element count. \return The object, with its `TypeId` stamped, its length written and its count at zero. \throws std::invalid_argument when `type` is not a canonical array type. \throws std::bad_alloc when the GC budget refuses the allocation. */
+	void* allocateHostArray(TypeId type, std::uint32_t length);
+	/** \brief Retains one engine count on a host object. \param object An object in this Store's GC heap; null or a foreign pointer is ignored. \return The same pointer, for expression chaining. */
+	void* retainHostObject(void* object) noexcept;
+	//! Releases one engine count, deferring the recycle when it reaches zero.
+	//!
+	//! The recycle is deferred because an uncounted borrow may still be on a
+	//! guest frame: the object is queued here and reclaimed by
+	//! `collectHostObjects()` at a safepoint. A release on an already-zero count
+	//! is ignored — this entry point has no trap channel, so a host bug cannot be
+	//! reported from it.
+	/** \brief Releases one engine count and queues the object when it reaches zero. \param object An object in this Store's GC heap; null or a foreign pointer is ignored. */
+	void releaseHostObject(void* object) noexcept;
+	//! Recycles the host objects whose count reached zero since the last call.
+	//!
+	//! A safepoint operation, like `ModuleInstance::gcCollect`: call it when no
+	//! Wasm frame is live. `Runtime::safepoint()` drains it, and only when no
+	//! instance is in a call — a live frame may hold an uncounted borrow.
+	/** \brief Recycles host objects released since the last safepoint. */
+	void collectHostObjects();
+
 	//! \par Strings (docs/proposals/STRINGREF.md)
 	//! Host-owned string objects: stable pointers, no reference counting, and a
 	//! lifetime that ends with the Store. `string.const` literals and every
@@ -664,6 +703,19 @@ private:
 
 	//! The GC object heap: mmap-backed regions, no per-object libc allocation.
 	GcHeap gcHeap{ *this };
+
+	//! \par Host-created GC objects (docs/proposals/SYNTHETIC_OBJECTS.md `SO-1`)
+	//! The region set every host-created object is carved from, and the objects
+	//! whose count reached zero and wait for a safepoint. Both are Store-owned
+	//! because a host object belongs to the Store, not to an instance
+	//! (A.14.3/A.14.4). The set is created lazily and released by `~Store`.
+	GcHeap::RegionSet* hostObjectSet_ = nullptr; //!< lazily created host region set
+	std::vector<void*> hostObjectQueue_; //!< released objects awaiting a safepoint
+	mutable std::mutex hostObjectMutex_; //!< guards the two members above
+
+	//! Creates `hostObjectSet_` on first use.
+	/** \brief Returns the Store-owned region set host objects are allocated from. \return The host region set, created on first use. */
+	GcHeap::RegionSet& hostRegionSet();
 
 	//! Host-owned string objects (STRINGREF.md). Never freed before teardown.
 	StringStore stringStore{ *this };

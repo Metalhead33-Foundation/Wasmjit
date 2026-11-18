@@ -2,7 +2,7 @@
 
 *What Is an Engine Gap, and What Is a Boundary*
 
-Status: policy note, revision 6 (2026-11-11). It is the canonical record of the
+Status: policy note, revision 9 (2026-11-18). It is the canonical record of the
 surfaces WasmJit deliberately does **not** own and of the deviations it has
 chosen, so that none of them is counted as an implementation gap. Open defects
 and limitations live in one register,
@@ -16,9 +16,10 @@ diagnostics guest-log facility (§3.1); revision 7 (2026-11-18) adds §3.2, the
 synthetic-object boundary, and its row in §3, so a product object model is not
 mistaken for engine debt ([`proposals/SYNTHETIC_OBJECTS.md`](proposals/SYNTHETIC_OBJECTS.md)).
 **Revision 8 (2026-11-18)** revises §3.2 and its row for that note's revision 2: the
-*identity and allocation* of a host-registered Wasm type are engine work (planned,
-`SO-1`/`EN-14`), and §3.2's table records the split; only the object model remains
-a boundary.
+*identity and allocation* of a host-registered Wasm type are engine work, and
+§3.2's table records the split; only the object model remains a boundary. Revision
+9 (2026-11-18) records `SO-1` as shipped and the reference-field limit as a
+staging gap (`SO17`/`SO-6`).
 Audience: anyone triaging a missing feature, filling in a completeness meter,
 writing a proposal note, asking "which languages do we actually serve?", or
 asking "is this engine mature yet?".
@@ -124,7 +125,7 @@ the split because it decides who is behind on what:
 
 | Half | Owner | Status |
 |---|---|---|
-| **identity and allocation** — intern a canonical `struct`/`array` the host supplies; allocate/free its instances in the Store's `GcHeap`; stamp the `TypeId`; keep one count per graph | **engine** | **planned** (`SO-1`, `EN-14`). It is not a boundary any more, and it is not shipped: `TypeRegistry` is parser-fed today and `allocateStructObject` needs a module-local index, so a host cannot originate a type (`SO13`). |
+| **identity and allocation** — intern a canonical `struct`/`array` the host supplies; allocate/free its instances in the Store's `GcHeap`; stamp the `TypeId`; keep one count per graph | **engine** | **shipped** (`SO-1`, `EN-14`): `internHostType` runs the same canonicalizer a module uses, and `Store::allocateHostStruct`/`allocateHostArray` allocate from a Store-owned region set. One staging limit: a reference **field** is refused at interning until the Store-level release walk lands (`SO17`, `SO-6`, `EN-15`). |
 | **the object model** — names, versions, fields-as-properties, methods, signals, interfaces, reflection, dispatch, thread policy | **embedder** | out of the engine, permanently (`SOD6`) |
 
 The engine also still ships the transport and nothing else for an *opaque* host

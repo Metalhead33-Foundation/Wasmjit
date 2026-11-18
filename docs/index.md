@@ -45,7 +45,7 @@ applies to `proposals/`, `languages/` and `backends/`.
 | check whether a second code generator may begin | \subpage doc_readiness_audit | `G3` and `LF-0a` in one sweep, the seam inventory, the pinned snapshot |
 | decide whether something is an engine gap or an out-of-scope boundary | \subpage doc_scope | the triage rule, the embedder/text/encoding-blocked tables, the recorded deviations |
 | find a per-proposal note | \subpage proposals_index | the per-proposal notes: spec demands → shipped state → gaps → deviations → plan → tests |
-| design a cross-language object model, or ask whether “C can use a Wasm GC object” is a gap | [proposals/SYNTHETIC_OBJECTS.md](proposals/SYNTHETIC_OBJECTS.md) | the host-registered object type, the GObject precedent, the measured wire, what the Component Model already owns, and `SO-1`…`SO-5` |
+| design a cross-language object model, or ask whether “C can use a Wasm GC object” is a gap | [proposals/SYNTHETIC_OBJECTS.md](proposals/SYNTHETIC_OBJECTS.md) | the host-registered object type, the GObject precedent, the measured wire, what the Component Model already owns, and `SO-1`…`SO-6` (`SO-1` shipped) |
 | find a backend slice, defect or measurement | \subpage backends_index | the current backend facts, the two backend pages, and the frozen `HISTORY.md` |
 | find a language study | \subpage languages_index | the `LF-1` triage, the `LF-2` arms, the `LF-4` component arms, the verdicts and engine findings |
 
@@ -78,7 +78,8 @@ Two consequences worth stating, because both were live ambiguities:
   counts only what the engine owes.
 - **A note may stop being only a study.** `SYNTHETIC_OBJECTS.md` revision 2 is the
   first: its Appendix A is still the study (the wire measurement, the backings, the
-  arena), and its §7 now opens `SO-1`…`SO-5`, so the note is read as a **plan**
+  arena), and its §7 opened `SO-1`…`SO-5` — `SO-1` has since shipped, and `SO-6`
+  was added — so the note is read as a **plan**
   whose evidence is the appendix. The kind a sentence belongs to is the section's,
   not the file's.
 

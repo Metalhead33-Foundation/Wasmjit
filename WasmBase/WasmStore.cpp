@@ -1,9 +1,13 @@
 #include "WasmStore.hpp"
+#include "WasmGcHeader.hpp"
 #include "WasmModuleInstance.hpp"
 #include "WasmDiagnostics.hpp"
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
+#include <span>
+#include <new>
 #include <stdexcept>
 
 namespace WASM {
@@ -334,6 +338,126 @@ Store::~Store()
 	retainedInstances_.clear();
 	for (const StoreOwnedException& exception : exceptions)
 		delete[] exception.storage;
+	// Host-created objects are Store-owned, so their regions and their pending
+	// queue die with the Store rather than with an instance
+	// (docs/proposals/SYNTHETIC_OBJECTS.md A.14.3). Drain first so a dedicated
+	// region is released once, then release whatever is left in the set.
+	collectHostObjects();
+	gcHeap.releaseSet(hostObjectSet_);
+	hostObjectSet_ = nullptr;
+}
+
+GcHeap::RegionSet& Store::hostRegionSet()
+{
+	std::lock_guard<std::mutex> lock(hostObjectMutex_);
+	if (hostObjectSet_ == nullptr)
+		hostObjectSet_ = gcHeap.createSet();
+	return *hostObjectSet_;
+}
+
+void* Store::allocateHostStruct(TypeId type)
+{
+	if (!typeRegistry.isCoreType(type))
+		throw std::invalid_argument(
+				"allocateHostStruct: the type is not a canonical core type");
+	const CoreTypeView view = typeRegistry.canonicalType(type);
+	if (view.kind() != CanonTypeKind::Struct)
+		throw std::invalid_argument("allocateHostStruct: the type is not a struct");
+
+	const std::span<const CanonFieldType> fields = view.structFields();
+	const std::size_t size = gcStructSize(fields);
+	// Host-field offsets are 32-bit in the seam's layout, so an object the
+	// offsets cannot address is refused instead of being silently truncated.
+	if (size > std::numeric_limits<std::uint32_t>::max())
+		throw std::length_error("allocateHostStruct: the struct exceeds the 32-bit offset range");
+	GcHeap::RegionSet& set = hostRegionSet();
+	std::uint8_t* object = static_cast<std::uint8_t*>(gcHeap.allocate(set, size));
+	if (object == nullptr)
+		throw std::bad_alloc();
+	// The same header contract the instance path writes: canonical TypeId, a
+	// zero count (a fresh object is unowned, GC.md RC-1) and a null descriptor.
+	GcHeader::writeWord(object, GcHeader::kTypeIdOffset, type.value);
+	GcHeader::writeWord(object, GcHeader::kRefcountOffset, 0);
+	*reinterpret_cast<void**>(object + GcHeader::kDescriptorOffset) = nullptr;
+	return object;
+}
+
+void* Store::allocateHostArray(TypeId type, std::uint32_t length)
+{
+	if (!typeRegistry.isCoreType(type))
+		throw std::invalid_argument(
+				"allocateHostArray: the type is not a canonical core type");
+	const CoreTypeView view = typeRegistry.canonicalType(type);
+	if (view.kind() != CanonTypeKind::Array)
+		throw std::invalid_argument("allocateHostArray: the type is not an array");
+
+	const CanonStorageType& element = view.arrayElement().storage;
+	const std::size_t dataOffset = gcArrayDataOffset(element);
+	const std::size_t elementBytes = gcStorageBytes(element);
+	// `length` is a Wasm vector length and `elementBytes` is at most 16, but the
+	// product still has to be proved not to wrap before it is used as a size.
+	if (length != 0
+			&& elementBytes > (std::numeric_limits<std::size_t>::max() - dataOffset) / length)
+		throw std::length_error("allocateHostArray: the array size overflows size_t");
+	const std::size_t total = dataOffset + static_cast<std::size_t>(length) * elementBytes;
+	if (total > std::numeric_limits<std::uint32_t>::max())
+		throw std::length_error("allocateHostArray: the array exceeds the 32-bit offset range");
+
+	GcHeap::RegionSet& set = hostRegionSet();
+	std::uint8_t* object = static_cast<std::uint8_t*>(gcHeap.allocate(set, total));
+	if (object == nullptr)
+		throw std::bad_alloc();
+	GcHeader::writeWord(object, GcHeader::kTypeIdOffset, type.value);
+	GcHeader::writeWord(object, GcHeader::kRefcountOffset, 0);
+	GcHeader::writeWord(object, GcHeader::kArrayLengthOffset, length);
+	return object;
+}
+
+void* Store::retainHostObject(void* object) noexcept
+{
+	if (object == nullptr || !gcHeap.owns(object))
+		return object;
+	auto* count = reinterpret_cast<std::uint32_t*>(
+			static_cast<std::uint8_t*>(object) + GcHeader::kRefcountOffset);
+	GcRefcount(count).increment(); // saturating, exactly like `refClone`
+	return object;
+}
+
+void Store::releaseHostObject(void* object) noexcept
+{
+	if (object == nullptr || !gcHeap.owns(object))
+		return;
+	auto* count = reinterpret_cast<std::uint32_t*>(
+			static_cast<std::uint8_t*>(object) + GcHeader::kRefcountOffset);
+	bool underflow = false;
+	const std::uint32_t previous = GcRefcount(count).decrement(underflow);
+	if (underflow || previous != 1)
+		return;
+	// The count reached zero, but a guest frame may still hold an uncounted
+	// borrow, so the recycle waits for a safepoint (A.14.4). Stamping the tag is
+	// the same "already queued" mark the instance path uses, so a double release
+	// cannot queue the object twice.
+	GcHeader::writeWord(object, GcHeader::kTypeIdOffset, GcHeader::kReclaimedTypeId);
+	try {
+		std::lock_guard<std::mutex> lock(hostObjectMutex_);
+		hostObjectQueue_.push_back(object);
+	} catch (...) {
+		// Out of memory here must not terminate: the object is unreachable (its
+		// count is zero) and its region is released when the Store dies.
+	}
+}
+
+void Store::collectHostObjects()
+{
+	std::vector<void*> queued;
+	{
+		std::lock_guard<std::mutex> lock(hostObjectMutex_);
+		queued.swap(hostObjectQueue_);
+	}
+	// Leaf host objects have no outgoing references yet (`SO17`), so a safepoint
+	// only has to return the blocks to their region's free list.
+	for (void* object : queued)
+		gcHeap.recycle(object);
 }
 
 Store::MemoryId Store::createLinearMemory(uint64_t initialPages, uint64_t maxPages, bool isShared,

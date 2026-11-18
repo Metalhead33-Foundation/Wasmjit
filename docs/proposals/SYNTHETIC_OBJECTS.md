@@ -2,25 +2,28 @@
 
 *Host-Registered Object Types, the GObject Precedent, and What the Component Model Already Covers*
 
-Status: design note / implementation reference (**revision 2 — 2026-11-18**). This
+Status: design note / implementation reference (**revision 3 — 2026-11-18**). This
 is `EMBEDDING_SURFACE.md` §16 promoted to a note of its own: that section had grown
 into a six-hundred-line study inside an implementation reference, and the
 reference now keeps only the embedder-facing half. Revision 1 recorded a boundary —
 *study accepted, engine implementation rejected*. **Revision 2 reverses the
 implementation half and keeps the boundary where it belongs.** A host object model
-is now a planned, opt-in feature (`SO-1`…`SO-5`); the identity it uses is the
+is now a planned, opt-in feature; the identity it uses is the
 Store's **`TypeId`**, not a third identity domain (`SOD2` is superseded); and the
 engine gains a generic *type-registration and allocation* seam, while the object
 model, its descriptors, its dispatch and its reflection stay outside `WasmBase/`
-(`SOD6` rewritten, not deleted). **Contains no new code**: revision 2 is a decision
-record plus the mechanism study in Appendix A.14. The `externref` + `HostBridge`
+(`SOD6` rewritten, not deleted). **Revision 3 implements that seam (`SO-1`)**: a
+host type interns through the same canonicalizer a module uses, the Store allocates
+its instances, and the count is the engine's one count; interning a **reference
+field** stays refused until the Store-level release walk lands (`SO17`, `SO-6`).
+The `externref` + `HostBridge`
 path is unchanged and remains the answer for truly opaque host objects; the new
 path is a second, opt-in one for objects that are **expressible in Wasm**.
 
 Audience: anyone designing a cross-language object layer, anyone asking whether
 “C can use a Wasm GC object” is an engine gap ([`../SCOPE.md`](../SCOPE.md) §3.2),
 anyone extending the generator plan of [`../EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md)
-§11/§14, and the implementer of `SO-1`…`SO-5`.
+§11/§14, and the implementer of `SO-2`…`SO-6`.
 
 Follows the same split as [`COMPONENT_MODEL.md`](COMPONENT_MODEL.md) and
 [`TYPE_MODEL.md`](TYPE_MODEL.md). **Appendix A** carries the study itself, at the
@@ -37,7 +40,7 @@ now cite. §2–§8 state the decisions and cite the appendix rather than repeat
 | §4 | What is implemented today? |
 | §5 | What is missing or untested (`SO1`–`SO16`)? |
 | §6 | Where do we deliberately deviate (`SOD1`–`SOD7`)? |
-| §7 | What is the plan (`SO-1`–`SO-5`)? |
+| §7 | What is the plan (`SO-1`–`SO-6`)? |
 | §8 | What does the test survey measure? |
 | Appendix A | The study: a GObject-shaped host object runtime, in full (A.14 is the revision-2 mechanism) |
 | §9 | References — the last section, as [§2.3](../PROPOSALS.md) requires |
@@ -242,6 +245,7 @@ This is the line the model draws, and it is not negotiable:
 |---|---|
 | a `struct` of scalars and references, with `i32` offsets into a shared memory for bulk data | `std::string`, `std::vector`, `std::map` as *fields* — copy through a canonical string/list record, or store a handle |
 | a reference to another synthetic object, including a cycle | a `std::shared_ptr` graph with a custom deleter — host-owned, behind a handle |
+| …and a note on staging: a reference **field** is refused at interning until the Store-level release walk lands (`SO17`, `SO-6`) | — |
 | a `struct` with a `v128` field | a type with a vtable, virtual bases, or RTTI — host-owned |
 | an `array` of scalars or references | a non-trivially-copyable member, an RAII lock, a move-only type — host-owned |
 | a component resource (nominal identity) | a C++ template instantiation — the descriptor names the instantiated type, the Wasm type is its fields |
@@ -410,32 +414,40 @@ originate a type that no module declared**: `internModule` consumes a parser's
 
 | Not shipped | Why | Where it goes |
 |---|---|---|
-| a host-originated type intern | the registry is parser-fed today | `SO-1` (engine) |
-| allocation of a host type without a module-local index | the instance API resolves a local index | `SO-1` (engine) |
+| a reference field in a host type | the Store-level release walk is not written; a half-walk would leak the children's counts | `SO-6` (`SO17`) |
 | a descriptor registry and its versioning | host metadata, not engine metadata | `SO-2` (host + tool) |
 | object entries in the binding schema | the envelope carries imports/exports only | `SO-2` (tool) |
 | dynamic properties, signals, a nominal class tree | product policy, and no common core | stays out, permanently (`SOD6`) |
 | a C++ class, RTTI, a destructor, a C++ layout | the §2.6 constraint | stays out, permanently |
 
-The last two rows are the boundary that survives revision 2. The first four are
+The last two rows are the boundary that survives revision 2. The first three are
 gaps with IDs, not boundaries (§5).
 
-### 4.4 The scaffolding (2026-11-18)
+### 4.4 The seam, implemented (`SO-1`, 2026-11-18)
 
-`SO-1`'s interface is in the tree, so the shape can be reviewed and used before
-the implementation exists:
+`SO-1` is in the tree and exercised end to end. The pieces and where they live:
 
-| Header | What is there | What is not |
+| Piece | Where | What it does |
 |---|---|---|
-| [`../WasmBase/WasmHostType.hpp`](../../WasmBase/WasmHostType.hpp) | `HostTypeDefinition`/`HostFieldDefinition` (the Wasm storage vocabulary, no names), `HostTypeLayout`/`HostFieldLayout`, `hostTypeSupportAvailable()`, and `layoutHostType()` — **implemented** over `gcStructFieldOffset`/`gcStructSize`/`gcArrayDataOffset`, so it agrees with the GC heap by construction | `internHostType`, `allocateHostStruct`, `allocateHostArray`: declared, documented, and throwing `std::logic_error`. `retainHostObject`/`releaseHostObject` are non-throwing no-ops until an object can exist. |
-| [`../WasmBase/WasmHostObject.hpp`](../../WasmBase/WasmHostObject.hpp) | `HostType` (definition + layout + optional `TypeId`) and `HostObject` (move-only, one engine count, scalar/`v128` field access by index) | `HostType::intern`, `HostObject::createStruct`, `HostObject::createArray` reach the throwing seam. A reference field is refused by the accessors, because reading its word as data would bypass `refClone`/`refDrop`. |
+| **interning** | `internHostType` over `TypeRegistry::internGroup` | converts the definition to a `Subtype` and runs the **same** canonicalizer a module uses — one `rec` group of one member. A module declaring the shape gets the same `TypeId` (A.14.2). |
+| **allocation** | `Store::allocateHostStruct` / `allocateHostArray` | validates the composite, derives `size`/offsets from the canonical record, allocates from a **Store-owned** `GcHeap::RegionSet`, stamps the `TypeId`, starts the count at 0. |
+| **count** | `Store::retainHostObject` / `releaseHostObject` + `GcRefcount` | the engine's one count (`SOD4`). The saturating arithmetic moved to [`../WasmBase/WasmGcHeader.hpp`](../../WasmBase/WasmGcHeader.hpp) so the instance path and the host path cannot disagree. |
+| **reclamation** | `Store::collectHostObjects` | a count that reaches zero is **queued** — a guest frame may still hold an uncounted borrow — and recycled at the next safepoint. `Runtime::safepoint()` drains it after the instances' own collections. |
+| **ergonomics** | [`../WasmBase/WasmHostObject.hpp`](../../WasmBase/WasmHostObject.hpp) | `HostType` (definition + layout + `TypeId`) and `HostObject` (move-only, one count, field and array-element access by index). |
 
-Both are embedder-tier headers (`EMBEDDING_SURFACE.md` §6.1.1), carry no name or
-descriptor (`SO-2`), and are pinned by `Test/HostObjectTests.cpp` (`[hostobject]`):
-the mixed-field layout equals the GC contract, an illegal definition is refused
-before any state changes, and the stubs throw rather than pretending to succeed.
-This is what §4.3 calls “not shipped, yet”: the interface is shipped, the
-implementation is not.
+Evidence: [`Test/HostObjectTests.cpp`](../../Test/HostObjectTests.cpp)
+(`[hostobject]`) over [`Test/wasm_wat/host_object_probe.wat`](../../Test/wasm_wat/host_object_probe.wat).
+The host interns `{i32, i32}`, allocates it, writes 20 and 22; the module's
+`sum_pair` returns 42 (layout and identity), `is_pair` returns 1 (`ref.test` reads
+the header), and `save` stores it so the object survives the host's release.
+`liveObjectCount()` pins both counts: one object while the guest holds it, none
+after `drop_saved` and a safepoint. `SO13` and `SO16` are closed by this.
+
+**The one restriction.** `internHostType` refuses a definition with a reference
+field (`SO17`, milestone `SO-6`): releasing such a graph needs a Store-level walk,
+and recycling without it would leak the children's counts. The definition and
+`layoutHostType` still describe references, because `SO-2`'s descriptor and
+`SO-5`'s arena need that metadata; only *interning* is gated.
 
 ## 5. Gaps
 
@@ -459,10 +471,11 @@ product ship this?”), not against the engine's completeness meter
 | SO10 | **No arena-ownership test**: the arena allocator and a host count must never both free one object, and a borrow must not outlive its owner | same gate as SO9 | Medium; host-side |
 | SO11 | **No descriptor registry and no generator output exists** for the object case; the emitter work is §11/§14 of [`../EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) for functions and values, not for objects | closed by `SO-2` | High; tool-side |
 | SO12 | **No transport for a host object that is not an `externref`** beyond the integer handle; `externref` is available in two of the tested toolchains (§8) | measured, §8 | Low; the `i64` wire covers all six |
-| SO13 | **No public way to register a host-originated type *yet*.** The interface exists ([`../WasmBase/WasmHostType.hpp`](../../WasmBase/WasmHostType.hpp), §4.4) and `internHostType` throws; behind it, `TypeRegistry::internModule`/`internGroup` take a parser `Subtype` span and `allocateStructObject` resolves a `LocalTypeIdx` through the module | [`../WasmHostType.hpp`](../../WasmBase/WasmHostType.hpp), [`../WasmModuleInstance.cpp`](../../WasmBase/WasmModuleInstance.cpp) (`allocateStructObject`) | **High — engine; it is the gate on D1/D2** (`SO-1`) |
+| ~~SO13~~ | ~~**No public way to register a host-originated type.**~~ **Done (SO-1):** `internHostType` builds a `Subtype` and runs `TypeRegistry::internGroup`, the *same* canonicalizer a module uses; `Store::allocateHostStruct`/`allocateHostArray` take a `TypeId` and need no module. | [`../WasmHostType.hpp`](../../WasmBase/WasmHostType.hpp), [`../WasmStore.hpp`](../../WasmBase/WasmStore.hpp) | Closed — §4.4 |
 | SO14 | **No object descriptor in the binding schema.** The envelope (`wasmjit.binding/1`) carries `imports`/`exports`; there is no `types`/`objects` section, so the generator cannot emit a typed reference or a resource for an object | [`../EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) §11.8; `Tools/Bindings/BindingModel.hpp` | High; tool-side (`SO-2`) |
 | SO15 | **No dual-surface test.** One object, two spellings: a `(ref $T)` export and an `i64` handle export of the same operation must reach the same object and the same count; dropping the last handle must not free an object the guest still holds | A.14.4; nothing in the tree | High; engine + tool (`SO-3`) |
-| SO16 | **No structural-dedup test for host types.** Two descriptors with the same shape must intern to one `TypeId`; two versions of one name must intern to two; a guest declaring the shape must match without knowing the descriptor | A.14.2; [`../TYPE_IDENTITY.md`](../TYPE_IDENTITY.md) §6.2 | **High — it is the evidence for D1** (`SO-1`) |
+| ~~SO16~~ | ~~**No structural-dedup test for host types.**~~ **Done (SO-1):** `[hostobject]` pins a module-declared `{i32,i32}` and a host definition to one `TypeId`, and a mutability change to a different one — no name involved, which is the evidence for D1. | [`../../Test/HostObjectTests.cpp`](../../Test/HostObjectTests.cpp); [`../TYPE_IDENTITY.md`](../TYPE_IDENTITY.md) §6.2 | Closed — §4.4 |
+| SO17 | **A host type with a reference field cannot be interned.** A reference field makes the object a graph node; releasing the graph needs the Store-level walk, and recycling without it would leak the children's counts. The definition and the layout still describe references. | `internHostType` throws `std::logic_error`; [`../WasmStore.hpp`](../../WasmBase/WasmStore.hpp) documents the leaf-only rule | **High for a graph; `SO-6` closes it** |
 
 ## 6. Where we can and should play fast and loose
 
@@ -537,21 +550,24 @@ engine's count is the only one.
 Revision 2 **opens a milestone**, which revision 1 explicitly did not. The plan is
 ordered so the engine seam is proved before any binding is generated, and so the
 part that needs a memory layout (the arena) comes last. `SO-1` is class **B**
-(additive public API, no removal); `SO-2`–`SO-4` are tooling/host work; `SO-5` is
-host-side work gated on the sharing study and is **not** an engine milestone.
+(additive public API, no removal); `SO-6` is engine work on the same surface;
+`SO-2`–`SO-4` are tooling/host work; `SO-5` is host-side work gated on the sharing
+study and is **not** an engine milestone.
 
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
-| **SO-1 — Host type registration and allocation** | Add a public path to intern a host-originated canonical type into the Store's `TypeRegistry` (the same interning that module types use), and a way to allocate/free an object of that `TypeId` in the Store's `GcHeap` with the header stamped and the count at its documented starting value. No descriptor, no names, no dispatch in `WasmBase/` (A.14.3). | SO13, SO16 | a test interns a struct from the host, allocates it, passes it to a guest export declared with the same shape, and `ref.test`/`ref.cast` succeed inside the guest; a structurally identical guest declaration gets the *same* `TypeId`, and two host versions of one name get two |
+| **SO-1 — Host type registration and allocation** ✅ | A public path to intern a host-originated canonical type into the Store's `TypeRegistry` (the same interning that module types use), and a way to allocate/free an object of that `TypeId` in the Store's `GcHeap` with the header stamped and the count at its documented starting value. No descriptor, no names, no dispatch in `WasmBase/` (A.14.3). | SO13, SO16 | **Done 2026-11-18:** `internHostType` interns through `TypeRegistry::internGroup`; `Store::allocateHostStruct`/`allocateHostArray` allocate from a Store-owned region set; `[hostobject]` proves the module and the host share one `TypeId`, `ref.test`/`struct.get` see the object, and the counts balance across a guest store and a safepoint (§4.4). The name/version half of the original wording is `SO-2`'s descriptor and does not change the type-level test. |
 | **SO-2 — The descriptor and the schema** | A hand-written descriptor table (fields, methods, parent, interfaces, version) and an extension of the neutral envelope with a `types`/`objects` section, consumed by `Tools/Bindings/`. Emit WIT, and at least the C and Rust targets (A.14.5). | SO14, SO11 | one descriptor source produces a WIT package and a C/Rust header; a version mismatch is a load-time error; the generator never parses a C++ header for it |
 | **SO-3 — The handle table and the dual surface** | A host-side handle table whose entry holds one `refClone` root, generated `i64` accessors, and the rule that a GC guest may pass the same object as `(ref $T)`. Explicit release, stale-handle rejection, no second count (A.14.4). | SO1, SO2, SO6, SO8, SO12, SO15 | one object is reached by a `(ref $T)` export and an `i64` export in the same run; dropping the handle does not free an object the guest still holds, and dropping the last guest reference does not free one the table still roots |
 | **SO-4 — Component packaging, GC-language façade** | A WIT resource version of the same API, plus the generated wrapper for a GC language (Kotlin/Wasm or MoonBit) and a Dart/Kotlin-style façade holding the handle. | SO3, SO4 | `resource.drop` runs the host release once; a wrapper's drop reaches one decrement; a cycle through the wrapper is collected or documented as a host cycle |
 | **SO-5 — The arena backing** | Objects as `i32` offsets in the shared memory of [`SHARING_LINEAR_MEMORY.md`](SHARING_LINEAR_MEMORY.md) A.13, gated on `SLM-1`…`SLM-4`. | SO9, SO10 | the object survives the writer's unload and re-instantiation, and a forged offset is a clean error |
+| **SO-6 — Reference-field graphs on the Store release path** | Let `internHostType` accept a reference field again: at a safepoint, a released host object drops each outgoing reference (the same `refClone`/`refDrop` contract) before its block is recycled, reusing the instance walker's type/layout logic rather than a second collector. | SO17 | a host object with a `struct`/`array` reference field is interned, released and collected with `liveObjectCount()` back to its baseline; a cycle is either collected or documented as a host-side cycle, and the child's count never leaks |
 
-**Scaffolding landed 2026-11-18.** `SO-1`'s interface is in the tree (§4.4:
-`WasmHostType.hpp`/`WasmHostObject.hpp`, plus the `[hostobject]` test). The row
-stays open and its `Done when` is unchanged: an interface that throws is not the
-milestone.
+**`SO-1` landed 2026-11-18; the scaffolding paragraph it replaced is history.**
+The remaining engine row is `SO-6`, and it exists because of one deliberate
+restriction rather than an oversight: interning refuses a reference field until
+the Store-level walk exists (§4.4), so no object can leak a child's count in the
+meantime.
 
 Ordering, and why it is not negotiable: `SO-1` is the only engine row and
 everything else is written against it — generating bindings for a type the engine
@@ -561,6 +577,7 @@ because a handle table without a descriptor is a table of anonymous slots.
 `SO-5` is last for the reason revision 1 gave: it depends on a memory-layout plan
 that is explicitly out of scope for the short term
 ([`SHARING_LINEAR_MEMORY.md`](SHARING_LINEAR_MEMORY.md) §12.3, rungs 5–6).
+`SO-6` follows `SO-1` directly and is independent of `SO-2`–`SO-5`.
 
 The **arena-first** ordering revision 1 implied is therefore reversed. Revision 1
 put a WIT package first because the Component Model was the recommended contract;
@@ -594,7 +611,7 @@ the import section and the artifact sizes). The in-suite anchors are `[runtime]`
 for the object header the guest-owned case relies on.
 
 That measurement answers the *wire* question and nothing else. Revision 2 adds
-five claims the lab never tested, and they are `SO-1`–`SO-5`'s acceptance criteria:
+five claims the lab never tested, and they are `SO-1`–`SO-6`'s acceptance criteria:
 
 | Test | What it would prove | Milestone |
 |---|---|---|

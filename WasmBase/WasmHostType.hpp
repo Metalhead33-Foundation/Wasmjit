@@ -14,14 +14,14 @@
   shape receives the same `TypeId`, so `ref.test`/`ref.cast` work across the
   boundary without an adapter (`SOD1`, `SOD2`).
 
-  **Scaffolding (2026-11-18).** The declarations below are the contract; the
-  state-changing entry points are not implemented yet and throw
-  `std::logic_error`. `layoutHostType` is implemented because it is a pure
-  function over the helpers the runtime and a backend already share
-  (docs/ABI.md "GC Object and Heap ABI"), so the shape can be pinned now. Nothing
-  in this header names a product, a property, a signal or a C++ class (`SOD6`): a
-  host type is a Wasm `struct`/`array`, and the name/descriptor layer stays in the
-  embedder (`SO-2`).
+  **Status (the `SO-1` seam, 2026-11-18).** Interning, allocation, retain and
+  release are implemented; `layoutHostType` is a pure function over the helpers
+  the runtime and a backend already share (docs/ABI.md "GC Object and Heap ABI").
+  The one staging restriction is a **reference field**: interning refuses it until
+  the Store-level release walk lands (`SO17`), because recycling a graph without
+  dropping its children would leak their counts. Nothing in this header names a
+  product, a property, a signal or a C++ class (`SOD6`): a host type is a Wasm
+  `struct`/`array`, and the name/descriptor layer stays in the embedder (`SO-2`).
 
   This header is part of the exported surface: every declaration in it
   is exported (docs/EMBEDDING_SURFACE.md ES-4).
@@ -191,7 +191,9 @@ inline HostTypeDefinition hostArray(HostFieldDefinition element)
 
 /*!
   \brief Reports whether the state-changing `SO-1` entry points are implemented.
-  \return false until `SO-1` lands; the scaffolds throw instead of pretending.
+  \return true in this build; the query exists so an embedder can branch on the
+          capability instead of catching, and stays meaningful if a future build
+          compiles the seam out.
 */
 bool hostTypeSupportAvailable() noexcept;
 
@@ -209,7 +211,7 @@ HostTypeLayout layoutHostType(const HostTypeDefinition& definition);
   \param definition The struct or array definition to intern.
   \return The canonical identity the registry assigned, shared with any module
           that declares the same shape.
-  \throws std::logic_error until `SO-1` implements the entry point.
+  \throws std::logic_error when the definition has a reference field (`SO17`).
   \throws std::invalid_argument when the definition is not a legal Wasm struct or array.
 */
 TypeId internHostType(Store& store, const HostTypeDefinition& definition);
@@ -219,7 +221,8 @@ TypeId internHostType(Store& store, const HostTypeDefinition& definition);
   \param store The store whose `GcHeap` backs the object.
   \param type An interned struct type identity.
   \return The new object, with a zero count until `retainHostObject` is called.
-  \throws std::logic_error until `SO-1` implements the entry point.
+  \throws std::invalid_argument when `type` is not a canonical struct type.
+  \throws std::bad_alloc when the GC budget refuses the allocation.
 */
 void* allocateHostStruct(Store& store, TypeId type);
 
@@ -229,22 +232,23 @@ void* allocateHostStruct(Store& store, TypeId type);
   \param type An interned array type identity.
   \param length The element count.
   \return The new object, with a zero count until `retainHostObject` is called.
-  \throws std::logic_error until `SO-1` implements the entry point.
+  \throws std::invalid_argument when `type` is not a canonical array type.
+  \throws std::bad_alloc when the GC budget refuses the allocation.
 */
 void* allocateHostArray(Store& store, TypeId type, std::uint32_t length);
 
 /*!
   \brief Retains one engine count on an object of a host type.
   \param store The store that owns the object's heap.
-  \param object The object to retain.
+  \param object The object to retain; null and non-heap pointers are ignored.
   \return The same object, for expression chaining.
 */
 void* retainHostObject(Store& store, void* object) noexcept;
 
 /*!
-  \brief Releases one engine count on an object of a host type.
+  \brief Releases one engine count; a zero count defers the recycle to a safepoint.
   \param store The store that owns the object's heap.
-  \param object The object to release; null is accepted and ignored.
+  \param object The object to release; null and non-heap pointers are ignored.
 */
 void releaseHostObject(Store& store, void* object) noexcept;
 

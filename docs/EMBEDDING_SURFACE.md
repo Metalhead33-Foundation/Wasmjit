@@ -47,6 +47,9 @@ first `SO-1` scaffolding: `WasmHostType.hpp`
 (the definition/layout/intern/allocate seam) and `WasmHostObject.hpp` (the RAII
 owner), both embedder-tier and both documented in §6.1.1. `layoutHostType` is
 implemented; every state-changing entry point throws until `SO-1` lands.
+**Revision 36 (2026-11-18)** delivers `SO-1`: the seam interns through the module
+canonicalizer, the Store allocates, counts and safepoints host objects, `EN-14` is
+done, and `EN-15` records the reference-field restriction (`SO17`, `SO-6`).
 
 The earlier `JitRuntime`/`JitContext`/`ModuleInstance` sketch from a different
 repository is reviewed in §5 as a **salvage list**, not a template; its
@@ -607,13 +610,15 @@ That is **73** header files under `WasmBase/` — 70 `.hpp`, one `.h` and two
 so it is the copy that has to be updated when a header moves.
 
 `WasmHostType.hpp` and `WasmHostObject.hpp` are the first headers added by
-[`proposals/SYNTHETIC_OBJECTS.md`](proposals/SYNTHETIC_OBJECTS.md) revision 2
-(`SO-1`). They are **scaffolding**: the seam, the layout helper and the RAII
-wrapper are declared and documented, `layoutHostType` is implemented, and every
-state-changing entry point throws `std::logic_error` until `SO-1` lands
-(`hostTypeSupportAvailable()` returns false). They carry no name, version,
-property or signal — that layer remains the embedder's (`SO-2`), which is what
-keeps them in this tier instead of behind a product header.
+[`proposals/SYNTHETIC_OBJECTS.md`](proposals/SYNTHETIC_OBJECTS.md) (`SO-1`). They
+are the seam and its ergonomics: `internHostType` interns through the same
+canonicalizer a module uses, `Store::allocateHostStruct`/`allocateHostArray`
+allocate from a Store-owned region set, and `HostType`/`HostObject` wrap the
+pair. One staging restriction remains — a host type with a reference field cannot
+be interned yet (`SO17`, `EN-15`) — and `hostTypeSupportAvailable()` reports the
+capability. They carry no name, version, property or signal — that layer remains
+the embedder's (`SO-2`), which is what keeps them in this tier instead of behind a
+product header.
 
 Two classifications are deliberate and worth stating: `WasmValidation.hpp` stays
 **internal** even though `Module::fromFile(file, options)` takes its
@@ -1494,10 +1499,10 @@ the WIT package/world representation, but WIT-origin schemas round-trip through
 Owner labels: the opaque `externref`/`GcHeap`/`HostBridge` primitive is **ENG**;
 the A/B/C object policy, handle table, finalizer and class bridge are **EMB**;
 a generated header or SWIG/Glue adapter is **TOOL**. The native class model is
-not an engine feature. **One row was added in `SYNTHETIC_OBJECTS.md` revision 2:**
-interning a host-originated *Wasm* type and allocating an object of it is
-**ENG** and planned (`SO-1`, `EN-14`); it is not a native class model, and it does
-not change anything in this section.
+not an engine feature. **One row was added in `SYNTHETIC_OBJECTS.md` revision 2 and
+delivered in `SO-1`:** interning a host-originated *Wasm* type and allocating an
+object of it is **ENG** and shipped (`EN-14`); it is not a native class model, and
+it does not change anything in this section.
 
 ### 12.1 The question this section answers
 
@@ -1525,12 +1530,13 @@ There are only a few honest answers:
    general object lifetime system.
 6. **A C++ reflection system in the engine** — rejected in §12.7.3. It would be
    a new subsystem, not a binding mechanism.
-7. **A host-registered Wasm type plus an optional host descriptor** — accepted in
-   [`proposals/SYNTHETIC_OBJECTS.md`](proposals/SYNTHETIC_OBJECTS.md) revision 2
-   (`SO-1`…`SO-5`): the engine interns a canonical type the host supplies and
-   allocates instances of it; names, dispatch, properties and reflection stay in
-   the host descriptor (§16). This is the one answer that gives a guest a real
-   `(ref $T)` **and** a C guest a handle, and it is not a C++ object model.
+7. **A host-registered Wasm type plus an optional host descriptor** — accepted and
+   **shipped** in [`proposals/SYNTHETIC_OBJECTS.md`](proposals/SYNTHETIC_OBJECTS.md)
+   (`SO-1`; `SO-2`…`SO-6` remain): the engine interns a canonical type the host
+   supplies and allocates instances of it; names, dispatch, properties and
+   reflection stay in the host descriptor (§16). This is the one answer that gives
+   a guest a real `(ref $T)` **and** a C guest a handle, and it is not a C++ object
+   model.
 
 The decision in §12.8 is deliberately narrower than “make everything
 work”: the engine owns the **opaque boundary** (`externref`, `HostBridge`,
@@ -1667,13 +1673,14 @@ not know `T`, destructors or host ownership. `std::pmr` allocates bytes and does
 not run a destructor. A host-side type-erased releaser is the correct finalizer
 hook.
 
-**Refined by `SYNTHETIC_OBJECTS.md` revision 2:** what `GcHeap` *can* allocate for a
-host is a **Wasm-expressible** object of a host-registered type (`SO-1`). That is
-not “the GC allocates C++ objects” — there is still no `T`, no destructor and no
-C++ layout — but it does mean the sentence “the engine never allocates a host
-object” is no longer accurate. The distinction is §2.6 of that note: if the type
-cannot be written as a Wasm struct/array, it stays on the host side and the guest
-gets an `externref`/handle.
+**Refined by `SYNTHETIC_OBJECTS.md` revision 2 and delivered in `SO-1`:** what
+`GcHeap` *can* allocate for a host is a **Wasm-expressible** object of a
+host-registered type. That is not “the GC allocates C++ objects” — there is still
+no `T`, no destructor and no C++ layout — but it does mean the sentence “the
+engine never allocates a host object” is no longer accurate. The distinction is
+§2.6 of that note: if the type cannot be written as a Wasm struct/array, it stays
+on the host side and the guest gets an `externref`/handle. A reference *field* is
+refused at interning until `SO17`/`SO-6` lands, so a host object is a leaf today.
 
 #### 12.7.3 A C++ reflection system in the engine
 
@@ -1717,9 +1724,9 @@ The direct answers to the questions that prompted this section:
   Without a bridge it is just an opaque `void*` with no host callbacks.
 - **What is the engine’s responsibility?** The representation, barriers,
   instance lifecycle callback, component resource ABI, validation and metadata —
-  plus, planned under `SO-1`, the **identity and allocation of a host-registered
-  Wasm type**. Not the C++ object model, not a finalizer, not a reflection
-  registry.
+  plus, since `SO-1`, the **identity and allocation of a host-registered
+  Wasm type** (`EN-14`). Not the C++ object model, not a finalizer, not a
+  reflection registry.
 - **What is the guest’s responsibility?** Treat handles and `externref` values
   as opaque; call the declared functions; follow the documented ownership
   (`own`/`borrow`, explicit `destroy`, or the GC field’s lifetime); never
@@ -1729,7 +1736,7 @@ The direct answers to the questions that prompted this section:
   production readiness. If a product needs one, put it in an optional host-side
   adapter library built on the handle table and `HostBridge`; do not add it to
   `WasmBase/` or make it part of the frozen embedder surface. **What the engine
-  does gain (planned, `SO-1`) is narrower:** the ability to intern a canonical
+  does gain (`SO-1`) is narrower:** the ability to intern a canonical
   type the host supplies and to allocate an object of it. That is type
   registration plus allocation, not reflection; the descriptor, the names and the
   method tables stay outside (`SYNTHETIC_OBJECTS.md` §3.1/A.14.3).
@@ -2516,7 +2523,8 @@ do not name a host runtime or a source language.
 | **EN-11** | A `(ref $T)` import must match the canonical function/type identity, not just a pointer kind | §13.2, §13.8 | **Verify** | The matching machinery exists; add the two-module GC/typed-ref test to the evidence set. |
 | **EN-12** | The public metadata must be sufficient for generated headers | §13.8 | **Verify** | `importDescriptors`/`exportDescriptors` + `typeView` are the schema; prove a C/C++ and Rust emitter consumes them without parsing C++ headers. |
 | **EN-13** | `Elvavena` remains in the public SDK headers | §6.2, §9 | **Accepted** | Deliberate first-freeze tradeoff; removal is a separate public-header/API decision, not an embedding-runtime bug. **Won't be removed. We in fact intend to make WasmJit a first-class member of the MhLib ecosystem in the distant future.** |
-| **EN-14** | A host cannot originate a type, and cannot allocate an object without a module-local index | §12.7.2, [`proposals/SYNTHETIC_OBJECTS.md`](proposals/SYNTHETIC_OBJECTS.md) A.14.3 | **Planned** (`SO-1`) | Intern a canonical type from a host definition through the **same** `TypeRegistry` canonicalizer, then allocate/free objects of that `TypeId` in the Store's `GcHeap`. No names, dispatch, properties, signals or reflection in `WasmBase/`; the type is a `struct`/`array`, not a class. |
+| **EN-14** | A host cannot originate a type, and cannot allocate an object without a module-local index | §12.7.2, [`proposals/SYNTHETIC_OBJECTS.md`](proposals/SYNTHETIC_OBJECTS.md) A.14.3 | **Done (SO-1, 2026-11-18)** | `internHostType` runs the same `TypeRegistry` canonicalizer a module uses; `Store::allocateHostStruct`/`allocateHostArray` take a `TypeId` and allocate from a Store-owned region set. `[hostobject]` proves the shared `TypeId` and the end-to-end call. |
+| **EN-15** | A host type with a **reference field** cannot be interned, so a host object cannot be a graph node | §13.2, [`proposals/SYNTHETIC_OBJECTS.md`](proposals/SYNTHETIC_OBJECTS.md) A.14.4, `SO17` | **Planned** (`SO-6`) | Add the Store-level release walk: drop a released host object's outgoing references at a safepoint before recycling it, reusing the instance walker's type/layout logic. Until then `internHostType` refuses the definition by name. |
 
 The **ENG** list is deliberately short, and it stays short in revision 2 of the
 object study: `EN-14` is the only planned engine row, and it is a type origin plus
@@ -2532,7 +2540,7 @@ product decisions.
 
 | ID | Problem / open question | Where | Status | Owner-side action |
 |---|---|---|---|---|
-| **EM-1** | How a guest sees a native C++ object or C struct: A/B/C | §12.4–§12.6 | **Open** | Choose/implement the handle table, generated stubs or host box. The engine supplies `externref`/barriers, and — for an object that *is* a Wasm type — the planned `SO-1` intern/allocation (`EN-14`); a native object still stays outside. |
+| **EM-1** | How a guest sees a native C++ object or C struct: A/B/C | §12.4–§12.6 | **Open** | Choose/implement the handle table, generated stubs or host box. The engine supplies `externref`/barriers, and — for an object that *is* a Wasm type — the shipped `SO-1` intern/allocation (`EN-14`); a native object still stays outside. |
 | **EM-2** | Host-side descriptor registry, its JSON, and generated bindings | §12.7.3, §14.3–§14.5, §11.8 | **Planned** (`SO-2`/`SO-3`) | Build it outside `WasmBase`: names, versions, fields, methods, interfaces and the `wasmjit.binding/2` `objects` section. The engine owns only the type intern and the allocation (`EN-14`); it does not own the class model. |
 | **EM-3** | Native object lifetime and finalization | §12.6, §12.9 | **Open** | Pick `unique_ptr`, `shared_ptr`, arena, custom deleter or `HostBox`; install the `HostBridge` callbacks and drop per-instance roots. |
 | **EM-4** | Host object table storage and thread affinity | §12.5, §12.9 | **Open** | Choose a mutex/thread-local/per-agent table; document that a native object is not automatically thread-safe. |
@@ -2662,7 +2670,7 @@ gives the host a reference the guest can hold as `(ref $T)`; the descriptor, the
 names, the dispatch, the properties, the signals and the reflection remain the
 host's. The opaque path below is unchanged and still the answer for an object that
 cannot be expressed in Wasm. This section describes the surface; the note carries
-the decisions (`SO-1`…`SO-5`).
+the decisions (`SO-1` shipped; `SO-2`…`SO-6` remain).
 
 ### 16.1 The primitive an embedder gets
 
@@ -2670,8 +2678,8 @@ the decisions (`SO-1`…`SO-5`).
 |---|---|---|
 | hold an opaque host value in a guest | `externref` plus `HostBridge` retain/release | `WasmHostBridge.hpp`; [`ABI.md`](ABI.md) “Host boundary” |
 | create a Wasm GC object from the host | `allocateStructObject`/`allocateArrayObject` on the instance | [`ABI.md`](ABI.md) “GC Object and Heap ABI” |
-| a host-defined object **type** | **planned** (`SO-1`): intern a host-originated canonical type, allocate an object of its `TypeId` | [`proposals/SYNTHETIC_OBJECTS.md`](proposals/SYNTHETIC_OBJECTS.md) A.14.3 |
-| the seam's **scaffolding** | `WasmHostType.hpp` (define/lay out/intern/allocate) and `WasmHostObject.hpp` (RAII owner); the state-changing entry points throw until `SO-1` | `WasmHostType.hpp`, `WasmHostObject.hpp`; `SO-1` |
+| a host-defined object **type** | **shipped** (`SO-1`): `internHostType` interns the canonical type, `Store::allocateHostStruct`/`allocateHostArray` allocate an object of its `TypeId`; a reference field is refused until `SO17`/`SO-6` | [`proposals/SYNTHETIC_OBJECTS.md`](proposals/SYNTHETIC_OBJECTS.md) A.14.3 |
+| the seam's **ergonomics** | `WasmHostType.hpp` (define/lay out/intern/allocate) and `WasmHostObject.hpp` (`HostType`/`HostObject`, one engine count each) | `WasmHostType.hpp`, `WasmHostObject.hpp`; `SO-1` |
 | a cross-language object *type* | component resources (`own`/`borrow`, `resource.drop`, `resource.rep`) | [`proposals/COMPONENT_MODEL.md`](proposals/COMPONENT_MODEL.md) §2.3/§4.3 |
 | a function namespace for the object's methods | synthetic modules and native imports | [`SCOPE.md`](SCOPE.md) §3.1 |
 
@@ -2698,8 +2706,8 @@ that spelling is a second view of one identity, not a second object
 
 ### 16.3 The boundary
 
-The engine owns the transport, the resource contract and — planned — the **type
-origin and allocation** for a Wasm-expressible host object. The class model, the
+The engine owns the transport, the resource contract and the **type origin and
+allocation** for a Wasm-expressible host object (`SO-1`). The class model, the
 descriptors, the generated headers, the properties, the signals and the lifetime
 policy are the embedder's ([`SCOPE.md`](SCOPE.md) §3.2, [`LAYERING.md`](LAYERING.md)
 §4). The test is the one `SYNTHETIC_OBJECTS.md` §6.1 (`SOD6`) states: can
