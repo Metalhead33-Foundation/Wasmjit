@@ -225,41 +225,39 @@ std::string emitKotlinImpl(const Json& schema, const Schema& typed)
 	collectSchemaRefs(schema, refs);
 
 	std::ostringstream out;
-	out << "// Generated from the " << schema.at("schema").get<std::string>() << " "
-		<< schema.at("direction").get<std::string>() << " schema. Do not edit.\n\n";
+	out << "// Generated from the " << typed.id << " "
+		<< directionName(typed.direction) << " schema. Do not edit.\n\n";
 	out << "class WasmV128(val bytes: ByteArray)\n";
 	for (const std::string& ref : refs)
 		out << "class " << pascalName(ref) << " private constructor()\n";
 	out << "\n";
 
-	forEachFunction(schema, "exports", [&](const Json& entry) {
+	forEachFunction(typed, false, [&](const Entry& entry) {
 		out << "// H2G export: " << exportComment(entry) << "\n";
-		out << "typealias wasmjit_" << sanitize(entry.at("name").get<std::string>())
-			<< "_t = (";
-		const Json& params = signatureParams(entry);
+		out << "typealias wasmjit_" << sanitize(entry.name) << "_t = (";
+		const std::vector<ValueType>& params = entry.function.params;
 		for (std::size_t i = 0; i < params.size(); ++i) {
 			if (i != 0) out << ", ";
 			out << kotlinType(params[i]);
 		}
+		const std::vector<ValueType>& results = entry.function.results;
 		out << ") -> "
-			<< (signatureResults(entry).size() == 1 ? kotlinType(signatureResults(entry)[0])
-											   : "Unit");
+			<< (results.size() == 1 ? kotlinType(results[0]) : "Unit");
 		out << "\n\n";
 	});
 
-	forEachFunction(schema, "imports", [&](const Json& entry) {
+	forEachFunction(typed, true, [&](const Entry& entry) {
 		out << "// G2H import: " << importComment(entry) << "\n";
-		out << "external fun wasmjit_"
-			<< sanitize(importModule(entry)) << "_"
-			<< sanitize(entry.at("name").get<std::string>()) << "(";
-		const Json& params = signatureParams(entry);
+		out << "external fun wasmjit_" << sanitize(importModule(entry)) << "_"
+			<< sanitize(entry.name) << "(";
+		const std::vector<ValueType>& params = entry.function.params;
 		for (std::size_t i = 0; i < params.size(); ++i) {
 			if (i != 0) out << ", ";
 			out << argumentName(entry, i) << ": " << kotlinType(params[i]);
 		}
+		const std::vector<ValueType>& results = entry.function.results;
 		out << "): "
-			<< (signatureResults(entry).size() == 1 ? kotlinType(signatureResults(entry)[0])
-											   : "Unit");
+			<< (results.size() == 1 ? kotlinType(results[0]) : "Unit");
 		out << "\n\n";
 	});
 	out << nonFunctionNotes(schema);
