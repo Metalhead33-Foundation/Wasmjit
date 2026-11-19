@@ -12,6 +12,17 @@ namespace WASM::Bindings::detail {
 
 using Json = nlohmann::ordered_json;
 
+// Forward declarations: the typed forms come next to the JSON ones and the
+// JSON ones call them.
+std::string luaType(const ValueType& type);
+std::string swiftType(const ValueType& type);
+std::string dType(const ValueType& type);
+std::string nimType(const ValueType& type);
+std::string crystalType(const ValueType& type);
+std::string adaType(const ValueType& type);
+std::string pascalType(const ValueType& type);
+std::string haskellType(const ValueType& type);
+
 std::string pythonType(const Json& type)
 {
 	return pythonType(ValueType::fromJson(type));
@@ -113,54 +124,67 @@ std::string emitRubyImpl(const Json& schema, const Schema& typed)
 
 std::string luaType(const Json& type)
 {
-	const std::string kind = type.value("type", "");
-	if (kind == "i32" || kind == "u32" || kind == "s32" || kind == "i8"
-			|| kind == "u8" || kind == "i16" || kind == "u16")
-		return "int32_t";
-	if (kind == "i64" || kind == "u64" || kind == "s64") return "int64_t";
-	if (kind == "f32" || kind == "float32") return "float";
-	if (kind == "f64" || kind == "float64") return "double";
-	if (kind == "v128") return "uint8_t[16]";
-	if (kind == "void") return "void";
+	return luaType(ValueType::fromJson(type));
+}
+
+std::string luaType(const ValueType& type)
+{
+	switch (type.kind) {
+	case ValueKind::I32:
+	case ValueKind::U32:
+	case ValueKind::S32:
+	case ValueKind::I8:
+	case ValueKind::U8:
+	case ValueKind::I16:
+	case ValueKind::U16: return "int32_t";
+	case ValueKind::I64:
+	case ValueKind::U64:
+	case ValueKind::S64: return "int64_t";
+	case ValueKind::F32: return "float";
+	case ValueKind::F64: return "double";
+	case ValueKind::V128: return "uint8_t[16]";
+	case ValueKind::Void: return "void";
+	default: break;
+	}
 	return "void*";
 }
 
-std::string emitLuaImpl(const Json& schema)
+std::string emitLuaImpl(const Json& schema, const Schema& typed)
 {
 	std::ostringstream out;
 	out << "-- Generated LuaJIT FFI bindings from the "
-		<< schema.at("schema").get<std::string>() << " "
-		<< schema.at("direction").get<std::string>() << " schema. Do not edit.\n";
+		<< typed.id << " "
+		<< directionName(typed.direction) << " schema. Do not edit.\n";
 	out << "local ffi = require(\"ffi\")\n\nffi.cdef[[\n";
 	std::set<std::string> witTypes;
 	collectWitTypeNames(schema, witTypes);
 	for (const std::string& type : witTypes)
 		out << "typedef struct " << type << " " << type << ";\n";
-	forEachFunction(schema, "exports", [&](const Json& entry) {
-		out << "typedef " << (signatureResults(entry).size() == 1
-				? luaType(signatureResults(entry)[0]) : "void")
-			<< " (*wasmjit_" << sanitize(entry.at("name").get<std::string>())
+	forEachFunction(typed, false, [&](const Entry& entry) {
+		out << "typedef " << (entry.function.results.size() == 1
+				? luaType(entry.function.results[0]) : "void")
+			<< " (*wasmjit_" << sanitize(entry.name)
 			<< "_fn)(";
-		const Json& params = signatureParams(entry);
+		const std::vector<ValueType>& params = entry.function.params;
 		for (std::size_t i = 0; i < params.size(); ++i) {
 			if (i != 0) out << ", ";
 			out << luaType(params[i]);
 		}
-		if (signatureResults(entry).size() > 1u)
+		if (entry.function.results.size() > 1u)
 			out << (params.empty() ? "" : ", ") << "void*";
 		out << ");\n";
 	});
-	forEachFunction(schema, "imports", [&](const Json& entry) {
-		out << luaType(signatureResults(entry).size() == 1
-				? signatureResults(entry)[0] : Json{{"type", "void"}})
+	forEachFunction(typed, true, [&](const Entry& entry) {
+		out << luaType(entry.function.results.size() == 1
+				? entry.function.results[0] : voidValue())
 			<< " wasmjit_" << sanitize(importModule(entry)) << "_"
-			<< sanitize(entry.at("name").get<std::string>()) << "(";
-		const Json& params = signatureParams(entry);
+			<< sanitize(entry.name) << "(";
+		const std::vector<ValueType>& params = entry.function.params;
 		for (std::size_t i = 0; i < params.size(); ++i) {
 			if (i != 0) out << ", ";
 			out << luaType(params[i]);
 		}
-		if (signatureResults(entry).size() > 1u)
+		if (entry.function.results.size() > 1u)
 			out << (params.empty() ? "" : ", ") << "void*";
 		out << ");\n";
 	});
@@ -172,14 +196,27 @@ std::string emitLuaImpl(const Json& schema)
 
 std::string swiftType(const Json& type)
 {
-	const std::string kind = type.value("type", "");
-	if (kind == "i32" || kind == "u32" || kind == "s32" || kind == "i8"
-			|| kind == "u8" || kind == "i16" || kind == "u16")
-		return "Int32";
-	if (kind == "i64" || kind == "u64" || kind == "s64") return "Int64";
-	if (kind == "f32" || kind == "float32") return "Float";
-	if (kind == "f64" || kind == "float64") return "Double";
-	if (kind == "void") return "Void";
+	return swiftType(ValueType::fromJson(type));
+}
+
+std::string swiftType(const ValueType& type)
+{
+	switch (type.kind) {
+	case ValueKind::I32:
+	case ValueKind::U32:
+	case ValueKind::S32:
+	case ValueKind::I8:
+	case ValueKind::U8:
+	case ValueKind::I16:
+	case ValueKind::U16: return "Int32";
+	case ValueKind::I64:
+	case ValueKind::U64:
+	case ValueKind::S64: return "Int64";
+	case ValueKind::F32: return "Float";
+	case ValueKind::F64: return "Double";
+	case ValueKind::Void: return "Void";
+	default: break;
+	}
 	return "UnsafeMutableRawPointer?";
 }
 
@@ -234,15 +271,28 @@ std::string emitSwiftImpl(const Json& schema)
 
 std::string dType(const Json& type)
 {
-	const std::string kind = type.value("type", "");
-	if (kind == "i32" || kind == "u32" || kind == "s32" || kind == "i8"
-			|| kind == "u8" || kind == "i16" || kind == "u16")
-		return "int";
-	if (kind == "i64" || kind == "u64" || kind == "s64") return "long";
-	if (kind == "f32" || kind == "float32") return "float";
-	if (kind == "f64" || kind == "float64") return "double";
-	if (kind == "v128") return "ubyte[16]";
-	if (kind == "void") return "void";
+	return dType(ValueType::fromJson(type));
+}
+
+std::string dType(const ValueType& type)
+{
+	switch (type.kind) {
+	case ValueKind::I32:
+	case ValueKind::U32:
+	case ValueKind::S32:
+	case ValueKind::I8:
+	case ValueKind::U8:
+	case ValueKind::I16:
+	case ValueKind::U16: return "int";
+	case ValueKind::I64:
+	case ValueKind::U64:
+	case ValueKind::S64: return "long";
+	case ValueKind::F32: return "float";
+	case ValueKind::F64: return "double";
+	case ValueKind::V128: return "ubyte[16]";
+	case ValueKind::Void: return "void";
+	default: break;
+	}
 	return "void*";
 }
 
@@ -294,15 +344,28 @@ std::string emitDLangImpl(const Json& schema)
 
 std::string nimType(const Json& type)
 {
-	const std::string kind = type.value("type", "");
-	if (kind == "i32" || kind == "u32" || kind == "s32" || kind == "i8"
-			|| kind == "u8" || kind == "i16" || kind == "u16")
-		return "int32";
-	if (kind == "i64" || kind == "u64" || kind == "s64") return "int64";
-	if (kind == "f32" || kind == "float32") return "float32";
-	if (kind == "f64" || kind == "float64") return "float64";
-	if (kind == "v128") return "array[16, uint8]";
-	if (kind == "void") return "void";
+	return nimType(ValueType::fromJson(type));
+}
+
+std::string nimType(const ValueType& type)
+{
+	switch (type.kind) {
+	case ValueKind::I32:
+	case ValueKind::U32:
+	case ValueKind::S32:
+	case ValueKind::I8:
+	case ValueKind::U8:
+	case ValueKind::I16:
+	case ValueKind::U16: return "int32";
+	case ValueKind::I64:
+	case ValueKind::U64:
+	case ValueKind::S64: return "int64";
+	case ValueKind::F32: return "float32";
+	case ValueKind::F64: return "float64";
+	case ValueKind::V128: return "array[16, uint8]";
+	case ValueKind::Void: return "void";
+	default: break;
+	}
 	return "pointer";
 }
 
@@ -353,15 +416,28 @@ std::string emitNimImpl(const Json& schema)
 
 std::string crystalType(const Json& type)
 {
-	const std::string kind = type.value("type", "");
-	if (kind == "i32" || kind == "u32" || kind == "s32" || kind == "i8"
-			|| kind == "u8" || kind == "i16" || kind == "u16")
-		return "Int32";
-	if (kind == "i64" || kind == "u64" || kind == "s64") return "Int64";
-	if (kind == "f32" || kind == "float32") return "Float32";
-	if (kind == "f64" || kind == "float64") return "Float64";
-	if (kind == "v128") return "StaticArray(UInt8, 16)";
-	if (kind == "void") return "Void";
+	return crystalType(ValueType::fromJson(type));
+}
+
+std::string crystalType(const ValueType& type)
+{
+	switch (type.kind) {
+	case ValueKind::I32:
+	case ValueKind::U32:
+	case ValueKind::S32:
+	case ValueKind::I8:
+	case ValueKind::U8:
+	case ValueKind::I16:
+	case ValueKind::U16: return "Int32";
+	case ValueKind::I64:
+	case ValueKind::U64:
+	case ValueKind::S64: return "Int64";
+	case ValueKind::F32: return "Float32";
+	case ValueKind::F64: return "Float64";
+	case ValueKind::V128: return "StaticArray(UInt8, 16)";
+	case ValueKind::Void: return "Void";
+	default: break;
+	}
 	return "Void*";
 }
 
@@ -411,15 +487,27 @@ std::string emitCrystalImpl(const Json& schema)
 
 std::string adaType(const Json& type)
 {
-	const std::string kind = type.value("type", "");
-	if (kind == "i32" || kind == "u32" || kind == "s32" || kind == "i8"
-			|| kind == "u8" || kind == "i16" || kind == "u16")
-		return "Interfaces.Integer_32";
-	if (kind == "i64" || kind == "u64" || kind == "s64")
-		return "Interfaces.Integer_64";
-	if (kind == "f32" || kind == "float32") return "Interfaces.Float_32";
-	if (kind == "f64" || kind == "float64") return "Interfaces.Float_64";
-	if (kind == "void") return "Ada.Numerics.Void";
+	return adaType(ValueType::fromJson(type));
+}
+
+std::string adaType(const ValueType& type)
+{
+	switch (type.kind) {
+	case ValueKind::I32:
+	case ValueKind::U32:
+	case ValueKind::S32:
+	case ValueKind::I8:
+	case ValueKind::U8:
+	case ValueKind::I16:
+	case ValueKind::U16: return "Interfaces.Integer_32";
+	case ValueKind::I64:
+	case ValueKind::U64:
+	case ValueKind::S64: return "Interfaces.Integer_64";
+	case ValueKind::F32: return "Interfaces.Float_32";
+	case ValueKind::F64: return "Interfaces.Float_64";
+	case ValueKind::Void: return "Ada.Numerics.Void";
+	default: break;
+	}
 	return "System.Address";
 }
 
@@ -474,15 +562,28 @@ std::string emitAdaImpl(const Json& schema)
 
 std::string pascalType(const Json& type)
 {
-	const std::string kind = type.value("type", "");
-	if (kind == "i32" || kind == "u32" || kind == "s32" || kind == "i8"
-			|| kind == "u8" || kind == "i16" || kind == "u16")
-		return "LongInt";
-	if (kind == "i64" || kind == "u64" || kind == "s64") return "Int64";
-	if (kind == "f32" || kind == "float32") return "Single";
-	if (kind == "f64" || kind == "float64") return "Double";
-	if (kind == "v128") return "array[0..15] of Byte";
-	if (kind == "void") return "";
+	return pascalType(ValueType::fromJson(type));
+}
+
+std::string pascalType(const ValueType& type)
+{
+	switch (type.kind) {
+	case ValueKind::I32:
+	case ValueKind::U32:
+	case ValueKind::S32:
+	case ValueKind::I8:
+	case ValueKind::U8:
+	case ValueKind::I16:
+	case ValueKind::U16: return "LongInt";
+	case ValueKind::I64:
+	case ValueKind::U64:
+	case ValueKind::S64: return "Int64";
+	case ValueKind::F32: return "Single";
+	case ValueKind::F64: return "Double";
+	case ValueKind::V128: return "array[0..15] of Byte";
+	case ValueKind::Void: return "";
+	default: break;
+	}
 	return "Pointer";
 }
 
@@ -534,14 +635,27 @@ std::string emitPascalImpl(const Json& schema)
 
 std::string haskellType(const Json& type)
 {
-	const std::string kind = type.value("type", "");
-	if (kind == "i32" || kind == "u32" || kind == "s32" || kind == "i8"
-			|| kind == "u8" || kind == "i16" || kind == "u16")
-		return "CInt";
-	if (kind == "i64" || kind == "u64" || kind == "s64") return "CLLong";
-	if (kind == "f32" || kind == "float32") return "CFloat";
-	if (kind == "f64" || kind == "float64") return "CDouble";
-	if (kind == "void") return "()";
+	return haskellType(ValueType::fromJson(type));
+}
+
+std::string haskellType(const ValueType& type)
+{
+	switch (type.kind) {
+	case ValueKind::I32:
+	case ValueKind::U32:
+	case ValueKind::S32:
+	case ValueKind::I8:
+	case ValueKind::U8:
+	case ValueKind::I16:
+	case ValueKind::U16: return "CInt";
+	case ValueKind::I64:
+	case ValueKind::U64:
+	case ValueKind::S64: return "CLLong";
+	case ValueKind::F32: return "CFloat";
+	case ValueKind::F64: return "CDouble";
+	case ValueKind::Void: return "()";
+	default: break;
+	}
 	return "Ptr ()";
 }
 
