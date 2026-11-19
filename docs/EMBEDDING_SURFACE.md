@@ -2,9 +2,11 @@
 
 *`WASM::Runtime`, the Umbrella Header, Versioning, and the Include Set*
 
-Status: implementation reference + design note (revision 32 — 2026-11-13).
+Status: implementation reference + design note (revision 45 — 2026-11-19).
 `WASM::Runtime` is shipped (`ES-1`…`ES-6` are all closed), so §2, §4 and §4.7
-describe the surface as it is rather than as it was planned. `Tools/Bindings/`
+describe the surface as it is rather than as it was planned. §2.1 is the
+embedder's walkthrough — engine, module, call — and §2.2 continues it to
+references, continuations and agents. `Tools/Bindings/`
 has a typed schema model, modular emitters, complete descriptor/candidate schemas,
 and a C++-front-end path that produces both JSON and every non-C++ header target;
 `WasmBase/WasmCallCache.hpp` remains the optional libffi precache. This note
@@ -69,7 +71,7 @@ provenance and the reason its two names do not survive here are in §3.
 
 | Section | Question it answers |
 |---|---|
-| §2 | What does an embedder have to include and call today? |
+| §2 | What does an embedder have to include and call today? (§2.1 is the walkthrough; §2.2 continues it to references, continuations and agents) |
 | §3 | Which JS-engine role maps onto which WasmJit object — and what "context" means each time? |
 | §4 | What does `WASM::Runtime` own, what must it not own, and what does its header declare? |
 | §5 | What is worth salvaging from the earlier sketch, and what is not? |
@@ -118,6 +120,204 @@ closed each one — it is history, not a to-do list:
 | P4 | **There was no version or capability surface.** | `ES-4`: `WasmVersion.hpp`, `Runtime::version()`, `abiVersion()`, `profile()`, `supports()` and `compilationCapabilities()`. |
 | P5 | **`WasmRuntime.hpp` and `WasmContext.hpp` were 6-line empty namespaces**, leftover shells of an earlier sketch; `LibJIT::Runtime` was an empty stub. | `WasmContext.hpp` and `LibJIT::Runtime` are deleted (2026-10-29); `WasmRuntime.hpp` is the real engine object (`ES-1`). §3.1–§3.2 record why each candidate meaning of "context" lost the name. |
 | P6 | **The GC safepoint was the embedder's job** and nothing reminded them. | `ES-1`: `Runtime::safepoint()` collects on every live instance; `ABI.md` "Other store-owned entities" still explains the mechanism. |
+
+## 2.1 A walkthrough: an engine, a module, a call
+
+The table above is the recipe; this is the same thing as a program. Every call
+below is what `Test/consumer/Consumer.cpp` does out of tree through `pkg-config`
+(`Test/install-check.sh` builds and runs it), and what `Test/RuntimeTests.cpp`
+proves in tree.
+
+```cpp
+#include <wasmjit/WasmJit.hpp>   // the umbrella: embedder tier, no backend header
+
+int main()
+{
+    // 1. Create the engine. The backend name is the embedder's decision, never a
+    //    file key (BACKEND_PLUGIN_ABI.md BP-2).
+    WASM::RuntimeConfig config;
+    config.sink = myDiagnosticSink;                    // optional; DIAGNOSTICS.md
+    auto runtime = WASM::Runtime::create("libjit", config);
+
+    // 2. Load. The module interns its types in this runtime's store.
+    auto module = runtime->loadFile("add.wasm");
+
+    // 3. Publish the host functions the module imports (see below).
+    WASM::RegistryImportResolver imports;
+    imports.registerFunction("env", "log_i32", WASM::nativeImport<&hostLogI32>());
+
+    // 4. Instantiate. Idempotent: one Module → one ModuleInstance.
+    WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+
+    // 5. Call.
+    const std::int32_t sum = runtime->callExport<std::int32_t>(instance, "add", 20, 22);
+
+    // 6. A trap is a C++ exception with a kind and a message.
+    try {
+        runtime->callExport<void>(instance, "trap_on_purpose");
+    } catch (const WASM::Trap& trap) {
+        std::fprintf(stderr, "trap: %s: %s\n",
+                WASM::trapKindName(trap.kind()), trap.what());
+    }
+
+    // 7. Collect at a frame end: this is the GC safepoint, once per frame.
+    runtime->safepoint();
+    return sum == 42 ? 0 : 3;
+}
+```
+
+**Choosing the backend.** `"libjit"` is the executing backend compiled in;
+`"null"` is the core's `NullInstantiator`, which resolves and validates without
+generating code. Any other name is looked up as a **loadable plugin** before
+`create` fails, so `Runtime::create("example")` works for a backend the frontend
+was never compiled with ([`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md) §4.1).
+`runtime->backendName()`, `profile()`, `supports(feature)` and `version()` answer
+what was actually selected — an embedder that needs a specific capability should
+ask, not assume.
+
+**Registering native functions: what a “synthetic module” is.** There is no
+`Module` object for the host side. A host namespace is a `(module, field)`
+resolver convention, and the guest sees ordinary Wasm imports
+([`SCOPE.md`](SCOPE.md) §3.1):
+
+| You want the guest to import | You register |
+|---|---|
+| `(import "env" "log_i32" (func (param i32)))` | `imports.registerFunction("env", "log_i32", …)` |
+| a whole namespace at once | `imports.moduleRegistry("env").registerFunctions({ … })` |
+| a memory, table, global or tag | `registerMemory` / `registerTable` / `registerGlobal` / `registerTag` on the same resolver |
+
+A native function is a plain C++ function whose **first parameter is the caller's
+`VMContext*`** and whose remaining parameters are the Wasm signature's:
+`void hostLogI32(WASM::VMContext* context, std::int32_t value)`. Generated code
+calls it directly, so it must not let an exception escape —
+`WASM::nativeImport<&hostLogI32>()` is the trampoline that turns `WASM::trap(...)`,
+`std::bad_alloc` and any other `std::exception` into the engine's pending trap
+slot ([`../WasmBase/WasmNativeImport.hpp`](../WasmBase/WasmNativeImport.hpp)).
+Per-instance state arrives through `context->hostData`, never through a capture.
+
+**Calling back into the guest.** `callExport<T>` is the one-line path for a C++
+caller; `callExportWithResults` writes a multi-value result tuple into a
+caller-owned buffer (the layout is [`ABI.md`](ABI.md) “Multiple Results”);
+`instance.exportedFunction(name)` returns a `Callable` when the caller is C, or
+when the entry point should be stored instead of looked up per call.
+
+**Two rules that are structural, not advice.** `instantiate` returns the existing
+instance for a `Module` it already instantiated, and the API cannot express a
+second one ([`THREADSAFETY.md`](THREADSAFETY.md) §3.1). And the runtime owns the
+store, the modules, the instances and the backend, so nothing needs a
+process-wide singleton (`ES-2`) — two runtimes in one process have two heaps and
+two budgets.
+
+## 2.2 The host side of the boundary: hooks, continuations, agents
+
+Everything an embedder needs to put a *host language* behind the boundary lives in
+three seams, and none of them names one. This is §2.1 continued past the
+synchronous case.
+
+**Seam 1 — imports and exports** (§2.1). The ABI is `Callable::fnPtr(VMContext*,
+params…)`, identical for every backend, so a host thunk is ordinary C++ and no
+code generator needs to know what is behind it.
+
+**Seam 2 — references.** An `externref` is an opaque `void*` the guest can hold.
+Making it participate in the engine's barriers is `HostBridge`:
+`references.isHostReference` (optional; without it the engine uses a conservative
+fallback — non-null, not an i31, not owned by the GC heap, the string store or a
+registered `Callable`), `references.retain`/`release` (install **as a pair**; a
+one-sided bridge is treated as disabled), and `references.equals` for host
+identity. `instanceCreated` is where per-instance state is published *before*
+`start` runs; `instanceDestroying` is where every host reference handed to that
+instance is released, because the engine does not walk a dying instance's graph.
+
+```cpp
+WASM::HostBridge bridge;                       // must outlive every instance
+bridge.userData = &myRealm;
+bridge.references.isHostReference = &realmOwns;
+bridge.references.retain = &realmRetain;
+bridge.references.release = &realmRelease;
+bridge.instanceCreated = &publishHostData;
+bridge.instanceDestroying = &dropRealmRoots;
+
+WASM::RuntimeConfig config;
+config.hostBridge = &bridge;                   // installed at create, not later
+auto runtime = WASM::Runtime::create("libjit", config);
+```
+
+The callbacks must not throw, and they may run during instance construction, so
+they use `userData` rather than `context->hostData` for state that early.
+
+**Seam 3 — suspension.** When a guest suspends (`suspend`, or an import the host
+answers asynchronously), the engine hands the host a continuation reference.
+`HostContinuation` owns it; `HostContinuationScheduler` is the serial queue the
+host drives:
+
+```cpp
+WASM::HostContinuationScheduler::Hooks hooks;
+hooks.userData = &myRealm;
+hooks.onSuspended = &keepContinuationForLater;   // ownership transferred here
+hooks.onCompleted = &settlePromiseOrFuture;
+hooks.onRejected  = &failPromiseOrFuture;        // trap or uncaught exception
+
+WASM::HostContinuationScheduler scheduler(hooks);
+scheduler.submit(continuationRef, /*arg=*/0);    // hand the reference over
+scheduler.step();                                // resume exactly one task
+```
+
+`onSuspended` receives the *replacement* continuation: the host stores it behind
+its own promise/task object and calls `submit` again when the awaited work
+completes. `submitEx`/`onSuspendedEx`/`onCompletedEx` are the wide forms — 16-byte
+`ContinuationValue` slots plus a kind array, which is what a `v128`, an
+`externref` or a multi-value payload needs; `submitThrow`/`onRejected` are the
+reject path. No hook is required: with none installed the scheduler still resumes
+tasks and releases replacement continuations.
+
+Four rules come with it. Hooks are called **synchronously** on the thread that
+calls `step`, so the scheduler is serial and is not an agent API. A borrowed
+buffer is valid only during the callback. Do not resume one continuation
+concurrently, and do not destroy a suspended one on another thread. And a
+suspended continuation is a reference: keep it alive for the whole awaited
+lifetime, or `HostBridge`'s retain/release is the only automatic hook there is.
+
+**Opting into several agents.** The default is one agent inside a call. A host
+that wants several host threads in one instance asks for it, supplies the
+threads, and supplies the ordering:
+
+```cpp
+WASM::RuntimeConfig config;
+config.concurrency = WASM::ConcurrencyModel::Agents;   // default: Single
+auto runtime = WASM::Runtime::create("libjit", config);
+
+auto agent = runtime->createAgent();                   // one per host thread
+WASM::AgentScope scope(*agent);                        // install on this thread
+runtime->callExport<void>(instance, "worker", id);     // then call normally
+```
+
+The core spawns no thread: the embedder creates and joins them. What the engine
+guarantees is the hard half — per-agent execution state (a trap in one agent never
+leaks into another), an atomic active-call counter, a lock-guarded GC with atomic
+counters and reference-slot barriers, and a real address-keyed `wait`/`notify`
+table. What the *guest* guarantees is the memory model: it uses `i32/i64.atomic.*`,
+`global.atomic.*`, `table/struct/array.atomic.*` and `memory.atomic.wait/notify`
+([`proposals/THREADS.md`](proposals/THREADS.md) §4.3). The engine supplies the
+operations, not a guest mutex.
+
+**Each host language fills in one layer.** The same seams serve every embedder
+that puts two engines in one process — WasmJit plus a scripting engine it already
+ships:
+
+| Host language | What the adapter supplies | What the engine already supplies |
+|---|---|---|
+| JavaScript (V8/JSC/SpiderMonkey) | `WebAssembly.Suspending`/`promising`, the `Promise`, the job queue, JS↔`ContinuationValue` conversion, `js:` builtins, ESM loading | continuations, scheduler hooks, `Callable`, `HostBridge`, descriptors |
+| QuickJS, MuJS | the same, against that engine's API: a value handle is the `externref` payload, and its C API is called from a thunk | the same — no `JSValue` anywhere in the core |
+| Lua (5.4/LuaJIT) | coroutines ↔ the scheduler, `lua_pushlightuserdata` for references, `pcall` ↔ trap | the same |
+| Python (CPython) | generators/`async` tasks ↔ the scheduler, `Py_INCREF`/`DECREF` ↔ retain/release | the same |
+| Ruby | fibers ↔ the scheduler, `rb_gc_register_address` ↔ retain/release | the same |
+
+The mapping from `WebAssembly.Suspending` onto these hooks is spelled out once, as
+the JSPI embedder contract, in
+[`proposals/JS_INTEGRATION.md`](proposals/JS_INTEGRATION.md) §4.2.2; §6.4 of the
+same note states why the identical seam serves a non-JavaScript runtime unchanged.
+The scheduler in use is [`proposals/STACK_SWITCHING.md`](proposals/STACK_SWITCHING.md)
+§4.1, and the agent opt-in is [`proposals/THREADS.md`](proposals/THREADS.md) §4.4.
 
 ## 3. Does the JS-engine split map onto this engine?
 

@@ -45,7 +45,7 @@ applies to `proposals/`, `languages/` and `backends/`.
 | check whether a second code generator may begin | \subpage doc_readiness_audit | `G3` and `LF-0a` in one sweep, the seam inventory, the pinned snapshot |
 | decide whether something is an engine gap or an out-of-scope boundary | \subpage doc_scope | the triage rule, the embedder/text/encoding-blocked tables, the recorded deviations |
 | find a per-proposal note | \subpage proposals_index | the per-proposal notes: spec demands → shipped state → gaps → deviations → plan → tests |
-| design a cross-language object model, or ask whether “C can use a Wasm GC object” is a gap | [proposals/SYNTHETIC_OBJECTS.md](proposals/SYNTHETIC_OBJECTS.md) | the host-registered object type, the GObject precedent, the measured wire, what the Component Model already owns, and `SO-1`…`SO-7` (`SO-1`, `SO-2`, `SO-3`, `SO-6`, `SO-7` shipped; `SO-4` partial; `SO-5` gated) |
+| design a cross-language object model, or ask whether “C can use a Wasm GC object” is a gap | [proposals/SYNTHETIC_OBJECTS.md](proposals/SYNTHETIC_OBJECTS.md) | the host-registered object type, the GObject precedent, the measured wire, what the Component Model already owns, `SO-1`…`SO-7` (`SO-1`, `SO-2`, `SO-3`, `SO-6`, `SO-7` shipped; `SO-4` partial; `SO-5` gated), and §4.12's end-to-end walkthrough |
 | find a backend slice, defect or measurement | \subpage backends_index | the current backend facts, the two backend pages, and the frozen `HISTORY.md` |
 | find a language study | \subpage languages_index | the `LF-1` triage, the `LF-2` arms, the `LF-4` component arms, the verdicts and engine findings |
 

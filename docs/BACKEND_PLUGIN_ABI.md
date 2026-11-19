@@ -2,10 +2,11 @@
 
 *Dynamically Loaded Code Generators Behind a Minimal C ABI*
 
-Status: implementation reference (revision 3 — 2026-11-13). `BP-1`…`BP-5` are
+Status: implementation reference (revision 4 — 2026-11-19). `BP-1`…`BP-5` are
 shipped: the POD views, the name-based registry, the `dlopen` loader, its refusal
 tests, and the plugin packaging. §4 now quotes the interface as it is, including
-the C signature/layout views that closed the last gap this note tracked. The
+the C signature/layout views that closed the last gap this note tracked, and §4.3
+walks a load end to end. The
 **full C compilation seam is still deliberately not taken** (Design 1, §4.3).
 Audience: anyone who will implement another code generator, freeze the public ABI
 ([`EMBEDDING_SURFACE.md`](EMBEDDING_SURFACE.md)), or package the library.
@@ -274,6 +275,49 @@ That closes `AAS2` in the same artifact [`ABI.md`](ABI.md) needs: one POD
 signature view an embedder, a harness and a plugin can all read, whether or not
 the backend that produced it is in-process. `[backendabi]`
 (`Test/BackendAbiTests.cpp`) pins the kind codes and both round trips.
+
+### 4.3 An end-to-end load
+
+Three routes reach a backend, and the last two need no frontend rebuild:
+
+| Route | Call | What has to exist |
+|---|---|---|
+| compiled in | `WASM::Runtime::create("libjit", config)` | `WASMJIT_REGISTER_BACKEND` in a linked translation unit (`LibJit/LibJitPlugin.cpp`) |
+| by plugin name | `WASM::Runtime::create("example", config)` | a shared object exporting `wasmjit_backend_query`, found through `WASMJIT_BACKEND_PATH` |
+| by explicit path | `WASM::loadBackendPluginFile("/path/libexample.so")`, then `Runtime`'s backend-instance constructor | the same export, at a path the embedder chose |
+
+`Runtime::create` resolves a name in that order: the registry first, then the
+plugin loader (`createBackendByName`, `WasmRuntime.cpp`) — so the embedder never
+branches on where a backend came from. A runtime built from a plugin remembers the
+**path**, and recreates its per-instance compiler state through it, rather than
+re-reading `WASMJIT_BACKEND_PATH`, which the embedder may have changed since
+`create`.
+
+The load is a five-step handshake, each step refusing with a message the diagnostic
+sink records as `WASM.BACKEND.PLUGIN` (§4.1, §4.2):
+
+1. `dlsym` for `wasmjit_backend_query`. Absent → “not a backend”.
+2. Call it with `WASMJIT_BACKEND_ABI_VERSION`. `nullptr` back → whatever
+   `wasmjit_backend_last_error()` says, or an ABI-version refusal.
+3. Compare `desc->abi_version` — **3** today. A plugin built against 2 called
+   through a vtable that no longer has the same slots, so it is refused here
+   rather than in the first compiled function.
+4. Compare `core_abi_version` and `build_flags`. A plugin compiled against a core
+   with a different ABI, or a different build kind, is refused before its code
+   runs.
+5. `desc->create(&host, &instantiator)`. A non-zero status is a load failure, and
+   the descriptor's `destroy` is what releases a successful one.
+
+A successful load is a **Note** carrying the path and the build kind; an embedder
+that wants the evidence in its own log reads it from the same sink
+([`DIAGNOSTICS.md`](DIAGNOSTICS.md) §5.5). Once the runtime exists, the rest is
+§2.1 of [`EMBEDDING_SURFACE.md`](EMBEDDING_SURFACE.md): load, instantiate, call —
+with the plugin's capabilities deciding what may be asked of it
+(`Runtime::supports()`, and `CPD6`'s refusal when a policy asks for more).
+
+The worked example is `Test/ExampleBackend/`: a plugin the frontend was never
+compiled with, built in its own directory, loaded by name, and driven through the
+ordinary `Runtime` API; `[plugin]` covers every refusal above.
 
 ## 5. What can cross the boundary
 
