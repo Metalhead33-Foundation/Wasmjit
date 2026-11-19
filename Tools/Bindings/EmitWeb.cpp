@@ -82,45 +82,43 @@ std::string emitTypeScriptImpl(const Json& schema, const Schema& typed)
 	return out.str();
 }
 
-std::string emitAssemblyScriptImpl(const Json& schema)
+std::string emitAssemblyScriptImpl(const Json& schema, const Schema& typed)
 {
 	std::ostringstream out;
-	out << "// Generated from the " << schema.at("schema").get<std::string>() << " "
-		<< schema.at("direction").get<std::string>() << " schema. Do not edit.\n\n";
+	out << "// Generated from the " << typed.id << " "
+		<< directionName(typed.direction) << " schema. Do not edit.\n\n";
 	std::set<std::string> witTypes;
 	collectWitTypeNames(schema, witTypes);
 	for (const std::string& type : witTypes)
 		out << "export class " << type << " { private constructor() {} }\n";
 	out << "\n";
 
-	forEachFunction(schema, "imports", [&](const Json& entry) {
-		out << "@external(\"" << importModule(entry) << "\", \""
-			<< entry.at("name").get<std::string>() << "\")\n";
-		out << "export declare function wasmjit_"
-			<< sanitize(importModule(entry)) << "_"
-			<< sanitize(entry.at("name").get<std::string>()) << "(";
-		const Json& params = signatureParams(entry);
+	forEachFunction(typed, true, [&](const Entry& entry) {
+		out << "@external(\"" << importModule(entry) << "\", \"" << entry.name
+			<< "\")\n";
+		out << "export declare function wasmjit_" << sanitize(importModule(entry))
+			<< "_" << sanitize(entry.name) << "(";
+		const std::vector<ValueType>& params = entry.function.params;
 		for (std::size_t i = 0; i < params.size(); ++i) {
 			if (i != 0) out << ", ";
 			out << argumentName(entry, i) << ": " << asType(params[i]);
 		}
 		out << ")";
-		const Json& results = signatureResults(entry);
+		const std::vector<ValueType>& results = entry.function.results;
 		out << (results.size() == 1 ? ": " + asType(results[0]) : ": void");
 		out << ";\n\n";
 	});
 
-	forEachFunction(schema, "exports", [&](const Json& entry) {
+	forEachFunction(typed, false, [&](const Entry& entry) {
 		out << "// H2G export: " << exportComment(entry) << "\n";
-		out << "export declare function wasmjit_"
-			<< sanitize(entry.at("name").get<std::string>()) << "(";
-		const Json& params = signatureParams(entry);
+		out << "export declare function wasmjit_" << sanitize(entry.name) << "(";
+		const std::vector<ValueType>& params = entry.function.params;
 		for (std::size_t i = 0; i < params.size(); ++i) {
 			if (i != 0) out << ", ";
 			out << argumentName(entry, i) << ": " << asType(params[i]);
 		}
 		out << ")";
-		const Json& results = signatureResults(entry);
+		const std::vector<ValueType>& results = entry.function.results;
 		out << (results.size() == 1 ? ": " + asType(results[0]) : ": void");
 		out << ";\n\n";
 	});

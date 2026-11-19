@@ -32,7 +32,8 @@ std::string emitTypeScriptImpl(const nlohmann::ordered_json& schema,
 		const Schema& typed);
 
 //! Emits AssemblyScript declarations.
-std::string emitAssemblyScriptImpl(const nlohmann::ordered_json& schema);
+std::string emitAssemblyScriptImpl(const nlohmann::ordered_json& schema,
+		const Schema& typed);
 
 //! Emits Zig declarations.
 std::string emitZigImpl(const nlohmann::ordered_json& schema);
