@@ -220,12 +220,12 @@ std::string swiftType(const ValueType& type)
 	return "UnsafeMutableRawPointer?";
 }
 
-std::string emitSwiftImpl(const Json& schema)
+std::string emitSwiftImpl(const Json& schema, const Schema& typed)
 {
 	std::ostringstream out;
 	out << "// Generated Swift/C-convention bindings from the "
-		<< schema.at("schema").get<std::string>() << " "
-		<< schema.at("direction").get<std::string>() << " schema. Do not edit.\n";
+		<< typed.id << " "
+		<< directionName(typed.direction) << " schema. Do not edit.\n";
 	out << "import Foundation\n\n";
 	out << "public typealias WasmExternref = UnsafeMutableRawPointer\n\n";
 	std::set<std::string> witTypes;
@@ -233,36 +233,36 @@ std::string emitSwiftImpl(const Json& schema)
 	for (const std::string& type : witTypes)
 		out << "public struct " << type << " { }\n";
 	out << "\n";
-	forEachFunction(schema, "exports", [&](const Json& entry) {
-		const std::string name = sanitize(entry.at("name").get<std::string>());
+	forEachFunction(typed, false, [&](const Entry& entry) {
+		const std::string name = sanitize(entry.name);
 		out << "public typealias Wasmjit_" << name << "_Fn = @convention(c) (";
-		const Json& params = signatureParams(entry);
+		const std::vector<ValueType>& params = entry.function.params;
 		for (std::size_t i = 0; i < params.size(); ++i) {
 			if (i != 0) out << ", ";
 			out << swiftType(params[i]);
 		}
-		if (signatureResults(entry).size() > 1u)
+		if (entry.function.results.size() > 1u)
 			out << (params.empty() ? "" : ", ") << "UnsafeMutableRawPointer?";
 		out << ") -> "
-			<< (signatureResults(entry).size() == 1
-					? swiftType(signatureResults(entry)[0]) : "Void")
+			<< (entry.function.results.size() == 1
+					? swiftType(entry.function.results[0]) : "Void")
 			<< "\n\n";
 	});
-	forEachFunction(schema, "imports", [&](const Json& entry) {
+	forEachFunction(typed, true, [&](const Entry& entry) {
 		out << "// G2H import: " << importComment(entry) << "\n";
-		out << "@_silgen_name(\"" << entry.at("name").get<std::string>() << "\")\n";
+		out << "@_silgen_name(\"" << entry.name << "\")\n";
 		out << "public func wasmjit_" << sanitize(importModule(entry)) << "_"
-			<< sanitize(entry.at("name").get<std::string>()) << "(";
-		const Json& params = signatureParams(entry);
+			<< sanitize(entry.name) << "(";
+		const std::vector<ValueType>& params = entry.function.params;
 		for (std::size_t i = 0; i < params.size(); ++i) {
 			if (i != 0) out << ", ";
 			out << argumentName(entry, i) << ": " << swiftType(params[i]);
 		}
-		if (signatureResults(entry).size() > 1u)
+		if (entry.function.results.size() > 1u)
 			out << (params.empty() ? "" : ", ") << "result: UnsafeMutableRawPointer";
 		out << ") -> "
-			<< (signatureResults(entry).size() == 1
-					? swiftType(signatureResults(entry)[0]) : "Void") << "\n\n";
+			<< (entry.function.results.size() == 1
+					? swiftType(entry.function.results[0]) : "Void") << "\n\n";
 	});
 	out << nonFunctionNotes(schema);
 	return out.str();

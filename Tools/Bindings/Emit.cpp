@@ -81,7 +81,7 @@ std::string emit(const Schema& input, Language language)
 	case Language::Python: return detail::emitPythonImpl(schema, input);
 	case Language::Ruby: return detail::emitRubyImpl(schema, input);
 	case Language::Lua: return detail::emitLuaImpl(schema, input);
-	case Language::Swift: return detail::emitSwiftImpl(schema);
+	case Language::Swift: return detail::emitSwiftImpl(schema, input);
 	case Language::DLang: return detail::emitDLangImpl(schema);
 	case Language::Nim: return detail::emitNimImpl(schema);
 	case Language::Crystal: return detail::emitCrystalImpl(schema);

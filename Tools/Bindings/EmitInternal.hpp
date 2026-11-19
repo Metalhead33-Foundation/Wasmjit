@@ -69,7 +69,7 @@ std::string emitRubyImpl(const nlohmann::ordered_json& schema, const Schema& typ
 std::string emitLuaImpl(const nlohmann::ordered_json& schema, const Schema& typed);
 
 //! Emits Swift declarations.
-std::string emitSwiftImpl(const nlohmann::ordered_json& schema);
+std::string emitSwiftImpl(const nlohmann::ordered_json& schema, const Schema& typed);
 
 //! Emits D `extern(C)` declarations.
 std::string emitDLangImpl(const nlohmann::ordered_json& schema);
