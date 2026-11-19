@@ -75,7 +75,7 @@ std::string emitSwiftImpl(const nlohmann::ordered_json& schema, const Schema& ty
 std::string emitDLangImpl(const nlohmann::ordered_json& schema, const Schema& typed);
 
 //! Emits Nim declarations.
-std::string emitNimImpl(const nlohmann::ordered_json& schema);
+std::string emitNimImpl(const nlohmann::ordered_json& schema, const Schema& typed);
 
 //! Emits Crystal `lib` bindings.
 std::string emitCrystalImpl(const nlohmann::ordered_json& schema);

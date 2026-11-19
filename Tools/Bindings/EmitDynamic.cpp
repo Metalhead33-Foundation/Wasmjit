@@ -369,44 +369,44 @@ std::string nimType(const ValueType& type)
 	return "pointer";
 }
 
-std::string emitNimImpl(const Json& schema)
+std::string emitNimImpl(const Json& schema, const Schema& typed)
 {
 	std::ostringstream out;
 	out << "# Generated Nim bindings from the "
-		<< schema.at("schema").get<std::string>() << " "
-		<< schema.at("direction").get<std::string>() << " schema. Do not edit.\n";
+		<< typed.id << " "
+		<< directionName(typed.direction) << " schema. Do not edit.\n";
 	std::set<std::string> witTypes;
 	collectWitTypeNames(schema, witTypes);
 	for (const std::string& type : witTypes)
 		out << "type " << type << "* = object\n";
 	out << "\n";
-	forEachFunction(schema, "exports", [&](const Json& entry) {
-		const std::string name = sanitize(entry.at("name").get<std::string>());
+	forEachFunction(typed, false, [&](const Entry& entry) {
+		const std::string name = sanitize(entry.name);
 		out << "type Wasmjit_" << name << "_Fn = proc(";
-		const Json& params = signatureParams(entry);
+		const std::vector<ValueType>& params = entry.function.params;
 		for (std::size_t i = 0; i < params.size(); ++i) {
 			if (i != 0) out << "; ";
 			out << argumentName(entry, i) << ": " << nimType(params[i]);
 		}
-		if (signatureResults(entry).size() > 1u)
+		if (entry.function.results.size() > 1u)
 			out << (params.empty() ? "" : "; ") << "result: pointer";
-		out << "): " << (signatureResults(entry).size() == 1
-				? nimType(signatureResults(entry)[0]) : "void")
+		out << "): " << (entry.function.results.size() == 1
+				? nimType(entry.function.results[0]) : "void")
 			<< " {.cdecl.}\n\n";
 	});
-	forEachFunction(schema, "imports", [&](const Json& entry) {
+	forEachFunction(typed, true, [&](const Entry& entry) {
 		out << "proc wasmjit_" << sanitize(importModule(entry)) << "_"
-			<< sanitize(entry.at("name").get<std::string>()) << "(";
-		const Json& params = signatureParams(entry);
+			<< sanitize(entry.name) << "(";
+		const std::vector<ValueType>& params = entry.function.params;
 		for (std::size_t i = 0; i < params.size(); ++i) {
 			if (i != 0) out << "; ";
 			out << argumentName(entry, i) << ": " << nimType(params[i]);
 		}
-		if (signatureResults(entry).size() > 1u)
+		if (entry.function.results.size() > 1u)
 			out << (params.empty() ? "" : "; ") << "result: pointer";
-		out << "): " << (signatureResults(entry).size() == 1
-				? nimType(signatureResults(entry)[0]) : "void")
-			<< " {.importc: \"" << entry.at("name").get<std::string>()
+		out << "): " << (entry.function.results.size() == 1
+				? nimType(entry.function.results[0]) : "void")
+			<< " {.importc: \"" << entry.name
 			<< "\", cdecl.}\n\n";
 	});
 	out << nonFunctionNotes(schema);
