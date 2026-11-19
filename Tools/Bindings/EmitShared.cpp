@@ -285,14 +285,22 @@ void collectSchemaRefs(const Json& schema, std::set<std::string>& names)
 
 std::string importModule(const Json& entry)
 {
-	const std::string module = entry.value("module", "");
-	return module.empty() ? "component" : module;
+	return importModule(Entry::fromJson(entry, true));
+}
+
+std::string importModule(const Entry& entry)
+{
+	return entry.module.empty() ? "component" : entry.module;
 }
 
 std::string importName(const Json& entry)
 {
-	return "wasmjit_" + sanitize(importModule(entry)) + "_"
-			+ sanitize(entry.at("name").get<std::string>());
+	return importName(Entry::fromJson(entry, true));
+}
+
+std::string importName(const Entry& entry)
+{
+	return "wasmjit_" + sanitize(importModule(entry)) + "_" + sanitize(entry.name);
 }
 
 std::string commentText(std::string text)
@@ -306,12 +314,22 @@ std::string commentText(std::string text)
 
 std::string functionDescription(const Json& entry)
 {
-	return commentText(entry.value("description", ""));
+	return functionDescription(Entry::fromJson(entry, true));
+}
+
+std::string functionDescription(const Entry& entry)
+{
+	return commentText(entry.description);
 }
 
 std::string importComment(const Json& entry)
 {
-	std::string text = importModule(entry) + "." + entry.at("name").get<std::string>();
+	return importComment(Entry::fromJson(entry, true));
+}
+
+std::string importComment(const Entry& entry)
+{
+	std::string text = importModule(entry) + "." + entry.name;
 	const std::string description = functionDescription(entry);
 	if (!description.empty())
 		text += " — " + description;
@@ -320,7 +338,12 @@ std::string importComment(const Json& entry)
 
 std::string exportComment(const Json& entry)
 {
-	std::string text = entry.at("name").get<std::string>();
+	return exportComment(Entry::fromJson(entry, false));
+}
+
+std::string exportComment(const Entry& entry)
+{
+	std::string text = entry.name;
 	const std::string description = functionDescription(entry);
 	if (!description.empty())
 		text += " — " + description;
@@ -332,14 +355,19 @@ std::string exportComment(const Json& entry)
 //! target language the schema supports.
 std::string argumentName(const Json& entry, std::size_t index)
 {
-	if (entry.contains("argNames") && entry.at("argNames").is_array()) {
-		const Json& names = entry.at("argNames");
-		if (index < names.size() && names[index].is_string()) {
-			const std::string name = names[index].get<std::string>();
-			if (!name.empty())
-				return sanitize(name);
-		}
-	}
+	const bool named = entry.contains("argNames") && entry.at("argNames").is_array()
+			&& index < entry.at("argNames").size()
+			&& entry.at("argNames").at(index).is_string();
+	const std::string name = named
+			? entry.at("argNames").at(index).get<std::string>()
+			: std::string();
+	return name.empty() ? "arg" + std::to_string(index) : sanitize(name);
+}
+
+std::string argumentName(const Entry& entry, std::size_t index)
+{
+	if (index < entry.argNames.size() && !entry.argNames.at(index).empty())
+		return sanitize(entry.argNames.at(index));
 	return "arg" + std::to_string(index);
 }
 

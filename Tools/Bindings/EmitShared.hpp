@@ -66,25 +66,43 @@ void collectSchemaRefs(const Json& schema, std::set<std::string>& names);
 void collectWitTypeNames(const Json& schema, std::set<std::string>& names);
 
 //! Returns an import's Wasm module, falling back to `component`.
-std::string importModule(const Json& entry);
+std::string importModule(const nlohmann::ordered_json& entry);
+
+//! Returns a typed import's Wasm module, falling back to `component`.
+std::string importModule(const Entry& entry);
 
 //! Returns the generated C/C++ name of an import.
-std::string importName(const Json& entry);
+std::string importName(const nlohmann::ordered_json& entry);
+
+//! Returns the generated C/C++ name of a typed import.
+std::string importName(const Entry& entry);
 
 //! Flattens prose into one line for a generated comment.
 std::string commentText(std::string text);
 
 //! Returns an entry's optional description.
-std::string functionDescription(const Json& entry);
+std::string functionDescription(const nlohmann::ordered_json& entry);
+
+//! Returns a typed entry's optional description.
+std::string functionDescription(const Entry& entry);
 
 //! Returns the display comment of an import.
-std::string importComment(const Json& entry);
+std::string importComment(const nlohmann::ordered_json& entry);
+
+//! Returns the display comment of a typed import.
+std::string importComment(const Entry& entry);
 
 //! Returns the display comment of an export.
-std::string exportComment(const Json& entry);
+std::string exportComment(const nlohmann::ordered_json& entry);
+
+//! Returns the display comment of a typed export.
+std::string exportComment(const Entry& entry);
 
 //! Returns an argument name, falling back to `argN`.
-std::string argumentName(const Json& entry, std::size_t index);
+std::string argumentName(const nlohmann::ordered_json& entry, std::size_t index);
+
+//! Returns a typed argument name, falling back to `argN`.
+std::string argumentName(const Entry& entry, std::size_t index);
 
 //! Returns the Canonical ABI or structured function parameters.
 const Json& signatureParams(const Json& entry);
