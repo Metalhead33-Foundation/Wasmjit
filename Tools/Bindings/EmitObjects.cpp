@@ -1,0 +1,533 @@
+#include "EmitObjects.hpp"
+
+#include "EmitShared.hpp"
+
+#include <cctype>
+#include <optional>
+#include <string>
+#include <vector>
+
+namespace WASM::Bindings::detail {
+
+using Json = nlohmann::ordered_json;
+
+namespace {
+
+//! Lower-cases a copy of `text`.
+std::string lowerCopy(std::string text)
+{
+	for (char& character : text)
+		character = static_cast<char>(
+				std::tolower(static_cast<unsigned char>(character)));
+	return text;
+}
+
+//! Upper-cases a copy of `text`.
+std::string upperCopy(std::string text)
+{
+	for (char& character : text)
+		character = static_cast<char>(
+				std::toupper(static_cast<unsigned char>(character)));
+	return text;
+}
+
+//! The `objects` array, or null when the schema carries none.
+const Json* objectArray(const Json& schema)
+{
+	if (!schema.contains("objects") || !schema.at("objects").is_array()
+			|| schema.at("objects").empty())
+		return nullptr;
+	return &schema.at("objects");
+}
+
+//! The current version of a named descriptor, or null.
+//!
+//! A name is a lookup key, not an identity (A.14.2): when several versions are
+//! declared, the highest one is what the name means.
+const Json* namedObject(const Json& schema, std::string_view name)
+{
+	if (!schema.contains("objects") || !schema.at("objects").is_array())
+		return nullptr;
+	const Json* found = nullptr;
+	for (const Json& object : schema.at("objects")) {
+		if (object.value("name", "") != name)
+			continue;
+		if (found == nullptr
+				|| object.value("version", 0u) > found->value("version", 0u))
+			found = &object;
+	}
+	return found;
+}
+
+//! The macro prefix of an object: `WASMJIT_OBJECT_DEMO_WIDGET_V1`.
+std::string macroPrefix(const Json& object)
+{
+	return upperCopy(objectTypeName(object));
+}
+
+//! A WIT identifier built from an arbitrary name (`demo.Widget` -> `demo-widget`).
+std::string witIdentifier(std::string text)
+{
+	std::string out;
+	for (const char character : text) {
+		if (std::isalnum(static_cast<unsigned char>(character)))
+			out.push_back(static_cast<char>(
+					std::tolower(static_cast<unsigned char>(character))));
+		else if (out.empty() || out.back() != '-')
+			out.push_back('-');
+	}
+	while (!out.empty() && out.back() == '-')
+		out.pop_back();
+	if (out.empty())
+		out = "object";
+	if (!std::isalpha(static_cast<unsigned char>(out.front())))
+		out.insert(0, "object-");
+	return out;
+}
+
+//! The WIT resource name of one object: `demo-widget-v1`.
+std::string witObjectName(const Json& object)
+{
+	return witIdentifier(object.value("name", "")) + "-v"
+			+ std::to_string(object.value("version", 1u));
+}
+
+//! The C spelling of a descriptor type, resolving a defined reference to the
+//! object it names.
+std::string objectCType(const Json& schema, const Json& type)
+{
+	if (type.is_object() && type.value("type", "") == "ref") {
+		if (type.value("heap", "") == "defined") {
+			if (const Json* target = namedObject(schema, type.value("name", "")))
+				return objectTypeName(*target) + "*";
+		}
+		return refTypeName(type) + "*";
+	}
+	return cType(type);
+}
+
+//! The Rust spelling of a descriptor type, with the same resolution as C.
+std::string objectRustType(const Json& schema, const Json& type)
+{
+	if (type.is_object() && type.value("type", "") == "ref"
+			&& type.value("heap", "") == "defined") {
+		if (const Json* target = namedObject(schema, type.value("name", "")))
+			return "*mut " + objectTypeName(*target);
+	}
+	return rustType(type);
+}
+
+//! The WIT spelling of one descriptor type, or nullopt when WIT cannot say it.
+std::optional<std::string> witType(const Json& schema, const Json& type)
+{
+	if (!type.is_object())
+		return std::nullopt;
+	if (type.value("type", "") == "ref") {
+		// A reference to another host object is a borrowed handle; every other
+		// reference (externref, anyref, ...) has no WIT spelling.
+		if (type.value("heap", "") != "defined")
+			return std::nullopt;
+		const Json* target = namedObject(schema, type.value("name", ""));
+		if (target == nullptr)
+			return std::nullopt;
+		return "borrow<" + witObjectName(*target) + ">";
+	}
+	const std::string kind = type.value("type", "");
+	if (kind == "i32") return "s32";
+	if (kind == "i64") return "s64";
+	if (kind == "f32") return "f32";
+	if (kind == "f64") return "f64";
+	if (type.value("packed", false)) {
+		if (kind == "i8") return "s8";
+		if (kind == "i16") return "s16";
+	}
+	return std::nullopt;
+}
+
+} // namespace
+
+std::string objectIdentifier(std::string_view name)
+{
+	return sanitize(lowerCopy(std::string(name)));
+}
+
+std::string objectTypeName(const Json& object)
+{
+	return "wasmjit_object_" + objectIdentifier(object.value("name", ""))
+			+ "_v" + std::to_string(object.value("version", 1u));
+}
+
+void emitCObjects(std::ostringstream& out, const Json& schema)
+{
+	const Json* objects = objectArray(schema);
+	if (objects == nullptr)
+		return;
+
+	out << "/* Host-registered objects (wasmjit.binding/2).\n"
+		   "   A descriptor is host metadata, not a Wasm ABI: the offsets are the\n"
+		   "   canonical, header-inclusive offsets WASM::layoutHostType derives, and\n"
+		   "   a reference field is a GC reference, never an integer handle. Field\n"
+		   "   access goes through the engine's object API, not these constants. */\n\n";
+	out << "typedef struct wasmjit_object_meta_field {\n"
+		   "    const char* name;\n"
+		   "    uint32_t offset;\n"
+		   "    uint32_t bytes;\n"
+		   "    uint8_t is_reference;\n"
+		   "    uint8_t is_mutable;\n"
+		   "} wasmjit_object_meta_field;\n\n";
+	out << "typedef struct wasmjit_object_meta {\n"
+		   "    const char* name;\n"
+		   "    uint32_t version;\n"
+		   "    uint32_t size;\n"
+		   "    const char* parent;\n"
+		   "    uint32_t field_count;\n"
+		   "    const wasmjit_object_meta_field* fields;\n"
+		   "    uint32_t method_count;\n"
+		   "    const char* const* methods;\n"
+		   "} wasmjit_object_meta;\n\n";
+
+	out << "/* One opaque handle per (name, version) descriptor. A C host cannot spell\n"
+		   "   `(ref $T)`, so this is the type it passes; every typedef is emitted\n"
+		   "   first, so a method signature may name any object regardless of\n"
+		   "   declaration order. */\n";
+	const Json emptyArray = Json::array();
+	for (const Json& object : *objects) {
+		const std::string type = objectTypeName(object);
+		out << "typedef struct " << type << " " << type << ";\n";
+	}
+	out << "\n";
+
+	for (const Json& object : *objects) {
+		const std::string type = objectTypeName(object);
+		const std::string macro = macroPrefix(object);
+		const std::string name = object.value("name", "");
+		const std::uint32_t version = object.value("version", 1u);
+		const std::uint32_t size = object.value("size", 0u);
+		const Json& fields =
+				object.contains("fields") ? object.at("fields") : emptyArray;
+		const Json& methods =
+				object.contains("methods") ? object.at("methods") : emptyArray;
+
+		out << "/* " << name << " version " << version;
+		if (object.contains("parent"))
+			out << ", parent " << object.at("parent").get<std::string>();
+		if (object.contains("interfaces") && object.at("interfaces").is_array()
+				&& !object.at("interfaces").empty()) {
+			out << ", interfaces ";
+			bool first = true;
+			for (const Json& entry : object.at("interfaces")) {
+				if (!first)
+					out << ", ";
+				first = false;
+				out << entry.get<std::string>();
+			}
+		}
+		out << ". */\n";
+		out << "#define " << macro << "_VERSION " << version << "u\n";
+		out << "#define " << macro << "_SIZE " << size << "u\n";
+		for (const Json& field : fields) {
+			out << "#define " << macro << "_FIELD_"
+				<< upperCopy(objectIdentifier(field.value("name", ""))) << " "
+				<< field.value("offset", 0u) << "u\n";
+		}
+		for (const Json& method : methods) {
+			const Json& params =
+					method.contains("params") ? method.at("params") : emptyArray;
+			const Json& results =
+					method.contains("results") ? method.at("results") : emptyArray;
+			out << "typedef ";
+			if (results.size() == 1u)
+				out << cType(results.at(0));
+			else
+				out << "void";
+			out << " (*" << type << "_"
+				<< objectIdentifier(method.value("name", "")) << "_fn)("
+				<< type << "* self";
+			for (const Json& param : params)
+				out << ", " << objectCType(schema, param);
+			if (results.size() > 1u)
+				out << ", void* results";
+			out << ");\n";
+		}
+		out << "\n";
+
+		if (!fields.empty()) {
+			out << "static const wasmjit_object_meta_field " << type
+				<< "_fields[] = {\n";
+			for (const Json& field : fields) {
+				out << "    { " << quoteName(field.value("name", ""), false) << ", "
+					<< field.value("offset", 0u) << "u, "
+					<< field.value("bytes", 0u) << "u, "
+					<< (field.value("reference", false) ? 1 : 0) << "u, "
+					<< (field.value("mutable", false) ? 1 : 0) << "u },\n";
+			}
+			out << "};\n";
+		}
+		if (!methods.empty()) {
+			out << "static const char* const " << type << "_methods[] = {";
+			for (std::size_t index = 0; index < methods.size(); ++index) {
+				if (index != 0u)
+					out << ", ";
+				out << quoteName(methods.at(index).value("name", ""), false);
+			}
+			out << "};\n";
+		}
+		out << "static const wasmjit_object_meta " << type << "_meta = {\n"
+			<< "    " << quoteName(name, false) << ", " << version << "u, "
+			<< size << "u, ";
+		if (object.contains("parent"))
+			out << quoteName(object.at("parent").get<std::string>(), false);
+		else
+			out << "NULL";
+		out << ", " << fields.size() << "u, "
+			<< (fields.empty() ? std::string("NULL") : type + "_fields") << ", "
+			<< methods.size() << "u, "
+			<< (methods.empty() ? std::string("NULL") : type + "_methods")
+			<< "\n};\n\n";
+	}
+}
+
+void emitRustObjects(std::ostringstream& out, const Json& schema)
+{
+	const Json* objects = objectArray(schema);
+	if (objects == nullptr)
+		return;
+
+	out << "// Host-registered objects (wasmjit.binding/2).\n"
+		   "// A descriptor is host metadata, not a Wasm ABI: the offsets are the\n"
+		   "// canonical, header-inclusive offsets `layoutHostType` derives, and a\n"
+		   "// reference field is a GC reference, never an integer handle.\n\n";
+	out << "pub struct wasmjit_object_meta_field {\n"
+		   "    pub name: &'static str,\n"
+		   "    pub offset: u32,\n"
+		   "    pub bytes: u32,\n"
+		   "    pub is_reference: bool,\n"
+		   "    pub is_mutable: bool,\n"
+		   "}\n\n";
+	out << "pub struct wasmjit_object_meta {\n"
+		   "    pub name: &'static str,\n"
+		   "    pub version: u32,\n"
+		   "    pub size: u32,\n"
+		   "    pub parent: Option<&'static str>,\n"
+		   "    pub fields: &'static [wasmjit_object_meta_field],\n"
+		   "    pub methods: &'static [&'static str],\n"
+		   "}\n\n";
+
+	const Json emptyArray = Json::array();
+	for (const Json& object : *objects) {
+		const std::string type = objectTypeName(object);
+		const std::string macro = macroPrefix(object);
+		const std::string name = object.value("name", "");
+		const std::uint32_t version = object.value("version", 1u);
+		const std::uint32_t size = object.value("size", 0u);
+		const Json& fields =
+				object.contains("fields") ? object.at("fields") : emptyArray;
+		const Json& methods =
+				object.contains("methods") ? object.at("methods") : emptyArray;
+
+		out << "// " << name << " version " << version;
+		if (object.contains("parent"))
+			out << ", parent " << object.at("parent").get<std::string>();
+		if (object.contains("interfaces") && object.at("interfaces").is_array()
+				&& !object.at("interfaces").empty()) {
+			out << ", interfaces ";
+			bool first = true;
+			for (const Json& entry : object.at("interfaces")) {
+				if (!first)
+					out << ", ";
+				first = false;
+				out << entry.get<std::string>();
+			}
+		}
+		out << ".\n";
+		out << "#[repr(C)]\npub struct " << type << " { _private: [u8; 0] }\n";
+		out << "pub const " << macro << "_VERSION: u32 = " << version << ";\n";
+		out << "pub const " << macro << "_SIZE: u32 = " << size << ";\n";
+		for (const Json& field : fields) {
+			out << "pub const " << macro << "_FIELD_"
+				<< upperCopy(objectIdentifier(field.value("name", ""))) << ": u32 = "
+				<< field.value("offset", 0u) << ";\n";
+		}
+		for (const Json& method : methods) {
+			const Json& params =
+					method.contains("params") ? method.at("params") : emptyArray;
+			const Json& results =
+					method.contains("results") ? method.at("results") : emptyArray;
+			out << "pub type " << type << "_"
+				<< objectIdentifier(method.value("name", ""))
+				<< "_fn = unsafe extern \"C\" fn(*mut " << type;
+			for (const Json& param : params)
+				out << ", " << objectRustType(schema, param);
+			if (results.size() > 1u)
+				out << ", result: *mut core::ffi::c_void";
+			out << ")";
+			if (results.size() == 1u)
+				out << " -> " << objectRustType(schema, results.at(0));
+			out << ";\n";
+		}
+		out << "\npub static " << macro
+			<< "_FIELDS: &[wasmjit_object_meta_field] = &[\n";
+		for (const Json& field : fields) {
+			out << "    wasmjit_object_meta_field { name: "
+				<< quoteName(field.value("name", ""), true)
+				<< ", offset: " << field.value("offset", 0u)
+				<< ", bytes: " << field.value("bytes", 0u)
+				<< ", is_reference: "
+				<< (field.value("reference", false) ? "true" : "false")
+				<< ", is_mutable: "
+				<< (field.value("mutable", false) ? "true" : "false") << " },\n";
+		}
+		out << "];\npub static " << macro
+			<< ": wasmjit_object_meta = wasmjit_object_meta {\n"
+			<< "    name: " << quoteName(name, true) << ", version: " << version
+			<< ", size: " << size << ", parent: ";
+		if (object.contains("parent"))
+			out << "Some("
+				<< quoteName(object.at("parent").get<std::string>(), true) << ")";
+		else
+			out << "None";
+		out << ",\n    fields: " << macro << "_FIELDS,\n    methods: &[";
+		for (std::size_t index = 0; index < methods.size(); ++index) {
+			if (index != 0u)
+				out << ", ";
+			out << quoteName(methods.at(index).value("name", ""), true);
+		}
+		out << "],\n};\n\n";
+	}
+}
+
+namespace {
+
+//! A WIT member identifier, escaping the words WIT treats as keywords.
+std::string witMemberName(std::string_view name)
+{
+	std::string text = witIdentifier(std::string(name));
+	static const char* const reserved[] = { "type", "record", "variant", "enum",
+		"flags", "resource", "func", "world", "interface", "package", "use",
+		"import", "export", "own", "borrow", "list", "option", "result", "tuple",
+		"stream", "future", "async", "static", "constructor" };
+	for (const char* word : reserved) {
+		if (text == word) {
+			text.insert(0, "%");
+			break;
+		}
+	}
+	return text;
+}
+
+//! The reason WIT cannot express a type, for an emitted note.
+std::string witOmission(const Json& type)
+{
+	if (!type.is_object())
+		return "an absent type";
+	if (type.value("type", "") == "ref")
+		return "a reference that is not another host object";
+	return std::string("`") + type.value("type", "unknown") + "`";
+}
+
+} // namespace
+
+void emitWitObjects(std::ostringstream& out, const Json& schema)
+{
+	const Json* objects = objectArray(schema);
+	if (objects == nullptr)
+		return;
+
+	const Json emptyArray = Json::array();
+	for (const Json& object : *objects) {
+		const std::string name = object.value("name", "");
+		const std::uint32_t version = object.value("version", 1u);
+		const std::uint32_t size = object.value("size", 0u);
+		const Json& fields =
+				object.contains("fields") ? object.at("fields") : emptyArray;
+		const Json& methods =
+				object.contains("methods") ? object.at("methods") : emptyArray;
+
+		out << "  /// Host-registered object `" << name << "`, descriptor version "
+			<< version << ".\n"
+			<< "  /// Canonical size " << size
+			<< " bytes; the offsets are host metadata, not a Wasm ABI.\n";
+		if (object.contains("parent") || object.contains("interfaces"))
+			out << "  /// Parent and interfaces are descriptor metadata; WIT resources"
+				   " have no inheritance.\n";
+
+		std::ostringstream members;
+		for (const Json& field : fields) {
+			const std::string fieldName = field.value("name", "");
+			const Json& type = field.contains("type") ? field.at("type") : Json{};
+			const bool isReference =
+					type.is_object() && type.value("type", "") == "ref";
+			const std::optional<std::string> wit = witType(schema, type);
+			if (!wit) {
+				members << "    /// " << witMemberName(fieldName) << ": "
+					<< witOmission(type) << " is not expressible in WIT; omitted.\n";
+				continue;
+			}
+			if (isReference) {
+				// WIT forbids returning a `borrow<T>` (a borrowed handle cannot
+				// escape the call), so a reference field has no getter; a mutable
+				// one still gets the setter WIT can express.
+				members << "    /// " << witMemberName(fieldName)
+					<< ": a reference field has no WIT getter (a borrow cannot be"
+					" returned).\n";
+				if (field.value("mutable", false))
+					members << "    set-" << witMemberName(fieldName)
+						<< ": func(value: " << *wit << ");\n";
+				continue;
+			}
+			members << "    " << witMemberName(fieldName) << ": func() -> " << *wit
+				<< ";\n";
+			if (field.value("mutable", false))
+				members << "    set-" << witMemberName(fieldName)
+					<< ": func(value: " << *wit << ");\n";
+		}
+		for (const Json& method : methods) {
+			const Json& params =
+					method.contains("params") ? method.at("params") : emptyArray;
+			const Json& results =
+					method.contains("results") ? method.at("results") : emptyArray;
+			const std::string methodName = method.value("name", "");
+			std::vector<std::string> paramTypes;
+			std::string omission;
+			for (const Json& param : params) {
+				const std::optional<std::string> wit = witType(schema, param);
+				if (!wit) {
+					omission = witOmission(param) + " parameter";
+					break;
+				}
+				paramTypes.push_back(*wit);
+			}
+			std::optional<std::string> result;
+			if (omission.empty() && results.size() > 1u)
+				omission = "more than one result";
+			if (omission.empty() && results.size() == 1u) {
+				result = witType(schema, results.at(0));
+				if (!result)
+					omission = witOmission(results.at(0)) + " result";
+			}
+			if (!omission.empty()) {
+				members << "    /// " << witMemberName(methodName) << ": " << omission
+					<< " is not expressible in WIT; omitted.\n";
+				continue;
+			}
+			members << "    " << witMemberName(methodName) << ": func(";
+			for (std::size_t index = 0; index < paramTypes.size(); ++index) {
+				if (index != 0u)
+					members << ", ";
+				members << "p" << index << ": " << paramTypes[index];
+			}
+			members << ")";
+			if (result)
+				members << " -> " << *result;
+			members << ";\n";
+		}
+
+		if (members.str().empty())
+			out << "  resource " << witObjectName(object) << ";\n";
+		else
+			out << "  resource " << witObjectName(object) << " {\n"
+				<< members.str() << "  }\n";
+	}
+}
+
+} // namespace WASM::Bindings::detail

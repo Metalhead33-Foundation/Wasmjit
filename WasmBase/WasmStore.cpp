@@ -436,28 +436,101 @@ void Store::releaseHostObject(void* object) noexcept
 	// The count reached zero, but a guest frame may still hold an uncounted
 	// borrow, so the recycle waits for a safepoint (A.14.4). Stamping the tag is
 	// the same "already queued" mark the instance path uses, so a double release
-	// cannot queue the object twice.
-	GcHeader::writeWord(object, GcHeader::kTypeIdOffset, GcHeader::kReclaimedTypeId);
+	// cannot queue the object twice — and the type is captured *first*, because
+	// the walk needs it to find the object's reference slots.
+	auto* bytes = static_cast<std::uint8_t*>(object);
+	const TypeId type{GcHeader::readWord(bytes, GcHeader::kTypeIdOffset)};
+	GcHeader::writeWord(bytes, GcHeader::kTypeIdOffset, GcHeader::kReclaimedTypeId);
 	try {
 		std::lock_guard<std::mutex> lock(hostObjectMutex_);
-		hostObjectQueue_.push_back(object);
+		hostObjectQueue_.push_back(PendingHostObject{object, type});
 	} catch (...) {
 		// Out of memory here must not terminate: the object is unreachable (its
 		// count is zero) and its region is released when the Store dies.
 	}
 }
 
+void Store::hostChildSlots(void* object, TypeId type,
+		std::vector<std::uint8_t*>& slots)
+{
+	slots.clear();
+	if (!typeRegistry.isCoreType(type))
+		return;
+	const CoreTypeView view = typeRegistry.canonicalType(type);
+	if (!view.valid())
+		return;
+
+	auto* bytes = static_cast<std::uint8_t*>(object);
+	if (view.kind() == CanonTypeKind::Struct) {
+		const std::span<const CanonFieldType> fields = view.structFields();
+		for (std::size_t index = 0; index < fields.size(); ++index) {
+			const CanonStorageType& storage = fields[index].storage;
+			if (!storage.isPacked && isReferenceType(storage.value.opcode))
+				slots.push_back(bytes + gcStructFieldOffset(fields, index));
+		}
+		return;
+	}
+	if (view.kind() != CanonTypeKind::Array)
+		return;
+	const CanonStorageType& element = view.arrayElement().storage;
+	if (element.isPacked || !isReferenceType(element.value.opcode))
+		return;
+	const std::uint32_t length =
+			GcHeader::readWord(bytes, GcHeader::kArrayLengthOffset);
+	const std::size_t dataOffset = gcArrayDataOffset(element);
+	const std::size_t stride = gcStorageBytes(element);
+	for (std::uint32_t index = 0; index < length; ++index)
+		slots.push_back(bytes + dataOffset + static_cast<std::size_t>(index) * stride);
+}
+
 void Store::collectHostObjects()
 {
-	std::vector<void*> queued;
-	{
-		std::lock_guard<std::mutex> lock(hostObjectMutex_);
-		queued.swap(hostObjectQueue_);
-	}
-	// Leaf host objects have no outgoing references yet (`SO17`), so a safepoint
-	// only has to return the blocks to their region's free list.
-	for (void* object : queued)
+	// The walk holds the queue lock: a release from another thread waits for the
+	// safepoint instead of half-joining it, which is what makes the reclaimed tag
+	// a sufficient "already in the work list" mark below.
+	std::lock_guard<std::mutex> lock(hostObjectMutex_);
+	std::vector<PendingHostObject> work;
+	work.swap(hostObjectQueue_);
+	std::vector<std::uint8_t*> slots; // walk scratch, reused across objects
+	for (std::size_t index = 0; index < work.size(); ++index) {
+		void* object = work[index].object;
+		if (object == nullptr)
+			continue;
+		auto* bytes = static_cast<std::uint8_t*>(object);
+		auto* count = reinterpret_cast<std::uint32_t*>(
+				bytes + GcHeader::kRefcountOffset);
+		if (GcRefcount(count).load() != 0) {
+			// Resurrected by a clone before the safepoint: it is alive again, so
+			// put its tag back and leave it alone (the instance path does the same).
+			GcHeader::writeWord(bytes, GcHeader::kTypeIdOffset,
+					work[index].type.value);
+			continue;
+		}
+		// Iterative, never recursive: `work` grows as children reach zero, so one
+		// safepoint walks the whole dying graph in a loop.
+		hostChildSlots(object, work[index].type, slots);
+		for (std::uint8_t* slot : slots) {
+			void* child = *reinterpret_cast<void* const*>(slot);
+			if (child == nullptr || !gcHeap.owns(child))
+				continue; // a funcref, an i31 immediate, or a freed child
+			auto* childBytes = static_cast<std::uint8_t*>(child);
+			const std::uint32_t tag =
+					GcHeader::readWord(childBytes, GcHeader::kTypeIdOffset);
+			if (tag == GcHeader::kReclaimedTypeId)
+				continue; // already queued (or this walk already took it)
+			auto* childCount = reinterpret_cast<std::uint32_t*>(
+					childBytes + GcHeader::kRefcountOffset);
+			bool underflow = false;
+			const std::uint32_t previous =
+					GcRefcount(childCount).decrement(underflow);
+			if (underflow || previous != 1)
+				continue;
+			GcHeader::writeWord(childBytes, GcHeader::kTypeIdOffset,
+					GcHeader::kReclaimedTypeId);
+			work.push_back(PendingHostObject{child, TypeId{tag}});
+		}
 		gcHeap.recycle(object);
+	}
 }
 
 Store::MemoryId Store::createLinearMemory(uint64_t initialPages, uint64_t maxPages, bool isShared,

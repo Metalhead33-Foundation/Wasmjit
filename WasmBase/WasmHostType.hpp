@@ -17,11 +17,12 @@
   **Status (the `SO-1` seam, 2026-11-18).** Interning, allocation, retain and
   release are implemented; `layoutHostType` is a pure function over the helpers
   the runtime and a backend already share (docs/ABI.md "GC Object and Heap ABI").
-  The one staging restriction is a **reference field**: interning refuses it until
-  the Store-level release walk lands (`SO17`), because recycling a graph without
-  dropping its children would leak their counts. Nothing in this header names a
-  product, a property, a signal or a C++ class (`SOD6`): a host type is a Wasm
-  `struct`/`array`, and the name/descriptor layer stays in the embedder (`SO-2`).
+  A **reference field** is accepted when its count is this Store's — a GC
+  reference, which the safepoint walk drops (`SO-6`) — and refused when the count
+  belongs to a host bridge or the continuation machinery (`externref`, `exnref`,
+  `contref`; `SO18`). Nothing in this header names a product, a property, a signal
+  or a C++ class (`SOD6`): a host type is a Wasm `struct`/`array`, and the
+  name/descriptor layer stays in the embedder (`SO-2`).
 
   This header is part of the exported surface: every declaration in it
   is exported (docs/EMBEDDING_SURFACE.md ES-4).
@@ -50,9 +51,9 @@ enum class HostTypeKind : std::uint8_t {
 //!
 //! Only a storage type a Wasm field can have is legal: `i32`, `i64`, `f32`,
 //! `f64`, `v128`, the packed `i8`/`i16`, or a shorthand reference. A reference
-//! to *another* host type is not part of the scaffold yet; A.14.1's recursion is
-//! a `SO-1` implementation detail and the type index it needs is not in this
-//! struct.
+//! field may name another host type indirectly through `StructRef`/`ArrayRef`;
+//! a reference whose count the Store cannot release (`externref`, `exnref`,
+//! `contref`) is refused at interning (`SO18`).
 /** \brief Storage type, mutability and nullability of one host-defined field. */
 struct HostFieldDefinition {
 	//! The field's storage type (`I8`/`I16` only with `isPacked`).
@@ -211,7 +212,8 @@ HostTypeLayout layoutHostType(const HostTypeDefinition& definition);
   \param definition The struct or array definition to intern.
   \return The canonical identity the registry assigned, shared with any module
           that declares the same shape.
-  \throws std::logic_error when the definition has a reference field (`SO17`).
+  \throws std::logic_error when the definition has a reference field whose count
+          the Store cannot release (`externref`, `exnref`, `contref`; `SO18`).
   \throws std::invalid_argument when the definition is not a legal Wasm struct or array.
 */
 TypeId internHostType(Store& store, const HostTypeDefinition& definition);

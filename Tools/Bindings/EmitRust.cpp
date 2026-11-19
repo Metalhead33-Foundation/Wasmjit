@@ -1,5 +1,6 @@
 #include "BindingSchema.hpp"
 #include "EmitInternal.hpp"
+#include "EmitObjects.hpp"
 #include "EmitShared.hpp"
 
 #include <cstddef>
@@ -35,6 +36,7 @@ std::string emitRustModule(const nlohmann::ordered_json& input)
 	out << "\n// Reference types are opaque. Reference parameters are borrowed unless\n"
 		   "// the adapter says otherwise; reference results carry an explicit\n"
 		   "// ownership note. This module defines no layout and no TypeId.\n\n";
+	emitRustObjects(out, schema);
 
 	for (const Json& entry : schema.at("exports")) {
 		if (entry.value("kind", "") != "function")

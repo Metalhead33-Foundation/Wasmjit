@@ -1,6 +1,7 @@
 #include "EmitShared.hpp"
 
 #include "BindingModel.hpp"
+#include "EmitObjects.hpp"
 #include "frontend/wit/WitFrontend.hpp"
 
 #include <cctype>
@@ -263,6 +264,10 @@ void collectSchemaRefs(const Json& schema, std::set<std::string>& names)
 		collectRefs(schema.at("types"), names);
 	collectRefs(schema.at("imports"), names);
 	collectRefs(schema.at("exports"), names);
+	// Object descriptors carry field and method types of their own, and those
+	// need the same opaque typedefs a function's parameters get (A.14.5).
+	if (schema.contains("objects"))
+		collectRefs(schema.at("objects"), names);
 	collectWitTypeNames(schema, names);
 }
 
@@ -424,6 +429,13 @@ std::string emitCHeaderImpl(const Json& schema)
 		   "   the adapter says otherwise; reference results carry an explicit\n"
 		   "   ownership note. This header defines no layout, no TypeId and no\n"
 		   "   sizeof contract. */\n\n";
+	if (schema.contains("objects") && schema.at("objects").is_array()
+			&& !schema.at("objects").empty()) {
+		out << "/* The object block below is the one exception: its offsets and size\n"
+			   "   are the canonical layout the engine derives, not a C layout, and\n"
+			   "   each descriptor is versioned so a mismatch is a load-time check. */\n\n";
+		emitCObjects(out, schema);
+	}
 
 	for (const Json& entry : schema.at("exports")) {
 		if (entry.value("kind", "") != "function")
@@ -804,11 +816,16 @@ std::string emitWitImpl(const Json& schema)
 			schema.value("world", schema.value("module", "component")));
 	out << "package " << packageName << ";\n\n";
 
-	if (schema.contains("types") && schema.at("types").is_array()
-			&& !schema.at("types").empty()) {
+	if ((schema.contains("types") && schema.at("types").is_array()
+			&& !schema.at("types").empty())
+			|| (schema.contains("objects") && schema.at("objects").is_array()
+				&& !schema.at("objects").empty())) {
 		out << "interface types {\n";
+		const Json noTypes = Json::array();
+		const Json& definitions =
+				schema.contains("types") ? schema.at("types") : noTypes;
 		std::size_t id = 0;
-		for (const Json& definition : schema.at("types")) {
+		for (const Json& definition : definitions) {
 			const std::string name = typeNames[id++];
 			if (!definition.contains("kind"))
 				continue;
@@ -902,6 +919,7 @@ std::string emitWitImpl(const Json& schema)
 					<< ref(kind.at("future"), ref) << ">;\n";
 			}
 		}
+		emitWitObjects(out, schema);
 		out << "}\n\n";
 	}
 

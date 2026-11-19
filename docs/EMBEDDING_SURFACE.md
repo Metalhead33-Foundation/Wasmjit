@@ -50,6 +50,12 @@ implemented; every state-changing entry point throws until `SO-1` lands.
 **Revision 36 (2026-11-18)** delivers `SO-1`: the seam interns through the module
 canonicalizer, the Store allocates, counts and safepoints host objects, `EN-14` is
 done, and `EN-15` records the reference-field restriction (`SO17`, `SO-6`).
+**Revision 37 (2026-11-18)** delivers `SO-2`: `wasmjit.binding/2` consumes an
+`objects` section, validates each descriptor against the engine's canonical layout
+at load, and emits the versioned C, Rust and WIT artifacts (§11.8).
+**Revision 38 (2026-11-18)** delivers `SO-6`: a host object may hold GC references,
+the safepoint walk drops them when the object is released, `EN-15` is done, and
+`EN-16` records the one remaining limit (a bridge-owned reference field).
 
 The earlier `JitRuntime`/`JitContext`/`ModuleInstance` sketch from a different
 repository is reviewed in §5 as a **salvage list**, not a template; its
@@ -614,8 +620,10 @@ so it is the copy that has to be updated when a header moves.
 are the seam and its ergonomics: `internHostType` interns through the same
 canonicalizer a module uses, `Store::allocateHostStruct`/`allocateHostArray`
 allocate from a Store-owned region set, and `HostType`/`HostObject` wrap the
-pair. One staging restriction remains — a host type with a reference field cannot
-be interned yet (`SO17`, `EN-15`) — and `hostTypeSupportAvailable()` reports the
+pair. One staging restriction remains — a host type with a **bridge-owned**
+reference field (`externref`, `exnref`, `contref`) cannot be interned yet
+(`SO18`, `EN-16`), while a GC reference field is a graph edge the safepoint walk
+drops (`SO-6`) — and `hostTypeSupportAvailable()` reports the
 capability. They carry no name, version, property or signal — that layer remains
 the embedder's (`SO-2`), which is what keeps them in this tier instead of behind a
 product header.
@@ -1136,7 +1144,28 @@ an input that is not a direction: an `objects` section in the same envelope
 type the host registered ([`proposals/SYNTHETIC_OBJECTS.md`](proposals/SYNTHETIC_OBJECTS.md)
 A.14.5). It is **consumed, never produced** by `wasmjit-bindings`: the host writes
 it — by hand or with a small builder — and the generator projects it into a WIT
-resource and into the target's typed-reference or handle declarations.
+resource and into the target's handle and metadata declarations. **Shipped in
+`SO-2` (2026-11-18)**; the shipped shape is:
+
+```json
+{
+  "schema": "wasmjit.binding/2",
+  "direction": "all",
+  "module": "demo",
+  "objects": [
+    { "name": "demo.Widget", "version": 1, "parent": "demo.Base",
+      "interfaces": ["demo.Sized"],
+      "fields": [
+        { "name": "x", "type": "i32" },
+        { "name": "y", "type": "i32", "mutable": true }
+      ],
+      "methods": [
+        { "name": "resize", "params": ["i32", "i32"], "results": [] }
+      ] }
+  ],
+  "imports": [], "exports": []
+}
+```
 
 It does not change the authority rule. `Module` descriptors remain the truth for a
 function's signature; the object section adds the type *behind* a reference, and
@@ -1145,13 +1174,58 @@ the runtime check remains the Store's `TypeId` (`SYNTHETIC_OBJECTS.md` §3.2,
 `wasmjit.binding/1` consumer that ignores unknown members keeps working, and a
 consumer that emits objects must opt in.
 
+**The load-time checks.** Loading the schema is where a descriptor is validated,
+and each failure is a named `std::runtime_error`, never a best-effort parse:
+
+| Condition | Result |
+|---|---|
+| `schema` is neither `wasmjit.binding/1` nor `/2` | refused — the generator speaks two versions and no others |
+| an `objects` section under `/1` | refused — objects are the `/2` addition |
+| a field's declared `offset` differs from the canonical one | refused, and the message names both numbers |
+| the same `(name, version)` appears twice | refused — one name and version has one shape (A.14.2) |
+| a field type is not a Wasm storage type (a component value, a `string`, …) | refused |
+
+`offset` is therefore an **assertion**, not an input: the canonical offset comes
+from `WASM::layoutHostType` over the same definition `SO-1` interns
+(`SYNTHETIC_OBJECTS.md` `SOD7`), so the tool cannot drift from the heap. Omitting
+it is legal and is what a hand-written descriptor should do; the emitted
+interchange form always carries the derived value, plus `bytes` and `reference`.
+
+**What is emitted.** One versioned block per `(name, version)` descriptor — the
+suffix is mandatory, so two versions of one name never collide:
+
+| Target | Artifact |
+|---|---|
+| C header | an opaque `wasmjit_object_<name>_v<N>` handle (forward-declared first, so any method may name any object), `#define` constants for the version, the canonical size and each field offset, one `typedef` per method signature, and walkable `wasmjit_object_meta` / `wasmjit_object_meta_field` tables carrying name, version, parent, offsets and mutability |
+| Rust module | the same facts as `pub const`, a `#[repr(C)]` zero-sized handle, `pub type` method aliases, and `pub static WASMJIT_OBJECT_<…>` descriptor statics |
+| WIT | one `resource <name>-v<N>`: a field becomes a getter and, when mutable, `set-<field>`; a method becomes a `func`; a defined reference becomes `borrow<…>` in a **parameter** position |
+
+WIT is the one target that cannot express everything, and the emitter says so in
+the file instead of dropping it silently: a non-object reference field, a `v128`
+member and a member with more than one result are each replaced by a documented
+`///` note. A reference **field** never becomes a getter either — WIT forbids
+returning a `borrow<T>` — so the field carries a note and, if mutable, a setter.
+
+`parent` and `interfaces` are carried through the model and the JSON, and printed
+in the generated comments; they are **not** Wasm type relations, and WIT resources
+have no inheritance, so nothing structural is emitted for them. A version mismatch
+is checkable at registration because each table carries `name` and `version`
+beside the handle: the host compares them with what it registers, and a mismatch
+is a load-time error rather than a cast that happens to succeed.
+
+**The schema is not the engine's gate.** A descriptor may declare an `externref`
+field — it is a legal Wasm storage type, so the tool validates the layout and emits
+the metadata. Whether the *engine* can intern that type is a separate contract:
+today it cannot, because the count belongs to a host bridge (`SO18`), so a product
+using such a field keeps its own count policy behind a handle.
+
 #### Layout and build rules
 
 | Path | What it is | Rule |
 |---|---|---|
 | `Tools/Bindings/BindingModel.{hpp,cpp}` | typed schema model (`Direction`, `EntryKind`, `ValueKind`, `HeapKind`, `Entry`, `Schema`), JSON parse/format and dedupe | JSON is only the interchange boundary |
 | `Tools/Bindings/BindingSchema.{hpp,cpp}` | core-module and component descriptors → schema; typed and JSON projections; public wrappers | first-party; reads `WasmBase` headers, not part of the installed SDK |
-| `Tools/Bindings/Emit*.cpp` | shared emitter helpers, Rust, web/JVM/.NET, dynamic/native-ABI and C++ emitters | one source table per language group |
+| `Tools/Bindings/Emit*.cpp` | shared emitter helpers, Rust, web/JVM/.NET, dynamic/native-ABI and C++ emitters, plus `EmitObjects.cpp` for the `/2` object block | one source table per language group |
 | `Tools/Bindings/main.cpp` | the `wasmjit-bindings` CLI | operates on `Schema`, never on raw JSON except at file input/output |
 | `Tools/Bindings/frontend/cpp/` | optional SWIG and Glue candidate front-ends | build-time only; candidate schemas are G2H imports and never authority |
 | `Tools/Bindings/frontend/wit/` | WIT JSON, WIT text/package, and WITX input (`--wit-json`, `--wit`, `--witx`); WIT/WITX output (`--emit wit`, `--emit witx`) | component-level schema input; WITX preserves legacy Preview 1 names; `wasm-tools` is an optional WIT text converter |
@@ -1186,6 +1260,14 @@ its imports/exports are projected. The invocation is:
 
 ./build/Desktop-Release/Tools/Bindings/wasmjit-bindings \
     --wit-json component.wit.json --direction h2g --emit rust
+
+# A hand-written `wasmjit.binding/2` descriptor: one source, three artifacts.
+./build/Desktop-Release/Tools/Bindings/wasmjit-bindings \
+    --schema objects.binding.json --direction all --emit c-header > objects.h
+./build/Desktop-Release/Tools/Bindings/wasmjit-bindings \
+    --schema objects.binding.json --direction all --emit rust > objects.rs
+./build/Desktop-Release/Tools/Bindings/wasmjit-bindings \
+    --schema objects.binding.json --direction all --emit wit > objects.wit
 ```
 
 `--emit` accepts `schema`, `c-header`, `rust`, `typescript`, `assemblyscript`,
@@ -2524,7 +2606,8 @@ do not name a host runtime or a source language.
 | **EN-12** | The public metadata must be sufficient for generated headers | §13.8 | **Verify** | `importDescriptors`/`exportDescriptors` + `typeView` are the schema; prove a C/C++ and Rust emitter consumes them without parsing C++ headers. |
 | **EN-13** | `Elvavena` remains in the public SDK headers | §6.2, §9 | **Accepted** | Deliberate first-freeze tradeoff; removal is a separate public-header/API decision, not an embedding-runtime bug. **Won't be removed. We in fact intend to make WasmJit a first-class member of the MhLib ecosystem in the distant future.** |
 | **EN-14** | A host cannot originate a type, and cannot allocate an object without a module-local index | §12.7.2, [`proposals/SYNTHETIC_OBJECTS.md`](proposals/SYNTHETIC_OBJECTS.md) A.14.3 | **Done (SO-1, 2026-11-18)** | `internHostType` runs the same `TypeRegistry` canonicalizer a module uses; `Store::allocateHostStruct`/`allocateHostArray` take a `TypeId` and allocate from a Store-owned region set. `[hostobject]` proves the shared `TypeId` and the end-to-end call. |
-| **EN-15** | A host type with a **reference field** cannot be interned, so a host object cannot be a graph node | §13.2, [`proposals/SYNTHETIC_OBJECTS.md`](proposals/SYNTHETIC_OBJECTS.md) A.14.4, `SO17` | **Planned** (`SO-6`) | Add the Store-level release walk: drop a released host object's outgoing references at a safepoint before recycling it, reusing the instance walker's type/layout logic. Until then `internHostType` refuses the definition by name. |
+| **EN-15** | A host type with a **reference field** could not be interned, so a host object could not be a graph node | §13.2, [`proposals/SYNTHETIC_OBJECTS.md`](proposals/SYNTHETIC_OBJECTS.md) A.14.4, `SO17` | **Done (SO-6, 2026-11-18)** | `internHostType` accepts a GC reference field; `Store::collectHostObjects` drops each reference the released object holds and queues a child that reaches zero. `[hostobject][gc]` pins the counts end to end. |
+| **EN-16** | A reference field whose count is **not the Store's** (`externref`, `exnref`, `contref`) still cannot be interned | §12.7.2, [`proposals/SYNTHETIC_OBJECTS.md`](proposals/SYNTHETIC_OBJECTS.md) §4.6, `SO18` | **Documented limit** (`SO-3` may lift it) | The count belongs to a host bridge or the continuation machinery; the Store owns neither, so recycling such an object would leave it behind. `internHostType` refuses the field by name. |
 
 The **ENG** list is deliberately short, and it stays short in revision 2 of the
 object study: `EN-14` is the only planned engine row, and it is a type origin plus
@@ -2678,16 +2761,18 @@ the decisions (`SO-1` shipped; `SO-2`…`SO-6` remain).
 |---|---|---|
 | hold an opaque host value in a guest | `externref` plus `HostBridge` retain/release | `WasmHostBridge.hpp`; [`ABI.md`](ABI.md) “Host boundary” |
 | create a Wasm GC object from the host | `allocateStructObject`/`allocateArrayObject` on the instance | [`ABI.md`](ABI.md) “GC Object and Heap ABI” |
-| a host-defined object **type** | **shipped** (`SO-1`): `internHostType` interns the canonical type, `Store::allocateHostStruct`/`allocateHostArray` allocate an object of its `TypeId`; a reference field is refused until `SO17`/`SO-6` | [`proposals/SYNTHETIC_OBJECTS.md`](proposals/SYNTHETIC_OBJECTS.md) A.14.3 |
+| a host-defined object **type** | **shipped** (`SO-1`, `SO-6`): `internHostType` interns the canonical type, `Store::allocateHostStruct`/`allocateHostArray` allocate an object of its `TypeId`, and a GC reference field is dropped when the object is released; a bridge-owned reference field is refused (`SO18`) | [`proposals/SYNTHETIC_OBJECTS.md`](proposals/SYNTHETIC_OBJECTS.md) A.14.3, §4.6 |
 | the seam's **ergonomics** | `WasmHostType.hpp` (define/lay out/intern/allocate) and `WasmHostObject.hpp` (`HostType`/`HostObject`, one engine count each) | `WasmHostType.hpp`, `WasmHostObject.hpp`; `SO-1` |
+| the **descriptor and its schema** | **shipped** (`SO-2`): `wasmjit.binding/2` `objects` section → validated against `layoutHostType`, emitted as C/Rust metadata tables and WIT resources | §11.8; [`../Tools/Bindings/`](../Tools/Bindings/) `BindingModel`, `EmitObjects` |
 | a cross-language object *type* | component resources (`own`/`borrow`, `resource.drop`, `resource.rep`) | [`proposals/COMPONENT_MODEL.md`](proposals/COMPONENT_MODEL.md) §2.3/§4.3 |
 | a function namespace for the object's methods | synthetic modules and native imports | [`SCOPE.md`](SCOPE.md) §3.1 |
 
-No object model ships: no handle table, no descriptor registry, no properties and
-no signals. What ships is the transport, the resource contract and the GC
-allocation; what is planned is the type origin that lets the host create a
-first-class Wasm object instead of only an opaque one. The model stays out
-(§16.3).
+No object model ships: no handle table, no properties and no signals. What ships
+is the transport, the resource contract, the GC allocation, the type origin that
+lets the host create a first-class Wasm object, and the **generator-side**
+descriptor that names and versions it. A *runtime* descriptor registry would be an
+engine-side object model and stays out (§16.3); the tool's tables are the host's
+own metadata, and the identity remains the Store's `TypeId`.
 
 ### 16.2 The measured wire
 

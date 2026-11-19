@@ -1,5 +1,8 @@
 #include "BindingModel.hpp"
 
+#include "WasmBase/WasmHostType.hpp"
+
+#include <limits>
 #include <set>
 #include <stdexcept>
 #include <string_view>
@@ -380,6 +383,282 @@ Json Entry::toJson() const
 	return out;
 }
 
+namespace {
+
+//! Reads an unsigned member, falling back when it is absent or mistyped.
+std::uint32_t jsonUint(const Json& json, std::string_view key,
+		std::uint32_t fallback = 0)
+{
+	if (!json.is_object())
+		return fallback;
+	const auto found = json.find(std::string(key));
+	if (found == json.end() || !found->is_number_unsigned())
+		return fallback;
+	return found->get<std::uint32_t>();
+}
+
+//! The engine storage code of one reference heap kind.
+WASM::ValueTypeCode referenceCode(HeapKind heap)
+{
+	using Code = WASM::ValueTypeCode;
+	switch (heap) {
+	case HeapKind::Func: return Code::FuncRef;
+	case HeapKind::Extern: return Code::ExternRef;
+	case HeapKind::Any: return Code::AnyRef;
+	case HeapKind::Eq: return Code::EqRef;
+	case HeapKind::I31: return Code::I31Ref;
+	case HeapKind::Struct: return Code::StructRef;
+	case HeapKind::Array: return Code::ArrayRef;
+	case HeapKind::Exn: return Code::ExnRef;
+	case HeapKind::Cont: return Code::ContRef;
+	case HeapKind::None: return Code::NullRef;
+	case HeapKind::NoFunc: return Code::NullFuncRef;
+	case HeapKind::NoExtern: return Code::NullExternRef;
+	case HeapKind::NoExn: return Code::NullExnRef;
+	// A *defined* reference is pointer-sized like `structref`, so that is the
+	// layout it has; the name stays metadata. Interning a defined reference is
+	// `SO17`'s follow-up, and this table is the layout assertion, not the type.
+	case HeapKind::Defined: return Code::StructRef;
+	default: break;
+	}
+	return Code::Void;
+}
+
+//! Converts one descriptor field into the engine's own field vocabulary.
+WASM::HostFieldDefinition hostField(const ObjectField& field,
+		const std::string& object)
+{
+	WASM::HostFieldDefinition out;
+	out.isMutable = field.mutableField;
+	const ValueType& type = field.type;
+	if (type.kind == ValueKind::Ref) {
+		if (type.heap == HeapKind::Unknown || type.heap == HeapKind::Rec)
+			throw std::runtime_error("object '" + object + "' field '"
+					+ field.name + "': a reference needs a concrete heap kind");
+		out.storage = referenceCode(type.heap);
+		out.isNullable = type.nullable;
+		return out;
+	}
+	switch (type.kind) {
+	case ValueKind::I32: out.storage = WASM::ValueTypeCode::I32; break;
+	case ValueKind::I64: out.storage = WASM::ValueTypeCode::I64; break;
+	case ValueKind::F32: out.storage = WASM::ValueTypeCode::F32; break;
+	case ValueKind::F64: out.storage = WASM::ValueTypeCode::F64; break;
+	case ValueKind::V128: out.storage = WASM::ValueTypeCode::V128; break;
+	case ValueKind::I8:
+		out.storage = WASM::ValueTypeCode::I8;
+		out.isPacked = true;
+		break;
+	case ValueKind::I16:
+		out.storage = WASM::ValueTypeCode::I16;
+		out.isPacked = true;
+		break;
+	default:
+		throw std::runtime_error("object '" + object + "' field '" + field.name
+				+ "': '" + valueKindName(type.kind)
+				+ "' is not a Wasm storage type");
+	}
+	return out;
+}
+
+//! Validates every descriptor against the engine's canonical layout.
+//!
+//! This is the load-time check the note promises: a declared offset is an
+//! assertion about the canonical type, and the assertion is checked against
+//! `WASM::layoutHostType` rather than trusted. `(name, version)` is unique — one
+//! name and version has one shape (A.14.2) — while two versions of one name are
+//! two descriptors and two types.
+void validateObjects(std::vector<ObjectDescriptor>& objects)
+{
+	std::set<std::string> keys;
+	for (ObjectDescriptor& object : objects) {
+		WASM::HostTypeDefinition definition;
+		definition.kind = WASM::HostTypeKind::Struct;
+		definition.fields.reserve(object.fields.size());
+		std::set<std::string> names;
+		for (const ObjectField& field : object.fields) {
+			if (!names.insert(field.name).second)
+				throw std::runtime_error("object '" + object.name
+						+ "' declares field '" + field.name + "' twice");
+			definition.fields.push_back(hostField(field, object.name));
+		}
+		const WASM::HostTypeLayout layout = WASM::layoutHostType(definition);
+		object.size = layout.totalBytes;
+		for (std::size_t index = 0; index < object.fields.size(); ++index) {
+			ObjectField& field = object.fields[index];
+			field.offset = layout.fields[index].offset;
+			field.bytes = layout.fields[index].bytes;
+			field.isReference = layout.fields[index].isReference;
+			if (field.hasOffset && field.declaredOffset != field.offset)
+				throw std::runtime_error("object '" + object.name + "' field '"
+						+ field.name + "': declared offset "
+						+ std::to_string(field.declaredOffset)
+						+ " disagrees with the canonical offset "
+						+ std::to_string(field.offset));
+		}
+		const std::string key = object.name + "@" + std::to_string(object.version);
+		if (!keys.insert(key).second)
+			throw std::runtime_error("object descriptor '" + key
+					+ "' is declared twice; one name and version has one shape");
+	}
+}
+
+} // namespace
+
+ObjectField ObjectField::fromJson(const Json& json)
+{
+	if (!json.is_object())
+		throw std::runtime_error("object field: expected a JSON object");
+	ObjectField out;
+	out.name = jsonString(json, "name");
+	if (out.name.empty())
+		throw std::runtime_error("object field: missing name");
+	Json type = json.contains("type") ? json.at("type") : Json{};
+	if (type.is_null() && json.contains("kind"))
+		type = json.at("kind");
+	out.type = ValueType::fromJson(type);
+	if (out.type.kind == ValueKind::Unknown)
+		throw std::runtime_error("object field '" + out.name + "': unknown type");
+	// `i8`/`i16` are only legal as packed Wasm storage, and every emitter reads
+	// the flag, so it is set here rather than inferred again downstream.
+	if (out.type.kind == ValueKind::I8 || out.type.kind == ValueKind::I16)
+		out.type.packed = true;
+	out.mutableField = jsonBool(json, "mutable");
+	if (json.contains("offset")) {
+		const Json& declared = json.at("offset");
+		std::uint64_t value = 0;
+		if (declared.is_number_unsigned())
+			value = declared.get<std::uint64_t>();
+		else if (declared.is_number_integer()
+				&& declared.get<std::int64_t>() >= 0)
+			value = static_cast<std::uint64_t>(declared.get<std::int64_t>());
+		else
+			throw std::runtime_error("object field '" + out.name
+					+ "': offset is not a non-negative integer");
+		if (value > std::numeric_limits<std::uint32_t>::max())
+			throw std::runtime_error("object field '" + out.name
+					+ "': offset is out of range");
+		out.hasOffset = true;
+		out.declaredOffset = static_cast<std::uint32_t>(value);
+	}
+	return out;
+}
+
+Json ObjectField::toJson() const
+{
+	Json out;
+	out["name"] = name;
+	out["type"] = type.toJson();
+	out["offset"] = offset;
+	out["bytes"] = bytes;
+	out["reference"] = isReference;
+	if (mutableField)
+		out["mutable"] = true;
+	return out;
+}
+
+ObjectMethod ObjectMethod::fromJson(const Json& json)
+{
+	if (!json.is_object())
+		throw std::runtime_error("object method: expected a JSON object");
+	ObjectMethod out;
+	out.name = jsonString(json, "name");
+	if (out.name.empty())
+		throw std::runtime_error("object method: missing name");
+	const auto parseList = [&out](const Json& node, const char* key) {
+		std::vector<ValueType> types;
+		if (!node.contains(key))
+			return types;
+		const Json& array = node.at(key);
+		if (!array.is_array())
+			throw std::runtime_error("object method '" + out.name + "': `"
+					+ key + "` must be an array");
+		for (const Json& item : array) {
+			ValueType type = ValueType::fromJson(item);
+			if (type.kind == ValueKind::Unknown)
+				throw std::runtime_error("object method '" + out.name
+						+ "': unknown " + key + " type");
+			types.push_back(std::move(type));
+		}
+		return types;
+	};
+	out.params = parseList(json, "params");
+	out.results = parseList(json, "results");
+	return out;
+}
+
+Json ObjectMethod::toJson() const
+{
+	Json out;
+	out["name"] = name;
+	out["params"] = Json::array();
+	for (const ValueType& param : params)
+		out["params"].push_back(param.toJson());
+	out["results"] = Json::array();
+	for (const ValueType& result : results)
+		out["results"].push_back(result.toJson());
+	return out;
+}
+
+ObjectDescriptor ObjectDescriptor::fromJson(const Json& json)
+{
+	if (!json.is_object())
+		throw std::runtime_error("object descriptor: expected a JSON object");
+	ObjectDescriptor out;
+	out.name = jsonString(json, "name");
+	if (out.name.empty())
+		throw std::runtime_error("object descriptor: missing name");
+	out.version = jsonUint(json, "version", 1);
+	if (out.version == 0)
+		throw std::runtime_error("object '" + out.name
+				+ "': version must be at least 1");
+	out.parent = jsonString(json, "parent");
+	if (json.contains("interfaces") && json.at("interfaces").is_array()) {
+		for (const Json& item : json.at("interfaces")) {
+			if (item.is_string())
+				out.interfaces.push_back(item.get<std::string>());
+		}
+	}
+	if (json.contains("fields")) {
+		if (!json.at("fields").is_array())
+			throw std::runtime_error("object '" + out.name
+					+ "': `fields` must be an array");
+		for (const Json& item : json.at("fields"))
+			out.fields.push_back(ObjectField::fromJson(item));
+	}
+	if (json.contains("methods")) {
+		if (!json.at("methods").is_array())
+			throw std::runtime_error("object '" + out.name
+					+ "': `methods` must be an array");
+		for (const Json& item : json.at("methods"))
+			out.methods.push_back(ObjectMethod::fromJson(item));
+	}
+	out.raw = json;
+	return out;
+}
+
+Json ObjectDescriptor::toJson() const
+{
+	Json out = raw.is_object() ? raw : Json::object();
+	out["name"] = name;
+	out["version"] = version;
+	if (parent.empty())
+		out.erase("parent");
+	else
+		out["parent"] = parent;
+	if (interfaces.empty())
+		out.erase("interfaces");
+	else
+		out["interfaces"] = interfaces;
+	out["size"] = size;
+	out["fields"] = Json::array();
+	for (const ObjectField& field : fields)
+		out["fields"].push_back(field.toJson());
+	out["methods"] = Json::array();
+	for (const ObjectMethod& method : methods)
+		out["methods"].push_back(method.toJson());
+	return out;
+}
 Schema Schema::fromJson(const Json& json)
 {
 	if (!json.is_object())
@@ -388,6 +667,13 @@ Schema Schema::fromJson(const Json& json)
 	out.id = jsonString(json, "schema");
 	if (out.id.empty())
 		out.id = "wasmjit.binding/1";
+	// The envelope is versioned: a consumer that emits nothing but functions
+	// keeps speaking /1, and an `objects` section opts into /2 (A.14.5). An
+	// unknown version is a load-time error rather than a best-effort parse.
+	if (out.id != "wasmjit.binding/1" && out.id != "wasmjit.binding/2")
+		throw std::runtime_error("schema import: unsupported schema version '"
+				+ out.id + "'; this generator speaks wasmjit.binding/1 and"
+				" wasmjit.binding/2");
 	const std::string direction = jsonString(json, "direction");
 	if (!parseDirection(direction, out.direction))
 		throw std::runtime_error("schema import: missing or unknown direction");
@@ -405,6 +691,18 @@ Schema Schema::fromJson(const Json& json)
 		for (const Json& entry : json.at("exports"))
 			out.exports.push_back(Entry::fromJson(entry, false));
 	}
+	if (json.contains("objects")) {
+		if (!json.at("objects").is_array())
+			throw std::runtime_error("schema import: `objects` must be an array");
+		if (!json.at("objects").empty()) {
+			if (out.id != "wasmjit.binding/2")
+				throw std::runtime_error("schema import: an `objects` section"
+						" requires wasmjit.binding/2, not '" + out.id + "'");
+			for (const Json& item : json.at("objects"))
+				out.objects.push_back(ObjectDescriptor::fromJson(item));
+			validateObjects(out.objects);
+		}
+	}
 	out.dedupe();
 	return out;
 }
@@ -412,13 +710,22 @@ Schema Schema::fromJson(const Json& json)
 Json Schema::toJson() const
 {
 	Json out = extras.is_object() ? extras : Json::object();
-	out["schema"] = id;
+	// An object descriptor is what makes this envelope `/2`; a `/2` input that
+	// carries no objects stays `/2` so a round-trip never downgrades silently.
+	out["schema"] = objects.empty() ? id : "wasmjit.binding/2";
 	out["direction"] = directionName(direction);
 	out["module"] = module;
 	if (!frontend.empty())
 		out["frontend"] = frontend;
 	if (!types.is_null())
 		out["types"] = types;
+	if (objects.empty()) {
+		out.erase("objects");
+	} else {
+		out["objects"] = Json::array();
+		for (const ObjectDescriptor& object : objects)
+			out["objects"].push_back(object.toJson());
+	}
 	out["imports"] = Json::array();
 	for (const Entry& entry : imports)
 		out["imports"].push_back(entry.toJson());

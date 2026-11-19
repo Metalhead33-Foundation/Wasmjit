@@ -35,12 +35,21 @@ WASM::HostTypeDefinition mixedStruct()
 }
 
 //! A leaf struct: the shape the probe module declares and the host interns.
-//! `SO17` refuses a reference field for now, so the end-to-end case is a leaf.
 WASM::HostTypeDefinition leafStruct()
 {
 	return WASM::hostStruct({
 		WASM::hostValueField(WASM::ValueTypeCode::I32),
 		WASM::hostValueField(WASM::ValueTypeCode::I32),
+	});
+}
+
+//! A holder: one mutable `anyref`, the shape the probe module declares as
+//! `$holder` (`SO-6`: a host object that is a graph node).
+WASM::HostTypeDefinition holderStruct()
+{
+	return WASM::hostStruct({
+		WASM::hostReferenceField(WASM::ValueTypeCode::AnyRef,
+				/*isNullable*/ true, /*isMutable*/ true),
 	});
 }
 
@@ -147,19 +156,22 @@ TEST_CASE("a definition outside the Wasm vocabulary is refused", "[hostobject][l
 
 // The seam is available (`SO-1`), and its one staging restriction is stated by
 // the interner rather than discovered from a silently leaking object (`SO17`).
-TEST_CASE("the host-type seam is available and refuses reference fields", "[hostobject]")
+TEST_CASE("the host-type seam is available and refuses bridge-owned references", "[hostobject]")
 {
 	CHECK(WASM::hostTypeSupportAvailable());
 
 	WASM::Store store;
-	// A reference field is the leaf-only restriction: the layout knows it, the
-	// interner refuses it until the Store-level graph walk exists.
-	CHECK_THROWS_AS(WASM::internHostType(store, mixedStruct()), std::logic_error);
-	CHECK_THROWS_AS(WASM::HostType::intern(store, mixedStruct()), std::logic_error);
-
 	// An id the registry does not know is not a core type.
 	CHECK_THROWS_AS(WASM::allocateHostStruct(store, WASM::TypeId{0}), std::invalid_argument);
 	CHECK_THROWS_AS(WASM::allocateHostArray(store, WASM::TypeId{0}, 4), std::invalid_argument);
+
+	// A GC reference is the Store's own count, so it interns (`SO-6`); an
+	// `externref` belongs to a host bridge the Store does not own (`SO18`).
+	CHECK_THROWS_AS(WASM::internHostType(store, mixedStruct()), std::logic_error);
+	CHECK_THROWS_AS(WASM::HostType::intern(store, mixedStruct()), std::logic_error);
+	CHECK_NOTHROW(WASM::internHostType(store, holderStruct()));
+	CHECK_NOTHROW(WASM::internHostType(store, WASM::hostStruct({
+			WASM::hostReferenceField(WASM::ValueTypeCode::FuncRef)})));
 
 	const WASM::TypeId leaf = WASM::internHostType(store, leafStruct());
 	// The wrong composite is refused, in both directions.
@@ -308,6 +320,108 @@ TEST_CASE("a host-created object is a guest object (SO-1)", "[hostobject][gc]")
 	// The guest drops its count; the instance queues the object at `refDrop` and
 	// its own safepoint recycles it.
 	CHECK(runtime->callExport<std::int32_t>(instance, "drop_saved") == 1);
+	runtime->safepoint();
+	CHECK(store.gc().liveObjectCount() == before);
+}
+
+// `SO-6`'s acceptance case: a host object is a graph node. The guest stores a
+// reference into it, the host releases its root, and the safepoint walk drops the
+// field's count — so both objects come back to the baseline.
+TEST_CASE("a released host object drops the references it holds (SO-6)", "[hostobject][gc]")
+{
+	auto runtime = WASM::Runtime::create("libjit");
+	REQUIRE(runtime != nullptr);
+	WASM::Store& store = runtime->store();
+
+	const std::filesystem::path path =
+			std::filesystem::path(WASM_TEST_DIR) / "host_object_probe.wasm";
+	auto module = runtime->loadFile(path);
+	REQUIRE(module != nullptr);
+	WASM::RegistryImportResolver imports;
+	WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+
+	const WASM::HostType leaf = WASM::HostType::intern(store, leafStruct());
+	const WASM::HostType holder = WASM::HostType::intern(store, holderStruct());
+	REQUIRE(holder.isInterned());
+	// `$holder` is the module's second declared type; its reference field is the
+	// pointer-sized field at 16, so the object is 24 bytes.
+	CHECK(holder.id() == module->typeId(WASM::LocalTypeIdx{1}));
+	CHECK(holder.layout().totalBytes == 24u);
+	CHECK(holder.fieldOffset(0) == 16u);
+	CHECK(holder.field(0).isReference);
+
+	const std::size_t before = store.gc().liveObjectCount();
+	{
+		WASM::HostObject parent = WASM::HostObject::createStruct(store, holder);
+		WASM::HostObject child = WASM::HostObject::createStruct(store, leaf);
+		REQUIRE(parent.isValid());
+		REQUIRE(child.isValid());
+		child.writeField<std::int32_t>(0, 7);
+
+		// The guest stores the child in the parent, so the field takes a count.
+		CHECK_NOTHROW(runtime->callExport<void>(instance, "set_child",
+				parent.raw(), child.raw()));
+		CHECK(runtime->callExport<std::int32_t>(instance, "has_child", parent.raw()) == 1);
+
+		// The host drops its own child root; the field still holds it.
+		child.reset();
+		runtime->safepoint();
+		CHECK(store.gc().liveObjectCount() == before + 2);
+	}
+	// Releasing the parent queues it; the walk drops the child and recycles both.
+	runtime->safepoint();
+	CHECK(store.gc().liveObjectCount() == before);
+}
+
+// A cycle of host objects is not freed by the Store's release walk — every link
+// keeps a count — but the engine's **trial-deletion** pass still collects it,
+// because a guest field store has already registered a candidate. `SO-6` adds a
+// walk, never a second collector.
+TEST_CASE("a host cycle is collected by the engine's trial-deletion pass", "[hostobject][gc]")
+{
+	auto runtime = WASM::Runtime::create("libjit");
+	REQUIRE(runtime != nullptr);
+	WASM::Store& store = runtime->store();
+
+	const std::filesystem::path path =
+			std::filesystem::path(WASM_TEST_DIR) / "host_object_probe.wasm";
+	auto module = runtime->loadFile(path);
+	REQUIRE(module != nullptr);
+	WASM::RegistryImportResolver imports;
+	WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+
+	const WASM::HostType holder = WASM::HostType::intern(store, holderStruct());
+	REQUIRE(holder.isInterned());
+
+	const std::size_t before = store.gc().liveObjectCount();
+	void* firstRaw = nullptr;
+	void* secondRaw = nullptr;
+	{
+		WASM::HostObject first = WASM::HostObject::createStruct(store, holder);
+		WASM::HostObject second = WASM::HostObject::createStruct(store, holder);
+		REQUIRE(first.isValid());
+		REQUIRE(second.isValid());
+		firstRaw = first.raw();
+		secondRaw = second.raw();
+		CHECK(store.gc().liveObjectCount() == before + 2);
+		CHECK(store.gc().totalAllocations() == 2u);
+		CHECK(store.gc().totalRecycles() == 0u);
+		CHECK_NOTHROW(runtime->callExport<void>(instance, "set_child",
+				first.raw(), second.raw()));
+		CHECK(instance.gcRefCount(secondRaw) == 2u); // host root + first's field
+		CHECK_NOTHROW(runtime->callExport<void>(instance, "set_child",
+				second.raw(), first.raw()));
+		CHECK(instance.gcRefCount(firstRaw) == 2u); // host root + second's field
+	}
+	// Each object holds one count: the other object's field, so nothing reaches
+	// zero and the Store's release queue stays empty.
+	CHECK(instance.gcRefCount(firstRaw) == 1u);
+	CHECK(instance.gcRefCount(secondRaw) == 1u);
+	CHECK(store.gc().liveObjectCount() == before + 2);
+	CHECK(store.gc().totalRecycles() == 0u);
+
+	// The safepoint still collects the cycle: trial deletion owns it, and the
+	// guest's field store registered the candidate. The Store adds no collector.
 	runtime->safepoint();
 	CHECK(store.gc().liveObjectCount() == before);
 }

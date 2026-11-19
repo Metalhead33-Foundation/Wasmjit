@@ -164,11 +164,112 @@ struct Entry {
 };
 
 /*!
+ * \brief One field of a host-registered object descriptor.
+ *
+ * The offset is the **canonical** offset the Store's GC heap uses, header
+ * included, derived from the field types by `WASM::layoutHostType` — never by
+ * `sizeof(T)` (docs/proposals/SYNTHETIC_OBJECTS.md `SOD7`). A descriptor may
+ * assert the offset; validation refuses an assertion that disagrees, and
+ * `toJson()` always writes the derived value.
+ */
+struct ObjectField {
+	std::string name; //!< The field name, unique within the object.
+	ValueType type; //!< The field's Wasm storage type.
+	bool mutableField = false; //!< True for a `mut` field (a WIT setter).
+	bool hasOffset = false; //!< True when the input asserted an offset.
+	std::uint32_t declaredOffset = 0; //!< The asserted offset, when present.
+	std::uint32_t offset = 0; //!< The canonical offset, filled by validation.
+	std::uint32_t bytes = 0; //!< The storage size, filled by validation.
+	bool isReference = false; //!< True for a reference-valued field.
+
+	/*!
+	 * \brief Parses one field descriptor.
+	 * \param json The field object.
+	 * \return The typed field, with the asserted offset when present.
+	 * \throws std::runtime_error when the name is missing or the type is not a
+	 * Wasm storage type.
+	 */
+	static ObjectField fromJson(const nlohmann::ordered_json& json);
+
+	/*!
+	 * \brief Formats the field with its derived offset and size.
+	 * \return The ordered JSON object.
+	 */
+	nlohmann::ordered_json toJson() const;
+};
+
+/*!
+ * \brief One method of a host-registered object descriptor.
+ *
+ * A method is metadata: it names a signature the host implements as a
+ * trampoline. The tool emits the shape; it never invents an implementation.
+ */
+struct ObjectMethod {
+	std::string name; //!< The method name.
+	std::vector<ValueType> params; //!< The method's parameters.
+	std::vector<ValueType> results; //!< The method's results.
+
+	/*!
+	 * \brief Parses one method descriptor.
+	 * \param json The method object.
+	 * \return The typed method.
+	 * \throws std::runtime_error when the name is missing or a type is unknown.
+	 */
+	static ObjectMethod fromJson(const nlohmann::ordered_json& json);
+
+	/*!
+	 * \brief Formats the method for schema interchange.
+	 * \return The ordered JSON object.
+	 */
+	nlohmann::ordered_json toJson() const;
+};
+
+/*!
+ * \brief A host-registered object type: name, version, fields and methods.
+ *
+ * This is the "Poor Man's Reflection" table of
+ * docs/proposals/SYNTHETIC_OBJECTS.md A.14.5: host metadata that a generator can
+ * walk, never RTTI. The tool consumes it and never produces it — the host writes
+ * it, by hand or with a builder — and it carries no engine `TypeId`: identity is
+ * the Store's structural `TypeId`, and a name is only a lookup key (A.14.2).
+ */
+struct ObjectDescriptor {
+	std::string name; //!< The descriptor name, for example `demo.Widget`.
+	std::uint32_t version = 1; //!< The descriptor version; a change is a new type.
+	std::string parent; //!< The optional parent descriptor name.
+	std::vector<std::string> interfaces; //!< The optional interface names.
+	std::vector<ObjectField> fields; //!< The field table.
+	std::vector<ObjectMethod> methods; //!< The method table.
+	std::uint32_t size = 0; //!< The canonical object size, filled by validation.
+	nlohmann::ordered_json raw; //!< The original object, for open-ended fields.
+
+	/*!
+	 * \brief Parses one object descriptor.
+	 * \param json The object descriptor.
+	 * \return The typed descriptor, before layout validation.
+	 * \throws std::runtime_error when the name or version is missing.
+	 */
+	static ObjectDescriptor fromJson(const nlohmann::ordered_json& json);
+
+	/*!
+	 * \brief Formats the descriptor with its derived layout.
+	 * \return The ordered JSON object.
+	 */
+	nlohmann::ordered_json toJson() const;
+};
+
+/*!
  * \brief A complete binding schema, with typed function entries.
  *
  * Component value/type payloads remain JSON because the schema intentionally
  * carries open-ended component structures; every value the emitters call is
  * available through \c Entry and \c ValueType.
+ *
+ * The `objects` section is the `wasmjit.binding/2` addition
+ * (docs/proposals/SYNTHETIC_OBJECTS.md A.14.5). It is consumed, never produced:
+ * a schema projected from a module or component leaves it empty, and
+ * `toJson()` bumps the envelope to `/2` only when an object is present, so a
+ * `/1` consumer keeps working.
  */
 struct Schema {
 	std::string id = "wasmjit.binding/1"; //!< The schema identifier.
@@ -178,13 +279,16 @@ struct Schema {
 	std::vector<Entry> imports; //!< Import entries.
 	std::vector<Entry> exports; //!< Export entries.
 	nlohmann::ordered_json types = nlohmann::ordered_json::array(); //!< Type definitions.
+	std::vector<ObjectDescriptor> objects; //!< Host-registered object descriptors (`/2`).
 	nlohmann::ordered_json extras = nlohmann::ordered_json::object(); //!< Other envelope fields.
 
 	/*!
 	 * \brief Parses a schema from JSON.
 	 * \param json The schema object.
-	 * \return The typed schema.
-	 * \throws std::runtime_error when the identifier or direction is invalid.
+	 * \return The typed schema, with every object offset already validated
+	 * against the canonical layout.
+	 * \throws std::runtime_error when the identifier, direction or an object
+	 * descriptor is invalid, or when an `objects` section is not `wasmjit.binding/2`.
 	 */
 	static Schema fromJson(const nlohmann::ordered_json& json);
 

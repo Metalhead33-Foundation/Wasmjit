@@ -110,17 +110,40 @@ std::vector<CanonFieldType> canonicalFields(const HostTypeDefinition& definition
 	return fields;
 }
 
-//! True when the definition contains a reference-valued field, which the
-//! Store-level release path cannot walk yet (`SO17`).
-bool hasReferenceField(const HostTypeDefinition& definition)
+//! True when `code` is a reference whose count the Store itself can release.
+//!
+//! A GC reference points into this Store's heap, so the safepoint walk drops it
+//! with the same arithmetic the instance path uses. An `externref` is counted by
+//! a *host bridge* the Store does not own, and an `exnref`/`contref` belongs to
+//! the exception/continuation machinery, so a field of either would leave a
+//! count behind when the object dies (`SO18`).
+const char* uncountedReference(const ValueTypeCode code)
 {
-	if (definition.kind == HostTypeKind::Array)
-		return isReferenceStorage(definition.element.storage);
-	for (const HostFieldDefinition& field : definition.fields) {
-		if (isReferenceStorage(field.storage))
-			return true;
+	switch (code) {
+	case ValueTypeCode::ExternRef:
+	case ValueTypeCode::NullExternRef: return "externref";
+	case ValueTypeCode::ExnRef:
+	case ValueTypeCode::NullExnRef: return "exnref";
+	case ValueTypeCode::ContRef: return "contref";
+	default: return nullptr;
 	}
-	return false;
+}
+
+//! The first uncounted reference field of a definition, or null.
+const char* uncountedReferenceField(const HostTypeDefinition& definition)
+{
+	if (definition.kind == HostTypeKind::Array) {
+		if (isReferenceStorage(definition.element.storage))
+			return uncountedReference(definition.element.storage);
+		return nullptr;
+	}
+	for (const HostFieldDefinition& field : definition.fields) {
+		if (!isReferenceStorage(field.storage))
+			continue;
+		if (const char* name = uncountedReference(field.storage))
+			return name;
+	}
+	return nullptr;
 }
 
 //! Converts one field to the parser's `FieldType`, the form the canonicalizer
@@ -199,11 +222,14 @@ TypeId internHostType(Store& store, const HostTypeDefinition& definition)
 	// Validate first: the layout function is the shared validator, so a malformed
 	// definition is rejected before the registry sees it.
 	(void)layoutHostType(definition);
-	// Leaf-only staging: a reference field would need a Store-level graph walk on
-	// release, and a half-walk would leak the children's counts (`SO17`).
-	if (hasReferenceField(definition))
-		notImplemented("internHostType",
-				"host types with a reference field are not supported yet (SO17)");
+	// A reference field is collectable when its count is this Store's (`SO-6`).
+	// A bridge- or continuation-owned reference is not, and a half-walk would
+	// leave that count behind (`SO18`).
+	if (const char* uncounted = uncountedReferenceField(definition)) {
+		notImplemented("internHostType", (std::string("a field holding '")
+				+ uncounted + "' is not supported yet: its count belongs to the"
+				" host bridge, which the Store does not own (SO18)").c_str());
+	}
 
 	Subtype subtype{};
 	subtype.isFinal = definition.isFinal;

@@ -24,9 +24,10 @@
 
   **Status (`SO-1`, 2026-11-18).** `HostType` and `HostObject` are usable:
   interning, allocation, the layout/offset accessors and the RAII count work
-  through `WasmHostType.hpp`. One staging restriction carries over — a type with a
-  reference field cannot be interned yet (`SO17`), so a `HostObject` is a leaf;
-  the data accessors refuse a reference field in any case.
+  through `WasmHostType.hpp`. A reference field may be interned when its count is
+  the Store's (the safepoint walk drops it, `SO-6`); the data accessors still
+  refuse one in any case, because reading or writing that word as data would
+  bypass the engine's count.
 
   This header is part of the exported surface: every declaration in it
   is exported (docs/EMBEDDING_SURFACE.md ES-4).

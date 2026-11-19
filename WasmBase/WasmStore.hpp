@@ -263,14 +263,15 @@ public:
 	//! one count (A.14.3/A.14.4). These are the unergonomic entry points;
 	//! `WasmHostObject.hpp` wraps them in `HostType`/`HostObject`.
 	//!
-	//! **Leaf types only, for now.** Interning refuses a type with a reference
-	//! field (`SO17`): releasing such a graph needs a Store-level walk, and a
-	//! half-walk would leak the children's counts. The definition and the layout
-	//! still describe references; allocation does not accept such a type.
-	//!
 	//! A fresh object is **unowned** (count 0), exactly like the instance path:
 	//! the caller retains it once to hold a root, and a guest that stores it
 	//! retains it through the normal barriers.
+	//!
+	//! A field may be a **GC reference**: releasing the object at a safepoint
+	//! drops each reference it holds, so a host-created graph is collectable
+	//! (`SO-6`). A reference whose count belongs to a host bridge or the
+	//! continuation machinery (`externref`, `exnref`, `contref`) is refused at
+	//! interning instead, because the Store cannot release that count (`SO18`).
 
 	/** \brief Allocates an unowned struct object of an interned core type. \param type Canonical identity of a struct type. \return The object, with its `TypeId` stamped and its count at zero. \throws std::invalid_argument when `type` is not a canonical struct type. \throws std::bad_alloc when the GC budget refuses the allocation. */
 	void* allocateHostStruct(TypeId type);
@@ -292,7 +293,22 @@ public:
 	//! A safepoint operation, like `ModuleInstance::gcCollect`: call it when no
 	//! Wasm frame is live. `Runtime::safepoint()` drains it, and only when no
 	//! instance is in a call — a live frame may hold an uncounted borrow.
-	/** \brief Recycles host objects released since the last safepoint. */
+	//!
+	//! The drain is a **walk**, not a list of blocks: before a released object is
+	//! recycled, each reference field or element it holds gives up one count, and
+	//! a child that reaches zero joins the same iterative work list. That is what
+	//! makes a host-created graph collectable (`SO-6`). A non-heap reference
+	//! (`funcref`) is skipped — it has no count — and a host-owned reference
+	//! (`externref`) cannot be a field of an interned host type for the same
+	//! reason: the Store has no bridge to release it (`SO18`).
+	//!
+	//! A cycle of host objects is **not** freed by this walk — every link keeps a
+	//! count — but it is still collected at a safepoint: the instance's
+	//! trial-deletion pass owns cycles, and a guest field store has already
+	//! registered the candidate. The Store adds a walk, never a second collector;
+	//! a cycle built with no instance release at all would be a host-side leak
+	//! until Store teardown (A.14.4).
+	/** \brief Recycles host objects released since the last safepoint, dropping their references. */
 	void collectHostObjects();
 
 	//! \par Strings (docs/proposals/STRINGREF.md)
@@ -710,12 +726,30 @@ private:
 	//! because a host object belongs to the Store, not to an instance
 	//! (A.14.3/A.14.4). The set is created lazily and released by `~Store`.
 	GcHeap::RegionSet* hostObjectSet_ = nullptr; //!< lazily created host region set
-	std::vector<void*> hostObjectQueue_; //!< released objects awaiting a safepoint
+
+	//! One released object waiting for a safepoint.
+	//!
+	//! The `TypeId` is captured before `releaseHostObject` stamps the header: the
+	//! walk needs the canonical type to find the object's child slots, exactly as
+	//! `ModuleInstance::PendingGcObject` keeps it for the instance path.
+	struct PendingHostObject {
+		void* object = nullptr; //!< the released object
+		TypeId type = TypeId{TypeId::kNone}; //!< its canonical type, read before the stamp
+	};
+
+	std::vector<PendingHostObject> hostObjectQueue_; //!< released objects awaiting a safepoint
 	mutable std::mutex hostObjectMutex_; //!< guards the two members above
 
 	//! Creates `hostObjectSet_` on first use.
 	/** \brief Returns the Store-owned region set host objects are allocated from. \return The host region set, created on first use. */
 	GcHeap::RegionSet& hostRegionSet();
+	//! Collects the reference slots of one host object.
+	//!
+	//! The same offset arithmetic `ModuleInstance::childSlotsOf` uses
+	//! (`gcStructFieldOffset`/`gcArrayDataOffset`), so the two walks cannot
+	//! disagree about where a field or element is.
+	/** \brief Appends the reference-valued slots of one host object. \param object The object to inspect. \param type Its canonical type, captured before recycling. \param slots Receives one address per reference field or element. */
+	void hostChildSlots(void* object, TypeId type, std::vector<std::uint8_t*>& slots);
 
 	//! Host-owned string objects (STRINGREF.md). Never freed before teardown.
 	StringStore stringStore{ *this };

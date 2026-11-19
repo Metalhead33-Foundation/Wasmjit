@@ -164,6 +164,7 @@ SOURCES += main.cpp \
     ../Tools/Bindings/BindingModel.cpp \
     ../Tools/Bindings/BindingSchema.cpp \
     ../Tools/Bindings/Emit.cpp \
+    ../Tools/Bindings/EmitObjects.cpp \
     ../Tools/Bindings/EmitShared.cpp \
     ../Tools/Bindings/EmitRust.cpp \
     ../Tools/Bindings/EmitWeb.cpp \

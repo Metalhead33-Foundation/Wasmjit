@@ -2571,3 +2571,252 @@ testStore().types(), WASM::Bindings::Direction::HostToGuest, "v128_param");
 		CHECK(text.find("arg0_lo") == std::string::npos);
 	}
 }
+namespace {
+
+//! A `wasmjit.binding/2` schema: the object section is input the generator
+//! consumes and never produces (docs/proposals/SYNTHETIC_OBJECTS.md A.14.5).
+Json objectSchema()
+{
+	return Json::parse(R"({
+		"schema": "wasmjit.binding/2",
+		"direction": "all",
+		"module": "demo",
+		"objects": [
+			{ "name": "demo.Widget", "version": 1,
+			  "parent": "demo.Base",
+			  "interfaces": ["demo.Sized"],
+			  "fields": [
+				{ "name": "x", "type": "i32" },
+				{ "name": "y", "type": "i32", "mutable": true },
+				{ "name": "label", "type": { "type": "ref", "heap": "extern" } },
+				{ "name": "target", "type": { "type": "ref", "heap": "defined", "name": "demo.Node" }, "mutable": true }
+			  ],
+			  "methods": [
+				{ "name": "resize", "params": ["i32", "i32"], "results": [] },
+				{ "name": "area", "params": [], "results": ["i32"] },
+				{ "name": "attach", "params": [ { "type": "ref", "heap": "defined", "name": "demo.Node" } ], "results": [] },
+				{ "name": "blit", "params": ["v128"], "results": [] }
+			  ] },
+			{ "name": "demo.Node", "version": 1,
+			  "fields": [ { "name": "kind", "type": "i8" } ] },
+			{ "name": "demo.Widget", "version": 2,
+			  "fields": [ { "name": "x", "type": "i32" } ] }
+		],
+		"imports": [], "exports": []
+	})");
+}
+
+} // namespace
+
+TEST_CASE("a v2 schema validates object offsets against the canonical layout", "[bindings][objects]")
+{
+	const WASM::Bindings::Schema schema = WASM::Bindings::Schema::fromJson(objectSchema());
+	CHECK(schema.id == "wasmjit.binding/2");
+	REQUIRE(schema.objects.size() == 3u);
+
+	const WASM::Bindings::ObjectDescriptor& widget = schema.objects[0];
+	CHECK(widget.name == "demo.Widget");
+	CHECK(widget.version == 1u);
+	CHECK(widget.parent == "demo.Base");
+	REQUIRE(widget.interfaces.size() == 1u);
+	CHECK(widget.interfaces[0] == "demo.Sized");
+	REQUIRE(widget.fields.size() == 4u);
+	// Header 16: i32, i32, a pointer-aligned reference at 24 and another at 32.
+	CHECK(widget.fields[0].offset == 16u);
+	CHECK(widget.fields[1].offset == 20u);
+	CHECK(widget.fields[1].bytes == 4u);
+	CHECK(widget.fields[1].mutableField);
+	CHECK(widget.fields[2].offset == 24u);
+	CHECK(widget.fields[2].bytes == 8u);
+	CHECK(widget.fields[2].isReference);
+	CHECK(widget.fields[3].offset == 32u);
+	CHECK(widget.fields[3].isReference);
+	CHECK(widget.size == 40u);
+	REQUIRE(widget.methods.size() == 4u);
+	CHECK(widget.methods[0].params.size() == 2u);
+	CHECK(widget.methods[2].params.size() == 1u);
+	// A packed field is one byte and the object is `header + 1`.
+	CHECK(schema.objects[1].fields[0].bytes == 1u);
+	CHECK(schema.objects[1].size == 17u);
+	// Two versions of one name are two descriptors, not a dedup.
+	CHECK(schema.objects[2].version == 2u);
+	CHECK(schema.objects[2].size == 20u);
+
+	// The interchange form carries the derived facts, not the asserted ones.
+	const Json out = schema.toJson();
+	CHECK(out.at("schema") == "wasmjit.binding/2");
+	REQUIRE(out.at("objects").size() == 3u);
+	CHECK(out.at("objects")[0].at("size") == 40u);
+	CHECK(out.at("objects")[0].at("fields")[1].at("offset") == 20u);
+	CHECK(out.at("objects")[0].at("fields")[2].at("reference") == true);
+	CHECK(out.at("objects")[0].at("methods")[0].at("name") == "resize");
+
+	// A `/1` schema keeps its version and gains no empty section.
+	const Json one = Json::parse(R"({
+		"schema": "wasmjit.binding/1", "direction": "g2h", "module": "m",
+		"imports": [], "exports": [] })");
+	const Json oneOut = WASM::Bindings::Schema::fromJson(one).toJson();
+	CHECK(oneOut.at("schema") == "wasmjit.binding/1");
+	CHECK_FALSE(oneOut.contains("objects"));
+}
+
+TEST_CASE("the object section is refused when its version or layout disagrees", "[bindings][objects]")
+{
+	using WASM::Bindings::Schema;
+	const auto failure = [](const Json& input) {
+		try {
+			(void)Schema::fromJson(input);
+		} catch (const std::runtime_error& error) {
+			return std::string(error.what());
+		}
+		return std::string();
+	};
+
+	Json unknown = objectSchema();
+	unknown["schema"] = "wasmjit.binding/3";
+	CHECK(failure(unknown).find("wasmjit.binding/2") != std::string::npos);
+
+	Json mislabelled = objectSchema();
+	mislabelled["schema"] = "wasmjit.binding/1";
+	CHECK(failure(mislabelled).find("requires wasmjit.binding/2") != std::string::npos);
+
+	Json shifted = objectSchema();
+	shifted["objects"][0]["fields"][1]["offset"] = 8;
+	CHECK(failure(shifted).find("canonical offset 20") != std::string::npos);
+
+	Json duplicate = objectSchema();
+	duplicate["objects"][2]["version"] = 1;
+	CHECK(failure(duplicate).find("declared twice") != std::string::npos);
+
+	Json badType = objectSchema();
+	badType["objects"][1]["fields"][0]["type"] = "string";
+	CHECK(failure(badType).find("not a Wasm storage type") != std::string::npos);
+}
+
+TEST_CASE("one object descriptor reaches the C, Rust and WIT emitters", "[bindings][objects]")
+{
+	const WASM::Bindings::Schema schema = WASM::Bindings::Schema::fromJson(objectSchema());
+
+	const std::string header = WASM::Bindings::emitCHeader(schema);
+	CHECK(header.find("Generated from the wasmjit.binding/2") != std::string::npos);
+	CHECK(header.find("typedef struct wasmjit_object_meta_field {") != std::string::npos);
+	CHECK(header.find("typedef struct wasmjit_object_demo_widget_v1 wasmjit_object_demo_widget_v1;")
+			!= std::string::npos);
+	CHECK(header.find("#define WASMJIT_OBJECT_DEMO_WIDGET_V1_VERSION 1u") != std::string::npos);
+	CHECK(header.find("#define WASMJIT_OBJECT_DEMO_WIDGET_V1_SIZE 40u") != std::string::npos);
+	CHECK(header.find("#define WASMJIT_OBJECT_DEMO_WIDGET_V1_FIELD_TARGET 32u") != std::string::npos);
+	CHECK(header.find("wasmjit_object_demo_widget_v1_resize_fn") != std::string::npos);
+	CHECK(header.find("wasmjit_object_demo_widget_v1_attach_fn)(wasmjit_object_demo_widget_v1* self,"
+			" wasmjit_object_demo_node_v1*)") != std::string::npos);
+	CHECK(header.find("static const wasmjit_object_meta wasmjit_object_demo_widget_v1_meta")
+			!= std::string::npos);
+	CHECK(header.find("\"demo.Widget\", 1u, 40u, \"demo.Base\"") != std::string::npos);
+	CHECK(header.find("\"target\", 32u, 8u, 1u, 1u") != std::string::npos);
+
+	const std::string rust = WASM::Bindings::emitRustModule(schema);
+	CHECK(rust.find("pub const WASMJIT_OBJECT_DEMO_WIDGET_V1_FIELD_TARGET: u32 = 32;")
+			!= std::string::npos);
+	CHECK(rust.find("pub static WASMJIT_OBJECT_DEMO_WIDGET_V1: wasmjit_object_meta")
+			!= std::string::npos);
+	CHECK(rust.find("pub type wasmjit_object_demo_widget_v1_attach_fn = unsafe extern \"C\" fn("
+			"*mut wasmjit_object_demo_widget_v1, *mut wasmjit_object_demo_node_v1)")
+			!= std::string::npos);
+	CHECK(rust.find("parent: Some(\"demo.Base\")") != std::string::npos);
+
+	const std::string wit = WASM::Bindings::emit(schema, WASM::Bindings::Language::Wit);
+	CHECK(wit.find("interface types {") != std::string::npos);
+	CHECK(wit.find("resource demo-widget-v1 {") != std::string::npos);
+	CHECK(wit.find("resource demo-widget-v2 {") != std::string::npos);
+	CHECK(wit.find("resource demo-node-v1 {") != std::string::npos);
+	CHECK(wit.find("x: func() -> s32;") != std::string::npos);
+	CHECK(wit.find("set-y: func(value: s32);") != std::string::npos);
+	CHECK(wit.find("attach: func(p0: borrow<demo-node-v1>);") != std::string::npos);
+	CHECK(wit.find("area: func() -> s32;") != std::string::npos);
+	// What WIT cannot say is documented in the emitted file, not dropped silently.
+	CHECK(wit.find("label: a reference that is not another host object")
+			!= std::string::npos);
+	CHECK(wit.find("target: a reference field has no WIT getter") != std::string::npos);
+	// A mutable reference field still gets the setter WIT can express.
+	CHECK(wit.find("set-target: func(value: borrow<demo-node-v1>);") != std::string::npos);
+	CHECK(wit.find("blit: `v128` parameter") != std::string::npos);
+	// A packed byte is a WIT `s8`, and a packed field is one byte in the table.
+	CHECK(wit.find("kind: func() -> s8;") != std::string::npos);
+	CHECK(header.find("#define WASMJIT_OBJECT_DEMO_NODE_V1_SIZE 17u") != std::string::npos);
+
+	// Without objects the emitters are byte-for-byte what they were.
+	const Json plain = Json::parse(R"({
+		"schema": "wasmjit.binding/1", "direction": "all", "module": "m",
+		"imports": [], "exports": [] })");
+	const std::string plainHeader =
+			WASM::Bindings::emit(plain, WASM::Bindings::Language::CHeader);
+	CHECK(plainHeader.find("wasmjit_object_meta") == std::string::npos);
+	CHECK(plainHeader.find("Generated from the wasmjit.binding/1") != std::string::npos);
+}
+
+TEST_CASE("generated object bindings compile and their WIT is accepted", "[bindings][objects]")
+{
+	const WASM::Bindings::Schema schema = WASM::Bindings::Schema::fromJson(objectSchema());
+	const std::filesystem::path dir = bindingsDir();
+	const std::filesystem::path headerPath = dir / "demo_objects.h";
+	const std::filesystem::path cSourcePath = dir / "demo_objects.c";
+	const std::filesystem::path cLogPath = dir / "demo_objects_gcc.log";
+	const std::filesystem::path rustPath = dir / "demo_objects.rs";
+	const std::filesystem::path rustLogPath = dir / "demo_objects_rustc.log";
+	const std::filesystem::path witPath = dir / "demo_objects.wit";
+	const std::filesystem::path witJsonPath = dir / "demo_objects.wit.json";
+	const std::filesystem::path witLogPath = dir / "demo_objects_wit.log";
+
+	{
+		std::ofstream header(headerPath, std::ios::binary);
+		header << WASM::Bindings::emitCHeader(schema);
+		// A translation unit that really uses the table: a declaration that is
+		// merely included and never referenced proves too little.
+		std::ofstream source(cSourcePath, std::ios::binary);
+		source << "#include \"demo_objects.h\"\n"
+				  "static const wasmjit_object_meta* demo_meta(void)\n"
+				  "{\n"
+				  "    return &wasmjit_object_demo_widget_v1_meta;\n"
+				  "}\n"
+				  "int main(void)\n"
+				  "{\n"
+				  "    return (int)(demo_meta()->size\n"
+				  "            + WASMJIT_OBJECT_DEMO_WIDGET_V1_FIELD_TARGET\n"
+				  "            + WASMJIT_OBJECT_DEMO_WIDGET_V1_SIZE);\n"
+				  "}\n";
+		std::ofstream rust(rustPath, std::ios::binary);
+		rust << WASM::Bindings::emitRustModule(schema);
+		std::ofstream wit(witPath, std::ios::binary);
+		wit << WASM::Bindings::emit(schema, WASM::Bindings::Language::Wit);
+	}
+
+	if (haveTool("gcc --version > /dev/null 2>&1")) {
+		const std::string command = "gcc -std=c11 -fsyntax-only -I\"" + dir.string()
+				+ "\" \"" + cSourcePath.string() + "\" > \"" + cLogPath.string()
+				+ "\" 2>&1";
+		INFO(readText(cLogPath));
+		REQUIRE(std::system(command.c_str()) == 0);
+	} else {
+		WARN("gcc not found; skipped the generated object header compile check");
+	}
+
+	if (haveTool("rustc --version > /dev/null 2>&1")) {
+		const std::filesystem::path rustLib = dir / "demo_objects.rlib";
+		const std::string command = "rustc --crate-type lib --edition 2021 \""
+				+ rustPath.string() + "\" -o \"" + rustLib.string() + "\" > \""
+				+ rustLogPath.string() + "\" 2>&1";
+		INFO(readText(rustLogPath));
+		REQUIRE(std::system(command.c_str()) == 0);
+	} else {
+		WARN("rustc not found; skipped the generated object Rust compile check");
+	}
+
+	if (!haveTool("command -v wasm-tools > /dev/null 2>&1")) {
+		WARN("wasm-tools not found; skipped the object WIT parse check");
+		return;
+	}
+	const std::string command = "wasm-tools component wit '" + witPath.string()
+			+ "' --json > '" + witJsonPath.string() + "' 2> '"
+			+ witLogPath.string() + "'";
+	INFO(readText(witLogPath));
+	REQUIRE(std::system(command.c_str()) == 0);
+}

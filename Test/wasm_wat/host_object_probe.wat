@@ -29,4 +29,18 @@
   ;; Releases the global's count; the object dies at the next safepoint.
   (func (export "drop_saved") (result i32)
     (global.set $saved (ref.null $pair))
-    (i32.const 1)))
+    (i32.const 1))
+
+  ;; ── A holder: one mutable `anyref` ────────────────────────────────────────
+  ;; The host can build a two-object graph through these, so the Store's release
+  ;; walk has a reference to drop (`SO-6`). The field's count is the field's.
+  (type $holder (struct (field (mut anyref))))
+
+  (func (export "set_child") (param $h (ref $holder)) (param $child anyref)
+    (struct.set $holder 0 (local.get $h) (local.get $child)))
+
+  (func (export "clear_child") (param $h (ref $holder))
+    (struct.set $holder 0 (local.get $h) (ref.null any)))
+
+  (func (export "has_child") (param $h (ref $holder)) (result i32)
+    (i32.eqz (ref.is_null (struct.get $holder 0 (local.get $h))))))

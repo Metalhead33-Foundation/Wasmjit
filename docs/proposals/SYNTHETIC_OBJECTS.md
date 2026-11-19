@@ -2,7 +2,7 @@
 
 *Host-Registered Object Types, the GObject Precedent, and What the Component Model Already Covers*
 
-Status: design note / implementation reference (**revision 3 — 2026-11-18**). This
+Status: design note / implementation reference (**revision 5 — 2026-11-18**). This
 is `EMBEDDING_SURFACE.md` §16 promoted to a note of its own: that section had grown
 into a six-hundred-line study inside an implementation reference, and the
 reference now keeps only the embedder-facing half. Revision 1 recorded a boundary —
@@ -16,6 +16,12 @@ model, its descriptors, its dispatch and its reflection stay outside `WasmBase/`
 host type interns through the same canonicalizer a module uses, the Store allocates
 its instances, and the count is the engine's one count; interning a **reference
 field** stays refused until the Store-level release walk lands (`SO17`, `SO-6`).
+**Revision 4 adds the descriptor and the schema (`SO-2`)**: `wasmjit.binding/2`
+carries an `objects` section whose offsets are validated against the engine's own
+layout and which the generator projects into versioned C, Rust and WIT artifacts.
+**Revision 5 completes the engine seam (`SO-6`)**: a host object may hold GC
+references, and releasing it at a safepoint drops them; a bridge-owned reference
+field is the one remaining limit (`SO18`).
 The `externref` + `HostBridge`
 path is unchanged and remains the answer for truly opaque host objects; the new
 path is a second, opt-in one for objects that are **expressible in Wasm**.
@@ -23,7 +29,7 @@ path is a second, opt-in one for objects that are **expressible in Wasm**.
 Audience: anyone designing a cross-language object layer, anyone asking whether
 “C can use a Wasm GC object” is an engine gap ([`../SCOPE.md`](../SCOPE.md) §3.2),
 anyone extending the generator plan of [`../EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md)
-§11/§14, and the implementer of `SO-2`…`SO-6`.
+§11/§14, and the implementer of `SO-3`…`SO-5`.
 
 Follows the same split as [`COMPONENT_MODEL.md`](COMPONENT_MODEL.md) and
 [`TYPE_MODEL.md`](TYPE_MODEL.md). **Appendix A** carries the study itself, at the
@@ -414,14 +420,14 @@ originate a type that no module declared**: `internModule` consumes a parser's
 
 | Not shipped | Why | Where it goes |
 |---|---|---|
-| a reference field in a host type | the Store-level release walk is not written; a half-walk would leak the children's counts | `SO-6` (`SO17`) |
-| a descriptor registry and its versioning | host metadata, not engine metadata | `SO-2` (host + tool) |
-| object entries in the binding schema | the envelope carries imports/exports only | `SO-2` (tool) |
+| a reference field whose count is not the Store's (`externref`, `exnref`, `contref`) | a host bridge or the continuation machinery owns that count, and the Store has neither | `SO18`; documented limit of the engine seam |
 | dynamic properties, signals, a nominal class tree | product policy, and no common core | stays out, permanently (`SOD6`) |
 | a C++ class, RTTI, a destructor, a C++ layout | the §2.6 constraint | stays out, permanently |
+| a *runtime* descriptor registry in the engine | the tool's tables are host metadata; a Store-owned registry would be a second object model | stays out (`SOD6`); the host owns the map (`SO-3`) |
 
-The last two rows are the boundary that survives revision 2. The first three are
-gaps with IDs, not boundaries (§5).
+The last three rows are the boundary that survives revision 2. The first row is a
+narrower staging limit than revision 2's blanket rule: a **GC** reference field is
+a graph edge the Store can walk (`SO-6`), while a bridge-owned one is not.
 
 ### 4.4 The seam, implemented (`SO-1`, 2026-11-18)
 
@@ -443,11 +449,88 @@ the header), and `save` stores it so the object survives the host's release.
 `liveObjectCount()` pins both counts: one object while the guest holds it, none
 after `drop_saved` and a safepoint. `SO13` and `SO16` are closed by this.
 
-**The one restriction.** `internHostType` refuses a definition with a reference
-field (`SO17`, milestone `SO-6`): releasing such a graph needs a Store-level walk,
-and recycling without it would leak the children's counts. The definition and
-`layoutHostType` still describe references, because `SO-2`'s descriptor and
-`SO-5`'s arena need that metadata; only *interning* is gated.
+**The remaining limit.** `internHostType` accepts a reference field whose count is
+this Store's — any/eq/i31/struct/array/none/defined, plus the uncounted `funcref` —
+and refuses one whose count belongs to a host bridge or the continuation machinery
+(`externref`, `exnref`, `contref`; `SO18`), because the Store has no bridge to
+release it. The definition and `layoutHostType` describe both, because `SO-2`'s
+descriptor and `SO-5`'s arena need the metadata; only *interning* is gated.
+
+### 4.5 The descriptor and the schema (`SO-2`, 2026-11-18)
+
+The descriptor is shipped as *tooling*, which is what A.14.5 asked for: the host
+writes the table, the generator consumes it, and `WasmBase/` gains nothing.
+
+| Piece | Where | What it does |
+|---|---|---|
+| **the model** | [`../../Tools/Bindings/BindingModel.hpp`](../../Tools/Bindings/BindingModel.hpp) | `ObjectField`, `ObjectMethod`, `ObjectDescriptor` and `Schema::objects`, parsed from and formatted to the `wasmjit.binding/2` envelope |
+| **the validator** | `Schema::fromJson` | builds a `WASM::HostTypeDefinition` from each descriptor and calls **`WASM::layoutHostType`** — the `SO-1` function — so the offsets are the heap's, not a second implementation |
+| **the emitters** | [`../../Tools/Bindings/EmitObjects.hpp`](../../Tools/Bindings/EmitObjects.hpp) | one versioned block per `(name, version)` in the C header, the Rust module and WIT |
+
+**The load-time checks** (all `std::runtime_error`, all pinned by tests): an
+unknown envelope version; an `objects` section under `/1`; a declared `offset`
+that disagrees with the canonical one (the message names both numbers); a repeated
+`(name, version)`; and a field type outside the Wasm storage vocabulary. `offset`
+is an *assertion*, so a hand-written descriptor may omit it — the tool derives it
+and writes it back.
+
+**The version rule.** Every emitted symbol carries the version
+(`wasmjit_object_demo_widget_v1`, `demo-widget-v1`), and the C/Rust descriptor
+tables carry `name` and `version` beside the offsets. Two versions of one name are
+two blocks and two tables, so a host can compare the version it registered against
+the one it was generated for and refuse a mismatch at load — A.14.2's
+`(name, version) -> TypeId` map, on the host's side where it belongs.
+
+**What WIT cannot say is noted, not dropped.** WIT forbids returning a
+`borrow<T>`, so a reference field gets no getter (a mutable one gets a setter); a
+non-object reference, a `v128` member and a member with more than one result are
+each replaced by a `///` note in the emitted file. `parent` and `interfaces` are
+carried in the model, the JSON and the comments, but they are not Wasm type
+relations and WIT has no inheritance, so nothing structural is emitted for them.
+
+Evidence: `Test/BindingSchemaTests.cpp` (`[bindings][objects]`, four cases) takes
+one descriptor source and checks the canonical offsets, every refusal above, and
+the three artifacts — the C header is compiled by `gcc`, the Rust module by
+`rustc`, and the WIT is parsed by `wasm-tools component wit` when those tools are
+present. `SO11` and `SO14` are closed by this.
+
+### 4.6 Reference-field graphs (`SO-6`, 2026-11-18)
+
+`SO17`'s blanket refusal is gone: a host object may hold **GC references**, and
+releasing it drops them. The walk is the only new mechanism; it is not a second
+collector.
+
+| Piece | Where | What it does |
+|---|---|---|
+| **the queue entry** | `Store::PendingHostObject` | carries the object *and* the `TypeId` captured before the tag is stamped, because the walk needs the canonical type |
+| **the slots** | `Store::hostChildSlots` | the same offsets `ModuleInstance::childSlotsOf` uses (`gcStructFieldOffset`, `gcArrayDataOffset`, `gcStorageBytes`), skipping packed fields and non-reference kinds |
+| **the walk** | `Store::collectHostObjects` | iterative (`work` grows as children reach zero), with a resurrection check and the reclaimed tag as the "already queued" mark — so a self-edge or a diamond cannot queue a block twice |
+
+**The counts.** A host object starts at 0 (`SO-1`), the host's handle is one count,
+and a guest that stores the object into a field takes another. Releasing the
+host's root leaves the field's count, so the object survives; releasing it later
+queues it, and the walk drops the child — which may queue the child in turn. That
+is exactly the acceptance case: `liveObjectCount()` returns to its baseline only
+after the whole graph is gone, and `ModuleInstance::gcRefCount` pins the
+intermediate counts.
+
+**Cycles.** A cycle is *not* freed by this walk — every link keeps a count — but it
+is still collected at a safepoint, by the instance's existing **trial-deletion**
+pass: a guest field store is a `refDrop`, which registers the candidate, and the
+trial pass handles any object in the Store's heap. The Store adds a walk, never a
+second collector; a cycle built with no instance release at all would be a
+host-side leak until Store teardown, which is recorded rather than hidden (A.14.4).
+
+**The remaining limit** is `SO18`: an `externref`/`exnref`/`contref` field is
+refused at interning, because its count belongs to a host bridge or the
+continuation machinery and the Store owns neither. A `funcref` field is accepted:
+it carries no count.
+
+Evidence: `Test/HostObjectTests.cpp` (`[hostobject][gc]`) — the graph case builds
+`holder -> leaf` through the guest, releases the roots in the order that matters,
+and pins `liveObjectCount()` at `+2` (the field's count) and back to the baseline;
+the cycle case pins `gcRefCount` 2/2 → 1/1, an empty release queue
+(`totalRecycles() == 0`) and the safepoint's collection.
 
 ## 5. Gaps
 
@@ -469,13 +552,14 @@ product ship this?”), not against the engine's completeness meter
 | SO8 | **No negative test.** A forged handle, a use-after-release, a raw pointer and a cross-runtime handle must all be clean errors | the rule is stated (§2.1); nothing measures it | High; host-side |
 | SO9 | **No arena-object test** (Appendix A.13): instance A creates, instance B reads, A is unloaded and re-instantiated and the object survives; a forged offset, a freed slot and a cross-Store tag are clean errors | the arena needs the layout of [`SHARING_LINEAR_MEMORY.md`](SHARING_LINEAR_MEMORY.md) `SLM-1`…`SLM-4` first | Medium; host-side, gated on the sharing plan |
 | SO10 | **No arena-ownership test**: the arena allocator and a host count must never both free one object, and a borrow must not outlive its owner | same gate as SO9 | Medium; host-side |
-| SO11 | **No descriptor registry and no generator output exists** for the object case; the emitter work is §11/§14 of [`../EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) for functions and values, not for objects | closed by `SO-2` | High; tool-side |
+| ~~SO11~~ | ~~**No descriptor registry and no generator output exists** for the object case.~~ **Done (SO-2):** the descriptor is a typed model (`ObjectField`/`ObjectMethod`/`ObjectDescriptor`), and C, Rust and WIT output is emitted from it (§4.5). | [`../../Tools/Bindings/BindingModel.hpp`](../../Tools/Bindings/BindingModel.hpp), [`../../Tools/Bindings/EmitObjects.hpp`](../../Tools/Bindings/EmitObjects.hpp) | Closed — §4.5 |
 | SO12 | **No transport for a host object that is not an `externref`** beyond the integer handle; `externref` is available in two of the tested toolchains (§8) | measured, §8 | Low; the `i64` wire covers all six |
 | ~~SO13~~ | ~~**No public way to register a host-originated type.**~~ **Done (SO-1):** `internHostType` builds a `Subtype` and runs `TypeRegistry::internGroup`, the *same* canonicalizer a module uses; `Store::allocateHostStruct`/`allocateHostArray` take a `TypeId` and need no module. | [`../WasmHostType.hpp`](../../WasmBase/WasmHostType.hpp), [`../WasmStore.hpp`](../../WasmBase/WasmStore.hpp) | Closed — §4.4 |
-| SO14 | **No object descriptor in the binding schema.** The envelope (`wasmjit.binding/1`) carries `imports`/`exports`; there is no `types`/`objects` section, so the generator cannot emit a typed reference or a resource for an object | [`../EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) §11.8; `Tools/Bindings/BindingModel.hpp` | High; tool-side (`SO-2`) |
+| ~~SO14~~ | ~~**No object descriptor in the binding schema.**~~ **Done (SO-2):** `wasmjit.binding/2` carries an `objects` section; it is validated against the canonical layout at load and consumed by every emitter (§4.5, `EMBEDDING_SURFACE.md` §11.8). | [`../EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) §11.8; [`../../Tools/Bindings/BindingModel.cpp`](../../Tools/Bindings/BindingModel.cpp) | Closed — §4.5 |
 | SO15 | **No dual-surface test.** One object, two spellings: a `(ref $T)` export and an `i64` handle export of the same operation must reach the same object and the same count; dropping the last handle must not free an object the guest still holds | A.14.4; nothing in the tree | High; engine + tool (`SO-3`) |
 | ~~SO16~~ | ~~**No structural-dedup test for host types.**~~ **Done (SO-1):** `[hostobject]` pins a module-declared `{i32,i32}` and a host definition to one `TypeId`, and a mutability change to a different one — no name involved, which is the evidence for D1. | [`../../Test/HostObjectTests.cpp`](../../Test/HostObjectTests.cpp); [`../TYPE_IDENTITY.md`](../TYPE_IDENTITY.md) §6.2 | Closed — §4.4 |
-| SO17 | **A host type with a reference field cannot be interned.** A reference field makes the object a graph node; releasing the graph needs the Store-level walk, and recycling without it would leak the children's counts. The definition and the layout still describe references. | `internHostType` throws `std::logic_error`; [`../WasmStore.hpp`](../../WasmBase/WasmStore.hpp) documents the leaf-only rule | **High for a graph; `SO-6` closes it** |
+| ~~SO17~~ | ~~**A host type with a reference field cannot be interned.**~~ **Done (SO-6):** a GC reference field interns and is dropped by the Store's safepoint walk; the remaining restriction is narrower and has its own ID (`SO18`). | `internHostType`; `Store::hostChildSlots`; [`../WasmStore.hpp`](../../WasmBase/WasmStore.hpp) | Closed — §4.6 |
+| SO18 | **A reference field whose count is not the Store's cannot be interned.** An `externref` is counted by a host bridge and an `exnref`/`contref` by the exception/continuation machinery; the Store owns neither, so recycling such an object would leave the count behind. | `internHostType` refuses it by name; `layoutHostType` and the `SO-2` schema still describe it | **Documented limit**; `SO-3`'s bridge policy is where it could be lifted |
 
 ## 6. Where we can and should play fast and loose
 
@@ -557,17 +641,19 @@ study and is **not** an engine milestone.
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
 | **SO-1 — Host type registration and allocation** ✅ | A public path to intern a host-originated canonical type into the Store's `TypeRegistry` (the same interning that module types use), and a way to allocate/free an object of that `TypeId` in the Store's `GcHeap` with the header stamped and the count at its documented starting value. No descriptor, no names, no dispatch in `WasmBase/` (A.14.3). | SO13, SO16 | **Done 2026-11-18:** `internHostType` interns through `TypeRegistry::internGroup`; `Store::allocateHostStruct`/`allocateHostArray` allocate from a Store-owned region set; `[hostobject]` proves the module and the host share one `TypeId`, `ref.test`/`struct.get` see the object, and the counts balance across a guest store and a safepoint (§4.4). The name/version half of the original wording is `SO-2`'s descriptor and does not change the type-level test. |
-| **SO-2 — The descriptor and the schema** | A hand-written descriptor table (fields, methods, parent, interfaces, version) and an extension of the neutral envelope with a `types`/`objects` section, consumed by `Tools/Bindings/`. Emit WIT, and at least the C and Rust targets (A.14.5). | SO14, SO11 | one descriptor source produces a WIT package and a C/Rust header; a version mismatch is a load-time error; the generator never parses a C++ header for it |
+| **SO-2 — The descriptor and the schema** ✅ | A hand-written descriptor table (fields, methods, parent, interfaces, version) and an extension of the neutral envelope with a `types`/`objects` section, consumed by `Tools/Bindings/`. Emit WIT, and at least the C and Rust targets (A.14.5). | SO14, SO11 | **Done 2026-11-18:** one `wasmjit.binding/2` descriptor source validates each field offset against `WASM::layoutHostType` at load and emits a versioned C block (opaque handle, constants, method typedefs, walkable tables), a Rust block and a WIT `resource` per `(name, version)`; the emitted C compiles with `gcc`, the Rust with `rustc` and the WIT parses with `wasm-tools` (§4.5). The name/version half is the emitted table plus the host's `(name, version) -> TypeId` map (`SO-3`), not an engine registry. |
 | **SO-3 — The handle table and the dual surface** | A host-side handle table whose entry holds one `refClone` root, generated `i64` accessors, and the rule that a GC guest may pass the same object as `(ref $T)`. Explicit release, stale-handle rejection, no second count (A.14.4). | SO1, SO2, SO6, SO8, SO12, SO15 | one object is reached by a `(ref $T)` export and an `i64` export in the same run; dropping the handle does not free an object the guest still holds, and dropping the last guest reference does not free one the table still roots |
 | **SO-4 — Component packaging, GC-language façade** | A WIT resource version of the same API, plus the generated wrapper for a GC language (Kotlin/Wasm or MoonBit) and a Dart/Kotlin-style façade holding the handle. | SO3, SO4 | `resource.drop` runs the host release once; a wrapper's drop reaches one decrement; a cycle through the wrapper is collected or documented as a host cycle |
 | **SO-5 — The arena backing** | Objects as `i32` offsets in the shared memory of [`SHARING_LINEAR_MEMORY.md`](SHARING_LINEAR_MEMORY.md) A.13, gated on `SLM-1`…`SLM-4`. | SO9, SO10 | the object survives the writer's unload and re-instantiation, and a forged offset is a clean error |
-| **SO-6 — Reference-field graphs on the Store release path** | Let `internHostType` accept a reference field again: at a safepoint, a released host object drops each outgoing reference (the same `refClone`/`refDrop` contract) before its block is recycled, reusing the instance walker's type/layout logic rather than a second collector. | SO17 | a host object with a `struct`/`array` reference field is interned, released and collected with `liveObjectCount()` back to its baseline; a cycle is either collected or documented as a host-side cycle, and the child's count never leaks |
+| **SO-6 — Reference-field graphs on the Store release path** ✅ | Let `internHostType` accept a reference field again: at a safepoint, a released host object drops each outgoing reference (the same `refClone`/`refDrop` contract) before its block is recycled, reusing the instance walker's type/layout logic rather than a second collector. | SO17 | **Done 2026-11-18:** a GC reference field interns; the drain walk drops each reference the object holds, queues a child that reaches zero in the same iterative list, and leaves cycles to the instance's trial-deletion pass. A bridge-owned reference field stays refused (`SO18`). `[hostobject][gc]` pins `gcRefCount` 2/2 → 1/1 → baseline and the empty release queue for a cycle (§4.6). |
 
-**`SO-1` landed 2026-11-18; the scaffolding paragraph it replaced is history.**
-The remaining engine row is `SO-6`, and it exists because of one deliberate
-restriction rather than an oversight: interning refuses a reference field until
-the Store-level walk exists (§4.4), so no object can leak a child's count in the
-meantime.
+**`SO-1`, `SO-2` and `SO-6` landed 2026-11-18.** The engine seam, the tool-side
+descriptor and the reference-field walk are in the tree (§4.4–§4.6), so every
+engine row of this plan is closed and the remaining rows are host/tool work:
+`SO-3` (the handle table, the dual surface and the `(name, version) -> TypeId`
+map), `SO-4` (component packaging) and `SO-5` (the arena). `SO-18` is the one
+documented limit the engine keeps: a bridge-owned reference field is refused,
+because the Store has no bridge.
 
 Ordering, and why it is not negotiable: `SO-1` is the only engine row and
 everything else is written against it — generating bindings for a type the engine
@@ -1077,8 +1163,8 @@ that already emits WIT, C, Rust and every other target of
   "objects": [
     { "name": "demo.Widget", "version": 1,
       "fields": [
-        { "name": "x",   "type": "i32", "offset": 8 },
-        { "name": "y",   "type": "i32", "offset": 12 }
+        { "name": "x",   "type": "i32", "offset": 16 },
+        { "name": "y",   "type": "i32", "offset": 20 }
       ],
       "methods": [
         { "name": "resize", "params": ["i32", "i32"], "results": [] }
@@ -1087,6 +1173,13 @@ that already emits WIT, C, Rust and every other target of
   "imports": [], "exports": []
 }
 ```
+
+The two offsets are the canonical, header-inclusive ones `layoutHostType` derives
+for a `{i32, i32}` struct, and they are optional: a descriptor that states one is
+making an assertion, which the loader checks, and a descriptor that omits one is
+simply asking the tool to derive it. **Shipped in `SO-2`** — see §4.5 for the
+validated model, the five load-time refusals, and the versioned C/Rust/WIT
+artifacts.
 
 Two things this is *not*: it is not a new IDL (the `type` spellings are the core
 Wasm storage types the schema already uses), and it is not an engine parser. The
