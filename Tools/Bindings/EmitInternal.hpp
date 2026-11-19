@@ -90,7 +90,7 @@ std::string emitPascalImpl(const nlohmann::ordered_json& schema, const Schema& t
 std::string emitHaskellImpl(const nlohmann::ordered_json& schema, const Schema& typed);
 
 //! Emits C++ `Callable` typedefs.
-std::string emitCppTypedefsImpl(const nlohmann::ordered_json& schema);
+std::string emitCppTypedefsImpl(const nlohmann::ordered_json& schema, const Schema& typed);
 
 //! Emits C++ cast/load helpers.
 std::string emitCppSourceImpl(const nlohmann::ordered_json& schema);

@@ -336,24 +336,22 @@ void emitWitCppTypeDefinitions(std::ostringstream& out, const Json& schema)
 	}
 }
 
-std::string emitCppTypedefsImpl(const Json& schema)
+std::string emitCppTypedefsImpl(const Json& schema, const Schema& typed)
 {
-	const std::string direction = schema.value("direction", "g2h");
-	if (direction == "g2g")
+	if (typed.direction == Direction::GuestToGuest)
 		return "// cpp-typedefs is not applicable to G2G; project the producer "
 			   "schema to g2h or h2g first.\n";
 
 	std::set<std::string> refs;
 	collectSchemaRefs(schema, refs);
-	const bool emitImports = direction != "h2g";
-	const bool emitExports = direction != "g2h";
+	const bool emitImports = typed.direction != Direction::HostToGuest;
+	const bool emitExports = typed.direction != Direction::GuestToHost;
 	std::ostringstream out;
-	out << "// Generated C++ binding surface from the "
-		<< schema.at("schema").get<std::string>() << " " << direction
-		<< " schema. Do not edit.\n";
-	out << "#ifndef WASMJIT_GENERATED_" << sanitize(schema.value("module", "module"))
-		<< "_CALLABLES_HPP\n#define WASMJIT_GENERATED_"
-		<< sanitize(schema.value("module", "module")) << "_CALLABLES_HPP\n\n";
+	out << "// Generated C++ binding surface from the " << typed.id << " "
+		<< directionName(typed.direction) << " schema. Do not edit.\n";
+	out << "#ifndef WASMJIT_GENERATED_" << sanitize(typed.module)
+		<< "_CALLABLES_HPP\n#define WASMJIT_GENERATED_" << sanitize(typed.module)
+		<< "_CALLABLES_HPP\n\n";
 	out << "#include <cstdint>\n\n";
 	out << "namespace WASM { struct VMContext; struct ModuleInstance; class RegistryImportResolver; }\n";
 	// A v128 crosses the C boundary as two scalar words, low first (decision
@@ -372,29 +370,29 @@ std::string emitCppTypedefsImpl(const Json& schema)
 	if (emitImports) {
 		out << "\nextern \"C\" {\n";
 		out << "\n// Host imports the guest expects you to implement (G2H).\n";
-		forEachFunction(schema, "imports", [&](const Json& entry) {
+		forEachFunction(typed, true, [&](const Entry& entry) {
 			emitCppImportDeclaration(out, entry);
 		});
 		out << "\n} // extern \"C\"\n";
 		out << "\n// C++-only: publish the implementations above into a synthetic\n"
 			   "// Wasm import module. This declaration is deliberately outside\n"
 			   "// the C ABI block.\n";
-		out << "bool wasmjit_" << sanitize(schema.value("module", "module"))
+		out << "bool wasmjit_" << sanitize(typed.module)
 			<< "_register_imports(WASM::RegistryImportResolver& registrar);\n";
 	}
 	if (emitExports) {
 		out << "\n// Guest exports the host can resolve (H2G).\n";
-		forEachFunction(schema, "exports", [&](const Json& entry) {
+		forEachFunction(typed, false, [&](const Entry& entry) {
 			out << "// export: " << exportComment(entry) << "\n";
 			emitCppExportDeclaration(out, entry);
 		});
 		out << "\n// C++-only: resolve the pointers above from a loaded module instance.\n";
-		out << "bool wasmjit_" << sanitize(schema.value("module", "module"))
+		out << "bool wasmjit_" << sanitize(typed.module)
 			<< "_load_callables(WASM::ModuleInstance* instance);\n";
 	}
 	out << nonFunctionNotes(schema);
-	out << "\n#endif // WASMJIT_GENERATED_"
-		<< sanitize(schema.value("module", "module")) << "_CALLABLES_HPP\n";
+	out << "\n#endif // WASMJIT_GENERATED_" << sanitize(typed.module)
+		<< "_CALLABLES_HPP\n";
 	return out.str();
 }
 
