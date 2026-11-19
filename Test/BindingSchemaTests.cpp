@@ -2605,9 +2605,12 @@ Json objectSchema()
 				{ "name": "set_status", "params": ["i32"], "results": [] },
 				{ "name": "compute_caption", "params": [], "results": ["i32"] },
 				{ "name": "get_preview", "params": [], "results": [ { "type": "ref", "heap": "defined", "name": "demo.Node" } ] }
-			  ] },
+			  ],
+			  "constructors": [ { "name": "create", "params": ["i32", "i32"] },
+			                    { "name": "open", "params": ["i64"] } ] },
 			{ "name": "demo.Node", "version": 1,
-			  "fields": [ { "name": "kind", "type": "i8" } ] },
+			  "fields": [ { "name": "kind", "type": "i8" } ],
+			  "constructors": [ { "name": "spawn", "params": [] } ] },
 			{ "name": "demo.Widget", "version": 2,
 			  "fields": [ { "name": "x", "type": "i32" } ] }
 		],
@@ -2864,6 +2867,75 @@ TEST_CASE("the wrapper's own member names are not taken by the descriptor",
 	}
 }
 
+// A constructor is an entry point with no `self`. It shares the method namespace,
+// it cannot be spelled twice in one class, and its parameters are typed like any
+// other — all checked at load time, because each failure would otherwise be a
+// header that does not compile in the consumer's build.
+TEST_CASE("a constructor descriptor is validated like an entry point",
+		"[bindings][objects]")
+{
+	using WASM::Bindings::Schema;
+	const auto failure = [](const Json& input) {
+		try {
+			(void)Schema::fromJson(input);
+		} catch (const std::runtime_error& error) {
+			return std::string(error.what());
+		}
+		return std::string();
+	};
+
+	// The interchange form keeps the table, and only when there is one.
+	const Schema plenty = Schema::fromJson(objectSchema());
+	const Json out = plenty.toJson();
+	REQUIRE(out.at("objects")[0].contains("constructors"));
+	CHECK(out.at("objects")[0].at("constructors")[0].at("name") == "create");
+	CHECK(out.at("objects")[0].at("constructors")[0].at("params").size() == 2u);
+	CHECK_FALSE(out.at("objects")[2].contains("constructors"));
+
+	Json duplicate = objectSchema();
+	duplicate["objects"][0]["constructors"].push_back(
+			Json::parse(R"({ "name": "create", "params": ["f32"] })"));
+	CHECK(failure(duplicate).find("declares constructor 'create' twice")
+			!= std::string::npos);
+
+	// `<type>_<name>` is one namespace: a method and a constructor cannot share it.
+	Json methodName = objectSchema();
+	methodName["objects"][0]["constructors"][0]["name"] = "area";
+	CHECK(failure(methodName).find("and a method of the same name")
+			!= std::string::npos);
+
+	// Two names, one parameter list: one C++ constructor, so one is a mistake.
+	Json sameSignature = objectSchema();
+	sameSignature["objects"][0]["constructors"].push_back(
+			Json::parse(R"({ "name": "make", "params": ["i32", "i32"] })"));
+	CHECK(failure(sameSignature).find("same parameter list") != std::string::npos);
+
+	// `release` is the object's lifetime entry point, whatever makes the object.
+	Json release = objectSchema();
+	release["objects"][0]["constructors"][0]["name"] = "release";
+	CHECK(failure(release).find("lifetime entry point") != std::string::npos);
+
+	// A parameter is a type the engine can name: a constructor cannot smuggle in a
+	// storage kind with no ABI, and `stringref` is one it can name.
+	Json unknown = objectSchema();
+	unknown["objects"][1]["constructors"][0]["params"] = Json::array({ "i128" });
+	CHECK(failure(unknown).find("unknown param type") != std::string::npos);
+
+	// A parameter the Kotlin façade cannot spell is omitted there with a note —
+	// never guessed — while C, C++ and Rust still see the entry point.
+	Json stringref = objectSchema();
+	stringref["objects"][1]["constructors"][0]["params"] = Json::array({ "string" });
+	const Schema softened = Schema::fromJson(stringref);
+	CHECK(WASM::Bindings::emit(softened, WASM::Bindings::Language::CHeader)
+					.find("wasmjit_object_demo_node_v1_handle "
+						  "wasmjit_object_demo_node_v1_spawn(void* p0);")
+			!= std::string::npos);
+	CHECK(WASM::Bindings::emit(softened, WASM::Bindings::Language::Kotlin)
+					.find("// `spawn`: a non-scalar parameter is not expressible"
+						  " here")
+			!= std::string::npos);
+}
+
 TEST_CASE("one object descriptor reaches the C, Rust and WIT emitters", "[bindings][objects]")
 {
 	const WASM::Bindings::Schema schema = WASM::Bindings::Schema::fromJson(objectSchema());
@@ -3044,6 +3116,40 @@ TEST_CASE("one object descriptor reaches the C, Rust and WIT emitters", "[bindin
 	CHECK(header.find("\tvoid resize(int32_t p0, int32_t p1)") != std::string::npos);
 	CHECK(header.find("\tvoid blit(wasm_v128 p0)") != std::string::npos);
 
+	// A declared constructor is a C++ constructor; a parameter list that would be
+	// the default (or adopting) constructor's becomes a static factory instead, so
+	// one `spawn()` is still one call rather than a class that does not compile.
+	CHECK(header.find("\texplicit DemoWidgetV1(int32_t p0, int32_t p1)\n"
+			"\t\t: _handle(wasmjit_object_demo_widget_v1_create(p0, p1))")
+			!= std::string::npos);
+	CHECK(header.find("static DemoNodeV1 spawn()") != std::string::npos);
+	CHECK(header.find("return DemoNodeV1(wasmjit_object_demo_node_v1_spawn());")
+			!= std::string::npos);
+	// A constructor whose single parameter *is* the slot type would be the
+	// adopting constructor over again, so it is a factory of the same name.
+	CHECK(header.find("static DemoWidgetV1 open(int64_t p0)") != std::string::npos);
+	CHECK(header.find("return DemoWidgetV1(wasmjit_object_demo_widget_v1_open(p0));")
+			!= std::string::npos);
+	// The C side spells the same two calls: an entry point and its `_h_fn`.
+	CHECK(header.find("wasmjit_object_demo_widget_v1_handle "
+			"wasmjit_object_demo_widget_v1_create(int32_t p0, int32_t p1);")
+			!= std::string::npos);
+	CHECK(header.find("typedef int64_t (*wasmjit_object_demo_node_v1_spawn_h_fn)"
+			"(void);") != std::string::npos);
+	CHECK(rust.find("pub type wasmjit_object_demo_widget_v1_create_h_fn = "
+			"unsafe extern \"C\" fn(i32, i32) -> i64;") != std::string::npos);
+	CHECK(wit.find("constructor(p0: s32, p1: s32);") != std::string::npos);
+	CHECK(wit.find("constructor();") != std::string::npos);
+	// WIT names every constructor `[constructor]r`, so one resource carries one:
+	// the second is noted and points at the entry point that is not in WIT.
+	CHECK(wit.find("a second constructor is not expressible in WIT")
+			!= std::string::npos);
+	CHECK(kotlin.find("fun create(p0: Int, p1: Int): DemoWidgetV1 =")
+			!= std::string::npos);
+	CHECK(kotlin.find("fun spawn(): DemoNodeV1 =") != std::string::npos);
+	// Overloading is a C++ and Kotlin thing, not a WIT one.
+	CHECK(kotlin.find("fun open(p0: Long): DemoWidgetV1 =") != std::string::npos);
+
 	// Without objects the emitters are byte-for-byte what they were.
 	const Json plain = Json::parse(R"({
 		"schema": "wasmjit.binding/1", "direction": "all", "module": "m",
@@ -3166,6 +3272,27 @@ void wasmjit_object_demo_widget_v1_prop_status_set(
     (void)self;
     lastSlot = value;
 }
+int nodeReleases = 0;
+wasmjit_object_demo_widget_v1_handle wasmjit_object_demo_widget_v1_create(
+        int32_t p0, int32_t p1)
+{
+    return (static_cast<wasmjit_object_demo_widget_v1_handle>(p0) << 32)
+         | static_cast<wasmjit_object_demo_widget_v1_handle>(
+                 static_cast<uint32_t>(p1));
+}
+wasmjit_object_demo_node_v1_handle wasmjit_object_demo_node_v1_spawn(void)
+{
+    return 0x300000001LL;
+}
+wasmjit_object_demo_widget_v1_handle wasmjit_object_demo_widget_v1_open(int64_t p0)
+{
+    return p0;
+}
+void wasmjit_object_demo_node_v1_release(wasmjit_object_demo_node_v1_handle self)
+{
+    (void)self;
+    ++nodeReleases;
+}
 
 }
 
@@ -3206,6 +3333,27 @@ int main()
         if (releases != 3) return 14;
     }
     if (releases != 4) return 15;
+    {
+        // A declared constructor is a constructor; an empty parameter list becomes
+        // a static factory, because it would be the default constructor.
+        DemoWidgetV1 made(4, 6);
+        if (!made) return 16;
+        if (made.handle() != ((static_cast<wasmjit_object_demo_widget_v1_handle>(4)
+                               << 32) | 6LL)) return 17;
+        DemoNodeV1 node = DemoNodeV1::spawn();
+        if (!node) return 18;
+        if (nodeReleases != 0) return 19;
+        // The slot-typed parameter cannot be a second constructor, so `open` is a
+        // factory — and the slot it returns is adopted, not cloned.
+        DemoWidgetV1 opened = DemoWidgetV1::open(0x400000002LL);
+        if (!opened) return 22;
+        if (opened.handle() != 0x400000002LL) return 23;
+        if (releases != 4) return 24;
+    }
+    // `made`, `opened` released their slots at the end of the block; the factory's
+    // wrapper released the node's slot exactly once.
+    if (releases != 6) return 20;
+    if (nodeReleases != 1) return 21;
     return 0;
 }
 )cpp";

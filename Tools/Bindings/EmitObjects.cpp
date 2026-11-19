@@ -107,6 +107,28 @@ std::string objectCType(const Json& schema, const Json& type)
 	return cType(type);
 }
 
+//! The Kotlin spelling of one descriptor type, or nullopt when it is not a scalar.
+//!
+//! The Kotlin façade wraps the slot, not the layout, so only the scalar
+//! parameter types a constructor can take are spelled here; a reference or a
+//! `v128` is reported as not expressible, and the constructor is omitted with a
+//! comment rather than emitted with a guessed type.
+std::optional<std::string> objectKotlinType(const Json& type)
+{
+	if (!type.is_object() || type.value("type", "") == "ref")
+		return std::nullopt;
+	const std::string kind = type.value("type", "");
+	if (type.value("packed", false))
+		return kind == "i8" ? "Byte" : "Short";
+	if (kind == "i32" || kind == "s32") return "Int";
+	if (kind == "u32") return "UInt";
+	if (kind == "i64" || kind == "s64") return "Long";
+	if (kind == "u64") return "ULong";
+	if (kind == "f32") return "Float";
+	if (kind == "f64") return "Double";
+	return std::nullopt;
+}
+
 //! The Rust spelling of a descriptor type, with the same resolution as C.
 std::string objectRustType(const Json& schema, const Json& type)
 {
@@ -238,6 +260,9 @@ void emitCObjects(std::ostringstream& out, const Json& schema)
 				object.contains("properties") ? object.at("properties") : emptyArray;
 		const Json& methods =
 				object.contains("methods") ? object.at("methods") : emptyArray;
+		const Json& constructors =
+				object.contains("constructors") ? object.at("constructors")
+											   : emptyArray;
 
 		out << "/* " << name << " version " << version;
 		if (object.contains("parent"))
@@ -314,6 +339,23 @@ void emitCObjects(std::ostringstream& out, const Json& schema)
 			   "   spelling, never the table. */\n";
 		out << "typedef int64_t " << type << "_handle;\n";
 		out << "#define " << macro << "_HANDLE_NONE 0\n";
+		// A constructor is the one entry point that has no `self`: it takes the
+		// arguments and returns the slot, which is what a C++ constructor projects.
+		for (const Json& constructor : constructors) {
+			const Json& params =
+					constructor.contains("params") ? constructor.at("params")
+												   : emptyArray;
+			out << "typedef int64_t (*" << type << "_"
+				<< objectIdentifier(constructor.value("name", "")) << "_h_fn)(";
+			if (params.empty())
+				out << "void";
+			for (std::size_t index = 0; index < params.size(); ++index) {
+				if (index != 0)
+					out << ", ";
+				out << objectCType(schema, params[index]);
+			}
+			out << ");\n";
+		}
 		for (const Json& method : methods) {
 			const Json& params =
 					method.contains("params") ? method.at("params") : emptyArray;
@@ -351,6 +393,21 @@ void emitCObjects(std::ostringstream& out, const Json& schema)
 			   "   Implement each as `resolve the slot, then forward`; the generated\n"
 			   "   C++ wrapper below calls them and owns the slot for you. */\n";
 		out << "void " << type << "_release(" << type << "_handle self);\n";
+		for (const Json& constructor : constructors) {
+			const Json& params =
+					constructor.contains("params") ? constructor.at("params")
+												   : emptyArray;
+			out << type << "_handle " << type << "_"
+				<< objectIdentifier(constructor.value("name", "")) << "(";
+			if (params.empty())
+				out << "void";
+			for (std::size_t index = 0; index < params.size(); ++index) {
+				if (index != 0)
+					out << ", ";
+				out << objectCType(schema, params[index]) << " p" << index;
+			}
+			out << ");\n";
+		}
 		for (const Json& method : methods) {
 			const Json& params =
 					method.contains("params") ? method.at("params") : emptyArray;
@@ -567,6 +624,24 @@ void emitRustObjects(std::ostringstream& out, const Json& schema)
 				out << " -> " << objectRustType(schema, results.at(0));
 			out << ";\n";
 		}
+		// A constructor has no `self` and returns the slot: one alias per declared
+		// constructor, mirroring the C entry points.
+		for (const Json& constructor :
+				(object.contains("constructors") ? object.at("constructors")
+												 : emptyArray)) {
+			const Json& params =
+					constructor.contains("params") ? constructor.at("params")
+												   : emptyArray;
+			out << "pub type " << type << "_"
+				<< objectIdentifier(constructor.value("name", ""))
+				<< "_h_fn = unsafe extern \"C\" fn(";
+			for (std::size_t index = 0; index < params.size(); ++index) {
+				if (index != 0)
+					out << ", ";
+				out << objectRustType(schema, params[index]);
+			}
+			out << ") -> i64;\n";
+		}
 		for (const Json& property : properties) {
 			const std::string propIdent =
 					objectIdentifier(property.value("name", ""));
@@ -743,6 +818,15 @@ void emitCppObjects(std::ostringstream& out, const Json& schema)
 				object.contains("properties") ? object.at("properties") : emptyArray;
 		const Json& methods =
 				object.contains("methods") ? object.at("methods") : emptyArray;
+		const Json& constructors =
+				object.contains("constructors") ? object.at("constructors")
+											   : emptyArray;
+
+		// The wrapper's own members are taken. A descriptor member that spells one
+		// of them is reachable through its C entry point, which keeps the class
+		// unambiguous instead of emitting two members with one name.
+		const std::set<std::string> reserved = { "handle", "valid", "reset",
+			"release" };
 
 		// An accessor is projected as its property, so the standalone method of
 		// that name is not emitted a second time: one member, one spelling.
@@ -762,6 +846,52 @@ void emitCppObjects(std::ostringstream& out, const Json& schema)
 		out << "\t//! Takes ownership of `handle`; the caller must not release it.\n";
 		out << "\texplicit " << klass << "(" << type
 			<< "_handle handle) noexcept : _handle(handle) {}\n";
+		// A declared constructor is a C++ constructor: no `self`, the result is the
+		// slot. When its parameter list would *be* the default or the adopting
+		// constructor's, it becomes a static factory with the same name — one call
+		// spelled once, and a class that still compiles.
+		for (const Json& constructor : constructors) {
+			const Json& params =
+					constructor.contains("params") ? constructor.at("params")
+												   : emptyArray;
+			const std::string name = constructor.value("name", "");
+			const std::string entry = type + "_" + objectIdentifier(name);
+			std::string args;
+			std::string declared;
+			for (std::size_t index = 0; index < params.size(); ++index) {
+				if (index != 0) {
+					args += ", ";
+					declared += ", ";
+				}
+				args += "p" + std::to_string(index);
+				declared += objectCType(schema, params[index]) + " p"
+						+ std::to_string(index);
+			}
+			const bool adopts = params.size() == 1u
+					&& objectCType(schema, params.at(0)) == "int64_t";
+			if (params.empty() || adopts) {
+				const std::string factory = camelMemberName(name);
+				if (reserved.count(factory) != 0u) {
+					out << "\t//! `" << name << "` is not wrapped: the wrapper's own"
+						   " `" << factory << "` is a member. Call `" << entry
+						<< "` directly.\n";
+					continue;
+				}
+				out << "\t//! `" << name << "`, as a static factory: its parameter"
+					   " list would be the "
+					<< (params.empty() ? "default" : "adopting")
+					<< " constructor's.\n";
+				out << "\tstatic " << klass << " " << factory << "(" << declared
+					<< ")\n\t{\n\t\treturn " << klass << "(" << entry << "(" << args
+					<< "));\n\t}\n";
+			} else {
+				out << "\t//! `" << name << "`, a declared constructor (a slot of "
+					<< macroPrefix(object)
+					<< "_HANDLE_NONE leaves `valid()` false).\n";
+				out << "\texplicit " << klass << "(" << declared
+					<< ")\n\t\t: _handle(" << entry << "(" << args << "))\n\t{\n\t}\n";
+			}
+		}
 		out << "\t//! Releases the slot, if the wrapper still owns one.\n";
 		out << "\t~" << klass << "() { reset(); }\n\n";
 		out << "\t" << klass << "(const " << klass << "&) = delete;\n";
@@ -790,12 +920,6 @@ void emitCppObjects(std::ostringstream& out, const Json& schema)
 		out << "\t" << type << "_handle release() noexcept\n\t{\n\t\tconst " << type
 			<< "_handle gave = _handle;\n\t\t_handle = " << none
 			<< ";\n\t\treturn gave;\n\t}\n";
-
-		// The wrapper's own members are taken. A descriptor member that spells one
-		// of them is reachable through its C entry point, which keeps the class
-		// unambiguous instead of emitting two members with one name.
-		const std::set<std::string> reserved = { "handle", "valid", "reset",
-			"release" };
 
 		for (const Json& property : properties) {
 			const std::string name = property.value("name", "");
@@ -865,6 +989,7 @@ void emitKotlinObjects(std::ostringstream& out, const Json& schema)
 	const Json* objects = objectArray(schema);
 	if (objects == nullptr)
 		return;
+	const Json emptyArray = Json::array();
 
 	out << "\n// Host-registered objects (wasmjit.binding/2). The wrapper holds the `i64`\n"
 		   "// slot; the host's table owns the object, so `close()` is the one release and\n"
@@ -873,6 +998,9 @@ void emitKotlinObjects(std::ostringstream& out, const Json& schema)
 	for (const Json& object : *objects) {
 		const std::string wrapper = pascalObjectName(object);
 		const std::string type = objectTypeName(object);
+		const Json& constructors =
+				object.contains("constructors") ? object.at("constructors")
+											   : emptyArray;
 		out << "// `" << object.value("name", "") << "` version "
 			<< object.value("version", 1u) << ".\n";
 		out << "class " << wrapper << "(private val handle: Long) : AutoCloseable {\n"
@@ -889,15 +1017,51 @@ void emitKotlinObjects(std::ostringstream& out, const Json& schema)
 			<< type << "_release(handle)\n"
 					   "    }\n"
 					   "\n"
-					   "    companion object {\n"
-					   "        /** The null slot. */\n"
-					   "        const val HANDLE_NONE: Long = 0\n"
-					   "    }\n"
-					   "}\n"
-					   "\n"
-					   "// Provided by the host: `HostHandleTable::release`, which is idempotent.\n"
-					   "external fun "
-			<< type << "_release(handle: Long)\n\n";
+					   "    companion object {\n";
+		for (const Json& constructor : constructors) {
+			const Json& params =
+					constructor.contains("params") ? constructor.at("params")
+												   : emptyArray;
+			std::string declared;
+			std::string args;
+			std::string omission;
+			for (std::size_t index = 0; index < params.size(); ++index) {
+				const std::optional<std::string> kotlin =
+						objectKotlinType(params.at(index));
+				if (!kotlin) {
+					omission = "a non-scalar parameter";
+					break;
+				}
+				if (index != 0u) {
+					declared += ", ";
+					args += ", ";
+				}
+				declared += "p" + std::to_string(index) + ": " + *kotlin;
+				args += "p" + std::to_string(index);
+			}
+			if (!omission.empty()) {
+				out << "        // `" << constructor.value("name", "")
+					<< "`: " << omission
+					<< " is not expressible here; call `" << type << "_"
+					<< objectIdentifier(constructor.value("name", ""))
+					<< "` directly.\n";
+				continue;
+			}
+			out << "        /** `" << constructor.value("name", "")
+				<< "`: a declared constructor. */\n";
+			out << "        fun " << camelMemberName(constructor.value("name", ""))
+				<< "(" << declared << "): " << wrapper << " =\n"
+				<< "            " << wrapper << "(" << type << "_"
+				<< objectIdentifier(constructor.value("name", "")) << "(" << args
+				<< "))\n\n";
+		}
+		out << "        /** The null slot. */\n"
+			   "        const val HANDLE_NONE: Long = 0\n"
+			   "    }\n"
+			   "}\n"
+			   "\n"
+			   "// Provided by the host: `HostHandleTable::release`, which is idempotent.\n"
+			   "external fun " << type << "_release(handle: Long)\n\n";
 	}
 }
 
@@ -1034,6 +1198,50 @@ void emitWitObjects(std::ostringstream& out, const Json& schema)
 			if (result)
 				members << " -> " << *result;
 			members << ";\n";
+		}
+
+		// A constructor is a WIT `constructor`: the canonical ABI's own spelling of
+		// "this call makes one of these". WIT names every constructor
+		// `[constructor]r` — the signature is not part of the name — so a resource
+		// carries **one**, and the first expressible one wins; the rest are noted.
+		bool constructorEmitted = false;
+		for (const Json& constructor :
+				(object.contains("constructors") ? object.at("constructors")
+												 : emptyArray)) {
+			const Json& params =
+					constructor.contains("params") ? constructor.at("params")
+												   : emptyArray;
+			std::vector<std::string> types;
+			std::string omission;
+			for (const Json& param : params) {
+				const std::optional<std::string> wit = witType(schema, param);
+				if (!wit) {
+					omission = witOmission(param) + " parameter";
+					break;
+				}
+				types.push_back(*wit);
+			}
+			if (omission.empty() && constructorEmitted)
+				omission = "a second constructor";
+			if (!omission.empty()) {
+				members << "    /// constructor `" << constructor.value("name", "")
+					<< "`: " << omission << " is not expressible in WIT"
+					<< (omission == "a second constructor"
+									? " (one `[constructor]` per resource); call `"
+									: "; call `")
+					<< objectTypeName(object) << "_"
+					<< objectIdentifier(constructor.value("name", ""))
+					<< "` instead.\n";
+				continue;
+			}
+			members << "    constructor(";
+			for (std::size_t index = 0; index < types.size(); ++index) {
+				if (index != 0u)
+					members << ", ";
+				members << "p" << index << ": " << types[index];
+			}
+			members << ");\n";
+			constructorEmitted = true;
 		}
 
 		if (members.str().empty())

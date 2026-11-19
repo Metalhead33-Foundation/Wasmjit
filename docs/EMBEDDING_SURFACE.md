@@ -1258,6 +1258,17 @@ its entry point, and `release` itself is refused at load time because every gene
 artifact calls it to end an object's life. The C++ surface is compile-and-run tested
 with a release counter, so it is evidence and not just an artifact (`SO-4`).
 
+**Construction is declared, not inferred.** `objects[].constructors[]` names the
+call that *makes* an object (`{ "name": "create", "params": ["i32", "i32"] }`).
+Every emitter projects it as the host language's construction: a C++ constructor,
+a WIT `constructor(...)`, a Kotlin companion factory, a Rust `_h_fn`, a C entry
+point returning the slot. A name that collides with a method, two constructors with
+one parameter list, and a name spelled `release` are refused at load time; a
+parameter list identical to the default or adopting constructor becomes a static
+factory of the same name (`DemoNodeV1::spawn()`). WIT is the exception in the other
+direction: its constructors are all named `[constructor]r`, so one resource carries
+one, and a second is noted rather than emitted.
+
 #### Layout and build rules
 
 | Path | What it is | Rule |
@@ -2811,6 +2822,10 @@ declares the handle *entry points*, and the `#ifdef __cplusplus` block after
 `reset()`/`release()` for the two ways to give the slot up, properties as
 `status()`/`setStatus()`, methods in lowerCamel. It is compiled and run by the test
 suite, which counts releases.
+**Revision 43 (2026-11-19)** adds construction: `objects[].constructors[]` declares
+the call that makes an object, emitted as a C++ constructor (or a static factory
+when the parameter list would collide), a WIT `constructor`, a Kotlin companion
+factory and a Rust `_h_fn`, with the collisions refused at load time.
 
 ### 16.1 The primitive an embedder gets
 

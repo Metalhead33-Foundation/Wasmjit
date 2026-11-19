@@ -554,6 +554,15 @@ void validateObjects(std::vector<ObjectDescriptor>& objects)
 		// emitter projects all three as members of one resource/struct, so two
 		// members with one name would collide in the generated artifact.
 		std::set<std::string> methodNames;
+		// Entry points are spelled `<type>_<lowercased name>`, so the name checks
+		// below compare the lowered spelling: `Release` and `release` are one
+		// entry point in the generated header.
+		const auto lowered = [](std::string text) {
+			for (char& character : text)
+				character = static_cast<char>(std::tolower(
+						static_cast<unsigned char>(character)));
+			return text;
+		};
 		for (const ObjectMethod& method : object.methods) {
 			if (!methodNames.insert(method.name).second)
 				throw std::runtime_error("object '" + object.name
@@ -562,15 +571,40 @@ void validateObjects(std::vector<ObjectDescriptor>& objects)
 			// every C/C++ header and the Kotlin façade call it under that name:
 			// a method spelled the same way would collide with it rather than be
 			// a second function (`SO-3`/`SO-4`).
-			std::string lowered = method.name;
-			for (char& character : lowered)
-				character = static_cast<char>(std::tolower(
-						static_cast<unsigned char>(character)));
-			if (lowered == "release")
+			if (lowered(method.name) == "release")
 				throw std::runtime_error("object '" + object.name
 						+ "' declares a method named '" + method.name
 						+ "'; `release` is the object's lifetime entry point —"
 						" rename the method");
+		}
+		// A constructor is an entry point too (`<type>_<name>`), so it shares the
+		// method namespace; and two constructors with one parameter list would be
+		// one C++ constructor. Both are load-time errors, not a header that fails
+		// to compile in the consumer's build.
+		std::set<std::string> constructorNames;
+		std::set<std::string> constructorSignatures;
+		for (const ObjectConstructor& constructor : object.constructors) {
+			if (!constructorNames.insert(constructor.name).second)
+				throw std::runtime_error("object '" + object.name
+						+ "' declares constructor '" + constructor.name
+						+ "' twice");
+			if (methodNames.count(constructor.name) != 0u)
+				throw std::runtime_error("object '" + object.name
+						+ "' declares constructor '" + constructor.name
+						+ "' and a method of the same name; both are one"
+						" '<type>_<name>' entry point");
+			if (lowered(constructor.name) == "release")
+				throw std::runtime_error("object '" + object.name
+						+ "' declares a constructor named '" + constructor.name
+						+ "'; `release` is the object's lifetime entry point —"
+						" rename the constructor");
+			std::string signature;
+			for (const ValueType& param : constructor.params)
+				signature += typeLabel(param) + ";";
+			if (!constructorSignatures.insert(signature).second)
+				throw std::runtime_error("object '" + object.name
+						+ "' declares two constructors with the same parameter"
+						" list; they would be one C++ constructor");
 		}
 		std::set<std::string> propertyNames;
 		std::set<std::string> accessors;
@@ -771,6 +805,40 @@ Json ObjectMethod::toJson() const
 	return out;
 }
 
+ObjectConstructor ObjectConstructor::fromJson(const Json& json)
+{
+	if (!json.is_object())
+		throw std::runtime_error("object constructor: expected a JSON object");
+	ObjectConstructor out;
+	out.name = jsonString(json, "name");
+	if (out.name.empty())
+		throw std::runtime_error("object constructor: missing name");
+	if (!json.contains("params"))
+		return out;
+	const Json& array = json.at("params");
+	if (!array.is_array())
+		throw std::runtime_error("object constructor '" + out.name
+				+ "': `params` must be an array");
+	for (const Json& item : array) {
+		ValueType type = ValueType::fromJson(item);
+		if (type.kind == ValueKind::Unknown)
+			throw std::runtime_error("object constructor '" + out.name
+					+ "': unknown param type");
+		out.params.push_back(std::move(type));
+	}
+	return out;
+}
+
+Json ObjectConstructor::toJson() const
+{
+	Json out;
+	out["name"] = name;
+	out["params"] = Json::array();
+	for (const ValueType& param : params)
+		out["params"].push_back(param.toJson());
+	return out;
+}
+
 ObjectDescriptor ObjectDescriptor::fromJson(const Json& json)
 {
 	if (!json.is_object())
@@ -811,6 +879,13 @@ ObjectDescriptor ObjectDescriptor::fromJson(const Json& json)
 		for (const Json& item : json.at("methods"))
 			out.methods.push_back(ObjectMethod::fromJson(item));
 	}
+	if (json.contains("constructors")) {
+		if (!json.at("constructors").is_array())
+			throw std::runtime_error("object '" + out.name
+					+ "': `constructors` must be an array");
+		for (const Json& item : json.at("constructors"))
+			out.constructors.push_back(ObjectConstructor::fromJson(item));
+	}
 	out.raw = json;
 	return out;
 }
@@ -842,6 +917,13 @@ Json ObjectDescriptor::toJson() const
 	out["methods"] = Json::array();
 	for (const ObjectMethod& method : methods)
 		out["methods"].push_back(method.toJson());
+	if (!constructors.empty()) {
+		out["constructors"] = Json::array();
+		for (const ObjectConstructor& constructor : constructors)
+			out["constructors"].push_back(constructor.toJson());
+	} else {
+		out.erase("constructors");
+	}
 	return out;
 }
 Schema Schema::fromJson(const Json& json)

@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <stdexcept>
 #include <utility>
+#include <vector>
 
 #include "WasmBase/WasmGcHeader.hpp"
 #include "WasmBase/WasmHostObject.hpp"
@@ -648,6 +649,62 @@ TEST_CASE("a stale, forged or foreign handle is refused (SO-3)",
 	// The table is the owner, not a registry with a manual sweep: releasing the
 	// last root puts the count back where it started.
 	CHECK(table.release(reused));
+	store.collectHostObjects();
+	CHECK(store.gc().liveObjectCount() == before);
+}
+
+// A table is a slot allocator, not a map: an index comes back, a generation moves
+// on, and the destructor is the sweep. Every façade above it (the C++ wrapper, the
+// Kotlin one, the emitted `_h_fn` thunks) assumes exactly that, so it is pinned
+// here rather than inferred (`SO-3`).
+TEST_CASE("the handle table reuses slots without resurrecting handles (SO-3)",
+		"[hostobject][handle]")
+{
+	WASM::Store store;
+	const WASM::HostType type = WASM::HostType::intern(store, leafStruct());
+	REQUIRE(type.isInterned());
+	const std::size_t before = store.gc().liveObjectCount();
+	{
+		WASM::HostHandleTable table(store);
+		std::vector<WASM::HostHandle> handles;
+		for (int index = 0; index < 8; ++index) {
+			handles.push_back(table.acquire(
+					WASM::HostObject::createStruct(store, type), type));
+		}
+		CHECK(table.liveCount() == 8u);
+		CHECK(table.slotCount() == 8u);
+		// Distinct slots: an allocator that handed one index out twice would pass
+		// every single-object test and fail here.
+		for (std::size_t index = 0; index < handles.size(); ++index)
+			CHECK(handles[index].index() == index);
+		CHECK(store.gc().liveObjectCount() == before + 8);
+
+		// Release in reverse; every slot goes to the free list and the drain
+		// reclaims every block.
+		for (auto handle = handles.rbegin(); handle != handles.rend(); ++handle)
+			CHECK(table.release(*handle));
+		CHECK(table.liveCount() == 0u);
+		CHECK(table.slotCount() == 8u);
+		store.collectHostObjects();
+		CHECK(store.gc().liveObjectCount() == before);
+
+		// The next eight reuse those slots — no growth — and each carries the next
+		// generation, so nothing from the old batch resolves through a live slot.
+		std::vector<WASM::HostHandle> again;
+		for (int index = 0; index < 8; ++index) {
+			again.push_back(table.acquire(
+					WASM::HostObject::createStruct(store, type), type));
+		}
+		CHECK(table.slotCount() == 8u);
+		CHECK(table.liveCount() == 8u);
+		for (std::size_t index = 0; index < again.size(); ++index) {
+			CHECK(again[index].index() == handles[index].index());
+			CHECK(again[index].generation() == handles[index].generation() + 1u);
+			CHECK(table.resolve(handles[index]) == nullptr);
+			CHECK(table.resolve(again[index]) != nullptr);
+		}
+		// Leaving the scope destroys the table, and with it the eight roots.
+	}
 	store.collectHostObjects();
 	CHECK(store.gc().liveObjectCount() == before);
 }

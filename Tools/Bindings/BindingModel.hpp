@@ -266,6 +266,34 @@ struct ObjectMethod {
 };
 
 /*!
+ * \brief A declared constructor: a function that takes arguments and returns the
+ *        object's handle.
+ *
+ * A constructor is *not* a method: it has no `self`, its result is the object by
+ * definition, and the C++ façade projects it as a real constructor rather than a
+ * named member. It shares the `methods` parameter namespace, because both become
+ * `<type>_<name>` entry points in the generated header.
+ */
+struct ObjectConstructor {
+	std::string name; //!< The constructor name, for example `create`.
+	std::vector<ValueType> params; //!< The constructor's parameters.
+
+	/*!
+	 * \brief Parses one constructor descriptor.
+	 * \param json The constructor object.
+	 * \return The typed constructor.
+	 * \throws std::runtime_error when the name is missing or a type is unknown.
+	 */
+	static ObjectConstructor fromJson(const nlohmann::ordered_json& json);
+
+	/*!
+	 * \brief Formats the constructor for schema interchange.
+	 * \return The ordered JSON object.
+	 */
+	nlohmann::ordered_json toJson() const;
+};
+
+/*!
  * \brief A host-registered object type: name, version, fields and methods.
  *
  * This is the "Poor Man's Reflection" table of
@@ -282,6 +310,7 @@ struct ObjectDescriptor {
 	std::vector<ObjectField> fields; //!< The stored-slot table.
 	std::vector<ObjectProperty> properties; //!< The accessor-backed properties.
 	std::vector<ObjectMethod> methods; //!< The method table (accessors included).
+	std::vector<ObjectConstructor> constructors; //!< The constructor table.
 	std::uint32_t size = 0; //!< The canonical object size, filled by validation.
 	nlohmann::ordered_json raw; //!< The original object, for open-ended fields.
 

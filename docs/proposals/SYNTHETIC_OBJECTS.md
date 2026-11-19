@@ -2,7 +2,7 @@
 
 *Host-Registered Object Types, the GObject Precedent, and What the Component Model Already Covers*
 
-Status: design note / implementation reference (**revision 9 — 2026-11-19**). This
+Status: design note / implementation reference (**revision 10 — 2026-11-19**). This
 is `EMBEDDING_SURFACE.md` §16 promoted to a note of its own: that section had grown
 into a six-hundred-line study inside an implementation reference, and the
 reference now keeps only the embedder-facing half. Revision 1 recorded a boundary —
@@ -40,6 +40,11 @@ scoped rather than attempted (§4.11).
 declares the handle *entry points*, and a `#ifdef __cplusplus` block after it turns
 them into one move-only RAII class per descriptor — compiled and run in the test
 suite, which counts the releases (§4.10).
+**Revision 10 adds construction**: `constructors[]` declares the call that *makes*
+an object, and every emitter projects it as the host language's construction — a
+C++ constructor, a WIT `constructor`, a Kotlin companion factory — with the two
+collision rules that would otherwise produce a header that does not compile
+checked at load time (§4.10).
 The `externref` + `HostBridge`
 path is unchanged and remains the answer for truly opaque host objects; the new
 path is a second, opt-in one for objects that are **expressible in Wasm**.
@@ -699,6 +704,23 @@ that owns references rather than integers.
 interface; a component that *exports* objects would export it. Making that
 explicit in the world is the whole of the packaging work — everything else about
 a resource (its `rep`, its drop, its borrow rules) is already the Canonical ABI's.
+
+**A declared constructor is a constructor.** `constructors[]` is its own table, not
+a method with a special result: it has no `self`, its result is the object by
+definition, and every emitter projects it as the host language's own construction
+— `DemoWidgetV1(int32_t p0, int32_t p1)` in C++, `constructor(p0: s32, p1: s32)`
+in WIT, `fun create(p0: Int, p1: Int)` in the Kotlin companion,
+`<type>_<name>_h_fn` in Rust, and an entry point returning the slot in C. Three
+things are load-time errors rather than a header that fails in a *consumer's*
+build: a name that collides with a method (`<type>_<name>` is one namespace), two
+constructors with the same parameter list (they would be one C++ constructor), and
+a name spelled `release` (the lifetime entry point). A parameter list that *is* the
+default or the adopting constructor's cannot be a second C++ constructor either, so
+it becomes a static factory of the same name — `DemoNodeV1::spawn()` — which is the
+same call spelled once. WIT has the opposite problem: every constructor is named
+`[constructor]r`, with no signature in the name, so a resource carries exactly
+**one**; the first expressible one is projected and the rest are noted with their
+entry point (`wasm-tools component wit` rejects a second).
 
 **One header, two audiences.** The C header has always clamped its declarations
 between `#ifdef __cplusplus / extern "C" {` and its closing `}`; what the handle
