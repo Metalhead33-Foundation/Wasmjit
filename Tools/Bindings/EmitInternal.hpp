@@ -63,7 +63,7 @@ std::string emitFSharpImpl(const nlohmann::ordered_json& schema, const Schema& t
 std::string emitPythonImpl(const nlohmann::ordered_json& schema, const Schema& typed);
 
 //! Emits Ruby/Fiddle declarations.
-std::string emitRubyImpl(const nlohmann::ordered_json& schema);
+std::string emitRubyImpl(const nlohmann::ordered_json& schema, const Schema& typed);
 
 //! Emits LuaJIT FFI declarations.
 std::string emitLuaImpl(const nlohmann::ordered_json& schema);

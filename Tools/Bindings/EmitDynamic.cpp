@@ -83,12 +83,12 @@ std::string emitPythonImpl(const Json& schema, const Schema& typed)
 }
 
 
-std::string emitRubyImpl(const Json& schema)
+std::string emitRubyImpl(const Json& schema, const Schema& typed)
 {
 	std::ostringstream out;
 	out << "# Generated Ruby/Fiddle bindings from the "
-		<< schema.at("schema").get<std::string>() << " "
-		<< schema.at("direction").get<std::string>() << " schema. Do not edit.\n";
+		<< typed.id << " "
+		<< directionName(typed.direction) << " schema. Do not edit.\n";
 	out << "require 'fiddle'\nrequire 'fiddle/import'\n\n";
 	out << "module WasmJitBindings\n\textend Fiddle::Importer\n\n";
 	std::set<std::string> witTypes;
@@ -97,12 +97,12 @@ std::string emitRubyImpl(const Json& schema)
 		out << "\t" << pascalName(type) << " = Object\n";
 	out << "\n";
 	out << "\t# Use dlload with the host's Wasm bridge library before calling.\n";
-	forEachFunction(schema, "imports", [&](const Json& entry) {
+	forEachFunction(typed, true, [&](const Entry& entry) {
 		out << "\t# G2H import: " << importComment(entry) << "\n";
 		out << "\textern 'void* wasmjit_" << sanitize(importModule(entry)) << "_"
-			<< sanitize(entry.at("name").get<std::string>()) << "'\n\n";
+			<< sanitize(entry.name) << "'\n\n";
 	});
-	forEachFunction(schema, "exports", [&](const Json& entry) {
+	forEachFunction(typed, false, [&](const Entry& entry) {
 		out << "\t# H2G export: " << exportComment(entry)
 			<< "\n\t# type: Fiddle::TYPE_VOIDP\n\n";
 	});
