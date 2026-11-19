@@ -333,6 +333,11 @@ struct ObjectDescriptor {
 	std::string parent; //!< The optional parent descriptor name.
 	std::vector<std::string> interfaces; //!< The optional interface names.
 	ObjectSelfKind self = ObjectSelfKind::Handle; //!< The receiver's wire form.
+	//! The method that ends the object's life, for an owning `externref` object.
+	//! Naming one makes the generated wrapper an owner: move-only, with a
+	//! destructor that calls it. Empty means the reference is borrowed, so the
+	//! wrapper copies and the bridge owns the lifetime (docs/proposals/SYNTHETIC_OBJECTS.md §4.13).
+	std::string destructor;
 	std::vector<ObjectField> fields; //!< The stored-slot table.
 	std::vector<ObjectProperty> properties; //!< The accessor-backed properties.
 	std::vector<ObjectMethod> methods; //!< The method table (accessors included).

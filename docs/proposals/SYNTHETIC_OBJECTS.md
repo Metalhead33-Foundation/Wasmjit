@@ -2,7 +2,7 @@
 
 *Host-Registered Object Types, the GObject Precedent, and What the Component Model Already Covers*
 
-Status: design note / implementation reference (**revision 13 — 2026-11-19**). This
+Status: design note / implementation reference (**revision 14 — 2026-11-19**). This
 is `EMBEDDING_SURFACE.md` §16 promoted to a note of its own: that section had grown
 into a six-hundred-line study inside an implementation reference, and the
 reference now keeps only the embedder-facing half. Revision 1 recorded a boundary —
@@ -40,6 +40,10 @@ scoped rather than attempted (§4.11).
 declares the handle *entry points*, and a `#ifdef __cplusplus` block after it turns
 them into one move-only RAII class per descriptor — compiled and run in the test
 suite, which counts the releases (§4.10).
+**Revision 14 adds the owned half of that shape**: `"destructor"` names the method
+that ends the object's life, so a host that exports “make one” and “destroy it”
+gets a move-only C++ wrapper whose destructor calls it, and a declaration that is
+checked at load (a real method, no parameters, no results, not an accessor).
 **Revision 13 adds the second shape**: `objects[].self` is `"handle"` (the `SO-3`
 slot, unchanged) or `"externref"` — the same member tables over an opaque host
 reference, for a payload that cannot be written in Wasm at all. §4.13 is the
@@ -1104,7 +1108,10 @@ reference**, and the generated surface is the same one §4.12 walked.
 ```
 
 `"self": "handle"` is the default and means everything §4.12 described.
-`"externref"` changes five things, and only those:
+`"externref"` changes five things, and only those. Adding
+`"destructor": "destroy"` as well is the second half of the story: it makes the
+object **owned**, which is what the rest of this section and the *borrowed or
+owned* table below are about.
 
 | | `self: handle` | `self: externref` |
 |---|---|---|
@@ -1119,13 +1126,31 @@ rule — are **identical**, because none of them was ever about the layout. That
 the point of the shape: one descriptor, two wires, the same `<type>_<name>`
 entry-point names in both.
 
+**Borrowed or owned — one key decides.** A `"destructor"` naming one of the
+object's own methods changes *who* ends its life, and therefore what the wrapper
+is:
+
+| | borrowed (no `destructor`) | owned (`"destructor": "destroy"`) |
+|---|---|---|
+| the host creates the object | a constructor returns the reference | the same |
+| the guest releases it | nobody: the bridge's count is the authority, and the reference dies with the frame | the wrapper's destructor calls the named method |
+| C++ wrapper | **copyable**, no destructor work, static factories | **move-only** with a destructor, `reset()` and `release()`; a declared constructor is a C++ constructor |
+| C | no lifetime macro | `<MACRO>_DESTRUCTOR` names the call |
+
+That is the case answered in §2.7 applied to a payload the guest can never hold:
+if the host exports “make one” and “destroy it”, the descriptor says so, and the
+generated wrapper stops pretending to be a borrowed view. Reference counting is
+the *borrowed* mode's answer — the `HostBridge` counts the reference for the
+engine — and copying is what a borrowed reference does; an owned one is copied
+once too many, which is why it does not compile.
+
 **What each target emits.** The generator adds nothing language-specific; it
 projects the same members over a receiver that is a reference:
 
 | Target | The opaque projection |
 |---|---|
 | **C** | the opaque `struct` typedef, one `typedef` per method over `type* self`, the property macros and accessors, then the constructors and members as ordinary declarations over `type*`. No `_handle`, no `_HANDLE_NONE`, no `_h_fn`, no `_release` |
-| **C++** | a **copyable** wrapper holding `type*`, with `self()`, `valid()`, `operator bool`, the members and one static factory per constructor. No destructor work: it owns nothing |
+| **C++** | a wrapper holding `type*`: **copyable** and factory-constructed when the reference is borrowed, **move-only** with a destructor that calls the declared lifetime method when it is owned |
 | **Rust** | `pub type <type>_ref = *mut <type>;` plus the `_fn` aliases, and a constructor alias returning that pointer |
 | **WIT** | the same `resource`. A component resource *is* the component-model spelling of an opaque host object, so the packaging half is unchanged (§4.10) |
 | **Kotlin** | `class X(val ref: XRef)` with a companion factory and no `close()`. The reference's spelling is the toolchain's, so `XRef` is a `typealias` the consumer points at it (Kotlin/Wasm: `JsAny`) |
@@ -1160,16 +1185,23 @@ the last reference an instance was given is dropped.
 **The guest side is the generated wrapper and nothing else.**
 
 ```cpp
-DemoSessionV1 session(referenceHandedOverByTheHost);   // copies, owns nothing
+// Borrowed: the host (or the bridge) owns the lifetime; the wrapper copies.
+DemoSessionV1 view(referenceHandedOverByTheHost);
+const std::int32_t status = view.status();             // the property accessor
+
+// Owned: the descriptor named a lifetime call, so this is one object with one
+// destroy — the scope is the object's life, and copying does not compile.
+DemoSessionV1 session = DemoSessionV1::open(0);        // or: DemoSessionV1(0)
 const std::int32_t sent = session.send(64);            // the import above
-const std::int32_t status = session.status();          // the property accessor
-anotherCall(session.self());                           // pass the reference on
+anotherCall(session.self());                           // borrow the reference
+// ~DemoSessionV1() calls `…_destroy` once, here
 ```
 
-There is nothing to release and no lifetime scope to write: a GC guest's
-reference dies with its frame and the bridge's count is the authority, while a
-guest that wants an explicit end-of-life calls the `destroy` method its own
-descriptor declares.
+For the borrowed shape there is nothing to release: a GC guest's reference dies
+with its frame and the bridge's count is the authority. For the owned one the
+wrapper *is* the owner — `reset()` destroys early, `release()` gives the reference
+away without destroying, and a move leaves exactly one owner, which the test suite
+runs and counts.
 
 **What this shape is not.** It is not a synthetic object (§2.7): there is no
 `TypeId`, no `ref.test`, no canonical layout. It is not a component resource

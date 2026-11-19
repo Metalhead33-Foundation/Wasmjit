@@ -330,9 +330,14 @@ void emitCObjects(std::ostringstream& out, const Schema& schema)
 			// own method is the call that ends the object's life; a guest that never
 			// drops it keeps it alive until the bridge does. Construction is the one
 			// call that hands a new reference over.
-			out << "\n/* Opaque host reference: no slot, no canonical size, no `_release`.\n"
-				   "   The bridge owns the lifetime; `" << type << "` values are the same\n"
-				   "   reference the host handed over. */\n";
+			if (object.destructor.empty())
+				out << "\n/* Opaque host reference: no slot, no canonical size, no `_release`.\n"
+					   "   The bridge owns the lifetime; `" << type << "` values are the same\n"
+					   "   reference the host handed over. */\n";
+			else
+				out << "\n/* Opaque host reference: no slot, no canonical size, no `_release`.\n"
+					   "   The holder owns one reference and ends it with " << type << "_"
+					<< objectIdentifier(object.destructor) << ", exactly once. */\n";
 			for (const ObjectConstructor& constructor : object.constructors) {
 				out << type << "* " << type << "_"
 					<< objectIdentifier(constructor.name) << "(";
@@ -347,6 +352,16 @@ void emitCObjects(std::ostringstream& out, const Schema& schema)
 				out << ");\n";
 			}
 
+			// The lifetime call, when the descriptor names one: the C consumer destroys
+			// an owned reference explicitly, and the C++ wrapper below calls this from
+			// its destructor.
+			if (!object.destructor.empty())
+				out << "\n/* The lifetime call: `" << type << "_"
+					<< objectIdentifier(object.destructor) << "` ends this object's life.\n"
+					   "   `release` is not a table operation here — the host owns the\n"
+					   "   reference, so the destroy is the descriptor's own call. */\n"
+					<< "#define " << macro << "_DESTRUCTOR "
+					<< quoteName(object.destructor, false) << "\n";
 			// The members are ordinary declarations over the opaque pointer, so a
 			// consumer calls them exactly as it calls the constructor above.
 			for (const ObjectMethod& method : object.methods) {
@@ -821,17 +836,28 @@ std::string pascalMemberName(std::string_view name)
 
 //! One C++ wrapper over an opaque host reference (`externref`).
 //!
-//! The reference is not owned here: the bridge counts it, so the wrapper copies,
-//! has no destructor work and no `release`. What ends the object's life is a call
-//! the descriptor declares. Construction is a static factory because the
-//! reference arrives from the host, not from a slot this class could own
-//! (docs/proposals/SYNTHETIC_OBJECTS.md §4.13).
+//! Two modes, both decided by the descriptor. With **no** `destructor` the
+//! reference is borrowed: the bridge owns the lifetime, so the wrapper copies and
+//! has no destructor work. With one it is **owned**: the wrapper holds a single
+//! reference, its destructor calls the named method, and it is move-only — one
+//! owner, one destroy (docs/proposals/SYNTHETIC_OBJECTS.md §4.13).
 void emitCppOpaqueObject(std::ostringstream& out, const Schema& schema,
 		const ObjectDescriptor& object)
 {
 	const std::string klass = pascalObjectName(object);
 	const std::string type = objectTypeName(object);
-	const std::set<std::string> reserved = { "self", "valid" };
+	const bool owning = !object.destructor.empty();
+	const std::string destroyed = owning
+			? type + "_" + objectIdentifier(object.destructor) : std::string();
+	// The wrapper's own members are taken, exactly as in the handle wrapper; an
+	// owning wrapper adds the two lifetime calls, which only an owner can have.
+	std::set<std::string> reserved = { "self", "valid" };
+	if (owning) {
+		reserved.insert("reset");
+		reserved.insert("release");
+	}
+	// An accessor is projected as its property and the lifetime call as the
+	// destructor, so neither appears again as a member.
 	std::set<std::string> claimed;
 	for (const ObjectProperty& property : object.properties) {
 		if (!property.getter.empty())
@@ -839,21 +865,59 @@ void emitCppOpaqueObject(std::ostringstream& out, const Schema& schema,
 		if (property.mutableProperty)
 			claimed.insert(property.setter);
 	}
+	if (owning)
+		claimed.insert(object.destructor);
 
-	out << "/* `" << object.name << "`: an opaque host reference. Copyable — the\n"
-		   "   bridge owns the lifetime — so there is nothing to release here. */\n";
+	out << "/* `" << object.name << "`: an opaque host reference.";
+	if (owning)
+		out << " The destructor calls\n   `" << destroyed
+			<< "`, so this wrapper owns the reference and moves.";
+	else
+		out << " Copyable — the\n   bridge owns the lifetime — so there is nothing"
+			   " to release here.";
+	out << " */\n";
+
 	out << "class " << klass << " {\npublic:\n";
-	out << "\t" << klass << "() noexcept = default;\n";
-	out << "\t//! Wraps a reference the caller already holds.\n";
-	out << "\texplicit " << klass << "(" << type << "* self) noexcept : _self(self) {}\n";
+	if (owning) {
+		out << "\t//! An empty wrapper: `valid()` is false and nothing is destroyed.\n";
+		out << "\t" << klass << "() noexcept : _self(nullptr) {}\n";
+		out << "\t//! Takes ownership of `self`; the caller must not destroy it.\n";
+		out << "\texplicit " << klass << "(" << type << "* self) noexcept : _self(self) {}\n";
+		out << "\t//! Destroys the object once; `reset()` is the same call.\n";
+		out << "\t~" << klass << "() { reset(); }\n\n";
+		out << "\t//! Moves the reference; the source becomes empty.\n";
+		out << "\t" << klass << "(" << klass << "&& other) noexcept : _self(other._self)\n"
+			   "\t{\n\t\tother._self = nullptr;\n\t}\n";
+		out << "\t" << klass << "& operator=(" << klass << "&& other) noexcept\n"
+			   "\t{\n\t\tif (this != &other) {\n\t\t\treset();\n"
+			   "\t\t\t_self = other._self;\n\t\t\tother._self = nullptr;\n"
+			   "\t\t}\n\t\treturn *this;\n\t}\n\n";
+		out << "\t//! One owner, one destroy: a copy would destroy the object twice.\n";
+		out << "\t" << klass << "(const " << klass << "&) = delete;\n";
+		out << "\t" << klass << "& operator=(const " << klass << "&) = delete;\n\n";
+	} else {
+		out << "\t" << klass << "() noexcept = default;\n";
+		out << "\t//! Wraps a reference the caller already holds.\n";
+		out << "\texplicit " << klass << "(" << type << "* self) noexcept : _self(self) {}\n";
+	}
 	out << "\t//! True when the wrapper refers to an object.\n";
 	out << "\tbool valid() const noexcept { return _self != nullptr; }\n";
 	out << "\t//! The same test, so `if (object)` reads naturally.\n";
 	out << "\texplicit operator bool() const noexcept { return valid(); }\n";
 	out << "\t//! The reference, for a call that takes one.\n";
 	out << "\t" << type << "* self() const noexcept { return _self; }\n";
+	if (owning) {
+		out << "\n\t//! Ends the object's life now; the destructor then does nothing.\n";
+		out << "\tvoid reset() noexcept\n\t{\n\t\tif (_self != nullptr) {\n\t\t\t"
+			<< destroyed << "(_self);\n\t\t\t_self = nullptr;\n\t\t}\n\t}\n";
+		out << "\n\t//! Gives up the reference *without* destroying it; the caller owns it.\n";
+		out << "\t" << type << "* release() noexcept\n\t{\n\t\t" << type
+			<< "* gave = _self;\n\t\t_self = nullptr;\n\t\treturn gave;\n\t}\n";
+	}
 
 	for (const ObjectConstructor& constructor : object.constructors) {
+		const std::string factory = camelMemberName(constructor.name);
+		const std::string entry = type + "_" + objectIdentifier(constructor.name);
 		std::string declared;
 		std::string args;
 		for (std::size_t index = 0; index < constructor.params.size(); ++index) {
@@ -865,11 +929,27 @@ void emitCppOpaqueObject(std::ostringstream& out, const Schema& schema,
 			declared += objectCType(schema, constructor.params.at(index)) + " " + param;
 			args += param;
 		}
+		// A declared constructor is a C++ constructor when the wrapper owns the
+		// object — the same projection the handle shape uses. When its parameter
+		// list would *be* the default constructor's (empty), or its name is one of
+		// the wrapper's own, it becomes a static factory with the same name.
+		const bool collides = reserved.count(factory) != 0u;
+		if (owning && collides) {
+			out << "\n\t//! `" << constructor.name << "` is not wrapped: the wrapper's"
+				   " own `" << factory << "` is a member. Call `" << entry
+				<< "` directly.\n";
+			continue;
+		}
+		const bool asFactory = !owning || constructor.params.empty();
 		out << "\n\t//! `" << constructor.name << "`: the call that makes one.\n";
-		out << "\tstatic " << klass << " " << camelMemberName(constructor.name)
-			<< "(" << declared << ")\n\t{\n\t\treturn " << klass << "(" << type
-			<< "_" << objectIdentifier(constructor.name) << "(" << args
-			<< "));\n\t}\n";
+		if (asFactory) {
+			out << "\tstatic " << klass << " " << factory << "(" << declared << ")\n"
+				   "\t{\n\t\treturn " << klass << "(" << entry << "(" << args
+				<< "));\n\t}\n";
+		} else {
+			out << "\t" << klass << "(" << declared << ")\n\t\t: _self(" << entry
+				<< "(" << args << ")) {}\n";
+		}
 	}
 
 	for (const ObjectProperty& property : object.properties) {
@@ -941,8 +1021,9 @@ void emitCppObjects(std::ostringstream& out, const Schema& schema)
 		   "   to an entry point. The slot is host state — a wrapper means nothing in\n"
 		   "   another Store or process — and `release()` hands ownership back without\n"
 		   "   releasing, which is what a caller wants when passing the slot on.\n"
-		   "   An `externref` object has no slot: its wrapper holds the reference, owns\n"
-		   "   nothing and copies (§4.13). */\n\n";
+		   "   An `externref` object has no slot: its wrapper holds the reference. With no\n"
+		   "   declared `destructor` it is borrowed and copies; with one it owns the\n"
+		   "   reference, moves, and the destructor calls that method (§4.13). */\n\n";
 	for (const ObjectDescriptor& object : *objects) {
 		if (isOpaqueObject(object)) {
 			emitCppOpaqueObject(out, schema, object);

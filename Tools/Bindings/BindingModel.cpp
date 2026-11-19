@@ -558,6 +558,35 @@ void validateObjectKey(const ObjectDescriptor& object,
 				+ "' is declared twice; one name and version has one shape");
 }
 
+//! Validates the lifetime call an owning `externref` object names.
+//!
+//! Naming one is what turns the generated wrapper into an owner, so the call has
+//! to be a real method with the one signature a destructor can have: no
+//! parameters, no results, and not an accessor — an accessor is a property's
+//! spelling, and a property is not the object's end of life.
+void validateObjectDestructor(const ObjectDescriptor& object)
+{
+	const std::string where =
+			"object '" + object.name + "' `destructor` '" + object.destructor + "'";
+	const ObjectMethod* method = findMethod(object, object.destructor);
+	if (method == nullptr)
+		throw std::runtime_error(where + " is not declared in `methods`; the"
+				" lifetime call is a method of the object like any other");
+	// An accessor is the clearer mistake of the two, and it is the one a reader
+	// is likelier to make: a property's function is a member, but it is not the
+	// object's end of life.
+	for (const ObjectProperty& property : object.properties) {
+		if (property.getter == object.destructor
+				|| (property.mutableProperty && property.setter == object.destructor))
+			throw std::runtime_error(where + " is the accessor of property '"
+					+ property.name + "'; a property is not the object's lifetime"
+					" call");
+	}
+	if (!method->params.empty() || !method->results.empty())
+		throw std::runtime_error(where + " must take no parameters and return"
+				" nothing, but `methods` declares " + signatureLabel(*method));
+}
+
 //! Validates every member of one descriptor: names, accessors and signatures.
 //!
 //! A field, a property and a method share one member namespace, because every
@@ -718,10 +747,20 @@ void validateObjects(std::vector<ObjectDescriptor>& objects)
 						" `externref` object has no fields — the payload stays in"
 						" the host, so the guest reaches it only through the"
 						" declared accessors");
+			if (!object.destructor.empty())
+				validateObjectDestructor(object);
 			object.size = 0;
 			validateObjectMembers(object);
+			validateObjectKey(object, keys);
 			continue;
 		}
+		// The handle shape already has one lifetime entry point, synthesised from
+		// the slot; a declared one would be a second spelling of the same act.
+		if (!object.destructor.empty())
+			throw std::runtime_error("object '" + object.name + "': a `handle`"
+					" object's lifetime entry point is `<type>_release`; a declared"
+					" `destructor` belongs to an `externref` object, whose lifetime"
+					" call the host implements");
 		WASM::HostTypeDefinition definition;
 		definition.kind = WASM::HostTypeKind::Struct;
 		definition.fields.reserve(object.fields.size());
@@ -975,6 +1014,9 @@ ObjectDescriptor ObjectDescriptor::fromJson(const Json& json)
 	else
 		throw std::runtime_error("object '" + out.name + "': `self` must be"
 				" \"handle\" or \"externref\", not '" + self + "'");
+	// The lifetime call, for an owning opaque object: naming one makes the
+	// generated wrapper an owner (move-only, destructor calls it).
+	out.destructor = jsonString(json, "destructor");
 	if (json.contains("interfaces") && json.at("interfaces").is_array()) {
 		for (const Json& item : json.at("interfaces")) {
 			if (item.is_string())
@@ -1030,6 +1072,10 @@ Json ObjectDescriptor::toJson() const
 		out["self"] = "externref";
 	else
 		out.erase("self");
+	if (destructor.empty())
+		out.erase("destructor");
+	else
+		out["destructor"] = destructor;
 	out["size"] = size;
 	out["fields"] = Json::array();
 	for (const ObjectField& field : fields)

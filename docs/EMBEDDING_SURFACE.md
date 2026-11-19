@@ -1492,6 +1492,14 @@ the lifetime. One descriptor, two shapes: a product targeting a non-GC guest and
 GC one emits it twice, once per `self`, and the member declarations are the same
 in both ([`proposals/SYNTHETIC_OBJECTS.md`](proposals/SYNTHETIC_OBJECTS.md) §4.13).
 
+**…and who ends its life.** `objects[].destructor` names the method that destroys
+an `externref` object. With one the generated C++ wrapper is move-only, its
+destructor calls that method, `reset()` destroys early and `release()` gives the
+reference away; without one the wrapper is a borrowed, copyable view and the
+`HostBridge` count is the authority. The call is validated at load — a declared
+method, no parameters, no results, not a property accessor — and a `handle` object
+may not declare one, because its lifetime entry point is `_release`.
+
 **The generator works on structures, not JSON.** The object emitters take the typed
 `Schema`: `EmitObjects.cpp` names `nlohmann::json` nowhere, switches on `ValueKind`
 and `HeapKind` instead of comparing strings, and prints the `size`/`offset` the
@@ -3058,6 +3066,10 @@ typed schema, so the generator stops trafficking JSON internally.
 `"externref"`, so a class whose payload cannot be expressed in Wasm gets the same
 generated surface — declarations over `type*`, a copyable C++ wrapper, no
 `_release` — instead of being hand-written (§16.1, and §4.13 of the note).
+**Revision 47 (2026-11-19)** adds the owned half: `objects[].destructor` names the
+method that ends an `externref` object's life, so a host that also exports the
+destroy gets a move-only C++ wrapper whose destructor calls it, and a `<MACRO>_DESTRUCTOR`
+name for C.
 
 ### 16.1 The primitive an embedder gets
 
@@ -3070,7 +3082,7 @@ generated surface — declarations over `type*`, a copyable C++ wrapper, no
 | the **descriptor and its schema** | **shipped** (`SO-2`): `wasmjit.binding/2` `objects` section → validated against `layoutHostType`, emitted as C/Rust metadata tables and WIT resources | §11.8; [`../Tools/Bindings/`](../Tools/Bindings/) `BindingModel`, `EmitObjects` |
 | a **property** of an object | **shipped** (`SO-7`, tooling only): `objects[].properties[]` declares a value type and a `get`/`set` accessor pair, checked against `methods[]` and emitted as export-name macros plus accessor typedefs in C/Rust and a `func()` member in WIT — no engine surface, because the value *is* a call | §11.8; [`proposals/SYNTHETIC_OBJECTS.md`](proposals/SYNTHETIC_OBJECTS.md) §4.7 |
 | a **handle** for a non-GC consumer | **shipped** (`SO-3`): `WASM::HostHandle` (one `i64`, generation over slot) and `WASM::HostHandleTable` (acquire/release/resolve, one engine count, stale and wrong-type rejection); the emitters declare the `_h_fn` thunk surface per method and property | `WasmHostObject.hpp`; [`proposals/SYNTHETIC_OBJECTS.md`](proposals/SYNTHETIC_OBJECTS.md) §4.9 |
-| an **opaque** host object (payload not expressible in Wasm) | **shipped** (`self: externref`): the same descriptor tables over an opaque host reference — no fields, no size, no `_release`; the bridge counts the reference and a declared constructor hands one over. Projected into C (declarations over `type*`), a copyable C++ wrapper, Rust, WIT (`resource`) and Kotlin | `Tools/Bindings/EmitObjects.cpp`; [`proposals/SYNTHETIC_OBJECTS.md`](proposals/SYNTHETIC_OBJECTS.md) §4.13 |
+| an **opaque** host object (payload not expressible in Wasm) | **shipped** (`self: externref`): the same descriptor tables over an opaque host reference — no fields, no size, no `_release`; the bridge counts the reference and a declared constructor hands one over. `destructor` names the method that ends its life, which makes the C++ wrapper move-only and gives C a `<MACRO>_DESTRUCTOR`; without one the wrapper is a borrowed view. Projected into C (declarations over `type*`), C++, Rust, WIT (`resource`) and Kotlin | `Tools/Bindings/EmitObjects.cpp`; [`proposals/SYNTHETIC_OBJECTS.md`](proposals/SYNTHETIC_OBJECTS.md) §4.13 |
 | a cross-language object *type* | component resources (`own`/`borrow`, `resource.drop`, `resource.rep`) | [`proposals/COMPONENT_MODEL.md`](proposals/COMPONENT_MODEL.md) §2.3/§4.3 |
 | a function namespace for the object's methods | synthetic modules and native imports | [`SCOPE.md`](SCOPE.md) §3.1 |
 

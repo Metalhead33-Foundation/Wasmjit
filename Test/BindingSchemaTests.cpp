@@ -3011,6 +3011,185 @@ TEST_CASE("the generated externref object header compiles as C and C++",
 	}
 }
 
+// Naming a lifetime call makes the wrapper an **owner**: move-only, with a
+// destructor that calls it, and constructors that are C++ constructors. This is
+// the `std::vector`-shaped object — the host creates the native object, hands the
+// reference over, and destroys it when the guest is done (SO §4.13).
+TEST_CASE("an owning externref object is move-only and destroys once",
+		"[bindings][objects]")
+{
+	using WASM::Bindings::Language;
+	using WASM::Bindings::ObjectSelfKind;
+	using WASM::Bindings::Schema;
+	const Json source = Json::parse(R"({
+		"schema": "wasmjit.binding/2", "direction": "all", "module": "demo",
+		"objects": [ { "name": "demo.Session", "version": 1, "self": "externref",
+			"destructor": "destroy",
+			"methods": [ { "name": "send", "argNames": ["bytes"],
+			               "params": ["i32"], "results": ["i32"] },
+			             { "name": "destroy", "params": [], "results": [] } ],
+			"constructors": [ { "name": "open", "argNames": ["slot"], "params": ["i32"] } ] } ],
+		"imports": [], "exports": [] })");
+	const Schema schema = Schema::fromJson(source);
+	REQUIRE(schema.objects.size() == 1u);
+	CHECK(schema.objects.at(0).self == ObjectSelfKind::ExternRef);
+	CHECK(schema.objects.at(0).destructor == "destroy");
+
+	const std::string header = WASM::Bindings::emit(schema, Language::CHeader);
+	// The C surface names the lifetime call and keeps it a plain declaration...
+	CHECK(header.find("#define WASMJIT_OBJECT_DEMO_SESSION_V1_DESTRUCTOR"
+			" \"destroy\"") != std::string::npos);
+	CHECK(header.find("void wasmjit_object_demo_session_v1_destroy("
+			"wasmjit_object_demo_session_v1* self);") != std::string::npos);
+	// ...and the wrapper owns: destructor, move, no copy, no static factory.
+	CHECK(header.find("~DemoSessionV1() { reset(); }") != std::string::npos);
+	CHECK(header.find("DemoSessionV1(const DemoSessionV1&) = delete;")
+			!= std::string::npos);
+	CHECK(header.find("DemoSessionV1(DemoSessionV1&& other) noexcept")
+			!= std::string::npos);
+	CHECK(header.find("void reset() noexcept") != std::string::npos);
+	CHECK(header.find("DemoSessionV1(int32_t slot)") != std::string::npos);
+	CHECK(header.find("static DemoSessionV1 open(") == std::string::npos);
+	// The lifetime call is the destructor, so it is not also a member.
+	CHECK(header.find("void destroy()") == std::string::npos);
+	// The shape round-trips.
+	CHECK(schema.toJson()["objects"][0]["destructor"] == "destroy");
+}
+
+// The three ways a declared lifetime call can be wrong, and the shape that may
+// not have one at all.
+TEST_CASE("a declared destructor is checked against the object it destroys",
+		"[bindings][objects]")
+{
+	using WASM::Bindings::Schema;
+	const auto failure = [](const Json& candidate) {
+		try {
+			(void)Schema::fromJson(candidate);
+		} catch (const std::runtime_error& error) {
+			return std::string(error.what());
+		}
+		return std::string();
+	};
+	const Json base = Json::parse(R"({
+		"schema": "wasmjit.binding/2", "direction": "all", "module": "demo",
+		"objects": [ { "name": "demo.Session", "version": 1, "self": "externref",
+			"destructor": "destroy",
+			"methods": [ { "name": "destroy", "params": [], "results": [] } ] } ],
+		"imports": [], "exports": [] })");
+	CHECK(failure(base).empty());
+
+	Json undeclared = base;
+	undeclared["objects"][0]["destructor"] = "dispose";
+	CHECK(failure(undeclared).find("is not declared in `methods`")
+			!= std::string::npos);
+
+	Json takesArguments = base;
+	takesArguments["objects"][0]["methods"][0]["params"] = Json::parse(R"(["i32"])");
+	CHECK(failure(takesArguments).find("must take no parameters")
+			!= std::string::npos);
+
+	Json returnsValue = base;
+	returnsValue["objects"][0]["methods"][0]["results"] = Json::parse(R"(["i32"])");
+	CHECK(failure(returnsValue).find("must take no parameters")
+			!= std::string::npos);
+
+	// A property's accessor is a member, but it is not the end of an object.
+	Json accessor = base;
+	accessor["objects"][0]["properties"] = Json::parse(
+			R"([ { "name": "status", "type": "i32", "get": "destroy" } ])");
+	accessor["objects"][0]["methods"][0]["results"] = Json::parse(R"(["i32"])");
+	CHECK(failure(accessor).find("is the accessor of property")
+			!= std::string::npos);
+
+	// The handle shape already has `_release`; a second lifetime call is two
+	// spellings of one act.
+	Json handle = Json::parse(R"({
+		"schema": "wasmjit.binding/2", "direction": "all", "module": "demo",
+		"objects": [ { "name": "demo.Thing", "version": 1, "destructor": "destroy",
+			"methods": [ { "name": "destroy", "params": [], "results": [] } ] } ],
+		"imports": [], "exports": [] })");
+	CHECK(failure(handle).find("lifetime entry point is `<type>_release`")
+			!= std::string::npos);
+}
+
+// The owning wrapper, compiled and run: the destructor destroys exactly once, a
+// move still leaves one owner, and `release()` gives the reference up without
+// destroying it. The stubs below stand for what a host implements.
+TEST_CASE("the owning externref wrapper destroys exactly once", "[bindings][objects]")
+{
+	if (!haveTool("g++ --version > /dev/null 2>&1")) {
+		WARN("g++ not found; skipped the owning wrapper run");
+		return;
+	}
+	const Json source = Json::parse(R"({
+		"schema": "wasmjit.binding/2", "direction": "all", "module": "demo",
+		"objects": [ { "name": "demo.Session", "version": 1, "self": "externref",
+			"destructor": "destroy",
+			"methods": [ { "name": "destroy", "params": [], "results": [] } ],
+			"constructors": [ { "name": "open", "argNames": ["slot"], "params": ["i32"] } ] } ],
+		"imports": [], "exports": [] })");
+	const WASM::Bindings::Schema schema = WASM::Bindings::Schema::fromJson(source);
+	const std::filesystem::path dir = bindingsDir() / "opaque_owned";
+	std::filesystem::create_directories(dir);
+	const std::filesystem::path headerPath = dir / "demo.h";
+	const std::filesystem::path sourcePath = dir / "demo.cpp";
+	const std::filesystem::path logPath = dir / "g++.log";
+	const std::filesystem::path binaryPath = dir / "demo";
+	{
+		std::ofstream header(headerPath, std::ios::binary);
+		header << WASM::Bindings::emit(schema, WASM::Bindings::Language::CHeader);
+		std::ofstream unit(sourcePath, std::ios::binary);
+		unit << R"(#include "demo.h"
+#include <cstdint>
+#include <utility>
+
+namespace {
+
+struct Session { int destroys = 0; };
+Session g_session;
+
+} // namespace
+
+extern "C" wasmjit_object_demo_session_v1*
+wasmjit_object_demo_session_v1_open(std::int32_t)
+{
+    return reinterpret_cast<wasmjit_object_demo_session_v1*>(&g_session);
+}
+
+extern "C" void wasmjit_object_demo_session_v1_destroy(
+        wasmjit_object_demo_session_v1* self)
+{
+    ++reinterpret_cast<Session*>(self)->destroys;
+}
+
+int main()
+{
+    { DemoSessionV1 session(std::int32_t(7)); (void)session; }
+    if (g_session.destroys != 1) return 1;   // the destructor destroyed once
+
+    { DemoSessionV1 first(std::int32_t(7));
+      DemoSessionV1 second(std::move(first)); (void)second; }
+    if (g_session.destroys != 2) return 2;   // a move is still one owner
+
+    { DemoSessionV1 session(std::int32_t(7)); (void)session.release(); }
+    if (g_session.destroys != 2) return 3;   // release destroys nothing
+
+    { DemoSessionV1 session(std::int32_t(7)); session.reset(); session.reset(); }
+    if (g_session.destroys != 3) return 4;   // reset destroys once, then the
+                                             // destructor does nothing
+    return 0;
+}
+)";
+	}
+	const std::string compile = "g++ -std=c++2a -I\"" + dir.string() + "\" \""
+			+ sourcePath.string() + "\" -o \"" + binaryPath.string() + "\" > \""
+			+ logPath.string() + "\" 2>&1";
+	INFO(readText(logPath));
+	REQUIRE(std::system(compile.c_str()) == 0);
+	const std::string run = "\"" + binaryPath.string() + "\"";
+	CHECK(std::system(run.c_str()) == 0);
+}
+
 // A constructor is an entry point with no `self`. It shares the method namespace,
 // it cannot be spelled twice in one class, and its parameters are typed like any
 // other — all checked at load time, because each failure would otherwise be a
