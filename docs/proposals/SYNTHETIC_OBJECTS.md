@@ -2,7 +2,7 @@
 
 *Host-Registered Object Types, the GObject Precedent, and What the Component Model Already Covers*
 
-Status: design note / implementation reference (**revision 14 — 2026-11-19**). This
+Status: design note / implementation reference (**revision 15 — 2026-11-19**). This
 is `EMBEDDING_SURFACE.md` §16 promoted to a note of its own: that section had grown
 into a six-hundred-line study inside an implementation reference, and the
 reference now keeps only the embedder-facing half. Revision 1 recorded a boundary —
@@ -40,6 +40,10 @@ scoped rather than attempted (§4.11).
 declares the handle *entry points*, and a `#ifdef __cplusplus` block after it turns
 them into one move-only RAII class per descriptor — compiled and run in the test
 suite, which counts the releases (§4.10).
+**Revision 15 answers the provenance question**: §4.14 states the rule — `objects[]`
+is *authored*, by hand or by the embedder's own build step, because no front-end
+derives it (`SO22`) — gives the four routes, and walks author → `--emit schema` →
+emit, including the merge when the function half came from a candidate.
 **Revision 14 adds the owned half of that shape**: `"destructor"` names the method
 that ends the object's life, so a host that exports “make one” and “destroy it”
 gets a move-only C++ wrapper whose destructor calls it, and a declaration that is
@@ -1044,7 +1048,8 @@ a guest that drops its reference does not free a handle-rooted one (`SO15`).
 
 **Step 7 — generate the other half.** The engine half above is hand-written; the
 emitted half starts from a descriptor, and the two agree because the descriptor's
-offsets are validated against the same `layoutHostType` (§4.5):
+offsets are validated against the same `layoutHostType` (§4.5). Where that
+document comes from is §4.14's question: it is authored, and the tool judges it.
 
 ```json
 { "schema": "wasmjit.binding/2", "direction": "all", "module": "demo",
@@ -1211,6 +1216,134 @@ handle shape: a guest whose toolchain cannot spell a reference uses `self: handl
 on the *same* descriptor (§16.2 of [`../EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md)
 records which can), which is why both spellings live on one schema.
 
+### 4.14 Where the descriptor comes from
+
+§4.12 and §4.13 both begin with a JSON document. This is the step before: who
+writes that document, and why the tool declines to derive it.
+
+**The answer: `objects[]` is authored.** It is the one part of
+`wasmjit.binding/2` that has no producer in the tree, and that is a decision
+rather than an omission — `SO22` records it as the gap it is:
+
+- **a Wasm module does not carry it.** A module has types and functions; a
+  `(struct (mut i32) (mut i32))` has no field *names*, no version, no method
+  table, no property accessors and no lifetime policy. Those *are* the descriptor.
+- **a candidate front-end does not carry it either.** `--candidates` (SWIG) and
+  `--glue-candidates` read a C++ surface and produce **host function imports**:
+  the first parameter must be `VMContext*`, the rest must map to scalar or
+  reference kinds, and a class is not a function.
+- **the two cannot be mixed in one invocation.** `--schema` refuses
+  `--candidates`/`--glue-candidates`/WIT, and each of those refuses `--schema`,
+  so there is no in-tool merge to lean on.
+- **the shape is a product decision**, invisible in a header: whether a class is
+  a synthetic object or an opaque reference is §2.7's question, and whether it is
+  *owned* is one more key (§4.13).
+
+**What the tool does instead is judge the document.** That is why authoring it is
+safe rather than fragile: every claim is checked against the engine, not trusted.
+
+| Where the document comes from | When it is the right route | What the tool adds |
+|---|---|---|
+| **hand-written JSON** | a handful of objects, or a first prototype — §4.12's example | validates offsets against `layoutHostType`, derives `size`/`offset`/`bytes`, checks names, accessors, `self` and `destructor` |
+| **your own emitter** — one small program in your build that prints the document from the same table the host registers | a product with many objects, or objects that follow a class list | exactly the same checks; it cannot tell who wrote the document |
+| **SWIG / Glue candidates** | the *function* half only: host imports whose first parameter is `VMContext*` | never emits `objects`; merge the two documents before feeding them in |
+| **a component's WIT** | when the object already exists as a component interface | projects `types[]` and function entries (`witOwnership.kind == "resource"`), not `objects` |
+
+The workflow that follows from that table is one sentence: **author once, validate
+with `--emit schema`, then emit.** `--emit schema` is not a debug dump — it is the
+parse-and-normalise step, and its output is the document worth keeping in the
+build, because it carries the offsets the engine derived.
+
+**Step 1 — one document, both shapes.** A product that has a plain-data class and
+a `std::vector`-holding session writes both descriptors into one file:
+
+```json
+{ "schema": "wasmjit.binding/2", "direction": "all", "module": "demo",
+  "objects": [
+    { "name": "demo.Widget", "version": 1,
+      "fields": [ { "name": "width", "type": "i32", "mutable": true },
+                  { "name": "height", "type": "i32" } ],
+      "properties": [ { "name": "status", "type": "i32", "get": "get_status" } ],
+      "methods": [ { "name": "area", "params": [], "results": ["i32"] },
+                   { "name": "get_status", "params": [], "results": ["i32"] } ],
+      "constructors": [ { "name": "create", "argNames": ["width", "height"],
+                          "params": ["i32", "i32"] } ] },
+    { "name": "demo.Session", "version": 1, "self": "externref", "destructor": "destroy",
+      "methods": [ { "name": "send", "params": ["i32"], "results": ["i32"] },
+                   { "name": "destroy", "params": [], "results": [] } ],
+      "constructors": [ { "name": "open", "params": [] } ] } ],
+  "imports": [], "exports": [] }
+```
+
+Nothing in it is a measurement: `size`, `offset`, `bytes` and `reference` are all
+absent, because the reader derives them.
+
+**Step 2 — validate and normalise.** `--emit schema` is the step that turns the
+claims into facts:
+
+```bash
+wasmjit-bindings --schema objects.binding.json --emit schema > objects.validated.json
+```
+
+The output is the same document with `width` at offset 16 and `height` at 20,
+`"size": 24`, every type spelled as a `{"type": …}` object, and `self` and
+`destructor` preserved where they were declared. Keeping *that* file in the build
+is what makes a later emitter change visible.
+
+**Step 3 — the judge refuses the three mistakes that matter.** Each of these is a
+message, not a broken header in a consumer's build:
+
+```text
+object 'demo.Widget' field 'height': declared offset 12 disagrees with the canonical offset 20
+object 'demo.Session': an `externref` object has no fields — the payload stays in the host,
+    so the guest reaches it only through the declared accessors
+object 'demo.Session' `destructor` 'dispose' is not declared in `methods`; the lifetime call
+    is a method of the object like any other
+```
+
+**Step 4 — the functions come from a candidate, the objects from you.** A product
+that already has a `VMContext*`-shaped host surface lets SWIG or Glue produce the
+*function* half, and merges its own descriptors in before the emitting run. There
+is no flag for this, deliberately — the merge is ten lines of the build's own
+script:
+
+```python
+import json
+functions = json.load(open("host.functions.json"))   # --candidates … --frontend-schema
+objects = json.load(open("objects.binding.json"))    # authored or generated
+functions["schema"] = "wasmjit.binding/2"            # objects are the /2 addition
+functions["objects"] = objects["objects"]
+json.dump(functions, open("combined.binding.json", "w"), indent=2)
+```
+
+```bash
+wasmjit-bindings --schema combined.binding.json --emit c-header > bindings.h
+```
+
+**Step 5 — or let the build print the document.** For a product with many objects,
+the emitter is the same three loops every time: walk the class table, print
+`fields` from the layout the host already registers, print `methods`, `properties`
+and `constructors` from the function table, print one `objects[]` entry per
+`(name, version)`. Two rules keep it honest:
+
+- **it must read the same table the host registers**, or the two drift and the
+  tool refuses the document (which is the safe failure);
+- **it must not print `size` or `offset`.** Those are the tool's half of the
+  contract; printing them turns a derived fact into an assertion that will one
+  day be wrong.
+
+A generated document is not trusted more than a hand-written one — `--emit schema`
+sees the same claims either way. That is the whole reason §4.12's tutorial could
+start from JSON without asking where it came from, and why it is worth answering
+the question here instead.
+
+**What would change this** is a class-aware candidate front-end: something that
+reads a C++ surface and emits `objects[]` itself. It would still have to be *told*
+each class's `self` (handle or opaque) and which method destroys it, because those
+are product decisions, not facts about the class — so it would be a generator that
+takes a policy file, not a parser that infers one. Until such a front-end exists,
+the authored document is the input, and `SO22` says so.
+
 ## 5. Gaps
 
 Every row below is either a **claim that has not been demonstrated** or a missing
@@ -1242,6 +1375,7 @@ product ship this?”), not against the engine's completeness meter
 | SO19 | **A signal the host raises between calls cannot re-enter the guest.** A subscription is a stored callback, and invoking it when no call is in flight crosses the one-agent-per-call contract; a *dynamic* signal name crosses SOD6 as well | §4.8; the `[multiagent]`/`[concurrency]` contract; no callback table with lifetime rules exists | **Documented limit**; the static pattern (§4.8 row 1) covers the product need; the callback table is its own proposal |
 | SO20 | **A handle carries no table identity.** Resolving it against a table it did not come from either falls outside that table's slots or — if the index and generation happen to match a live slot — aliases it | §4.9; the mitigation is structural (one table per Store, the handle stays host-side) | **Documented limit**; a per-table salt or tag would make it checkable, and `SO5`'s cross-Store test is where it would show |
 | SO21 | **`resource.drop` does not reach a `HostHandleTable`.** The component resource destructor runs once in the defining runtime (proven), but nothing lowers a component-level `release: func(u32)` into a core module and calls the table, so a component cannot yet release a host object through its resource | §4.10; no such fixture or import path exists | **High for `SO-4`'s component half**; needs a component fixture plus the lowered import, not an engine change |
+| SO22 | **No producer for `objects[]`.** The descriptor half of `wasmjit.binding/2` is authored — hand-written, or printed by the embedder's own build step — because nothing derives it: a module carries no field names, versions or members; `--candidates`/`--glue-candidates` emit function imports only; and a class's `self` and `destructor` are product decisions rather than facts about the class | §4.14; `--schema` cannot be combined with a candidate or WIT input, so there is no in-tool merge | **Documented limit**; the tool validates whatever arrives (offsets through `layoutHostType`, names, accessors, lifetimes), and a class-aware front-end would need a policy file, not a parser |
 
 ## 6. Where we can and should play fast and loose
 

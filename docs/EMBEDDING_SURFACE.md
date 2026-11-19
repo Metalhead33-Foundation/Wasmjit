@@ -1492,6 +1492,14 @@ the lifetime. One descriptor, two shapes: a product targeting a non-GC guest and
 GC one emits it twice, once per `self`, and the member declarations are the same
 in both ([`proposals/SYNTHETIC_OBJECTS.md`](proposals/SYNTHETIC_OBJECTS.md) §4.13).
 
+**The `objects` half is authored, not derived.** No front-end produces it: a module
+carries no field names, versions or members; `--candidates`/`--glue-candidates`
+emit function imports only; and `--schema` cannot be combined with either. A
+product writes the document — by hand, or from one small program in its own build —
+and `--emit schema` validates and normalises it: offsets derived, sizes computed,
+names, accessors, `self` and `destructor` all checked
+([`proposals/SYNTHETIC_OBJECTS.md`](proposals/SYNTHETIC_OBJECTS.md) §4.14, `SO22`).
+
 **…and who ends its life.** `objects[].destructor` names the method that destroys
 an `externref` object. With one the generated C++ wrapper is move-only, its
 destructor calls that method, `reset()` destroys early and `release()` gives the
@@ -3070,6 +3078,9 @@ generated surface — declarations over `type*`, a copyable C++ wrapper, no
 method that ends an `externref` object's life, so a host that also exports the
 destroy gets a move-only C++ wrapper whose destructor calls it, and a `<MACRO>_DESTRUCTOR`
 name for C.
+**Revision 48 (2026-11-19)** records the provenance rule: `objects[]` is authored
+and validated, never derived — no module, candidate front-end or WIT input produces
+it (§16.1, and §4.14 of the note, `SO22`).
 
 ### 16.1 The primitive an embedder gets
 
