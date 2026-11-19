@@ -1235,73 +1235,10 @@ void copySegmentIntoElements(uint8_t* destination, const uint8_t* source,
 	}
 }
 
-// The header's reference count is read-modify-written, not merely read, so it
-// cannot go through `GcHeader::readWord`: reversing a sum is not the sum of
-// reversing. The *coded* word is what the CAS compares and the decoded value is
-// what the caller reasons about, which is what keeps one heap layout on every
-// host (docs/proposals/BIG_ENDIAN.md `BED3`) without making the count
-// unmaintainable. On a little-endian host both words are the same word, so every
-// method below is the `std::atomic_ref` loop it always was (`BED5`).
-class GcRefcount
-{
-public:
-	explicit GcRefcount(uint32_t* coded) noexcept : coded_(*coded) {}
 
-	uint32_t load() const noexcept
-	{
-		return decode(coded_.load(std::memory_order_relaxed));
-	}
-
-	//! Saturating increment; returns the count the cell held (D19: a leak beats a wrap).
-	uint32_t increment() noexcept
-	{
-		uint32_t coded = coded_.load(std::memory_order_relaxed);
-		for (;;) {
-			const uint32_t value = decode(coded);
-			if (value == std::numeric_limits<uint32_t>::max())
-				return value;
-			if (coded_.compare_exchange_weak(coded, encode(value + 1),
-					std::memory_order_relaxed))
-				return value;
-		}
-	}
-
-	//! Decrement; returns the count the cell held, and flags underflow instead.
-	uint32_t decrement(bool& underflow) noexcept
-	{
-		underflow = false;
-		uint32_t coded = coded_.load(std::memory_order_relaxed);
-		for (;;) {
-			const uint32_t value = decode(coded);
-			if (value == 0) {
-				underflow = true;
-				return 0;
-			}
-			if (coded_.compare_exchange_weak(coded, encode(value - 1),
-					std::memory_order_relaxed))
-				return value;
-		}
-	}
-
-	//! Non-atomic adjustment, for the safepoint trial-deletion pass.
-	void adjust(int delta) noexcept
-	{
-		coded_.store(encode(load() + static_cast<uint32_t>(delta)),
-				std::memory_order_relaxed);
-	}
-
-private:
-	static uint32_t decode(uint32_t coded) noexcept
-	{
-		return headerWordFromGuest(!WASM::hostMatchesGuestByteOrder(), coded);
-	}
-	static uint32_t encode(uint32_t value) noexcept
-	{
-		return decode(value); // the reversal is its own inverse
-	}
-
-	std::atomic_ref<uint32_t> coded_; //!< The header word, in the layout's own order.
-};
+// The GC reference count lives in WasmGcHeader.hpp (`WASM::GcRefcount`): the
+// host-object seam decrements the same count, so there is one implementation
+// and therefore one count (docs/proposals/SYNTHETIC_OBJECTS.md A.14.4).
 
 // Delegate to the shared helpers so the runtime and the backend cannot drift (H1).
 void* gcArrayByteAddressImpl(void* reference, uint32_t address, uint64_t offset,

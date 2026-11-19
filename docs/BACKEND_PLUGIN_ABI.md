@@ -2,10 +2,11 @@
 
 *Dynamically Loaded Code Generators Behind a Minimal C ABI*
 
-Status: implementation reference (revision 3 — 2026-11-13). `BP-1`…`BP-5` are
+Status: implementation reference (revision 4 — 2026-11-19). `BP-1`…`BP-5` are
 shipped: the POD views, the name-based registry, the `dlopen` loader, its refusal
 tests, and the plugin packaging. §4 now quotes the interface as it is, including
-the C signature/layout views that closed the last gap this note tracked. The
+the C signature/layout views that closed the last gap this note tracked, and §4.5
+walks a load end to end. The
 **full C compilation seam is still deliberately not taken** (Design 1, §4.3).
 Audience: anyone who will implement another code generator, freeze the public ABI
 ([`EMBEDDING_SURFACE.md`](EMBEDDING_SURFACE.md)), or package the library.
@@ -39,7 +40,7 @@ same reason: the dangerous boundary (code ↔ runtime) is already C.
 |---|---|
 | §2 | How far does the Unreal-renderer analogy go before it breaks? |
 | §3 | What does the tree already provide? |
-| §4 | What **is** the interface, field by field? |
+| §4 | What **is** the interface, field by field — and how does a load resolve it? |
 | §5 | What can cross the boundary, and what must not? |
 | §6 | What are the boundary rules a plugin must obey? |
 | §7 | What are the hard problems that make this "medium" and not "easy"? |
@@ -275,6 +276,74 @@ signature view an embedder, a harness and a plugin can all read, whether or not
 the backend that produced it is in-process. `[backendabi]`
 (`Test/BackendAbiTests.cpp`) pins the kind codes and both round trips.
 
+### 4.5 An end-to-end load
+
+**No backend is ever compiled into the core.** `libWasmBase` links against no
+code generator, and none is built into it: `LibJit/LibJit.pro` links
+*`-lWasmBase`*, and each backend is its own shared object exporting
+`wasmjit_backend_query` (§4.1). What varies between the two routes is **who maps
+that object**:
+
+| Route | Call | Who loads the `.so` |
+|---|---|---|
+| the application already links the backend (`LIBS += -lLibJit`) | `WASM::Runtime::create("libjit", config)` | the process loader, before `main`: the library's `WASMJIT_REGISTER_BACKEND` static initialiser has filled the registry, so `hasBackend("libjit")` is already true and no `dlopen` happens |
+| the application links nothing and only names it | `WASM::Runtime::create("example", config)` | `Runtime::create` itself: there is no registry entry, so `createBackendByName` falls back to `loadBackendPlugin("example")`, which `dlopen`s `libwasmjit-backend-example.so` from `WASMJIT_BACKEND_PATH` (colon-separated), the working directory or the executable's directory |
+
+So “compiled in” and “statically linked” are both wrong descriptions of a backend:
+the code generator is always a separate shared image, and the only question is
+whether the *application's* link line brought it into the process or WasmJit
+fetched it on demand. `WASM::backendNames()` reports the first set — every name
+whose library is already mapped — which is why it can only answer for those.
+
+```cpp
+// Route 1: the application links libLibJit, so its registration has run.
+auto runtime = WASM::Runtime::create("libjit", config);
+
+// Route 2: nothing links it; create() loads it from the search path.
+::setenv("WASMJIT_BACKEND_PATH", "/opt/acme/lib", 1);
+auto other = WASM::Runtime::create("acme", config);    // libwasmjit-backend-acme.so
+
+other->backendName();               // "acme"
+other->profile();                   // the profile it will enforce
+other->compilationCapabilities();    // what the plugin declared it can produce
+```
+
+`loadBackendPluginFile(path)` and `loadBackendPlugin(name)` are public and return a
+`BackendInstance`; `[plugin]` calls them directly to assert the handshake. They
+are **not** a way to build a `Runtime` around one file — that constructor is
+private — so an embedder that must name an exact path puts its directory on
+`WASMJIT_BACKEND_PATH` and uses `Runtime::create(name)`. A runtime created that
+way remembers the resolved path and recreates its per-instance compiler state
+through it, rather than re-reading the variable, which the embedder may have
+changed since `create`.
+
+The load is a five-step handshake; each refusal is a message the diagnostic sink
+records as `WASM.BACKEND.PLUGIN` (§4.1, §4.2):
+
+1. `dlsym` for `wasmjit_backend_query`. Absent → “not a backend”.
+2. Call it with `WASMJIT_BACKEND_ABI_VERSION`. `nullptr` back → whatever
+   `wasmjit_backend_last_error()` says, or an ABI-version refusal.
+3. Compare `desc->abi_version` — **3** today. A plugin built against 2 would call
+   through a vtable whose slots moved, so it is refused here rather than in the
+   first compiled function.
+4. Compare `core_abi_version` and `build_flags`. A plugin built against a
+   different core ABI, or of a different build kind, is refused before its code
+   runs.
+5. `desc->create(&host, &instantiator)`. A non-zero status is a load failure, and
+   the descriptor's `destroy` is what releases a successful one.
+
+A successful load is a **Note** carrying the path and the build kind, so an
+embedder that only watches its sink still sees the lifecycle
+([`DIAGNOSTICS.md`](DIAGNOSTICS.md) §5.5). Once the runtime exists, the rest is
+§2.1 of [`EMBEDDING_SURFACE.md`](EMBEDDING_SURFACE.md): load, instantiate, call —
+with the plugin's capabilities deciding what may be asked of it
+(`Runtime::supports()`, and `CPD6`'s refusal when a policy asks for more).
+
+The worked example is `Test/ExampleBackend/`: a plugin the frontend was never
+compiled with or linked against, built in its own directory, found by name through
+the search path, and driven through the ordinary `Runtime` API; `[plugin]` covers
+every refusal above.
+
 ## 5. What can cross the boundary
 
 | Crosses | Examples | Notes |
@@ -414,7 +483,7 @@ guarantees or explicit embedder responsibilities; none is an open code gap.
 
 | Evidence | Result | Reading |
 |---|---|---|
-| Default suite (2026-11-13) | **22,881 assertions / 843 cases, green** | The compiled-in path is the baseline every `BP-*` stage must preserve. |
+| Default suite (2026-11-13) | **22,881 assertions / 843 cases, green** | The in-process (registry) path is the baseline every `BP-*` stage must preserve. |
 | Backend selection | `WasmBackendRegistry` names `libjit` and `null`; an unknown name is a named error | The selector is general and the second implementation exists. |
 | Plugin load test | **Present** — `Test/ExampleBackend/libwasmjit-backend-example.so`, loaded by path and by name (`[plugin]`) | `BP-3`; the plugin lives in its own directory and the frontend was not rebuilt for it. |
 | Wrong-ABI / missing-symbol / failing-create tests | **Present** — descriptor ABI, core ABI, no query symbol, missing file, failing `create` (`[plugin]`) | `BP-3`/`BP-4`; every path is an exception with a reason, never an abort. |

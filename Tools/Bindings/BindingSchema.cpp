@@ -728,7 +728,9 @@ Schema componentSchemaModel(const WASM::Component& component,
 
 Schema projectSchema(const Schema& input, Direction direction)
 {
-	if (input.id != "wasmjit.binding/1")
+	// `/2` is `/1` plus the `objects` section, and an object descriptor is
+	// direction-neutral, so a projection keeps every object unchanged (A.14.5).
+	if (input.id != "wasmjit.binding/1" && input.id != "wasmjit.binding/2")
 		throw std::runtime_error("schema import: unsupported schema id");
 	if (input.direction == direction) {
 		Schema out = input;
@@ -776,19 +778,21 @@ Json projectSchema(const Json& input, Direction direction)
 
 std::string emitCHeader(const Schema& input)
 {
-	return emitCHeader(input.toJson());
+	Json view = input.toJson();
+	dedupeFunctionEntries(view);
+	return emitCHeaderImpl(view, input);
 }
 
 std::string emitCHeader(const nlohmann::ordered_json& input)
 {
 	Json schema = input;
 	dedupeFunctionEntries(schema);
-	return emitCHeaderImpl(schema);
+	return emitCHeaderImpl(schema, Schema::fromJson(schema));
 }
 
 std::string emitRustModule(const Schema& input)
 {
-	return emitRustModule(input.toJson());
+	return detail::emitRustModuleImpl(input.toJson(), input);
 }
 
 

@@ -2,12 +2,13 @@
 
 *Implementation Notes, Spec Status, and Deliberate Deviations*
 
-Status: design note / implementation reference (revision 12 — TH-1…TH-6 are
+Status: design note / implementation reference (revision 13 — TH-1…TH-6 are
 implemented). TH-5 (real agents) is an opt-in `ConcurrencyModel::Agents` with a
 guest-address-keyed waiter table, concurrent entry into the one instance,
 per-agent trap state and a multi-mutator-safe GC path. `Single` stays the default
 and is bit-identical to the previous revision; at most one instance per module
-is allowed, and concurrent compilation is rejected as a feature.
+is allowed, and concurrent compilation is rejected as a feature. Revision 13 adds
+§4.6, the opt-in written as an embedder uses it.
 Audience: anyone touching `WasmMemory`, `WasmStore`, `WasmOpcode`,
 `WasmOpcodeDispatcher`, `LibjitOpcodeDispatcher`, or the test harness.
 
@@ -382,6 +383,64 @@ Two further properties of the tail-call lowering:
   elements) now work on all three too (`global=5 struct32=7 struct64=9
   array=11`). Reference slots and table slots still refuse: the former need the
   GC retain/release barrier and the latter need table.get/set lowering.
+
+### 4.6 Opting into several agents
+
+The model above is opt-in, and the opt-in is one field plus one call per host
+thread. A guest that exports `bump(n)` and `total()` over a shared `i32` global —
+incremented with `global.atomic.rmw.add`, because ordering is the guest's job —
+is driven like this:
+
+```cpp
+WASM::RuntimeConfig config;
+config.concurrency = WASM::ConcurrencyModel::Agents;   // default: Single
+auto runtime = WASM::Runtime::create("libjit", config);
+
+auto module = runtime->loadFile("counter.wasm");
+WASM::RegistryImportResolver imports;
+WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+
+std::vector<std::thread> workers;
+for (int i = 0; i < 4; ++i) {
+    workers.emplace_back([&] {
+        auto agent = runtime->createAgent();   // this thread's execution state
+        WASM::AgentScope scope(*agent);        // install it for this scope
+        runtime->callExport<void>(instance, "bump", 1000);
+    });
+}
+for (auto& thread : workers)
+    thread.join();
+
+const std::int32_t total = runtime->callExport<std::int32_t>(instance, "total");  // 4000
+```
+
+Four things are worth being explicit about, because each is a contract rather than
+a convention:
+
+| Contract | What it means in the code above |
+|---|---|
+| **one instance** | every thread enters the *same* `ModuleInstance`; the cardinality rule still holds (`THREADSAFETY.md` §3.1) |
+| **agent per thread** | `createAgent` gives that thread a private trap slot, pending exception, tail-call state, defer stack, depth counters and stack limit — a trap on one thread never appears on another |
+| **the host owns the threads** | no thread is spawned by the engine; `HostAgentScheduler` is declared, embedder-owned and never called by the engine (§6.2) |
+| **the guest owns the ordering** | shared memory, globals and tables are shared state; the guest synchronises with `i32/i64.atomic.*`, `global.atomic.*`, `table/struct/array.atomic.*` and `memory.atomic.wait`/`notify` (§4.3) |
+
+`safepoint()` stays a quiescent operation: it refuses an instance with a call in
+flight, so a host that collects does it after joining, not inside a worker. And if
+the embedder forgets `config.concurrency`, nothing is silently shared — a second
+thread entering the instance is refused with a named error, which is the same
+answer `Single` gave before the model existed.
+
+Diagnostics stay per-execution-state for the same reason: each agent has its own
+ring. A host that wants one log for four workers installs one sink on each agent's
+execution state (§4.3.1's row for why a runtime-level copy would reintroduce
+`TRAP-6`).
+
+The `[multiagent]` suite (`Test/ConcurrencyTests.cpp`) is the executable form of
+the table: concurrent entry, acquire/release message passing through shared
+memory, `wait`/`notify`, shared-global RMW, trap isolation, concurrent GC
+allocation and reclamation, and the reference-slot barrier. The walkthrough form,
+with the boundary hooks that usually surround it, is
+[`../EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) §2.2.
 
 ## 5. Gaps
 

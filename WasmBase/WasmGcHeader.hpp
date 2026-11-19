@@ -15,9 +15,11 @@ WASMJIT_VISIBLE_BEGIN
 #include "WasmByteOrder.hpp"
 #include "WasmCanonicalType.hpp"
 #include "WasmType.hpp"
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 
 namespace WASM {
 
@@ -117,6 +119,91 @@ inline void writeWord(void* object, uint32_t offset, uint32_t value) noexcept
 	std::memcpy(static_cast<uint8_t*>(object) + offset, &raw, sizeof(raw));
 }
 } // namespace GcHeader
+
+//! The GC object's reference count, in the header's coded byte order.
+//!
+//! The count is read-modify-written, not merely read, so it cannot go through
+//! `GcHeader::readWord`: reversing a sum is not the sum of reversing. The
+//! *coded* word is what the CAS compares and the decoded value is what the
+//! caller reasons about, which keeps one heap layout on every host
+//! (docs/proposals/BIG_ENDIAN.md `BED3`) without making the count
+//! unmaintainable. On a little-endian host both words are the same word, so
+//! every method is the `std::atomic_ref` loop it always was (`BED5`).
+//!
+//! The runtime and the host-object seam share this one implementation: the
+//! count is the engine's (`SOD4`), so a second spelling of the arithmetic would
+//! be a second count waiting to disagree
+//! (docs/proposals/SYNTHETIC_OBJECTS.md A.14.4).
+/** \brief Atomic, saturating access to one GC object's header reference count. */
+class GcRefcount
+{
+public:
+	//! Binds the accessor to one object's count word.
+	/** \brief Binds the accessor to a header count word. \param coded Pointer to the object's count word (`object + kRefcountOffset`). */
+	explicit GcRefcount(std::uint32_t* coded) noexcept : coded_(*coded) {}
+
+	//! Reads the count without modifying it.
+	/** \brief Reads the count. \return The decoded reference count. */
+	std::uint32_t load() const noexcept
+	{
+		return decode(coded_.load(std::memory_order_relaxed));
+	}
+
+	//! Saturating increment; returns the count the cell held (D19: a leak beats a wrap).
+	/** \brief Increments the count, saturating at the maximum. \return The count the cell held before the increment. */
+	std::uint32_t increment() noexcept
+	{
+		std::uint32_t coded = coded_.load(std::memory_order_relaxed);
+		for (;;) {
+			const std::uint32_t value = decode(coded);
+			if (value == std::numeric_limits<std::uint32_t>::max())
+				return value;
+			if (coded_.compare_exchange_weak(coded, encode(value + 1),
+					std::memory_order_relaxed))
+				return value;
+		}
+	}
+
+	//! Decrement; returns the count the cell held, and flags underflow instead.
+	/** \brief Decrements the count unless it is zero. \param underflow Set to true when the count was already zero. \return The count the cell held before the attempt. */
+	std::uint32_t decrement(bool& underflow) noexcept
+	{
+		underflow = false;
+		std::uint32_t coded = coded_.load(std::memory_order_relaxed);
+		for (;;) {
+			const std::uint32_t value = decode(coded);
+			if (value == 0) {
+				underflow = true;
+				return 0;
+			}
+			if (coded_.compare_exchange_weak(coded, encode(value - 1),
+					std::memory_order_relaxed))
+				return value;
+		}
+	}
+
+	//! Non-atomic adjustment, for the safepoint trial-deletion pass.
+	/** \brief Adds a signed delta without saturation. \param delta Adjustment to apply. */
+	void adjust(int delta) noexcept
+	{
+		coded_.store(encode(load() + static_cast<std::uint32_t>(delta)),
+				std::memory_order_relaxed);
+	}
+
+private:
+	//! Decodes a header word from the layout's byte order.
+	static std::uint32_t decode(std::uint32_t coded) noexcept
+	{
+		return headerWordFromGuest(!hostMatchesGuestByteOrder(), coded);
+	}
+	//! Encodes a count into the layout's byte order.
+	static std::uint32_t encode(std::uint32_t value) noexcept
+	{
+		return decode(value); //!< The reversal is its own inverse.
+	}
+
+	std::atomic_ref<std::uint32_t> coded_; //!< The header word, in the layout's own order.
+};
 
 //! \par Storage layout helpers, shared so the runtime and the backend agree (H1)
 

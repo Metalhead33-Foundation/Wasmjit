@@ -506,12 +506,21 @@ void Runtime::safepoint()
 	// embedder must call safepoint() only when it knows no agent can enter
 	// (normally after joining its threads), because a call can start between
 	// the check and gcCollect().
+	bool quiescent = true;
 	for (auto& entry : instances_) {
 		ModuleInstance& instance = *entry.second.instance;
-		if (instance.inCall())
+		if (instance.inCall()) {
+			quiescent = false;
 			continue;
+		}
 		instance.gcCollect();
 	}
+	// Host-created objects are Store-owned (docs/proposals/SYNTHETIC_OBJECTS.md
+	// A.14.3) and their queue is shared by every instance, so it can only be
+	// drained when *no* instance is in a call: an uncounted borrow of a released
+	// host object may sit on any live frame.
+	if (quiescent)
+		store_.collectHostObjects();
 }
 
 std::unique_ptr<Agent> Runtime::createAgent()

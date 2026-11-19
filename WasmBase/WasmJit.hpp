@@ -46,6 +46,8 @@ WASMJIT_VISIBLE_BEGIN
 #include "WasmException.hpp"
 #include "WasmExn.hpp"
 #include "WasmHostBridge.hpp"
+#include "WasmHostObject.hpp"
+#include "WasmHostType.hpp"
 #include "WasmImport.hpp"
 #include "WasmMemory.hpp"
 #include "WasmModule.hpp"

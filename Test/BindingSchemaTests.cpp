@@ -1819,7 +1819,9 @@ TEST_CASE("WIT records get named C++ declarations", "[bindings]")
 	REQUIRE(header.find("struct wasmjit_wit_point;") != std::string::npos);
 	REQUIRE(header.find("struct wasmjit_wit_point {") != std::string::npos);
 	REQUIRE(header.find("int32_t x;") != std::string::npos);
-	REQUIRE(header.find("int32_t value") != std::string::npos);
+	// `echo(value: point)` takes and returns the named record, so the parameter's
+	// spelling is the record pointer — the name is what this case is about.
+	REQUIRE(header.find("wasmjit_wit_point* value") != std::string::npos);
 	REQUIRE(schema.types[0].at("witLayout").at("size") == 4);
 	REQUIRE(schema.types[0].at("witLayout").at("align") == 4);
 	REQUIRE(schema.types[5].at("witOwnership").at("kind") == "resource");
@@ -2570,4 +2572,1199 @@ testStore().types(), WASM::Bindings::Direction::HostToGuest, "v128_param");
 		INFO("language index " << static_cast<int>(language));
 		CHECK(text.find("arg0_lo") == std::string::npos);
 	}
+}
+namespace {
+
+//! A `wasmjit.binding/2` schema: the object section is input the generator
+//! consumes and never produces (docs/proposals/SYNTHETIC_OBJECTS.md A.14.5).
+Json objectSchema()
+{
+	return Json::parse(R"({
+		"schema": "wasmjit.binding/2",
+		"direction": "all",
+		"module": "demo",
+		"objects": [
+			{ "name": "demo.Widget", "version": 1,
+			  "parent": "demo.Base",
+			  "interfaces": ["demo.Sized"],
+			  "fields": [
+				{ "name": "x", "type": "i32" },
+				{ "name": "y", "type": "i32", "mutable": true },
+				{ "name": "label", "type": { "type": "ref", "heap": "extern" } },
+				{ "name": "target", "type": { "type": "ref", "heap": "defined", "name": "demo.Node" }, "mutable": true }
+			  ],
+			  "properties": [
+				{ "name": "status", "type": "i32", "get": "get_status", "set": "set_status" },
+				{ "name": "caption", "type": "i32", "get": "compute_caption" },
+				{ "name": "preview", "type": { "type": "ref", "heap": "defined", "name": "demo.Node" }, "get": "get_preview" }
+			  ],
+			  "methods": [
+				{ "name": "resize", "argNames": ["width", "height"], "params": ["i32", "i32"], "results": [] },
+				{ "name": "area", "params": [], "results": ["i32"] },
+				{ "name": "attach", "argNames": ["target"], "params": [ { "type": "ref", "heap": "defined", "name": "demo.Node" } ], "results": [] },
+				{ "name": "blit", "argNames": ["lanes"], "params": ["v128"], "results": [] },
+				{ "name": "get_status", "params": [], "results": ["i32"] },
+				{ "name": "set_status", "params": ["i32"], "results": [] },
+				{ "name": "compute_caption", "params": [], "results": ["i32"] },
+				{ "name": "get_preview", "params": [], "results": [ { "type": "ref", "heap": "defined", "name": "demo.Node" } ] }
+			  ],
+			  "constructors": [ { "name": "create", "argNames": ["width", "height"], "params": ["i32", "i32"] },
+			                    { "name": "open", "argNames": ["slot"], "params": ["i64"] } ] },
+			{ "name": "demo.Node", "version": 1,
+			  "fields": [ { "name": "kind", "type": "i8" } ],
+			  "constructors": [ { "name": "spawn", "params": [] } ] },
+			{ "name": "demo.Widget", "version": 2,
+			  "fields": [ { "name": "x", "type": "i32" } ] }
+		],
+		"imports": [], "exports": []
+	})");
+}
+
+} // namespace
+
+TEST_CASE("a v2 schema validates object offsets against the canonical layout", "[bindings][objects]")
+{
+	const WASM::Bindings::Schema schema = WASM::Bindings::Schema::fromJson(objectSchema());
+	CHECK(schema.id == "wasmjit.binding/2");
+	REQUIRE(schema.objects.size() == 3u);
+
+	const WASM::Bindings::ObjectDescriptor& widget = schema.objects[0];
+	CHECK(widget.name == "demo.Widget");
+	CHECK(widget.version == 1u);
+	CHECK(widget.parent == "demo.Base");
+	REQUIRE(widget.interfaces.size() == 1u);
+	CHECK(widget.interfaces[0] == "demo.Sized");
+	REQUIRE(widget.fields.size() == 4u);
+	// Header 16: i32, i32, a pointer-aligned reference at 24 and another at 32.
+	CHECK(widget.fields[0].offset == 16u);
+	CHECK(widget.fields[1].offset == 20u);
+	CHECK(widget.fields[1].bytes == 4u);
+	CHECK(widget.fields[1].mutableField);
+	CHECK(widget.fields[2].offset == 24u);
+	CHECK(widget.fields[2].bytes == 8u);
+	CHECK(widget.fields[2].isReference);
+	CHECK(widget.fields[3].offset == 32u);
+	CHECK(widget.fields[3].isReference);
+	CHECK(widget.size == 40u);
+	// Two properties and their three accessors are declared as methods too: an
+	// accessor is a function of the object, not a second kind of member.
+	REQUIRE(widget.properties.size() == 3u);
+	CHECK(widget.properties[0].name == "status");
+	CHECK(widget.properties[0].getter == "get_status");
+	CHECK(widget.properties[0].setter == "set_status");
+	CHECK(widget.properties[0].mutableProperty);
+	CHECK(widget.properties[1].name == "caption");
+	CHECK(widget.properties[1].setter.empty());
+	CHECK_FALSE(widget.properties[1].mutableProperty);
+	// A property may itself be a typed handle, not only a scalar.
+	CHECK(widget.properties[2].type.kind == WASM::Bindings::ValueKind::Ref);
+	CHECK(widget.properties[2].type.heap == WASM::Bindings::HeapKind::Defined);
+	CHECK(widget.properties[2].type.name == "demo.Node");
+	REQUIRE(widget.methods.size() == 8u);
+	CHECK(widget.methods[0].params.size() == 2u);
+	CHECK(widget.methods[2].params.size() == 1u);
+	// A packed field is one byte and the object is `header + 1`.
+	CHECK(schema.objects[1].fields[0].bytes == 1u);
+	CHECK(schema.objects[1].size == 17u);
+	// Two versions of one name are two descriptors, not a dedup.
+	CHECK(schema.objects[2].version == 2u);
+	CHECK(schema.objects[2].size == 20u);
+
+	// The interchange form carries the derived facts, not the asserted ones.
+	const Json out = schema.toJson();
+	CHECK(out.at("schema") == "wasmjit.binding/2");
+	REQUIRE(out.at("objects").size() == 3u);
+	CHECK(out.at("objects")[0].at("size") == 40u);
+	CHECK(out.at("objects")[0].at("fields")[1].at("offset") == 20u);
+	CHECK(out.at("objects")[0].at("fields")[2].at("reference") == true);
+	CHECK(out.at("objects")[0].at("methods")[0].at("name") == "resize");
+
+	// A `/1` schema keeps its version and gains no empty section.
+	const Json one = Json::parse(R"({
+		"schema": "wasmjit.binding/1", "direction": "g2h", "module": "m",
+		"imports": [], "exports": [] })");
+	const Json oneOut = WASM::Bindings::Schema::fromJson(one).toJson();
+	CHECK(oneOut.at("schema") == "wasmjit.binding/1");
+	CHECK_FALSE(oneOut.contains("objects"));
+}
+
+TEST_CASE("the object section is refused when its version or layout disagrees", "[bindings][objects]")
+{
+	using WASM::Bindings::Schema;
+	const auto failure = [](const Json& input) {
+		try {
+			(void)Schema::fromJson(input);
+		} catch (const std::runtime_error& error) {
+			return std::string(error.what());
+		}
+		return std::string();
+	};
+
+	Json unknown = objectSchema();
+	unknown["schema"] = "wasmjit.binding/3";
+	CHECK(failure(unknown).find("wasmjit.binding/2") != std::string::npos);
+
+	Json mislabelled = objectSchema();
+	mislabelled["schema"] = "wasmjit.binding/1";
+	CHECK(failure(mislabelled).find("requires wasmjit.binding/2") != std::string::npos);
+
+	Json shifted = objectSchema();
+	shifted["objects"][0]["fields"][1]["offset"] = 8;
+	CHECK(failure(shifted).find("canonical offset 20") != std::string::npos);
+
+	Json duplicate = objectSchema();
+	duplicate["objects"][2]["version"] = 1;
+	CHECK(failure(duplicate).find("declared twice") != std::string::npos);
+
+	Json badType = objectSchema();
+	badType["objects"][1]["fields"][0]["type"] = "string";
+	CHECK(failure(badType).find("not a Wasm storage type") != std::string::npos);
+}
+
+TEST_CASE("a property is an accessor pair, not a stored slot", "[bindings][objects]")
+{
+	using WASM::Bindings::Schema;
+	const Json source = objectSchema();
+	const Schema schema = Schema::fromJson(source);
+	const WASM::Bindings::ObjectDescriptor& widget = schema.objects[0];
+	REQUIRE(widget.properties.size() == 3u);
+
+	// A property owns no bytes: dropping the section changes no offset and no
+	// size, because `layoutHostType` never saw it.
+	Json stripped = source;
+	stripped["objects"][0].erase("properties");
+	const Schema plain = Schema::fromJson(stripped);
+	REQUIRE(plain.objects.size() == 3u);
+	REQUIRE(plain.objects[0].fields.size() == widget.fields.size());
+	CHECK(plain.objects[0].size == widget.size);
+	for (std::size_t index = 0; index < widget.fields.size(); ++index) {
+		CHECK(plain.objects[0].fields[index].offset == widget.fields[index].offset);
+		CHECK(plain.objects[0].fields[index].bytes == widget.fields[index].bytes);
+	}
+
+	// The interchange form keeps the accessor pair, and only when there is one.
+	const Json out = schema.toJson();
+	REQUIRE(out.at("objects")[0].contains("properties"));
+	const Json& properties = out.at("objects")[0].at("properties");
+	REQUIRE(properties.size() == 3u);
+	CHECK(properties[0].at("name") == "status");
+	CHECK(properties[0].at("get") == "get_status");
+	CHECK(properties[0].at("set") == "set_status");
+	CHECK_FALSE(properties[1].contains("set"));
+	CHECK_FALSE(out.at("objects")[1].contains("properties"));
+}
+
+TEST_CASE("a property that cannot be bound is refused at load", "[bindings][objects]")
+{
+	using WASM::Bindings::Schema;
+	const auto failure = [](const Json& input) {
+		try {
+			(void)Schema::fromJson(input);
+		} catch (const std::runtime_error& error) {
+			return std::string(error.what());
+		}
+		return std::string();
+	};
+
+	// No getter: a member you can only write is a method with a side effect.
+	Json noGetter = objectSchema();
+	noGetter["objects"][0]["properties"][0].erase("get");
+	CHECK(failure(noGetter).find("missing `get`") != std::string::npos);
+
+	// A property is not a slot, so an offset is a field written the wrong way.
+	Json offset = objectSchema();
+	offset["objects"][0]["properties"][0]["offset"] = 8;
+	CHECK(failure(offset).find("no storage offset") != std::string::npos);
+
+	// `mutable` follows the setter; asserting it without one is a contradiction.
+	Json readOnly = objectSchema();
+	readOnly["objects"][0]["properties"][1]["mutable"] = true;
+	CHECK(failure(readOnly).find("`mutable` without `set`") != std::string::npos);
+
+	// A field, a property and a method share one member namespace.
+	Json fieldName = objectSchema();
+	fieldName["objects"][0]["properties"][0]["name"] = "x";
+	CHECK(failure(fieldName).find("same name as a field") != std::string::npos);
+
+	Json methodName = objectSchema();
+	methodName["objects"][0]["properties"][0]["name"] = "area";
+	CHECK(failure(methodName).find("same name as a method") != std::string::npos);
+
+	// An accessor is a function of the object, so `methods` must declare it...
+	Json undeclared = objectSchema();
+	undeclared["objects"][0]["properties"][0]["get"] = "read_status";
+	CHECK(failure(undeclared).find("is not declared in `methods`")
+			!= std::string::npos);
+
+	// ... and the declared signature must be the one the property implies.
+	Json wrongGetter = objectSchema();
+	wrongGetter["objects"][0]["methods"][4]["results"] = Json::array({ "i64" });
+	CHECK(failure(wrongGetter).find("must take no parameters and return i32")
+			!= std::string::npos);
+
+	Json wrongSetter = objectSchema();
+	wrongSetter["objects"][0]["methods"][5]["params"] = Json::array();
+	CHECK(failure(wrongSetter).find("must take i32 and return nothing")
+			!= std::string::npos);
+
+	// Two properties of one name, or two properties under one accessor, are
+	// both ambiguous: one member, one accessor.
+	Json duplicate = objectSchema();
+	const Json twice = duplicate["objects"][0]["properties"][0];
+	duplicate["objects"][0]["properties"].push_back(twice);
+	CHECK(failure(duplicate).find("is declared twice") != std::string::npos);
+
+	Json shared = objectSchema();
+	shared["objects"][0]["properties"][1]["get"] = "get_status";
+	CHECK(failure(shared).find("already claimed by another property")
+			!= std::string::npos);
+}
+
+// The handle surface owns one name in the descriptor's namespace — the lifetime
+// entry point — and the C++ wrapper owns four in its own. The first is refused at
+// load time because every generated artifact calls it by that name; the rest are
+// projected as plain entry points, so the class stays unambiguous.
+TEST_CASE("the wrapper's own member names are not taken by the descriptor",
+		"[bindings][objects]")
+{
+	using WASM::Bindings::Schema;
+	const Json source = Json::parse(R"({
+		"schema": "wasmjit.binding/2", "direction": "all", "module": "demo",
+		"objects": [ { "name": "demo.Trap", "version": 1,
+			"fields": [],
+			"properties": [ { "name": "handle", "type": "i32", "get": "get_handle" } ],
+			"methods": [ { "name": "get_handle", "params": [], "results": ["i32"] },
+			             { "name": "reset", "params": [], "results": [] },
+			             { "name": "area", "params": [], "results": ["i32"] } ] } ],
+		"imports": [], "exports": [] })");
+	const Schema schema = Schema::fromJson(source);
+	const std::string header =
+			WASM::Bindings::emit(schema, WASM::Bindings::Language::CHeader);
+
+	REQUIRE(header.find("class DemoTrapV1 {") != std::string::npos);
+	// The wrapper's own members survive...
+	CHECK(header.find("\twasmjit_object_demo_trap_v1_handle handle() const noexcept")
+			!= std::string::npos);
+	CHECK(header.find("\tvoid reset() noexcept") != std::string::npos);
+	// ... the descriptor's members become notes plus entry points...
+	CHECK(header.find("is not a member: the wrapper's own `handle` is")
+			!= std::string::npos);
+	CHECK(header.find("is not a member: the wrapper's own `reset` is")
+			!= std::string::npos);
+	CHECK(header.find("wasmjit_object_demo_trap_v1_prop_handle_get(")
+			!= std::string::npos);
+	CHECK(header.find("wasmjit_object_demo_trap_v1_reset(") != std::string::npos);
+	// ... and a member that shadows nothing is still a member.
+	CHECK(header.find("\tint32_t area()") != std::string::npos);
+
+	// `release` is the one reserved at load time: it is the lifetime entry point.
+	Json collision = source;
+	collision["objects"][0]["methods"][2]["name"] = "release";
+	try {
+		(void)Schema::fromJson(collision);
+		FAIL("a method named `release` must be refused");
+	} catch (const std::runtime_error& error) {
+		CHECK(std::string(error.what()).find("lifetime entry point")
+				!= std::string::npos);
+	}
+}
+
+// An `externref` object (docs/proposals/SYNTHETIC_OBJECTS.md §2.7, §4.13): the
+// same descriptor tables over an opaque host reference, for a native type whose
+// payload cannot be written as Wasm values. There is no slot and no canonical
+// layout, the bridge owns the lifetime, and a declared constructor is the call
+// that hands a reference over.
+TEST_CASE("an externref object projects an opaque receiver in every target",
+		"[bindings][objects]")
+{
+	using WASM::Bindings::Language;
+	using WASM::Bindings::ObjectSelfKind;
+	using WASM::Bindings::Schema;
+	const Json source = Json::parse(R"({
+		"schema": "wasmjit.binding/2", "direction": "all", "module": "demo",
+		"objects": [ { "name": "demo.Session", "version": 1, "self": "externref",
+			"properties": [ { "name": "status", "type": "i32", "get": "get_status" } ],
+			"methods": [ { "name": "send", "argNames": ["bytes"],
+			               "params": ["i32"], "results": ["i32"] },
+			             { "name": "get_status", "params": [], "results": ["i32"] } ],
+			"constructors": [ { "name": "open", "argNames": ["slot"], "params": ["i32"] } ] } ],
+		"imports": [], "exports": [] })");
+	const Schema schema = Schema::fromJson(source);
+	REQUIRE(schema.objects.size() == 1u);
+	CHECK(schema.objects.at(0).self == ObjectSelfKind::ExternRef);
+	// No canonical layout exists, so the descriptor carries no size.
+	CHECK(schema.objects.at(0).size == 0u);
+
+	const std::string header = WASM::Bindings::emit(schema, Language::CHeader);
+	// The typed accessor surface is the same shape as a handle object's...
+	CHECK(header.find("typedef int32_t (*wasmjit_object_demo_session_v1_send_fn)"
+			"(wasmjit_object_demo_session_v1* self, int32_t bytes);")
+			!= std::string::npos);
+	// ...a constructor hands a reference over instead of a slot...
+	CHECK(header.find("wasmjit_object_demo_session_v1*"
+			" wasmjit_object_demo_session_v1_open(int32_t slot);")
+			!= std::string::npos);
+	// ...and the slot surface is absent entirely: no handle, no size, no release.
+	CHECK(header.find("wasmjit_object_demo_session_v1_handle") == std::string::npos);
+	CHECK(header.find("_HANDLE_NONE") == std::string::npos);
+	CHECK(header.find("wasmjit_object_demo_session_v1_release") == std::string::npos);
+	CHECK(header.find("WASMJIT_OBJECT_DEMO_SESSION_V1_SIZE") == std::string::npos);
+	// The C++ wrapper holds the reference and owns nothing, so it copies.
+	CHECK(header.find("class DemoSessionV1 {") != std::string::npos);
+	CHECK(header.find("static DemoSessionV1 open(int32_t slot)") != std::string::npos);
+	CHECK(header.find("wasmjit_object_demo_session_v1* self() const noexcept")
+			!= std::string::npos);
+	CHECK(header.find("int32_t status() const") != std::string::npos);
+	CHECK(header.find("void reset() noexcept") == std::string::npos);
+
+	const std::string rust = WASM::Bindings::emit(schema, Language::Rust);
+	CHECK(rust.find("pub type wasmjit_object_demo_session_v1_ref ="
+			" *mut wasmjit_object_demo_session_v1;") != std::string::npos);
+	CHECK(rust.find("_SIZE") == std::string::npos);
+
+	const std::string wit = WASM::Bindings::emit(schema, Language::Wit);
+	CHECK(wit.find("Opaque: the payload is host-private") != std::string::npos);
+	CHECK(wit.find("resource demo-session-v1") != std::string::npos);
+
+	const std::string kotlin = WASM::Bindings::emit(schema, Language::Kotlin);
+	CHECK(kotlin.find("class DemoSessionV1(val ref: DemoSessionV1Ref)")
+			!= std::string::npos);
+	CHECK(kotlin.find("fun open(slot: Int): DemoSessionV1") != std::string::npos);
+	// No `AutoCloseable`, so no `close()`: the bridge owns the reference.
+	CHECK(kotlin.find("override fun close") == std::string::npos);
+	CHECK(kotlin.find("AutoCloseable") == std::string::npos);
+
+	// The shape round-trips, and both rules the wire cannot honour are refused.
+	const Json round = schema.toJson();
+	CHECK(round["objects"][0]["self"] == "externref");
+	CHECK(round["objects"][0]["size"] == 0);
+
+	const auto failure = [](const Json& candidate) {
+		try {
+			(void)Schema::fromJson(candidate);
+		} catch (const std::runtime_error& error) {
+			return std::string(error.what());
+		}
+		return std::string();
+	};
+	Json withFields = source;
+	withFields["objects"][0]["fields"] =
+			Json::parse(R"([ { "name": "x", "type": "i32" } ])");
+	CHECK(failure(withFields).find("has no fields") != std::string::npos);
+	Json unknownShape = source;
+	unknownShape["objects"][0]["self"] = "value";
+	CHECK(failure(unknownShape).find("must be") != std::string::npos);
+}
+
+// The generated artifacts compile: the declarations as C11, and the same header
+// as C++23, where the opaque wrapper is a real class that copies rather than owns.
+TEST_CASE("the generated externref object header compiles as C and C++",
+		"[bindings][objects]")
+{
+	const Json source = Json::parse(R"({
+		"schema": "wasmjit.binding/2", "direction": "all", "module": "demo",
+		"objects": [ { "name": "demo.Session", "version": 1, "self": "externref",
+			"methods": [ { "name": "send", "params": ["i32"], "results": ["i32"] },
+			             { "name": "touch", "params": [], "results": [] } ],
+			"constructors": [ { "name": "open", "params": [] } ] } ],
+		"imports": [], "exports": [] })");
+	const WASM::Bindings::Schema schema = WASM::Bindings::Schema::fromJson(source);
+	const std::filesystem::path dir = bindingsDir() / "opaque_object";
+	std::filesystem::create_directories(dir);
+	const std::filesystem::path headerPath = dir / "demo.h";
+	const std::filesystem::path cSourcePath = dir / "demo.c";
+	const std::filesystem::path cppSourcePath = dir / "demo.cpp";
+	const std::filesystem::path cLogPath = dir / "gcc.log";
+	const std::filesystem::path cppLogPath = dir / "g++.log";
+	{
+		std::ofstream header(headerPath, std::ios::binary);
+		header << WASM::Bindings::emit(schema, WASM::Bindings::Language::CHeader);
+		std::ofstream cSource(cSourcePath, std::ios::binary);
+		cSource << "#include \"demo.h\"\nint main(void) { return 0; }\n";
+		std::ofstream cppSource(cppSourcePath, std::ios::binary);
+		cppSource << "#include \"demo.h\"\n"
+				   "int main()\n{\n"
+				   "\tDemoSessionV1 session;\n"
+				   "\tif (session) return 1;          // false: no reference yet\n"
+				   "\tDemoSessionV1 copy = session;   // copies, does not own\n"
+				   "\treturn copy.self() == nullptr ? 0 : 2;\n}\n";
+	}
+
+	if (haveTool("gcc --version > /dev/null 2>&1")) {
+		const std::string command = "gcc -std=c11 -fsyntax-only -I\"" + dir.string()
+				+ "\" \"" + cSourcePath.string() + "\" > \"" + cLogPath.string()
+				+ "\" 2>&1";
+		INFO(readText(cLogPath));
+		REQUIRE(std::system(command.c_str()) == 0);
+	} else {
+		WARN("gcc not found; skipped the generated C header compile check");
+	}
+
+	if (haveTool("g++ --version > /dev/null 2>&1")) {
+		const std::string command = "g++ -std=c++2a -fsyntax-only -I\"" + dir.string()
+				+ "\" \"" + cppSourcePath.string() + "\" > \"" + cppLogPath.string()
+				+ "\" 2>&1";
+		INFO(readText(cppLogPath));
+		REQUIRE(std::system(command.c_str()) == 0);
+	} else {
+		WARN("g++ not found; skipped the generated C++ wrapper compile check");
+	}
+}
+
+// Naming a lifetime call makes the wrapper an **owner**: move-only, with a
+// destructor that calls it, and constructors that are C++ constructors. This is
+// the `std::vector`-shaped object — the host creates the native object, hands the
+// reference over, and destroys it when the guest is done (SO §4.13).
+TEST_CASE("an owning externref object is move-only and destroys once",
+		"[bindings][objects]")
+{
+	using WASM::Bindings::Language;
+	using WASM::Bindings::ObjectSelfKind;
+	using WASM::Bindings::Schema;
+	const Json source = Json::parse(R"({
+		"schema": "wasmjit.binding/2", "direction": "all", "module": "demo",
+		"objects": [ { "name": "demo.Session", "version": 1, "self": "externref",
+			"destructor": "destroy",
+			"methods": [ { "name": "send", "argNames": ["bytes"],
+			               "params": ["i32"], "results": ["i32"] },
+			             { "name": "destroy", "params": [], "results": [] } ],
+			"constructors": [ { "name": "open", "argNames": ["slot"], "params": ["i32"] } ] } ],
+		"imports": [], "exports": [] })");
+	const Schema schema = Schema::fromJson(source);
+	REQUIRE(schema.objects.size() == 1u);
+	CHECK(schema.objects.at(0).self == ObjectSelfKind::ExternRef);
+	CHECK(schema.objects.at(0).destructor == "destroy");
+
+	const std::string header = WASM::Bindings::emit(schema, Language::CHeader);
+	// The C surface names the lifetime call and keeps it a plain declaration...
+	CHECK(header.find("#define WASMJIT_OBJECT_DEMO_SESSION_V1_DESTRUCTOR"
+			" \"destroy\"") != std::string::npos);
+	CHECK(header.find("void wasmjit_object_demo_session_v1_destroy("
+			"wasmjit_object_demo_session_v1* self);") != std::string::npos);
+	// ...and the wrapper owns: destructor, move, no copy, no static factory.
+	CHECK(header.find("~DemoSessionV1() { reset(); }") != std::string::npos);
+	CHECK(header.find("DemoSessionV1(const DemoSessionV1&) = delete;")
+			!= std::string::npos);
+	CHECK(header.find("DemoSessionV1(DemoSessionV1&& other) noexcept")
+			!= std::string::npos);
+	CHECK(header.find("void reset() noexcept") != std::string::npos);
+	CHECK(header.find("DemoSessionV1(int32_t slot)") != std::string::npos);
+	CHECK(header.find("static DemoSessionV1 open(") == std::string::npos);
+	// The lifetime call is the destructor, so it is not also a member.
+	CHECK(header.find("void destroy()") == std::string::npos);
+	// The shape round-trips.
+	CHECK(schema.toJson()["objects"][0]["destructor"] == "destroy");
+}
+
+// The three ways a declared lifetime call can be wrong, and the shape that may
+// not have one at all.
+TEST_CASE("a declared destructor is checked against the object it destroys",
+		"[bindings][objects]")
+{
+	using WASM::Bindings::Schema;
+	const auto failure = [](const Json& candidate) {
+		try {
+			(void)Schema::fromJson(candidate);
+		} catch (const std::runtime_error& error) {
+			return std::string(error.what());
+		}
+		return std::string();
+	};
+	const Json base = Json::parse(R"({
+		"schema": "wasmjit.binding/2", "direction": "all", "module": "demo",
+		"objects": [ { "name": "demo.Session", "version": 1, "self": "externref",
+			"destructor": "destroy",
+			"methods": [ { "name": "destroy", "params": [], "results": [] } ] } ],
+		"imports": [], "exports": [] })");
+	CHECK(failure(base).empty());
+
+	Json undeclared = base;
+	undeclared["objects"][0]["destructor"] = "dispose";
+	CHECK(failure(undeclared).find("is not declared in `methods`")
+			!= std::string::npos);
+
+	Json takesArguments = base;
+	takesArguments["objects"][0]["methods"][0]["params"] = Json::parse(R"(["i32"])");
+	CHECK(failure(takesArguments).find("must take no parameters")
+			!= std::string::npos);
+
+	Json returnsValue = base;
+	returnsValue["objects"][0]["methods"][0]["results"] = Json::parse(R"(["i32"])");
+	CHECK(failure(returnsValue).find("must take no parameters")
+			!= std::string::npos);
+
+	// A property's accessor is a member, but it is not the end of an object.
+	Json accessor = base;
+	accessor["objects"][0]["properties"] = Json::parse(
+			R"([ { "name": "status", "type": "i32", "get": "destroy" } ])");
+	accessor["objects"][0]["methods"][0]["results"] = Json::parse(R"(["i32"])");
+	CHECK(failure(accessor).find("is the accessor of property")
+			!= std::string::npos);
+
+	// The handle shape already has `_release`; a second lifetime call is two
+	// spellings of one act.
+	Json handle = Json::parse(R"({
+		"schema": "wasmjit.binding/2", "direction": "all", "module": "demo",
+		"objects": [ { "name": "demo.Thing", "version": 1, "destructor": "destroy",
+			"methods": [ { "name": "destroy", "params": [], "results": [] } ] } ],
+		"imports": [], "exports": [] })");
+	CHECK(failure(handle).find("lifetime entry point is `<type>_release`")
+			!= std::string::npos);
+}
+
+// The owning wrapper, compiled and run: the destructor destroys exactly once, a
+// move still leaves one owner, and `release()` gives the reference up without
+// destroying it. The stubs below stand for what a host implements.
+TEST_CASE("the owning externref wrapper destroys exactly once", "[bindings][objects]")
+{
+	if (!haveTool("g++ --version > /dev/null 2>&1")) {
+		WARN("g++ not found; skipped the owning wrapper run");
+		return;
+	}
+	const Json source = Json::parse(R"({
+		"schema": "wasmjit.binding/2", "direction": "all", "module": "demo",
+		"objects": [ { "name": "demo.Session", "version": 1, "self": "externref",
+			"destructor": "destroy",
+			"methods": [ { "name": "destroy", "params": [], "results": [] } ],
+			"constructors": [ { "name": "open", "argNames": ["slot"], "params": ["i32"] } ] } ],
+		"imports": [], "exports": [] })");
+	const WASM::Bindings::Schema schema = WASM::Bindings::Schema::fromJson(source);
+	const std::filesystem::path dir = bindingsDir() / "opaque_owned";
+	std::filesystem::create_directories(dir);
+	const std::filesystem::path headerPath = dir / "demo.h";
+	const std::filesystem::path sourcePath = dir / "demo.cpp";
+	const std::filesystem::path logPath = dir / "g++.log";
+	const std::filesystem::path binaryPath = dir / "demo";
+	{
+		std::ofstream header(headerPath, std::ios::binary);
+		header << WASM::Bindings::emit(schema, WASM::Bindings::Language::CHeader);
+		std::ofstream unit(sourcePath, std::ios::binary);
+		unit << R"(#include "demo.h"
+#include <cstdint>
+#include <utility>
+
+namespace {
+
+struct Session { int destroys = 0; };
+Session g_session;
+
+} // namespace
+
+extern "C" wasmjit_object_demo_session_v1*
+wasmjit_object_demo_session_v1_open(std::int32_t)
+{
+    return reinterpret_cast<wasmjit_object_demo_session_v1*>(&g_session);
+}
+
+extern "C" void wasmjit_object_demo_session_v1_destroy(
+        wasmjit_object_demo_session_v1* self)
+{
+    ++reinterpret_cast<Session*>(self)->destroys;
+}
+
+int main()
+{
+    { DemoSessionV1 session(std::int32_t(7)); (void)session; }
+    if (g_session.destroys != 1) return 1;   // the destructor destroyed once
+
+    { DemoSessionV1 first(std::int32_t(7));
+      DemoSessionV1 second(std::move(first)); (void)second; }
+    if (g_session.destroys != 2) return 2;   // a move is still one owner
+
+    { DemoSessionV1 session(std::int32_t(7)); (void)session.release(); }
+    if (g_session.destroys != 2) return 3;   // release destroys nothing
+
+    { DemoSessionV1 session(std::int32_t(7)); session.reset(); session.reset(); }
+    if (g_session.destroys != 3) return 4;   // reset destroys once, then the
+                                             // destructor does nothing
+    return 0;
+}
+)";
+	}
+	const std::string compile = "g++ -std=c++2a -I\"" + dir.string() + "\" \""
+			+ sourcePath.string() + "\" -o \"" + binaryPath.string() + "\" > \""
+			+ logPath.string() + "\" 2>&1";
+	INFO(readText(logPath));
+	REQUIRE(std::system(compile.c_str()) == 0);
+	const std::string run = "\"" + binaryPath.string() + "\"";
+	CHECK(std::system(run.c_str()) == 0);
+}
+
+// A constructor is an entry point with no `self`. It shares the method namespace,
+// it cannot be spelled twice in one class, and its parameters are typed like any
+// other — all checked at load time, because each failure would otherwise be a
+// header that does not compile in the consumer's build.
+TEST_CASE("a constructor descriptor is validated like an entry point",
+		"[bindings][objects]")
+{
+	using WASM::Bindings::Schema;
+	const auto failure = [](const Json& input) {
+		try {
+			(void)Schema::fromJson(input);
+		} catch (const std::runtime_error& error) {
+			return std::string(error.what());
+		}
+		return std::string();
+	};
+
+	// The interchange form keeps the table, and only when there is one.
+	const Schema plenty = Schema::fromJson(objectSchema());
+	const Json out = plenty.toJson();
+	REQUIRE(out.at("objects")[0].contains("constructors"));
+	CHECK(out.at("objects")[0].at("constructors")[0].at("name") == "create");
+	CHECK(out.at("objects")[0].at("constructors")[0].at("params").size() == 2u);
+	CHECK_FALSE(out.at("objects")[2].contains("constructors"));
+
+	Json duplicate = objectSchema();
+	duplicate["objects"][0]["constructors"].push_back(
+			Json::parse(R"({ "name": "create", "params": ["f32"] })"));
+	CHECK(failure(duplicate).find("declares constructor 'create' twice")
+			!= std::string::npos);
+
+	// `<type>_<name>` is one namespace: a method and a constructor cannot share it.
+	Json methodName = objectSchema();
+	methodName["objects"][0]["constructors"][0]["name"] = "area";
+	CHECK(failure(methodName).find("and a method of the same name")
+			!= std::string::npos);
+
+	// Two names, one parameter list: one C++ constructor, so one is a mistake.
+	Json sameSignature = objectSchema();
+	sameSignature["objects"][0]["constructors"].push_back(
+			Json::parse(R"({ "name": "make", "params": ["i32", "i32"] })"));
+	CHECK(failure(sameSignature).find("same parameter list") != std::string::npos);
+
+	// `release` is the object's lifetime entry point, whatever makes the object.
+	Json release = objectSchema();
+	release["objects"][0]["constructors"][0]["name"] = "release";
+	CHECK(failure(release).find("lifetime entry point") != std::string::npos);
+
+	// A name list may cover part of a signature but never more of it, and two
+	// parameters of one name would be one identifier in every target language.
+	Json shortNames = objectSchema();
+	shortNames["objects"][1]["constructors"][0]["argNames"] =
+			Json::array({ "value", "other" });
+	CHECK(failure(shortNames).find("names 2 parameters but takes 0")
+			!= std::string::npos);
+
+	Json twins = objectSchema();
+	twins["objects"][0]["methods"][0]["argNames"] = Json::array({ "size", "Size" });
+	CHECK(failure(twins).find("a parameter name is unique within one signature")
+			!= std::string::npos);
+
+	Json receiver = objectSchema();
+	receiver["objects"][0]["constructors"][0]["argNames"] =
+			Json::array({ "self", "height" });
+	CHECK(failure(receiver).find("`self` is the receiver") != std::string::npos);
+
+	// A parameter is a type the engine can name: a constructor cannot smuggle in a
+	// storage kind with no ABI, and `stringref` is one it can name.
+	Json unknown = objectSchema();
+	unknown["objects"][1]["constructors"][0]["params"] = Json::array({ "i128" });
+	CHECK(failure(unknown).find("unknown param type") != std::string::npos);
+
+	// A parameter the Kotlin façade cannot spell is omitted there with a note —
+	// never guessed — while C, C++ and Rust still see the entry point.
+	Json stringref = objectSchema();
+	stringref["objects"][1]["constructors"][0]["params"] = Json::array({ "string" });
+	const Schema softened = Schema::fromJson(stringref);
+	CHECK(WASM::Bindings::emit(softened, WASM::Bindings::Language::CHeader)
+					.find("wasmjit_object_demo_node_v1_handle "
+						  "wasmjit_object_demo_node_v1_spawn(void* p0);")
+			!= std::string::npos);
+	CHECK(WASM::Bindings::emit(softened, WASM::Bindings::Language::Kotlin)
+					.find("// `spawn`: a non-scalar parameter is not expressible"
+						  " here")
+			!= std::string::npos);
+}
+
+TEST_CASE("one object descriptor reaches the C, Rust and WIT emitters", "[bindings][objects]")
+{
+	const WASM::Bindings::Schema schema = WASM::Bindings::Schema::fromJson(objectSchema());
+
+	const std::string header = WASM::Bindings::emitCHeader(schema);
+	CHECK(header.find("Generated from the wasmjit.binding/2") != std::string::npos);
+	CHECK(header.find("typedef struct wasmjit_object_meta_field {") != std::string::npos);
+	CHECK(header.find("typedef struct wasmjit_object_demo_widget_v1 wasmjit_object_demo_widget_v1;")
+			!= std::string::npos);
+	CHECK(header.find("#define WASMJIT_OBJECT_DEMO_WIDGET_V1_VERSION 1u") != std::string::npos);
+	CHECK(header.find("#define WASMJIT_OBJECT_DEMO_WIDGET_V1_SIZE 40u") != std::string::npos);
+	CHECK(header.find("#define WASMJIT_OBJECT_DEMO_WIDGET_V1_FIELD_TARGET 32u") != std::string::npos);
+	CHECK(header.find("wasmjit_object_demo_widget_v1_resize_fn") != std::string::npos);
+	CHECK(header.find("wasmjit_object_demo_widget_v1_attach_fn)(wasmjit_object_demo_widget_v1* self,"
+			" wasmjit_object_demo_node_v1* target)") != std::string::npos);
+	CHECK(header.find("static const wasmjit_object_meta wasmjit_object_demo_widget_v1_meta")
+			!= std::string::npos);
+	CHECK(header.find("\"demo.Widget\", 1u, 40u, \"demo.Base\"") != std::string::npos);
+	CHECK(header.find("\"target\", 32u, 8u, 1u, 1u") != std::string::npos);
+
+	// A property is emitted as an export name plus an accessor signature: the
+	// header says where the value comes from, never where it is stored.
+	CHECK(header.find("typedef struct wasmjit_object_property_meta {")
+			!= std::string::npos);
+	CHECK(header.find("#define WASMJIT_OBJECT_DEMO_WIDGET_V1_PROP_STATUS_GET \"get_status\"")
+			!= std::string::npos);
+	CHECK(header.find("#define WASMJIT_OBJECT_DEMO_WIDGET_V1_PROP_STATUS_SET \"set_status\"")
+			!= std::string::npos);
+	CHECK(header.find("int32_t (*wasmjit_object_demo_widget_v1_prop_status_get_fn)"
+			"(wasmjit_object_demo_widget_v1* self);") != std::string::npos);
+	CHECK(header.find("void (*wasmjit_object_demo_widget_v1_prop_status_set_fn)"
+			"(wasmjit_object_demo_widget_v1* self, int32_t value);")
+			!= std::string::npos);
+	CHECK(header.find("wasmjit_object_demo_node_v1* "
+			"(*wasmjit_object_demo_widget_v1_prop_preview_get_fn)("
+			"wasmjit_object_demo_widget_v1* self);") != std::string::npos);
+	CHECK(header.find("{ \"status\", \"i32\", \"get_status\", \"set_status\", 1u }")
+			!= std::string::npos);
+	CHECK(header.find("{ \"caption\", \"i32\", \"compute_caption\", NULL, 0u }")
+			!= std::string::npos);
+	CHECK(header.find("{ \"preview\", \"ref defined demo.Node\", "
+			"\"get_preview\", NULL, 0u }") != std::string::npos);
+	// A read-only property has no setter macro at all.
+	CHECK(header.find("WASMJIT_OBJECT_DEMO_WIDGET_V1_PROP_CAPTION_SET")
+			== std::string::npos);
+
+	// The handle surface (`SO-3`): the same accessors over the `i64` slot a
+	// non-GC consumer carries, so one operation keeps one implementation.
+	CHECK(header.find("typedef int64_t wasmjit_object_demo_widget_v1_handle;")
+			!= std::string::npos);
+	CHECK(header.find("#define WASMJIT_OBJECT_DEMO_WIDGET_V1_HANDLE_NONE 0")
+			!= std::string::npos);
+	CHECK(header.find("typedef int32_t (*wasmjit_object_demo_widget_v1_area_h_fn)"
+			"(int64_t self);") != std::string::npos);
+	CHECK(header.find("typedef int32_t "
+			"(*wasmjit_object_demo_widget_v1_prop_status_get_h_fn)(int64_t self);")
+			!= std::string::npos);
+	CHECK(header.find("typedef void "
+			"(*wasmjit_object_demo_widget_v1_prop_status_set_h_fn)"
+			"(int64_t self, int32_t value);") != std::string::npos);
+	// A reference parameter keeps its typed spelling in the handle form too.
+	CHECK(header.find("(*wasmjit_object_demo_widget_v1_attach_h_fn)"
+			"(int64_t self, wasmjit_object_demo_node_v1* target)")
+			!= std::string::npos);
+
+	const std::string rust = WASM::Bindings::emitRustModule(schema);
+	CHECK(rust.find("pub const WASMJIT_OBJECT_DEMO_WIDGET_V1_FIELD_TARGET: u32 = 32;")
+			!= std::string::npos);
+	CHECK(rust.find("pub static WASMJIT_OBJECT_DEMO_WIDGET_V1: wasmjit_object_meta")
+			!= std::string::npos);
+	CHECK(rust.find("pub type wasmjit_object_demo_widget_v1_attach_fn = unsafe extern \"C\" fn("
+			"*mut wasmjit_object_demo_widget_v1, target: *mut "
+			"wasmjit_object_demo_node_v1)")
+			!= std::string::npos);
+	CHECK(rust.find("parent: Some(\"demo.Base\")") != std::string::npos);
+	CHECK(rust.find("pub const WASMJIT_OBJECT_DEMO_WIDGET_V1_PROP_STATUS_GET: &str = "
+			"\"get_status\";") != std::string::npos);
+	CHECK(rust.find("pub type wasmjit_object_demo_widget_v1_prop_status_set_fn = "
+			"unsafe extern \"C\" fn(*mut wasmjit_object_demo_widget_v1, i32);")
+			!= std::string::npos);
+	CHECK(rust.find("wasmjit_object_property_meta { name: \"status\", type_name: \"i32\", "
+			"get_export: \"get_status\", set_export: Some(\"set_status\"), "
+			"is_mutable: true }") != std::string::npos);
+	CHECK(rust.find("properties: WASMJIT_OBJECT_DEMO_WIDGET_V1_PROPERTIES")
+			!= std::string::npos);
+	// An object without properties points at the empty slice, not at nothing.
+	CHECK(rust.find("properties: &[],") != std::string::npos);
+	CHECK(rust.find("pub type wasmjit_object_demo_widget_v1_handle = i64;")
+			!= std::string::npos);
+	CHECK(rust.find("pub const WASMJIT_OBJECT_DEMO_WIDGET_V1_HANDLE_NONE: i64 = 0;")
+			!= std::string::npos);
+	CHECK(rust.find("pub type wasmjit_object_demo_widget_v1_area_h_fn = "
+			"unsafe extern \"C\" fn(i64) -> i32;") != std::string::npos);
+	CHECK(rust.find("pub type wasmjit_object_demo_widget_v1_prop_status_get_h_fn = "
+			"unsafe extern \"C\" fn(i64) -> i32;") != std::string::npos);
+
+	const std::string wit = WASM::Bindings::emit(schema, WASM::Bindings::Language::Wit);
+	CHECK(wit.find("interface types {") != std::string::npos);
+	CHECK(wit.find("resource demo-widget-v1 {") != std::string::npos);
+	CHECK(wit.find("resource demo-widget-v2 {") != std::string::npos);
+	CHECK(wit.find("resource demo-node-v1 {") != std::string::npos);
+	CHECK(wit.find("x: func() -> s32;") != std::string::npos);
+	CHECK(wit.find("set-y: func(value: s32);") != std::string::npos);
+	CHECK(wit.find("attach: func(target: borrow<demo-node-v1>);") != std::string::npos);
+	CHECK(wit.find("area: func() -> s32;") != std::string::npos);
+	// What WIT cannot say is documented in the emitted file, not dropped silently.
+	CHECK(wit.find("label: a reference that is not another host object")
+			!= std::string::npos);
+	CHECK(wit.find("target: a reference field has no WIT getter") != std::string::npos);
+	// A mutable reference field still gets the setter WIT can express.
+	CHECK(wit.find("set-target: func(value: borrow<demo-node-v1>);") != std::string::npos);
+	CHECK(wit.find("blit: `v128` parameter") != std::string::npos);
+	// A packed byte is a WIT `s8`, and a packed field is one byte in the table.
+	CHECK(wit.find("kind: func() -> s8;") != std::string::npos);
+	// A property crosses the boundary as the call it already is: WIT has no
+	// storage, so a property and a field project to the same member shape and
+	// the difference is the note that says the value is computed.
+	CHECK(wit.find("/// Property `status`: computed by `get_status`, not a stored slot.")
+			!= std::string::npos);
+	CHECK(wit.find("    status: func() -> s32;") != std::string::npos);
+	CHECK(wit.find("    set-status: func(value: s32);") != std::string::npos);
+	CHECK(wit.find("    caption: func() -> s32;") != std::string::npos);
+	// A read-only property gets no setter, and the accessor is never emitted
+	// twice: it is the property's projection, not a second member.
+	CHECK(wit.find("set-caption") == std::string::npos);
+	CHECK(wit.find("get-status:") == std::string::npos);
+	CHECK(wit.find("preview: a property of a reference has no WIT getter")
+			!= std::string::npos);
+
+	// `SO-4`: the packaging. The host provides the objects, so the world imports
+	// the interface that carries their resources; `resource.drop` is then the
+	// guest-side spelling of the host's release.
+	CHECK(wit.find("world demo {") != std::string::npos);
+	CHECK(wit.find("// The host provides the objects") != std::string::npos);
+	CHECK(wit.find("  import types;") != std::string::npos);
+
+	// ... and the Kotlin façade holds the `i64` slot with exactly one release.
+	const std::string kotlin =
+			WASM::Bindings::emit(schema, WASM::Bindings::Language::Kotlin);
+	INFO(kotlin);
+	CHECK(kotlin.find("class DemoWidgetV1(private val handle: Long) : AutoCloseable")
+			!= std::string::npos);
+	CHECK(kotlin.find("class DemoWidgetV2(private val handle: Long) : AutoCloseable")
+			!= std::string::npos);
+	CHECK(kotlin.find("external fun wasmjit_object_demo_widget_v1_release"
+			"(handle: Long)") != std::string::npos);
+	CHECK(kotlin.find("if (released) return") != std::string::npos);
+	CHECK(kotlin.find("const val HANDLE_NONE: Long = 0") != std::string::npos);
+	CHECK(header.find("#define WASMJIT_OBJECT_DEMO_NODE_V1_SIZE 17u") != std::string::npos);
+
+	// A C++ consumer gets an object that owns the slot: the entry points first,
+	// then — *after* `extern "C"` closes, because a class cannot have C linkage —
+	// one RAII class per descriptor.
+	CHECK(header.find("void wasmjit_object_demo_widget_v1_release("
+			"wasmjit_object_demo_widget_v1_handle self);") != std::string::npos);
+	CHECK(header.find("int32_t wasmjit_object_demo_widget_v1_area("
+			"wasmjit_object_demo_widget_v1_handle self);") != std::string::npos);
+	const std::size_t cLinkageEnd = header.find("#ifdef __cplusplus\n}\n#endif");
+	REQUIRE(cLinkageEnd != std::string::npos);
+	CHECK(header.find("class DemoWidgetV1 {") > cLinkageEnd);
+	CHECK(header.find("class DemoNodeV1 {") > cLinkageEnd);
+	CHECK(header.find("class DemoWidgetV2 {") > cLinkageEnd);
+	// Ownership: move-only, one release in the destructor, two ways to give up.
+	CHECK(header.find("DemoWidgetV1(const DemoWidgetV1&) = delete;")
+			!= std::string::npos);
+	CHECK(header.find("DemoWidgetV1(DemoWidgetV1&& other) noexcept")
+			!= std::string::npos);
+	CHECK(header.find("\t\t\twasmjit_object_demo_widget_v1_release(_handle);")
+			!= std::string::npos);
+	// An accessor is projected as its property, so it is not a second member...
+	CHECK(header.find("\tint32_t status() const { return "
+			"wasmjit_object_demo_widget_v1_prop_status_get(_handle); }")
+			!= std::string::npos);
+	CHECK(header.find("void setStatus(int32_t value)") != std::string::npos);
+	CHECK(header.find(" int32_t getStatus(") == std::string::npos);
+	CHECK(header.find(" int32_t computeCaption(") == std::string::npos);
+	CHECK(header.find(" setStatusValue(") == std::string::npos);
+	// ... and the methods that are not accessors forward with their arguments.
+	CHECK(header.find("\tint32_t area()") != std::string::npos);
+	CHECK(header.find("\tvoid resize(int32_t width, int32_t height)")
+			!= std::string::npos);
+	CHECK(header.find("\tvoid blit(wasm_v128 lanes)") != std::string::npos);
+
+	// A declared constructor is a C++ constructor; a parameter list that would be
+	// the default (or adopting) constructor's becomes a static factory instead, so
+	// one `spawn()` is still one call rather than a class that does not compile.
+	CHECK(header.find("\texplicit DemoWidgetV1(int32_t width, int32_t height)\n"
+			"\t\t: _handle(wasmjit_object_demo_widget_v1_create(width, height))")
+			!= std::string::npos);
+	CHECK(header.find("static DemoNodeV1 spawn()") != std::string::npos);
+	CHECK(header.find("return DemoNodeV1(wasmjit_object_demo_node_v1_spawn());")
+			!= std::string::npos);
+	// A constructor whose single parameter *is* the slot type would be the
+	// adopting constructor over again, so it is a factory of the same name.
+	CHECK(header.find("static DemoWidgetV1 open(int64_t slot)") != std::string::npos);
+	CHECK(header.find("return DemoWidgetV1(wasmjit_object_demo_widget_v1_open(slot));")
+			!= std::string::npos);
+	// The C side spells the same two calls: an entry point and its `_h_fn`.
+	CHECK(header.find("wasmjit_object_demo_widget_v1_handle "
+			"wasmjit_object_demo_widget_v1_create(int32_t width, int32_t height);")
+			!= std::string::npos);
+	CHECK(header.find("typedef int64_t (*wasmjit_object_demo_node_v1_spawn_h_fn)"
+			"(void);") != std::string::npos);
+	CHECK(rust.find("pub type wasmjit_object_demo_widget_v1_create_h_fn = "
+			"unsafe extern \"C\" fn(width: i32, height: i32) -> i64;")
+			!= std::string::npos);
+	CHECK(wit.find("constructor(width: s32, height: s32);") != std::string::npos);
+	CHECK(wit.find("constructor();") != std::string::npos);
+	// WIT names every constructor `[constructor]r`, so one resource carries one:
+	// the second is noted and points at the entry point that is not in WIT.
+	CHECK(wit.find("a second constructor is not expressible in WIT")
+			!= std::string::npos);
+	CHECK(kotlin.find("fun create(width: Int, height: Int): DemoWidgetV1 =")
+			!= std::string::npos);
+	CHECK(kotlin.find("fun spawn(): DemoNodeV1 =") != std::string::npos);
+	// Overloading is a C++ and Kotlin thing, not a WIT one.
+	CHECK(kotlin.find("fun open(slot: Long): DemoWidgetV1 =") != std::string::npos);
+
+	// A declared parameter name is the name every emitter uses, never `pN`:
+	// `argNames` is the same index-aligned list a function entry carries.
+	CHECK(header.find("typedef void (*wasmjit_object_demo_widget_v1_resize_fn)"
+			"(wasmjit_object_demo_widget_v1* self, int32_t width, int32_t height);")
+			!= std::string::npos);
+	CHECK(header.find("\tvoid resize(int32_t width, int32_t height)") != std::string::npos);
+	CHECK(header.find("wasmjit_object_demo_widget_v1_resize(_handle, width, height);")
+			!= std::string::npos);
+	CHECK(header.find("wasmjit_object_demo_widget_v1_attach(_handle, target);")
+			!= std::string::npos);
+	CHECK(header.find("\texplicit DemoWidgetV1(int32_t width, int32_t height)")
+			!= std::string::npos);
+	CHECK(wit.find("resize: func(width: s32, height: s32);") != std::string::npos);
+	CHECK(wit.find("attach: func(target: borrow<demo-node-v1>);")
+			!= std::string::npos);
+	CHECK(wit.find("constructor(width: s32, height: s32);") != std::string::npos);
+	CHECK(kotlin.find("fun create(width: Int, height: Int): DemoWidgetV1 =")
+			!= std::string::npos);
+	CHECK(rust.find("fn(*mut wasmjit_object_demo_widget_v1, width: i32, height: i32)")
+			!= std::string::npos);
+	CHECK(rust.find("_h_fn = unsafe extern \"C\" fn(width: i32, height: i32) -> i64;")
+			!= std::string::npos);
+
+	// A list shorter than the signature is legal: the rest keep their position,
+	// so one name does not shift the others.
+	Json partial = objectSchema();
+	partial["objects"][0]["methods"][0]["argNames"] = Json::array({ "width" });
+	const std::string partialHeader = WASM::Bindings::emitCHeader(
+			WASM::Bindings::Schema::fromJson(partial));
+	CHECK(partialHeader.find("int32_t width, int32_t p1)") != std::string::npos);
+
+	// Without objects the emitters are byte-for-byte what they were.
+	const Json plain = Json::parse(R"({
+		"schema": "wasmjit.binding/1", "direction": "all", "module": "m",
+		"imports": [], "exports": [] })");
+	const std::string plainHeader =
+			WASM::Bindings::emit(plain, WASM::Bindings::Language::CHeader);
+	CHECK(plainHeader.find("wasmjit_object_meta") == std::string::npos);
+	CHECK(plainHeader.find("Generated from the wasmjit.binding/1") != std::string::npos);
+}
+
+TEST_CASE("generated object bindings compile and their WIT is accepted", "[bindings][objects]")
+{
+	const WASM::Bindings::Schema schema = WASM::Bindings::Schema::fromJson(objectSchema());
+	const std::filesystem::path dir = bindingsDir();
+	const std::filesystem::path headerPath = dir / "demo_objects.h";
+	const std::filesystem::path cSourcePath = dir / "demo_objects.c";
+	const std::filesystem::path cLogPath = dir / "demo_objects_gcc.log";
+	const std::filesystem::path rustPath = dir / "demo_objects.rs";
+	const std::filesystem::path rustLogPath = dir / "demo_objects_rustc.log";
+	const std::filesystem::path witPath = dir / "demo_objects.wit";
+	const std::filesystem::path witJsonPath = dir / "demo_objects.wit.json";
+	const std::filesystem::path witLogPath = dir / "demo_objects_wit.log";
+
+	{
+		std::ofstream header(headerPath, std::ios::binary);
+		header << WASM::Bindings::emitCHeader(schema);
+		// A translation unit that really uses the table: a declaration that is
+		// merely included and never referenced proves too little.
+		std::ofstream source(cSourcePath, std::ios::binary);
+		source << "#include \"demo_objects.h\"\n"
+				  "static const wasmjit_object_meta* demo_meta(void)\n"
+				  "{\n"
+				  "    return &wasmjit_object_demo_widget_v1_meta;\n"
+				  "}\n"
+				  "static int32_t demo_status(wasmjit_object_demo_widget_v1* self)\n"
+				  "{\n"
+				  "    wasmjit_object_demo_widget_v1_prop_status_get_fn get = 0;\n"
+				  "    (void)get;\n"
+				  "    return (int32_t)(self != 0);\n"
+				  "}\n"
+				  "static wasmjit_object_demo_widget_v1_handle demo_handle(void)\n"
+				  "{\n"
+				  "    wasmjit_object_demo_widget_v1_area_h_fn area = 0;\n"
+				  "    (void)area;\n"
+				  "    return WASMJIT_OBJECT_DEMO_WIDGET_V1_HANDLE_NONE;\n"
+				  "}\n"
+				  "int main(void)\n"
+				  "{\n"
+				  "    return (int)(demo_meta()->size\n"
+				  "            + WASMJIT_OBJECT_DEMO_WIDGET_V1_FIELD_TARGET\n"
+				  "            + WASMJIT_OBJECT_DEMO_WIDGET_V1_SIZE\n"
+				  "            + demo_meta()->property_count\n"
+				  "            + (unsigned)demo_handle()\n"
+				  "            + (unsigned)sizeof(WASMJIT_OBJECT_DEMO_WIDGET_V1_PROP_STATUS_GET));\n"
+				  "}\n";
+		std::ofstream rust(rustPath, std::ios::binary);
+		rust << WASM::Bindings::emitRustModule(schema);
+		std::ofstream wit(witPath, std::ios::binary);
+		wit << WASM::Bindings::emit(schema, WASM::Bindings::Language::Wit);
+	}
+
+	if (haveTool("gcc --version > /dev/null 2>&1")) {
+		const std::string command = "gcc -std=c11 -fsyntax-only -I\"" + dir.string()
+				+ "\" \"" + cSourcePath.string() + "\" > \"" + cLogPath.string()
+				+ "\" 2>&1";
+		INFO(readText(cLogPath));
+		REQUIRE(std::system(command.c_str()) == 0);
+	} else {
+		WARN("gcc not found; skipped the generated object header compile check");
+	}
+
+	// The C++ half is not just syntax: the wrapper owns the slot, so the test
+	// counts releases. Each `return N` is one broken ownership rule; the entry
+	// points are stubs, which is exactly what an embedder writes.
+	if (haveTool("g++ --version > /dev/null 2>&1")) {
+		const std::filesystem::path cppPath = dir / "demo_objects_wrapper.cpp";
+		const std::filesystem::path binary = dir / "demo_objects_wrapper";
+		const std::filesystem::path cppLogPath = dir / "demo_objects_gxx.log";
+		{
+			std::ofstream source(cppPath, std::ios::binary);
+			source << R"cpp(#include "demo_objects.h"
+#include <cstdint>
+#include <type_traits>
+#include <utility>
+
+// A wrapper owns one slot: copy is gone, move is not.
+static_assert(!std::is_copy_constructible<DemoWidgetV1>::value,
+              "a wrapper owns a slot: copy is disabled");
+static_assert(!std::is_copy_assignable<DemoWidgetV1>::value,
+              "a wrapper owns a slot: copy is disabled");
+static_assert(std::is_move_constructible<DemoWidgetV1>::value,
+              "a wrapper owns a slot: move is allowed");
+// Every descriptor gets a class, methods or not.
+static_assert(std::is_move_constructible<DemoNodeV1>::value, "node wrapper");
+static_assert(std::is_move_constructible<DemoWidgetV2>::value, "v2 wrapper");
+
+extern "C" {
+
+int releases = 0;
+int64_t lastSlot = 0;
+
+void wasmjit_object_demo_widget_v1_release(wasmjit_object_demo_widget_v1_handle self)
+{
+    ++releases;
+    lastSlot = self;
+}
+int32_t wasmjit_object_demo_widget_v1_area(wasmjit_object_demo_widget_v1_handle self)
+{
+    return static_cast<int32_t>(self & 0xffff);
+}
+int32_t wasmjit_object_demo_widget_v1_prop_status_get(
+        wasmjit_object_demo_widget_v1_handle self)
+{
+    (void)self;
+    return 7;
+}
+void wasmjit_object_demo_widget_v1_prop_status_set(
+        wasmjit_object_demo_widget_v1_handle self, int32_t value)
+{
+    (void)self;
+    lastSlot = value;
+}
+int nodeReleases = 0;
+wasmjit_object_demo_widget_v1_handle wasmjit_object_demo_widget_v1_create(
+        int32_t p0, int32_t p1)
+{
+    return (static_cast<wasmjit_object_demo_widget_v1_handle>(p0) << 32)
+         | static_cast<wasmjit_object_demo_widget_v1_handle>(
+                 static_cast<uint32_t>(p1));
+}
+wasmjit_object_demo_node_v1_handle wasmjit_object_demo_node_v1_spawn(void)
+{
+    return 0x300000001LL;
+}
+wasmjit_object_demo_widget_v1_handle wasmjit_object_demo_widget_v1_open(int64_t p0)
+{
+    return p0;
+}
+void wasmjit_object_demo_node_v1_release(wasmjit_object_demo_node_v1_handle self)
+{
+    (void)self;
+    ++nodeReleases;
+}
+
+}
+
+int main()
+{
+    const wasmjit_object_demo_widget_v1_handle slot = 0x100000005LL;
+    {
+        DemoWidgetV1 widget(slot);
+        if (!widget) return 1;
+        if (widget.area() != 5) return 2;
+        if (widget.status() != 7) return 3;
+        widget.setStatus(9);
+        if (lastSlot != 9) return 4;
+        DemoWidgetV1 moved(std::move(widget));
+        if (widget.valid()) return 5;
+        if (releases != 0) return 6;
+        DemoWidgetV1 assigned;
+        assigned = std::move(moved);
+        if (moved.valid() || !assigned.valid()) return 7;
+        if (releases != 0) return 8;
+    }
+    if (releases != 1) return 9;
+    if (lastSlot != slot) return 10;
+    {
+        // `reset()` twice releases once; `release()` gives the slot up silently.
+        DemoWidgetV1 a(42), b(43);
+        a.reset();
+        a.reset();
+        if (releases != 2) return 11;
+        const wasmjit_object_demo_widget_v1_handle gave = b.release();
+        if (gave != 43 || b.valid()) return 12;
+    }
+    if (releases != 2) return 13;
+    {
+        // Assigning over a live slot releases the old one, exactly once.
+        DemoWidgetV1 c(50), d(51);
+        c = std::move(d);
+        if (releases != 3) return 14;
+    }
+    if (releases != 4) return 15;
+    {
+        // A declared constructor is a constructor; an empty parameter list becomes
+        // a static factory, because it would be the default constructor.
+        DemoWidgetV1 made(4, 6);
+        if (!made) return 16;
+        if (made.handle() != ((static_cast<wasmjit_object_demo_widget_v1_handle>(4)
+                               << 32) | 6LL)) return 17;
+        DemoNodeV1 node = DemoNodeV1::spawn();
+        if (!node) return 18;
+        if (nodeReleases != 0) return 19;
+        // The slot-typed parameter cannot be a second constructor, so `open` is a
+        // factory — and the slot it returns is adopted, not cloned.
+        DemoWidgetV1 opened = DemoWidgetV1::open(0x400000002LL);
+        if (!opened) return 22;
+        if (opened.handle() != 0x400000002LL) return 23;
+        if (releases != 4) return 24;
+    }
+    // `made`, `opened` released their slots at the end of the block; the factory's
+    // wrapper released the node's slot exactly once.
+    if (releases != 6) return 20;
+    if (nodeReleases != 1) return 21;
+    return 0;
+}
+)cpp";
+		}
+		const std::string compile = "g++ -std=c++17 -Wall -Wextra -I\"" + dir.string()
+				+ "\" \"" + cppPath.string() + "\" -o \"" + binary.string()
+				+ "\" > \"" + cppLogPath.string() + "\" 2>&1";
+		INFO(readText(cppLogPath));
+		REQUIRE(std::system(compile.c_str()) == 0);
+		const std::string run = "\"" + binary.string() + "\" > \""
+				+ cppLogPath.string() + "\" 2>&1";
+		INFO(readText(cppLogPath));
+		REQUIRE(std::system(run.c_str()) == 0);
+	} else {
+		WARN("g++ not found; skipped the generated C++ wrapper check");
+	}
+
+	if (haveTool("rustc --version > /dev/null 2>&1")) {
+		const std::filesystem::path rustLib = dir / "demo_objects.rlib";
+		const std::string command = "rustc --crate-type lib --edition 2021 \""
+				+ rustPath.string() + "\" -o \"" + rustLib.string() + "\" > \""
+				+ rustLogPath.string() + "\" 2>&1";
+		INFO(readText(rustLogPath));
+		REQUIRE(std::system(command.c_str()) == 0);
+	} else {
+		WARN("rustc not found; skipped the generated object Rust compile check");
+	}
+
+	if (!haveTool("command -v wasm-tools > /dev/null 2>&1")) {
+		WARN("wasm-tools not found; skipped the object WIT parse check");
+		return;
+	}
+	const std::string command = "wasm-tools component wit '" + witPath.string()
+			+ "' --json > '" + witJsonPath.string() + "' 2> '"
+			+ witLogPath.string() + "'";
+	INFO(readText(witLogPath));
+	REQUIRE(std::system(command.c_str()) == 0);
 }

@@ -14,6 +14,7 @@ SOURCES += \
     BindingModel.cpp \
     BindingSchema.cpp \
     Emit.cpp \
+    EmitObjects.cpp \
     EmitShared.cpp \
     EmitRust.cpp \
     EmitWeb.cpp \
@@ -27,6 +28,7 @@ HEADERS += \
     BindingModel.hpp \
     BindingSchema.hpp \
     EmitInternal.hpp \
+    EmitObjects.hpp \
     EmitShared.hpp \
     frontend/cpp/CppFrontend.hpp \
     frontend/wit/WitFrontend.hpp

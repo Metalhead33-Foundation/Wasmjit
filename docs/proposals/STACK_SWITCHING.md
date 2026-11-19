@@ -2,14 +2,15 @@
 
 *Implementation Notes, Spec Status, and Deliberate Deviations*
 
-Status: design note / implementation reference (revision 13). SS-0/SS-1/SS-2,
+Status: design note / implementation reference (revision 14). SS-0/SS-1/SS-2,
 the per-execution-context Agent/ExecutionState refactor, the native-stack
 provider (default), the host-thread fallback, the `HostContinuation` /
 `HostContinuationScheduler` seam, multiple/loop handler dispatch, `cont.bind`,
 `resume_throw`/`resume_throw_ref`, serial A migration, ASAN fiber annotations,
 wide payloads, the suspended-stack root registry and symmetric `switch` are
 implemented. A continuation remains a serial execution context; multi-agent
-scheduling is an embedder-owned `Agent`/`ComponentExecutor` choice.
+scheduling is an embedder-owned `Agent`/`ComponentExecutor` choice. Revision 14
+adds §4.1, the scheduler written as a host uses it.
 Audience: anyone touching `WasmModule` (types), `WasmType` (heap types),
 `WasmOpcode`, `WasmStore`, `WasmModuleInstance`, the JIT compiler, a backend's
 continuation lowering, or the exception-tag machinery.
@@ -168,6 +169,93 @@ The decision applies engine-wide and is recorded with its reasoning in §9.15
   argument, a handled suspension, an unhandled suspension, multiple handlers,
   a loop handler, `cont.bind`, `resume_throw`, a `resume_throw` handler clause,
   wide payloads and the A/B `switch` peer handoff.
+
+### 4.1 The scheduler in use
+
+The list above says what exists; this is the shape a host actually writes. Two
+sides, one scheduler.
+
+**The guest side.** A Wasm function that suspends is a normal function: it calls
+`cont.new` on a target and resumes it, and the target's `suspend $tag value` stops
+it. From a *native import*, the host can suspend the current continuation itself:
+
+```cpp
+std::int32_t awaitHostTodo(WASM::VMContext* context, std::int32_t tag)
+{
+    std::int32_t resumedValue = 0;
+    // Returns 1 when resumed, 0 when no continuation is active or it was cancelled.
+    WASM::HostContinuation::suspendCurrent(tag, /*value=*/0, &resumedValue);
+    return resumedValue;
+}
+```
+
+**The host side.** Whatever the guest returned — an exported `(ref cont)`, or the
+suspension the import above triggered — arrives as a `void*` reference, and
+`HostContinuation` is the RAII owner of that one count:
+
+```cpp
+struct Pending {
+    void* continuation = nullptr;   // owned until we hand it to `submit`
+    std::int32_t tag = 0;
+    std::int32_t status = -1;
+};
+Pending pending;
+WASM::HostContinuationScheduler::Hooks hooks;
+hooks.userData = &pending;
+hooks.onSuspended = [](void* user, void* continuation, std::int32_t tag,
+        std::int32_t value) noexcept {
+    auto* p = static_cast<Pending*>(user);
+    p->continuation = continuation;   // ownership transferred to us
+    p->tag = tag;
+};
+hooks.onCompleted = [](void* user, std::int32_t status) noexcept {
+    static_cast<Pending*>(user)->status = status;
+};
+
+WASM::HostContinuationScheduler scheduler(hooks);
+scheduler.submit(continuationRef, /*arg=*/0);   // queue one resume
+scheduler.step();                               // resume exactly one task
+```
+
+That is the whole loop: `step` resumes one continuation, the engine calls
+`onSuspended` with the *replacement* handle (or `onCompleted` when the function
+returned), and the host stores the replacement behind its own task object until
+the awaited work is ready — then calls `submit` again. `run()` drains the queue;
+`step()` is what a host interleaves into its own event loop. `pending()` reports
+the queue depth and `clear()` abandons it.
+
+**Wide payloads.** The scalar path above carries one `i32` each way. A suspension
+whose tag or results include an `i64`, a `v128`, a reference or several values
+uses the `*Ex` forms:
+
+| Narrow | Wide | Payload |
+|---|---|---|
+| `submit(ref, arg)` | `submitEx(ref, args, argCount, argKinds)` | `ContinuationValue` slots, 16 bytes each |
+| `onSuspended` | `onSuspendedEx(user, ref, tag, values, count, kinds)` | tag payload + `ContinuationValueKind` per slot |
+| `onCompleted` | `onCompletedEx(user, status, results, count, kinds)` | the function's results |
+| — | `submitThrow(ref, exception)` / `onRejected(user, status, exception)` | the reject/throw path |
+
+Passing `argKinds` is optional and matters only for references: the scheduler
+retains a reference argument for the duration of the task and releases it after
+`step`, so a reference slot without its kind is a lifetime bug, not a type bug.
+
+**The rules, once.** A continuation resumes **once**: the handle is consumed
+whether it completes, suspends, traps or throws. `onSuspended`'s replacement must
+be kept alive — if the host drops it, the task is gone. Hooks run synchronously on
+the thread that called `step`; a borrowed buffer is valid only during the
+callback; and a suspended continuation must not be destroyed on another thread
+while it is suspended. Traps and uncaught exceptions are already recorded in the
+execution state whose agent ran the task, so `onRejected` is a notification, and
+reading the pending slots is how the host gets the kind and message.
+
+**Where this stops.** The scheduler is serial and is not an agent API: it makes no
+second execution context and takes no lock on the instance. An embedder that wants
+several host threads inside one instance opts into
+`ConcurrencyModel::Agents` separately (`THREADS.md` §4.6) — and a continuation is
+an execution *context*, not an agent (D-5). The full embedder-side contract, for
+the case that specifies what the host must supply, is
+[`JS_INTEGRATION.md`](JS_INTEGRATION.md) §4.2.2; the same four layers written as a
+walkthrough are [`../EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) §2.2.
 
 ## 5. Gaps
 

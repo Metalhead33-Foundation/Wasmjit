@@ -2,11 +2,13 @@
 
 *Current Surface, Gaps, and Plan*
 
-Status: design note / implementation plan (revision 6). DG-0…DG-8 and the
+Status: design note / implementation plan (revision 7). DG-0…DG-8 and the
 terminal-facing extension of DG-3 are implemented: rule ids, the structured
 record, runtime/continuation/scheduler diagnostics, the bounded ring, text/JSON
 sinks and the harness's diagnose/options modes. The pretty terminal form is
-opt-in; the core default is off.
+opt-in; the core default is off. Revision 7 adds the two reading tutorials: §5.5
+takes a record to the source line that emitted it, and §9.1 is the packet an
+embedder hands an AI coding agent.
 Audience: WasmJit developers, Wasm module authors, embedders (host applications
 and language adapters), and AI agents or other automated maintainers that need
 to reproduce and localize a failure without guessing.
@@ -722,6 +724,110 @@ trampoline's catch frame. `panic` is how a unit test fails loudly from inside
 the guest: the record is queryable with its id and message, and the trap makes
 the call fail even if the test does not inspect the ring.
 
+### 5.5 A tutorial: from a record to a source line
+
+There are three readers of the same record, and the walkthrough is the same for
+all three: **the id is the key, the phase is the owner, the location is the
+site.**
+
+| Reader | How to get the record | When to use it |
+|---|---|---|
+| the embedder | `RuntimeConfig::sink` (a `DiagnosticSink`), or `recentDiagnostics()` for the ring | a product that logs, metrics or asserts on failures |
+| a test | the ring, after the call that failed | a regression that pins an id rather than a message |
+| a person at a terminal | `--diagnostics=text\|json`, `--diagnose=PATH [--invoke=…]` | a module that fails before any harness exists |
+
+The first two are the same object in C++, and neither needs a log parser:
+
+```cpp
+// The embedder's reader: one sink, installed once on the runtime.
+void onDiagnostic(void* userData, const WASM::Diagnostic& diagnostic) noexcept
+{
+    auto* log = static_cast<DiagnosticsLog*>(userData);
+    log->line(WASM::formatDiagnostic(diagnostic));    // id, message, `at` line, hint
+}
+
+WASM::RuntimeConfig config;
+config.sink = &onDiagnostic;
+config.sinkUserData = &log;
+auto runtime = WASM::Runtime::create("libjit", config);
+
+// The test's reader: the bounded ring, after the call that failed.
+try {
+    runtime->callExport<void>(instance, "divide");
+} catch (const WASM::Trap&) {
+    for (const WASM::Diagnostic& record : WASM::recentDiagnostics()) {
+        if (record.id == "WASM.EXECUTE.TRAP.INTEGER_DIVIDE_BY_ZERO") {
+            // the id is the assertion; record.message and record.location are evidence
+        }
+    }
+}
+```
+
+**Step 1 — read the id, not the message.** `message` is allowed to improve; the
+id is the contract (§4.1). A text line is `<severity> <id>: <message>`, and the id
+is greppable in three places at once: the constant in
+`WASM::DiagnosticId`, the emitting site, and the test that pins it.
+
+```
+error WASM.VALIDATE.UNKNOWN_TYPE: unknown type 3
+  at function 7 ($make_widget) instruction 4
+  hint: docs/VALIDATION.md
+```
+
+**Step 2 — the phase prefix names the owner.** The first two segments of the id
+are the phase, and the phase is a *component*, not a severity (§4.2):
+
+| Id prefix | Emitted by | Read next |
+|---|---|---|
+| `WASM.DECODE.*` | `Module::fromFile`, the opcode dispatcher | [`VALIDATION.md`](VALIDATION.md) §decode, [`SAFETY.md`](SAFETY.md) §2.1 (is it even a module?) |
+| `WASM.VALIDATE.*` | `Validator::fail`, classified by `validationRuleId()` | [`VALIDATION.md`](VALIDATION.md); the rule families are §4.2 of this note |
+| `WASM.COMPILE.*` | a backend that cannot lower a function, or a policy that was reduced | [`proposals/COMPILER_POLICY.md`](proposals/COMPILER_POLICY.md), [`WRITING_A_BACKEND.md`](WRITING_A_BACKEND.md) |
+| `WASM.INSTANTIATE.*` / `WASM.MEMORY.*` | linking, segment application, the allocation budget | [`ABI.md`](ABI.md), [`SAFETY.md`](SAFETY.md) §2.3 |
+| `WASM.EXECUTE.TRAP.*` | the trap boundary — generated code, a helper, or a host raise | [`ABI.md`](ABI.md) “Traps”, [`SAFETY.md`](SAFETY.md) §2.4 |
+| `WASM.EXECUTE.EXCEPTION` | an uncaught Wasm exception reached the host | [`ABI.md`](ABI.md) “Exceptions” |
+| `WASM.CONTINUATION.*` | resume/switch/scheduler paths | [`proposals/STACK_SWITCHING.md`](proposals/STACK_SWITCHING.md) §4.1 |
+| `WASM.BACKEND.PLUGIN` | a plugin load refusal, or a successful load as a Note | [`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md) §4.5 |
+
+**Step 3 — the location is the site, when the phase can name one.** Validation and
+decode records carry a module-local `functionIndex`, an opcode
+`instructionOffset` and a byte `moduleOffset`; a runtime trap carries the same
+shape when the backend reported it from generated code, and none when a helper
+raised it (`reportTrap` has no site). `functionName` is copied from the name
+section when the record is emitted, so it survives the module — which is the
+whole reason it is copied (§4.1).
+
+```
+error WASM.EXECUTE.TRAP.INTEGER_DIVIDE_BY_ZERO: integer divide by zero
+  at function 3 ($divmod) instruction 12
+```
+
+Interpret `instruction` as an offset **from the body's first opcode**, not from
+the binary — the locals declaration is decoded separately, and both validation and
+runtime offsets start after it (§4.1). `function N` is the module-local index;
+`($name)` appears when the name section supplied one; `(module byte 0x…)` appears
+when the record came from the load boundary. If the whole `at` line is absent, the
+failure is either helper-raised or came from a boundary that took the trap slot
+directly.
+
+**Step 4 — read the continuation context when the record has one.** Only records
+that carry a populated `state` serialize a `continuation` object; it names the
+provider, the generation, the tag, the value/result counts and whether roots were
+registered (§4.3). That is the difference between “the guest trapped” and “a
+suspended task was resumed into a trap after a generation had moved on”.
+
+**Step 5 — follow the remediation, then the test.** `remediation` is a doc anchor
+or a short hint, and it is a static literal — so it is safe to print. When it is
+empty, the id still resolves to a test case: `grep` the id in `Test/` and the
+matching case is the executable statement of what the failure means (§7).
+
+**What the id does *not* tell you.** A `Note` is not a failure — a successful load
+that *recovered* something says so (`WASM.DECODE.LEGACY_EXCEPTIONS_REWRITTEN`),
+and `--diagnose` prints such a note on an otherwise clean exit. `WASM.VALIDATE.RULE`
+is the fallback leaf: it means no rule family matched, so the message's prose is
+the only classification there is, and a new validator message that lands in it
+wants an explicit family (§4.2). And a severity describes the record, never the
+return value: `env.info` is a successful call that records a `Note`.
+
 ## 6. Roadmap
 
 Status: ✅ implemented, ◐ partial, ☐ open.
@@ -844,6 +950,80 @@ Still open, from the original plan:
 5. `docs/proposals/THREADS.md` §4.3.1 — why diagnostics must stay
    execution-context-aware, not assume a second agent exists.
 6. This note — shipped ids, schema, roadmap and test gates.
+
+### 9.1 Handing a failure to an AI coding agent
+
+An agent is a reader with two properties worth designing for: it cannot run the
+program unless you tell it how, and it will believe whatever you paste. Both are
+solved by pasting the **record**, not a transcript — the record is already the
+structured form, and the envelope is already versioned.
+
+**The packet.** Six fields, in this order, is enough for a first pass:
+
+```text
+Symptom:      one sentence, in the user's words ("add returns 41", not "trap")
+Command:      the exact line that reproduces it, with --diagnose or --diagnostics
+Runtime:      backend, profile and abi version (Runtime::backendName(),
+              Runtime::profile(), WASM::abiVersion()) — the three things that
+              decide which code path produced the record
+Records:      the JSON envelope, unedited:
+              {"schema":"wasmjit.diagnostic.v1","startedAt":…,"records":[ … ]}
+Repro:        the smallest module (.wat text or path) plus the one call
+Question:     what you want decided — "why does this validate" is a better
+              question than "fix it"
+```
+
+`--diagnostics-file=PATH` writes the envelope to a file instead of stdout, and
+`--diagnostics-limit=N` bounds it, so a packet is small by construction: the ring
+holds 32 records by default and a run that needs more is usually a run with a
+different bug (§5.1).
+
+An embedder builds the same field from its own ring, without parsing anything:
+
+```cpp
+// The "Records" field of the packet: the versioned envelope, straight from the
+// execution state that produced it.
+const std::string records = WASM::diagnosticsToJson(WASM::recentDiagnostics(),
+                                                    WASM::diagnosticsStartedAt());
+std::ofstream("failure.json") << records;    // schema wasmjit.diagnostic.v1
+```
+
+**Then tell it how to look the id up.** The three lookups are mechanical, and an
+agent that knows them does not have to guess:
+
+1. `grep -rn "WASM.<PHASE>.<LEAF>" WasmBase/ Tools/ Test/` — the constant in
+   `WASM::DiagnosticId`, the emitting site, and the test that pins the id.
+2. The phase table in §5.5 says which **component** owns it, and therefore which
+   document is the contract: decode and validate are
+   [`VALIDATION.md`](VALIDATION.md), traps and exceptions are [`ABI.md`](ABI.md),
+   containment and budgets are [`SAFETY.md`](SAFETY.md), continuations are
+   [`proposals/STACK_SWITCHING.md`](proposals/STACK_SWITCHING.md) §4.1, a plugin
+   load is [`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md) §4.5.
+3. The test name from (1) is the executable statement of the failure's meaning;
+   §7 lists what is covered, so “is this even a tested path?” is answered before
+   any code is changed.
+
+**Three things to say explicitly, because an agent will otherwise get them
+wrong.** `message` is prose and may change — the id is the contract, so a fix that
+edits a message to match a log line is a fix in the wrong place. A `Note` in the
+packet is not the bug: `WASM.DECODE.LEGACY_EXCEPTIONS_REWRITTEN` and
+`WASM.BACKEND.PLUGIN`'s success form both mean “this worked, and here is what was
+decided”. And `WASM.VALIDATE.RULE` means the classifier missed: the fix there is a
+rule family in §4.2 plus a doc line, not a nicer sentence in the message.
+
+**A worked exchange.** A guest traps on `integer divide by zero` after a resume.
+The packet carries `WASM.EXECUTE.TRAP.INTEGER_DIVIDE_BY_ZERO` with a
+`continuation` object whose `state` is populated, so the phase table points at the
+trap boundary and §4.3 points at the continuation context; the id's test case in
+§7 says the trap is raised by generated code, and the `at function … instruction …`
+site localises it. The question then has an answer that is not “add a print”: the
+resume delivered a zero divisor, and the code that built the resume value is the
+place under discussion — which is exactly the question the packet should ask.
+
+**Where the agent reads next.** The list at the top of §9 is the reading order, and
+it is deliberately short: safety, validation, the ABI, then the two notes that
+carry the concurrency and scheduling contracts. The packet supplies the one record
+that says *which* of those applies.
 
 ## 10. References
 

@@ -164,11 +164,214 @@ struct Entry {
 };
 
 /*!
+ * \brief One field of a host-registered object descriptor.
+ *
+ * The offset is the **canonical** offset the Store's GC heap uses, header
+ * included, derived from the field types by `WASM::layoutHostType` — never by
+ * `sizeof(T)` (docs/proposals/SYNTHETIC_OBJECTS.md `SOD7`). A descriptor may
+ * assert the offset; validation refuses an assertion that disagrees, and
+ * `toJson()` always writes the derived value.
+ */
+struct ObjectField {
+	std::string name; //!< The field name, unique within the object.
+	ValueType type; //!< The field's Wasm storage type.
+	bool mutableField = false; //!< True for a `mut` field (a WIT setter).
+	bool hasOffset = false; //!< True when the input asserted an offset.
+	std::uint32_t declaredOffset = 0; //!< The asserted offset, when present.
+	std::uint32_t offset = 0; //!< The canonical offset, filled by validation.
+	std::uint32_t bytes = 0; //!< The storage size, filled by validation.
+	bool isReference = false; //!< True for a reference-valued field.
+
+	/*!
+	 * \brief Parses one field descriptor.
+	 * \param json The field object.
+	 * \return The typed field, with the asserted offset when present.
+	 * \throws std::runtime_error when the name is missing or the type is not a
+	 * Wasm storage type.
+	 */
+	static ObjectField fromJson(const nlohmann::ordered_json& json);
+
+	/*!
+	 * \brief Formats the field with its derived offset and size.
+	 * \return The ordered JSON object.
+	 */
+	nlohmann::ordered_json toJson() const;
+};
+
+/*!
+ * \brief One property of a host-registered object descriptor: a value behind a
+ * function pair, not a stored slot.
+ *
+ * A field says "this member is at offset N"; a property says "this member is
+ * whatever `get` returns". The getter is required and the setter optional, and
+ * neither occupies a byte of the object — so a property is how a descriptor
+ * declares a *computed* or *cascading* member (a lazily formatted label, a
+ * status whose change updates a mixer, a derived value) while the storage and
+ * its offsets stay the host's business.
+ *
+ * Both accessors must also be declared in the object's `methods` table: an
+ * accessor is a function of the object like any other, and the descriptor is
+ * checked against itself rather than trusted
+ * (docs/proposals/SYNTHETIC_OBJECTS.md §4.7).
+ */
+struct ObjectProperty {
+	std::string name; //!< The property name, unique among the object's members.
+	ValueType type; //!< The property's value type.
+	std::string getter; //!< The accessor that reads it; required.
+	std::string setter; //!< The accessor that writes it; empty when read-only.
+	bool mutableProperty = false; //!< True when a setter is declared.
+
+	/*!
+	 * \brief Parses one property descriptor.
+	 * \param json The property object.
+	 * \return The typed property.
+	 * \throws std::runtime_error when the name, the value type or the getter is
+	 * missing, when a `void` type is declared, when `offset` is present, or when
+	 * `mutable` is asserted without a setter.
+	 */
+	static ObjectProperty fromJson(const nlohmann::ordered_json& json);
+
+	/*!
+	 * \brief Formats the property for schema interchange.
+	 * \return The ordered JSON object.
+	 */
+	nlohmann::ordered_json toJson() const;
+};
+
+/*!
+ * \brief One method of a host-registered object descriptor.
+ *
+ * A method is metadata: it names a signature the host implements as a
+ * trampoline. The tool emits the shape; it never invents an implementation.
+ * A method named by a property's `get`/`set` is that property's accessor.
+ */
+struct ObjectMethod {
+	std::string name; //!< The method name.
+	std::vector<ValueType> params; //!< The method's parameters.
+	std::vector<ValueType> results; //!< The method's results.
+	std::vector<std::string> argNames; //!< Optional parameter names, index-aligned.
+
+	/*!
+	 * \brief Returns the declared spelling of one parameter, or its position.
+	 * \param index The parameter index.
+	 * \return `argNames[index]` when the descriptor named it, else `p<index>`.
+	 */
+	std::string paramName(std::size_t index) const;
+
+	/*!
+	 * \brief Parses one method descriptor.
+	 * \param json The method object.
+	 * \return The typed method.
+	 * \throws std::runtime_error when the name is missing or a type is unknown.
+	 */
+	static ObjectMethod fromJson(const nlohmann::ordered_json& json);
+
+	/*!
+	 * \brief Formats the method for schema interchange.
+	 * \return The ordered JSON object.
+	 */
+	nlohmann::ordered_json toJson() const;
+};
+
+/*!
+ * \brief A declared constructor: a function that takes arguments and returns the
+ *        object's handle.
+ *
+ * A constructor is *not* a method: it has no `self`, its result is the object by
+ * definition, and the C++ façade projects it as a real constructor rather than a
+ * named member. It shares the `methods` parameter namespace, because both become
+ * `<type>_<name>` entry points in the generated header.
+ */
+struct ObjectConstructor {
+	std::string name; //!< The constructor name, for example `create`.
+	std::vector<ValueType> params; //!< The constructor's parameters.
+	std::vector<std::string> argNames; //!< Optional parameter names, index-aligned.
+
+	/*!
+	 * \brief Returns the declared spelling of one parameter, or its position.
+	 * \param index The parameter index.
+	 * \return `argNames[index]` when the descriptor named it, else `p<index>`.
+	 */
+	std::string paramName(std::size_t index) const;
+
+	/*!
+	 * \brief Parses one constructor descriptor.
+	 * \param json The constructor object.
+	 * \return The typed constructor.
+	 * \throws std::runtime_error when the name is missing or a type is unknown.
+	 */
+	static ObjectConstructor fromJson(const nlohmann::ordered_json& json);
+
+	/*!
+	 * \brief Formats the constructor for schema interchange.
+	 * \return The ordered JSON object.
+	 */
+	nlohmann::ordered_json toJson() const;
+};
+
+/*!
+ * \brief A host-registered object type: name, version, fields and methods.
+ *
+ * This is the "Poor Man's Reflection" table of
+ * docs/proposals/SYNTHETIC_OBJECTS.md A.14.5: host metadata that a generator can
+ * walk, never RTTI. The tool consumes it and never produces it — the host writes
+ * it, by hand or with a builder — and it carries no engine `TypeId`: identity is
+ * the Store's structural `TypeId`, and a name is only a lookup key (A.14.2).
+ */
+/*! \brief What a generated receiver crosses as: the host's `i64` slot, or an `externref`. */
+enum class ObjectSelfKind {
+	Handle, //!< The `SO-3` handle table: an `i64` slot, released by `…_release`.
+	ExternRef //!< An opaque host reference: no slot, no canonical layout, no release entry point.
+};
+
+/*!
+ * \brief A host object descriptor: its members, and how its receiver crosses.
+ */
+struct ObjectDescriptor {
+	std::string name; //!< The descriptor name, for example `demo.Widget`.
+	std::uint32_t version = 1; //!< The descriptor version; a change is a new type.
+	std::string parent; //!< The optional parent descriptor name.
+	std::vector<std::string> interfaces; //!< The optional interface names.
+	ObjectSelfKind self = ObjectSelfKind::Handle; //!< The receiver's wire form.
+	//! The method that ends the object's life, for an owning `externref` object.
+	//! Naming one makes the generated wrapper an owner: move-only, with a
+	//! destructor that calls it. Empty means the reference is borrowed, so the
+	//! wrapper copies and the bridge owns the lifetime (docs/proposals/SYNTHETIC_OBJECTS.md §4.13).
+	std::string destructor;
+	std::vector<ObjectField> fields; //!< The stored-slot table.
+	std::vector<ObjectProperty> properties; //!< The accessor-backed properties.
+	std::vector<ObjectMethod> methods; //!< The method table (accessors included).
+	std::vector<ObjectConstructor> constructors; //!< The constructor table.
+	std::uint32_t size = 0; //!< The canonical object size; 0 for an `externref` object.
+	nlohmann::ordered_json raw; //!< The original object, for open-ended fields.
+
+	/*!
+	 * \brief Parses one object descriptor.
+	 * \param json The object descriptor.
+	 * \return The typed descriptor, before layout validation.
+	 * \throws std::runtime_error when the name or version is missing.
+	 */
+	static ObjectDescriptor fromJson(const nlohmann::ordered_json& json);
+
+	/*!
+	 * \brief Formats the descriptor with its derived layout.
+	 * \return The ordered JSON object.
+	 */
+	nlohmann::ordered_json toJson() const;
+};
+
+/*!
  * \brief A complete binding schema, with typed function entries.
  *
  * Component value/type payloads remain JSON because the schema intentionally
  * carries open-ended component structures; every value the emitters call is
  * available through \c Entry and \c ValueType.
+ *
+ * The `objects` section is the `wasmjit.binding/2` addition
+ * (docs/proposals/SYNTHETIC_OBJECTS.md A.14.5). It is consumed, never produced:
+ * a schema projected from a module or component leaves it empty, and
+ * `toJson()` bumps the envelope to `/2` only when an object is present, so a
+ * `/1` consumer keeps working.
  */
 struct Schema {
 	std::string id = "wasmjit.binding/1"; //!< The schema identifier.
@@ -178,13 +381,16 @@ struct Schema {
 	std::vector<Entry> imports; //!< Import entries.
 	std::vector<Entry> exports; //!< Export entries.
 	nlohmann::ordered_json types = nlohmann::ordered_json::array(); //!< Type definitions.
+	std::vector<ObjectDescriptor> objects; //!< Host-registered object descriptors (`/2`).
 	nlohmann::ordered_json extras = nlohmann::ordered_json::object(); //!< Other envelope fields.
 
 	/*!
 	 * \brief Parses a schema from JSON.
 	 * \param json The schema object.
-	 * \return The typed schema.
-	 * \throws std::runtime_error when the identifier or direction is invalid.
+	 * \return The typed schema, with every object offset already validated
+	 * against the canonical layout.
+	 * \throws std::runtime_error when the identifier, direction or an object
+	 * descriptor is invalid, or when an `objects` section is not `wasmjit.binding/2`.
 	 */
 	static Schema fromJson(const nlohmann::ordered_json& json);
 

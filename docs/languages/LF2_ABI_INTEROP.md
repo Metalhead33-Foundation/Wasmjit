@@ -2,13 +2,16 @@
 
 *Host bindings and the scalar-to-GC difficulty scale*
 
-Status: cross-cutting `LF-2` amendment, revision 4 (2026-11-04). It adds the
+Status: cross-cutting `LF-2` amendment, revision 5 (2026-11-18). It adds the
 ABI/interop dimension the cluster reports did not treat as one subject: how a
 language sees WasmJit's exports and synthetic host modules, how the C/C++ runtime
 and a JavaScript bridge see the language's exports, and where each language sits
 on the scalar-to-GC/reference difficulty scale. It points at
-`EMBEDDING_SURFACE.md` §12–§14 and adds the §11 ownership map. It does **not**
-change any `LF-2` verdict.
+`EMBEDDING_SURFACE.md` §12–§14 and adds the §11 ownership map. Revision 5 records
+the **host-registered object type** of
+[`../proposals/SYNTHETIC_OBJECTS.md`](../proposals/SYNTHETIC_OBJECTS.md) revision 2:
+one row in §6, one sentence per affected language in §7, a test in §10 and two
+ownership rows (§11). It does **not** change any `LF-2` language verdict.
 
 This is deliberately an amendment to the language-feasibility set, not a new
 language charter. The host-binding contract it elaborates is
@@ -61,6 +64,15 @@ The guest sees ordinary imports; it cannot tell whether the provider is a real
 module, a native C/C++ function, a JS adapter, or another guest module. That
 uniformity is the point of the seam, and it is why “synthetic module” needs no
 new engine object.
+
+A **host-registered object type** is the object-side case, and it is not a third
+call direction: it is a *value* that crosses the two directions above
+([`../proposals/SYNTHETIC_OBJECTS.md`](../proposals/SYNTHETIC_OBJECTS.md) §2.1/§2.5).
+The host interns a canonical `struct`/`array` into the Store's `TypeRegistry` and
+creates instances in the Store's `GcHeap`; a GC guest declares the same shape and
+therefore shares the `TypeId`; a non-GC guest reaches the same object through an
+`i64` slot. The guest sees a normal import module plus a type it already has — no
+new ABI, no new direction, and no change to any verdict below.
 
 ## 3. Which ABI is in play?
 
@@ -209,6 +221,7 @@ language-runtime/GC/JS/async bridge, and `?` means the study did not measure it
 | `v128` by value | B | ? | ? | ? | ? | ? | ? | ? | ? |
 | `externref` / `(ref extern)` | B | B | B | C (JS interop) | C | C | ? | C | ? |
 | GC-managed object/array/string reference | C | C | C | C (AS-managed object) | C | C | C | C | C |
+| Host-registered object type, same Store, matching canonical type (`SYNTHETIC_OBJECTS.md` r2) | C (handle) | C (handle) | C (handle) | C (handle) | B (typed `(ref $T)`) | B (typed `(ref $T)`) | C (handle) | B (typed, adapter) | C (handle) |
 | `exnref` / guest exception value | C | C | C | C | C | C | C | C | C |
 | Resource / stream / future / task | C | C | C | C | C | C | C | C | C |
 | Host synthetic module returning a GC ref | C | C | C | C | C | C | C | C | C |
@@ -231,6 +244,16 @@ The pattern is stable:
   The engine can move an opaque reference, but only the originating runtime (or
   the component Canonical ABI adapter) understands it.
 
+The one new row is the exception that proves the rule. A host-registered object
+type is still a C in the non-GC columns — the language has no typed reference —
+but in the GC columns it is **B**, because the host supplied the type: there is no
+"originating runtime" to consult beyond the Store's `TypeId`, and `ref.test`
+answers the identity question. That is the whole point of
+[`../proposals/SYNTHETIC_OBJECTS.md`](../proposals/SYNTHETIC_OBJECTS.md) revision 2,
+and it is why the row reads B for Kotlin/MoonBit and C for C/Rust/Zig/Go: the
+object is one identity with two spellings, and each language pays only for the
+spelling it can express (A.14.4).
+
 This is the same line as
 [`EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) §11: `A`/`B` are the
 descriptor-and-template generator’s territory; `C` is where the embedder’s
@@ -247,7 +270,10 @@ conversion rules are in [`EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md)
   imports, one guest memory, C++ objects only behind opaque pointers or
   validated handles. GC refs and `exnref` are C, not the C++ ABI; C++
   exceptions and `std::string` do not cross. The synthetic-module direction is
-  the easiest in the set: a `nativeImport` with `VMContext*` first.
+  the easiest in the set: a `nativeImport` with `VMContext*` first. A
+  host-registered object reaches C as an `i64` slot (or an `externref` for an
+  opaque value); the typed `(ref $T)` form is the GC-language lane, not the C lane
+  (`SYNTHETIC_OBJECTS.md` A.14.4).
 - **Rust (`S2`)** — Scalar and pointer shapes are A/B; `extern "C"` plus
   explicit ownership. Rust’s allocator is guest-side. `wasm-bindgen` is a JS
   adapter, not this engine’s ABI. GC references and exceptions are C; a Rust
@@ -262,9 +288,14 @@ conversion rules are in [`EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md)
 - **Kotlin/Wasm (`S4`)** — `wasmWasi` scalar exports are A/B and the measured
   arm. WasmGC objects/strings are C. `wasmJs` is a separate C case: its hundreds
   of JS/`wasm:js-string` imports and imported `(ref extern)` globals require the
-  JS bridge before any export is callable from a bare C++ host.
+  JS bridge before any export is callable from a bare C++ host. Kotlin is one of
+  the two GC lanes that can consume a host-created object as a normal typed
+  reference when the canonical type matches (`SYNTHETIC_OBJECTS.md` A.14.2).
 - **MoonBit (`S4`)** — WasmGC module; scalar host hook works. GC values and
-  component resources are C; a binding needs a MoonBit/WasmGC-aware adapter.
+  component resources are C; a binding needs a MoonBit/WasmGC-aware adapter. Like
+  Kotlin, it can consume a host-registered object type as `(ref $T)` when the
+  canonical type matches, which is the cheapest cross-language object path in this
+  set (`SYNTHETIC_OBJECTS.md` A.14.2/A.14.4).
 - **Go/TinyGo (`S2`/`L8`)** — `//go:wasmimport`/`//go:wasmexport`, scalar/pointer
   A/B. Go's runtime initialization (`_initialize`) and scheduler are
   embedder-visible preconditions. Go heap objects are not WasmGC refs; crossing
@@ -286,6 +317,14 @@ That is the useful design target for host-side native C/C++:
 - do not expect a guest’s `std::string`, Rust `String`, AssemblyScript `string`,
   Kotlin object or Dart string to arrive as a C++ object;
 - do not expect a host C++ object to arrive as a guest GC object.
+
+The one exception is deliberate: a **host-registered object type** is a guest GC
+object by construction ([`../proposals/SYNTHETIC_OBJECTS.md`](../proposals/SYNTHETIC_OBJECTS.md)
+revision 2). A GC lane holds it as `(ref $T)` with the Store's `TypeId`; a non-GC
+lane holds the same object as an `i64` slot, and the host performs the type check
+the guest cannot. What does *not* change is the C++ class: it is still on the
+host, still not expressible in Wasm, and still reached only through functions
+(`SOD3`, `SOD6`).
 
 The engine can carry the opaque reference; it cannot make two runtimes agree on
 what the object means. That agreement is the binding adapter's job, and is the
@@ -324,6 +363,12 @@ rule:
    🟩 green scalar arm into a claim about GC, exceptions or resources. `LF2_S1`,
    `LF2_S2`, `LF2_S3`, `LF2_S4` and `LF2_S5` remain the source for what was
    actually built and run.
+6. **Treat a host-registered object type as a shared type, not a new ABI.** It
+   needs no per-language emitter beyond the existing one: the GC lane gets the
+   typed declaration, the non-GC lane gets the handle declaration, and both come
+   from the same `objects` section of the schema (`EMBEDDING_SURFACE.md` §11.8).
+   The generator must not duplicate an operation into two implementations; a
+   second spelling is a thunk (`SYNTHETIC_OBJECTS.md` A.14.4).
 
 ## 10. Open questions and tests
 
@@ -341,7 +386,10 @@ The following would turn a `?` in §6 into evidence:
 - a **JS bridge** arm for Kotlin `wasmJs` and Dart, showing which imports and
   `(ref extern)` globals are required;
 - an **exception path** for each language that can throw across its own runtime,
-  distinguishing a guest trap, a pending exception and a host adapter error.
+  distinguishing a guest trap, a pending exception and a host adapter error;
+- a **host-registered object** crossing in Kotlin/MoonBit as `(ref $T)` and in C as
+  an `i64` handle, proving one `TypeId`, one count, and a rejected stale handle
+  (`SYNTHETIC_OBJECTS.md` `SO15`).
 
 Until those tests exist, the matrix is a design map, not a new set of language
 verdicts.
@@ -386,6 +434,8 @@ both real, they are separate rows; do not hide a `LANG` boundary inside a
 | **LF2-21** | The test matrix is a design map, not evidence | §10 | **TOOL** | **Open** | Run the per-language arms; keep the measured verdicts in `LF2_*`. |
 | **LF2-22** | Native string model versus `stringref` | §6, §7 | **LANG** | **Accepted** | Copy through the Store/canonical string ABI; no native string layout crosses. |
 | **LF2-23** | Two GC languages may share a Wasm type but not their class/runtime semantics | §6, §7 | **LANG** | **Accepted** | Export a function API over the common Wasm type; do not assume a shared class library. |
+| **LF2-24** | A host-defined object type has no origin the guest can match | §2, §6 | **ENG** | **Planned** (`SO-1`) | Intern a canonical host type and allocate its instances in the Store `GcHeap`, so a GC lane's `(ref $T)` shares the `TypeId` (`SYNTHETIC_OBJECTS.md` A.14.3). |
+| **LF2-25** | The same object must reach a GC lane and a non-GC lane | §6, §7 | **TOOL** | **Planned** (`SO-3`) | Generate the handle surface and the typed declaration from one descriptor; a `_h` thunk only where a producer must serve a non-GC consumer — never two implementations (`SYNTHETIC_OBJECTS.md` A.14.4). |
 
 This table does **not** promote any language: every 🟩 green scalar arm is still
 scalar; every `C` cell is still an adapter problem. It also does not turn
@@ -396,6 +446,11 @@ system, which is host-side/tooling, not a language capability.
 
 ## 12. References
 
+- [`../proposals/SYNTHETIC_OBJECTS.md`](../proposals/SYNTHETIC_OBJECTS.md) —
+  revision 2: §2.1/§2.5 (the host-registered object type and its five decisions),
+  §3.2.1 (one Store per process), A.14.2 (dedup and names), A.14.3 (the engine
+  seam) and A.14.4 (one identity, two spellings). The §6 row and the §7 sentences
+  in this note are its language-level projection.
 - [`EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) §11 — host-binding guide,
   descriptor-driven generation, per-language limits and the embedder fallback;
   §13 — native C++ objects/C structs, opaque handles, typed handle tables,

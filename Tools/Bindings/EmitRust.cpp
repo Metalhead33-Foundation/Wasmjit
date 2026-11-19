@@ -1,5 +1,6 @@
 #include "BindingSchema.hpp"
 #include "EmitInternal.hpp"
+#include "EmitObjects.hpp"
 #include "EmitShared.hpp"
 
 #include <cstddef>
@@ -15,6 +16,14 @@ using namespace detail;
 using Json = nlohmann::ordered_json;
 
 std::string emitRustModule(const nlohmann::ordered_json& input)
+{
+	return detail::emitRustModuleImpl(input, Schema::fromJson(input));
+}
+
+namespace detail {
+
+std::string emitRustModuleImpl(const nlohmann::ordered_json& input,
+		const Schema& typed)
 {
 	Json schema = input;
 	dedupeJsonSchema(schema);
@@ -35,17 +44,16 @@ std::string emitRustModule(const nlohmann::ordered_json& input)
 	out << "\n// Reference types are opaque. Reference parameters are borrowed unless\n"
 		   "// the adapter says otherwise; reference results carry an explicit\n"
 		   "// ownership note. This module defines no layout and no TypeId.\n\n";
+	emitRustObjects(out, typed);
 
-	for (const Json& entry : schema.at("exports")) {
-		if (entry.value("kind", "") != "function")
-			continue;
-		const std::string exportName = entry.at("name").get<std::string>();
+	forEachFunction(typed, false, [&](const Entry& entry) {
+		const std::string& exportName = entry.name;
 		const std::string name = "wasmjit_" + sanitize(exportName);
 		out << "// H2G export: " << exportComment(entry) << "\n";
 		out << "pub type " << name << "_t = unsafe extern \"C\" fn(";
-		emitRustParams(out, entry, signatureResults(entry).size() > 1u);
+		emitRustParams(out, entry, entry.function.results.size() > 1u);
 		out << ")";
-		emitRustReturn(out, signatureResults(entry));
+		emitRustReturn(out, entry.function.results);
 		out << ";\n\n";
 
 		// A type alias alone cannot be implemented as a Wasm export. Emit a
@@ -53,36 +61,34 @@ std::string emitRustModule(const nlohmann::ordered_json& input)
 		// in the body.
 		out << "#[export_name = " << quoteName(exportName, true) << "]\n";
 		out << "pub extern \"C\" fn " << name << "_impl(";
-		emitRustParams(out, entry, signatureResults(entry).size() > 1u);
+		emitRustParams(out, entry, entry.function.results.size() > 1u);
 		out << ")";
-		emitRustReturn(out, signatureResults(entry));
+		emitRustReturn(out, entry.function.results);
 		out << " {\n    todo!("
 			<< quoteName("implement " + exportName, true) << ");\n}\n\n";
-	}
+	});
 
 	// Group imports by Wasm import module: Rust requires the module annotation
 	// on the extern block and the field name on each declaration.
-	std::map<std::string, std::vector<const Json*>> importsByModule;
-	for (const Json& entry : schema.at("imports")) {
-		if (entry.value("kind", "") != "function")
-			continue;
+	std::map<std::string, std::vector<const Entry*>> importsByModule;
+	forEachFunction(typed, true, [&](const Entry& entry) {
 		importsByModule[importModule(entry)].push_back(&entry);
-	}
+	});
 	for (const auto& [module, entries] : importsByModule) {
 		out << "#[link(wasm_import_module = " << quoteName(module, true) << ")]\n";
 		out << "extern \"C\" {\n";
-		for (const Json* entry : entries) {
+		for (const Entry* entry : entries) {
 			const std::string name = "wasmjit_"
 					+ sanitize(module) + "_"
-					+ sanitize(entry->at("name").get<std::string>());
+					+ sanitize(entry->name);
 			out << "    // G2H import: " << importComment(*entry) << "\n";
 			out << "    #[link_name = "
-				<< quoteName(entry->at("name").get<std::string>(), true) << "]\n";
+				<< quoteName(entry->name, true) << "]\n";
 			out << "    pub fn " << name << "(";
 			emitRustParams(out, *entry,
-					signatureResults(*entry).size() > 1u);
+					entry->function.results.size() > 1u);
 			out << ")";
-			emitRustReturn(out, signatureResults(*entry));
+			emitRustReturn(out, entry->function.results);
 			out << ";\n";
 		}
 		out << "}\n\n";
@@ -90,5 +96,7 @@ std::string emitRustModule(const nlohmann::ordered_json& input)
 	out << nonFunctionNotes(schema);
 	return out.str();
 }
+
+} // namespace detail
 
 } // namespace WASM::Bindings

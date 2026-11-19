@@ -1,6 +1,7 @@
 #include "EmitShared.hpp"
 
 #include "BindingModel.hpp"
+#include "EmitObjects.hpp"
 #include "frontend/wit/WitFrontend.hpp"
 
 #include <cctype>
@@ -12,6 +13,13 @@
 #include <string_view>
 
 namespace WASM::Bindings::detail {
+
+ValueType voidValue()
+{
+	ValueType type;
+	type.kind = ValueKind::Void;
+	return type;
+}
 
 void dedupeJsonSchema(Json& schema)
 {
@@ -86,17 +94,25 @@ std::string quoteName(std::string_view text, bool rust)
 
 bool isReference(const Json& type)
 {
-	const ValueType value = ValueType::fromJson(type);
-	return value.kind == ValueKind::Ref || value.kind == ValueKind::StringRef
-			|| value.kind == ValueKind::StringViewWtf8
-			|| value.kind == ValueKind::StringViewWtf16
-			|| value.kind == ValueKind::StringViewIter;
+	return isReference(ValueType::fromJson(type));
+}
+
+bool isReference(const ValueType& type)
+{
+	return type.kind == ValueKind::Ref || type.kind == ValueKind::StringRef
+			|| type.kind == ValueKind::StringViewWtf8
+			|| type.kind == ValueKind::StringViewWtf16
+			|| type.kind == ValueKind::StringViewIter;
 }
 
 std::string refTypeName(const Json& type)
 {
-	const ValueType value = ValueType::fromJson(type);
-	switch (value.kind) {
+	return refTypeName(ValueType::fromJson(type));
+}
+
+std::string refTypeName(const ValueType& type)
+{
+	switch (type.kind) {
 	case ValueKind::StringRef: return "wasm_stringref";
 	case ValueKind::StringViewWtf8: return "wasm_stringview_wtf8";
 	case ValueKind::StringViewWtf16: return "wasm_stringview_wtf16";
@@ -104,7 +120,7 @@ std::string refTypeName(const Json& type)
 	case ValueKind::Ref: break;
 	default: return "wasm_ref_defined";
 	}
-	switch (value.heap) {
+	switch (type.heap) {
 	case HeapKind::Func: return "wasm_funcref";
 	case HeapKind::Extern: return "wasm_externref";
 	case HeapKind::Any: return "wasm_anyref";
@@ -120,11 +136,11 @@ std::string refTypeName(const Json& type)
 	case HeapKind::NoExtern: return "wasm_nullexternref";
 	case HeapKind::NoExn: return "wasm_nullexnref";
 	case HeapKind::Defined:
-		if (value.typeKind == "struct") return "wasm_structref";
-		if (value.typeKind == "array") return "wasm_arrayref";
-		if (value.typeKind == "func") return "wasm_funcref";
-		if (value.typeKind == "cont") return "wasm_contref";
-		if (value.typeKind == "import") return "wasm_ref_import";
+		if (type.typeKind == "struct") return "wasm_structref";
+		if (type.typeKind == "array") return "wasm_arrayref";
+		if (type.typeKind == "func") return "wasm_funcref";
+		if (type.typeKind == "cont") return "wasm_contref";
+		if (type.typeKind == "import") return "wasm_ref_import";
 		return "wasm_ref_defined";
 	default: return "wasm_ref_defined";
 	}
@@ -182,7 +198,11 @@ void emitWitOpaqueTypes(std::ostringstream& out, const Json& schema, bool cpp)
 
 std::string cType(const Json& type)
 {
-	const ValueType value = ValueType::fromJson(type);
+	return cType(ValueType::fromJson(type));
+}
+
+std::string cType(const ValueType& value)
+{
 	if (value.packed)
 		return value.kind == ValueKind::I8 ? "int8_t" : "int16_t";
 	switch (value.kind) {
@@ -209,12 +229,12 @@ std::string cType(const Json& type)
 	case ValueKind::Ref:
 		if (value.wit && !value.name.empty())
 			return witOpaqueTypeName(value.name) + "*";
-		return refTypeName(type) + "*";
+		return refTypeName(value) + "*";
 	case ValueKind::StringRef:
 	case ValueKind::StringViewWtf8:
 	case ValueKind::StringViewWtf16:
 	case ValueKind::StringViewIter:
-		return refTypeName(type) + "*";
+		return refTypeName(value) + "*";
 	case ValueKind::Unknown: break;
 	}
 	return "void*";
@@ -263,19 +283,31 @@ void collectSchemaRefs(const Json& schema, std::set<std::string>& names)
 		collectRefs(schema.at("types"), names);
 	collectRefs(schema.at("imports"), names);
 	collectRefs(schema.at("exports"), names);
+	// Object descriptors carry field and method types of their own, and those
+	// need the same opaque typedefs a function's parameters get (A.14.5).
+	if (schema.contains("objects"))
+		collectRefs(schema.at("objects"), names);
 	collectWitTypeNames(schema, names);
 }
 
 std::string importModule(const Json& entry)
 {
-	const std::string module = entry.value("module", "");
-	return module.empty() ? "component" : module;
+	return importModule(Entry::fromJson(entry, true));
+}
+
+std::string importModule(const Entry& entry)
+{
+	return entry.module.empty() ? "component" : entry.module;
 }
 
 std::string importName(const Json& entry)
 {
-	return "wasmjit_" + sanitize(importModule(entry)) + "_"
-			+ sanitize(entry.at("name").get<std::string>());
+	return importName(Entry::fromJson(entry, true));
+}
+
+std::string importName(const Entry& entry)
+{
+	return "wasmjit_" + sanitize(importModule(entry)) + "_" + sanitize(entry.name);
 }
 
 std::string commentText(std::string text)
@@ -289,12 +321,22 @@ std::string commentText(std::string text)
 
 std::string functionDescription(const Json& entry)
 {
-	return commentText(entry.value("description", ""));
+	return functionDescription(Entry::fromJson(entry, true));
+}
+
+std::string functionDescription(const Entry& entry)
+{
+	return commentText(entry.description);
 }
 
 std::string importComment(const Json& entry)
 {
-	std::string text = importModule(entry) + "." + entry.at("name").get<std::string>();
+	return importComment(Entry::fromJson(entry, true));
+}
+
+std::string importComment(const Entry& entry)
+{
+	std::string text = importModule(entry) + "." + entry.name;
 	const std::string description = functionDescription(entry);
 	if (!description.empty())
 		text += " — " + description;
@@ -303,7 +345,12 @@ std::string importComment(const Json& entry)
 
 std::string exportComment(const Json& entry)
 {
-	std::string text = entry.at("name").get<std::string>();
+	return exportComment(Entry::fromJson(entry, false));
+}
+
+std::string exportComment(const Entry& entry)
+{
+	std::string text = entry.name;
 	const std::string description = functionDescription(entry);
 	if (!description.empty())
 		text += " — " + description;
@@ -315,45 +362,42 @@ std::string exportComment(const Json& entry)
 //! target language the schema supports.
 std::string argumentName(const Json& entry, std::size_t index)
 {
-	if (entry.contains("argNames") && entry.at("argNames").is_array()) {
-		const Json& names = entry.at("argNames");
-		if (index < names.size() && names[index].is_string()) {
-			const std::string name = names[index].get<std::string>();
-			if (!name.empty())
-				return sanitize(name);
-		}
-	}
+	const bool named = entry.contains("argNames") && entry.at("argNames").is_array()
+			&& index < entry.at("argNames").size()
+			&& entry.at("argNames").at(index).is_string();
+	const std::string name = named
+			? entry.at("argNames").at(index).get<std::string>()
+			: std::string();
+	return name.empty() ? "arg" + std::to_string(index) : sanitize(name);
+}
+
+std::string argumentName(const Entry& entry, std::size_t index)
+{
+	if (index < entry.argNames.size() && !entry.argNames.at(index).empty())
+		return sanitize(entry.argNames.at(index));
 	return "arg" + std::to_string(index);
-}
-
-const Json& signatureParams(const Json& entry)
-{
-	if (entry.contains("abi") && entry.at("abi").contains("params"))
-		return entry.at("abi").at("params");
-	return entry.at("type").at("params");
-}
-
-const Json& signatureResults(const Json& entry)
-{
-	if (entry.contains("abi") && entry.at("abi").contains("results"))
-		return entry.at("abi").at("results");
-	return entry.at("type").at("results");
 }
 
 void emitFunction(std::ostringstream& out, const Json& entry, const std::string& name,
 		const char* side, const std::string& attribute)
 {
-	std::string display = entry.value("module", "");
+	emitFunction(out, Entry::fromJson(entry, side[0] == 'G'), name, side, attribute);
+}
+
+void emitFunction(std::ostringstream& out, const Entry& entry, const std::string& name,
+		const char* side, const std::string& attribute)
+{
+	std::string display = entry.module;
 	if (!display.empty())
 		display += ".";
-	display += entry.at("name").get<std::string>();
+	display += entry.name;
 
 	out << "/* " << side << ": " << display << " */\n";
 	if (!functionDescription(entry).empty())
 		out << "/* " << functionDescription(entry) << " */\n";
 	if (!attribute.empty())
 		out << attribute << "\n";
-	const Json& results = signatureResults(entry);
+	const std::vector<ValueType>& results = entry.function.results;
 	const bool multiValue = results.size() > 1u;
 	if (multiValue) {
 		out << "/* multi-value result: use a generated result buffer */\n";
@@ -364,7 +408,7 @@ void emitFunction(std::ostringstream& out, const Json& entry, const std::string&
 		out << cType(results[0]) << " " << name << "(";
 	}
 
-	const Json& params = signatureParams(entry);
+	const std::vector<ValueType>& params = entry.function.params;
 	if (params.empty()) {
 		if (!multiValue)
 			out << "void";
@@ -391,7 +435,7 @@ void emitFunction(std::ostringstream& out, const Json& entry, const std::string&
 
 std::string nonFunctionNotes(const Json& schema);
 
-std::string emitCHeaderImpl(const Json& schema)
+std::string emitCHeaderImpl(const Json& schema, const Schema& typed)
 {
 	std::set<std::string> refs;
 	collectSchemaRefs(schema, refs);
@@ -424,59 +468,85 @@ std::string emitCHeaderImpl(const Json& schema)
 		   "   the adapter says otherwise; reference results carry an explicit\n"
 		   "   ownership note. This header defines no layout, no TypeId and no\n"
 		   "   sizeof contract. */\n\n";
-
-	for (const Json& entry : schema.at("exports")) {
-		if (entry.value("kind", "") != "function")
-			continue;
-		emitFunction(out, entry, "wasmjit_" + sanitize(entry.at("name").get<std::string>()),
-				"H2G export");
+	if (!typed.objects.empty()) {
+		out << "/* The object block below is the one exception: its offsets and size\n"
+			   "   are the canonical layout the engine derives, not a C layout, and\n"
+			   "   each descriptor is versioned so a mismatch is a load-time check. */\n\n";
+		emitCObjects(out, typed);
 	}
-	for (const Json& entry : schema.at("imports")) {
-		if (entry.value("kind", "") != "function")
-			continue;
+
+	forEachFunction(typed, false, [&](const Entry& entry) {
+		emitFunction(out, entry, "wasmjit_" + sanitize(entry.name),
+				"H2G export");
+	});
+	forEachFunction(typed, true, [&](const Entry& entry) {
 		const std::string attribute = "WASMJIT_WASM_IMPORT("
 				+ quoteName(importModule(entry), false) + ", "
-				+ quoteName(entry.at("name").get<std::string>(), false) + ")";
+				+ quoteName(entry.name, false) + ")";
 		emitFunction(out, entry,
 				importName(entry),
 				"G2H import", attribute);
-	}
+	});
 
 	out << nonFunctionNotes(schema);
 	out << "#ifdef __cplusplus\n}\n#endif\n\n";
+	// A class cannot have C linkage, so the wrappers come after `extern "C"` and
+	// inside the guard: one header, two audiences (C gets the handle, C++ gets an
+	// object that owns it).
+	emitCppObjects(out, typed);
 	out << "#endif /* " << guard << " */\n";
 	return out.str();
 }
 
 std::string rustType(const Json& type)
 {
-	if (type.value("packed", false))
-		return type.value("type", "") == "i8" ? "i8" : "i16";
-	const std::string kind = type.value("type", "");
-	if (kind == "i32" || kind == "s32") return "i32";
-	if (kind == "u32") return "u32";
-	if (kind == "i64" || kind == "s64") return "i64";
-	if (kind == "u64") return "u64";
-	if (kind == "s8") return "i8";
-	if (kind == "u8") return "u8";
-	if (kind == "s16") return "i16";
-	if (kind == "u16") return "u16";
-	if (kind == "f32" || kind == "float32") return "f32";
-	if (kind == "f64" || kind == "float64") return "f64";
-	if (kind == "bool") return "i32";
-	if (kind == "char") return "u32";
-	if (kind == "v128") return "wasm_v128";
-	if (kind == "void") return "()";
-	if (kind == "string" || kind == "error-context")
-		return "*mut core::ffi::c_void";
-	if (isReference(type))
+	return rustType(ValueType::fromJson(type));
+}
+
+std::string rustType(const ValueType& type)
+{
+	if (type.packed)
+		return type.kind == ValueKind::I8 ? "i8" : "i16";
+	switch (type.kind) {
+	case ValueKind::I32:
+	case ValueKind::S32: return "i32";
+	case ValueKind::U32: return "u32";
+	case ValueKind::I64:
+	case ValueKind::S64: return "i64";
+	case ValueKind::U64: return "u64";
+	case ValueKind::S8:
+	case ValueKind::I8: return "i8";
+	case ValueKind::U8: return "u8";
+	case ValueKind::S16:
+	case ValueKind::I16: return "i16";
+	case ValueKind::U16: return "u16";
+	case ValueKind::F32: return "f32";
+	case ValueKind::F64: return "f64";
+	case ValueKind::Bool: return "i32";
+	case ValueKind::Char: return "u32";
+	case ValueKind::V128: return "wasm_v128";
+	case ValueKind::Void: return "()";
+	case ValueKind::String:
+	case ValueKind::ErrorContext: return "*mut core::ffi::c_void";
+	case ValueKind::Ref:
+	case ValueKind::StringRef:
+	case ValueKind::StringViewWtf8:
+	case ValueKind::StringViewWtf16:
+	case ValueKind::StringViewIter:
 		return "*mut " + refTypeName(type);
+	case ValueKind::Unknown: break;
+	}
 	return "*mut core::ffi::c_void";
 }
 
 void emitRustParams(std::ostringstream& out, const Json& entry, bool resultBuffer)
 {
-	const Json& params = signatureParams(entry);
+	emitRustParams(out, Entry::fromJson(entry, true), resultBuffer);
+}
+
+void emitRustParams(std::ostringstream& out, const Entry& entry, bool resultBuffer)
+{
+	const std::vector<ValueType>& params = entry.function.params;
 	bool first = true;
 	for (std::size_t i = 0; i < params.size(); ++i) {
 		if (!first)
@@ -494,6 +564,14 @@ void emitRustParams(std::ostringstream& out, const Json& entry, bool resultBuffe
 }
 
 void emitRustReturn(std::ostringstream& out, const Json& results)
+{
+	std::vector<ValueType> typed;
+	for (const Json& result : results)
+		typed.push_back(ValueType::fromJson(result));
+	emitRustReturn(out, typed);
+}
+
+void emitRustReturn(std::ostringstream& out, const std::vector<ValueType>& results)
 {
 	if (results.size() != 1u)
 		return;
@@ -522,139 +600,236 @@ std::string pascalName(std::string_view name)
 
 std::string refPascal(const Json& type)
 {
+	return refPascal(ValueType::fromJson(type));
+}
+
+std::string refPascal(const ValueType& type)
+{
 	return pascalName(refTypeName(type));
 }
 
 std::string tsType(const Json& type)
 {
-	const std::string kind = type.value("type", "");
-	if (kind == "i32" || kind == "i64" || kind == "f32" || kind == "f64"
-			|| kind == "s8" || kind == "u8" || kind == "s16" || kind == "u16"
-			|| kind == "s32" || kind == "u32")
-		return "number";
-	if (kind == "s64" || kind == "u64") return "bigint";
-	if (kind == "bool") return "boolean";
-	if (kind == "char" || kind == "string") return "string";
-	if (kind == "v128") return "Uint8Array";
-	if (kind == "void") return "void";
-	if (isReference(type)) return refPascal(type);
+	return tsType(ValueType::fromJson(type));
+}
+
+std::string tsType(const ValueType& type)
+{
+	switch (type.kind) {
+	case ValueKind::I32:
+	case ValueKind::I64:
+	case ValueKind::F32:
+	case ValueKind::F64:
+	case ValueKind::S8:
+	case ValueKind::U8:
+	case ValueKind::S16:
+	case ValueKind::U16:
+	case ValueKind::S32:
+	case ValueKind::U32: return "number";
+	case ValueKind::S64:
+	case ValueKind::U64: return "bigint";
+	case ValueKind::Bool: return "boolean";
+	case ValueKind::Char:
+	case ValueKind::String: return "string";
+	case ValueKind::V128: return "Uint8Array";
+	case ValueKind::Void: return "void";
+	default: break;
+	}
+	if (isReference(type))
+		return refPascal(type);
 	return "unknown";
 }
 
 std::string asType(const Json& type)
 {
-	const std::string kind = type.value("type", "");
-	if (kind == "i32" || kind == "s8" || kind == "u8" || kind == "s16"
-			|| kind == "u16" || kind == "s32" || kind == "u32")
-		return "i32";
-	if (kind == "i64" || kind == "s64" || kind == "u64") return "i64";
-	if (kind == "f32" || kind == "float32") return "f32";
-	if (kind == "f64" || kind == "float64") return "f64";
-	if (kind == "bool") return "bool";
-	if (kind == "char" || kind == "string") return "string";
-	if (kind == "v128") return "v128";
-	if (kind == "void") return "void";
-	if (kind == "error-context" || isReference(type)) return "externref";
+	return asType(ValueType::fromJson(type));
+}
+
+std::string asType(const ValueType& type)
+{
+	switch (type.kind) {
+	case ValueKind::I32:
+	case ValueKind::S8:
+	case ValueKind::U8:
+	case ValueKind::S16:
+	case ValueKind::U16:
+	case ValueKind::S32:
+	case ValueKind::U32: return "i32";
+	case ValueKind::I64:
+	case ValueKind::S64:
+	case ValueKind::U64: return "i64";
+	case ValueKind::F32: return "f32";
+	case ValueKind::F64: return "f64";
+	case ValueKind::Bool: return "bool";
+	case ValueKind::Char:
+	case ValueKind::String: return "string";
+	case ValueKind::V128: return "v128";
+	case ValueKind::Void: return "void";
+	case ValueKind::ErrorContext: return "externref";
+	default: break;
+	}
+	if (isReference(type))
+		return "externref";
 	return "externref";
 }
 
 std::string zigType(const Json& type)
 {
-	const std::string kind = type.value("type", "");
-	if (kind == "i32" || kind == "s32") return "i32";
-	if (kind == "u32") return "u32";
-	if (kind == "i64" || kind == "s64") return "i64";
-	if (kind == "u64") return "u64";
-	if (kind == "s8") return "i8";
-	if (kind == "u8") return "u8";
-	if (kind == "s16") return "i16";
-	if (kind == "u16") return "u16";
-	if (kind == "f32" || kind == "float32") return "f32";
-	if (kind == "f64" || kind == "float64") return "f64";
-	if (kind == "bool") return "bool";
-	if (kind == "char") return "u32";
-	if (kind == "string") return "[]const u8";
-	if (kind == "v128") return "wasm_v128";
-	if (kind == "void") return "void";
-	if (kind == "error-context") return "*anyopaque";
-	if (isReference(type)) return "*" + refTypeName(type);
+	return zigType(ValueType::fromJson(type));
+}
+
+std::string zigType(const ValueType& type)
+{
+	switch (type.kind) {
+	case ValueKind::I32:
+	case ValueKind::S32: return "i32";
+	case ValueKind::U32: return "u32";
+	case ValueKind::I64:
+	case ValueKind::S64: return "i64";
+	case ValueKind::U64: return "u64";
+	case ValueKind::S8: return "i8";
+	case ValueKind::U8: return "u8";
+	case ValueKind::S16: return "i16";
+	case ValueKind::U16: return "u16";
+	case ValueKind::F32: return "f32";
+	case ValueKind::F64: return "f64";
+	case ValueKind::Bool: return "bool";
+	case ValueKind::Char: return "u32";
+	case ValueKind::String: return "[]const u8";
+	case ValueKind::V128: return "wasm_v128";
+	case ValueKind::Void: return "void";
+	case ValueKind::ErrorContext: return "*anyopaque";
+	default: break;
+	}
+	if (isReference(type))
+		return "*" + refTypeName(type);
 	return "*anyopaque";
 }
 
 std::string kotlinType(const Json& type)
 {
-	const std::string kind = type.value("type", "");
-	if (kind == "i32" || kind == "s8" || kind == "u8" || kind == "s16"
-			|| kind == "u16" || kind == "s32" || kind == "u32")
-		return "Int";
-	if (kind == "i64" || kind == "s64" || kind == "u64") return "Long";
-	if (kind == "f32" || kind == "float32") return "Float";
-	if (kind == "f64" || kind == "float64") return "Double";
-	if (kind == "bool") return "Boolean";
-	if (kind == "char") return "Char";
-	if (kind == "string") return "String";
-	if (kind == "v128") return "WasmV128";
-	if (kind == "void") return "Unit";
-	if (isReference(type)) return refPascal(type);
+	return kotlinType(ValueType::fromJson(type));
+}
+
+std::string kotlinType(const ValueType& type)
+{
+	switch (type.kind) {
+	case ValueKind::I32:
+	case ValueKind::S8:
+	case ValueKind::U8:
+	case ValueKind::S16:
+	case ValueKind::U16:
+	case ValueKind::S32:
+	case ValueKind::U32: return "Int";
+	case ValueKind::I64:
+	case ValueKind::S64:
+	case ValueKind::U64: return "Long";
+	case ValueKind::F32: return "Float";
+	case ValueKind::F64: return "Double";
+	case ValueKind::Bool: return "Boolean";
+	case ValueKind::Char: return "Char";
+	case ValueKind::String: return "String";
+	case ValueKind::V128: return "WasmV128";
+	case ValueKind::Void: return "Unit";
+	default: break;
+	}
+	if (isReference(type))
+		return refPascal(type);
 	return "Any";
 }
 
 std::string moonbitType(const Json& type)
 {
-	const std::string kind = type.value("type", "");
-	if (kind == "i32" || kind == "s8" || kind == "u8" || kind == "s16"
-			|| kind == "u16" || kind == "s32" || kind == "u32")
-		return "Int";
-	if (kind == "i64" || kind == "s64" || kind == "u64") return "Int64";
-	if (kind == "f32" || kind == "float32") return "Float";
-	if (kind == "f64" || kind == "float64") return "Double";
-	if (kind == "bool") return "Bool";
-	if (kind == "char") return "Char";
-	if (kind == "string") return "String";
-	if (kind == "v128") return "Bytes";
-	if (kind == "void") return "Unit";
-	if (isReference(type)) return refPascal(type);
+	return moonbitType(ValueType::fromJson(type));
+}
+
+std::string moonbitType(const ValueType& type)
+{
+	switch (type.kind) {
+	case ValueKind::I32:
+	case ValueKind::S8:
+	case ValueKind::U8:
+	case ValueKind::S16:
+	case ValueKind::U16:
+	case ValueKind::S32:
+	case ValueKind::U32: return "Int";
+	case ValueKind::I64:
+	case ValueKind::S64:
+	case ValueKind::U64: return "Int64";
+	case ValueKind::F32: return "Float";
+	case ValueKind::F64: return "Double";
+	case ValueKind::Bool: return "Bool";
+	case ValueKind::Char: return "Char";
+	case ValueKind::String: return "String";
+	case ValueKind::V128: return "Bytes";
+	case ValueKind::Void: return "Unit";
+	default: break;
+	}
+	if (isReference(type))
+		return refPascal(type);
 	return "Bytes";
 }
 
 std::string goType(const Json& type)
 {
-	const std::string kind = type.value("type", "");
-	if (kind == "i32" || kind == "s32") return "int32";
-	if (kind == "u32") return "uint32";
-	if (kind == "i64" || kind == "s64") return "int64";
-	if (kind == "u64") return "uint64";
-	if (kind == "s8") return "int8";
-	if (kind == "u8") return "uint8";
-	if (kind == "s16") return "int16";
-	if (kind == "u16") return "uint16";
-	if (kind == "f32" || kind == "float32") return "float32";
-	if (kind == "f64" || kind == "float64") return "float64";
-	if (kind == "bool") return "bool";
-	if (kind == "char") return "rune";
-	if (kind == "string") return "string";
-	if (kind == "v128") return "[16]byte";
-	if (kind == "void") return "";
+	return goType(ValueType::fromJson(type));
+}
+
+std::string goType(const ValueType& type)
+{
+	switch (type.kind) {
+	case ValueKind::I32:
+	case ValueKind::S32: return "int32";
+	case ValueKind::U32: return "uint32";
+	case ValueKind::I64:
+	case ValueKind::S64: return "int64";
+	case ValueKind::U64: return "uint64";
+	case ValueKind::S8: return "int8";
+	case ValueKind::U8: return "uint8";
+	case ValueKind::S16: return "int16";
+	case ValueKind::U16: return "uint16";
+	case ValueKind::F32: return "float32";
+	case ValueKind::F64: return "float64";
+	case ValueKind::Bool: return "bool";
+	case ValueKind::Char: return "rune";
+	case ValueKind::String: return "string";
+	case ValueKind::V128: return "[16]byte";
+	case ValueKind::Void: return "";
+	case ValueKind::ErrorContext: return "uintptr";
+	default: break;
+	}
 	// Go's wasmimport/wasmexport accept integer handles, not pointer types
 	// (docs/EMBEDDING_SURFACE.md §11.6: prefer a table handle).
-	if (kind == "error-context" || isReference(type)) return "uintptr";
 	return "uintptr";
 }
 
 std::string dartType(const Json& type)
 {
-	const std::string kind = type.value("type", "");
-	if (kind == "i32" || kind == "i64" || kind == "s8" || kind == "u8"
-			|| kind == "s16" || kind == "u16" || kind == "s32" || kind == "u32"
-			|| kind == "s64" || kind == "u64")
-		return "int";
-	if (kind == "f32" || kind == "f64" || kind == "float32" || kind == "float64")
-		return "double";
-	if (kind == "bool") return "bool";
-	if (kind == "char" || kind == "string") return "String";
-	if (kind == "v128") return "Pointer<Uint8>";
-	if (kind == "void") return "void";
-	if (kind == "error-context" || isReference(type)) return "Pointer<Void>";
+	return dartType(ValueType::fromJson(type));
+}
+
+std::string dartType(const ValueType& type)
+{
+	switch (type.kind) {
+	case ValueKind::I32:
+	case ValueKind::I64:
+	case ValueKind::S8:
+	case ValueKind::U8:
+	case ValueKind::S16:
+	case ValueKind::U16:
+	case ValueKind::S32:
+	case ValueKind::U32:
+	case ValueKind::S64:
+	case ValueKind::U64: return "int";
+	case ValueKind::F32:
+	case ValueKind::F64: return "double";
+	case ValueKind::Bool: return "bool";
+	case ValueKind::Char:
+	case ValueKind::String: return "String";
+	case ValueKind::V128: return "Pointer<Uint8>";
+	case ValueKind::Void: return "void";
+	default: break;
+	}
 	return "Pointer<Void>";
 }
 
@@ -702,7 +877,7 @@ std::string nonFunctionNotes(const Json& schema)
 	return out.str();
 }
 
-std::string emitWitImpl(const Json& schema)
+std::string emitWitImpl(const Json& schema, const Schema& typed)
 {
 	std::ostringstream out;
 	const auto witIdent = [](std::string text) {
@@ -735,9 +910,9 @@ std::string emitWitImpl(const Json& schema)
 	std::map<std::size_t, std::string> typeNames;
 	std::map<std::string, std::string> refNames;
 	std::set<std::string> usedNames;
-	if (schema.contains("types") && schema.at("types").is_array()) {
+	if (typed.types.is_array()) {
 		std::size_t id = 0;
-		for (const Json& definition : schema.at("types")) {
+		for (const Json& definition : typed.types) {
 			std::string name = definition.contains("witName")
 					&& definition.at("witName").is_string()
 					? definition.at("witName").get<std::string>() : std::string();
@@ -797,18 +972,19 @@ std::string emitWitImpl(const Json& schema)
 		return "u32";
 	};
 
-	std::string packageName = schema.value("module", "wasmjit:bindings@0.1.0");
+	std::string packageName = typed.module;
 	if (packageName.find(':') == std::string::npos)
 		packageName = "wasmjit:bindings@0.1.0";
 	const std::string worldName = witName(
-			schema.value("world", schema.value("module", "component")));
+			typed.extras.value("world", typed.module));
 	out << "package " << packageName << ";\n\n";
 
-	if (schema.contains("types") && schema.at("types").is_array()
-			&& !schema.at("types").empty()) {
+	if ((typed.types.is_array() && !typed.types.empty())
+			|| !typed.objects.empty()) {
 		out << "interface types {\n";
+		const Json& definitions = typed.types;
 		std::size_t id = 0;
-		for (const Json& definition : schema.at("types")) {
+		for (const Json& definition : definitions) {
 			const std::string name = typeNames[id++];
 			if (!definition.contains("kind"))
 				continue;
@@ -902,24 +1078,25 @@ std::string emitWitImpl(const Json& schema)
 					<< ref(kind.at("future"), ref) << ">;\n";
 			}
 		}
+		emitWitObjects(out, typed);
 		out << "}\n\n";
 	}
 
-	const auto emitFunction = [&](const Json& entry) -> std::string {
+	const auto emitFunction = [&](const Entry& entry) -> std::string {
 		std::ostringstream fn;
-		fn << witName(entry.value("name", std::string())) << ": func(";
-		const Json& logical = entry.contains("type") ? entry.at("type")
-				: Json::object();
+		fn << witName(entry.name) << ": func(";
+		// The *structured* parameter list is what WIT names; the canonical ABI
+		// flattening in `entry.function` is the other spelling of the same call.
+		const Json& logical = entry.raw.contains("type") ? entry.raw.at("type")
+			: Json::object();
 		const Json& params = logical.contains("params") ? logical.at("params")
-				: Json::array();
+			: Json::array();
 		for (std::size_t i = 0; i < params.size(); ++i) {
 			if (i != 0)
 				fn << ", ";
-			std::string name = "arg" + std::to_string(i);
-			if (entry.contains("argNames") && entry.at("argNames").is_array()
-					&& i < entry.at("argNames").size()
-					&& entry.at("argNames")[i].is_string())
-				name = entry.at("argNames")[i].get<std::string>();
+			std::string name = i < entry.argNames.size() && !entry.argNames[i].empty()
+					? entry.argNames[i]
+					: "arg" + std::to_string(i);
 			fn << witName(name) << ": " << ref(params[i], ref);
 		}
 		fn << ")";
@@ -936,30 +1113,22 @@ std::string emitWitImpl(const Json& schema)
 		return fn.str();
 	};
 
-	std::map<std::string, std::vector<const Json*>> interfaceImports;
-	std::map<std::string, std::vector<const Json*>> interfaceExports;
-	std::vector<const Json*> worldImports;
-	std::vector<const Json*> worldExports;
-	if (schema.contains("imports") && schema.at("imports").is_array())
-		for (const Json& entry : schema.at("imports")) {
-			if (entry.value("kind", "") != "function")
-				continue;
-			const std::string module = entry.value("module", std::string());
-			if (module.empty())
-				worldImports.push_back(&entry);
-			else
-				interfaceImports[witName(module)].push_back(&entry);
-		}
-	if (schema.contains("exports") && schema.at("exports").is_array())
-		for (const Json& entry : schema.at("exports")) {
-			if (entry.value("kind", "") != "function")
-				continue;
-			const std::string module = entry.value("module", std::string());
-			if (module.empty())
-				worldExports.push_back(&entry);
-			else
-				interfaceExports[witName(module)].push_back(&entry);
-		}
+	std::map<std::string, std::vector<const Entry*>> interfaceImports;
+	std::map<std::string, std::vector<const Entry*>> interfaceExports;
+	std::vector<const Entry*> worldImports;
+	std::vector<const Entry*> worldExports;
+	forEachFunction(typed, true, [&](const Entry& entry) {
+		if (entry.module.empty())
+			worldImports.push_back(&entry);
+		else
+			interfaceImports[witName(entry.module)].push_back(&entry);
+	});
+	forEachFunction(typed, false, [&](const Entry& entry) {
+		if (entry.module.empty())
+			worldExports.push_back(&entry);
+		else
+			interfaceExports[witName(entry.module)].push_back(&entry);
+	});
 
 	const auto emitUseTypes = [&](std::ostringstream& target,
 			std::string_view indent) {
@@ -980,23 +1149,31 @@ std::string emitWitImpl(const Json& schema)
 	for (const auto& [name, entries] : interfaceImports) {
 		out << "interface " << name << " {\n";
 		emitUseTypes(out, "  ");
-		for (const Json* entry : entries)
+		for (const Entry* entry : entries)
 			out << "  " << emitFunction(*entry);
 		out << "}\n\n";
 	}
 	for (const auto& [name, entries] : interfaceExports) {
 		out << "interface " << name << " {\n";
 		emitUseTypes(out, "  ");
-		for (const Json* entry : entries)
+		for (const Entry* entry : entries)
 			out << "  " << emitFunction(*entry);
 		out << "}\n\n";
 	}
 
 	out << "world " << worldName << " {\n";
+	// A guest consumes host-registered objects, so the interface carrying their
+	// resources is an *import* of this world: the host owns the object, the guest
+	// gets a resource, and `resource.drop` is the release (SO-4, A.14.4).
+	if (!typed.objects.empty()) {
+		out << "  // The host provides the objects; a component that exports them\n"
+			   "  // instead would export this interface.\n"
+			   "  import types;\n";
+	}
 	emitUseTypes(out, "  ");
-	for (const Json* entry : worldImports)
+	for (const Entry* entry : worldImports)
 		out << "  import " << emitFunction(*entry);
-	for (const Json* entry : worldExports)
+	for (const Entry* entry : worldExports)
 		out << "  export " << emitFunction(*entry);
 	for (const auto& [name, ignored] : interfaceImports) {
 		(void)ignored;
@@ -1010,7 +1187,7 @@ std::string emitWitImpl(const Json& schema)
 	return out.str();
 }
 
-std::string emitWitxImpl(const Json& schema)
+std::string emitWitxImpl(const Json& schema, const Schema& typed)
 {
 	const auto witxType = [](const Json& type) -> std::string {
 		if (type.is_string())
@@ -1025,53 +1202,46 @@ std::string emitWitxImpl(const Json& schema)
 		return kind.empty() ? "i32" : kind;
 	};
 	std::ostringstream out;
-	out << "(module $" << sanitize(schema.value("module", "module")) << "\n";
-	if (schema.contains("witxTypes") && schema.at("witxTypes").is_array())
-		for (const Json& definition : schema.at("witxTypes"))
+	out << "(module $" << sanitize(typed.module) << "\n";
+	if (typed.extras.contains("witxTypes") && typed.extras.at("witxTypes").is_array())
+		for (const Json& definition : typed.extras.at("witxTypes"))
 			if (definition.is_string())
 				out << "  " << definition.get<std::string>() << "\n";
-	const auto emitFunction = [&](const Json& entry) {
-		if (entry.contains("witxSource") && entry.at("witxSource").is_string()) {
-			out << "  " << entry.at("witxSource").get<std::string>() << "\n";
+	const auto emitFunction = [&](const Entry& entry) {
+		if (entry.raw.contains("witxSource") && entry.raw.at("witxSource").is_string()) {
+			out << "  " << entry.raw.at("witxSource").get<std::string>() << "\n";
 			return;
 		}
-		out << "  (@interface func (export \""
-			<< entry.value("name", std::string()) << "\")\n";
-		const Json& logical = entry.contains("type") ? entry.at("type")
-				: Json::object();
+		out << "  (@interface func (export \"" << entry.name << "\")\n";
+		// WITX names the structured types, so its parameter list is the payload
+		// in `raw`, not the canonical ABI flattening in `entry.function`.
+		const Json& logical = entry.raw.contains("type") ? entry.raw.at("type")
+			: Json::object();
 		const Json& params = logical.contains("params") ? logical.at("params")
-				: Json::array();
+			: Json::array();
 		for (std::size_t i = 0; i < params.size(); ++i) {
-			std::string name = "arg" + std::to_string(i);
-			if (entry.contains("argNames") && entry.at("argNames").is_array()
-					&& i < entry.at("argNames").size()
-					&& entry.at("argNames")[i].is_string())
-				name = entry.at("argNames")[i].get<std::string>();
+			std::string name = i < entry.argNames.size() && !entry.argNames[i].empty()
+					? entry.argNames[i]
+					: "arg" + std::to_string(i);
 			out << "    (param $" << sanitize(name) << " "
 				<< witxType(params[i]) << ")\n";
 		}
 		const Json& results = logical.contains("results") ? logical.at("results")
-				: Json::array();
+			: Json::array();
 		for (std::size_t i = 0; i < results.size(); ++i) {
 			std::string name = "result" + std::to_string(i);
-			if (entry.contains("resultNames")
-					&& entry.at("resultNames").is_array()
-					&& i < entry.at("resultNames").size()
-					&& entry.at("resultNames")[i].is_string())
-				name = entry.at("resultNames")[i].get<std::string>();
+			if (entry.raw.contains("resultNames")
+					&& entry.raw.at("resultNames").is_array()
+					&& i < entry.raw.at("resultNames").size()
+					&& entry.raw.at("resultNames")[i].is_string())
+				name = entry.raw.at("resultNames")[i].get<std::string>();
 			out << "    (result $" << sanitize(name) << " "
 				<< witxType(results[i]) << ")\n";
 		}
 		out << "  )\n";
 	};
-	if (schema.contains("imports") && schema.at("imports").is_array())
-		for (const Json& entry : schema.at("imports"))
-			if (entry.value("kind", "") == "function")
-				emitFunction(entry);
-	if (schema.contains("exports") && schema.at("exports").is_array())
-		for (const Json& entry : schema.at("exports"))
-			if (entry.value("kind", "") == "function")
-				emitFunction(entry);
+	forEachFunction(typed, true, emitFunction);
+	forEachFunction(typed, false, emitFunction);
 	out << ")\n";
 	return out.str();
 }

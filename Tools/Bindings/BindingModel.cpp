@@ -1,5 +1,9 @@
 #include "BindingModel.hpp"
 
+#include "WasmBase/WasmHostType.hpp"
+
+#include <cctype>
+#include <limits>
 #include <set>
 #include <stdexcept>
 #include <string_view>
@@ -26,6 +30,42 @@ bool jsonBool(const Json& json, std::string_view key, bool fallback = false)
 	const auto found = json.find(std::string(key));
 	return found == json.end() || !found->is_boolean() ? fallback
 			: found->get<bool>();
+}
+
+//! Reads an `argNames` array: parameter names, index-aligned with `params`.
+//!
+//! A name list shorter than the parameter list is legal — the trailing parameters
+//! keep their positional spelling — but a longer one has no meaning, and neither
+//! does a list with two parameters of one name: every emitter would then spell two
+//! parameters of one function the same way, which C++, Kotlin and WIT all refuse.
+std::vector<std::string> parseArgNames(const Json& json, const std::string& what)
+{
+	std::vector<std::string> names;
+	if (!json.contains("argNames"))
+		return names;
+	const Json& array = json.at("argNames");
+	if (!array.is_array())
+		throw std::runtime_error(what + ": `argNames` must be an array");
+	std::set<std::string> seen;
+	for (const Json& item : array) {
+		if (!item.is_string())
+			throw std::runtime_error(what + ": `argNames` must hold strings");
+		std::string name = item.get<std::string>();
+		if (name.empty())
+			throw std::runtime_error(what + ": an `argNames` entry is empty");
+		std::string lowered = name;
+		for (char& character : lowered)
+			character = static_cast<char>(std::tolower(
+					static_cast<unsigned char>(character)));
+		if (lowered == "self")
+			throw std::runtime_error(what + ": `self` is the receiver, not a"
+					" parameter name");
+		if (!seen.insert(lowered).second)
+			throw std::runtime_error(what + ": two parameters are named '" + name
+					+ "'; a parameter name is unique within one signature");
+		names.push_back(std::move(name));
+	}
+	return names;
 }
 
 Json functionTypeJson(const FunctionType& function)
@@ -380,6 +420,685 @@ Json Entry::toJson() const
 	return out;
 }
 
+namespace {
+
+//! Reads an unsigned member, falling back when it is absent or mistyped.
+std::uint32_t jsonUint(const Json& json, std::string_view key,
+		std::uint32_t fallback = 0)
+{
+	if (!json.is_object())
+		return fallback;
+	const auto found = json.find(std::string(key));
+	if (found == json.end() || !found->is_number_unsigned())
+		return fallback;
+	return found->get<std::uint32_t>();
+}
+
+//! The engine storage code of one reference heap kind.
+WASM::ValueTypeCode referenceCode(HeapKind heap)
+{
+	using Code = WASM::ValueTypeCode;
+	switch (heap) {
+	case HeapKind::Func: return Code::FuncRef;
+	case HeapKind::Extern: return Code::ExternRef;
+	case HeapKind::Any: return Code::AnyRef;
+	case HeapKind::Eq: return Code::EqRef;
+	case HeapKind::I31: return Code::I31Ref;
+	case HeapKind::Struct: return Code::StructRef;
+	case HeapKind::Array: return Code::ArrayRef;
+	case HeapKind::Exn: return Code::ExnRef;
+	case HeapKind::Cont: return Code::ContRef;
+	case HeapKind::None: return Code::NullRef;
+	case HeapKind::NoFunc: return Code::NullFuncRef;
+	case HeapKind::NoExtern: return Code::NullExternRef;
+	case HeapKind::NoExn: return Code::NullExnRef;
+	// A *defined* reference is pointer-sized like `structref`, so that is the
+	// layout it has; the name stays metadata. Interning a defined reference is
+	// `SO17`'s follow-up, and this table is the layout assertion, not the type.
+	case HeapKind::Defined: return Code::StructRef;
+	default: break;
+	}
+	return Code::Void;
+}
+
+//! Converts one descriptor field into the engine's own field vocabulary.
+WASM::HostFieldDefinition hostField(const ObjectField& field,
+		const std::string& object)
+{
+	WASM::HostFieldDefinition out;
+	out.isMutable = field.mutableField;
+	const ValueType& type = field.type;
+	if (type.kind == ValueKind::Ref) {
+		if (type.heap == HeapKind::Unknown || type.heap == HeapKind::Rec)
+			throw std::runtime_error("object '" + object + "' field '"
+					+ field.name + "': a reference needs a concrete heap kind");
+		out.storage = referenceCode(type.heap);
+		out.isNullable = type.nullable;
+		return out;
+	}
+	switch (type.kind) {
+	case ValueKind::I32: out.storage = WASM::ValueTypeCode::I32; break;
+	case ValueKind::I64: out.storage = WASM::ValueTypeCode::I64; break;
+	case ValueKind::F32: out.storage = WASM::ValueTypeCode::F32; break;
+	case ValueKind::F64: out.storage = WASM::ValueTypeCode::F64; break;
+	case ValueKind::V128: out.storage = WASM::ValueTypeCode::V128; break;
+	case ValueKind::I8:
+		out.storage = WASM::ValueTypeCode::I8;
+		out.isPacked = true;
+		break;
+	case ValueKind::I16:
+		out.storage = WASM::ValueTypeCode::I16;
+		out.isPacked = true;
+		break;
+	default:
+		throw std::runtime_error("object '" + object + "' field '" + field.name
+				+ "': '" + valueKindName(type.kind)
+				+ "' is not a Wasm storage type");
+	}
+	return out;
+}
+
+//! True when two descriptor types denote the same value.
+bool sameType(const ValueType& left, const ValueType& right)
+{
+	return left.kind == right.kind && left.heap == right.heap
+			&& left.packed == right.packed && left.nullable == right.nullable
+			&& left.name == right.name;
+}
+
+//! The human spelling of a descriptor type, for refusal messages.
+std::string typeLabel(const ValueType& type)
+{
+	std::string out = valueKindName(type.kind);
+	if (type.kind == ValueKind::Ref) {
+		out += " ";
+		out += heapKindName(type.heap);
+		if (type.heap == HeapKind::Defined && !type.name.empty())
+			out += " " + type.name;
+	}
+	if (type.packed)
+		out += " (packed)";
+	return out;
+}
+
+//! The `(params) -> (results)` spelling of a method, for refusal messages.
+std::string signatureLabel(const ObjectMethod& method)
+{
+	const auto list = [](const std::vector<ValueType>& types) {
+		std::string out;
+		for (std::size_t index = 0; index < types.size(); ++index) {
+			if (index != 0u)
+				out += ", ";
+			out += typeLabel(types[index]);
+		}
+		return out;
+	};
+	return "(" + list(method.params) + ") -> (" + list(method.results) + ")";
+}
+
+//! The named method of an object, or null when it declares none by that name.
+const ObjectMethod* findMethod(const ObjectDescriptor& object,
+		const std::string& name)
+{
+	for (const ObjectMethod& method : object.methods) {
+		if (method.name == name)
+			return &method;
+	}
+	return nullptr;
+}
+
+//! Rejects two descriptors with one `(name, version)`; one name and version has
+//! one shape, and two versions of one name are two descriptors (A.14.2).
+void validateObjectKey(const ObjectDescriptor& object,
+		std::set<std::string>& keys)
+{
+	const std::string key = object.name + "@" + std::to_string(object.version);
+	if (!keys.insert(key).second)
+		throw std::runtime_error("object descriptor '" + key
+				+ "' is declared twice; one name and version has one shape");
+}
+
+//! Validates the lifetime call an owning `externref` object names.
+//!
+//! Naming one is what turns the generated wrapper into an owner, so the call has
+//! to be a real method with the one signature a destructor can have: no
+//! parameters, no results, and not an accessor — an accessor is a property's
+//! spelling, and a property is not the object's end of life.
+void validateObjectDestructor(const ObjectDescriptor& object)
+{
+	const std::string where =
+			"object '" + object.name + "' `destructor` '" + object.destructor + "'";
+	const ObjectMethod* method = findMethod(object, object.destructor);
+	if (method == nullptr)
+		throw std::runtime_error(where + " is not declared in `methods`; the"
+				" lifetime call is a method of the object like any other");
+	// An accessor is the clearer mistake of the two, and it is the one a reader
+	// is likelier to make: a property's function is a member, but it is not the
+	// object's end of life.
+	for (const ObjectProperty& property : object.properties) {
+		if (property.getter == object.destructor
+				|| (property.mutableProperty && property.setter == object.destructor))
+			throw std::runtime_error(where + " is the accessor of property '"
+					+ property.name + "'; a property is not the object's lifetime"
+					" call");
+	}
+	if (!method->params.empty() || !method->results.empty())
+		throw std::runtime_error(where + " must take no parameters and return"
+				" nothing, but `methods` declares " + signatureLabel(*method));
+}
+
+//! Validates every member of one descriptor: names, accessors and signatures.
+//!
+//! A field, a property and a method share one member namespace, because every
+//! emitter projects all three as members of one resource/struct. This half is
+//! independent of how the receiver crosses, so an `externref` object is held to
+//! the same rules as a handle one.
+void validateObjectMembers(const ObjectDescriptor& object)
+{
+	std::set<std::string> names;
+	for (const ObjectField& field : object.fields)
+		names.insert(field.name);
+		// A field, a property and a method share one member namespace: every
+	// emitter projects all three as members of one resource/struct, so two
+	// members with one name would collide in the generated artifact.
+	std::set<std::string> methodNames;
+	// Entry points are spelled `<type>_<lowercased name>`, so the name checks
+	// below compare the lowered spelling: `Release` and `release` are one
+	// entry point in the generated header.
+	const auto lowered = [](std::string text) {
+		for (char& character : text)
+			character = static_cast<char>(std::tolower(
+					static_cast<unsigned char>(character)));
+		return text;
+	};
+	for (const ObjectMethod& method : object.methods) {
+		if (!methodNames.insert(method.name).second)
+			throw std::runtime_error("object '" + object.name
+					+ "' declares method '" + method.name + "' twice");
+		// The handle surface's lifetime entry point is `<type>_release`, and
+		// every C/C++ header and the Kotlin façade call it under that name:
+		// a method spelled the same way would collide with it rather than be
+		// a second function (`SO-3`/`SO-4`).
+		if (lowered(method.name) == "release")
+			throw std::runtime_error("object '" + object.name
+					+ "' declares a method named '" + method.name
+					+ "'; `release` is the object's lifetime entry point —"
+					" rename the method");
+	}
+	// A constructor is an entry point too (`<type>_<name>`), so it shares the
+	// method namespace; and two constructors with one parameter list would be
+	// one C++ constructor. Both are load-time errors, not a header that fails
+	// to compile in the consumer's build.
+	std::set<std::string> constructorNames;
+	std::set<std::string> constructorSignatures;
+	for (const ObjectConstructor& constructor : object.constructors) {
+		if (!constructorNames.insert(constructor.name).second)
+			throw std::runtime_error("object '" + object.name
+					+ "' declares constructor '" + constructor.name
+					+ "' twice");
+		if (methodNames.count(constructor.name) != 0u)
+			throw std::runtime_error("object '" + object.name
+					+ "' declares constructor '" + constructor.name
+					+ "' and a method of the same name; both are one"
+					" '<type>_<name>' entry point");
+		if (lowered(constructor.name) == "release")
+			throw std::runtime_error("object '" + object.name
+					+ "' declares a constructor named '" + constructor.name
+					+ "'; `release` is the object's lifetime entry point —"
+					" rename the constructor");
+		std::string signature;
+		for (const ValueType& param : constructor.params)
+			signature += typeLabel(param) + ";";
+		if (!constructorSignatures.insert(signature).second)
+			throw std::runtime_error("object '" + object.name
+					+ "' declares two constructors with the same parameter"
+					" list; they would be one C++ constructor");
+	}
+	// A name list may cover part of a signature but never more of it, and a
+	// named parameter must be a spelling every emitter can make an identifier
+	// from — `parseArgNames` already refused the empty, the duplicated and
+	// `self`.
+	const auto checkNames = [&object](const std::string& what,
+									  std::size_t params,
+									  std::size_t names) {
+		if (names > params)
+			throw std::runtime_error("object '" + object.name + "' " + what
+					+ " names " + std::to_string(names) + " parameters but takes "
+					+ std::to_string(params));
+	};
+	for (const ObjectMethod& method : object.methods)
+		checkNames("method '" + method.name + "'", method.params.size(),
+				method.argNames.size());
+	for (const ObjectConstructor& constructor : object.constructors)
+		checkNames("constructor '" + constructor.name + "'",
+				constructor.params.size(), constructor.argNames.size());
+	std::set<std::string> propertyNames;
+	std::set<std::string> accessors;
+	for (const ObjectProperty& property : object.properties) {
+		const std::string where =
+				"object '" + object.name + "' property '" + property.name + "'";
+		if (!propertyNames.insert(property.name).second)
+			throw std::runtime_error(where + "' is declared twice");
+		if (names.count(property.name) != 0u)
+			throw std::runtime_error(where
+					+ " has the same name as a field; a stored value and a"
+					" computed one cannot share a member name");
+		if (methodNames.count(property.name) != 0u)
+			throw std::runtime_error(where + " has the same name as a method");
+		for (const std::string* accessor : { &property.getter,
+					 &property.setter }) {
+			if (accessor->empty())
+				continue;
+			if (!accessors.insert(*accessor).second)
+				throw std::runtime_error(where + ": accessor '" + *accessor
+						+ "' is already claimed by another property");
+			if (names.count(*accessor) != 0u)
+				throw std::runtime_error(where + ": accessor '" + *accessor
+						+ "' is a field, not a function");
+			if (methodNames.count(*accessor) == 0u)
+				throw std::runtime_error(where + ": accessor '" + *accessor
+						+ "' is not declared in `methods`; an accessor is a"
+						" function of the object like any other");
+		}
+		const ObjectMethod* getter = findMethod(object, property.getter);
+		if (!getter->params.empty() || getter->results.size() != 1u
+				|| !sameType(getter->results.at(0), property.type))
+			throw std::runtime_error(where + ": getter '" + property.getter
+					+ "' must take no parameters and return "
+					+ typeLabel(property.type) + ", but `methods` declares "
+					+ signatureLabel(*getter));
+		if (!property.setter.empty()) {
+			const ObjectMethod* setter = findMethod(object, property.setter);
+			if (setter->params.size() != 1u || !setter->results.empty()
+					|| !sameType(setter->params.at(0), property.type))
+				throw std::runtime_error(where + ": setter '"
+						+ property.setter + "' must take "
+						+ typeLabel(property.type)
+						+ " and return nothing, but `methods` declares "
+						+ signatureLabel(*setter));
+		}
+	}
+
+}
+
+//! Validates every descriptor against the engine's canonical layout.
+//!
+//! This is the load-time check the note promises: a declared offset is an
+//! assertion about the canonical type, and the assertion is checked against
+//! `WASM::layoutHostType` rather than trusted. `(name, version)` is unique — one
+//! name and version has one shape (A.14.2) — while two versions of one name are
+//! two descriptors and two types.
+//!
+//! A property is checked against the object *itself* rather than the layout: it
+//! owns no bytes, so what can be wrong is its interface — a name that collides
+//! with another member, an accessor that `methods` does not declare, or an
+//! accessor whose declared signature is not the one the property's type implies.
+void validateObjects(std::vector<ObjectDescriptor>& objects)
+{
+	std::set<std::string> keys;
+	for (ObjectDescriptor& object : objects) {
+		if (object.self == ObjectSelfKind::ExternRef) {
+			// An opaque object has no guest-visible representation: its payload
+			// lives in the host, so there is no canonical layout to check and a
+			// field would be a claim the wire cannot honour
+			// (docs/proposals/SYNTHETIC_OBJECTS.md §2.7).
+			if (!object.fields.empty())
+				throw std::runtime_error("object '" + object.name + "': an"
+						" `externref` object has no fields — the payload stays in"
+						" the host, so the guest reaches it only through the"
+						" declared accessors");
+			if (!object.destructor.empty())
+				validateObjectDestructor(object);
+			object.size = 0;
+			validateObjectMembers(object);
+			validateObjectKey(object, keys);
+			continue;
+		}
+		// The handle shape already has one lifetime entry point, synthesised from
+		// the slot; a declared one would be a second spelling of the same act.
+		if (!object.destructor.empty())
+			throw std::runtime_error("object '" + object.name + "': a `handle`"
+					" object's lifetime entry point is `<type>_release`; a declared"
+					" `destructor` belongs to an `externref` object, whose lifetime"
+					" call the host implements");
+		WASM::HostTypeDefinition definition;
+		definition.kind = WASM::HostTypeKind::Struct;
+		definition.fields.reserve(object.fields.size());
+		std::set<std::string> names;
+		for (const ObjectField& field : object.fields) {
+			if (!names.insert(field.name).second)
+				throw std::runtime_error("object '" + object.name
+						+ "' declares field '" + field.name + "' twice");
+			definition.fields.push_back(hostField(field, object.name));
+		}
+		const WASM::HostTypeLayout layout = WASM::layoutHostType(definition);
+		object.size = layout.totalBytes;
+		for (std::size_t index = 0; index < object.fields.size(); ++index) {
+			ObjectField& field = object.fields[index];
+			field.offset = layout.fields[index].offset;
+			field.bytes = layout.fields[index].bytes;
+			field.isReference = layout.fields[index].isReference;
+			if (field.hasOffset && field.declaredOffset != field.offset)
+				throw std::runtime_error("object '" + object.name + "' field '"
+						+ field.name + "': declared offset "
+						+ std::to_string(field.declaredOffset)
+						+ " disagrees with the canonical offset "
+						+ std::to_string(field.offset));
+		}
+		validateObjectMembers(object);
+		validateObjectKey(object, keys);
+	}
+}
+
+} // namespace
+
+ObjectField ObjectField::fromJson(const Json& json)
+{
+	if (!json.is_object())
+		throw std::runtime_error("object field: expected a JSON object");
+	ObjectField out;
+	out.name = jsonString(json, "name");
+	if (out.name.empty())
+		throw std::runtime_error("object field: missing name");
+	Json type = json.contains("type") ? json.at("type") : Json{};
+	if (type.is_null() && json.contains("kind"))
+		type = json.at("kind");
+	out.type = ValueType::fromJson(type);
+	if (out.type.kind == ValueKind::Unknown)
+		throw std::runtime_error("object field '" + out.name + "': unknown type");
+	// `i8`/`i16` are only legal as packed Wasm storage, and every emitter reads
+	// the flag, so it is set here rather than inferred again downstream.
+	if (out.type.kind == ValueKind::I8 || out.type.kind == ValueKind::I16)
+		out.type.packed = true;
+	out.mutableField = jsonBool(json, "mutable");
+	if (json.contains("offset")) {
+		const Json& declared = json.at("offset");
+		std::uint64_t value = 0;
+		if (declared.is_number_unsigned())
+			value = declared.get<std::uint64_t>();
+		else if (declared.is_number_integer()
+				&& declared.get<std::int64_t>() >= 0)
+			value = static_cast<std::uint64_t>(declared.get<std::int64_t>());
+		else
+			throw std::runtime_error("object field '" + out.name
+					+ "': offset is not a non-negative integer");
+		if (value > std::numeric_limits<std::uint32_t>::max())
+			throw std::runtime_error("object field '" + out.name
+					+ "': offset is out of range");
+		out.hasOffset = true;
+		out.declaredOffset = static_cast<std::uint32_t>(value);
+	}
+	return out;
+}
+
+Json ObjectField::toJson() const
+{
+	Json out;
+	out["name"] = name;
+	out["type"] = type.toJson();
+	out["offset"] = offset;
+	out["bytes"] = bytes;
+	out["reference"] = isReference;
+	if (mutableField)
+		out["mutable"] = true;
+	return out;
+}
+
+ObjectProperty ObjectProperty::fromJson(const Json& json)
+{
+	if (!json.is_object())
+		throw std::runtime_error("object property: expected a JSON object");
+	ObjectProperty out;
+	out.name = jsonString(json, "name");
+	if (out.name.empty())
+		throw std::runtime_error("object property: missing name");
+	Json type = json.contains("type") ? json.at("type") : Json{};
+	if (type.is_null() && json.contains("kind"))
+		type = json.at("kind");
+	out.type = ValueType::fromJson(type);
+	if (out.type.kind == ValueKind::Unknown)
+		throw std::runtime_error("object property '" + out.name + "': unknown type");
+	if (out.type.kind == ValueKind::Void)
+		throw std::runtime_error("object property '" + out.name
+				+ "': a property needs a value, not `void`");
+	if (out.type.kind == ValueKind::I8 || out.type.kind == ValueKind::I16)
+		out.type.packed = true;
+	// A property is not a slot, so an offset here is a field written the wrong
+	// way round; the message names the right key rather than ignoring it.
+	if (json.contains("offset"))
+		throw std::runtime_error("object property '" + out.name
+				+ "': a property has no storage offset; a stored slot is a `field`");
+	out.getter = jsonString(json, "get");
+	if (out.getter.empty())
+		throw std::runtime_error("object property '" + out.name
+				+ "': missing `get`; a property without a getter is a method");
+	out.setter = jsonString(json, "set");
+	const bool assertedMutable = jsonBool(json, "mutable");
+	if (out.setter.empty() && assertedMutable)
+		throw std::runtime_error("object property '" + out.name
+				+ "': `mutable` without `set`; a read-only property has no setter");
+	out.mutableProperty = !out.setter.empty();
+	return out;
+}
+
+Json ObjectProperty::toJson() const
+{
+	Json out;
+	out["name"] = name;
+	out["type"] = type.toJson();
+	out["get"] = getter;
+	if (!setter.empty())
+		out["set"] = setter;
+	return out;
+}
+
+ObjectMethod ObjectMethod::fromJson(const Json& json)
+{
+	if (!json.is_object())
+		throw std::runtime_error("object method: expected a JSON object");
+	ObjectMethod out;
+	out.name = jsonString(json, "name");
+	if (out.name.empty())
+		throw std::runtime_error("object method: missing name");
+	const auto parseList = [&out](const Json& node, const char* key) {
+		std::vector<ValueType> types;
+		if (!node.contains(key))
+			return types;
+		const Json& array = node.at(key);
+		if (!array.is_array())
+			throw std::runtime_error("object method '" + out.name + "': `"
+					+ key + "` must be an array");
+		for (const Json& item : array) {
+			ValueType type = ValueType::fromJson(item);
+			if (type.kind == ValueKind::Unknown)
+				throw std::runtime_error("object method '" + out.name
+						+ "': unknown " + key + " type");
+			types.push_back(std::move(type));
+		}
+		return types;
+	};
+	out.params = parseList(json, "params");
+	out.results = parseList(json, "results");
+	out.argNames = parseArgNames(json, "object method '" + out.name + "'");
+	return out;
+}
+
+Json ObjectMethod::toJson() const
+{
+	Json out;
+	out["name"] = name;
+	out["params"] = Json::array();
+	for (const ValueType& param : params)
+		out["params"].push_back(param.toJson());
+	out["results"] = Json::array();
+	for (const ValueType& result : results)
+		out["results"].push_back(result.toJson());
+	if (!argNames.empty())
+		out["argNames"] = argNames;
+	return out;
+}
+
+std::string ObjectMethod::paramName(std::size_t index) const
+{
+	return index < argNames.size() && !argNames.at(index).empty()
+			? argNames.at(index)
+			: "p" + std::to_string(index);
+}
+
+ObjectConstructor ObjectConstructor::fromJson(const Json& json)
+{
+	if (!json.is_object())
+		throw std::runtime_error("object constructor: expected a JSON object");
+	ObjectConstructor out;
+	out.name = jsonString(json, "name");
+	if (out.name.empty())
+		throw std::runtime_error("object constructor: missing name");
+	if (json.contains("params")) {
+		const Json& array = json.at("params");
+		if (!array.is_array())
+			throw std::runtime_error("object constructor '" + out.name
+					+ "': `params` must be an array");
+		for (const Json& item : array) {
+			ValueType type = ValueType::fromJson(item);
+			if (type.kind == ValueKind::Unknown)
+				throw std::runtime_error("object constructor '" + out.name
+						+ "': unknown param type");
+			out.params.push_back(std::move(type));
+		}
+	}
+	out.argNames = parseArgNames(json, "object constructor '" + out.name + "'");
+	return out;
+}
+
+Json ObjectConstructor::toJson() const
+{
+	Json out;
+	out["name"] = name;
+	out["params"] = Json::array();
+	for (const ValueType& param : params)
+		out["params"].push_back(param.toJson());
+	if (!argNames.empty())
+		out["argNames"] = argNames;
+	return out;
+}
+
+std::string ObjectConstructor::paramName(std::size_t index) const
+{
+	return index < argNames.size() && !argNames.at(index).empty()
+			? argNames.at(index)
+			: "p" + std::to_string(index);
+}
+
+ObjectDescriptor ObjectDescriptor::fromJson(const Json& json)
+{
+	if (!json.is_object())
+		throw std::runtime_error("object descriptor: expected a JSON object");
+	ObjectDescriptor out;
+	out.name = jsonString(json, "name");
+	if (out.name.empty())
+		throw std::runtime_error("object descriptor: missing name");
+	out.version = jsonUint(json, "version", 1);
+	if (out.version == 0)
+		throw std::runtime_error("object '" + out.name
+				+ "': version must be at least 1");
+	out.parent = jsonString(json, "parent");
+	// How the receiver crosses. `handle` is the `SO-3` slot this tool has always
+	// projected; `externref` is the same member tables over an opaque host
+	// reference, for an object whose payload cannot be expressed in Wasm
+	// (docs/proposals/SYNTHETIC_OBJECTS.md §2.7).
+	const std::string self = jsonString(json, "self");
+	if (self.empty() || self == "handle")
+		out.self = ObjectSelfKind::Handle;
+	else if (self == "externref")
+		out.self = ObjectSelfKind::ExternRef;
+	else
+		throw std::runtime_error("object '" + out.name + "': `self` must be"
+				" \"handle\" or \"externref\", not '" + self + "'");
+	// The lifetime call, for an owning opaque object: naming one makes the
+	// generated wrapper an owner (move-only, destructor calls it).
+	out.destructor = jsonString(json, "destructor");
+	if (json.contains("interfaces") && json.at("interfaces").is_array()) {
+		for (const Json& item : json.at("interfaces")) {
+			if (item.is_string())
+				out.interfaces.push_back(item.get<std::string>());
+		}
+	}
+	if (json.contains("fields")) {
+		if (!json.at("fields").is_array())
+			throw std::runtime_error("object '" + out.name
+					+ "': `fields` must be an array");
+		for (const Json& item : json.at("fields"))
+			out.fields.push_back(ObjectField::fromJson(item));
+	}
+	if (json.contains("properties")) {
+		if (!json.at("properties").is_array())
+			throw std::runtime_error("object '" + out.name
+					+ "': `properties` must be an array");
+		for (const Json& item : json.at("properties"))
+			out.properties.push_back(ObjectProperty::fromJson(item));
+	}
+	if (json.contains("methods")) {
+		if (!json.at("methods").is_array())
+			throw std::runtime_error("object '" + out.name
+					+ "': `methods` must be an array");
+		for (const Json& item : json.at("methods"))
+			out.methods.push_back(ObjectMethod::fromJson(item));
+	}
+	if (json.contains("constructors")) {
+		if (!json.at("constructors").is_array())
+			throw std::runtime_error("object '" + out.name
+					+ "': `constructors` must be an array");
+		for (const Json& item : json.at("constructors"))
+			out.constructors.push_back(ObjectConstructor::fromJson(item));
+	}
+	out.raw = json;
+	return out;
+}
+
+Json ObjectDescriptor::toJson() const
+{
+	Json out = raw.is_object() ? raw : Json::object();
+	out["name"] = name;
+	out["version"] = version;
+	if (parent.empty())
+		out.erase("parent");
+	else
+		out["parent"] = parent;
+	if (interfaces.empty())
+		out.erase("interfaces");
+	else
+		out["interfaces"] = interfaces;
+	if (self == ObjectSelfKind::ExternRef)
+		out["self"] = "externref";
+	else
+		out.erase("self");
+	if (destructor.empty())
+		out.erase("destructor");
+	else
+		out["destructor"] = destructor;
+	out["size"] = size;
+	out["fields"] = Json::array();
+	for (const ObjectField& field : fields)
+		out["fields"].push_back(field.toJson());
+	if (!properties.empty()) {
+		out["properties"] = Json::array();
+		for (const ObjectProperty& property : properties)
+			out["properties"].push_back(property.toJson());
+	} else {
+		out.erase("properties");
+	}
+	out["methods"] = Json::array();
+	for (const ObjectMethod& method : methods)
+		out["methods"].push_back(method.toJson());
+	if (!constructors.empty()) {
+		out["constructors"] = Json::array();
+		for (const ObjectConstructor& constructor : constructors)
+			out["constructors"].push_back(constructor.toJson());
+	} else {
+		out.erase("constructors");
+	}
+	return out;
+}
 Schema Schema::fromJson(const Json& json)
 {
 	if (!json.is_object())
@@ -388,6 +1107,13 @@ Schema Schema::fromJson(const Json& json)
 	out.id = jsonString(json, "schema");
 	if (out.id.empty())
 		out.id = "wasmjit.binding/1";
+	// The envelope is versioned: a consumer that emits nothing but functions
+	// keeps speaking /1, and an `objects` section opts into /2 (A.14.5). An
+	// unknown version is a load-time error rather than a best-effort parse.
+	if (out.id != "wasmjit.binding/1" && out.id != "wasmjit.binding/2")
+		throw std::runtime_error("schema import: unsupported schema version '"
+				+ out.id + "'; this generator speaks wasmjit.binding/1 and"
+				" wasmjit.binding/2");
 	const std::string direction = jsonString(json, "direction");
 	if (!parseDirection(direction, out.direction))
 		throw std::runtime_error("schema import: missing or unknown direction");
@@ -405,6 +1131,18 @@ Schema Schema::fromJson(const Json& json)
 		for (const Json& entry : json.at("exports"))
 			out.exports.push_back(Entry::fromJson(entry, false));
 	}
+	if (json.contains("objects")) {
+		if (!json.at("objects").is_array())
+			throw std::runtime_error("schema import: `objects` must be an array");
+		if (!json.at("objects").empty()) {
+			if (out.id != "wasmjit.binding/2")
+				throw std::runtime_error("schema import: an `objects` section"
+						" requires wasmjit.binding/2, not '" + out.id + "'");
+			for (const Json& item : json.at("objects"))
+				out.objects.push_back(ObjectDescriptor::fromJson(item));
+			validateObjects(out.objects);
+		}
+	}
 	out.dedupe();
 	return out;
 }
@@ -412,13 +1150,22 @@ Schema Schema::fromJson(const Json& json)
 Json Schema::toJson() const
 {
 	Json out = extras.is_object() ? extras : Json::object();
-	out["schema"] = id;
+	// An object descriptor is what makes this envelope `/2`; a `/2` input that
+	// carries no objects stays `/2` so a round-trip never downgrades silently.
+	out["schema"] = objects.empty() ? id : "wasmjit.binding/2";
 	out["direction"] = directionName(direction);
 	out["module"] = module;
 	if (!frontend.empty())
 		out["frontend"] = frontend;
 	if (!types.is_null())
 		out["types"] = types;
+	if (objects.empty()) {
+		out.erase("objects");
+	} else {
+		out["objects"] = Json::array();
+		for (const ObjectDescriptor& object : objects)
+			out["objects"].push_back(object.toJson());
+	}
 	out["imports"] = Json::array();
 	for (const Entry& entry : imports)
 		out["imports"].push_back(entry.toJson());

@@ -2,22 +2,22 @@
 
 *Sharing a Linear Memory Between Instances*
 
-Status: engine-seam study, revision 4 (2026-11-18, `6f2a391`). It answers
-whether a large monolithic module and a set of small scripts can share one
-linear memory: aliasing is **yes**, coexistence is **yes with build-side work**,
-and accounting is **no, not today**. `Runtime::unload` and the
-`ModuleInstantiator::releaseInstance` hook shipped; layout and re-binding stay
-out of scope for the short term, with an allocator-injection pass and an
-embedder initializer contract written up instead. **Revision 4 ran `SLM-6`**: §10
-is no longer a plan but ten measured toolchain arms, and the answer to
-coexistence is now per language — C, C++, Rust, Zig and AssemblyScript can
-import a shared memory; Go and TinyGo cannot. It also corrects revision 3's
-`dlclose` claim (§12.2 — unloading shipped on 2026-11-01) and connects the note
-to the host object runtime: objects that live in the arena are
-[`SYNTHETIC_OBJECTS.md`](SYNTHETIC_OBJECTS.md) A.13. **Revision 5
-(2026-11-18) closes the other half of rung 8 in code**: `Runtime::unloadImage`,
-`hasImage` and `imageCount` release the parsed image once no instance holds it,
-so §12.2's table is now an asymmetry of *guest teardown* only.
+Status: engine-seam study, revision 6 (2026-11-18). It answers whether a large
+monolithic module and a set of small scripts can share one linear memory: aliasing
+is **yes**, coexistence is **yes with build-side work**, and accounting is **no,
+not today**. `Runtime::unload` and the `ModuleInstantiator::releaseInstance` hook
+shipped; layout and re-binding stay out of scope for the short term, with an
+allocator-injection pass and an embedder initializer contract written up instead.
+**Revision 4 ran `SLM-6`**: §10 is no longer a plan but ten measured toolchain
+arms, and the answer to coexistence is now per language — C, C++, Rust, Zig and
+AssemblyScript can import a shared memory; Go and TinyGo cannot. **Revision 5**
+closes the other half of rung 8 in code: `Runtime::unloadImage`, `hasImage` and
+`imageCount` release the parsed image once no instance holds it, so §12.2's table
+is now an asymmetry of *guest teardown* only. **Revision 6 records a preference,
+not a milestone** (§2.5): one embedder-provided (or libc-like, synthetic) allocator
+plus one shared memory, with the per-module stack as the open question. It changes
+no decision and prices nothing; it says what the ideal end-state looks like so the
+plan can be read against it.
 Audience: anyone writing the embedding host for a product that mixes one big
 module with many small ones (`WASM::Runtime`, `RegistryImportResolver`, the
 `HostBridge` boundary), anyone touching `Store`/`LinearMemory`/`MemoryBudget`, and
@@ -40,7 +40,7 @@ already implements; what is missing is a *recipe*, a *contract* and
 
 | Section | Question it answers |
 |---|---|
-| §2 | What does the monolithic-module-plus-scripts scenario actually demand? (and what mental model it implies — §2.4) |
+| §2 | What does the monolithic-module-plus-scripts scenario actually demand? (the mental model it implies — §2.4 — and the preferred end-state, a preference rather than a plan — §2.5) |
 | §3 | What does it *not* demand? |
 | §4 | What does the engine already give — and what is genuinely absent? |
 | §5 | Where do we fall short (`SLM1`–`SLM13`)? |
@@ -143,10 +143,12 @@ A library brings two things, and this note only owns one of them. It brings its
 **address space** — which is §4.1, §9 and §12 — and it brings its **class
 library**: the objects, their methods and their lifetimes. ELF separates them
 (`ld.so` and `libgobject`); so does this tree, because the object-model half lives
-in [`SYNTHETIC_OBJECTS.md`](SYNTHETIC_OBJECTS.md) and the bridge between the two —
-objects that live *in* the shared arena and are reached by an `i32` offset — is
-that note's A.13. Reading this note alone gives a module a place to
-put its bytes; the pair gives it something to put there.
+in [`SYNTHETIC_OBJECTS.md`](SYNTHETIC_OBJECTS.md) — whose revision 2 moves the
+*identity and allocation* of a Wasm-expressible host type into the engine while
+keeping the model outside it — and the bridge between the two, objects that live
+*in* the shared arena and are reached by an `i32` offset, is that note's A.13.
+Reading this note alone gives a module a place to put its bytes; the pair gives it
+something to put there.
 
 The QVM lineage matters here. The engine is the spiritual successor of **Quake 3's
 QVM** ([`../API_ABI_STABILITY.md`](../API_ABI_STABILITY.md) §2.1, gate `G1`), and
@@ -154,6 +156,62 @@ Q3 chose the *script* shape for all three of its modules: each VM got its own da
 segment and a narrow `syscall` boundary instead of a shared heap. That choice is
 still the engine's default, and §12.5 keeps it in view when the linker question is
 weighed.
+
+### 2.5 The preferred end-state, stated as a preference
+
+This subsection is a **preference, not a plan**. It has no milestone, no ID and no
+price; it exists so that `SLM-1`–`SLM-6`, §13's pass and §14's contract can be read
+against the shape they are converging on. Nothing here is proposed for the current
+milestone.
+
+> **The ideal.** The embedder writes (or provides) one `malloc`/`free`/`realloc`
+> and one linear memory, exports both, and every module imports them. Modules
+> either share the one memory outright, or split it in two — a private memory for
+> the module's own stack (where the toolchain can place its stack in a second
+> memory at all; see the blockers below), the shared one for the heap. Even
+> better: the per-module stacks disappear, and each module allocates its stack
+> from the imported allocator at registration time. The end-state is one address
+> space in which a pointer from any module is meaningful to every other, because
+> there is one allocator and one heap.
+
+The alternative shape of the same idea is a **memory-manager module**: a `.wasm`
+module — or a synthetic module whose functions a host registers — that owns the
+heap and exports the allocator, and that every other module imports. It is a
+`libc` for the process: one implementation, many tenants, and a stable import
+signature instead of a per-toolchain symbol convention.
+
+Both shapes are the *same* answer to §9.1's trap: one allocator, so two modules
+cannot be handed the same block. What they add is the part the recipe in §4.2 does
+not have — the allocator is named once and imported, instead of being duplicated in
+every module and merely *hoped* to be disjoint by layout.
+
+Why it stays a preference, stated plainly:
+
+| Blocker | Why the ideal does not land today |
+|---|---|
+| **The stack is a per-module global** | `__stack_pointer` (with `__stack_low`/`__stack_high` for the bounds check) is set by the linker and adjusted by the prolog. Allocating it from `malloc` at registration is not a toolchain contract; it would mean writing the globals *and* making the bounds check accept a block that is not a contiguous downward stack. §14's initializer contract is the only supported way to hand a module a layout, and it still leaves each module its own stack (§14's table). |
+| **TLS and the shadow stack** | `__tls_base`/`__tls_size` and the stack-probe globals are per-module linker artefacts. A shared heap does not make them shared, and a per-thread region is not something the engine can assign. |
+| **Two memories is not obviously better** | A private stack memory plus a shared heap memory is *expressible* in the engine (several imported memories link — [`MULTI_MEMORY.md`](MULTI_MEMORY.md)), but no measured toolchain can place `__stack_pointer` in a second memory, so it is a hypothetical layout rather than an available one. It would keep stacks out of the shared memory, not unify them. |
+| **The allocator ABI is not stable** | `malloc(size_t)`, `realloc`, `free`, the failure convention (`0` vs `-1` vs a trap) and `sbrk` differ per toolchain; C's `malloc` is not a stable symbol across the set (§10.3 Q5, §13). |
+| **Some modules cannot import a memory at all** | Go and TinyGo cannot at these pins (§10.3 Q1), so the ideal excludes two languages in the measured set before any allocator question arises. |
+| **GC languages bring their own heap** | A runtime with a tracing GC does not call `malloc` for its objects; the pass can observe its heap, not replace it (§13). |
+| **One allocator means one failure mode** | A corrupting tenant corrupts every other tenant's heap, not just its own partition. That is the same trust-domain decision as `SLMD1`, taken further: the recipe at least lets a tenant be *given* a disjoint region. |
+| **Accounting disappears** | One heap is one number (`SLM5`, `SLMD2`), so the ideal and per-tenant accounting are mutually exclusive. |
+
+What *would* make it more than a preference is a change in one of the blockers
+above — most likely the stack, the allocator contract or the load-time layout: a
+toolchain gaining a documented “stack from an allocator” contract; a module system
+(or an embedder that controls every artifact) mandating the imported allocator the
+way §14's contract mandates `init`; or a real linker/loader that assigns the layout
+at load time (§12's rungs 5–6, class E). None is on the table, and this note does
+not ask for one.
+
+Two notes of continuity. First, §14's initializer contract is the *negotiated*
+version of this idea: the module keeps its own stack and accepts a layout, where the
+ideal has no per-module stack at all. Second, if such a memory ever exists, the
+arena backing of [`SYNTHETIC_OBJECTS.md`](SYNTHETIC_OBJECTS.md) A.13 stops being a
+special case and becomes the natural place for a host-created object — the same
+reason that note's revision 2 puts the arena last (`SO-5`) rather than first.
 
 ## 3. What the scenario does not demand
 
@@ -350,6 +408,14 @@ Stop conditions:
   without a second front end, `SLM-7` becomes a proposal — and the first thing it
   must state is that it moves the engine away from the QVM model (§12.5). Until
   both hold, this note stays a study.
+
+**§2.5 is deliberately absent from this table.** It is a preference for the
+end-state — one allocator, one memory, no per-module stack — and a milestone for it
+would be a milestone for a *change of mind*, not for work. If it ever becomes
+actionable, the order is: a toolchain or module-system change that makes an
+imported allocator a contract, then `SLM-3`'s allocator contract with a named
+implementation, and only then `SLM-7`'s link-time question. A row that skipped the
+first step would be the linker proposal this note has avoided since revision 1.
 
 ## 8. Test survey
 
@@ -1064,6 +1130,12 @@ backend**: rewrite the module on the way in — a front-end pass, the same kind 
 pass [`LEGACY_EXCEPTIONS.md`](LEGACY_EXCEPTIONS.md) already performs for legacy
 exception handling.
 
+This appendix is the **fallback** for §2.5's preference. The ideal there is that
+every module imports one allocator and one memory by construction; the pass exists
+for a module that was built without knowing, and that cannot simply be rebuilt. The
+distinction matters: an imported allocator is a toolchain contract, while a rewrite
+is the host imposing one after the fact.
+
 **The idea.** Whatever language produced the module, it imports or defines an
 allocator (`malloc`/`free`/`realloc`, or the language's own runtime allocation
 functions). A front-end pass could **inject an allocator**: import our own
@@ -1168,6 +1240,12 @@ because nothing in the engine calls a module's destructor on `Runtime::unload`
 either (§12.2). A module that holds a resource — a file, a lock, an arena
 allocation — needs the `fini` counterpart, and it is the embedder's to define and
 call, exactly like `init`.
+
+It is also the negotiated compromise of §2.5's preference, not the preference
+itself: the module keeps its own stack and accepts a layout, where the ideal would
+have it allocate its stack from the imported allocator. What the contract buys is
+the *negotiation* — one place where the host and the module agree on the regions —
+which is the part a shared allocator would otherwise have to assume.
 
 That is why this appendix is documentation: the engine's job is to keep the
 modules' memory *addressable* and the layout *unconstrained*; the embedder's job
@@ -1298,7 +1376,10 @@ what makes Q5 and Q6 measurable; `poke`/`peek` are what §10.5 uses.
   the type), [`MEMORY64.md`](MEMORY64.md) (index type is part of the type),
   [`COMPONENT_MODEL.md`](COMPONENT_MODEL.md) (one memory + `realloc` as the
   sanctioned multi-module answer), [`LEGACY_EXCEPTIONS.md`](LEGACY_EXCEPTIONS.md)
-  (the precedent for a build/front-end desugaring pass).
+  (the precedent for a build/front-end desugaring pass), and
+  [`SYNTHETIC_OBJECTS.md`](SYNTHETIC_OBJECTS.md) (the object half of the library
+  analogy — A.13's arena, which §2.5 says becomes the natural home for a
+  host-created object once one allocator and one memory exist).
 - Policy: [`../SAFETY.md`](../SAFETY.md) §1 (not a sandbox) and §2 (budget),
   [`../LAYERING.md`](../LAYERING.md) §2 (the engine states contracts, not
   toolchain flags), [`../FRESHNESS.md`](../FRESHNESS.md) §2.4 (why §4 is stamped).

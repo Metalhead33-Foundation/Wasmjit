@@ -2,7 +2,7 @@
 
 *Implementation Notes, Spec Status, and Deliberate Non-Integration*
 
-Status: design note / implementation reference (revision 10). It consolidates
+Status: design note / implementation reference (revision 11). It consolidates
 JS-BigInt, JS String Builtins, JSPI, custom descriptors, ESM integration, JS
 Primitive Builtins and JS Types, plus the shipped generic host-bridge
 groundwork. No JavaScript engine or JavaScript semantics is implemented inside
@@ -10,7 +10,10 @@ the engine: `WasmHostBridge`, `HostContinuation`, the wide scheduler hooks, the
 import/export descriptor views and the core Custom Descriptors instructions/RTT
 are the engine side; a JS engine, Promise/event loop, ESM loader and
 `js-prototypes` configuration belong to the embedder. `JS-0`…`JS-5` are
-complete.
+complete. Revision 11 adds §6.8, the same seam written as an adapter skeleton, so
+an embedder that ships QuickJS, MuJS, Lua, Python or Ruby alongside this engine
+has one boundary to code against instead of a JavaScript-shaped one; §6.4 states
+the rule it obeys.
 Audience: anyone touching `ImportResolver`, `Callable`, `VMContext`,
 `HostBridge`, `externref`, `Module` metadata, or considering a
 QuickJS/MuJS/other adapter.
@@ -879,6 +882,73 @@ walk/unwind, and must convert a JS exception into the engine's trap/exception
 path rather than unwinding through JIT frames. A JS engine that is not
 thread-safe restricts the adapter to the engine's single-threaded execution
 model.
+
+### 6.8 A host-language adapter, in code
+
+§6.4 states the rule (opaque handles, no engine callbacks in core, no JS-shaped
+metadata) and §6.5 lists what the core may and may not own. This is the rule
+written down, with the scripting engine's own API left as elided calls so the
+shape stays visible — the same skeleton serves V8, QuickJS, MuJS, Lua, CPython or
+Ruby, and only the elided names change.
+
+```cpp
+// One thunk per Wasm signature the host exposes. The first parameter is the
+// caller's VMContext; nothing in the signature is JavaScript.
+void scriptCallThunk(WASM::VMContext* context, std::int32_t argc, std::int32_t id)
+{
+    auto* realm = static_cast<Realm*>(context->hostData);   // published at instanceCreated
+    if (realm == nullptr)
+        WASM::trap(WASM::TrapKind::Internal, "scriptCallThunk: no realm");
+
+    ScriptValue callee = realm->lookup(id);                 // JS_GetProperty / lua_getfield / PyDict_GetItem
+    ScriptValue result = engineCall(*realm, callee, argc);  // JS_Call / lua_pcall / PyObject_Call
+
+    if (engineFailed(*realm))                               // a JS exception, a Lua error, a Python raise
+        WASM::trap(WASM::TrapKind::Internal, engineErrorText(*realm));
+    realm->keep(result);                                    // one owner, chosen deliberately
+}
+
+// The reference half: the scripting engine's value lifetime *is* the barrier's.
+WASM::HostBridge bridge;
+bridge.userData = &realm;
+bridge.references.isHostReference = &realmOwns;   // "is this handle mine?"
+bridge.references.retain = &engineRetain;         // JS_DupValue / luaL_ref / Py_INCREF
+bridge.references.release = &engineRelease;       // JS_FreeValue / luaL_unref / Py_DECREF
+bridge.references.equals = &engineEquals;         // SameValue / rawequal
+bridge.instanceCreated = &publishRealm;           // context->hostData = &realm, before `start`
+bridge.instanceDestroying = &dropRealmRoots;      // every handle this instance was given
+```
+
+The suspension half is the scheduler from
+[`STACK_SWITCHING.md`](STACK_SWITCHING.md) §4.1, driven from the engine's own loop:
+
+```cpp
+WASM::HostContinuationScheduler::Hooks hooks;
+hooks.userData = &realm;
+hooks.onSuspended = &adoptIntoScheduledTask;   // JS: keep the replacement behind a Promise
+hooks.onCompleted = &settleTask;
+hooks.onRejected = &failTask;                  // trap or uncaught exception arrives here
+
+WASM::HostContinuationScheduler scheduler(hooks);
+// Once per turn of the scripting engine's loop, one Wasm task:
+while (scheduler.step()) { /* the host owns the interleaving */ }
+```
+
+Three consequences the adapter gets wrong first, in order:
+
+1. **Failure is `WASM::trap`, never an escape.** A C++ exception must not cross the
+   generated frame, and a scripting engine's `longjmp`/`setjmp` must not cross it
+   either: catch it inside the thunk, convert it, and trap
+   ([`SAFETY.md`](../SAFETY.md) §2.4, `WASM::nativeImport` as the trampoline).
+2. **One owner per value.** The script engine's count and `HostBridge`'s count
+   must be the *same* count — a `retain` with no matching `release` leaks the
+   value, and two counts free it twice (§4.2.2, rule 6).
+3. **The adapter chooses when it may re-enter.** Not inside a GC walk, not during
+   a trap unwind, and not from a thread the engine was not installed on (§6.4).
+
+The two-engine decision (who owns the queue) and the per-language mapping are §2.2
+of [`../EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md); the fully specified case,
+where the proposal itself names its objects, is the JSPI contract in §4.2.2.
 
 ## 7. Plan
 

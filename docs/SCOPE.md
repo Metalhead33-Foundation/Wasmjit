@@ -2,7 +2,7 @@
 
 *What Is an Engine Gap, and What Is a Boundary*
 
-Status: policy note, revision 6 (2026-11-11). It is the canonical record of the
+Status: policy note, revision 9 (2026-11-18). It is the canonical record of the
 surfaces WasmJit deliberately does **not** own and of the deviations it has
 chosen, so that none of them is counted as an implementation gap. Open defects
 and limitations live in one register,
@@ -15,6 +15,11 @@ records the synthetic-module boundary and its one deliberate exception, the
 diagnostics guest-log facility (§3.1); revision 7 (2026-11-18) adds §3.2, the
 synthetic-object boundary, and its row in §3, so a product object model is not
 mistaken for engine debt ([`proposals/SYNTHETIC_OBJECTS.md`](proposals/SYNTHETIC_OBJECTS.md)).
+**Revision 8 (2026-11-18)** revises §3.2 and its row for that note's revision 2: the
+*identity and allocation* of a host-registered Wasm type are engine work, and
+§3.2's table records the split; only the object model remains a boundary. Revision
+9 (2026-11-18) records `SO-1` as shipped and the reference-field limit as a
+staging gap (`SO17`/`SO-6`).
 Audience: anyone triaging a missing feature, filling in a completeness meter,
 writing a proposal note, asking "which languages do we actually serve?", or
 asking "is this engine mature yet?".
@@ -68,7 +73,7 @@ embedder supplies the policy, engine or event loop.
 | `js-prototypes` configuration | The embedder | The descriptor/RTT/JS-Types metadata surface | `JS_INTEGRATION.md` `JS8` |
 | WASI function exports and host imports | The embedder | `ImportResolver`, native imports, `VMContext::hostData` | `WasmImport.hpp`; `WasmNativeImport.hpp` |
 | Synthetic modules (`(module, field)` host namespaces of functions, memories, tables or globals) | The embedder | The seam only: `ImportRegistrar`/`ImportResolver`, `RegistryImportResolver`, `WASM::nativeImport`, `HostBridge`. **One deliberate exception**, the diagnostics guest-log facility (`info`/`warn`/`error`/`panic`, `log`, `log_str`, `log_as`), because its record format, stable ids and safety rules are engine-owned (§3.1) | `WasmImport.hpp`; `WasmNativeImport.hpp`; `WasmDiagnostics.hpp` “Guest log imports”; `DIAGNOSTICS.md` §5.4 |
-| Synthetic objects (host-defined classes reached through an integer handle and described by a host descriptor, with or without the GObject precedent) | The embedder | The transport only: `externref` + `HostBridge`, Store `GcHeap` allocation (`allocateStructObject`/`allocateArrayObject`), and component resources; no handle table, descriptor registry, properties or signals | [`proposals/SYNTHETIC_OBJECTS.md`](proposals/SYNTHETIC_OBJECTS.md) §2.1/§4.3; `WasmHostBridge.hpp` |
+| Synthetic objects (host-registered Wasm types, reached as `(ref $T)` or an integer handle, and described by a host descriptor) | The embedder for the model; the engine for the identity and the allocation (**planned**) | The transport — `externref` + `HostBridge`, Store `GcHeap` allocation (`allocateStructObject`/`allocateArrayObject`), component resources — **plus, planned under `SO-1`, interning a host-originated canonical type and allocating/freeing its instances**. Still no descriptor registry, no properties, no signals and no nominal class tree | [`proposals/SYNTHETIC_OBJECTS.md`](proposals/SYNTHETIC_OBJECTS.md) §2.5/§3.1; `WasmHostBridge.hpp`, `WasmTypeRegistry.hpp` |
 | Host reference lifetime and per-call arenas | The embedder | The optional `HostBridge` callbacks and opaque `externref` values | `JS_INTEGRATION.md` `JSD3`; `ABI.md` "Host boundary" |
 | Module lifetime across callers | The embedder | The `VMContext*`-as-arg0 ABI; a module must outlive every module that calls it | `ABI.md:26-34`, `:404-407` |
 | Linear-memory layout between modules | The embedder / build | Memory aliasing through imported memories; no partition or allocator policy | `SHARING_LINEAR_MEMORY.md` `SLM-1`…`SLM-4`; `L3` |
@@ -109,27 +114,34 @@ implicitly; the test harness does so by default, and an embedder opts in.
 
 ### 3.2 The synthetic-object boundary
 
-The object-side analogue of §3.1 is a **synthetic object**: a host-defined class
-whose instances a guest reaches through an integer handle, described by a host
-side descriptor, and dispatched through host functions
-([`proposals/SYNTHETIC_OBJECTS.md`](proposals/SYNTHETIC_OBJECTS.md) §2.1). Like a
-synthetic module it needs **no engine object** — no `TypeId`, no `GcHeader`, no
-`TypeRegistry` entry — which is why a product's object model is not an engine gap.
+The object-side analogue of §3.1 is a **synthetic object**: an object of a
+host-registered Wasm type, reached from a guest as `(ref $T)` where the toolchain
+emits GC references and as an integer handle everywhere else, and described by a
+host-side descriptor
+([`proposals/SYNTHETIC_OBJECTS.md`](proposals/SYNTHETIC_OBJECTS.md) §2.1/§2.5).
 
-The engine ships the transport and nothing else: `externref` with `HostBridge`
-retain/release, host-created Wasm GC objects through the instance allocation
-entry points, and the component resource contract (`own`/`borrow`,
-`resource.drop`). A handle table, a descriptor registry, properties, signals and
-reflection are the embedder's ([`proposals/SYNTHETIC_OBJECTS.md`](proposals/SYNTHETIC_OBJECTS.md)
-§6, `SOD6`), for the same reason §3.1 gives for modules: every product would
-reinvent them differently, and the engine would be promising a compatibility
-surface it has not decided to keep.
+Revision 2 of that note splits the old boundary in two, and this document records
+the split because it decides who is behind on what:
 
-There is **no exception** here. Diagnostics has one (§3.1) because every embedder
-would otherwise reinvent the same failure channel; object models have no such
-common core — the Component Model already standardises the half that is common
-(wire, lifetime, bindings), and the remaining half is exactly what products
-differ on.
+| Half | Owner | Status |
+|---|---|---|
+| **identity and allocation** — intern a canonical `struct`/`array` the host supplies; allocate/free its instances in the Store's `GcHeap`; stamp the `TypeId`; keep one count per graph | **engine** | **shipped** (`SO-1`, `EN-14`): `internHostType` runs the same canonicalizer a module uses, and `Store::allocateHostStruct`/`allocateHostArray` allocate from a Store-owned region set. One staging limit: a reference **field** is refused at interning until the Store-level release walk lands (`SO17`, `SO-6`, `EN-15`). |
+| **the object model** — names, versions, fields-as-properties, methods, signals, interfaces, reflection, dispatch, thread policy | **embedder** | out of the engine, permanently (`SOD6`) |
+
+The engine also still ships the transport and nothing else for an *opaque* host
+object: `externref` with `HostBridge` retain/release, host-created Wasm GC objects
+through the instance allocation entry points, and the component resource contract
+(`own`/`borrow`, `resource.drop`). A handle table, a descriptor registry,
+properties and signals remain the embedder's, for the reason §3.1 gives for
+modules.
+
+There is **no exception** here, and there is no contradiction with §3.1. A
+host-registered Wasm type is not a new subsystem: it is the type system the engine
+already implements, with an origin that is not a module. The line that holds is
+the one `SOD6` states — if `WasmBase/` can implement it without a product name in
+a header, it is a primitive; the moment it needs `setProperty("colour")`, it is the
+product's. The Component Model already standardises the nominal half (resources,
+`own`/`borrow`, generated bindings) for an embedder that wants it.
 
 ## 4. Build-time and text-format surfaces — binary-only, permanently
 

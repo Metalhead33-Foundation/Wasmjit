@@ -3,6 +3,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include "BindingModel.hpp"
+
 #include <cstddef>
 #include <set>
 #include <sstream>
@@ -21,6 +23,13 @@ namespace WASM::Bindings::detail {
 
 using Json = nlohmann::ordered_json; //!< Ordered JSON used at the emit boundary.
 
+//! Returns the `void` value a signature names when a call returns nothing.
+/*!
+  \brief Builds the typed `void` used in place of a result list.
+  \return A `ValueType` whose kind is `ValueKind::Void`.
+*/
+ValueType voidValue();
+
 //! Makes a schema name safe for every target language.
 std::string sanitize(std::string_view text);
 
@@ -28,13 +37,22 @@ std::string sanitize(std::string_view text);
 std::string quoteName(std::string_view text, bool rust);
 
 //! True when the value type is a reference.
-bool isReference(const Json& type);
+bool isReference(const nlohmann::ordered_json& type);
+
+//! True when a typed value is a reference.
+bool isReference(const ValueType& type);
 
 //! Returns the target-neutral opaque name for a reference type.
-std::string refTypeName(const Json& type);
+std::string refTypeName(const nlohmann::ordered_json& type);
+
+//! Returns the target-neutral opaque name for a typed reference.
+std::string refTypeName(const ValueType& type);
 
 //! Returns the C spelling of a value type.
-std::string cType(const Json& type);
+std::string cType(const nlohmann::ordered_json& type);
+
+//! Returns the C spelling of a typed value.
+std::string cType(const ValueType& type);
 
 //! Returns the stable opaque name of a WIT type.
 std::string witOpaqueTypeName(std::string_view name);
@@ -55,80 +73,139 @@ void collectSchemaRefs(const Json& schema, std::set<std::string>& names);
 void collectWitTypeNames(const Json& schema, std::set<std::string>& names);
 
 //! Returns an import's Wasm module, falling back to `component`.
-std::string importModule(const Json& entry);
+std::string importModule(const nlohmann::ordered_json& entry);
+
+//! Returns a typed import's Wasm module, falling back to `component`.
+std::string importModule(const Entry& entry);
 
 //! Returns the generated C/C++ name of an import.
-std::string importName(const Json& entry);
+std::string importName(const nlohmann::ordered_json& entry);
+
+//! Returns the generated C/C++ name of a typed import.
+std::string importName(const Entry& entry);
 
 //! Flattens prose into one line for a generated comment.
 std::string commentText(std::string text);
 
 //! Returns an entry's optional description.
-std::string functionDescription(const Json& entry);
+std::string functionDescription(const nlohmann::ordered_json& entry);
+
+//! Returns a typed entry's optional description.
+std::string functionDescription(const Entry& entry);
 
 //! Returns the display comment of an import.
-std::string importComment(const Json& entry);
+std::string importComment(const nlohmann::ordered_json& entry);
+
+//! Returns the display comment of a typed import.
+std::string importComment(const Entry& entry);
 
 //! Returns the display comment of an export.
-std::string exportComment(const Json& entry);
+std::string exportComment(const nlohmann::ordered_json& entry);
+
+//! Returns the display comment of a typed export.
+std::string exportComment(const Entry& entry);
 
 //! Returns an argument name, falling back to `argN`.
-std::string argumentName(const Json& entry, std::size_t index);
+std::string argumentName(const nlohmann::ordered_json& entry, std::size_t index);
 
-//! Returns the Canonical ABI or structured function parameters.
-const Json& signatureParams(const Json& entry);
-
-//! Returns the Canonical ABI or structured function results.
-const Json& signatureResults(const Json& entry);
+//! Returns a typed argument name, falling back to `argN`.
+std::string argumentName(const Entry& entry, std::size_t index);
 
 //! Emits one C-style declaration.
-void emitFunction(std::ostringstream& out, const Json& entry, const std::string& name,
-		const char* side, const std::string& attribute = {});
+void emitFunction(std::ostringstream& out, const nlohmann::ordered_json& entry,
+		const std::string& name, const char* side,
+		const std::string& attribute = {});
+
+//! Emits one C-style declaration from a typed entry.
+void emitFunction(std::ostringstream& out, const Entry& entry,
+		const std::string& name, const char* side,
+		const std::string& attribute = {});
 
 //! Emits the C header body.
-std::string emitCHeaderImpl(const Json& schema);
+std::string emitCHeaderImpl(const nlohmann::ordered_json& schema,
+		const Schema& typed);
 
 //! Returns the PascalCase spelling of a name.
 std::string pascalName(std::string_view name);
 
 //! Returns the Pascal-case reference type name.
-std::string refPascal(const Json& type);
+std::string refPascal(const nlohmann::ordered_json& type);
+
+//! Returns the Pascal-case name of a typed reference.
+std::string refPascal(const ValueType& type);
 
 //! Returns the Rust spelling of a value type.
-std::string rustType(const Json& type);
+std::string rustType(const nlohmann::ordered_json& type);
+
+//! Returns the Rust spelling of a typed value.
+std::string rustType(const ValueType& type);
 
 //! Emits Rust parameters for one entry.
-void emitRustParams(std::ostringstream& out, const Json& entry, bool resultBuffer);
+void emitRustParams(std::ostringstream& out, const nlohmann::ordered_json& entry,
+		bool resultBuffer);
+
+//! Emits Rust parameters for one typed entry.
+void emitRustParams(std::ostringstream& out, const Entry& entry, bool resultBuffer);
 
 //! Emits a Rust return type.
-void emitRustReturn(std::ostringstream& out, const Json& results);
+void emitRustReturn(std::ostringstream& out, const nlohmann::ordered_json& results);
+
+//! Emits a Rust return type from typed results.
+void emitRustReturn(std::ostringstream& out, const std::vector<ValueType>& results);
 
 //! Returns the TypeScript spelling of a value type.
-std::string tsType(const Json& type);
+std::string tsType(const nlohmann::ordered_json& type);
+
+//! Returns the TypeScript spelling of a typed value.
+std::string tsType(const ValueType& type);
 
 //! Returns the AssemblyScript spelling of a value type.
-std::string asType(const Json& type);
+std::string asType(const nlohmann::ordered_json& type);
+
+//! Returns the AssemblyScript spelling of a typed value.
+std::string asType(const ValueType& type);
 
 //! Returns the Zig spelling of a value type.
-std::string zigType(const Json& type);
+std::string zigType(const nlohmann::ordered_json& type);
+
+//! Returns the Zig spelling of a typed value.
+std::string zigType(const ValueType& type);
 
 //! Returns the Kotlin spelling of a value type.
-std::string kotlinType(const Json& type);
+std::string kotlinType(const nlohmann::ordered_json& type);
+
+//! Returns the Kotlin spelling of a typed value.
+std::string kotlinType(const ValueType& type);
 
 //! Returns the MoonBit spelling of a value type.
-std::string moonbitType(const Json& type);
+std::string moonbitType(const nlohmann::ordered_json& type);
+
+//! Returns the MoonBit spelling of a typed value.
+std::string moonbitType(const ValueType& type);
 
 //! Returns the Go spelling of a value type.
-std::string goType(const Json& type);
+std::string goType(const nlohmann::ordered_json& type);
+
+//! Returns the Go spelling of a typed value.
+std::string goType(const ValueType& type);
 
 //! Returns the Dart FFI spelling of a value type.
-std::string dartType(const Json& type);
+std::string dartType(const nlohmann::ordered_json& type);
+
+//! Returns the Dart FFI spelling of a typed value.
+std::string dartType(const ValueType& type);
 
 //! Returns the Dart native spelling of a value type.
-std::string dartNativeType(const Json& type);
+std::string dartNativeType(const nlohmann::ordered_json& type);
+
+//! Returns the Dart native spelling of a typed value.
+std::string dartNativeType(const ValueType& type);
 
 //! Returns the Python ctypes spelling of a value type.
-std::string pythonType(const Json& type);
+std::string pythonType(const nlohmann::ordered_json& type);
+
+//! Returns the Python ctypes spelling of a typed value.
+std::string pythonType(const ValueType& type);
 
 //! Emits comments for non-function entries.
 std::string nonFunctionNotes(const Json& schema);
@@ -150,6 +227,22 @@ void forEachFunction(const Json& schema, const char* key, Fn fn)
 		if (entry.value("kind", "") != "function")
 			continue;
 		fn(entry);
+	}
+}
+
+/*!
+ * \brief Iterates over function entries in one typed section.
+ * \tparam Fn The callable type receiving `const Entry&`.
+ * \param schema The typed schema to inspect.
+ * \param imports True for the import section, false for the export section.
+ * \param fn The callable to invoke.
+ */
+template <typename Fn>
+void forEachFunction(const Schema& schema, bool imports, Fn fn)
+{
+	for (const Entry& entry : imports ? schema.imports : schema.exports) {
+		if (entry.kind == EntryKind::Function)
+			fn(entry);
 	}
 }
 
