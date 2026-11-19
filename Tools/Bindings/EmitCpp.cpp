@@ -14,17 +14,50 @@ namespace WASM::Bindings::detail {
 
 using Json = nlohmann::ordered_json;
 
+// Forward declarations: the typed forms sit next to the JSON ones, and the JSON
+// ones call them.
+std::string cppTypedefName(const Entry &entry);
+std::string cppCallableName(const Entry &entry);
+std::string cppReturnType(const Entry &entry);
+void emitCppParams(std::ostringstream &out, const Entry &entry);
+void emitCppParam(std::ostringstream& out, const Entry& entry, std::size_t i,
+		const ValueType& param);
+void emitCppPointerTypedef(std::ostringstream &out, const Entry &entry,
+		const std::string &typedefName);
+void emitCppImportDeclaration(std::ostringstream &out, const Entry &entry);
+void emitCppExportDeclaration(std::ostringstream &out, const Entry &entry);
+void emitCppImportStub(std::ostringstream &out, const Entry &entry);
+
 std::string cppTypedefName(const Json &entry) {
-	return "wasmjit_" + sanitize(entry.at("name").get<std::string>()) + "_fn";
+	return cppTypedefName(Entry::fromJson(entry, false));
+}
+
+std::string cppTypedefName(const Entry &entry) {
+	return "wasmjit_" + sanitize(entry.name) + "_fn";
 }
 
 std::string cppCallableName(const Json &entry) {
-	return "wasmjit_" + sanitize(entry.at("name").get<std::string>());
+	return cppCallableName(Entry::fromJson(entry, false));
+}
+
+std::string cppCallableName(const Entry &entry) {
+	return "wasmjit_" + sanitize(entry.name);
 }
 
 std::string cppReturnType(const Json &entry) {
-	const Json &results = signatureResults(entry);
+	return cppReturnType(Entry::fromJson(entry, false));
+}
+
+std::string cppReturnType(const Entry &entry) {
+	const std::vector<ValueType> &results = entry.function.results;
 	return results.size() == 1 ? cType(results[0]) : "void";
+}
+
+void emitCppParam(std::ostringstream& out, const Json& entry, std::size_t i,
+		const Json& param)
+{
+	emitCppParam(out, Entry::fromJson(entry, false), i,
+			ValueType::fromJson(param));
 }
 
 //! Emits one C parameter, expanding a vector into the canonical two scalar words.
@@ -32,7 +65,8 @@ std::string cppReturnType(const Json &entry) {
 //! @param entry The function entry the parameter belongs to.
 //! @param i Parameter index.
 //! @param param Storage type of the parameter.
-void emitCppParam(std::ostringstream& out, const Json& entry, std::size_t i, const Json& param)
+void emitCppParam(std::ostringstream& out, const Entry& entry, std::size_t i,
+		const ValueType& param)
 {
 if (cType(param) == "wasm_v128") {
 // Native side: two scalar words, low first (decision note section 28). An
@@ -45,27 +79,40 @@ out << cType(param) << " " << argumentName(entry, i);
 }
 
 void emitCppParams(std::ostringstream &out, const Json &entry) {
-	const Json &params = signatureParams(entry);
+	emitCppParams(out, Entry::fromJson(entry, false));
+}
+
+void emitCppParams(std::ostringstream &out, const Entry &entry) {
+	const std::vector<ValueType> &params = entry.function.params;
 	out << "WASM::VMContext* context";
 	for (std::size_t i = 0; i < params.size(); ++i) {
 		out << ", ";
 		emitCppParam(out, entry, i, params[i]);
 	}
-	if (signatureResults(entry).size() > 1u)
+	if (entry.function.results.size() > 1u)
 		out << ", void* result";
 }
 
 void emitCppPointerTypedef(std::ostringstream &out, const Json &entry,
 			   const std::string &typedefName) {
+	emitCppPointerTypedef(out, Entry::fromJson(entry, false), typedefName);
+}
+
+void emitCppPointerTypedef(std::ostringstream &out, const Entry &entry,
+			   const std::string &typedefName) {
 	out << "using " << typedefName << " = " << cppReturnType(entry) << " (*)(";
 	emitCppParams(out, entry);
 	out << ");";
-	if (signatureResults(entry).size() == 1 && isReference(signatureResults(entry)[0]))
+	if (entry.function.results.size() == 1 && isReference(entry.function.results[0]))
 		out << " // result ownership: explicit";
 	out << "\n";
 }
 
 void emitCppImportDeclaration(std::ostringstream &out, const Json &entry) {
+	emitCppImportDeclaration(out, Entry::fromJson(entry, true));
+}
+
+void emitCppImportDeclaration(std::ostringstream &out, const Entry &entry) {
 	// A G2H import is a function the host implements; no function-pointer
 	// typedef is needed for the declaration.
 	out << cppReturnType(entry) << " " << importName(entry) << "(";
@@ -74,19 +121,27 @@ void emitCppImportDeclaration(std::ostringstream &out, const Json &entry) {
 }
 
 void emitCppExportDeclaration(std::ostringstream &out, const Json &entry) {
+	emitCppExportDeclaration(out, Entry::fromJson(entry, false));
+}
+
+void emitCppExportDeclaration(std::ostringstream &out, const Entry &entry) {
 	emitCppPointerTypedef(out, entry, cppTypedefName(entry));
 	out << "extern " << cppTypedefName(entry) << " " << cppCallableName(entry) << ";\n";
 }
 
 void emitCppImportStub(std::ostringstream &out, const Json &entry) {
-	const Json &results = signatureResults(entry);
+	emitCppImportStub(out, Entry::fromJson(entry, true));
+}
+
+void emitCppImportStub(std::ostringstream &out, const Entry &entry) {
+	const std::vector<ValueType> &results = entry.function.results;
 	const std::string name = importName(entry);
 	out << "// host import: " << importComment(entry) << "\n";
 	out << cppReturnType(entry) << " " << name << "(";
 	emitCppParams(out, entry);
 	out << ")\n{\n";
 	out << "\t(void)context;\n";
-	for (std::size_t i = 0; i < signatureParams(entry).size(); ++i)
+	for (std::size_t i = 0; i < entry.function.params.size(); ++i)
 		out << "\t(void)" << argumentName(entry, i) << ";\n";
 	if (results.size() > 1u)
 		out << "\t(void)result;\n";
@@ -97,6 +152,7 @@ void emitCppImportStub(std::ostringstream &out, const Json &entry) {
 		out << "\treturn {};\n";
 	out << "}\n\n";
 }
+
 
 std::string witCppDefinitionName(const Json& document, std::size_t index)
 {
