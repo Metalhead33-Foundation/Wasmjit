@@ -216,6 +216,22 @@ void forEachFunction(const Json& schema, const char* key, Fn fn)
 	}
 }
 
+/*!
+ * \brief Iterates over function entries in one typed section.
+ * \tparam Fn The callable type receiving `const Entry&`.
+ * \param schema The typed schema to inspect.
+ * \param imports True for the import section, false for the export section.
+ * \param fn The callable to invoke.
+ */
+template <typename Fn>
+void forEachFunction(const Schema& schema, bool imports, Fn fn)
+{
+	for (const Entry& entry : imports ? schema.imports : schema.exports) {
+		if (entry.kind == EntryKind::Function)
+			fn(entry);
+	}
+}
+
 } // namespace WASM::Bindings::detail
 
 #endif // WASMJIT_BINDINGS_EMITSHARED_HPP
