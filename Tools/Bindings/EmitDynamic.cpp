@@ -511,12 +511,12 @@ std::string adaType(const ValueType& type)
 	return "System.Address";
 }
 
-std::string emitAdaImpl(const Json& schema)
+std::string emitAdaImpl(const Json& schema, const Schema& typed)
 {
 	std::ostringstream out;
 	out << "-- Generated Ada bindings from the "
-		<< schema.at("schema").get<std::string>() << " "
-		<< schema.at("direction").get<std::string>() << " schema. Do not edit.\n";
+		<< typed.id << " "
+		<< directionName(typed.direction) << " schema. Do not edit.\n";
 	out << "with Interfaces; use Interfaces;\n";
 	out << "with System;\n\npackage WasmJit.Bindings is\n";
 	std::set<std::string> witTypes;
@@ -524,35 +524,35 @@ std::string emitAdaImpl(const Json& schema)
 	for (const std::string& type : witTypes)
 		out << "   type " << pascalName(type) << " is new System.Address;\n";
 	out << "\n";
-	forEachFunction(schema, "exports", [&](const Json& entry) {
-		const std::string name = sanitize(entry.at("name").get<std::string>());
+	forEachFunction(typed, false, [&](const Entry& entry) {
+		const std::string name = sanitize(entry.name);
 		out << "   type Wasmjit_" << name << "_Fn is access function (";
-		const Json& params = signatureParams(entry);
+		const std::vector<ValueType>& params = entry.function.params;
 		for (std::size_t i = 0; i < params.size(); ++i) {
 			if (i != 0) out << "; ";
 			out << pascalName(argumentName(entry, i)) << " : " << adaType(params[i]);
 		}
-		if (signatureResults(entry).size() > 1u)
+		if (entry.function.results.size() > 1u)
 			out << (params.empty() ? "" : "; ") << "Result : System.Address";
-		out << ") return " << (signatureResults(entry).size() == 1
-				? adaType(signatureResults(entry)[0]) : "System.Address")
+		out << ") return " << (entry.function.results.size() == 1
+				? adaType(entry.function.results[0]) : "System.Address")
 			<< " with Convention => C;\n";
 	});
-	forEachFunction(schema, "imports", [&](const Json& entry) {
+	forEachFunction(typed, true, [&](const Entry& entry) {
 		out << "   -- G2H import: " << importComment(entry) << "\n";
 		out << "   function Wasmjit_" << sanitize(importModule(entry)) << "_"
-			<< sanitize(entry.at("name").get<std::string>()) << " (";
-		const Json& params = signatureParams(entry);
+			<< sanitize(entry.name) << " (";
+		const std::vector<ValueType>& params = entry.function.params;
 		for (std::size_t i = 0; i < params.size(); ++i) {
 			if (i != 0) out << "; ";
 			out << pascalName(argumentName(entry, i)) << " : " << adaType(params[i]);
 		}
-		if (signatureResults(entry).size() > 1u)
+		if (entry.function.results.size() > 1u)
 			out << (params.empty() ? "" : "; ") << "Result : System.Address";
-		out << ") return " << (signatureResults(entry).size() == 1
-				? adaType(signatureResults(entry)[0]) : "System.Address")
+		out << ") return " << (entry.function.results.size() == 1
+				? adaType(entry.function.results[0]) : "System.Address")
 			<< " with Import, Convention => C, External_Name => \""
-			<< entry.at("name").get<std::string>() << "\";\n";
+			<< entry.name << "\";\n";
 	});
 	out << "end WasmJit.Bindings;\n";
 	out << nonFunctionNotes(schema);

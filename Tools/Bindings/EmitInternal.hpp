@@ -81,7 +81,7 @@ std::string emitNimImpl(const nlohmann::ordered_json& schema, const Schema& type
 std::string emitCrystalImpl(const nlohmann::ordered_json& schema, const Schema& typed);
 
 //! Emits Ada import/export bindings.
-std::string emitAdaImpl(const nlohmann::ordered_json& schema);
+std::string emitAdaImpl(const nlohmann::ordered_json& schema, const Schema& typed);
 
 //! Emits Pascal `cdecl` declarations.
 std::string emitPascalImpl(const nlohmann::ordered_json& schema);
