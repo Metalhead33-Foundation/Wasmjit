@@ -1246,6 +1246,18 @@ are *declarations of the thunk*: resolve the slot through `WASM::HostHandleTable
 then forward. The tool cannot write the resolve call, because the table is
 embedder state (`SO-3`; the note's §4.9).
 
+**The same header has two audiences.** Its declarations are clamped between
+`#ifdef __cplusplus` / `extern "C" {` and the matching `}`, and inside that block
+are the handle *entry points* — `<type>_release` plus one per method and property.
+After the block closes, a `#ifdef __cplusplus` section emits one move-only class per
+descriptor: the destructor is the single release, `reset()` releases now, `release()`
+hands the slot back without releasing, methods are lowerCamel, and a property is
+`status()` / `setStatus()`. Four names belong to the wrapper (`handle`, `valid`,
+`reset`, `release`); a descriptor member that spells one is emitted as a note naming
+its entry point, and `release` itself is refused at load time because every generated
+artifact calls it to end an object's life. The C++ surface is compile-and-run tested
+with a release counter, so it is evidence and not just an artifact (`SO-4`).
+
 #### Layout and build rules
 
 | Path | What it is | Rule |
@@ -2793,6 +2805,12 @@ the guest-side spelling of the host's release — and `--emit kotlin` gains one
 release. The engine half, `resource.drop` reaching a `HostHandleTable`, is the
 note's `SO21` and is not wired; `SO-5` (the arena) stays gated on the sharing
 study (`SLM-1`–`SLM-4`).
+**Revision 42 (2026-11-19)** adds the C++ half of that surface: the C header now
+declares the handle *entry points*, and the `#ifdef __cplusplus` block after
+`extern "C"` emits one move-only RAII class per descriptor — destructor releases,
+`reset()`/`release()` for the two ways to give the slot up, properties as
+`status()`/`setStatus()`, methods in lowerCamel. It is compiled and run by the test
+suite, which counts releases.
 
 ### 16.1 The primitive an embedder gets
 

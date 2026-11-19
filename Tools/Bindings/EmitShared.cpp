@@ -456,6 +456,10 @@ std::string emitCHeaderImpl(const Json& schema)
 
 	out << nonFunctionNotes(schema);
 	out << "#ifdef __cplusplus\n}\n#endif\n\n";
+	// A class cannot have C linkage, so the wrappers come after `extern "C"` and
+	// inside the guard: one header, two audiences (C gets the handle, C++ gets an
+	// object that owns it).
+	emitCppObjects(out, schema);
 	out << "#endif /* " << guard << " */\n";
 	return out.str();
 }

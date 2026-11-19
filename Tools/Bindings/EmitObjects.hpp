@@ -64,6 +64,20 @@ void emitRustObjects(std::ostringstream& out, const nlohmann::ordered_json& sche
 */
 void emitWitObjects(std::ostringstream& out, const nlohmann::ordered_json& schema);
 
+//! Emits the C++ RAII wrappers over the handle surface (`SO-3`/`SO-4`).
+/*!
+  \brief Emits one `#ifdef __cplusplus` class block per object.
+  \param out The output stream.
+  \param schema The validated schema view; nothing is emitted when it has no objects.
+
+  The block is written *after* the header's `extern "C"` section closes and
+  before the header guard ends, because a class cannot have C linkage. Each class
+  owns one slot: it is move-only, its destructor calls the object's `_release`
+  entry point, and `reset()`/`release()` spell the two ways to give the slot up.
+*/
+void emitCppObjects(std::ostringstream& out,
+		const nlohmann::ordered_json& schema);
+
 //! Emits one Kotlin/Wasm wrapper class per object: the façade that holds the handle.
 /*!
   \brief Emits the garbage-collected-language façade (`SO-4`).

@@ -2,7 +2,7 @@
 
 *Host-Registered Object Types, the GObject Precedent, and What the Component Model Already Covers*
 
-Status: design note / implementation reference (**revision 8 — 2026-11-19**). This
+Status: design note / implementation reference (**revision 9 — 2026-11-19**). This
 is `EMBEDDING_SURFACE.md` §16 promoted to a note of its own: that section had grown
 into a six-hundred-line study inside an implementation reference, and the
 reference now keeps only the embedder-facing half. Revision 1 recorded a boundary —
@@ -36,6 +36,10 @@ with a single release — the façade a GC language consumes (§4.10). The compo
 plumbing that would make `resource.drop` *be* the host release is `SO21`, and
 `SO-5` (the arena) is **gated** on the sharing study's `SLM-1`–`SLM-4`, so it is
 scoped rather than attempted (§4.11).
+**Revision 9 adds the C++ façade**: the C header's `extern "C"` section now
+declares the handle *entry points*, and a `#ifdef __cplusplus` block after it turns
+them into one move-only RAII class per descriptor — compiled and run in the test
+suite, which counts the releases (§4.10).
 The `externref` + `HostBridge`
 path is unchanged and remains the answer for truly opaque host objects; the new
 path is a second, opt-in one for objects that are **expressible in Wasm**.
@@ -689,11 +693,32 @@ that owns references rather than integers.
 |---|---|---|
 | **the package** | `emitWitObjects` + the world in [`../../Tools/Bindings/EmitShared.cpp`](../../Tools/Bindings/EmitShared.cpp) | `interface types` carries one `resource` per `(name, version)`, and the `world` **imports** it: the host provides the objects, so `resource.drop` is the guest-side spelling of the host's release |
 | **the façade** | `emitKotlinObjects` | one Kotlin/Wasm class per object: it holds the `i64` slot, exposes `raw`, and `close()` releases it **once** (`use { }` is the lifetime policy) |
+| **the C++ façade** | `emitCppObjects` | one class per descriptor *in the C header itself*, after `extern "C"` closes: move-only, the destructor calls `…_release`, and `reset()`/`release()` spell the two ways to give the slot up |
 
 **The direction is the decision.** A guest that consumes host objects imports the
 interface; a component that *exports* objects would export it. Making that
 explicit in the world is the whole of the packaging work — everything else about
 a resource (its `rep`, its drop, its borrow rules) is already the Canonical ABI's.
+
+**One header, two audiences.** The C header has always clamped its declarations
+between `#ifdef __cplusplus / extern "C" {` and its closing `}`; what the handle
+surface added is the *declarations themselves* — `<type>_release` plus one entry
+point per method and property, the things the `_h_fn` typedefs describe. The C++
+block then turns them into an object, so C gets a handle and C++ gets a class that
+owns one, from the same file. Naming is a projection, not a second API: methods are
+lowerCamel (`resize`, `area`), a property getter is the property's own name
+(`status()`), its setter is `set<Property>` (`setStatus(7)`), and an accessor is
+projected **only** as its property. Four names belong to the wrapper (`handle`,
+`valid`, `reset`, `release`): a descriptor member that spells one is emitted as a
+note naming its entry point instead, and `release` is refused at load time —
+because it is the one name every generated artifact calls to end an object's life.
+
+Evidence is compiled, not asserted: the emitter test writes the header, compiles a
+C++ translation unit with `g++ -Wall -Wextra`, **runs** it, and counts releases —
+a moved-from wrapper releases nothing, two `reset()`s release once, move-assignment
+over a live slot releases the old one, and `release()` hands the slot back without
+releasing. `static_assert`s pin copy-deleted and move-allowed for every descriptor,
+including the ones with no members at all.
 
 **The façade owns nothing the engine counts.** The wrapper is a `Long` plus a
 `Boolean`: the table owns the count, so `close()` is exactly one
@@ -752,8 +777,8 @@ product ship this?”), not against the engine's completeness meter
 | # | Gap | Evidence | Severity |
 |---|---|---|---|
 | ~~SO1~~ | ~~**No handle-lifetime test anywhere.**~~ **Done (SO-3):** `[hostobject][handle]` creates, uses, releases, reuses the slot and then presents the stale handle — and forges the index and the generation beside it. | `HostHandleTable`; [`../../Test/HostObjectTests.cpp`](../../Test/HostObjectTests.cpp) | Closed — §4.9 |
-| ~~SO2~~ | ~~**No RAII wrapper is exercised.**~~ **Done (SO-3) for C++:** `HostObject` *is* the wrapper — move-only, one release in the destructor — and the handle case makes a refused `acquire` throw after allocation to prove the temporary's count leaves on the unwind. A Rust/Zig wrapper is emitted work, not engine work, and stays open as tooling. | [`../../WasmBase/WasmHostObject.hpp`](../../WasmBase/WasmHostObject.hpp) | Closed — §4.9 |
-| ~~SO3~~ | ~~**No GC-language wrapper test.**~~ **Partly closed (SO-4):** the Kotlin/Wasm façade is emitted and its text is asserted (`close()` guarded, one release, `HANDLE_NONE`); the decrement it performs is the table's idempotent `release`, which `[hostobject][handle]` exercises twice. No Kotlin toolchain runs in this tree, so the wrapper is text-verified, not compiled — and a cycle through it is a host cycle, collected by trial deletion as §4.6 records. | §4.10; `emitKotlinObjects` | Closed for the emitted façade — §4.10 |
+| ~~SO2~~ | ~~**No RAII wrapper is exercised.**~~ **Done (SO-3/SO-4) for C++:** `HostObject` *is* the host-side wrapper — move-only, one release in the destructor — and the handle case makes a refused `acquire` throw after allocation to prove the temporary's count leaves on the unwind. The *guest-side* wrapper is generated too (`emitCppObjects`) and its release count is asserted by a compiled-and-run test. A Rust/Zig wrapper is emitted work, not engine work, and stays open as tooling. | [`../../WasmBase/WasmHostObject.hpp`](../../WasmBase/WasmHostObject.hpp); §4.10 | Closed — §4.9/§4.10 |
+| ~~SO3~~ | ~~**No GC-language wrapper test.**~~ **Partly closed (SO-4):** the Kotlin/Wasm façade is emitted and its text is asserted (`close()` guarded, one release, `HANDLE_NONE`); the C++ façade is emitted, compiled and *run* with a release counter; both end at the table's idempotent `release`, which `[hostobject][handle]` exercises twice. No Kotlin toolchain runs in this tree, so that one is text-verified rather than compiled — and a cycle through either wrapper is a host cycle, collected by trial deletion as §4.6 records. | §4.10; `emitKotlinObjects`, `emitCppObjects` | Closed for the emitted façades — §4.10 |
 | SO4 | **Component resource parity is untested as a *parity* test.** The destructor-once half is green (`component resource destructor runs in the defining runtime`), but nothing yet makes `resource.drop` *be* a `HostHandleTable::release`, so an `own`/`borrow` on an object cannot be compared with the `i64` path | §4.10; `SO21` | Medium; the parity test is gated on `SO21` |
 | SO5 | **No cross-Store identity test.** Two Stores with the same stable type name must yield different `TypeId`s and the same host descriptor, and a handle from one must be rejected by the other | the rule is §3.2.1 and A.14.2; nothing in the tree | Medium; host-side — the test that justifies §3.2.1 |
 | ~~SO6~~ | ~~**No ownership accounting test.**~~ **Done (SO-3):** the table's root *is* the engine count the object already had (`liveObjectCount()` does not move on `acquire`), a second `release` is a no-op, and recycling happens only at the safepoint. One object seen by a guest reference and a handle still has one count. | §4.9; `[hostobject][handle]` | Closed — §4.9 |

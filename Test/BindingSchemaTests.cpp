@@ -2815,6 +2815,55 @@ TEST_CASE("a property that cannot be bound is refused at load", "[bindings][obje
 			!= std::string::npos);
 }
 
+// The handle surface owns one name in the descriptor's namespace — the lifetime
+// entry point — and the C++ wrapper owns four in its own. The first is refused at
+// load time because every generated artifact calls it by that name; the rest are
+// projected as plain entry points, so the class stays unambiguous.
+TEST_CASE("the wrapper's own member names are not taken by the descriptor",
+		"[bindings][objects]")
+{
+	using WASM::Bindings::Schema;
+	const Json source = Json::parse(R"({
+		"schema": "wasmjit.binding/2", "direction": "all", "module": "demo",
+		"objects": [ { "name": "demo.Trap", "version": 1,
+			"fields": [],
+			"properties": [ { "name": "handle", "type": "i32", "get": "get_handle" } ],
+			"methods": [ { "name": "get_handle", "params": [], "results": ["i32"] },
+			             { "name": "reset", "params": [], "results": [] },
+			             { "name": "area", "params": [], "results": ["i32"] } ] } ],
+		"imports": [], "exports": [] })");
+	const Schema schema = Schema::fromJson(source);
+	const std::string header =
+			WASM::Bindings::emit(schema, WASM::Bindings::Language::CHeader);
+
+	REQUIRE(header.find("class DemoTrapV1 {") != std::string::npos);
+	// The wrapper's own members survive...
+	CHECK(header.find("\twasmjit_object_demo_trap_v1_handle handle() const noexcept")
+			!= std::string::npos);
+	CHECK(header.find("\tvoid reset() noexcept") != std::string::npos);
+	// ... the descriptor's members become notes plus entry points...
+	CHECK(header.find("is not a member: the wrapper's own `handle` is")
+			!= std::string::npos);
+	CHECK(header.find("is not a member: the wrapper's own `reset` is")
+			!= std::string::npos);
+	CHECK(header.find("wasmjit_object_demo_trap_v1_prop_handle_get(")
+			!= std::string::npos);
+	CHECK(header.find("wasmjit_object_demo_trap_v1_reset(") != std::string::npos);
+	// ... and a member that shadows nothing is still a member.
+	CHECK(header.find("\tint32_t area()") != std::string::npos);
+
+	// `release` is the one reserved at load time: it is the lifetime entry point.
+	Json collision = source;
+	collision["objects"][0]["methods"][2]["name"] = "release";
+	try {
+		(void)Schema::fromJson(collision);
+		FAIL("a method named `release` must be refused");
+	} catch (const std::runtime_error& error) {
+		CHECK(std::string(error.what()).find("lifetime entry point")
+				!= std::string::npos);
+	}
+}
+
 TEST_CASE("one object descriptor reaches the C, Rust and WIT emitters", "[bindings][objects]")
 {
 	const WASM::Bindings::Schema schema = WASM::Bindings::Schema::fromJson(objectSchema());
@@ -2963,6 +3012,38 @@ TEST_CASE("one object descriptor reaches the C, Rust and WIT emitters", "[bindin
 	CHECK(kotlin.find("const val HANDLE_NONE: Long = 0") != std::string::npos);
 	CHECK(header.find("#define WASMJIT_OBJECT_DEMO_NODE_V1_SIZE 17u") != std::string::npos);
 
+	// A C++ consumer gets an object that owns the slot: the entry points first,
+	// then — *after* `extern "C"` closes, because a class cannot have C linkage —
+	// one RAII class per descriptor.
+	CHECK(header.find("void wasmjit_object_demo_widget_v1_release("
+			"wasmjit_object_demo_widget_v1_handle self);") != std::string::npos);
+	CHECK(header.find("int32_t wasmjit_object_demo_widget_v1_area("
+			"wasmjit_object_demo_widget_v1_handle self);") != std::string::npos);
+	const std::size_t cLinkageEnd = header.find("#ifdef __cplusplus\n}\n#endif");
+	REQUIRE(cLinkageEnd != std::string::npos);
+	CHECK(header.find("class DemoWidgetV1 {") > cLinkageEnd);
+	CHECK(header.find("class DemoNodeV1 {") > cLinkageEnd);
+	CHECK(header.find("class DemoWidgetV2 {") > cLinkageEnd);
+	// Ownership: move-only, one release in the destructor, two ways to give up.
+	CHECK(header.find("DemoWidgetV1(const DemoWidgetV1&) = delete;")
+			!= std::string::npos);
+	CHECK(header.find("DemoWidgetV1(DemoWidgetV1&& other) noexcept")
+			!= std::string::npos);
+	CHECK(header.find("\t\t\twasmjit_object_demo_widget_v1_release(_handle);")
+			!= std::string::npos);
+	// An accessor is projected as its property, so it is not a second member...
+	CHECK(header.find("\tint32_t status() const { return "
+			"wasmjit_object_demo_widget_v1_prop_status_get(_handle); }")
+			!= std::string::npos);
+	CHECK(header.find("void setStatus(int32_t value)") != std::string::npos);
+	CHECK(header.find(" int32_t getStatus(") == std::string::npos);
+	CHECK(header.find(" int32_t computeCaption(") == std::string::npos);
+	CHECK(header.find(" setStatusValue(") == std::string::npos);
+	// ... and the methods that are not accessors forward with their arguments.
+	CHECK(header.find("\tint32_t area()") != std::string::npos);
+	CHECK(header.find("\tvoid resize(int32_t p0, int32_t p1)") != std::string::npos);
+	CHECK(header.find("\tvoid blit(wasm_v128 p0)") != std::string::npos);
+
 	// Without objects the emitters are byte-for-byte what they were.
 	const Json plain = Json::parse(R"({
 		"schema": "wasmjit.binding/1", "direction": "all", "module": "m",
@@ -3032,6 +3113,114 @@ TEST_CASE("generated object bindings compile and their WIT is accepted", "[bindi
 		REQUIRE(std::system(command.c_str()) == 0);
 	} else {
 		WARN("gcc not found; skipped the generated object header compile check");
+	}
+
+	// The C++ half is not just syntax: the wrapper owns the slot, so the test
+	// counts releases. Each `return N` is one broken ownership rule; the entry
+	// points are stubs, which is exactly what an embedder writes.
+	if (haveTool("g++ --version > /dev/null 2>&1")) {
+		const std::filesystem::path cppPath = dir / "demo_objects_wrapper.cpp";
+		const std::filesystem::path binary = dir / "demo_objects_wrapper";
+		const std::filesystem::path cppLogPath = dir / "demo_objects_gxx.log";
+		{
+			std::ofstream source(cppPath, std::ios::binary);
+			source << R"cpp(#include "demo_objects.h"
+#include <cstdint>
+#include <type_traits>
+#include <utility>
+
+// A wrapper owns one slot: copy is gone, move is not.
+static_assert(!std::is_copy_constructible<DemoWidgetV1>::value,
+              "a wrapper owns a slot: copy is disabled");
+static_assert(!std::is_copy_assignable<DemoWidgetV1>::value,
+              "a wrapper owns a slot: copy is disabled");
+static_assert(std::is_move_constructible<DemoWidgetV1>::value,
+              "a wrapper owns a slot: move is allowed");
+// Every descriptor gets a class, methods or not.
+static_assert(std::is_move_constructible<DemoNodeV1>::value, "node wrapper");
+static_assert(std::is_move_constructible<DemoWidgetV2>::value, "v2 wrapper");
+
+extern "C" {
+
+int releases = 0;
+int64_t lastSlot = 0;
+
+void wasmjit_object_demo_widget_v1_release(wasmjit_object_demo_widget_v1_handle self)
+{
+    ++releases;
+    lastSlot = self;
+}
+int32_t wasmjit_object_demo_widget_v1_area(wasmjit_object_demo_widget_v1_handle self)
+{
+    return static_cast<int32_t>(self & 0xffff);
+}
+int32_t wasmjit_object_demo_widget_v1_prop_status_get(
+        wasmjit_object_demo_widget_v1_handle self)
+{
+    (void)self;
+    return 7;
+}
+void wasmjit_object_demo_widget_v1_prop_status_set(
+        wasmjit_object_demo_widget_v1_handle self, int32_t value)
+{
+    (void)self;
+    lastSlot = value;
+}
+
+}
+
+int main()
+{
+    const wasmjit_object_demo_widget_v1_handle slot = 0x100000005LL;
+    {
+        DemoWidgetV1 widget(slot);
+        if (!widget) return 1;
+        if (widget.area() != 5) return 2;
+        if (widget.status() != 7) return 3;
+        widget.setStatus(9);
+        if (lastSlot != 9) return 4;
+        DemoWidgetV1 moved(std::move(widget));
+        if (widget.valid()) return 5;
+        if (releases != 0) return 6;
+        DemoWidgetV1 assigned;
+        assigned = std::move(moved);
+        if (moved.valid() || !assigned.valid()) return 7;
+        if (releases != 0) return 8;
+    }
+    if (releases != 1) return 9;
+    if (lastSlot != slot) return 10;
+    {
+        // `reset()` twice releases once; `release()` gives the slot up silently.
+        DemoWidgetV1 a(42), b(43);
+        a.reset();
+        a.reset();
+        if (releases != 2) return 11;
+        const wasmjit_object_demo_widget_v1_handle gave = b.release();
+        if (gave != 43 || b.valid()) return 12;
+    }
+    if (releases != 2) return 13;
+    {
+        // Assigning over a live slot releases the old one, exactly once.
+        DemoWidgetV1 c(50), d(51);
+        c = std::move(d);
+        if (releases != 3) return 14;
+    }
+    if (releases != 4) return 15;
+    return 0;
+}
+)cpp";
+		}
+		const std::string compile = "g++ -std=c++17 -Wall -Wextra -I\"" + dir.string()
+				+ "\" \"" + cppPath.string() + "\" -o \"" + binary.string()
+				+ "\" > \"" + cppLogPath.string() + "\" 2>&1";
+		INFO(readText(cppLogPath));
+		REQUIRE(std::system(compile.c_str()) == 0);
+		const std::string run = "\"" + binary.string() + "\" > \""
+				+ cppLogPath.string() + "\" 2>&1";
+		INFO(readText(cppLogPath));
+		REQUIRE(std::system(run.c_str()) == 0);
+	} else {
+		WARN("g++ not found; skipped the generated C++ wrapper check");
 	}
 
 	if (haveTool("rustc --version > /dev/null 2>&1")) {

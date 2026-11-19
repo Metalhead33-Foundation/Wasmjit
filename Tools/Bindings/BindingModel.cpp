@@ -558,6 +558,19 @@ void validateObjects(std::vector<ObjectDescriptor>& objects)
 			if (!methodNames.insert(method.name).second)
 				throw std::runtime_error("object '" + object.name
 						+ "' declares method '" + method.name + "' twice");
+			// The handle surface's lifetime entry point is `<type>_release`, and
+			// every C/C++ header and the Kotlin façade call it under that name:
+			// a method spelled the same way would collide with it rather than be
+			// a second function (`SO-3`/`SO-4`).
+			std::string lowered = method.name;
+			for (char& character : lowered)
+				character = static_cast<char>(std::tolower(
+						static_cast<unsigned char>(character)));
+			if (lowered == "release")
+				throw std::runtime_error("object '" + object.name
+						+ "' declares a method named '" + method.name
+						+ "'; `release` is the object's lifetime entry point —"
+						" rename the method");
 		}
 		std::set<std::string> propertyNames;
 		std::set<std::string> accessors;

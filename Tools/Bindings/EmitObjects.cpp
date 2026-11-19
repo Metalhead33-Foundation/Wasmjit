@@ -344,6 +344,39 @@ void emitCObjects(std::ostringstream& out, const Json& schema)
 					<< "_set_h_fn)(int64_t self, " << objectCType(schema, propType)
 					<< " value);\n";
 		}
+		// The entry points those typedefs describe. The tool declares them; the
+		// embedder implements one line each — resolve the slot, then forward to
+		// the typed accessor — so the operation keeps a single implementation.
+		out << "\n/* The handle entry points: one per signature above, plus the release.\n"
+			   "   Implement each as `resolve the slot, then forward`; the generated\n"
+			   "   C++ wrapper below calls them and owns the slot for you. */\n";
+		out << "void " << type << "_release(" << type << "_handle self);\n";
+		for (const Json& method : methods) {
+			const Json& params =
+					method.contains("params") ? method.at("params") : emptyArray;
+			const Json& results =
+					method.contains("results") ? method.at("results") : emptyArray;
+			out << (results.size() == 1u ? cType(results.at(0)) : "void") << " "
+				<< type << "_" << objectIdentifier(method.value("name", "")) << "("
+				<< type << "_handle self";
+			for (const Json& param : params)
+				out << ", " << objectCType(schema, param);
+			if (results.size() > 1u)
+				out << ", void* results";
+			out << ");\n";
+		}
+		for (const Json& property : properties) {
+			const std::string propIdent =
+					objectIdentifier(property.value("name", ""));
+			const Json& propType =
+					property.contains("type") ? property.at("type") : Json{};
+			out << objectCType(schema, propType) << " " << type << "_prop_"
+				<< propIdent << "_get(" << type << "_handle self);\n";
+			if (property.contains("set"))
+				out << "void " << type << "_prop_" << propIdent << "_set(" << type
+					<< "_handle self, " << objectCType(schema, propType)
+					<< " value);\n";
+		}
 		out << "\n";
 
 		if (!fields.empty()) {
@@ -632,8 +665,8 @@ std::string witOmission(const Json& type)
 	return std::string("`") + type.value("type", "unknown") + "`";
 }
 
-//! A Kotlin type-name spelling of one object: `DemoWidgetV1`.
-std::string kotlinObjectName(const Json& object)
+//! A type-name spelling of one object, for C++ and Kotlin: `DemoWidgetV1`.
+std::string pascalObjectName(const Json& object)
 {
 	const std::string name = object.value("name", std::string());
 	std::string out;
@@ -653,7 +686,179 @@ std::string kotlinObjectName(const Json& object)
 	return out + "V" + std::to_string(object.value("version", 1u));
 }
 
+//! The lower-camel spelling of a member name (`do_something` -> `doSomething`).
+std::string camelMemberName(std::string_view name)
+{
+	const std::string snake = objectIdentifier(name);
+	std::string out;
+	bool upper = false;
+	for (const char character : snake) {
+		if (character == '_') {
+			upper = true;
+			continue;
+		}
+		out.push_back(upper
+						? static_cast<char>(
+								  std::toupper(static_cast<unsigned char>(character)))
+						: character);
+		upper = false;
+	}
+	if (!out.empty())
+		out.front() = static_cast<char>(
+				std::tolower(static_cast<unsigned char>(out.front())));
+	return out;
+}
+
+//! The Pascal spelling of a member name, for a setter (`status` -> `Status`).
+std::string pascalMemberName(std::string_view name)
+{
+	std::string out = camelMemberName(name);
+	if (!out.empty())
+		out.front() = static_cast<char>(
+				std::toupper(static_cast<unsigned char>(out.front())));
+	return out;
+}
+
 } // namespace
+
+void emitCppObjects(std::ostringstream& out, const Json& schema)
+{
+	const Json* objects = objectArray(schema);
+	if (objects == nullptr)
+		return;
+	const Json emptyArray = Json::array();
+
+	out << "#ifdef __cplusplus\n\n"
+		   "/* RAII wrappers over the handle surface (`SO-3`/`SO-4`).\n"
+		   "   A wrapper owns one slot, so it is move-only: the destructor releases the\n"
+		   "   slot through the `_release` entry point above, and every member forwards\n"
+		   "   to an entry point. The slot is host state — a wrapper means nothing in\n"
+		   "   another Store or process — and `release()` hands ownership back without\n"
+		   "   releasing, which is what a caller wants when passing the slot on. */\n\n";
+	for (const Json& object : *objects) {
+		const std::string klass = pascalObjectName(object);
+		const std::string type = objectTypeName(object);
+		const std::string none = macroPrefix(object) + "_HANDLE_NONE";
+		const Json& properties =
+				object.contains("properties") ? object.at("properties") : emptyArray;
+		const Json& methods =
+				object.contains("methods") ? object.at("methods") : emptyArray;
+
+		// An accessor is projected as its property, so the standalone method of
+		// that name is not emitted a second time: one member, one spelling.
+		std::set<std::string> claimed;
+		for (const Json& property : properties) {
+			if (property.contains("get"))
+				claimed.insert(property.at("get").get<std::string>());
+			if (property.contains("set"))
+				claimed.insert(property.at("set").get<std::string>());
+		}
+
+		out << "/* `" << object.value("name", "") << "` version "
+			<< object.value("version", 1u) << ". */\n";
+		out << "class " << klass << " {\npublic:\n";
+		out << "\t//! An empty wrapper: `valid()` is false and nothing is released.\n";
+		out << "\t" << klass << "() noexcept : _handle(" << none << ") {}\n";
+		out << "\t//! Takes ownership of `handle`; the caller must not release it.\n";
+		out << "\texplicit " << klass << "(" << type
+			<< "_handle handle) noexcept : _handle(handle) {}\n";
+		out << "\t//! Releases the slot, if the wrapper still owns one.\n";
+		out << "\t~" << klass << "() { reset(); }\n\n";
+		out << "\t" << klass << "(const " << klass << "&) = delete;\n";
+		out << "\t" << klass << "& operator=(const " << klass << "&) = delete;\n\n";
+		out << "\t//! Takes the slot from `other`, leaving it empty.\n";
+		out << "\t" << klass << "(" << klass
+			<< "&& other) noexcept : _handle(other._handle)\n\t{\n\t\tother._handle = "
+			<< none << ";\n\t}\n";
+		out << "\t//! Releases the current slot, then takes `other`'s.\n";
+		out << "\t" << klass << "& operator=(" << klass
+			<< "&& other) noexcept\n\t{\n\t\tif (this != &other) {\n\t\t\treset();\n"
+			   "\t\t\t_handle = other._handle;\n\t\t\tother._handle = "
+			<< none << ";\n\t\t}\n\t\treturn *this;\n\t}\n\n";
+		out << "\t//! True when the wrapper still owns a slot.\n";
+		out << "\tbool valid() const noexcept { return _handle != " << none
+			<< "; }\n";
+		out << "\t//! The same test, so `if (object)` reads naturally.\n";
+		out << "\texplicit operator bool() const noexcept { return valid(); }\n";
+		out << "\t//! The slot, for a call that takes one.\n";
+		out << "\t" << type << "_handle handle() const noexcept { return _handle; }\n\n";
+		out << "\t//! Releases the slot now; the destructor then does nothing.\n";
+		out << "\tvoid reset() noexcept\n\t{\n\t\tif (_handle != " << none
+			<< ") {\n\t\t\t" << type << "_release(_handle);\n\t\t\t_handle = " << none
+			<< ";\n\t\t}\n\t}\n\n";
+		out << "\t//! Gives up the slot *without* releasing it; the caller then owns it.\n";
+		out << "\t" << type << "_handle release() noexcept\n\t{\n\t\tconst " << type
+			<< "_handle gave = _handle;\n\t\t_handle = " << none
+			<< ";\n\t\treturn gave;\n\t}\n";
+
+		// The wrapper's own members are taken. A descriptor member that spells one
+		// of them is reachable through its C entry point, which keeps the class
+		// unambiguous instead of emitting two members with one name.
+		const std::set<std::string> reserved = { "handle", "valid", "reset",
+			"release" };
+
+		for (const Json& property : properties) {
+			const std::string name = property.value("name", "");
+			const std::string member = camelMemberName(name);
+			const Json& propType =
+					property.contains("type") ? property.at("type") : Json{};
+			if (reserved.count(member) != 0u) {
+				out << "\n\t//! `" << name << "` is not a member: the wrapper's own"
+					   " `" << member << "` is. Call `" << type << "_prop_"
+					<< objectIdentifier(name) << "_get` directly.\n";
+				continue;
+			}
+			out << "\n\t//! Property `" << name << "` (computed by `"
+				<< property.value("get", "") << "`).\n";
+			out << "\t" << objectCType(schema, propType) << " " << member
+				<< "() const { return " << type << "_prop_"
+				<< objectIdentifier(name) << "_get(_handle); }\n";
+			if (property.contains("set"))
+				out << "\tvoid set" << pascalMemberName(name) << "("
+					<< objectCType(schema, propType) << " value) { " << type
+					<< "_prop_" << objectIdentifier(name)
+					<< "_set(_handle, value); }\n";
+		}
+
+		for (const Json& method : methods) {
+			const std::string name = method.value("name", "");
+			if (claimed.count(name) != 0u)
+				continue;
+			const Json& params =
+					method.contains("params") ? method.at("params") : emptyArray;
+			const Json& results =
+					method.contains("results") ? method.at("results") : emptyArray;
+			const std::string member = camelMemberName(name);
+			if (reserved.count(member) != 0u) {
+				out << "\n\t//! `" << name << "` is not a member: the wrapper's own"
+					   " `" << member << "` is. Call `" << type << "_"
+					<< objectIdentifier(name) << "` directly.\n";
+				continue;
+			}
+			out << "\n\t//! Method `" << name << "`.\n";
+			out << "\t" << (results.size() == 1u ? cType(results.at(0)) : "void")
+				<< " " << member << "(";
+			for (std::size_t index = 0; index < params.size(); ++index) {
+				if (index != 0)
+					out << ", ";
+				out << objectCType(schema, params[index]) << " p" << index;
+			}
+			if (results.size() > 1u)
+				out << (params.empty() ? "" : ", ") << "void* results";
+			out << ")\n\t{\n\t\t"
+				<< (results.size() == 1u ? "return " : "") << type << "_"
+				<< objectIdentifier(name) << "(_handle";
+			for (std::size_t index = 0; index < params.size(); ++index)
+				out << ", p" << index;
+			if (results.size() > 1u)
+				out << ", results";
+			out << ");\n\t}\n";
+		}
+
+		out << "\nprivate:\n\t" << type << "_handle _handle;\n};\n\n";
+	}
+	out << "#endif /* __cplusplus */\n\n";
+}
 
 void emitKotlinObjects(std::ostringstream& out, const Json& schema)
 {
@@ -666,7 +871,7 @@ void emitKotlinObjects(std::ostringstream& out, const Json& schema)
 		   "// `use { }` is the lifetime policy — the same contract the component model\n"
 		   "// spells `resource.drop` (docs/proposals/SYNTHETIC_OBJECTS.md A.14.4).\n\n";
 	for (const Json& object : *objects) {
-		const std::string wrapper = kotlinObjectName(object);
+		const std::string wrapper = pascalObjectName(object);
 		const std::string type = objectTypeName(object);
 		out << "// `" << object.value("name", "") << "` version "
 			<< object.value("version", 1u) << ".\n";
