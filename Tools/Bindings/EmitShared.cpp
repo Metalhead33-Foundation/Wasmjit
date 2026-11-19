@@ -555,7 +555,12 @@ std::string rustType(const ValueType& type)
 
 void emitRustParams(std::ostringstream& out, const Json& entry, bool resultBuffer)
 {
-	const Json& params = signatureParams(entry);
+	emitRustParams(out, Entry::fromJson(entry, true), resultBuffer);
+}
+
+void emitRustParams(std::ostringstream& out, const Entry& entry, bool resultBuffer)
+{
+	const std::vector<ValueType>& params = entry.function.params;
 	bool first = true;
 	for (std::size_t i = 0; i < params.size(); ++i) {
 		if (!first)
@@ -573,6 +578,14 @@ void emitRustParams(std::ostringstream& out, const Json& entry, bool resultBuffe
 }
 
 void emitRustReturn(std::ostringstream& out, const Json& results)
+{
+	std::vector<ValueType> typed;
+	for (const Json& result : results)
+		typed.push_back(ValueType::fromJson(result));
+	emitRustReturn(out, typed);
+}
+
+void emitRustReturn(std::ostringstream& out, const std::vector<ValueType>& results)
 {
 	if (results.size() != 1u)
 		return;

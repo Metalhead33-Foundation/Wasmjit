@@ -147,10 +147,17 @@ std::string rustType(const nlohmann::ordered_json& type);
 std::string rustType(const ValueType& type);
 
 //! Emits Rust parameters for one entry.
-void emitRustParams(std::ostringstream& out, const Json& entry, bool resultBuffer);
+void emitRustParams(std::ostringstream& out, const nlohmann::ordered_json& entry,
+		bool resultBuffer);
+
+//! Emits Rust parameters for one typed entry.
+void emitRustParams(std::ostringstream& out, const Entry& entry, bool resultBuffer);
 
 //! Emits a Rust return type.
-void emitRustReturn(std::ostringstream& out, const Json& results);
+void emitRustReturn(std::ostringstream& out, const nlohmann::ordered_json& results);
+
+//! Emits a Rust return type from typed results.
+void emitRustReturn(std::ostringstream& out, const std::vector<ValueType>& results);
 
 //! Returns the TypeScript spelling of a value type.
 std::string tsType(const nlohmann::ordered_json& type);
