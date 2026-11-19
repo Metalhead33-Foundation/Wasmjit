@@ -111,12 +111,6 @@ std::string argumentName(const nlohmann::ordered_json& entry, std::size_t index)
 //! Returns a typed argument name, falling back to `argN`.
 std::string argumentName(const Entry& entry, std::size_t index);
 
-//! Returns the Canonical ABI or structured function parameters.
-const Json& signatureParams(const Json& entry);
-
-//! Returns the Canonical ABI or structured function results.
-const Json& signatureResults(const Json& entry);
-
 //! Emits one C-style declaration.
 void emitFunction(std::ostringstream& out, const nlohmann::ordered_json& entry,
 		const std::string& name, const char* side,

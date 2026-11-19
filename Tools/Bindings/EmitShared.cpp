@@ -378,20 +378,6 @@ std::string argumentName(const Entry& entry, std::size_t index)
 	return "arg" + std::to_string(index);
 }
 
-const Json& signatureParams(const Json& entry)
-{
-	if (entry.contains("abi") && entry.at("abi").contains("params"))
-		return entry.at("abi").at("params");
-	return entry.at("type").at("params");
-}
-
-const Json& signatureResults(const Json& entry)
-{
-	if (entry.contains("abi") && entry.at("abi").contains("results"))
-		return entry.at("abi").at("results");
-	return entry.at("type").at("results");
-}
-
 void emitFunction(std::ostringstream& out, const Json& entry, const std::string& name,
 		const char* side, const std::string& attribute)
 {
