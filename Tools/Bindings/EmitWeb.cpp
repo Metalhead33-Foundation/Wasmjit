@@ -222,7 +222,7 @@ std::string emitZigImpl(const Json& schema)
 	return out.str();
 }
 
-std::string emitKotlinImpl(const Json& schema)
+std::string emitKotlinImpl(const Json& schema, const Schema& typed)
 {
 	std::set<std::string> refs;
 	collectSchemaRefs(schema, refs);
@@ -266,7 +266,7 @@ std::string emitKotlinImpl(const Json& schema)
 		out << "\n\n";
 	});
 	out << nonFunctionNotes(schema);
-	emitKotlinObjects(out, schema);
+	emitKotlinObjects(out, typed);
 	return out.str();
 }
 

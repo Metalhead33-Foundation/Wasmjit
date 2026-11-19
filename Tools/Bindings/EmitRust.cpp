@@ -17,6 +17,14 @@ using Json = nlohmann::ordered_json;
 
 std::string emitRustModule(const nlohmann::ordered_json& input)
 {
+	return detail::emitRustModuleImpl(input, Schema::fromJson(input));
+}
+
+namespace detail {
+
+std::string emitRustModuleImpl(const nlohmann::ordered_json& input,
+		const Schema& typed)
+{
 	Json schema = input;
 	dedupeJsonSchema(schema);
 	std::set<std::string> refs;
@@ -36,7 +44,7 @@ std::string emitRustModule(const nlohmann::ordered_json& input)
 	out << "\n// Reference types are opaque. Reference parameters are borrowed unless\n"
 		   "// the adapter says otherwise; reference results carry an explicit\n"
 		   "// ownership note. This module defines no layout and no TypeId.\n\n";
-	emitRustObjects(out, schema);
+	emitRustObjects(out, typed);
 
 	for (const Json& entry : schema.at("exports")) {
 		if (entry.value("kind", "") != "function")
@@ -92,5 +100,7 @@ std::string emitRustModule(const nlohmann::ordered_json& input)
 	out << nonFunctionNotes(schema);
 	return out.str();
 }
+
+} // namespace detail
 
 } // namespace WASM::Bindings

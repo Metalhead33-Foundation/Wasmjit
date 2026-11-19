@@ -2597,17 +2597,17 @@ Json objectSchema()
 				{ "name": "preview", "type": { "type": "ref", "heap": "defined", "name": "demo.Node" }, "get": "get_preview" }
 			  ],
 			  "methods": [
-				{ "name": "resize", "params": ["i32", "i32"], "results": [] },
+				{ "name": "resize", "argNames": ["width", "height"], "params": ["i32", "i32"], "results": [] },
 				{ "name": "area", "params": [], "results": ["i32"] },
-				{ "name": "attach", "params": [ { "type": "ref", "heap": "defined", "name": "demo.Node" } ], "results": [] },
-				{ "name": "blit", "params": ["v128"], "results": [] },
+				{ "name": "attach", "argNames": ["target"], "params": [ { "type": "ref", "heap": "defined", "name": "demo.Node" } ], "results": [] },
+				{ "name": "blit", "argNames": ["lanes"], "params": ["v128"], "results": [] },
 				{ "name": "get_status", "params": [], "results": ["i32"] },
 				{ "name": "set_status", "params": ["i32"], "results": [] },
 				{ "name": "compute_caption", "params": [], "results": ["i32"] },
 				{ "name": "get_preview", "params": [], "results": [ { "type": "ref", "heap": "defined", "name": "demo.Node" } ] }
 			  ],
-			  "constructors": [ { "name": "create", "params": ["i32", "i32"] },
-			                    { "name": "open", "params": ["i64"] } ] },
+			  "constructors": [ { "name": "create", "argNames": ["width", "height"], "params": ["i32", "i32"] },
+			                    { "name": "open", "argNames": ["slot"], "params": ["i64"] } ] },
 			{ "name": "demo.Node", "version": 1,
 			  "fields": [ { "name": "kind", "type": "i8" } ],
 			  "constructors": [ { "name": "spawn", "params": [] } ] },
@@ -2915,6 +2915,24 @@ TEST_CASE("a constructor descriptor is validated like an entry point",
 	release["objects"][0]["constructors"][0]["name"] = "release";
 	CHECK(failure(release).find("lifetime entry point") != std::string::npos);
 
+	// A name list may cover part of a signature but never more of it, and two
+	// parameters of one name would be one identifier in every target language.
+	Json shortNames = objectSchema();
+	shortNames["objects"][1]["constructors"][0]["argNames"] =
+			Json::array({ "value", "other" });
+	CHECK(failure(shortNames).find("names 2 parameters but takes 0")
+			!= std::string::npos);
+
+	Json twins = objectSchema();
+	twins["objects"][0]["methods"][0]["argNames"] = Json::array({ "size", "Size" });
+	CHECK(failure(twins).find("a parameter name is unique within one signature")
+			!= std::string::npos);
+
+	Json receiver = objectSchema();
+	receiver["objects"][0]["constructors"][0]["argNames"] =
+			Json::array({ "self", "height" });
+	CHECK(failure(receiver).find("`self` is the receiver") != std::string::npos);
+
 	// A parameter is a type the engine can name: a constructor cannot smuggle in a
 	// storage kind with no ABI, and `stringref` is one it can name.
 	Json unknown = objectSchema();
@@ -2950,7 +2968,7 @@ TEST_CASE("one object descriptor reaches the C, Rust and WIT emitters", "[bindin
 	CHECK(header.find("#define WASMJIT_OBJECT_DEMO_WIDGET_V1_FIELD_TARGET 32u") != std::string::npos);
 	CHECK(header.find("wasmjit_object_demo_widget_v1_resize_fn") != std::string::npos);
 	CHECK(header.find("wasmjit_object_demo_widget_v1_attach_fn)(wasmjit_object_demo_widget_v1* self,"
-			" wasmjit_object_demo_node_v1*)") != std::string::npos);
+			" wasmjit_object_demo_node_v1* target)") != std::string::npos);
 	CHECK(header.find("static const wasmjit_object_meta wasmjit_object_demo_widget_v1_meta")
 			!= std::string::npos);
 	CHECK(header.find("\"demo.Widget\", 1u, 40u, \"demo.Base\"") != std::string::npos);
@@ -2998,7 +3016,8 @@ TEST_CASE("one object descriptor reaches the C, Rust and WIT emitters", "[bindin
 			"(int64_t self, int32_t value);") != std::string::npos);
 	// A reference parameter keeps its typed spelling in the handle form too.
 	CHECK(header.find("(*wasmjit_object_demo_widget_v1_attach_h_fn)"
-			"(int64_t self, wasmjit_object_demo_node_v1*)") != std::string::npos);
+			"(int64_t self, wasmjit_object_demo_node_v1* target)")
+			!= std::string::npos);
 
 	const std::string rust = WASM::Bindings::emitRustModule(schema);
 	CHECK(rust.find("pub const WASMJIT_OBJECT_DEMO_WIDGET_V1_FIELD_TARGET: u32 = 32;")
@@ -3006,7 +3025,8 @@ TEST_CASE("one object descriptor reaches the C, Rust and WIT emitters", "[bindin
 	CHECK(rust.find("pub static WASMJIT_OBJECT_DEMO_WIDGET_V1: wasmjit_object_meta")
 			!= std::string::npos);
 	CHECK(rust.find("pub type wasmjit_object_demo_widget_v1_attach_fn = unsafe extern \"C\" fn("
-			"*mut wasmjit_object_demo_widget_v1, *mut wasmjit_object_demo_node_v1)")
+			"*mut wasmjit_object_demo_widget_v1, target: *mut "
+			"wasmjit_object_demo_node_v1)")
 			!= std::string::npos);
 	CHECK(rust.find("parent: Some(\"demo.Base\")") != std::string::npos);
 	CHECK(rust.find("pub const WASMJIT_OBJECT_DEMO_WIDGET_V1_PROP_STATUS_GET: &str = "
@@ -3037,7 +3057,7 @@ TEST_CASE("one object descriptor reaches the C, Rust and WIT emitters", "[bindin
 	CHECK(wit.find("resource demo-node-v1 {") != std::string::npos);
 	CHECK(wit.find("x: func() -> s32;") != std::string::npos);
 	CHECK(wit.find("set-y: func(value: s32);") != std::string::npos);
-	CHECK(wit.find("attach: func(p0: borrow<demo-node-v1>);") != std::string::npos);
+	CHECK(wit.find("attach: func(target: borrow<demo-node-v1>);") != std::string::npos);
 	CHECK(wit.find("area: func() -> s32;") != std::string::npos);
 	// What WIT cannot say is documented in the emitted file, not dropped silently.
 	CHECK(wit.find("label: a reference that is not another host object")
@@ -3113,42 +3133,75 @@ TEST_CASE("one object descriptor reaches the C, Rust and WIT emitters", "[bindin
 	CHECK(header.find(" setStatusValue(") == std::string::npos);
 	// ... and the methods that are not accessors forward with their arguments.
 	CHECK(header.find("\tint32_t area()") != std::string::npos);
-	CHECK(header.find("\tvoid resize(int32_t p0, int32_t p1)") != std::string::npos);
-	CHECK(header.find("\tvoid blit(wasm_v128 p0)") != std::string::npos);
+	CHECK(header.find("\tvoid resize(int32_t width, int32_t height)")
+			!= std::string::npos);
+	CHECK(header.find("\tvoid blit(wasm_v128 lanes)") != std::string::npos);
 
 	// A declared constructor is a C++ constructor; a parameter list that would be
 	// the default (or adopting) constructor's becomes a static factory instead, so
 	// one `spawn()` is still one call rather than a class that does not compile.
-	CHECK(header.find("\texplicit DemoWidgetV1(int32_t p0, int32_t p1)\n"
-			"\t\t: _handle(wasmjit_object_demo_widget_v1_create(p0, p1))")
+	CHECK(header.find("\texplicit DemoWidgetV1(int32_t width, int32_t height)\n"
+			"\t\t: _handle(wasmjit_object_demo_widget_v1_create(width, height))")
 			!= std::string::npos);
 	CHECK(header.find("static DemoNodeV1 spawn()") != std::string::npos);
 	CHECK(header.find("return DemoNodeV1(wasmjit_object_demo_node_v1_spawn());")
 			!= std::string::npos);
 	// A constructor whose single parameter *is* the slot type would be the
 	// adopting constructor over again, so it is a factory of the same name.
-	CHECK(header.find("static DemoWidgetV1 open(int64_t p0)") != std::string::npos);
-	CHECK(header.find("return DemoWidgetV1(wasmjit_object_demo_widget_v1_open(p0));")
+	CHECK(header.find("static DemoWidgetV1 open(int64_t slot)") != std::string::npos);
+	CHECK(header.find("return DemoWidgetV1(wasmjit_object_demo_widget_v1_open(slot));")
 			!= std::string::npos);
 	// The C side spells the same two calls: an entry point and its `_h_fn`.
 	CHECK(header.find("wasmjit_object_demo_widget_v1_handle "
-			"wasmjit_object_demo_widget_v1_create(int32_t p0, int32_t p1);")
+			"wasmjit_object_demo_widget_v1_create(int32_t width, int32_t height);")
 			!= std::string::npos);
 	CHECK(header.find("typedef int64_t (*wasmjit_object_demo_node_v1_spawn_h_fn)"
 			"(void);") != std::string::npos);
 	CHECK(rust.find("pub type wasmjit_object_demo_widget_v1_create_h_fn = "
-			"unsafe extern \"C\" fn(i32, i32) -> i64;") != std::string::npos);
-	CHECK(wit.find("constructor(p0: s32, p1: s32);") != std::string::npos);
+			"unsafe extern \"C\" fn(width: i32, height: i32) -> i64;")
+			!= std::string::npos);
+	CHECK(wit.find("constructor(width: s32, height: s32);") != std::string::npos);
 	CHECK(wit.find("constructor();") != std::string::npos);
 	// WIT names every constructor `[constructor]r`, so one resource carries one:
 	// the second is noted and points at the entry point that is not in WIT.
 	CHECK(wit.find("a second constructor is not expressible in WIT")
 			!= std::string::npos);
-	CHECK(kotlin.find("fun create(p0: Int, p1: Int): DemoWidgetV1 =")
+	CHECK(kotlin.find("fun create(width: Int, height: Int): DemoWidgetV1 =")
 			!= std::string::npos);
 	CHECK(kotlin.find("fun spawn(): DemoNodeV1 =") != std::string::npos);
 	// Overloading is a C++ and Kotlin thing, not a WIT one.
-	CHECK(kotlin.find("fun open(p0: Long): DemoWidgetV1 =") != std::string::npos);
+	CHECK(kotlin.find("fun open(slot: Long): DemoWidgetV1 =") != std::string::npos);
+
+	// A declared parameter name is the name every emitter uses, never `pN`:
+	// `argNames` is the same index-aligned list a function entry carries.
+	CHECK(header.find("typedef void (*wasmjit_object_demo_widget_v1_resize_fn)"
+			"(wasmjit_object_demo_widget_v1* self, int32_t width, int32_t height);")
+			!= std::string::npos);
+	CHECK(header.find("\tvoid resize(int32_t width, int32_t height)") != std::string::npos);
+	CHECK(header.find("wasmjit_object_demo_widget_v1_resize(_handle, width, height);")
+			!= std::string::npos);
+	CHECK(header.find("wasmjit_object_demo_widget_v1_attach(_handle, target);")
+			!= std::string::npos);
+	CHECK(header.find("\texplicit DemoWidgetV1(int32_t width, int32_t height)")
+			!= std::string::npos);
+	CHECK(wit.find("resize: func(width: s32, height: s32);") != std::string::npos);
+	CHECK(wit.find("attach: func(target: borrow<demo-node-v1>);")
+			!= std::string::npos);
+	CHECK(wit.find("constructor(width: s32, height: s32);") != std::string::npos);
+	CHECK(kotlin.find("fun create(width: Int, height: Int): DemoWidgetV1 =")
+			!= std::string::npos);
+	CHECK(rust.find("fn(*mut wasmjit_object_demo_widget_v1, width: i32, height: i32)")
+			!= std::string::npos);
+	CHECK(rust.find("_h_fn = unsafe extern \"C\" fn(width: i32, height: i32) -> i64;")
+			!= std::string::npos);
+
+	// A list shorter than the signature is legal: the rest keep their position,
+	// so one name does not shift the others.
+	Json partial = objectSchema();
+	partial["objects"][0]["methods"][0]["argNames"] = Json::array({ "width" });
+	const std::string partialHeader = WASM::Bindings::emitCHeader(
+			WASM::Bindings::Schema::fromJson(partial));
+	CHECK(partialHeader.find("int32_t width, int32_t p1)") != std::string::npos);
 
 	// Without objects the emitters are byte-for-byte what they were.
 	const Json plain = Json::parse(R"({

@@ -66,12 +66,12 @@ std::string emit(const Schema& input, Language language)
 	nlohmann::ordered_json schema = input.toJson();
 	detail::dedupeJsonSchema(schema);
 	switch (language) {
-	case Language::CHeader: return emitCHeader(schema);
-	case Language::Rust: return emitRustModule(schema);
+	case Language::CHeader: return emitCHeader(input);
+	case Language::Rust: return emitRustModule(input);
 	case Language::TypeScript: return detail::emitTypeScriptImpl(schema);
 	case Language::AssemblyScript: return detail::emitAssemblyScriptImpl(schema);
 	case Language::Zig: return detail::emitZigImpl(schema);
-	case Language::Kotlin: return detail::emitKotlinImpl(schema);
+	case Language::Kotlin: return detail::emitKotlinImpl(schema, input);
 	case Language::MoonBit: return detail::emitMoonBitImpl(schema);
 	case Language::Go: return detail::emitGoImpl(schema);
 	case Language::Dart: return detail::emitDartImpl(schema);
@@ -91,7 +91,7 @@ std::string emit(const Schema& input, Language language)
 	case Language::CppAdapter: return detail::emitCppAdapterImpl(schema);
 	case Language::CppTypedefs: return detail::emitCppTypedefsImpl(schema);
 	case Language::CppSource: return detail::emitCppSourceImpl(schema);
-	case Language::Wit: return detail::emitWitImpl(schema);
+	case Language::Wit: return detail::emitWitImpl(schema, input);
 	case Language::Witx: return detail::emitWitxImpl(schema);
 	}
 	return {};

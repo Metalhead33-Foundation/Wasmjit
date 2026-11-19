@@ -87,17 +87,25 @@ std::string quoteName(std::string_view text, bool rust)
 
 bool isReference(const Json& type)
 {
-	const ValueType value = ValueType::fromJson(type);
-	return value.kind == ValueKind::Ref || value.kind == ValueKind::StringRef
-			|| value.kind == ValueKind::StringViewWtf8
-			|| value.kind == ValueKind::StringViewWtf16
-			|| value.kind == ValueKind::StringViewIter;
+	return isReference(ValueType::fromJson(type));
+}
+
+bool isReference(const ValueType& type)
+{
+	return type.kind == ValueKind::Ref || type.kind == ValueKind::StringRef
+			|| type.kind == ValueKind::StringViewWtf8
+			|| type.kind == ValueKind::StringViewWtf16
+			|| type.kind == ValueKind::StringViewIter;
 }
 
 std::string refTypeName(const Json& type)
 {
-	const ValueType value = ValueType::fromJson(type);
-	switch (value.kind) {
+	return refTypeName(ValueType::fromJson(type));
+}
+
+std::string refTypeName(const ValueType& type)
+{
+	switch (type.kind) {
 	case ValueKind::StringRef: return "wasm_stringref";
 	case ValueKind::StringViewWtf8: return "wasm_stringview_wtf8";
 	case ValueKind::StringViewWtf16: return "wasm_stringview_wtf16";
@@ -105,7 +113,7 @@ std::string refTypeName(const Json& type)
 	case ValueKind::Ref: break;
 	default: return "wasm_ref_defined";
 	}
-	switch (value.heap) {
+	switch (type.heap) {
 	case HeapKind::Func: return "wasm_funcref";
 	case HeapKind::Extern: return "wasm_externref";
 	case HeapKind::Any: return "wasm_anyref";
@@ -121,11 +129,11 @@ std::string refTypeName(const Json& type)
 	case HeapKind::NoExtern: return "wasm_nullexternref";
 	case HeapKind::NoExn: return "wasm_nullexnref";
 	case HeapKind::Defined:
-		if (value.typeKind == "struct") return "wasm_structref";
-		if (value.typeKind == "array") return "wasm_arrayref";
-		if (value.typeKind == "func") return "wasm_funcref";
-		if (value.typeKind == "cont") return "wasm_contref";
-		if (value.typeKind == "import") return "wasm_ref_import";
+		if (type.typeKind == "struct") return "wasm_structref";
+		if (type.typeKind == "array") return "wasm_arrayref";
+		if (type.typeKind == "func") return "wasm_funcref";
+		if (type.typeKind == "cont") return "wasm_contref";
+		if (type.typeKind == "import") return "wasm_ref_import";
 		return "wasm_ref_defined";
 	default: return "wasm_ref_defined";
 	}
@@ -183,7 +191,11 @@ void emitWitOpaqueTypes(std::ostringstream& out, const Json& schema, bool cpp)
 
 std::string cType(const Json& type)
 {
-	const ValueType value = ValueType::fromJson(type);
+	return cType(ValueType::fromJson(type));
+}
+
+std::string cType(const ValueType& value)
+{
 	if (value.packed)
 		return value.kind == ValueKind::I8 ? "int8_t" : "int16_t";
 	switch (value.kind) {
@@ -210,12 +222,12 @@ std::string cType(const Json& type)
 	case ValueKind::Ref:
 		if (value.wit && !value.name.empty())
 			return witOpaqueTypeName(value.name) + "*";
-		return refTypeName(type) + "*";
+		return refTypeName(value) + "*";
 	case ValueKind::StringRef:
 	case ValueKind::StringViewWtf8:
 	case ValueKind::StringViewWtf16:
 	case ValueKind::StringViewIter:
-		return refTypeName(type) + "*";
+		return refTypeName(value) + "*";
 	case ValueKind::Unknown: break;
 	}
 	return "void*";
@@ -396,7 +408,7 @@ void emitFunction(std::ostringstream& out, const Json& entry, const std::string&
 
 std::string nonFunctionNotes(const Json& schema);
 
-std::string emitCHeaderImpl(const Json& schema)
+std::string emitCHeaderImpl(const Json& schema, const Schema& typed)
 {
 	std::set<std::string> refs;
 	collectSchemaRefs(schema, refs);
@@ -429,12 +441,11 @@ std::string emitCHeaderImpl(const Json& schema)
 		   "   the adapter says otherwise; reference results carry an explicit\n"
 		   "   ownership note. This header defines no layout, no TypeId and no\n"
 		   "   sizeof contract. */\n\n";
-	if (schema.contains("objects") && schema.at("objects").is_array()
-			&& !schema.at("objects").empty()) {
+	if (!typed.objects.empty()) {
 		out << "/* The object block below is the one exception: its offsets and size\n"
 			   "   are the canonical layout the engine derives, not a C layout, and\n"
 			   "   each descriptor is versioned so a mismatch is a load-time check. */\n\n";
-		emitCObjects(out, schema);
+		emitCObjects(out, typed);
 	}
 
 	for (const Json& entry : schema.at("exports")) {
@@ -459,34 +470,49 @@ std::string emitCHeaderImpl(const Json& schema)
 	// A class cannot have C linkage, so the wrappers come after `extern "C"` and
 	// inside the guard: one header, two audiences (C gets the handle, C++ gets an
 	// object that owns it).
-	emitCppObjects(out, schema);
+	emitCppObjects(out, typed);
 	out << "#endif /* " << guard << " */\n";
 	return out.str();
 }
 
 std::string rustType(const Json& type)
 {
-	if (type.value("packed", false))
-		return type.value("type", "") == "i8" ? "i8" : "i16";
-	const std::string kind = type.value("type", "");
-	if (kind == "i32" || kind == "s32") return "i32";
-	if (kind == "u32") return "u32";
-	if (kind == "i64" || kind == "s64") return "i64";
-	if (kind == "u64") return "u64";
-	if (kind == "s8") return "i8";
-	if (kind == "u8") return "u8";
-	if (kind == "s16") return "i16";
-	if (kind == "u16") return "u16";
-	if (kind == "f32" || kind == "float32") return "f32";
-	if (kind == "f64" || kind == "float64") return "f64";
-	if (kind == "bool") return "i32";
-	if (kind == "char") return "u32";
-	if (kind == "v128") return "wasm_v128";
-	if (kind == "void") return "()";
-	if (kind == "string" || kind == "error-context")
-		return "*mut core::ffi::c_void";
-	if (isReference(type))
+	return rustType(ValueType::fromJson(type));
+}
+
+std::string rustType(const ValueType& type)
+{
+	if (type.packed)
+		return type.kind == ValueKind::I8 ? "i8" : "i16";
+	switch (type.kind) {
+	case ValueKind::I32:
+	case ValueKind::S32: return "i32";
+	case ValueKind::U32: return "u32";
+	case ValueKind::I64:
+	case ValueKind::S64: return "i64";
+	case ValueKind::U64: return "u64";
+	case ValueKind::S8:
+	case ValueKind::I8: return "i8";
+	case ValueKind::U8: return "u8";
+	case ValueKind::S16:
+	case ValueKind::I16: return "i16";
+	case ValueKind::U16: return "u16";
+	case ValueKind::F32: return "f32";
+	case ValueKind::F64: return "f64";
+	case ValueKind::Bool: return "i32";
+	case ValueKind::Char: return "u32";
+	case ValueKind::V128: return "wasm_v128";
+	case ValueKind::Void: return "()";
+	case ValueKind::String:
+	case ValueKind::ErrorContext: return "*mut core::ffi::c_void";
+	case ValueKind::Ref:
+	case ValueKind::StringRef:
+	case ValueKind::StringViewWtf8:
+	case ValueKind::StringViewWtf16:
+	case ValueKind::StringViewIter:
 		return "*mut " + refTypeName(type);
+	case ValueKind::Unknown: break;
+	}
 	return "*mut core::ffi::c_void";
 }
 
@@ -718,7 +744,7 @@ std::string nonFunctionNotes(const Json& schema)
 	return out.str();
 }
 
-std::string emitWitImpl(const Json& schema)
+std::string emitWitImpl(const Json& schema, const Schema& typed)
 {
 	std::ostringstream out;
 	const auto witIdent = [](std::string text) {
@@ -923,7 +949,7 @@ std::string emitWitImpl(const Json& schema)
 					<< ref(kind.at("future"), ref) << ">;\n";
 			}
 		}
-		emitWitObjects(out, schema);
+		emitWitObjects(out, typed);
 		out << "}\n\n";
 	}
 

@@ -2,6 +2,7 @@
 
 #include "WasmBase/WasmHostType.hpp"
 
+#include <cctype>
 #include <limits>
 #include <set>
 #include <stdexcept>
@@ -29,6 +30,42 @@ bool jsonBool(const Json& json, std::string_view key, bool fallback = false)
 	const auto found = json.find(std::string(key));
 	return found == json.end() || !found->is_boolean() ? fallback
 			: found->get<bool>();
+}
+
+//! Reads an `argNames` array: parameter names, index-aligned with `params`.
+//!
+//! A name list shorter than the parameter list is legal — the trailing parameters
+//! keep their positional spelling — but a longer one has no meaning, and neither
+//! does a list with two parameters of one name: every emitter would then spell two
+//! parameters of one function the same way, which C++, Kotlin and WIT all refuse.
+std::vector<std::string> parseArgNames(const Json& json, const std::string& what)
+{
+	std::vector<std::string> names;
+	if (!json.contains("argNames"))
+		return names;
+	const Json& array = json.at("argNames");
+	if (!array.is_array())
+		throw std::runtime_error(what + ": `argNames` must be an array");
+	std::set<std::string> seen;
+	for (const Json& item : array) {
+		if (!item.is_string())
+			throw std::runtime_error(what + ": `argNames` must hold strings");
+		std::string name = item.get<std::string>();
+		if (name.empty())
+			throw std::runtime_error(what + ": an `argNames` entry is empty");
+		std::string lowered = name;
+		for (char& character : lowered)
+			character = static_cast<char>(std::tolower(
+					static_cast<unsigned char>(character)));
+		if (lowered == "self")
+			throw std::runtime_error(what + ": `self` is the receiver, not a"
+					" parameter name");
+		if (!seen.insert(lowered).second)
+			throw std::runtime_error(what + ": two parameters are named '" + name
+					+ "'; a parameter name is unique within one signature");
+		names.push_back(std::move(name));
+	}
+	return names;
 }
 
 Json functionTypeJson(const FunctionType& function)
@@ -606,6 +643,24 @@ void validateObjects(std::vector<ObjectDescriptor>& objects)
 						+ "' declares two constructors with the same parameter"
 						" list; they would be one C++ constructor");
 		}
+		// A name list may cover part of a signature but never more of it, and a
+		// named parameter must be a spelling every emitter can make an identifier
+		// from — `parseArgNames` already refused the empty, the duplicated and
+		// `self`.
+		const auto checkNames = [&object](const std::string& what,
+										  std::size_t params,
+										  std::size_t names) {
+			if (names > params)
+				throw std::runtime_error("object '" + object.name + "' " + what
+						+ " names " + std::to_string(names) + " parameters but takes "
+						+ std::to_string(params));
+		};
+		for (const ObjectMethod& method : object.methods)
+			checkNames("method '" + method.name + "'", method.params.size(),
+					method.argNames.size());
+		for (const ObjectConstructor& constructor : object.constructors)
+			checkNames("constructor '" + constructor.name + "'",
+					constructor.params.size(), constructor.argNames.size());
 		std::set<std::string> propertyNames;
 		std::set<std::string> accessors;
 		for (const ObjectProperty& property : object.properties) {
@@ -789,6 +844,7 @@ ObjectMethod ObjectMethod::fromJson(const Json& json)
 	};
 	out.params = parseList(json, "params");
 	out.results = parseList(json, "results");
+	out.argNames = parseArgNames(json, "object method '" + out.name + "'");
 	return out;
 }
 
@@ -802,7 +858,16 @@ Json ObjectMethod::toJson() const
 	out["results"] = Json::array();
 	for (const ValueType& result : results)
 		out["results"].push_back(result.toJson());
+	if (!argNames.empty())
+		out["argNames"] = argNames;
 	return out;
+}
+
+std::string ObjectMethod::paramName(std::size_t index) const
+{
+	return index < argNames.size() && !argNames.at(index).empty()
+			? argNames.at(index)
+			: "p" + std::to_string(index);
 }
 
 ObjectConstructor ObjectConstructor::fromJson(const Json& json)
@@ -813,19 +878,20 @@ ObjectConstructor ObjectConstructor::fromJson(const Json& json)
 	out.name = jsonString(json, "name");
 	if (out.name.empty())
 		throw std::runtime_error("object constructor: missing name");
-	if (!json.contains("params"))
-		return out;
-	const Json& array = json.at("params");
-	if (!array.is_array())
-		throw std::runtime_error("object constructor '" + out.name
-				+ "': `params` must be an array");
-	for (const Json& item : array) {
-		ValueType type = ValueType::fromJson(item);
-		if (type.kind == ValueKind::Unknown)
+	if (json.contains("params")) {
+		const Json& array = json.at("params");
+		if (!array.is_array())
 			throw std::runtime_error("object constructor '" + out.name
-					+ "': unknown param type");
-		out.params.push_back(std::move(type));
+					+ "': `params` must be an array");
+		for (const Json& item : array) {
+			ValueType type = ValueType::fromJson(item);
+			if (type.kind == ValueKind::Unknown)
+				throw std::runtime_error("object constructor '" + out.name
+						+ "': unknown param type");
+			out.params.push_back(std::move(type));
+		}
 	}
+	out.argNames = parseArgNames(json, "object constructor '" + out.name + "'");
 	return out;
 }
 
@@ -836,7 +902,16 @@ Json ObjectConstructor::toJson() const
 	out["params"] = Json::array();
 	for (const ValueType& param : params)
 		out["params"].push_back(param.toJson());
+	if (!argNames.empty())
+		out["argNames"] = argNames;
 	return out;
+}
+
+std::string ObjectConstructor::paramName(std::size_t index) const
+{
+	return index < argNames.size() && !argNames.at(index).empty()
+			? argNames.at(index)
+			: "p" + std::to_string(index);
 }
 
 ObjectDescriptor ObjectDescriptor::fromJson(const Json& json)

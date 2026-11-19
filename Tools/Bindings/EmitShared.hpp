@@ -3,6 +3,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include "BindingModel.hpp"
+
 #include <cstddef>
 #include <set>
 #include <sstream>
@@ -28,13 +30,22 @@ std::string sanitize(std::string_view text);
 std::string quoteName(std::string_view text, bool rust);
 
 //! True when the value type is a reference.
-bool isReference(const Json& type);
+bool isReference(const nlohmann::ordered_json& type);
+
+//! True when a typed value is a reference.
+bool isReference(const ValueType& type);
 
 //! Returns the target-neutral opaque name for a reference type.
-std::string refTypeName(const Json& type);
+std::string refTypeName(const nlohmann::ordered_json& type);
+
+//! Returns the target-neutral opaque name for a typed reference.
+std::string refTypeName(const ValueType& type);
 
 //! Returns the C spelling of a value type.
-std::string cType(const Json& type);
+std::string cType(const nlohmann::ordered_json& type);
+
+//! Returns the C spelling of a typed value.
+std::string cType(const ValueType& type);
 
 //! Returns the stable opaque name of a WIT type.
 std::string witOpaqueTypeName(std::string_view name);
@@ -86,7 +97,8 @@ void emitFunction(std::ostringstream& out, const Json& entry, const std::string&
 		const char* side, const std::string& attribute = {});
 
 //! Emits the C header body.
-std::string emitCHeaderImpl(const Json& schema);
+std::string emitCHeaderImpl(const nlohmann::ordered_json& schema,
+		const Schema& typed);
 
 //! Returns the PascalCase spelling of a name.
 std::string pascalName(std::string_view name);
@@ -95,7 +107,10 @@ std::string pascalName(std::string_view name);
 std::string refPascal(const Json& type);
 
 //! Returns the Rust spelling of a value type.
-std::string rustType(const Json& type);
+std::string rustType(const nlohmann::ordered_json& type);
+
+//! Returns the Rust spelling of a typed value.
+std::string rustType(const ValueType& type);
 
 //! Emits Rust parameters for one entry.
 void emitRustParams(std::ostringstream& out, const Json& entry, bool resultBuffer);

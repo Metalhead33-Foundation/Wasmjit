@@ -778,19 +778,21 @@ Json projectSchema(const Json& input, Direction direction)
 
 std::string emitCHeader(const Schema& input)
 {
-	return emitCHeader(input.toJson());
+	Json view = input.toJson();
+	dedupeFunctionEntries(view);
+	return emitCHeaderImpl(view, input);
 }
 
 std::string emitCHeader(const nlohmann::ordered_json& input)
 {
 	Json schema = input;
 	dedupeFunctionEntries(schema);
-	return emitCHeaderImpl(schema);
+	return emitCHeaderImpl(schema, Schema::fromJson(schema));
 }
 
 std::string emitRustModule(const Schema& input)
 {
-	return emitRustModule(input.toJson());
+	return detail::emitRustModuleImpl(input.toJson(), input);
 }
 
 

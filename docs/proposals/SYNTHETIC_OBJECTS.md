@@ -2,7 +2,7 @@
 
 *Host-Registered Object Types, the GObject Precedent, and What the Component Model Already Covers*
 
-Status: design note / implementation reference (**revision 10 — 2026-11-19**). This
+Status: design note / implementation reference (**revision 11 — 2026-11-19**). This
 is `EMBEDDING_SURFACE.md` §16 promoted to a note of its own: that section had grown
 into a six-hundred-line study inside an implementation reference, and the
 reference now keeps only the embedder-facing half. Revision 1 recorded a boundary —
@@ -40,6 +40,12 @@ scoped rather than attempted (§4.11).
 declares the handle *entry points*, and a `#ifdef __cplusplus` block after it turns
 them into one move-only RAII class per descriptor — compiled and run in the test
 suite, which counts the releases (§4.10).
+**Revision 11 adds named parameters and a typed generator**: a method or a
+constructor carries `argNames`, and every emitter spells `width`/`height` rather
+than `p0`/`p1` (§4.10, A.14.5). Internally, `Tools/Bindings/` no longer traffics
+JSON in the object emitters at all: enums, structs and integers from the parse to
+the artifact.
+
 **Revision 10 adds construction**: `constructors[]` declares the call that *makes*
 an object, and every emitter projects it as the host language's construction — a
 C++ constructor, a WIT `constructor`, a Kotlin companion factory — with the two
@@ -721,6 +727,23 @@ same call spelled once. WIT has the opposite problem: every constructor is named
 `[constructor]r`, with no signature in the name, so a resource carries exactly
 **one**; the first expressible one is projected and the rest are noted with their
 entry point (`wasm-tools component wit` rejects a second).
+
+**The generator traffics structures, not JSON.** JSON is the boundary: the CLI
+parses one document into `Schema`/`ObjectDescriptor`/`ObjectField`/`ValueType` and
+writes one out, and from that point the object emitters see no `nlohmann::json` at
+all — `EmitObjects.cpp` contains not one reference to it. The typed model also
+carries the enums the emitters switch on (`ValueKind`, `HeapKind`), so “is this a
+defined reference to `demo.Node`?” is a comparison, not a string match, and a
+parameter's name arrives as a `std::vector<std::string>` rather than as a lookup
+that can silently miss. Open-ended component payloads stay JSON by design (§4.5);
+everything the generator *decides* on is typed.
+
+**Parameters are named, and the name is declared.** A method or a constructor
+carries `argNames`, the same index-aligned list a function entry uses, and every
+emitter spells it — `int32_t width, int32_t height` in C and C++, `width: s32` in
+WIT, `width: Int` in Kotlin, `width: i32` in Rust — with `pN` only for a parameter
+that has no name. A list shorter than the signature is legal and does not shift the
+others; a longer one, a duplicate name, and `self` are refused at load time.
 
 **One header, two audiences.** The C header has always clamped its declarations
 between `#ifdef __cplusplus / extern "C" {` and its closing `}`; what the handle
@@ -1437,8 +1460,19 @@ that already emits WIT, C, Rust and every other target of
         { "name": "x",   "type": "i32", "offset": 16 },
         { "name": "y",   "type": "i32", "offset": 20 }
       ],
+      "properties": [
+        { "name": "status", "type": "i32",
+          "get": "get_status", "set": "set_status" }
+      ],
       "methods": [
-        { "name": "resize", "params": ["i32", "i32"], "results": [] }
+        { "name": "resize", "argNames": ["width", "height"],
+          "params": ["i32", "i32"], "results": [] },
+        { "name": "get_status", "params": [], "results": ["i32"] },
+        { "name": "set_status", "params": ["i32"], "results": [] }
+      ],
+      "constructors": [
+        { "name": "create", "argNames": ["width", "height"],
+          "params": ["i32", "i32"] }
       ] }
   ],
   "imports": [], "exports": []
@@ -1451,6 +1485,27 @@ making an assertion, which the loader checks, and a descriptor that omits one is
 simply asking the tool to derive it. **Shipped in `SO-2`** — see §4.5 for the
 validated model, the five load-time refusals, and the versioned C/Rust/WIT
 artifacts.
+
+**A parameter has a name, and the name is the declared one.** `argNames` is the
+index-aligned list a *function* entry already carries (§11.8 of
+`EMBEDDING_SURFACE.md`), reused verbatim for a method or a constructor: the entry
+above does not reach the generator as “two `i32`s” but as `width` and `height`, and
+every emitter spells them:
+
+| Target | The call above, as emitted |
+|---|---|
+| C | `wasmjit_object_demo_widget_v1_handle wasmjit_object_demo_widget_v1_create(int32_t width, int32_t height);` |
+| C++ | `explicit DemoWidgetV1(int32_t width, int32_t height)` |
+| WIT | `constructor(width: s32, height: s32);` |
+| Kotlin | `fun create(width: Int, height: Int): DemoWidgetV1` |
+| Rust | `pub type wasmjit_object_demo_widget_v1_create_h_fn = unsafe extern "C" fn(width: i32, height: i32) -> i64;` |
+
+A list shorter than the signature is legal and does not shift the others: the
+parameters it does not name keep their positional spelling (`p1`), which is also
+what every unnamed parameter gets. Three things are load-time errors, because each
+would be a header a consumer cannot compile or a signature whose names collide:
+more names than parameters, two parameters of one name (`size` and `Size` lower to
+one identifier), and a parameter named `self`, which is the receiver.
 
 Two things this is *not*: it is not a new IDL (the `type` spellings are the core
 Wasm storage types the schema already uses), and it is not an engine parser. The

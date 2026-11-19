@@ -249,6 +249,14 @@ struct ObjectMethod {
 	std::string name; //!< The method name.
 	std::vector<ValueType> params; //!< The method's parameters.
 	std::vector<ValueType> results; //!< The method's results.
+	std::vector<std::string> argNames; //!< Optional parameter names, index-aligned.
+
+	/*!
+	 * \brief Returns the declared spelling of one parameter, or its position.
+	 * \param index The parameter index.
+	 * \return `argNames[index]` when the descriptor named it, else `p<index>`.
+	 */
+	std::string paramName(std::size_t index) const;
 
 	/*!
 	 * \brief Parses one method descriptor.
@@ -277,6 +285,14 @@ struct ObjectMethod {
 struct ObjectConstructor {
 	std::string name; //!< The constructor name, for example `create`.
 	std::vector<ValueType> params; //!< The constructor's parameters.
+	std::vector<std::string> argNames; //!< Optional parameter names, index-aligned.
+
+	/*!
+	 * \brief Returns the declared spelling of one parameter, or its position.
+	 * \param index The parameter index.
+	 * \return `argNames[index]` when the descriptor named it, else `p<index>`.
+	 */
+	std::string paramName(std::size_t index) const;
 
 	/*!
 	 * \brief Parses one constructor descriptor.

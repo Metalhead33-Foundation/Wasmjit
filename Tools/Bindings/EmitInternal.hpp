@@ -3,11 +3,29 @@
 
 #include <nlohmann/json.hpp>
 
+#include "BindingModel.hpp"
+
 /*!
   \file EmitInternal.hpp
   \brief Declarations shared by the emitter translation units and the dispatcher.
+
+  The emitters take two views of one schema: the **typed** model
+  (`BindingModel.hpp`) for everything that is a structure, an enum or a number, and
+  an ordered-JSON view only for the open-ended component payloads a schema
+  deliberately carries. `typed` is never re-derived from `schema` inside an
+  emitter — it is the same schema the caller parsed.
 */
 namespace WASM::Bindings::detail {
+
+//! Emits the Rust module body from both views.
+/*!
+  \brief Emits exports, imports and the object block.
+  \param schema The ordered-JSON view, used for the open-ended entries.
+  \param typed The typed schema, used for every object descriptor.
+  \return The Rust source text.
+*/
+std::string emitRustModuleImpl(const nlohmann::ordered_json& schema,
+		const Schema& typed);
 
 //! Emits TypeScript declarations.
 std::string emitTypeScriptImpl(const nlohmann::ordered_json& schema);
@@ -19,7 +37,7 @@ std::string emitAssemblyScriptImpl(const nlohmann::ordered_json& schema);
 std::string emitZigImpl(const nlohmann::ordered_json& schema);
 
 //! Emits Kotlin/Wasm declarations.
-std::string emitKotlinImpl(const nlohmann::ordered_json& schema);
+std::string emitKotlinImpl(const nlohmann::ordered_json& schema, const Schema& typed);
 
 //! Emits MoonBit declarations.
 std::string emitMoonBitImpl(const nlohmann::ordered_json& schema);
@@ -79,7 +97,7 @@ std::string emitCppSourceImpl(const nlohmann::ordered_json& schema);
 std::string emitCppAdapterImpl(const nlohmann::ordered_json& schema);
 
 //! Emits a WIT package/world representation.
-std::string emitWitImpl(const nlohmann::ordered_json& schema);
+std::string emitWitImpl(const nlohmann::ordered_json& schema, const Schema& typed);
 
 //! Emits a legacy WITX module representation.
 std::string emitWitxImpl(const nlohmann::ordered_json& schema);

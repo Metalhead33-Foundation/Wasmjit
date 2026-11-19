@@ -1269,6 +1269,18 @@ factory of the same name (`DemoNodeV1::spawn()`). WIT is the exception in the ot
 direction: its constructors are all named `[constructor]r`, so one resource carries
 one, and a second is noted rather than emitted.
 
+**Parameters carry their declared names.** `objects[].methods[].argNames` and
+`constructors[].argNames` are the index-aligned lists a function entry already uses
+(`"argNames": ["width", "height"]`), so the emitted signature says `width` rather
+than `p0` in all five targets. A shorter list is legal (the rest stay positional);
+a longer one, a duplicate, and `self` are refused at load time.
+
+**The generator works on structures, not JSON.** The object emitters take the typed
+`Schema`: `EmitObjects.cpp` names `nlohmann::json` nowhere, switches on `ValueKind`
+and `HeapKind` instead of comparing strings, and prints the `size`/`offset` the
+model derived. JSON remains only at the boundary and for the open-ended component
+payloads.
+
 #### Layout and build rules
 
 | Path | What it is | Rule |
@@ -2822,10 +2834,9 @@ declares the handle *entry points*, and the `#ifdef __cplusplus` block after
 `reset()`/`release()` for the two ways to give the slot up, properties as
 `status()`/`setStatus()`, methods in lowerCamel. It is compiled and run by the test
 suite, which counts releases.
-**Revision 43 (2026-11-19)** adds construction: `objects[].constructors[]` declares
-the call that makes an object, emitted as a C++ constructor (or a static factory
-when the parameter list would collide), a WIT `constructor`, a Kotlin companion
-factory and a Rust `_h_fn`, with the collisions refused at load time.
+**Revision 44 (2026-11-19)** adds named parameters — `argNames` on a method or a
+constructor, spelled by every emitter — and moves the object emitters onto the
+typed schema, so the generator stops trafficking JSON internally.
 
 ### 16.1 The primitive an embedder gets
 
