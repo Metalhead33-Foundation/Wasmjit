@@ -659,12 +659,12 @@ std::string haskellType(const ValueType& type)
 	return "Ptr ()";
 }
 
-std::string emitHaskellImpl(const Json& schema)
+std::string emitHaskellImpl(const Json& schema, const Schema& typed)
 {
 	std::ostringstream out;
 	out << "-- Generated Haskell FFI bindings from the "
-		<< schema.at("schema").get<std::string>() << " "
-		<< schema.at("direction").get<std::string>() << " schema. Do not edit.\n";
+		<< typed.id << " "
+		<< directionName(typed.direction) << " schema. Do not edit.\n";
 	out << "{-# LANGUAGE ForeignFunctionInterface #-}\n";
 	out << "module WasmJitBindings where\n\n";
 	out << "import Foreign.C.Types\nimport Foreign.Ptr\n\n";
@@ -673,28 +673,28 @@ std::string emitHaskellImpl(const Json& schema)
 	for (const std::string& type : witTypes)
 		out << "data " << pascalName(type) << " = " << pascalName(type) << "\n";
 	out << "\n";
-	forEachFunction(schema, "exports", [&](const Json& entry) {
+	forEachFunction(typed, false, [&](const Entry& entry) {
 		out << "-- H2G export: " << exportComment(entry) << "\n";
-		out << "type Wasmjit_" << sanitize(entry.at("name").get<std::string>())
+		out << "type Wasmjit_" << sanitize(entry.name)
 			<< "_Fn = ";
-		const Json& params = signatureParams(entry);
-		for (const Json& param : params)
+		const std::vector<ValueType>& params = entry.function.params;
+		for (const ValueType& param : params)
 			out << haskellType(param) << " -> ";
-		if (signatureResults(entry).size() > 1u)
+		if (entry.function.results.size() > 1u)
 			out << "Ptr () -> ";
-		out << "IO " << (signatureResults(entry).size() == 1
-				? haskellType(signatureResults(entry)[0]) : "()") << "\n\n";
+		out << "IO " << (entry.function.results.size() == 1
+				? haskellType(entry.function.results[0]) : "()") << "\n\n";
 	});
-	forEachFunction(schema, "imports", [&](const Json& entry) {
-		out << "foreign import ccall \"" << entry.at("name").get<std::string>()
+	forEachFunction(typed, true, [&](const Entry& entry) {
+		out << "foreign import ccall \"" << entry.name
 			<< "\" wasmjit_" << sanitize(importModule(entry)) << "_"
-			<< sanitize(entry.at("name").get<std::string>()) << "\n  :: ";
-		for (const Json& param : signatureParams(entry))
+			<< sanitize(entry.name) << "\n  :: ";
+		for (const ValueType& param : entry.function.params)
 			out << haskellType(param) << " -> ";
-		if (signatureResults(entry).size() > 1u)
+		if (entry.function.results.size() > 1u)
 			out << "Ptr () -> ";
-		out << "IO " << (signatureResults(entry).size() == 1
-				? haskellType(signatureResults(entry)[0]) : "()") << "\n\n";
+		out << "IO " << (entry.function.results.size() == 1
+				? haskellType(entry.function.results[0]) : "()") << "\n\n";
 	});
 	out << nonFunctionNotes(schema);
 	return out.str();

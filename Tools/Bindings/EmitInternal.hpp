@@ -87,7 +87,7 @@ std::string emitAdaImpl(const nlohmann::ordered_json& schema, const Schema& type
 std::string emitPascalImpl(const nlohmann::ordered_json& schema, const Schema& typed);
 
 //! Emits Haskell `foreign import ccall` declarations.
-std::string emitHaskellImpl(const nlohmann::ordered_json& schema);
+std::string emitHaskellImpl(const nlohmann::ordered_json& schema, const Schema& typed);
 
 //! Emits C++ `Callable` typedefs.
 std::string emitCppTypedefsImpl(const nlohmann::ordered_json& schema);
