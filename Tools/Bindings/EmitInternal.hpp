@@ -45,7 +45,7 @@ std::string emitKotlinImpl(const nlohmann::ordered_json& schema, const Schema& t
 std::string emitMoonBitImpl(const nlohmann::ordered_json& schema, const Schema& typed);
 
 //! Emits Go Wasm declarations.
-std::string emitGoImpl(const nlohmann::ordered_json& schema);
+std::string emitGoImpl(const nlohmann::ordered_json& schema, const Schema& typed);
 
 //! Emits Dart FFI declarations.
 std::string emitDartImpl(const nlohmann::ordered_json& schema);

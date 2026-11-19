@@ -318,7 +318,7 @@ std::string emitMoonBitImpl(const Json& schema, const Schema& typed)
 	return out.str();
 }
 
-std::string emitGoImpl(const Json& schema)
+std::string emitGoImpl(const Json& schema, const Schema& typed)
 {
 	std::set<std::string> refs;
 	collectSchemaRefs(schema, refs);
@@ -329,43 +329,45 @@ std::string emitGoImpl(const Json& schema)
 		out << "type " << pascalName(ref) << " struct{ _ [0]byte }\n";
 	out << "\n";
 
-	forEachFunction(schema, "exports", [&](const Json& entry) {
-		out << "//go:wasmexport " << entry.at("name").get<std::string>() << "\n";
-		out << "func wasmjit_" << sanitize(entry.at("name").get<std::string>()) << "(";
-		const Json& params = signatureParams(entry);
+	forEachFunction(typed, false, [&](const Entry& entry) {
+		out << "//go:wasmexport " << entry.name << "\n";
+		out << "func wasmjit_" << sanitize(entry.name) << "(";
+		const std::vector<ValueType>& params = entry.function.params;
 		for (std::size_t i = 0; i < params.size(); ++i) {
 			if (i != 0) out << ", ";
 			out << argumentName(entry, i) << " " << goType(params[i]);
 		}
-		const bool multi = signatureResults(entry).size() > 1u;
+		const std::vector<ValueType>& results = entry.function.results;
+		const bool multi = results.size() > 1u;
 		if (multi) {
 			if (!params.empty()) out << ", ";
 			out << "result *byte";
 		}
 		out << ")";
-		if (!multi && signatureResults(entry).size() == 1)
-			out << " " << goType(signatureResults(entry)[0]);
+		if (!multi && results.size() == 1)
+			out << " " << goType(results[0]);
 		out << " { panic(\"generated adapter stub\") }\n\n";
 	});
 
-	forEachFunction(schema, "imports", [&](const Json& entry) {
-		out << "//go:wasmimport " << importModule(entry) << " "
-			<< entry.at("name").get<std::string>() << "\n";
+	forEachFunction(typed, true, [&](const Entry& entry) {
+		out << "//go:wasmimport " << importModule(entry) << " " << entry.name
+			<< "\n";
 		out << "func wasmjit_" << sanitize(importModule(entry)) << "_"
-			<< sanitize(entry.at("name").get<std::string>()) << "(";
-		const Json& params = signatureParams(entry);
+			<< sanitize(entry.name) << "(";
+		const std::vector<ValueType>& params = entry.function.params;
 		for (std::size_t i = 0; i < params.size(); ++i) {
 			if (i != 0) out << ", ";
 			out << argumentName(entry, i) << " " << goType(params[i]);
 		}
-		const bool multi = signatureResults(entry).size() > 1u;
+		const std::vector<ValueType>& results = entry.function.results;
+		const bool multi = results.size() > 1u;
 		if (multi) {
 			if (!params.empty()) out << ", ";
 			out << "result *byte";
 		}
 		out << ")";
-		if (!multi && signatureResults(entry).size() == 1)
-			out << " " << goType(signatureResults(entry)[0]);
+		if (!multi && results.size() == 1)
+			out << " " << goType(results[0]);
 		out << "\n\n";
 	});
 	out << nonFunctionNotes(schema);
