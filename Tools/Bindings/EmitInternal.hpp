@@ -93,7 +93,7 @@ std::string emitHaskellImpl(const nlohmann::ordered_json& schema, const Schema& 
 std::string emitCppTypedefsImpl(const nlohmann::ordered_json& schema, const Schema& typed);
 
 //! Emits C++ cast/load helpers.
-std::string emitCppSourceImpl(const nlohmann::ordered_json& schema);
+std::string emitCppSourceImpl(const nlohmann::ordered_json& schema, const Schema& typed);
 
 //! Emits a compiled C++ adapter.
 std::string emitCppAdapterImpl(const nlohmann::ordered_json& schema);

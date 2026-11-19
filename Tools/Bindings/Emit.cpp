@@ -90,7 +90,7 @@ std::string emit(const Schema& input, Language language)
 	case Language::Haskell: return detail::emitHaskellImpl(schema, input);
 	case Language::CppAdapter: return detail::emitCppAdapterImpl(schema);
 	case Language::CppTypedefs: return detail::emitCppTypedefsImpl(schema, input);
-	case Language::CppSource: return detail::emitCppSourceImpl(schema);
+	case Language::CppSource: return detail::emitCppSourceImpl(schema, input);
 	case Language::Wit: return detail::emitWitImpl(schema, input);
 	case Language::Witx: return detail::emitWitxImpl(schema);
 	}

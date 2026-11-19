@@ -397,20 +397,18 @@ std::string emitCppTypedefsImpl(const Json& schema, const Schema& typed)
 }
 
 
-std::string emitCppSourceImpl(const Json& schema)
+std::string emitCppSourceImpl(const Json& schema, const Schema& typed)
 {
-	const std::string direction = schema.value("direction", "g2h");
-	if (direction == "g2g")
+	if (typed.direction == Direction::GuestToGuest)
 		return "// cpp-source is not applicable to G2G; project the producer "
 			   "schema to g2h or h2g first.\n";
 
-	const bool emitImports = direction != "h2g";
-	const bool emitExports = direction != "g2h";
-	const std::string module = sanitize(schema.value("module", "module"));
+	const bool emitImports = typed.direction != Direction::HostToGuest;
+	const bool emitExports = typed.direction != Direction::GuestToHost;
+	const std::string module = sanitize(typed.module);
 	std::ostringstream out;
-	out << "// Generated C++ binding implementation from the "
-		<< schema.at("schema").get<std::string>() << " " << direction
-		<< " schema. Do not edit.\n";
+	out << "// Generated C++ binding implementation from the " << typed.id << " "
+		<< directionName(typed.direction) << " schema. Do not edit.\n";
 	out << "#include \"wasmjit_" << module << "_callables.hpp\"\n";
 	if (emitImports)
 		out << "#include <WasmBase/WasmRegistryImportResolver.hpp>\n"
@@ -423,7 +421,7 @@ std::string emitCppSourceImpl(const Json& schema)
 			   "#include <type_traits>\n";
 	out << "\n";
 	if (emitImports) {
-		forEachFunction(schema, "imports", [&](const Json& entry) {
+		forEachFunction(typed, true, [&](const Entry& entry) {
 			emitCppImportStub(out, entry);
 		});
 		out << "// Publish the host implementations as a synthetic Wasm import module.\n";
@@ -431,16 +429,16 @@ std::string emitCppSourceImpl(const Json& schema)
 		out << "// registry avoids one virtual module lookup per function.\n";
 		out << "bool wasmjit_" << module
 			<< "_register_imports(WASM::RegistryImportResolver& registrar)\n{\n";
-		std::map<std::string, std::vector<const Json*>> importsByModule;
-		forEachFunction(schema, "imports", [&](const Json& entry) {
+		std::map<std::string, std::vector<const Entry*>> importsByModule;
+		forEachFunction(typed, true, [&](const Entry& entry) {
 			importsByModule[importModule(entry)].push_back(&entry);
 		});
 		for (const auto& [importModuleName, entries] : importsByModule) {
 			out << "\t{\n\t\tauto& module = registrar.moduleRegistry("
 				<< quoteName(importModuleName, false) << ");\n";
 			out << "\t\tmodule.registerFunctions({\n";
-			for (const Json* entry : entries) {
-				out << "\t\t\t{ " << quoteName(entry->at("name").get<std::string>(), false)
+			for (const Entry* entry : entries) {
+				out << "\t\t\t{ " << quoteName(entry->name, false)
 					<< ",\n\t\t\t  WASM::nativeImport<&" << importName(*entry)
 					<< ">() },\n";
 			}
@@ -450,7 +448,7 @@ std::string emitCppSourceImpl(const Json& schema)
 	}
 	if (emitExports) {
 		out << "// Definitions of the resolveable guest export pointers.\n";
-		forEachFunction(schema, "exports", [&](const Json& entry) {
+		forEachFunction(typed, false, [&](const Entry& entry) {
 			out << cppTypedefName(entry) << " " << cppCallableName(entry)
 				<< " = nullptr;\n";
 		});
@@ -462,15 +460,14 @@ std::string emitCppSourceImpl(const Json& schema)
 		out << "\tif (instance == nullptr)\n\t\treturn false;\n";
 		out << "\tbool ok = true;\n";
 		std::size_t exportCount = 0;
-		forEachFunction(schema, "exports", [&](const Json&) { ++exportCount; });
+		forEachFunction(typed, false, [&](const Entry&) { ++exportCount; });
 		if (exportCount == 0) {
 			out << "\treturn ok;\n}\n";
 		} else {
 			out << "\tstatic constexpr std::array<std::string_view, " << exportCount
 				<< "> names = {\n";
-			forEachFunction(schema, "exports", [&](const Json& entry) {
-				out << "\t\t" << quoteName(entry.at("name").get<std::string>(), false)
-					<< ",\n";
+			forEachFunction(typed, false, [&](const Entry& entry) {
+				out << "\t\t" << quoteName(entry.name, false) << ",\n";
 			});
 			out << "\t};\n";
 			out << "\tstd::array<std::optional<WASM::Callable>, " << exportCount
@@ -487,7 +484,7 @@ std::string emitCppSourceImpl(const Json& schema)
 			out << "\t\ttarget = reinterpret_cast<Target>(callable->fnPtr);\n";
 			out << "\t};\n";
 			std::size_t index = 0;
-			forEachFunction(schema, "exports", [&](const Json& entry) {
+			forEachFunction(typed, false, [&](const Entry& entry) {
 				out << "\tassignCallable(callables[" << index++ << "], "
 					<< cppCallableName(entry) << ");\n";
 			});
