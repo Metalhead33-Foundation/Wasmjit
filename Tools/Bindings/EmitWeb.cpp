@@ -126,38 +126,39 @@ std::string emitAssemblyScriptImpl(const Json& schema, const Schema& typed)
 	return out.str();
 }
 
-std::string emitZigImpl(const Json& schema)
+std::string emitZigImpl(const Json& schema, const Schema& typed)
 {
 	std::set<std::string> refs;
 	collectSchemaRefs(schema, refs);
 
 	std::ostringstream out;
-	out << "// Generated from the " << schema.at("schema").get<std::string>() << " "
-		<< schema.at("direction").get<std::string>() << " schema. Do not edit.\n\n";
+	out << "// Generated from the " << typed.id << " "
+		<< directionName(typed.direction) << " schema. Do not edit.\n\n";
 	out << "pub const wasm_v128 = [16]u8;\n";
 	for (const std::string& ref : refs)
 		out << "pub const " << ref << " = opaque {};\n";
 	out << "\n";
 
-	forEachFunction(schema, "exports", [&](const Json& entry) {
-		const std::string exportName = entry.at("name").get<std::string>();
+	forEachFunction(typed, false, [&](const Entry& entry) {
+		const std::string& exportName = entry.name;
 		out << "// H2G export: " << exportComment(entry) << "\n";
 		out << "pub const wasmjit_" << sanitize(exportName) << "_t = *const fn (";
-		const Json& params = signatureParams(entry);
+		const std::vector<ValueType>& params = entry.function.params;
 		for (std::size_t i = 0; i < params.size(); ++i) {
 			if (i != 0) out << ", ";
 			out << argumentName(entry, i) << ": " << zigType(params[i]);
 		}
-		const bool multi = signatureResults(entry).size() > 1u;
+		const std::vector<ValueType>& results = entry.function.results;
+		const bool multi = results.size() > 1u;
 		if (multi) {
 			if (!params.empty()) out << ", ";
 			out << "result: *anyopaque";
 		}
 		out << ") callconv(.c) ";
-		if (multi || signatureResults(entry).empty())
+		if (multi || results.empty())
 			out << "void";
 		else
-			out << zigType(signatureResults(entry)[0]);
+			out << zigType(results[0]);
 		out << ";\n\n";
 
 		// A type alias is useful to a host loader, but a Zig guest needs the
@@ -172,10 +173,10 @@ std::string emitZigImpl(const Json& schema)
 			out << "result: *anyopaque";
 		}
 		out << ") callconv(.c) ";
-		if (multi || signatureResults(entry).empty())
+		if (multi || results.empty())
 			out << "void";
 		else
-			out << zigType(signatureResults(entry)[0]);
+			out << zigType(results[0]);
 		out << " {\n";
 		for (std::size_t i = 0; i < params.size(); ++i)
 			out << "    _ = " << argumentName(entry, i) << ";\n";
@@ -188,29 +189,29 @@ std::string emitZigImpl(const Json& schema)
 			<< " });\n}\n\n";
 	});
 
-	forEachFunction(schema, "imports", [&](const Json& entry) {
+	forEachFunction(typed, true, [&](const Entry& entry) {
 		out << "// G2H import: " << importComment(entry) << "\n";
 		// `@extern` keeps the local Zig name namespaced while mapping the
 		// declaration to the actual Wasm import module and field.
 		out << "pub const wasmjit_" << sanitize(importModule(entry)) << "_"
-			<< sanitize(entry.at("name").get<std::string>())
-			<< " = @extern(*const fn (";
-		const Json& params = signatureParams(entry);
+			<< sanitize(entry.name) << " = @extern(*const fn (";
+		const std::vector<ValueType>& params = entry.function.params;
 		for (std::size_t i = 0; i < params.size(); ++i) {
 			if (i != 0) out << ", ";
 			out << argumentName(entry, i) << ": " << zigType(params[i]);
 		}
-		const bool multi = signatureResults(entry).size() > 1u;
+		const std::vector<ValueType>& results = entry.function.results;
+		const bool multi = results.size() > 1u;
 		if (multi) {
 			if (!params.empty()) out << ", ";
 			out << "result: *anyopaque";
 		}
 		out << ") callconv(.c) ";
-		if (multi || signatureResults(entry).empty())
+		if (multi || results.empty())
 			out << "void";
 		else
-			out << zigType(signatureResults(entry)[0]);
-		out << ", .{ .name = " << quoteName(entry.at("name").get<std::string>(), false)
+			out << zigType(results[0]);
+		out << ", .{ .name = " << quoteName(entry.name, false)
 			<< ", .library_name = " << quoteName(importModule(entry), false)
 			<< " });\n\n";
 	});

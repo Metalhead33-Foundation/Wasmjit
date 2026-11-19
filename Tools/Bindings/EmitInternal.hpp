@@ -36,7 +36,7 @@ std::string emitAssemblyScriptImpl(const nlohmann::ordered_json& schema,
 		const Schema& typed);
 
 //! Emits Zig declarations.
-std::string emitZigImpl(const nlohmann::ordered_json& schema);
+std::string emitZigImpl(const nlohmann::ordered_json& schema, const Schema& typed);
 
 //! Emits Kotlin/Wasm declarations.
 std::string emitKotlinImpl(const nlohmann::ordered_json& schema, const Schema& typed);

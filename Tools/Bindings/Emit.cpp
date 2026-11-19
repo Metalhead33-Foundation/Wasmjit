@@ -70,7 +70,7 @@ std::string emit(const Schema& input, Language language)
 	case Language::Rust: return emitRustModule(input);
 	case Language::TypeScript: return detail::emitTypeScriptImpl(schema, input);
 	case Language::AssemblyScript: return detail::emitAssemblyScriptImpl(schema, input);
-	case Language::Zig: return detail::emitZigImpl(schema);
+	case Language::Zig: return detail::emitZigImpl(schema, input);
 	case Language::Kotlin: return detail::emitKotlinImpl(schema, input);
 	case Language::MoonBit: return detail::emitMoonBitImpl(schema);
 	case Language::Go: return detail::emitGoImpl(schema);
