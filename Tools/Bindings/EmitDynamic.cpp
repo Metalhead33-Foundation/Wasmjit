@@ -441,44 +441,44 @@ std::string crystalType(const ValueType& type)
 	return "Void*";
 }
 
-std::string emitCrystalImpl(const Json& schema)
+std::string emitCrystalImpl(const Json& schema, const Schema& typed)
 {
 	std::ostringstream out;
 	out << "# Generated Crystal lib bindings from the "
-		<< schema.at("schema").get<std::string>() << " "
-		<< schema.at("direction").get<std::string>() << " schema. Do not edit.\n";
+		<< typed.id << " "
+		<< directionName(typed.direction) << " schema. Do not edit.\n";
 	out << "lib WasmJitBindings\n";
 	std::set<std::string> witTypes;
 	collectWitTypeNames(schema, witTypes);
 	for (const std::string& type : witTypes)
 		out << "  struct " << type << "\n  end\n";
 	out << "\n";
-	forEachFunction(schema, "exports", [&](const Json& entry) {
-		const std::string name = sanitize(entry.at("name").get<std::string>());
+	forEachFunction(typed, false, [&](const Entry& entry) {
+		const std::string name = sanitize(entry.name);
 		out << "  alias Wasmjit_" << name << "_Fn = (";
-		const Json& params = signatureParams(entry);
+		const std::vector<ValueType>& params = entry.function.params;
 		for (std::size_t i = 0; i < params.size(); ++i) {
 			if (i != 0) out << ", ";
 			out << crystalType(params[i]);
 		}
-		if (signatureResults(entry).size() > 1u)
+		if (entry.function.results.size() > 1u)
 			out << (params.empty() ? "" : ", ") << "Void*";
-		out << ") -> " << (signatureResults(entry).size() == 1
-				? crystalType(signatureResults(entry)[0]) : "Void") << "\n";
+		out << ") -> " << (entry.function.results.size() == 1
+				? crystalType(entry.function.results[0]) : "Void") << "\n";
 	});
-	forEachFunction(schema, "imports", [&](const Json& entry) {
+	forEachFunction(typed, true, [&](const Entry& entry) {
 		out << "  # G2H import: " << importComment(entry) << "\n";
 		out << "  fun wasmjit_" << sanitize(importModule(entry)) << "_"
-			<< sanitize(entry.at("name").get<std::string>()) << "(";
-		const Json& params = signatureParams(entry);
+			<< sanitize(entry.name) << "(";
+		const std::vector<ValueType>& params = entry.function.params;
 		for (std::size_t i = 0; i < params.size(); ++i) {
 			if (i != 0) out << ", ";
 			out << argumentName(entry, i) << " : " << crystalType(params[i]);
 		}
-		if (signatureResults(entry).size() > 1u)
+		if (entry.function.results.size() > 1u)
 			out << (params.empty() ? "" : ", ") << "result : Void*";
-		out << ") : " << (signatureResults(entry).size() == 1
-				? crystalType(signatureResults(entry)[0]) : "Void") << "\n";
+		out << ") : " << (entry.function.results.size() == 1
+				? crystalType(entry.function.results[0]) : "Void") << "\n";
 	});
 	out << "end\n";
 	out << nonFunctionNotes(schema);
