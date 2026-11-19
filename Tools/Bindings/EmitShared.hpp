@@ -104,7 +104,10 @@ std::string emitCHeaderImpl(const nlohmann::ordered_json& schema,
 std::string pascalName(std::string_view name);
 
 //! Returns the Pascal-case reference type name.
-std::string refPascal(const Json& type);
+std::string refPascal(const nlohmann::ordered_json& type);
+
+//! Returns the Pascal-case name of a typed reference.
+std::string refPascal(const ValueType& type);
 
 //! Returns the Rust spelling of a value type.
 std::string rustType(const nlohmann::ordered_json& type);
@@ -119,31 +122,58 @@ void emitRustParams(std::ostringstream& out, const Json& entry, bool resultBuffe
 void emitRustReturn(std::ostringstream& out, const Json& results);
 
 //! Returns the TypeScript spelling of a value type.
-std::string tsType(const Json& type);
+std::string tsType(const nlohmann::ordered_json& type);
+
+//! Returns the TypeScript spelling of a typed value.
+std::string tsType(const ValueType& type);
 
 //! Returns the AssemblyScript spelling of a value type.
-std::string asType(const Json& type);
+std::string asType(const nlohmann::ordered_json& type);
+
+//! Returns the AssemblyScript spelling of a typed value.
+std::string asType(const ValueType& type);
 
 //! Returns the Zig spelling of a value type.
-std::string zigType(const Json& type);
+std::string zigType(const nlohmann::ordered_json& type);
+
+//! Returns the Zig spelling of a typed value.
+std::string zigType(const ValueType& type);
 
 //! Returns the Kotlin spelling of a value type.
-std::string kotlinType(const Json& type);
+std::string kotlinType(const nlohmann::ordered_json& type);
+
+//! Returns the Kotlin spelling of a typed value.
+std::string kotlinType(const ValueType& type);
 
 //! Returns the MoonBit spelling of a value type.
-std::string moonbitType(const Json& type);
+std::string moonbitType(const nlohmann::ordered_json& type);
+
+//! Returns the MoonBit spelling of a typed value.
+std::string moonbitType(const ValueType& type);
 
 //! Returns the Go spelling of a value type.
-std::string goType(const Json& type);
+std::string goType(const nlohmann::ordered_json& type);
+
+//! Returns the Go spelling of a typed value.
+std::string goType(const ValueType& type);
 
 //! Returns the Dart FFI spelling of a value type.
-std::string dartType(const Json& type);
+std::string dartType(const nlohmann::ordered_json& type);
+
+//! Returns the Dart FFI spelling of a typed value.
+std::string dartType(const ValueType& type);
 
 //! Returns the Dart native spelling of a value type.
-std::string dartNativeType(const Json& type);
+std::string dartNativeType(const nlohmann::ordered_json& type);
+
+//! Returns the Dart native spelling of a typed value.
+std::string dartNativeType(const ValueType& type);
 
 //! Returns the Python ctypes spelling of a value type.
-std::string pythonType(const Json& type);
+std::string pythonType(const nlohmann::ordered_json& type);
+
+//! Returns the Python ctypes spelling of a typed value.
+std::string pythonType(const ValueType& type);
 
 //! Emits comments for non-function entries.
 std::string nonFunctionNotes(const Json& schema);

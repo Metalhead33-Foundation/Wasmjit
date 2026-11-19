@@ -378,23 +378,32 @@ std::string emitGoImpl(const Json& schema)
 
 std::string dartNativeType(const Json& type)
 {
-	const std::string kind = type.value("type", "");
-	if (kind == "i32" || kind == "s32") return "Int32";
-	if (kind == "u32") return "Uint32";
-	if (kind == "i64" || kind == "s64") return "Int64";
-	if (kind == "u64") return "Uint64";
-	if (kind == "s8") return "Int8";
-	if (kind == "u8") return "Uint8";
-	if (kind == "s16") return "Int16";
-	if (kind == "u16") return "Uint16";
-	if (kind == "f32" || kind == "float32") return "Float";
-	if (kind == "f64" || kind == "float64") return "Double";
-	if (kind == "bool") return "Bool";
-	if (kind == "char") return "Uint32";
-	if (kind == "string") return "Pointer<Utf8>";
-	if (kind == "v128") return "Pointer<Uint8>";
-	if (kind == "void") return "Void";
-	if (kind == "error-context" || isReference(type)) return "Pointer<Void>";
+	return dartNativeType(ValueType::fromJson(type));
+}
+
+std::string dartNativeType(const ValueType& type)
+{
+	switch (type.kind) {
+	case ValueKind::I32:
+	case ValueKind::S32: return "Int32";
+	case ValueKind::U32: return "Uint32";
+	case ValueKind::I64:
+	case ValueKind::S64: return "Int64";
+	case ValueKind::U64: return "Uint64";
+	case ValueKind::S8: return "Int8";
+	case ValueKind::U8: return "Uint8";
+	case ValueKind::S16: return "Int16";
+	case ValueKind::U16: return "Uint16";
+	case ValueKind::F32: return "Float";
+	case ValueKind::F64: return "Double";
+	case ValueKind::Bool: return "Bool";
+	case ValueKind::Char: return "Uint32";
+	case ValueKind::String: return "Pointer<Utf8>";
+	case ValueKind::V128: return "Pointer<Uint8>";
+	case ValueKind::Void: return "Void";
+	case ValueKind::ErrorContext: return "Pointer<Void>";
+	default: break;
+	}
 	return "Pointer<Void>";
 }
 

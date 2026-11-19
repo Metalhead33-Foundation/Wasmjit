@@ -564,139 +564,236 @@ std::string pascalName(std::string_view name)
 
 std::string refPascal(const Json& type)
 {
+	return refPascal(ValueType::fromJson(type));
+}
+
+std::string refPascal(const ValueType& type)
+{
 	return pascalName(refTypeName(type));
 }
 
 std::string tsType(const Json& type)
 {
-	const std::string kind = type.value("type", "");
-	if (kind == "i32" || kind == "i64" || kind == "f32" || kind == "f64"
-			|| kind == "s8" || kind == "u8" || kind == "s16" || kind == "u16"
-			|| kind == "s32" || kind == "u32")
-		return "number";
-	if (kind == "s64" || kind == "u64") return "bigint";
-	if (kind == "bool") return "boolean";
-	if (kind == "char" || kind == "string") return "string";
-	if (kind == "v128") return "Uint8Array";
-	if (kind == "void") return "void";
-	if (isReference(type)) return refPascal(type);
+	return tsType(ValueType::fromJson(type));
+}
+
+std::string tsType(const ValueType& type)
+{
+	switch (type.kind) {
+	case ValueKind::I32:
+	case ValueKind::I64:
+	case ValueKind::F32:
+	case ValueKind::F64:
+	case ValueKind::S8:
+	case ValueKind::U8:
+	case ValueKind::S16:
+	case ValueKind::U16:
+	case ValueKind::S32:
+	case ValueKind::U32: return "number";
+	case ValueKind::S64:
+	case ValueKind::U64: return "bigint";
+	case ValueKind::Bool: return "boolean";
+	case ValueKind::Char:
+	case ValueKind::String: return "string";
+	case ValueKind::V128: return "Uint8Array";
+	case ValueKind::Void: return "void";
+	default: break;
+	}
+	if (isReference(type))
+		return refPascal(type);
 	return "unknown";
 }
 
 std::string asType(const Json& type)
 {
-	const std::string kind = type.value("type", "");
-	if (kind == "i32" || kind == "s8" || kind == "u8" || kind == "s16"
-			|| kind == "u16" || kind == "s32" || kind == "u32")
-		return "i32";
-	if (kind == "i64" || kind == "s64" || kind == "u64") return "i64";
-	if (kind == "f32" || kind == "float32") return "f32";
-	if (kind == "f64" || kind == "float64") return "f64";
-	if (kind == "bool") return "bool";
-	if (kind == "char" || kind == "string") return "string";
-	if (kind == "v128") return "v128";
-	if (kind == "void") return "void";
-	if (kind == "error-context" || isReference(type)) return "externref";
+	return asType(ValueType::fromJson(type));
+}
+
+std::string asType(const ValueType& type)
+{
+	switch (type.kind) {
+	case ValueKind::I32:
+	case ValueKind::S8:
+	case ValueKind::U8:
+	case ValueKind::S16:
+	case ValueKind::U16:
+	case ValueKind::S32:
+	case ValueKind::U32: return "i32";
+	case ValueKind::I64:
+	case ValueKind::S64:
+	case ValueKind::U64: return "i64";
+	case ValueKind::F32: return "f32";
+	case ValueKind::F64: return "f64";
+	case ValueKind::Bool: return "bool";
+	case ValueKind::Char:
+	case ValueKind::String: return "string";
+	case ValueKind::V128: return "v128";
+	case ValueKind::Void: return "void";
+	case ValueKind::ErrorContext: return "externref";
+	default: break;
+	}
+	if (isReference(type))
+		return "externref";
 	return "externref";
 }
 
 std::string zigType(const Json& type)
 {
-	const std::string kind = type.value("type", "");
-	if (kind == "i32" || kind == "s32") return "i32";
-	if (kind == "u32") return "u32";
-	if (kind == "i64" || kind == "s64") return "i64";
-	if (kind == "u64") return "u64";
-	if (kind == "s8") return "i8";
-	if (kind == "u8") return "u8";
-	if (kind == "s16") return "i16";
-	if (kind == "u16") return "u16";
-	if (kind == "f32" || kind == "float32") return "f32";
-	if (kind == "f64" || kind == "float64") return "f64";
-	if (kind == "bool") return "bool";
-	if (kind == "char") return "u32";
-	if (kind == "string") return "[]const u8";
-	if (kind == "v128") return "wasm_v128";
-	if (kind == "void") return "void";
-	if (kind == "error-context") return "*anyopaque";
-	if (isReference(type)) return "*" + refTypeName(type);
+	return zigType(ValueType::fromJson(type));
+}
+
+std::string zigType(const ValueType& type)
+{
+	switch (type.kind) {
+	case ValueKind::I32:
+	case ValueKind::S32: return "i32";
+	case ValueKind::U32: return "u32";
+	case ValueKind::I64:
+	case ValueKind::S64: return "i64";
+	case ValueKind::U64: return "u64";
+	case ValueKind::S8: return "i8";
+	case ValueKind::U8: return "u8";
+	case ValueKind::S16: return "i16";
+	case ValueKind::U16: return "u16";
+	case ValueKind::F32: return "f32";
+	case ValueKind::F64: return "f64";
+	case ValueKind::Bool: return "bool";
+	case ValueKind::Char: return "u32";
+	case ValueKind::String: return "[]const u8";
+	case ValueKind::V128: return "wasm_v128";
+	case ValueKind::Void: return "void";
+	case ValueKind::ErrorContext: return "*anyopaque";
+	default: break;
+	}
+	if (isReference(type))
+		return "*" + refTypeName(type);
 	return "*anyopaque";
 }
 
 std::string kotlinType(const Json& type)
 {
-	const std::string kind = type.value("type", "");
-	if (kind == "i32" || kind == "s8" || kind == "u8" || kind == "s16"
-			|| kind == "u16" || kind == "s32" || kind == "u32")
-		return "Int";
-	if (kind == "i64" || kind == "s64" || kind == "u64") return "Long";
-	if (kind == "f32" || kind == "float32") return "Float";
-	if (kind == "f64" || kind == "float64") return "Double";
-	if (kind == "bool") return "Boolean";
-	if (kind == "char") return "Char";
-	if (kind == "string") return "String";
-	if (kind == "v128") return "WasmV128";
-	if (kind == "void") return "Unit";
-	if (isReference(type)) return refPascal(type);
+	return kotlinType(ValueType::fromJson(type));
+}
+
+std::string kotlinType(const ValueType& type)
+{
+	switch (type.kind) {
+	case ValueKind::I32:
+	case ValueKind::S8:
+	case ValueKind::U8:
+	case ValueKind::S16:
+	case ValueKind::U16:
+	case ValueKind::S32:
+	case ValueKind::U32: return "Int";
+	case ValueKind::I64:
+	case ValueKind::S64:
+	case ValueKind::U64: return "Long";
+	case ValueKind::F32: return "Float";
+	case ValueKind::F64: return "Double";
+	case ValueKind::Bool: return "Boolean";
+	case ValueKind::Char: return "Char";
+	case ValueKind::String: return "String";
+	case ValueKind::V128: return "WasmV128";
+	case ValueKind::Void: return "Unit";
+	default: break;
+	}
+	if (isReference(type))
+		return refPascal(type);
 	return "Any";
 }
 
 std::string moonbitType(const Json& type)
 {
-	const std::string kind = type.value("type", "");
-	if (kind == "i32" || kind == "s8" || kind == "u8" || kind == "s16"
-			|| kind == "u16" || kind == "s32" || kind == "u32")
-		return "Int";
-	if (kind == "i64" || kind == "s64" || kind == "u64") return "Int64";
-	if (kind == "f32" || kind == "float32") return "Float";
-	if (kind == "f64" || kind == "float64") return "Double";
-	if (kind == "bool") return "Bool";
-	if (kind == "char") return "Char";
-	if (kind == "string") return "String";
-	if (kind == "v128") return "Bytes";
-	if (kind == "void") return "Unit";
-	if (isReference(type)) return refPascal(type);
+	return moonbitType(ValueType::fromJson(type));
+}
+
+std::string moonbitType(const ValueType& type)
+{
+	switch (type.kind) {
+	case ValueKind::I32:
+	case ValueKind::S8:
+	case ValueKind::U8:
+	case ValueKind::S16:
+	case ValueKind::U16:
+	case ValueKind::S32:
+	case ValueKind::U32: return "Int";
+	case ValueKind::I64:
+	case ValueKind::S64:
+	case ValueKind::U64: return "Int64";
+	case ValueKind::F32: return "Float";
+	case ValueKind::F64: return "Double";
+	case ValueKind::Bool: return "Bool";
+	case ValueKind::Char: return "Char";
+	case ValueKind::String: return "String";
+	case ValueKind::V128: return "Bytes";
+	case ValueKind::Void: return "Unit";
+	default: break;
+	}
+	if (isReference(type))
+		return refPascal(type);
 	return "Bytes";
 }
 
 std::string goType(const Json& type)
 {
-	const std::string kind = type.value("type", "");
-	if (kind == "i32" || kind == "s32") return "int32";
-	if (kind == "u32") return "uint32";
-	if (kind == "i64" || kind == "s64") return "int64";
-	if (kind == "u64") return "uint64";
-	if (kind == "s8") return "int8";
-	if (kind == "u8") return "uint8";
-	if (kind == "s16") return "int16";
-	if (kind == "u16") return "uint16";
-	if (kind == "f32" || kind == "float32") return "float32";
-	if (kind == "f64" || kind == "float64") return "float64";
-	if (kind == "bool") return "bool";
-	if (kind == "char") return "rune";
-	if (kind == "string") return "string";
-	if (kind == "v128") return "[16]byte";
-	if (kind == "void") return "";
+	return goType(ValueType::fromJson(type));
+}
+
+std::string goType(const ValueType& type)
+{
+	switch (type.kind) {
+	case ValueKind::I32:
+	case ValueKind::S32: return "int32";
+	case ValueKind::U32: return "uint32";
+	case ValueKind::I64:
+	case ValueKind::S64: return "int64";
+	case ValueKind::U64: return "uint64";
+	case ValueKind::S8: return "int8";
+	case ValueKind::U8: return "uint8";
+	case ValueKind::S16: return "int16";
+	case ValueKind::U16: return "uint16";
+	case ValueKind::F32: return "float32";
+	case ValueKind::F64: return "float64";
+	case ValueKind::Bool: return "bool";
+	case ValueKind::Char: return "rune";
+	case ValueKind::String: return "string";
+	case ValueKind::V128: return "[16]byte";
+	case ValueKind::Void: return "";
+	case ValueKind::ErrorContext: return "uintptr";
+	default: break;
+	}
 	// Go's wasmimport/wasmexport accept integer handles, not pointer types
 	// (docs/EMBEDDING_SURFACE.md §11.6: prefer a table handle).
-	if (kind == "error-context" || isReference(type)) return "uintptr";
 	return "uintptr";
 }
 
 std::string dartType(const Json& type)
 {
-	const std::string kind = type.value("type", "");
-	if (kind == "i32" || kind == "i64" || kind == "s8" || kind == "u8"
-			|| kind == "s16" || kind == "u16" || kind == "s32" || kind == "u32"
-			|| kind == "s64" || kind == "u64")
-		return "int";
-	if (kind == "f32" || kind == "f64" || kind == "float32" || kind == "float64")
-		return "double";
-	if (kind == "bool") return "bool";
-	if (kind == "char" || kind == "string") return "String";
-	if (kind == "v128") return "Pointer<Uint8>";
-	if (kind == "void") return "void";
-	if (kind == "error-context" || isReference(type)) return "Pointer<Void>";
+	return dartType(ValueType::fromJson(type));
+}
+
+std::string dartType(const ValueType& type)
+{
+	switch (type.kind) {
+	case ValueKind::I32:
+	case ValueKind::I64:
+	case ValueKind::S8:
+	case ValueKind::U8:
+	case ValueKind::S16:
+	case ValueKind::U16:
+	case ValueKind::S32:
+	case ValueKind::U32:
+	case ValueKind::S64:
+	case ValueKind::U64: return "int";
+	case ValueKind::F32:
+	case ValueKind::F64: return "double";
+	case ValueKind::Bool: return "bool";
+	case ValueKind::Char:
+	case ValueKind::String: return "String";
+	case ValueKind::V128: return "Pointer<Uint8>";
+	case ValueKind::Void: return "void";
+	default: break;
+	}
 	return "Pointer<Void>";
 }
 

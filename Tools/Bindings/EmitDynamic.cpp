@@ -14,16 +14,28 @@ using Json = nlohmann::ordered_json;
 
 std::string pythonType(const Json& type)
 {
-	const std::string kind = type.value("type", "");
-	if (kind == "i32" || kind == "u32" || kind == "s32" || kind == "i8"
-			|| kind == "u8" || kind == "i16" || kind == "u16")
-		return "ctypes.c_int32";
-	if (kind == "i64" || kind == "u64" || kind == "s64")
-		return "ctypes.c_int64";
-	if (kind == "f32" || kind == "float32") return "ctypes.c_float";
-	if (kind == "f64" || kind == "float64") return "ctypes.c_double";
-	if (kind == "v128") return "ctypes.c_ubyte * 16";
-	if (kind == "void") return "None";
+	return pythonType(ValueType::fromJson(type));
+}
+
+std::string pythonType(const ValueType& type)
+{
+	switch (type.kind) {
+	case ValueKind::I32:
+	case ValueKind::U32:
+	case ValueKind::S32:
+	case ValueKind::I8:
+	case ValueKind::U8:
+	case ValueKind::I16:
+	case ValueKind::U16: return "ctypes.c_int32";
+	case ValueKind::I64:
+	case ValueKind::U64:
+	case ValueKind::S64: return "ctypes.c_int64";
+	case ValueKind::F32: return "ctypes.c_float";
+	case ValueKind::F64: return "ctypes.c_double";
+	case ValueKind::V128: return "ctypes.c_ubyte * 16";
+	case ValueKind::Void: return "None";
+	default: break;
+	}
 	return "ctypes.c_void_p";
 }
 
