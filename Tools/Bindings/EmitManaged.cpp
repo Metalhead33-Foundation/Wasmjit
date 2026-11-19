@@ -12,6 +12,11 @@ namespace WASM::Bindings::detail {
 
 using Json = nlohmann::ordered_json;
 
+// Forward declarations: the typed forms are defined next to the JSON ones, and
+// the JSON ones call them.
+std::string javaType(const ValueType& type);
+std::string csharpType(const ValueType& type);
+
 std::string emitDartImpl(const Json& schema)
 {
 	std::set<std::string> refs;
@@ -61,15 +66,28 @@ std::string emitDartImpl(const Json& schema)
 
 std::string javaType(const Json& type)
 {
-	const std::string kind = type.value("type", "");
-	if (kind == "i32" || kind == "u32" || kind == "s32" || kind == "i8"
-			|| kind == "u8" || kind == "i16" || kind == "u16")
-		return "int";
-	if (kind == "i64" || kind == "u64" || kind == "s64") return "long";
-	if (kind == "f32" || kind == "float32") return "float";
-	if (kind == "f64" || kind == "float64") return "double";
-	if (kind == "v128") return "byte[]";
-	if (kind == "void") return "void";
+	return javaType(ValueType::fromJson(type));
+}
+
+std::string javaType(const ValueType& type)
+{
+	switch (type.kind) {
+	case ValueKind::I32:
+	case ValueKind::U32:
+	case ValueKind::S32:
+	case ValueKind::I8:
+	case ValueKind::U8:
+	case ValueKind::I16:
+	case ValueKind::U16: return "int";
+	case ValueKind::I64:
+	case ValueKind::U64:
+	case ValueKind::S64: return "long";
+	case ValueKind::F32: return "float";
+	case ValueKind::F64: return "double";
+	case ValueKind::V128: return "byte[]";
+	case ValueKind::Void: return "void";
+	default: break;
+	}
 	return "WasmExternref";
 }
 
@@ -135,15 +153,28 @@ std::string emitJavaImpl(const Json& schema)
 
 std::string csharpType(const Json& type)
 {
-	const std::string kind = type.value("type", "");
-	if (kind == "i32" || kind == "u32" || kind == "s32" || kind == "i8"
-			|| kind == "u8" || kind == "i16" || kind == "u16")
-		return "int";
-	if (kind == "i64" || kind == "u64" || kind == "s64") return "long";
-	if (kind == "f32" || kind == "float32") return "float";
-	if (kind == "f64" || kind == "float64") return "double";
-	if (kind == "v128") return "byte*";
-	if (kind == "void") return "void";
+	return csharpType(ValueType::fromJson(type));
+}
+
+std::string csharpType(const ValueType& type)
+{
+	switch (type.kind) {
+	case ValueKind::I32:
+	case ValueKind::U32:
+	case ValueKind::S32:
+	case ValueKind::I8:
+	case ValueKind::U8:
+	case ValueKind::I16:
+	case ValueKind::U16: return "int";
+	case ValueKind::I64:
+	case ValueKind::U64:
+	case ValueKind::S64: return "long";
+	case ValueKind::F32: return "float";
+	case ValueKind::F64: return "double";
+	case ValueKind::V128: return "byte*";
+	case ValueKind::Void: return "void";
+	default: break;
+	}
 	return "void*";
 }
 
