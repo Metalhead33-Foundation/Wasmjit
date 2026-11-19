@@ -736,6 +736,33 @@ site.**
 | a test | the ring, after the call that failed | a regression that pins an id rather than a message |
 | a person at a terminal | `--diagnostics=text\|json`, `--diagnose=PATH [--invoke=…]` | a module that fails before any harness exists |
 
+The first two are the same object in C++, and neither needs a log parser:
+
+```cpp
+// The embedder's reader: one sink, installed once on the runtime.
+void onDiagnostic(void* userData, const WASM::Diagnostic& diagnostic) noexcept
+{
+    auto* log = static_cast<DiagnosticsLog*>(userData);
+    log->line(WASM::formatDiagnostic(diagnostic));    // id, message, `at` line, hint
+}
+
+WASM::RuntimeConfig config;
+config.sink = &onDiagnostic;
+config.sinkUserData = &log;
+auto runtime = WASM::Runtime::create("libjit", config);
+
+// The test's reader: the bounded ring, after the call that failed.
+try {
+    runtime->callExport<void>(instance, "divide");
+} catch (const WASM::Trap&) {
+    for (const WASM::Diagnostic& record : WASM::recentDiagnostics()) {
+        if (record.id == "WASM.EXECUTE.TRAP.INTEGER_DIVIDE_BY_ZERO") {
+            // the id is the assertion; record.message and record.location are evidence
+        }
+    }
+}
+```
+
 **Step 1 — read the id, not the message.** `message` is allowed to improve; the
 id is the contract (§4.1). A text line is `<severity> <id>: <message>`, and the id
 is greppable in three places at once: the constant in
@@ -759,7 +786,7 @@ are the phase, and the phase is a *component*, not a severity (§4.2):
 | `WASM.EXECUTE.TRAP.*` | the trap boundary — generated code, a helper, or a host raise | [`ABI.md`](ABI.md) “Traps”, [`SAFETY.md`](SAFETY.md) §2.4 |
 | `WASM.EXECUTE.EXCEPTION` | an uncaught Wasm exception reached the host | [`ABI.md`](ABI.md) “Exceptions” |
 | `WASM.CONTINUATION.*` | resume/switch/scheduler paths | [`proposals/STACK_SWITCHING.md`](proposals/STACK_SWITCHING.md) §4.1 |
-| `WASM.BACKEND.PLUGIN` | a plugin load refusal, or a successful load as a Note | [`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md) §4.3 |
+| `WASM.BACKEND.PLUGIN` | a plugin load refusal, or a successful load as a Note | [`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md) §4.5 |
 
 **Step 3 — the location is the site, when the phase can name one.** Validation and
 decode records carry a module-local `functionIndex`, an opcode
@@ -951,6 +978,16 @@ Question:     what you want decided — "why does this validate" is a better
 holds 32 records by default and a run that needs more is usually a run with a
 different bug (§5.1).
 
+An embedder builds the same field from its own ring, without parsing anything:
+
+```cpp
+// The "Records" field of the packet: the versioned envelope, straight from the
+// execution state that produced it.
+const std::string records = WASM::diagnosticsToJson(WASM::recentDiagnostics(),
+                                                    WASM::diagnosticsStartedAt());
+std::ofstream("failure.json") << records;    // schema wasmjit.diagnostic.v1
+```
+
 **Then tell it how to look the id up.** The three lookups are mechanical, and an
 agent that knows them does not have to guess:
 
@@ -961,7 +998,7 @@ agent that knows them does not have to guess:
    [`VALIDATION.md`](VALIDATION.md), traps and exceptions are [`ABI.md`](ABI.md),
    containment and budgets are [`SAFETY.md`](SAFETY.md), continuations are
    [`proposals/STACK_SWITCHING.md`](proposals/STACK_SWITCHING.md) §4.1, a plugin
-   load is [`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md) §4.3.
+   load is [`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md) §4.5.
 3. The test name from (1) is the executable statement of the failure's meaning;
    §7 lists what is covered, so “is this even a tested path?” is answered before
    any code is changed.

@@ -8,7 +8,7 @@ guest-address-keyed waiter table, concurrent entry into the one instance,
 per-agent trap state and a multi-mutator-safe GC path. `Single` stays the default
 and is bit-identical to the previous revision; at most one instance per module
 is allowed, and concurrent compilation is rejected as a feature. Revision 13 adds
-§4.4, the opt-in written as an embedder uses it.
+§4.6, the opt-in written as an embedder uses it.
 Audience: anyone touching `WasmMemory`, `WasmStore`, `WasmOpcode`,
 `WasmOpcodeDispatcher`, `LibjitOpcodeDispatcher`, or the test harness.
 
@@ -384,7 +384,7 @@ Two further properties of the tail-call lowering:
   array=11`). Reference slots and table slots still refuse: the former need the
   GC retain/release barrier and the latter need table.get/set lowering.
 
-### 4.4 Opting into several agents
+### 4.6 Opting into several agents
 
 The model above is opt-in, and the opt-in is one field plus one call per host
 thread. A guest that exports `bump(n)` and `total()` over a shared `i32` global —

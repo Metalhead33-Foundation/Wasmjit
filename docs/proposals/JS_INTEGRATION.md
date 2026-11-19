@@ -10,9 +10,10 @@ the engine: `WasmHostBridge`, `HostContinuation`, the wide scheduler hooks, the
 import/export descriptor views and the core Custom Descriptors instructions/RTT
 are the engine side; a JS engine, Promise/event loop, ESM loader and
 `js-prototypes` configuration belong to the embedder. `JS-0`…`JS-5` are
-complete. Revision 11 adds §6.4, which states the same seam without a language,
-because an embedder that ships QuickJS, MuJS, Lua, Python or Ruby alongside this
-engine needs one boundary rather than a JavaScript-shaped one.
+complete. Revision 11 adds §6.8, the same seam written as an adapter skeleton, so
+an embedder that ships QuickJS, MuJS, Lua, Python or Ruby alongside this engine
+has one boundary to code against instead of a JavaScript-shaped one; §6.4 states
+the rule it obeys.
 Audience: anyone touching `ImportResolver`, `Callable`, `VMContext`,
 `HostBridge`, `externref`, `Module` metadata, or considering a
 QuickJS/MuJS/other adapter.
@@ -882,54 +883,72 @@ path rather than unwinding through JIT frames. A JS engine that is not
 thread-safe restricts the adapter to the engine's single-threaded execution
 model.
 
-### 6.4 The adapter is not a JavaScript adapter
+### 6.8 A host-language adapter, in code
 
-The verdict above is about proposals that carry JavaScript semantics. The *hooks*
-they need are older and broader than JavaScript, and this section states the
-general form, because most embedders of this engine ship a scripting runtime
-alongside it — QuickJS, MuJS, Lua, Python or Ruby — and want one boundary, not
-two.
+§6.4 states the rule (opaque handles, no engine callbacks in core, no JS-shaped
+metadata) and §6.5 lists what the core may and may not own. This is the rule
+written down, with the scripting engine's own API left as elided calls so the
+shape stays visible — the same skeleton serves V8, QuickJS, MuJS, Lua, CPython or
+Ruby, and only the elided names change.
 
-**The seam, stated without a language.** An embedder that owns a scripting engine
-has three things the engine must not model: a *value representation*, a
-*suspension primitive*, and a *scheduler*. WasmJit supplies the transport for all
-three and none of the three themselves:
+```cpp
+// One thunk per Wasm signature the host exposes. The first parameter is the
+// caller's VMContext; nothing in the signature is JavaScript.
+void scriptCallThunk(WASM::VMContext* context, std::int32_t argc, std::int32_t id)
+{
+    auto* realm = static_cast<Realm*>(context->hostData);   // published at instanceCreated
+    if (realm == nullptr)
+        WASM::trap(WASM::TrapKind::Internal, "scriptCallThunk: no realm");
 
-| The embedder has | The engine's transport | The adapter does |
-|---|---|---|
-| a value (`JSValue`, `lua_State` stack slot, `PyObject*`, `VALUE`) | an `externref` is an opaque `void*`; `ContinuationValue` is 16 opaque bytes plus a kind | keep the value alive, and hand the engine a stable pointer or slot |
-| a task/thread of control (Promise, coroutine, fiber, `async` task, generator) | `HostContinuation` + the serial `HostContinuationScheduler` | store the replacement continuation behind its own task object, and call `submit` when the task resumes |
-| a collector or a manual lifetime rule (`Py_INCREF`, `rb_gc_register_address`, a Lua registry) | `HostBridge::references.retain`/`release`, and `instanceDestroying` | count the host value; publish per-instance state at `instanceCreated` |
-| a calling convention (`JS_Call`, `lua_pcall`, `PyObject_Call`, `rb_funcall`) | `Callable::fnPtr(VMContext*, params…)` | one thunk per signature: read Wasm parameters, call its own engine, convert results |
+    ScriptValue callee = realm->lookup(id);                 // JS_GetProperty / lua_getfield / PyDict_GetItem
+    ScriptValue result = engineCall(*realm, callee, argc);  // JS_Call / lua_pcall / PyObject_Call
 
-Nothing in that table is JavaScript-shaped, which is why the JSPI work landed as
-`HostContinuation`, `HostContinuationScheduler` and `HostBridge` rather than as a
-`WebAssembly.Suspending` implementation. The JSPI contract
-(§4.2.2) is the *fully specified* case — it names `Promise`, the job queue and
-`instanceof` rules because the proposal does — and it is the template the other
-hosts instantiate with different nouns.
+    if (engineFailed(*realm))                               // a JS exception, a Lua error, a Python raise
+        WASM::trap(WASM::TrapKind::Internal, engineErrorText(*realm));
+    realm->keep(result);                                    // one owner, chosen deliberately
+}
 
-**What the engine must not grow, for any host.** A host value type, an event loop,
-a promise, a microtask queue, a loader, or a second scheduler. Each of those is a
-line where the engine would have to pick a language, and the rule in
-[`LAYERING.md`](../LAYERING.md) §4 is the same rule: the core states a contract,
-the embedder supplies the policy. `HostContinuationScheduler` is serial on purpose
-so that the host keeps ownership of interleaving — including the case where the
-host's own event loop is the only scheduler in the process.
+// The reference half: the scripting engine's value lifetime *is* the barrier's.
+WASM::HostBridge bridge;
+bridge.userData = &realm;
+bridge.references.isHostReference = &realmOwns;   // "is this handle mine?"
+bridge.references.retain = &engineRetain;         // JS_DupValue / luaL_ref / Py_INCREF
+bridge.references.release = &engineRelease;       // JS_FreeValue / luaL_unref / Py_DECREF
+bridge.references.equals = &engineEquals;         // SameValue / rawequal
+bridge.instanceCreated = &publishRealm;           // context->hostData = &realm, before `start`
+bridge.instanceDestroying = &dropRealmRoots;      // every handle this instance was given
+```
 
-**The one decision an embedder of two engines actually makes.** Not “which
-language”, but “who owns the queue”. Two loops in one process is a policy bug, and
-two schedulers racing over one continuation is a contract violation (§4.2.2, rule
-6). The shape that works: the scripting engine owns its loop, WasmJit's scheduler
-is a queue the host drains from inside that loop (`step`), and a Wasm
-continuation is resumed from the host's task callback — never from a second
-thread, unless the embedder also opted into several agents
-(`proposals/THREADS.md` §4.4, and note that a continuation is *not* an agent).
+The suspension half is the scheduler from
+[`STACK_SWITCHING.md`](STACK_SWITCHING.md) §4.1, driven from the engine's own loop:
 
-The code for all four layers is §2.2 of
-[`../EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md); the scheduler in use is
-`STACK_SWITCHING.md` §4.1; the reference-lifetime rules are
-`WasmHostBridge.hpp`'s header comment, which is the contract rather than a guide.
+```cpp
+WASM::HostContinuationScheduler::Hooks hooks;
+hooks.userData = &realm;
+hooks.onSuspended = &adoptIntoScheduledTask;   // JS: keep the replacement behind a Promise
+hooks.onCompleted = &settleTask;
+hooks.onRejected = &failTask;                  // trap or uncaught exception arrives here
+
+WASM::HostContinuationScheduler scheduler(hooks);
+// Once per turn of the scripting engine's loop, one Wasm task:
+while (scheduler.step()) { /* the host owns the interleaving */ }
+```
+
+Three consequences the adapter gets wrong first, in order:
+
+1. **Failure is `WASM::trap`, never an escape.** A C++ exception must not cross the
+   generated frame, and a scripting engine's `longjmp`/`setjmp` must not cross it
+   either: catch it inside the thunk, convert it, and trap
+   ([`SAFETY.md`](../SAFETY.md) §2.4, `WASM::nativeImport` as the trampoline).
+2. **One owner per value.** The script engine's count and `HostBridge`'s count
+   must be the *same* count — a `retain` with no matching `release` leaks the
+   value, and two counts free it twice (§4.2.2, rule 6).
+3. **The adapter chooses when it may re-enter.** Not inside a GC walk, not during
+   a trap unwind, and not from a thread the engine was not installed on (§6.4).
+
+The two-engine decision (who owns the queue) and the per-language mapping are §2.2
+of [`../EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md); the fully specified case,
+where the proposal itself names its objects, is the JSPI contract in §4.2.2.
 
 ## 7. Plan
 

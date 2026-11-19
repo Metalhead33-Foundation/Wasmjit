@@ -121,7 +121,7 @@ closed each one — it is history, not a to-do list:
 | P5 | **`WasmRuntime.hpp` and `WasmContext.hpp` were 6-line empty namespaces**, leftover shells of an earlier sketch; `LibJIT::Runtime` was an empty stub. | `WasmContext.hpp` and `LibJIT::Runtime` are deleted (2026-10-29); `WasmRuntime.hpp` is the real engine object (`ES-1`). §3.1–§3.2 record why each candidate meaning of "context" lost the name. |
 | P6 | **The GC safepoint was the embedder's job** and nothing reminded them. | `ES-1`: `Runtime::safepoint()` collects on every live instance; `ABI.md` "Other store-owned entities" still explains the mechanism. |
 
-## 2.1 A walkthrough: an engine, a module, a call
+### 2.1 A walkthrough: an engine, a module, a call
 
 The table above is the recipe; this is the same thing as a program. Every call
 below is what `Test/consumer/Consumer.cpp` does out of tree through `pkg-config`
@@ -166,14 +166,21 @@ int main()
 }
 ```
 
-**Choosing the backend.** `"libjit"` is the executing backend compiled in;
-`"null"` is the core's `NullInstantiator`, which resolves and validates without
-generating code. Any other name is looked up as a **loadable plugin** before
-`create` fails, so `Runtime::create("example")` works for a backend the frontend
-was never compiled with ([`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md) §4.1).
-`runtime->backendName()`, `profile()`, `supports(feature)` and `version()` answer
-what was actually selected — an embedder that needs a specific capability should
-ask, not assume.
+**Choosing the backend.** A backend is always a **separate shared library** that
+exports `wasmjit_backend_query`; `libWasmBase` links none of them and embeds no
+code generator. The name you pass selects it from one of two places
+([`BACKEND_PLUGIN_ABI.md`](BACKEND_PLUGIN_ABI.md) §4.5):
+
+| Name | Where it comes from |
+|---|---|
+| `"libjit"` | the library is already mapped — the *application* links it, so its `WASMJIT_REGISTER_BACKEND` initialiser has run and the registry knows the name |
+| `"null"` | the same, for the core's `NullInstantiator`: it resolves and validates, and generates nothing |
+| anything else | `Runtime::create` falls back to `loadBackendPlugin`, which `dlopen`s `libwasmjit-backend-<name>.so` from `WASMJIT_BACKEND_PATH`, the working directory or the executable's directory |
+
+So the same call reaches a backend the frontend was never linked against; nothing
+is statically compiled into the engine. `runtime->backendName()`, `profile()`,
+`supports(profile)` and `compilationCapabilities()` answer what was actually
+selected — an embedder that needs a specific capability should ask, not assume.
 
 **Registering native functions: what a “synthetic module” is.** There is no
 `Module` object for the host side. A host namespace is a `(module, field)`
@@ -208,7 +215,7 @@ store, the modules, the instances and the backend, so nothing needs a
 process-wide singleton (`ES-2`) — two runtimes in one process have two heaps and
 two budgets.
 
-## 2.2 The host side of the boundary: hooks, continuations, agents
+### 2.2 The host side of the boundary: hooks, continuations, agents
 
 Everything an embedder needs to put a *host language* behind the boundary lives in
 three seams, and none of them names one. This is §2.1 continued past the
@@ -315,9 +322,10 @@ ships:
 The mapping from `WebAssembly.Suspending` onto these hooks is spelled out once, as
 the JSPI embedder contract, in
 [`proposals/JS_INTEGRATION.md`](proposals/JS_INTEGRATION.md) §4.2.2; §6.4 of the
-same note states why the identical seam serves a non-JavaScript runtime unchanged.
+same note states why the identical seam serves a non-JavaScript runtime unchanged,
+and §6.8 writes that seam as an adapter skeleton.
 The scheduler in use is [`proposals/STACK_SWITCHING.md`](proposals/STACK_SWITCHING.md)
-§4.1, and the agent opt-in is [`proposals/THREADS.md`](proposals/THREADS.md) §4.4.
+§4.1, and the agent opt-in is [`proposals/THREADS.md`](proposals/THREADS.md) §4.6.
 
 ## 3. Does the JS-engine split map onto this engine?
 

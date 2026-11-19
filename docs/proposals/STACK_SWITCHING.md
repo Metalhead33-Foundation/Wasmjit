@@ -251,7 +251,7 @@ reading the pending slots is how the host gets the kind and message.
 **Where this stops.** The scheduler is serial and is not an agent API: it makes no
 second execution context and takes no lock on the instance. An embedder that wants
 several host threads inside one instance opts into
-`ConcurrencyModel::Agents` separately (`THREADS.md` §4.4) — and a continuation is
+`ConcurrencyModel::Agents` separately (`THREADS.md` §4.6) — and a continuation is
 an execution *context*, not an agent (D-5). The full embedder-side contract, for
 the case that specifies what the host must supply, is
 [`JS_INTEGRATION.md`](JS_INTEGRATION.md) §4.2.2; the same four layers written as a

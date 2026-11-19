@@ -324,6 +324,19 @@ because there are no fields.
 | the storage | the object header in the `GcHeap`, **no payload** | the native state lives host-side, addressed by the handle: §3.4's *host-owned* backing, which it explicitly keeps “for an opaque object that cannot be expressed in Wasm” |
 | the surface | methods, properties, constructors and `release`, unchanged | `fields: []` loads, and every emitter projects the rest |
 
+```cpp
+// The fieldless case: the empty struct is the whole Wasm type.
+const WASM::HostType session = WASM::HostType::intern(store, WASM::hostStruct({}));
+WASM::HostObject object = WASM::HostObject::createStruct(store, session);
+// layout().fields is empty and headerBytes == totalBytes; every member of the
+// native class is reached through an accessor, because none of it is a field.
+
+// The one-field fix, when two such classes must stay distinguishable.
+const WASM::HostType widget = WASM::HostType::intern(store, WASM::hostStruct({
+    WASM::hostValueField(WASM::ValueTypeCode::I32),   // kind
+}));
+```
+
 What it is **not** is *transparent*: no guest can read a byte of the native
 object, so every member must be a call. That is not a defect of the descriptor —
 it is exactly the property §4.7 claims for a property and the Component Model
@@ -911,6 +924,13 @@ The `TypeId` is structural: a module that declares the same `(struct (mut i32)
 (mut i32))` receives **the same identity**, so `ref.test` and `ref.cast` work
 across the boundary with no adapter (`SO16`, §4.4). A field change is a new
 definition and a new `TypeId` — never a mutation of this one.
+
+`"libjit"` names a backend the way every backend is named: a code generator is its
+own shared library, never linked into `WasmBase`; the application links it, its
+registration hook runs, and `Runtime::create` selects it by name. A backend the
+application does not link is reached through the same call — `create` `dlopen`s it
+from `WASMJIT_BACKEND_PATH` — so this line does not change when the backend does
+([`../BACKEND_PLUGIN_ABI.md`](../BACKEND_PLUGIN_ABI.md) §4.5).
 
 **Step 2 — create an instance and fill it.** `HostObject` is move-only and owns
 exactly one engine count (§4.4). The field index is the declaration index; the
