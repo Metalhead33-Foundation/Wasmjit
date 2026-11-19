@@ -2,7 +2,7 @@
 
 *Host-Registered Object Types, the GObject Precedent, and What the Component Model Already Covers*
 
-Status: design note / implementation reference (**revision 11 — 2026-11-19**). This
+Status: design note / implementation reference (**revision 12 — 2026-11-19**). This
 is `EMBEDDING_SURFACE.md` §16 promoted to a note of its own: that section had grown
 into a six-hundred-line study inside an implementation reference, and the
 reference now keeps only the embedder-facing half. Revision 1 recorded a boundary —
@@ -40,6 +40,12 @@ scoped rather than attempted (§4.11).
 declares the handle *entry points*, and a `#ifdef __cplusplus` block after it turns
 them into one move-only RAII class per descriptor — compiled and run in the test
 suite, which counts the releases (§4.10).
+**Revision 12 adds the tutorials**: §2.7 answers the question §2.6 leaves open —
+whether an object with no fields, only methods and properties, is still a
+synthetic object (yes, as an object of the empty `(struct)`; opaque in its
+representation, and with no discriminating identity of its own), and §4.12 is the
+end-to-end walkthrough: describe, intern, create, root in a handle table, serve
+from imports, call, release, generate.
 **Revision 11 adds named parameters and a typed generator**: a method or a
 constructor carries `argNames`, and every emitter spells `width`/`height` rather
 than `p0`/`p1` (§4.10, A.14.5). Internally, `Tools/Bindings/` no longer traffics
@@ -298,6 +304,65 @@ library**: plain data plus behaviours expressed as functions. That is the
 GObject/Vala constraint, and it is the price of crossing the boundary at zero
 copy. A product that wants to expose an arbitrary C++ object still has §12 of
 [`../EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md).
+
+### 2.7 An object with no fields: is it still a synthetic object?
+
+The question §2.6 raises one step further: a native class whose state cannot be
+written as Wasm values at all — an `std::vector`, an `std::string`, a vtable —
+exposed with **methods and properties and no fields**. Is that an opaque handle,
+or a synthetic object?
+
+**Yes, it is a synthetic object — with one precision about which half is
+synthetic.** The degenerate descriptor is legal end to end, and the reason is
+that §2.6's constraint is satisfied *vacuously*: every field is a Wasm value
+because there are no fields.
+
+| Part | A fieldless synthetic object | Why |
+|---|---|---|
+| the Wasm type | `(struct)` with zero fields | a legal Wasm type; interning does not require a field, and `layoutHostType` returns `headerBytes == totalBytes` |
+| the identity | the Store's `TypeId`, as for any host type | §2.1's definition — *an object of a host-registered Wasm type* — is met by an empty struct |
+| the storage | the object header in the `GcHeap`, **no payload** | the native state lives host-side, addressed by the handle: §3.4's *host-owned* backing, which it explicitly keeps “for an opaque object that cannot be expressed in Wasm” |
+| the surface | methods, properties, constructors and `release`, unchanged | `fields: []` loads, and every emitter projects the rest |
+
+What it is **not** is *transparent*: no guest can read a byte of the native
+object, so every member must be a call. That is not a defect of the descriptor —
+it is exactly the property §4.7 claims for a property and the Component Model
+claims for every resource member. The honest name is a **synthetic object with a
+host-private payload**: synthetic in its identity, its lifetime and its call
+surface; opaque in its representation.
+
+Three things follow, and the third is the one that bites:
+
+1. **It costs nothing to try.** An empty field list interns, an object of it
+   allocates, and `fields: []` in `wasmjit.binding/2` emits a C++ class whose
+   members are its methods and properties. `[bindings][objects]` already emits
+   exactly that shape (the `demo.Trap` case).
+2. **The payload's lifetime is the handle's.** `HostHandleTable::release` (or the
+   RAII `HostObject`) is the one place the native object dies; the engine's count
+   covers only the empty header. `instanceDestroying` is the last resort, and
+   `resource.drop` becomes the guest-side spelling once `SO21` is wired.
+3. **A fieldless type carries no discriminating identity.** Identity is
+   structural (D1), so *every* fieldless host type interns to the **one** empty
+   `(struct)`: `demo.Widget` and `demo.Session` share a `TypeId`, `ref.test`
+   cannot tell them apart, and neither can
+   `HostHandleTable::resolve(handle, type)` — its check compares the two
+   `TypeId`s and they are equal. Nominal identity then rests entirely on the
+   descriptor name and on which table the handle is resolved against, and a
+   handle carries no table identity (`SO20`).
+
+The cheap fix for (3) is a field one did not want: a single `i32 kind`, or a
+`version` counter, makes the type structurally distinct and every check above
+starts discriminating again. If not even that is affordable, the class
+distinction has to live above the boundary — one `HostHandleTable` per class, or
+the descriptor's `(name, version)` as the namespace — because the engine cannot
+invent a nominal tag its identity model does not have (§3.5).
+
+**Where the answer is still no.** An object with no fields *and* no methods or
+properties is a token, not an object: register nothing and pass an `i64` or an
+`externref`. And if the guest must reach *inside* the native payload — index the
+`std::vector`, compare the `std::string` — no descriptor shape helps: the object
+stays behind the opaque path (D5, `externref` + `HostBridge`) or its data is
+copied through a canonical list/string record (§2.6, A.4).
 
 
 ## 3. What the scenario does not demand
@@ -810,6 +875,188 @@ arena object becomes "a `HostHandleTable` whose entry is a `{offset, size}` pair
 in a memory the plan says is shared", and the acceptance case is already written
 (`SO9`/`SO10`: the object survives the writer's unload, and a forged offset is a
 clean error).
+
+### 4.12 A tutorial: a synthetic object from C++, end to end
+
+Everything in §4.1–§4.11 is already implemented and already exercised; this
+section is the same walkthrough a reader needs to build one. The running example
+is the smallest object that has all three member kinds — two fields, one method,
+one property — and the walkthrough is the shape `[hostobject][handle]` runs.
+
+**Step 0 — the native type.** Whatever the product already has:
+
+```cpp
+struct Widget {
+    std::int32_t width = 0;
+    std::int32_t height = 0;
+};
+```
+
+**Step 1 — describe it in Wasm terms and intern it.** The description carries no
+name, no version and no methods: those are descriptor metadata (§4.5), and the
+engine only canonicalises the shape.
+
+```cpp
+auto runtime = WASM::Runtime::create("libjit", config);   // `config` carries the bridge: step 4
+WASM::Store& store = runtime->store();
+
+const WASM::HostTypeDefinition definition = WASM::hostStruct({
+    WASM::hostValueField(WASM::ValueTypeCode::I32, /*isMutable=*/true),
+    WASM::hostValueField(WASM::ValueTypeCode::I32, /*isMutable=*/true),
+});
+const WASM::HostType widget = WASM::HostType::intern(store, definition);
+```
+
+The `TypeId` is structural: a module that declares the same `(struct (mut i32)
+(mut i32))` receives **the same identity**, so `ref.test` and `ref.cast` work
+across the boundary with no adapter (`SO16`, §4.4). A field change is a new
+definition and a new `TypeId` — never a mutation of this one.
+
+**Step 2 — create an instance and fill it.** `HostObject` is move-only and owns
+exactly one engine count (§4.4). The field index is the declaration index; the
+byte offset comes from `layoutHostType`, which is the same function the generated
+descriptor is validated against (§4.5).
+
+```cpp
+WASM::HostObject object = WASM::HostObject::createStruct(store, widget);
+object.writeField<std::int32_t>(0, 320);
+object.writeField<std::int32_t>(1, 200);
+```
+
+**Step 3 — root it in a handle table.** This is the half a non-GC guest needs
+(`SO-3`, §4.9). `acquire` **moves** the count the object already owns: the handle
+is a root, never a second object, so `liveObjectCount()` does not move and a
+release through either spelling is the same decrement.
+
+```cpp
+WASM::HostHandleTable handles(store);
+const WASM::HostHandle slot = handles.acquire(std::move(object), widget);
+const std::int64_t wire = static_cast<std::int64_t>(slot.value);  // the i64 the guest carries
+void* const reference = handles.raw(slot);                       // the same object, as (ref $T)
+```
+
+**Step 4 — serve the members from host imports.** A method is an import whose
+parameter is the handle: `(func (import "demo" "widget_area") (param i64)
+(result i32))` is `Widget::area()` at the boundary. The import is a plain function
+taking the caller's `VMContext*` first, so per-instance state arrives through
+`context->hostData` — never through a capture.
+
+```cpp
+struct HostState {
+    WASM::HostHandleTable* handles = nullptr;
+    const WASM::HostType* widget = nullptr;
+};
+
+std::int32_t widgetArea(WASM::VMContext* context, std::int64_t wire)
+{
+    auto* state = static_cast<HostState*>(context->hostData);
+    const WASM::HostHandle handle{static_cast<std::uint64_t>(wire)};
+    WASM::HostObject* object = state->handles->resolve(handle, *state->widget);
+    if (object == nullptr)
+        WASM::trap(WASM::TrapKind::Internal, "widgetArea: stale or foreign handle");
+    return object->readField<std::int32_t>(0) * object->readField<std::int32_t>(1);
+}
+```
+
+`resolve(handle, type)` is both checks in one call: a released slot's generation
+has moved on, and a live slot of another type fails the identity comparison.
+Register it, and let `nativeImport` be the trampoline
+([`../EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) §2.2):
+
+```cpp
+WASM::HostState state{};
+state.handles = &handles;
+state.widget = &widget;
+
+WASM::HostBridge bridge;
+bridge.userData = &state;
+bridge.instanceCreated = [](void* userData, WASM::VMContext* context) {
+    context->hostData = userData;      // published before `start` runs
+};
+
+WASM::RegistryImportResolver imports;
+imports.registerFunction("demo", "widget_area", WASM::nativeImport<&widgetArea>());
+```
+
+The bridge must be installed **at `create`** (`RuntimeConfig::hostBridge`), not
+after `instantiate`: global initialisers, segments and the start function run
+during instantiation, so an import called from `start` sees `hostData` only if
+`instanceCreated` published it.
+
+**Step 5 — hand it to the guest.** Load, instantiate with the resolver, and pass
+the `i64` exactly as the schema declares it:
+
+```cpp
+auto module = runtime->loadFile(path);
+WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+
+const std::int32_t area = runtime->callExport<std::int32_t>(instance, "compute_area", wire);
+```
+
+A GC-capable guest may take the same object as a typed reference instead — the
+second spelling of one identity (§4.9):
+
+```cpp
+const std::int32_t isWidget = runtime->callExport<std::int32_t>(instance, "is_widget", reference);
+```
+
+**Step 6 — release.** One call, and the slot's generation retires with it:
+
+```cpp
+handles.release(slot);   // every later resolve(slot) is nullptr
+```
+
+A `HostObject` that was never acquired still releases its own count in its
+destructor, which is why the type is move-only. `runtime->safepoint()` at a frame
+end collects the guest's objects as usual; a handle-rooted object survives it, and
+a guest that drops its reference does not free a handle-rooted one (`SO15`).
+
+**Step 7 — generate the other half.** The engine half above is hand-written; the
+emitted half starts from a descriptor, and the two agree because the descriptor's
+offsets are validated against the same `layoutHostType` (§4.5):
+
+```json
+{ "schema": "wasmjit.binding/2", "direction": "all", "module": "demo",
+  "objects": [ { "name": "demo.Widget", "version": 1,
+      "fields": [ { "name": "width",  "type": "i32", "mutable": true },
+                  { "name": "height", "type": "i32", "mutable": true } ],
+      "properties": [ { "name": "status", "type": "i32",
+                        "get": "get_status", "set": "set_status" } ],
+      "methods": [ { "name": "area", "params": [], "results": ["i32"] },
+                   { "name": "resize", "argNames": ["width", "height"],
+                     "params": ["i32", "i32"], "results": [] },
+                   { "name": "get_status", "params": [], "results": ["i32"] },
+                   { "name": "set_status", "params": ["i32"], "results": [] } ],
+      "constructors": [ { "name": "create", "argNames": ["width", "height"],
+                          "params": ["i32", "i32"] } ] } ],
+  "imports": [], "exports": [] }
+```
+
+```bash
+./build/Desktop-Release/Tools/Bindings/wasmjit-bindings \
+    --schema widget.binding.json --direction all --emit c-header > widget_object.h
+```
+
+The C header then carries `wasmjit_object_demo_widget_v1` (the opaque handle), the
+field-offset macros, one `typedef` per method, the walkable metadata tables, the
+`_h_fn` thunk declarations, and — inside `#ifdef __cplusplus` — one move-only
+`DemoWidgetV1` class whose members are `area()`, `resize(width, height)` and
+`status()`/`setStatus()`, and whose destructor calls `…_release`. The WIT target
+gives the same object as a `resource` in an interface the world imports, which is
+what a component-shaped package is (§4.10).
+
+**Where it goes wrong.** Every row is a message the code above already produces:
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `std::logic_error` (“a reference field is not writable as data”) | `writeField` on a reference slot | pass the reference through a method, or root it with the type's own helpers — reading that word as data would bypass the engine's count (§4.6) |
+| interning refuses the definition by name | an `externref`, `exnref` or `contref` field | `SO18`: the Store does not own that count, so the object cannot be recycled; use a GC reference, or a bridge-owned value behind a method |
+| `acquire` throws `logic_error` | the object's `TypeId` is not the given type's | intern once, keep the `HostType`, and give *that* to `acquire` |
+| `acquire` throws `invalid_argument` | the object belongs to another `Store`, or the type is not interned | one runtime, one store (`ES-2`); intern before creating |
+| `resolve(handle, type)` is null for a live handle | the handle was released, or a slot from another table aliased | that is the contract, not a bug: check for null; a handle carries no table identity (`SO20`) |
+| two classes resolve as each other | both registered fieldless — one shared empty `(struct)` | §2.7: add the `i32 kind` field, or use one table per class |
+| the import sees `hostData == nullptr` | the bridge was installed after `instantiate`, or `instanceCreated` is missing | set `RuntimeConfig::hostBridge` at `create` |
+| a C++ exception escapes the import and the host dies | the import threw instead of trapping | `WASM::trap(...)` inside the body; `nativeImport` catches what is left, because the generated caller has no unwind table |
 
 ## 5. Gaps
 
