@@ -72,7 +72,7 @@ std::string emit(const Schema& input, Language language)
 	case Language::AssemblyScript: return detail::emitAssemblyScriptImpl(schema, input);
 	case Language::Zig: return detail::emitZigImpl(schema, input);
 	case Language::Kotlin: return detail::emitKotlinImpl(schema, input);
-	case Language::MoonBit: return detail::emitMoonBitImpl(schema);
+	case Language::MoonBit: return detail::emitMoonBitImpl(schema, input);
 	case Language::Go: return detail::emitGoImpl(schema);
 	case Language::Dart: return detail::emitDartImpl(schema);
 	case Language::Java: return detail::emitJavaImpl(schema);

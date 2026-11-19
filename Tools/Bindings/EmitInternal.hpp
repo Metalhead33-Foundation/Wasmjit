@@ -42,7 +42,7 @@ std::string emitZigImpl(const nlohmann::ordered_json& schema, const Schema& type
 std::string emitKotlinImpl(const nlohmann::ordered_json& schema, const Schema& typed);
 
 //! Emits MoonBit declarations.
-std::string emitMoonBitImpl(const nlohmann::ordered_json& schema);
+std::string emitMoonBitImpl(const nlohmann::ordered_json& schema, const Schema& typed);
 
 //! Emits Go Wasm declarations.
 std::string emitGoImpl(const nlohmann::ordered_json& schema);

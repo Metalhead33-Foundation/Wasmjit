@@ -267,53 +267,52 @@ std::string emitKotlinImpl(const Json& schema, const Schema& typed)
 	return out.str();
 }
 
-std::string emitMoonBitImpl(const Json& schema)
+std::string emitMoonBitImpl(const Json& schema, const Schema& typed)
 {
 	std::set<std::string> refs;
 	collectSchemaRefs(schema, refs);
 
 	std::ostringstream out;
-	out << "// Generated from the " << schema.at("schema").get<std::string>() << " "
-		<< schema.at("direction").get<std::string>() << " schema. Do not edit.\n\n";
+	out << "// Generated from the " << typed.id << " "
+		<< directionName(typed.direction) << " schema. Do not edit.\n\n";
 	for (const std::string& ref : refs)
 		out << "#external\ntype " << pascalName(ref) << "\n";
 	out << "\n";
 
-	forEachFunction(schema, "imports", [&](const Json& entry) {
+	forEachFunction(typed, true, [&](const Entry& entry) {
 		out << "// G2H import: " << importComment(entry) << "\n";
+		const std::vector<ValueType>& params = entry.function.params;
 		std::string borrow;
-		for (std::size_t i = 0; i < signatureParams(entry).size(); ++i) {
-			if (isReference(signatureParams(entry)[i])) {
+		for (std::size_t i = 0; i < params.size(); ++i) {
+			if (isReference(params[i])) {
 				if (!borrow.empty()) borrow += ", ";
 				borrow += argumentName(entry, i);
 			}
 		}
 		if (!borrow.empty())
 			out << "#borrow(" << borrow << ")\n";
-		out << "extern \"wasm\" fn wasmjit_"
-			<< sanitize(importModule(entry)) << "_"
-			<< sanitize(entry.at("name").get<std::string>()) << "(";
-		for (std::size_t i = 0; i < signatureParams(entry).size(); ++i) {
+		out << "extern \"wasm\" fn wasmjit_" << sanitize(importModule(entry)) << "_"
+			<< sanitize(entry.name) << "(";
+		for (std::size_t i = 0; i < params.size(); ++i) {
 			if (i != 0) out << ", ";
-			out << argumentName(entry, i) << " : " << moonbitType(signatureParams(entry)[i]);
+			out << argumentName(entry, i) << " : " << moonbitType(params[i]);
 		}
+		const std::vector<ValueType>& results = entry.function.results;
 		out << ") -> "
-			<< (signatureResults(entry).size() == 1 ? moonbitType(signatureResults(entry)[0])
-											   : "Unit");
-		out << " = \"" << importModule(entry) << "\" \""
-			<< entry.at("name").get<std::string>() << "\"\n\n";
+			<< (results.size() == 1 ? moonbitType(results[0]) : "Unit");
+		out << " = \"" << importModule(entry) << "\" \"" << entry.name << "\"\n\n";
 	});
 
-	forEachFunction(schema, "exports", [&](const Json& entry) {
+	forEachFunction(typed, false, [&](const Entry& entry) {
 		out << "// H2G export: " << exportComment(entry) << "(";
-		for (std::size_t i = 0; i < signatureParams(entry).size(); ++i) {
+		const std::vector<ValueType>& params = entry.function.params;
+		for (std::size_t i = 0; i < params.size(); ++i) {
 			if (i != 0) out << ", ";
-			out << moonbitType(signatureParams(entry)[i]);
+			out << moonbitType(params[i]);
 		}
+		const std::vector<ValueType>& results = entry.function.results;
 		out << ") -> "
-			<< (signatureResults(entry).size() == 1 ? moonbitType(signatureResults(entry)[0])
-											   : "Unit")
-			<< "\n";
+			<< (results.size() == 1 ? moonbitType(results[0]) : "Unit") << "\n";
 	});
 	out << nonFunctionNotes(schema);
 	return out.str();
