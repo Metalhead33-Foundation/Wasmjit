@@ -2,7 +2,7 @@
 
 *Implementation Notes, Spec Status, and Deliberate Non-Integration*
 
-Status: design note / implementation reference (revision 10). It consolidates
+Status: design note / implementation reference (revision 11). It consolidates
 JS-BigInt, JS String Builtins, JSPI, custom descriptors, ESM integration, JS
 Primitive Builtins and JS Types, plus the shipped generic host-bridge
 groundwork. No JavaScript engine or JavaScript semantics is implemented inside
@@ -10,7 +10,9 @@ the engine: `WasmHostBridge`, `HostContinuation`, the wide scheduler hooks, the
 import/export descriptor views and the core Custom Descriptors instructions/RTT
 are the engine side; a JS engine, Promise/event loop, ESM loader and
 `js-prototypes` configuration belong to the embedder. `JS-0`…`JS-5` are
-complete.
+complete. Revision 11 adds §6.4, which states the same seam without a language,
+because an embedder that ships QuickJS, MuJS, Lua, Python or Ruby alongside this
+engine needs one boundary rather than a JavaScript-shaped one.
 Audience: anyone touching `ImportResolver`, `Callable`, `VMContext`,
 `HostBridge`, `externref`, `Module` metadata, or considering a
 QuickJS/MuJS/other adapter.
@@ -879,6 +881,55 @@ walk/unwind, and must convert a JS exception into the engine's trap/exception
 path rather than unwinding through JIT frames. A JS engine that is not
 thread-safe restricts the adapter to the engine's single-threaded execution
 model.
+
+### 6.4 The adapter is not a JavaScript adapter
+
+The verdict above is about proposals that carry JavaScript semantics. The *hooks*
+they need are older and broader than JavaScript, and this section states the
+general form, because most embedders of this engine ship a scripting runtime
+alongside it — QuickJS, MuJS, Lua, Python or Ruby — and want one boundary, not
+two.
+
+**The seam, stated without a language.** An embedder that owns a scripting engine
+has three things the engine must not model: a *value representation*, a
+*suspension primitive*, and a *scheduler*. WasmJit supplies the transport for all
+three and none of the three themselves:
+
+| The embedder has | The engine's transport | The adapter does |
+|---|---|---|
+| a value (`JSValue`, `lua_State` stack slot, `PyObject*`, `VALUE`) | an `externref` is an opaque `void*`; `ContinuationValue` is 16 opaque bytes plus a kind | keep the value alive, and hand the engine a stable pointer or slot |
+| a task/thread of control (Promise, coroutine, fiber, `async` task, generator) | `HostContinuation` + the serial `HostContinuationScheduler` | store the replacement continuation behind its own task object, and call `submit` when the task resumes |
+| a collector or a manual lifetime rule (`Py_INCREF`, `rb_gc_register_address`, a Lua registry) | `HostBridge::references.retain`/`release`, and `instanceDestroying` | count the host value; publish per-instance state at `instanceCreated` |
+| a calling convention (`JS_Call`, `lua_pcall`, `PyObject_Call`, `rb_funcall`) | `Callable::fnPtr(VMContext*, params…)` | one thunk per signature: read Wasm parameters, call its own engine, convert results |
+
+Nothing in that table is JavaScript-shaped, which is why the JSPI work landed as
+`HostContinuation`, `HostContinuationScheduler` and `HostBridge` rather than as a
+`WebAssembly.Suspending` implementation. The JSPI contract
+(§4.2.2) is the *fully specified* case — it names `Promise`, the job queue and
+`instanceof` rules because the proposal does — and it is the template the other
+hosts instantiate with different nouns.
+
+**What the engine must not grow, for any host.** A host value type, an event loop,
+a promise, a microtask queue, a loader, or a second scheduler. Each of those is a
+line where the engine would have to pick a language, and the rule in
+[`LAYERING.md`](../LAYERING.md) §4 is the same rule: the core states a contract,
+the embedder supplies the policy. `HostContinuationScheduler` is serial on purpose
+so that the host keeps ownership of interleaving — including the case where the
+host's own event loop is the only scheduler in the process.
+
+**The one decision an embedder of two engines actually makes.** Not “which
+language”, but “who owns the queue”. Two loops in one process is a policy bug, and
+two schedulers racing over one continuation is a contract violation (§4.2.2, rule
+6). The shape that works: the scripting engine owns its loop, WasmJit's scheduler
+is a queue the host drains from inside that loop (`step`), and a Wasm
+continuation is resumed from the host's task callback — never from a second
+thread, unless the embedder also opted into several agents
+(`proposals/THREADS.md` §4.4, and note that a continuation is *not* an agent).
+
+The code for all four layers is §2.2 of
+[`../EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md); the scheduler in use is
+`STACK_SWITCHING.md` §4.1; the reference-lifetime rules are
+`WasmHostBridge.hpp`'s header comment, which is the contract rather than a guide.
 
 ## 7. Plan
 
