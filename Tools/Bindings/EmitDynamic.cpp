@@ -296,45 +296,45 @@ std::string dType(const ValueType& type)
 	return "void*";
 }
 
-std::string emitDLangImpl(const Json& schema)
+std::string emitDLangImpl(const Json& schema, const Schema& typed)
 {
 	std::ostringstream out;
 	out << "// Generated D extern(C) bindings from the "
-		<< schema.at("schema").get<std::string>() << " "
-		<< schema.at("direction").get<std::string>() << " schema. Do not edit.\n";
+		<< typed.id << " "
+		<< directionName(typed.direction) << " schema. Do not edit.\n";
 	out << "extern(C):\n\n";
 	std::set<std::string> witTypes;
 	collectWitTypeNames(schema, witTypes);
 	for (const std::string& type : witTypes)
 		out << "struct " << type << " { }\n";
 	out << "\n";
-	forEachFunction(schema, "exports", [&](const Json& entry) {
-		const std::string name = sanitize(entry.at("name").get<std::string>());
+	forEachFunction(typed, false, [&](const Entry& entry) {
+		const std::string name = sanitize(entry.name);
 		out << "alias Wasmjit_" << name << "_Fn = " << dType(
-				signatureResults(entry).size() == 1
-						? signatureResults(entry)[0] : Json{{"type", "void"}})
+				entry.function.results.size() == 1
+						? entry.function.results[0] : voidValue())
 			<< " function(";
-		const Json& params = signatureParams(entry);
+		const std::vector<ValueType>& params = entry.function.params;
 		for (std::size_t i = 0; i < params.size(); ++i) {
 			if (i != 0) out << ", ";
 			out << dType(params[i]);
 		}
-		if (signatureResults(entry).size() > 1u)
+		if (entry.function.results.size() > 1u)
 			out << (params.empty() ? "" : ", ") << "void*";
 		out << ");\n\n";
 	});
-	forEachFunction(schema, "imports", [&](const Json& entry) {
+	forEachFunction(typed, true, [&](const Entry& entry) {
 		out << "// G2H import: " << importComment(entry) << "\n";
-		out << dType(signatureResults(entry).size() == 1
-				? signatureResults(entry)[0] : Json{{"type", "void"}})
+		out << dType(entry.function.results.size() == 1
+				? entry.function.results[0] : voidValue())
 			<< " wasmjit_" << sanitize(importModule(entry)) << "_"
-			<< sanitize(entry.at("name").get<std::string>()) << "(";
-		const Json& params = signatureParams(entry);
+			<< sanitize(entry.name) << "(";
+		const std::vector<ValueType>& params = entry.function.params;
 		for (std::size_t i = 0; i < params.size(); ++i) {
 			if (i != 0) out << ", ";
 			out << dType(params[i]);
 		}
-		if (signatureResults(entry).size() > 1u)
+		if (entry.function.results.size() > 1u)
 			out << (params.empty() ? "" : ", ") << "void*";
 		out << ");\n\n";
 	});
