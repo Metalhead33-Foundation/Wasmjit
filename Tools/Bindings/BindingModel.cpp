@@ -461,6 +461,55 @@ WASM::HostFieldDefinition hostField(const ObjectField& field,
 	return out;
 }
 
+//! True when two descriptor types denote the same value.
+bool sameType(const ValueType& left, const ValueType& right)
+{
+	return left.kind == right.kind && left.heap == right.heap
+			&& left.packed == right.packed && left.nullable == right.nullable
+			&& left.name == right.name;
+}
+
+//! The human spelling of a descriptor type, for refusal messages.
+std::string typeLabel(const ValueType& type)
+{
+	std::string out = valueKindName(type.kind);
+	if (type.kind == ValueKind::Ref) {
+		out += " ";
+		out += heapKindName(type.heap);
+		if (type.heap == HeapKind::Defined && !type.name.empty())
+			out += " " + type.name;
+	}
+	if (type.packed)
+		out += " (packed)";
+	return out;
+}
+
+//! The `(params) -> (results)` spelling of a method, for refusal messages.
+std::string signatureLabel(const ObjectMethod& method)
+{
+	const auto list = [](const std::vector<ValueType>& types) {
+		std::string out;
+		for (std::size_t index = 0; index < types.size(); ++index) {
+			if (index != 0u)
+				out += ", ";
+			out += typeLabel(types[index]);
+		}
+		return out;
+	};
+	return "(" + list(method.params) + ") -> (" + list(method.results) + ")";
+}
+
+//! The named method of an object, or null when it declares none by that name.
+const ObjectMethod* findMethod(const ObjectDescriptor& object,
+		const std::string& name)
+{
+	for (const ObjectMethod& method : object.methods) {
+		if (method.name == name)
+			return &method;
+	}
+	return nullptr;
+}
+
 //! Validates every descriptor against the engine's canonical layout.
 //!
 //! This is the load-time check the note promises: a declared offset is an
@@ -468,6 +517,11 @@ WASM::HostFieldDefinition hostField(const ObjectField& field,
 //! `WASM::layoutHostType` rather than trusted. `(name, version)` is unique — one
 //! name and version has one shape (A.14.2) — while two versions of one name are
 //! two descriptors and two types.
+//!
+//! A property is checked against the object *itself* rather than the layout: it
+//! owns no bytes, so what can be wrong is its interface — a name that collides
+//! with another member, an accessor that `methods` does not declare, or an
+//! accessor whose declared signature is not the one the property's type implies.
 void validateObjects(std::vector<ObjectDescriptor>& objects)
 {
 	std::set<std::string> keys;
@@ -496,6 +550,62 @@ void validateObjects(std::vector<ObjectDescriptor>& objects)
 						+ " disagrees with the canonical offset "
 						+ std::to_string(field.offset));
 		}
+		// A field, a property and a method share one member namespace: every
+		// emitter projects all three as members of one resource/struct, so two
+		// members with one name would collide in the generated artifact.
+		std::set<std::string> methodNames;
+		for (const ObjectMethod& method : object.methods) {
+			if (!methodNames.insert(method.name).second)
+				throw std::runtime_error("object '" + object.name
+						+ "' declares method '" + method.name + "' twice");
+		}
+		std::set<std::string> propertyNames;
+		std::set<std::string> accessors;
+		for (const ObjectProperty& property : object.properties) {
+			const std::string where =
+					"object '" + object.name + "' property '" + property.name + "'";
+			if (!propertyNames.insert(property.name).second)
+				throw std::runtime_error(where + "' is declared twice");
+			if (names.count(property.name) != 0u)
+				throw std::runtime_error(where
+						+ " has the same name as a field; a stored value and a"
+						" computed one cannot share a member name");
+			if (methodNames.count(property.name) != 0u)
+				throw std::runtime_error(where + " has the same name as a method");
+			for (const std::string* accessor : { &property.getter,
+						 &property.setter }) {
+				if (accessor->empty())
+					continue;
+				if (!accessors.insert(*accessor).second)
+					throw std::runtime_error(where + ": accessor '" + *accessor
+							+ "' is already claimed by another property");
+				if (names.count(*accessor) != 0u)
+					throw std::runtime_error(where + ": accessor '" + *accessor
+							+ "' is a field, not a function");
+				if (methodNames.count(*accessor) == 0u)
+					throw std::runtime_error(where + ": accessor '" + *accessor
+							+ "' is not declared in `methods`; an accessor is a"
+							" function of the object like any other");
+			}
+			const ObjectMethod* getter = findMethod(object, property.getter);
+			if (!getter->params.empty() || getter->results.size() != 1u
+					|| !sameType(getter->results.at(0), property.type))
+				throw std::runtime_error(where + ": getter '" + property.getter
+						+ "' must take no parameters and return "
+						+ typeLabel(property.type) + ", but `methods` declares "
+						+ signatureLabel(*getter));
+			if (!property.setter.empty()) {
+				const ObjectMethod* setter = findMethod(object, property.setter);
+				if (setter->params.size() != 1u || !setter->results.empty()
+						|| !sameType(setter->params.at(0), property.type))
+					throw std::runtime_error(where + ": setter '"
+							+ property.setter + "' must take "
+							+ typeLabel(property.type)
+							+ " and return nothing, but `methods` declares "
+							+ signatureLabel(*setter));
+			}
+		}
+
 		const std::string key = object.name + "@" + std::to_string(object.version);
 		if (!keys.insert(key).second)
 			throw std::runtime_error("object descriptor '" + key
@@ -554,6 +664,54 @@ Json ObjectField::toJson() const
 	out["reference"] = isReference;
 	if (mutableField)
 		out["mutable"] = true;
+	return out;
+}
+
+ObjectProperty ObjectProperty::fromJson(const Json& json)
+{
+	if (!json.is_object())
+		throw std::runtime_error("object property: expected a JSON object");
+	ObjectProperty out;
+	out.name = jsonString(json, "name");
+	if (out.name.empty())
+		throw std::runtime_error("object property: missing name");
+	Json type = json.contains("type") ? json.at("type") : Json{};
+	if (type.is_null() && json.contains("kind"))
+		type = json.at("kind");
+	out.type = ValueType::fromJson(type);
+	if (out.type.kind == ValueKind::Unknown)
+		throw std::runtime_error("object property '" + out.name + "': unknown type");
+	if (out.type.kind == ValueKind::Void)
+		throw std::runtime_error("object property '" + out.name
+				+ "': a property needs a value, not `void`");
+	if (out.type.kind == ValueKind::I8 || out.type.kind == ValueKind::I16)
+		out.type.packed = true;
+	// A property is not a slot, so an offset here is a field written the wrong
+	// way round; the message names the right key rather than ignoring it.
+	if (json.contains("offset"))
+		throw std::runtime_error("object property '" + out.name
+				+ "': a property has no storage offset; a stored slot is a `field`");
+	out.getter = jsonString(json, "get");
+	if (out.getter.empty())
+		throw std::runtime_error("object property '" + out.name
+				+ "': missing `get`; a property without a getter is a method");
+	out.setter = jsonString(json, "set");
+	const bool assertedMutable = jsonBool(json, "mutable");
+	if (out.setter.empty() && assertedMutable)
+		throw std::runtime_error("object property '" + out.name
+				+ "': `mutable` without `set`; a read-only property has no setter");
+	out.mutableProperty = !out.setter.empty();
+	return out;
+}
+
+Json ObjectProperty::toJson() const
+{
+	Json out;
+	out["name"] = name;
+	out["type"] = type.toJson();
+	out["get"] = getter;
+	if (!setter.empty())
+		out["set"] = setter;
 	return out;
 }
 
@@ -626,6 +784,13 @@ ObjectDescriptor ObjectDescriptor::fromJson(const Json& json)
 		for (const Json& item : json.at("fields"))
 			out.fields.push_back(ObjectField::fromJson(item));
 	}
+	if (json.contains("properties")) {
+		if (!json.at("properties").is_array())
+			throw std::runtime_error("object '" + out.name
+					+ "': `properties` must be an array");
+		for (const Json& item : json.at("properties"))
+			out.properties.push_back(ObjectProperty::fromJson(item));
+	}
 	if (json.contains("methods")) {
 		if (!json.at("methods").is_array())
 			throw std::runtime_error("object '" + out.name
@@ -654,6 +819,13 @@ Json ObjectDescriptor::toJson() const
 	out["fields"] = Json::array();
 	for (const ObjectField& field : fields)
 		out["fields"].push_back(field.toJson());
+	if (!properties.empty()) {
+		out["properties"] = Json::array();
+		for (const ObjectProperty& property : properties)
+			out["properties"].push_back(property.toJson());
+	} else {
+		out.erase("properties");
+	}
 	out["methods"] = Json::array();
 	for (const ObjectMethod& method : methods)
 		out["methods"].push_back(method.toJson());

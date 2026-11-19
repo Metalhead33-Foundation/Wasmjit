@@ -14,8 +14,10 @@
   The input is the validated `objects` view `Schema::toJson()` produces, so the
   offsets and sizes printed here are the ones `WASM::layoutHostType` derived,
   never a number a descriptor merely asserted
-  (docs/proposals/SYNTHETIC_OBJECTS.md A.14.5). Tooling only: this header is
-  never included from `WasmBase/`.
+  (docs/proposals/SYNTHETIC_OBJECTS.md A.14.5). A `properties` entry is emitted as
+  an accessor pair instead: it has no offset to print, and the names it carries
+  are the export names a host binds a trampoline to (§4.7 of the same note).
+  Tooling only: this header is never included from `WasmBase/`.
 */
 namespace WASM::Bindings::detail {
 

@@ -294,7 +294,7 @@ none is missing its front matter, and no note puts anything after its references
 note, not a WebAssembly feature proposal; `MEMORY_PROVIDER.md`,
 `CONFIGURATION.md` and `COMPILER_POLICY.md` are similarly engine-seam studies
 rather than feature proposals, and `SYNTHETIC_OBJECTS.md` is an engine-seam study
-and plan (revision 5: `SO-1`, `SO-2` and `SO-6` shipped) of a host-side object model.
+and plan (revision 6: `SO-1`, `SO-2`, `SO-6` and `SO-7` shipped) of a host-side object model.
 
 ## 9. References
 

@@ -56,6 +56,10 @@ at load, and emits the versioned C, Rust and WIT artifacts (§11.8).
 **Revision 38 (2026-11-18)** delivers `SO-6`: a host object may hold GC references,
 the safepoint walk drops them when the object is released, `EN-15` is done, and
 `EN-16` records the one remaining limit (a bridge-owned reference field).
+**Revision 39 (2026-11-19)** delivers `SO-7`: `objects[].properties[]` declares a
+value behind a `get`/`set` accessor pair, which the emitters project as export
+names plus accessor typedefs (C/Rust) and a `func()` member (WIT) — the member
+whose write has an effect, with no engine surface at all (§11.8).
 
 The earlier `JitRuntime`/`JitContext`/`ModuleInstance` sketch from a different
 repository is reviewed in §5 as a **salvage list**, not a template; its
@@ -1218,6 +1222,22 @@ field — it is a legal Wasm storage type, so the tool validates the layout and 
 the metadata. Whether the *engine* can intern that type is a separate contract:
 today it cannot, because the count belongs to a host bridge (`SO18`), so a product
 using such a field keeps its own count policy behind a handle.
+
+**A property is a member whose value is a call.** `objects[].properties[]` declares
+`{ "name", "type", "get", "set"? }`: no offset, no size, no `HostFieldDefinition`,
+so a property can never shift a field or grow the object. Both accessors must also
+appear in `methods[]`, and their declared signatures are compared with the type —
+`() -> type` for the getter, `(type) -> ()` for the setter — so a schema cannot
+promise a binding the emitted artifact cannot make. It is the answer for a member
+whose *write* does something (a status that updates a mixer, a caption that
+reformats) and for a value that is computed rather than stored; a plain word stays
+a field, because a slot is cheaper. WIT gets the same shape it already gives a
+field — `status: func() -> s32;` plus `set-status` — because the Canonical ABI
+models every resource member as a call, and the accessor method is not emitted a
+second time. Signals are treated as a pattern, not a schema element: a
+`subscribe`/`unsubscribe` method pair plus a host-side dispatcher inside the call;
+a signal the host raises *between* calls is `SO19`
+([`proposals/SYNTHETIC_OBJECTS.md`](proposals/SYNTHETIC_OBJECTS.md) §4.7/§4.8).
 
 #### Layout and build rules
 
@@ -2753,7 +2773,7 @@ gives the host a reference the guest can hold as `(ref $T)`; the descriptor, the
 names, the dispatch, the properties, the signals and the reflection remain the
 host's. The opaque path below is unchanged and still the answer for an object that
 cannot be expressed in Wasm. This section describes the surface; the note carries
-the decisions (`SO-1` shipped; `SO-2`…`SO-6` remain).
+the decisions (`SO-1`, `SO-2`, `SO-6` and `SO-7` shipped; `SO-3`…`SO-5` remain).
 
 ### 16.1 The primitive an embedder gets
 
@@ -2764,13 +2784,15 @@ the decisions (`SO-1` shipped; `SO-2`…`SO-6` remain).
 | a host-defined object **type** | **shipped** (`SO-1`, `SO-6`): `internHostType` interns the canonical type, `Store::allocateHostStruct`/`allocateHostArray` allocate an object of its `TypeId`, and a GC reference field is dropped when the object is released; a bridge-owned reference field is refused (`SO18`) | [`proposals/SYNTHETIC_OBJECTS.md`](proposals/SYNTHETIC_OBJECTS.md) A.14.3, §4.6 |
 | the seam's **ergonomics** | `WasmHostType.hpp` (define/lay out/intern/allocate) and `WasmHostObject.hpp` (`HostType`/`HostObject`, one engine count each) | `WasmHostType.hpp`, `WasmHostObject.hpp`; `SO-1` |
 | the **descriptor and its schema** | **shipped** (`SO-2`): `wasmjit.binding/2` `objects` section → validated against `layoutHostType`, emitted as C/Rust metadata tables and WIT resources | §11.8; [`../Tools/Bindings/`](../Tools/Bindings/) `BindingModel`, `EmitObjects` |
+| a **property** of an object | **shipped** (`SO-7`, tooling only): `objects[].properties[]` declares a value type and a `get`/`set` accessor pair, checked against `methods[]` and emitted as export-name macros plus accessor typedefs in C/Rust and a `func()` member in WIT — no engine surface, because the value *is* a call | §11.8; [`proposals/SYNTHETIC_OBJECTS.md`](proposals/SYNTHETIC_OBJECTS.md) §4.7 |
 | a cross-language object *type* | component resources (`own`/`borrow`, `resource.drop`, `resource.rep`) | [`proposals/COMPONENT_MODEL.md`](proposals/COMPONENT_MODEL.md) §2.3/§4.3 |
 | a function namespace for the object's methods | synthetic modules and native imports | [`SCOPE.md`](SCOPE.md) §3.1 |
 
-No object model ships: no handle table, no properties and no signals. What ships
-is the transport, the resource contract, the GC allocation, the type origin that
-lets the host create a first-class Wasm object, and the **generator-side**
-descriptor that names and versions it. A *runtime* descriptor registry would be an
+No object model ships: no handle table, no *dynamic* properties and no signals.
+What ships is the transport, the resource contract, the GC allocation, the type
+origin that lets the host create a first-class Wasm object, and the
+**generator-side** descriptor that names, versions and (since `SO-7`) arms it with
+accessor-backed properties. A *runtime* descriptor registry would be an
 engine-side object model and stays out (§16.3); the tool's tables are the host's
 own metadata, and the identity remains the Store's `TypeId`.
 

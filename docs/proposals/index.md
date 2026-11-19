@@ -48,7 +48,7 @@ and the `[docs]` check fails ([`DOCUMENTATION.md`](../DOCUMENTATION.md) §9).
 | \subpage prop_small_proposals | Sign-extension, non-trapping float→int, branch hints and the rest of phase 5 |
 | \subpage prop_stack_switching | Stack switching (continuations) |
 | \subpage prop_stringref | Reference-typed strings (`stringref`) |
-| \subpage prop_synthetic_objects | Synthetic objects: host-registered object types (revision 5 — `SO-1`, `SO-2` and `SO-6` shipped), the GObject precedent, one object with two spellings, and what the Component Model already covers |
+| \subpage prop_synthetic_objects | Synthetic objects: host-registered object types (revision 6 — `SO-1`, `SO-2`, `SO-6` and `SO-7` shipped), the GObject precedent, one object with two spellings, accessor-backed properties, and what the Component Model already covers |
 | \subpage prop_tailcalls | Tail calls |
 | \subpage prop_threads | Threads and atomics |
 | \subpage prop_type_imports | Type imports and exports |

@@ -2,7 +2,7 @@
 
 *Host-Registered Object Types, the GObject Precedent, and What the Component Model Already Covers*
 
-Status: design note / implementation reference (**revision 5 — 2026-11-18**). This
+Status: design note / implementation reference (**revision 6 — 2026-11-19**). This
 is `EMBEDDING_SURFACE.md` §16 promoted to a note of its own: that section had grown
 into a six-hundred-line study inside an implementation reference, and the
 reference now keeps only the embedder-facing half. Revision 1 recorded a boundary —
@@ -22,6 +22,11 @@ layout and which the generator projects into versioned C, Rust and WIT artifacts
 **Revision 5 completes the engine seam (`SO-6`)**: a host object may hold GC
 references, and releasing it at a safepoint drops them; a bridge-owned reference
 field is the one remaining limit (`SO18`).
+**Revision 6 adds properties (`SO-7`)**: a member whose value is a function call
+rather than a slot — the getter is required, the setter optional, and neither
+occupies a byte — which is what a *cascading* or *computed* member needs, and
+what the Component Model already models, because every resource member is a call
+there (§4.7). Signals are examined and deliberately left as a pattern (§4.8).
 The `externref` + `HostBridge`
 path is unchanged and remains the answer for truly opaque host objects; the new
 path is a second, opt-in one for objects that are **expressible in Wasm**.
@@ -44,9 +49,9 @@ now cite. §2–§8 state the decisions and cite the appendix rather than repeat
 | §2 | What does the scenario demand, now that host objects are a planned feature? |
 | §3 | What does it *not* demand? |
 | §4 | What is implemented today? |
-| §5 | What is missing or untested (`SO1`–`SO16`)? |
+| §5 | What is missing or untested (`SO1`–`SO19`)? |
 | §6 | Where do we deliberately deviate (`SOD1`–`SOD7`)? |
-| §7 | What is the plan (`SO-1`–`SO-6`)? |
+| §7 | What is the plan (`SO-1`–`SO-7`)? |
 | §8 | What does the test survey measure? |
 | Appendix A | The study: a GObject-shaped host object runtime, in full (A.14 is the revision-2 mechanism) |
 | §9 | References — the last section, as [§2.3](../PROPOSALS.md) requires |
@@ -421,7 +426,7 @@ originate a type that no module declared**: `internModule` consumes a parser's
 | Not shipped | Why | Where it goes |
 |---|---|---|
 | a reference field whose count is not the Store's (`externref`, `exnref`, `contref`) | a host bridge or the continuation machinery owns that count, and the Store has neither | `SO18`; documented limit of the engine seam |
-| dynamic properties, signals, a nominal class tree | product policy, and no common core | stays out, permanently (`SOD6`) |
+| a *dynamic* property or signal (a name looked up at runtime), a nominal class tree | product policy, and no common core; a **declared** property is a function pair and ships (`SO-7`) | stays out, permanently (`SOD6`); the declared form is §4.7 |
 | a C++ class, RTTI, a destructor, a C++ layout | the §2.6 constraint | stays out, permanently |
 | a *runtime* descriptor registry in the engine | the tool's tables are host metadata; a Store-owned registry would be a second object model | stays out (`SOD6`); the host owns the map (`SO-3`) |
 
@@ -532,6 +537,87 @@ and pins `liveObjectCount()` at `+2` (the field's count) and back to the baselin
 the cycle case pins `gcRefCount` 2/2 → 1/1, an empty release queue
 (`totalRecycles() == 0`) and the safepoint's collection.
 
+### 4.7 Properties: a value behind a function (`SO-7`, 2026-11-19)
+
+A **field** is a slot: `layoutHostType` gives it an offset, the header emits
+`_FIELD_X`, and the guest loads a word. A **property** is a pair of calls, and
+that is a different promise with a different cost.
+
+The distinction is not cosmetic. A status member that happens to be an `i32` is
+a field — but the moment "set it" also means "tell the mixer", "invalidate the
+label", "push a UI update", the member is no longer a word: it is an operation.
+The same is true of a value that is *computed* (an area derived from a geometry,
+a lazily formatted caption). Wasm has one primitive for "this read is a call",
+and it is a function; the descriptor needs a way to say so without pretending
+the member has a storage location.
+
+| Piece | Where | What it says |
+|---|---|---|
+| **the input** | `objects[].properties[]` in [`../../Tools/Bindings/BindingModel.hpp`](../../Tools/Bindings/BindingModel.hpp) | `{ "name", "type", "get", "set"? }` — a value type and one required accessor, a second optional one |
+| **the check** | `validateObjects` | the accessor is declared in `methods` and its signature is `() -> type` (getter) or `(type) -> ()` (setter); no member name is shared with a field or a method; no accessor serves two properties |
+| **the artifacts** | [`../../Tools/Bindings/EmitObjects.hpp`](../../Tools/Bindings/EmitObjects.hpp) | C/Rust: an export-name macro plus a function-pointer typedef and a `wasmjit_object_property_meta` row; WIT: a `func()` member |
+
+**A property owns no bytes.** It never reaches `HostTypeDefinition`, so it cannot
+shift an offset or change `size`: `demo.Widget` is 40 bytes with its three
+properties and 40 bytes without them, which a test pins rather than trusts
+(§4.5's rule — the layout is derived, never asserted).
+
+**The accessor is a member of `methods`.** A property is sugar over a function
+that the object exports anyway; if the descriptor names a function the interface
+does not declare, the load fails, and if it declares one with a different
+signature, the load fails with both signatures in the message. This is the same
+philosophy as an asserted offset: the descriptor is checked against itself, and
+a schema cannot promise a binding the emitted artifact cannot make.
+
+**WIT needs no new concept, and that is the point.** The Canonical ABI already
+models a resource member as a call — `[method]x` and `[method]x-set` — so at the
+component boundary there is no such thing as storage. A field and a property
+project to the *same* WIT shape:
+
+```wit
+resource demo-widget-v1 {
+  x: func() -> s32;                 // a field: a slot on the host side
+  /// Property `status`: computed by `get_status`, not a stored slot.
+  status: func() -> s32;            // a property: a call on both sides
+  set-status: func(value: s32);
+}
+```
+
+The difference survives only in the comment, and it should: from JavaScript the
+guest reads `widget.status` in either case, while the C++ side runs a function in
+one case and loads a word in the other. The accessor method itself is not emitted
+a second time — the property *is* its projection, so one member has one spelling.
+
+**What this is not.** It is not `setProperty("colour")`: the name is resolved by
+the generator, not by a runtime string table, and there is no `GValue` (SOD6,
+permanently). It is not introspection either — the emitted tables are the host's
+own metadata, and a product that wants reflection walks them, as A.14.5
+already describes.
+
+Evidence: `Test/BindingSchemaTests.cpp` (`[bindings][objects]`, six cases) takes
+one descriptor with three properties — a mutable scalar, a read-only scalar and a
+read-only handle — and checks the model, the no-slot rule, the round trip, ten
+refusals, the three artifacts and their real compilation, plus the WIT parse.
+
+### 4.8 Signals: considered, and left as a pattern
+
+A signal is a property plus fan-out: one set, many listeners. Three shapes were
+weighed, and only one of them is free.
+
+| Shape | Needs | Verdict |
+|---|---|---|
+| **static subscription**: `subscribe(handler)` / `unsubscribe(handler)` as ordinary methods, the guest calls the host's dispatcher | nothing new — `methods[]` plus a `funcref` parameter, which the engine already carries | **available today**, no schema element; the pattern is two methods and a host-side list |
+| **the host raises the signal** between calls | a retained callback the host may invoke when no call is in flight | **refused** (`SO19`): it re-enters the guest outside the one-agent-per-call contract |
+| **dynamic signals by name**: `connect("notify::status", cb)` | a runtime name table and a marshaller — GObject's model | **out** permanently (`SOD6`) |
+
+The first row is the honest answer for a Qt-shaped product: emit `subscribe` and
+`unsubscribe` as methods, let the host's dispatcher fan out **inside** the call
+that changed the value, and the behaviour is indistinguishable from a signal
+without the engine learning what one is. The second row is a real limitation, not
+a policy: a callback table with lifetime rules and a stated re-entrancy contract
+is a proposal of its own, and it belongs beside
+[`THREADS.md`](THREADS.md) rather than inside an object note.
+
 ## 5. Gaps
 
 Every row below is either a **claim that has not been demonstrated** or a missing
@@ -560,6 +646,7 @@ product ship this?”), not against the engine's completeness meter
 | ~~SO16~~ | ~~**No structural-dedup test for host types.**~~ **Done (SO-1):** `[hostobject]` pins a module-declared `{i32,i32}` and a host definition to one `TypeId`, and a mutability change to a different one — no name involved, which is the evidence for D1. | [`../../Test/HostObjectTests.cpp`](../../Test/HostObjectTests.cpp); [`../TYPE_IDENTITY.md`](../TYPE_IDENTITY.md) §6.2 | Closed — §4.4 |
 | ~~SO17~~ | ~~**A host type with a reference field cannot be interned.**~~ **Done (SO-6):** a GC reference field interns and is dropped by the Store's safepoint walk; the remaining restriction is narrower and has its own ID (`SO18`). | `internHostType`; `Store::hostChildSlots`; [`../WasmStore.hpp`](../../WasmBase/WasmStore.hpp) | Closed — §4.6 |
 | SO18 | **A reference field whose count is not the Store's cannot be interned.** An `externref` is counted by a host bridge and an `exnref`/`contref` by the exception/continuation machinery; the Store owns neither, so recycling such an object would leave the count behind. | `internHostType` refuses it by name; `layoutHostType` and the `SO-2` schema still describe it | **Documented limit**; `SO-3`'s bridge policy is where it could be lifted |
+| SO19 | **A signal the host raises between calls cannot re-enter the guest.** A subscription is a stored callback, and invoking it when no call is in flight crosses the one-agent-per-call contract; a *dynamic* signal name crosses SOD6 as well | §4.8; the `[multiagent]`/`[concurrency]` contract; no callback table with lifetime rules exists | **Documented limit**; the static pattern (§4.8 row 1) covers the product need; the callback table is its own proposal |
 
 ## 6. Where we can and should play fast and loose
 
@@ -636,7 +723,8 @@ ordered so the engine seam is proved before any binding is generated, and so the
 part that needs a memory layout (the arena) comes last. `SO-1` is class **B**
 (additive public API, no removal); `SO-6` is engine work on the same surface;
 `SO-2`–`SO-4` are tooling/host work; `SO-5` is host-side work gated on the sharing
-study and is **not** an engine milestone.
+study and is **not** an engine milestone; `SO-7` is tooling-only — a section in
+`SO-2`'s descriptor and its three emitters, with no engine surface at all.
 
 | Milestone | Work | Closes | Done when |
 |---|---|---|---|
@@ -646,14 +734,17 @@ study and is **not** an engine milestone.
 | **SO-4 — Component packaging, GC-language façade** | A WIT resource version of the same API, plus the generated wrapper for a GC language (Kotlin/Wasm or MoonBit) and a Dart/Kotlin-style façade holding the handle. | SO3, SO4 | `resource.drop` runs the host release once; a wrapper's drop reaches one decrement; a cycle through the wrapper is collected or documented as a host cycle |
 | **SO-5 — The arena backing** | Objects as `i32` offsets in the shared memory of [`SHARING_LINEAR_MEMORY.md`](SHARING_LINEAR_MEMORY.md) A.13, gated on `SLM-1`…`SLM-4`. | SO9, SO10 | the object survives the writer's unload and re-instantiation, and a forged offset is a clean error |
 | **SO-6 — Reference-field graphs on the Store release path** ✅ | Let `internHostType` accept a reference field again: at a safepoint, a released host object drops each outgoing reference (the same `refClone`/`refDrop` contract) before its block is recycled, reusing the instance walker's type/layout logic rather than a second collector. | SO17 | **Done 2026-11-18:** a GC reference field interns; the drain walk drops each reference the object holds, queues a child that reaches zero in the same iterative list, and leaves cycles to the instance's trial-deletion pass. A bridge-owned reference field stays refused (`SO18`). `[hostobject][gc]` pins `gcRefCount` 2/2 → 1/1 → baseline and the empty release queue for a cycle (§4.6). |
+| **SO-7 — Accessor-backed properties** ✅ | A `properties[]` entry in the descriptor: a value type plus a required getter and an optional setter, both of which must be methods of the object. Emit the accessor names and signatures in C and Rust and a `func()` member in WIT; take no storage slot and check the declared signature against the property's type. | SO-2 (the schema); nothing engine-side | **Done 2026-11-19:** `demo.Widget` interns three properties with an unchanged `size` and unchanged offsets; ten malformed descriptors are refused at load (no getter, an `offset`, `mutable` without a setter, a field/method name clash, an undeclared accessor, a wrong getter or setter signature, a duplicate property, a shared accessor); the emitted C/Rust compile and the WIT parses with the accessor method projected once (§4.7). |
 
-**`SO-1`, `SO-2` and `SO-6` landed 2026-11-18.** The engine seam, the tool-side
-descriptor and the reference-field walk are in the tree (§4.4–§4.6), so every
+**`SO-1`, `SO-2`, `SO-6` and `SO-7` landed 2026-11-18/19.** The engine seam and the
+reference-field walk are in the tree (§4.4/§4.6), and so are the tool-side
+descriptor, its emitters and the accessor-backed property (§4.5/§4.7), so every
 engine row of this plan is closed and the remaining rows are host/tool work:
 `SO-3` (the handle table, the dual surface and the `(name, version) -> TypeId`
-map), `SO-4` (component packaging) and `SO-5` (the arena). `SO-18` is the one
-documented limit the engine keeps: a bridge-owned reference field is refused,
-because the Store has no bridge.
+map), `SO-4` (component packaging) and `SO-5` (the arena). `SO18` is the one
+documented limit the engine keeps — a bridge-owned reference field is refused,
+because the Store has no bridge — and `SO19` is the one the object model keeps:
+a signal the host raises between calls cannot re-enter the guest (§4.8).
 
 Ordering, and why it is not negotiable: `SO-1` is the only engine row and
 everything else is written against it — generating bindings for a type the engine
@@ -663,7 +754,9 @@ because a handle table without a descriptor is a table of anonymous slots.
 `SO-5` is last for the reason revision 1 gave: it depends on a memory-layout plan
 that is explicitly out of scope for the short term
 ([`SHARING_LINEAR_MEMORY.md`](SHARING_LINEAR_MEMORY.md) §12.3, rungs 5–6).
-`SO-6` follows `SO-1` directly and is independent of `SO-2`–`SO-5`.
+`SO-6` follows `SO-1` directly and is independent of `SO-2`–`SO-5`. `SO-7` needs
+`SO-2`'s descriptor and nothing else, which is why it could land on top of the
+schema while the handle table (`SO-3`) was still open.
 
 The **arena-first** ordering revision 1 implied is therefore reversed. Revision 1
 put a WIT package first because the Component Model was the recommended contract;

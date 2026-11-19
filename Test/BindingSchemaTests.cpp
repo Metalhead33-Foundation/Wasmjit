@@ -2591,11 +2591,20 @@ Json objectSchema()
 				{ "name": "label", "type": { "type": "ref", "heap": "extern" } },
 				{ "name": "target", "type": { "type": "ref", "heap": "defined", "name": "demo.Node" }, "mutable": true }
 			  ],
+			  "properties": [
+				{ "name": "status", "type": "i32", "get": "get_status", "set": "set_status" },
+				{ "name": "caption", "type": "i32", "get": "compute_caption" },
+				{ "name": "preview", "type": { "type": "ref", "heap": "defined", "name": "demo.Node" }, "get": "get_preview" }
+			  ],
 			  "methods": [
 				{ "name": "resize", "params": ["i32", "i32"], "results": [] },
 				{ "name": "area", "params": [], "results": ["i32"] },
 				{ "name": "attach", "params": [ { "type": "ref", "heap": "defined", "name": "demo.Node" } ], "results": [] },
-				{ "name": "blit", "params": ["v128"], "results": [] }
+				{ "name": "blit", "params": ["v128"], "results": [] },
+				{ "name": "get_status", "params": [], "results": ["i32"] },
+				{ "name": "set_status", "params": ["i32"], "results": [] },
+				{ "name": "compute_caption", "params": [], "results": ["i32"] },
+				{ "name": "get_preview", "params": [], "results": [ { "type": "ref", "heap": "defined", "name": "demo.Node" } ] }
 			  ] },
 			{ "name": "demo.Node", "version": 1,
 			  "fields": [ { "name": "kind", "type": "i8" } ] },
@@ -2632,7 +2641,21 @@ TEST_CASE("a v2 schema validates object offsets against the canonical layout", "
 	CHECK(widget.fields[3].offset == 32u);
 	CHECK(widget.fields[3].isReference);
 	CHECK(widget.size == 40u);
-	REQUIRE(widget.methods.size() == 4u);
+	// Two properties and their three accessors are declared as methods too: an
+	// accessor is a function of the object, not a second kind of member.
+	REQUIRE(widget.properties.size() == 3u);
+	CHECK(widget.properties[0].name == "status");
+	CHECK(widget.properties[0].getter == "get_status");
+	CHECK(widget.properties[0].setter == "set_status");
+	CHECK(widget.properties[0].mutableProperty);
+	CHECK(widget.properties[1].name == "caption");
+	CHECK(widget.properties[1].setter.empty());
+	CHECK_FALSE(widget.properties[1].mutableProperty);
+	// A property may itself be a typed handle, not only a scalar.
+	CHECK(widget.properties[2].type.kind == WASM::Bindings::ValueKind::Ref);
+	CHECK(widget.properties[2].type.heap == WASM::Bindings::HeapKind::Defined);
+	CHECK(widget.properties[2].type.name == "demo.Node");
+	REQUIRE(widget.methods.size() == 8u);
 	CHECK(widget.methods[0].params.size() == 2u);
 	CHECK(widget.methods[2].params.size() == 1u);
 	// A packed field is one byte and the object is `header + 1`.
@@ -2693,6 +2716,105 @@ TEST_CASE("the object section is refused when its version or layout disagrees", 
 	CHECK(failure(badType).find("not a Wasm storage type") != std::string::npos);
 }
 
+TEST_CASE("a property is an accessor pair, not a stored slot", "[bindings][objects]")
+{
+	using WASM::Bindings::Schema;
+	const Json source = objectSchema();
+	const Schema schema = Schema::fromJson(source);
+	const WASM::Bindings::ObjectDescriptor& widget = schema.objects[0];
+	REQUIRE(widget.properties.size() == 3u);
+
+	// A property owns no bytes: dropping the section changes no offset and no
+	// size, because `layoutHostType` never saw it.
+	Json stripped = source;
+	stripped["objects"][0].erase("properties");
+	const Schema plain = Schema::fromJson(stripped);
+	REQUIRE(plain.objects.size() == 3u);
+	REQUIRE(plain.objects[0].fields.size() == widget.fields.size());
+	CHECK(plain.objects[0].size == widget.size);
+	for (std::size_t index = 0; index < widget.fields.size(); ++index) {
+		CHECK(plain.objects[0].fields[index].offset == widget.fields[index].offset);
+		CHECK(plain.objects[0].fields[index].bytes == widget.fields[index].bytes);
+	}
+
+	// The interchange form keeps the accessor pair, and only when there is one.
+	const Json out = schema.toJson();
+	REQUIRE(out.at("objects")[0].contains("properties"));
+	const Json& properties = out.at("objects")[0].at("properties");
+	REQUIRE(properties.size() == 3u);
+	CHECK(properties[0].at("name") == "status");
+	CHECK(properties[0].at("get") == "get_status");
+	CHECK(properties[0].at("set") == "set_status");
+	CHECK_FALSE(properties[1].contains("set"));
+	CHECK_FALSE(out.at("objects")[1].contains("properties"));
+}
+
+TEST_CASE("a property that cannot be bound is refused at load", "[bindings][objects]")
+{
+	using WASM::Bindings::Schema;
+	const auto failure = [](const Json& input) {
+		try {
+			(void)Schema::fromJson(input);
+		} catch (const std::runtime_error& error) {
+			return std::string(error.what());
+		}
+		return std::string();
+	};
+
+	// No getter: a member you can only write is a method with a side effect.
+	Json noGetter = objectSchema();
+	noGetter["objects"][0]["properties"][0].erase("get");
+	CHECK(failure(noGetter).find("missing `get`") != std::string::npos);
+
+	// A property is not a slot, so an offset is a field written the wrong way.
+	Json offset = objectSchema();
+	offset["objects"][0]["properties"][0]["offset"] = 8;
+	CHECK(failure(offset).find("no storage offset") != std::string::npos);
+
+	// `mutable` follows the setter; asserting it without one is a contradiction.
+	Json readOnly = objectSchema();
+	readOnly["objects"][0]["properties"][1]["mutable"] = true;
+	CHECK(failure(readOnly).find("`mutable` without `set`") != std::string::npos);
+
+	// A field, a property and a method share one member namespace.
+	Json fieldName = objectSchema();
+	fieldName["objects"][0]["properties"][0]["name"] = "x";
+	CHECK(failure(fieldName).find("same name as a field") != std::string::npos);
+
+	Json methodName = objectSchema();
+	methodName["objects"][0]["properties"][0]["name"] = "area";
+	CHECK(failure(methodName).find("same name as a method") != std::string::npos);
+
+	// An accessor is a function of the object, so `methods` must declare it...
+	Json undeclared = objectSchema();
+	undeclared["objects"][0]["properties"][0]["get"] = "read_status";
+	CHECK(failure(undeclared).find("is not declared in `methods`")
+			!= std::string::npos);
+
+	// ... and the declared signature must be the one the property implies.
+	Json wrongGetter = objectSchema();
+	wrongGetter["objects"][0]["methods"][4]["results"] = Json::array({ "i64" });
+	CHECK(failure(wrongGetter).find("must take no parameters and return i32")
+			!= std::string::npos);
+
+	Json wrongSetter = objectSchema();
+	wrongSetter["objects"][0]["methods"][5]["params"] = Json::array();
+	CHECK(failure(wrongSetter).find("must take i32 and return nothing")
+			!= std::string::npos);
+
+	// Two properties of one name, or two properties under one accessor, are
+	// both ambiguous: one member, one accessor.
+	Json duplicate = objectSchema();
+	const Json twice = duplicate["objects"][0]["properties"][0];
+	duplicate["objects"][0]["properties"].push_back(twice);
+	CHECK(failure(duplicate).find("is declared twice") != std::string::npos);
+
+	Json shared = objectSchema();
+	shared["objects"][0]["properties"][1]["get"] = "get_status";
+	CHECK(failure(shared).find("already claimed by another property")
+			!= std::string::npos);
+}
+
 TEST_CASE("one object descriptor reaches the C, Rust and WIT emitters", "[bindings][objects]")
 {
 	const WASM::Bindings::Schema schema = WASM::Bindings::Schema::fromJson(objectSchema());
@@ -2713,6 +2835,32 @@ TEST_CASE("one object descriptor reaches the C, Rust and WIT emitters", "[bindin
 	CHECK(header.find("\"demo.Widget\", 1u, 40u, \"demo.Base\"") != std::string::npos);
 	CHECK(header.find("\"target\", 32u, 8u, 1u, 1u") != std::string::npos);
 
+	// A property is emitted as an export name plus an accessor signature: the
+	// header says where the value comes from, never where it is stored.
+	CHECK(header.find("typedef struct wasmjit_object_property_meta {")
+			!= std::string::npos);
+	CHECK(header.find("#define WASMJIT_OBJECT_DEMO_WIDGET_V1_PROP_STATUS_GET \"get_status\"")
+			!= std::string::npos);
+	CHECK(header.find("#define WASMJIT_OBJECT_DEMO_WIDGET_V1_PROP_STATUS_SET \"set_status\"")
+			!= std::string::npos);
+	CHECK(header.find("int32_t (*wasmjit_object_demo_widget_v1_prop_status_get_fn)"
+			"(wasmjit_object_demo_widget_v1* self);") != std::string::npos);
+	CHECK(header.find("void (*wasmjit_object_demo_widget_v1_prop_status_set_fn)"
+			"(wasmjit_object_demo_widget_v1* self, int32_t value);")
+			!= std::string::npos);
+	CHECK(header.find("wasmjit_object_demo_node_v1* "
+			"(*wasmjit_object_demo_widget_v1_prop_preview_get_fn)("
+			"wasmjit_object_demo_widget_v1* self);") != std::string::npos);
+	CHECK(header.find("{ \"status\", \"i32\", \"get_status\", \"set_status\", 1u }")
+			!= std::string::npos);
+	CHECK(header.find("{ \"caption\", \"i32\", \"compute_caption\", NULL, 0u }")
+			!= std::string::npos);
+	CHECK(header.find("{ \"preview\", \"ref defined demo.Node\", "
+			"\"get_preview\", NULL, 0u }") != std::string::npos);
+	// A read-only property has no setter macro at all.
+	CHECK(header.find("WASMJIT_OBJECT_DEMO_WIDGET_V1_PROP_CAPTION_SET")
+			== std::string::npos);
+
 	const std::string rust = WASM::Bindings::emitRustModule(schema);
 	CHECK(rust.find("pub const WASMJIT_OBJECT_DEMO_WIDGET_V1_FIELD_TARGET: u32 = 32;")
 			!= std::string::npos);
@@ -2722,6 +2870,18 @@ TEST_CASE("one object descriptor reaches the C, Rust and WIT emitters", "[bindin
 			"*mut wasmjit_object_demo_widget_v1, *mut wasmjit_object_demo_node_v1)")
 			!= std::string::npos);
 	CHECK(rust.find("parent: Some(\"demo.Base\")") != std::string::npos);
+	CHECK(rust.find("pub const WASMJIT_OBJECT_DEMO_WIDGET_V1_PROP_STATUS_GET: &str = "
+			"\"get_status\";") != std::string::npos);
+	CHECK(rust.find("pub type wasmjit_object_demo_widget_v1_prop_status_set_fn = "
+			"unsafe extern \"C\" fn(*mut wasmjit_object_demo_widget_v1, i32);")
+			!= std::string::npos);
+	CHECK(rust.find("wasmjit_object_property_meta { name: \"status\", type_name: \"i32\", "
+			"get_export: \"get_status\", set_export: Some(\"set_status\"), "
+			"is_mutable: true }") != std::string::npos);
+	CHECK(rust.find("properties: WASMJIT_OBJECT_DEMO_WIDGET_V1_PROPERTIES")
+			!= std::string::npos);
+	// An object without properties points at the empty slice, not at nothing.
+	CHECK(rust.find("properties: &[],") != std::string::npos);
 
 	const std::string wit = WASM::Bindings::emit(schema, WASM::Bindings::Language::Wit);
 	CHECK(wit.find("interface types {") != std::string::npos);
@@ -2741,6 +2901,20 @@ TEST_CASE("one object descriptor reaches the C, Rust and WIT emitters", "[bindin
 	CHECK(wit.find("blit: `v128` parameter") != std::string::npos);
 	// A packed byte is a WIT `s8`, and a packed field is one byte in the table.
 	CHECK(wit.find("kind: func() -> s8;") != std::string::npos);
+	// A property crosses the boundary as the call it already is: WIT has no
+	// storage, so a property and a field project to the same member shape and
+	// the difference is the note that says the value is computed.
+	CHECK(wit.find("/// Property `status`: computed by `get_status`, not a stored slot.")
+			!= std::string::npos);
+	CHECK(wit.find("    status: func() -> s32;") != std::string::npos);
+	CHECK(wit.find("    set-status: func(value: s32);") != std::string::npos);
+	CHECK(wit.find("    caption: func() -> s32;") != std::string::npos);
+	// A read-only property gets no setter, and the accessor is never emitted
+	// twice: it is the property's projection, not a second member.
+	CHECK(wit.find("set-caption") == std::string::npos);
+	CHECK(wit.find("get-status:") == std::string::npos);
+	CHECK(wit.find("preview: a property of a reference has no WIT getter")
+			!= std::string::npos);
 	CHECK(header.find("#define WASMJIT_OBJECT_DEMO_NODE_V1_SIZE 17u") != std::string::npos);
 
 	// Without objects the emitters are byte-for-byte what they were.
@@ -2777,11 +2951,19 @@ TEST_CASE("generated object bindings compile and their WIT is accepted", "[bindi
 				  "{\n"
 				  "    return &wasmjit_object_demo_widget_v1_meta;\n"
 				  "}\n"
+				  "static int32_t demo_status(wasmjit_object_demo_widget_v1* self)\n"
+				  "{\n"
+				  "    wasmjit_object_demo_widget_v1_prop_status_get_fn get = 0;\n"
+				  "    (void)get;\n"
+				  "    return (int32_t)(self != 0);\n"
+				  "}\n"
 				  "int main(void)\n"
 				  "{\n"
 				  "    return (int)(demo_meta()->size\n"
 				  "            + WASMJIT_OBJECT_DEMO_WIDGET_V1_FIELD_TARGET\n"
-				  "            + WASMJIT_OBJECT_DEMO_WIDGET_V1_SIZE);\n"
+				  "            + WASMJIT_OBJECT_DEMO_WIDGET_V1_SIZE\n"
+				  "            + demo_meta()->property_count\n"
+				  "            + (unsigned)sizeof(WASMJIT_OBJECT_DEMO_WIDGET_V1_PROP_STATUS_GET));\n"
 				  "}\n";
 		std::ofstream rust(rustPath, std::ios::binary);
 		rust << WASM::Bindings::emitRustModule(schema);

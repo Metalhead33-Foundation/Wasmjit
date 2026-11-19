@@ -20,6 +20,13 @@ Regenerate after an **intentional** additive change:
 ./Test/abi-check.sh --update build/<config>
 ```
 
+**Snapshot (2026-11-19, `98fd811`):** `libWasmBase.exports` **2,155 strong
+symbols** (2,448 dynamic), `libLibJit.exports` **857** (957); both regenerated
+from the release build with `0 removed, 0 added`. The drift since the previous
+baseline (2026-11-02) was 286 + 23 *additions* and nothing removed — configuration
+loading, the component runtime, the GC surface, host types and the backend
+descriptor are all additive.
+
 ## Why this and not only `abidiff`
 
 The check is deliberately dependency-free: `nm` is in binutils and every build

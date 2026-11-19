@@ -199,10 +199,51 @@ struct ObjectField {
 };
 
 /*!
+ * \brief One property of a host-registered object descriptor: a value behind a
+ * function pair, not a stored slot.
+ *
+ * A field says "this member is at offset N"; a property says "this member is
+ * whatever `get` returns". The getter is required and the setter optional, and
+ * neither occupies a byte of the object — so a property is how a descriptor
+ * declares a *computed* or *cascading* member (a lazily formatted label, a
+ * status whose change updates a mixer, a derived value) while the storage and
+ * its offsets stay the host's business.
+ *
+ * Both accessors must also be declared in the object's `methods` table: an
+ * accessor is a function of the object like any other, and the descriptor is
+ * checked against itself rather than trusted
+ * (docs/proposals/SYNTHETIC_OBJECTS.md §4.7).
+ */
+struct ObjectProperty {
+	std::string name; //!< The property name, unique among the object's members.
+	ValueType type; //!< The property's value type.
+	std::string getter; //!< The accessor that reads it; required.
+	std::string setter; //!< The accessor that writes it; empty when read-only.
+	bool mutableProperty = false; //!< True when a setter is declared.
+
+	/*!
+	 * \brief Parses one property descriptor.
+	 * \param json The property object.
+	 * \return The typed property.
+	 * \throws std::runtime_error when the name, the value type or the getter is
+	 * missing, when a `void` type is declared, when `offset` is present, or when
+	 * `mutable` is asserted without a setter.
+	 */
+	static ObjectProperty fromJson(const nlohmann::ordered_json& json);
+
+	/*!
+	 * \brief Formats the property for schema interchange.
+	 * \return The ordered JSON object.
+	 */
+	nlohmann::ordered_json toJson() const;
+};
+
+/*!
  * \brief One method of a host-registered object descriptor.
  *
  * A method is metadata: it names a signature the host implements as a
  * trampoline. The tool emits the shape; it never invents an implementation.
+ * A method named by a property's `get`/`set` is that property's accessor.
  */
 struct ObjectMethod {
 	std::string name; //!< The method name.
@@ -238,8 +279,9 @@ struct ObjectDescriptor {
 	std::uint32_t version = 1; //!< The descriptor version; a change is a new type.
 	std::string parent; //!< The optional parent descriptor name.
 	std::vector<std::string> interfaces; //!< The optional interface names.
-	std::vector<ObjectField> fields; //!< The field table.
-	std::vector<ObjectMethod> methods; //!< The method table.
+	std::vector<ObjectField> fields; //!< The stored-slot table.
+	std::vector<ObjectProperty> properties; //!< The accessor-backed properties.
+	std::vector<ObjectMethod> methods; //!< The method table (accessors included).
 	std::uint32_t size = 0; //!< The canonical object size, filled by validation.
 	nlohmann::ordered_json raw; //!< The original object, for open-ended fields.
 

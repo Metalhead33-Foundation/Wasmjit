@@ -4,6 +4,7 @@
 
 #include <cctype>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -117,6 +118,25 @@ std::string objectRustType(const Json& schema, const Json& type)
 	return rustType(type);
 }
 
+//! The descriptor spelling of a type, for the metadata tables (`i32`,
+//! `ref extern`, `ref demo.Node`).
+std::string descriptorTypeName(const Json& type)
+{
+	if (!type.is_object())
+		return "unknown";
+	std::string out = type.value("type", std::string("unknown"));
+	if (out == "ref") {
+		out += " ";
+		out += type.value("heap", std::string("unknown"));
+		const std::string name = type.value("name", std::string());
+		if (!name.empty())
+			out += " " + name;
+	}
+	if (type.value("packed", false))
+		out += " (packed)";
+	return out;
+}
+
 //! The WIT spelling of one descriptor type, or nullopt when WIT cannot say it.
 std::optional<std::string> witType(const Json& schema, const Json& type)
 {
@@ -175,6 +195,13 @@ void emitCObjects(std::ostringstream& out, const Json& schema)
 		   "    uint8_t is_reference;\n"
 		   "    uint8_t is_mutable;\n"
 		   "} wasmjit_object_meta_field;\n\n";
+	out << "typedef struct wasmjit_object_property_meta {\n"
+		   "    const char* name;\n"
+		   "    const char* type;\n"
+		   "    const char* get_export;\n"
+		   "    const char* set_export;\n"
+		   "    uint8_t is_mutable;\n"
+		   "} wasmjit_object_property_meta;\n\n";
 	out << "typedef struct wasmjit_object_meta {\n"
 		   "    const char* name;\n"
 		   "    uint32_t version;\n"
@@ -182,6 +209,8 @@ void emitCObjects(std::ostringstream& out, const Json& schema)
 		   "    const char* parent;\n"
 		   "    uint32_t field_count;\n"
 		   "    const wasmjit_object_meta_field* fields;\n"
+		   "    uint32_t property_count;\n"
+		   "    const wasmjit_object_property_meta* properties;\n"
 		   "    uint32_t method_count;\n"
 		   "    const char* const* methods;\n"
 		   "} wasmjit_object_meta;\n\n";
@@ -205,6 +234,8 @@ void emitCObjects(std::ostringstream& out, const Json& schema)
 		const std::uint32_t size = object.value("size", 0u);
 		const Json& fields =
 				object.contains("fields") ? object.at("fields") : emptyArray;
+		const Json& properties =
+				object.contains("properties") ? object.at("properties") : emptyArray;
 		const Json& methods =
 				object.contains("methods") ? object.at("methods") : emptyArray;
 
@@ -249,6 +280,30 @@ void emitCObjects(std::ostringstream& out, const Json& schema)
 				out << ", void* results";
 			out << ");\n";
 		}
+		if (!properties.empty()) {
+			out << "\n/* Properties: a value reached through a function, never a slot.\n"
+				   "   The accessor names are the instance's export names; a host\n"
+				   "   binds one trampoline per name and reads the property through\n"
+				   "   it, so a getter may compute or cascade rather than load. */\n";
+			for (const Json& property : properties) {
+				const std::string propName = property.value("name", "");
+				const std::string propIdent = objectIdentifier(propName);
+				const std::string propMacro = macro + "_PROP_" + upperCopy(propIdent);
+				const Json& propType =
+						property.contains("type") ? property.at("type") : Json{};
+				out << "#define " << propMacro << "_GET "
+					<< quoteName(property.value("get", ""), false) << "\n";
+				if (property.contains("set"))
+					out << "#define " << propMacro << "_SET "
+						<< quoteName(property.value("set", ""), false) << "\n";
+				out << "typedef " << objectCType(schema, propType) << " (*" << type
+					<< "_prop_" << propIdent << "_get_fn)(" << type << "* self);\n";
+				if (property.contains("set"))
+					out << "typedef void (*" << type << "_prop_" << propIdent
+						<< "_set_fn)(" << type << "* self, "
+						<< objectCType(schema, propType) << " value);\n";
+			}
+		}
 		out << "\n";
 
 		if (!fields.empty()) {
@@ -272,6 +327,23 @@ void emitCObjects(std::ostringstream& out, const Json& schema)
 			}
 			out << "};\n";
 		}
+		if (!properties.empty()) {
+			out << "static const wasmjit_object_property_meta " << type
+				<< "_properties[] = {\n";
+			for (const Json& property : properties) {
+				const Json& propType =
+						property.contains("type") ? property.at("type") : Json{};
+				out << "    { " << quoteName(property.value("name", ""), false)
+					<< ", " << quoteName(descriptorTypeName(propType), false)
+					<< ", " << quoteName(property.value("get", ""), false) << ", ";
+				if (property.contains("set"))
+					out << quoteName(property.value("set", ""), false);
+				else
+					out << "NULL";
+				out << ", " << (property.contains("set") ? 1 : 0) << "u },\n";
+			}
+			out << "};\n";
+		}
 		out << "static const wasmjit_object_meta " << type << "_meta = {\n"
 			<< "    " << quoteName(name, false) << ", " << version << "u, "
 			<< size << "u, ";
@@ -281,7 +353,9 @@ void emitCObjects(std::ostringstream& out, const Json& schema)
 			out << "NULL";
 		out << ", " << fields.size() << "u, "
 			<< (fields.empty() ? std::string("NULL") : type + "_fields") << ", "
-			<< methods.size() << "u, "
+			<< properties.size() << "u, "
+			<< (properties.empty() ? std::string("NULL") : type + "_properties")
+			<< ", " << methods.size() << "u, "
 			<< (methods.empty() ? std::string("NULL") : type + "_methods")
 			<< "\n};\n\n";
 	}
@@ -304,12 +378,20 @@ void emitRustObjects(std::ostringstream& out, const Json& schema)
 		   "    pub is_reference: bool,\n"
 		   "    pub is_mutable: bool,\n"
 		   "}\n\n";
+	out << "pub struct wasmjit_object_property_meta {\n"
+		   "    pub name: &'static str,\n"
+		   "    pub type_name: &'static str,\n"
+		   "    pub get_export: &'static str,\n"
+		   "    pub set_export: Option<&'static str>,\n"
+		   "    pub is_mutable: bool,\n"
+		   "}\n\n";
 	out << "pub struct wasmjit_object_meta {\n"
 		   "    pub name: &'static str,\n"
 		   "    pub version: u32,\n"
 		   "    pub size: u32,\n"
 		   "    pub parent: Option<&'static str>,\n"
 		   "    pub fields: &'static [wasmjit_object_meta_field],\n"
+		   "    pub properties: &'static [wasmjit_object_property_meta],\n"
 		   "    pub methods: &'static [&'static str],\n"
 		   "}\n\n";
 
@@ -322,6 +404,8 @@ void emitRustObjects(std::ostringstream& out, const Json& schema)
 		const std::uint32_t size = object.value("size", 0u);
 		const Json& fields =
 				object.contains("fields") ? object.at("fields") : emptyArray;
+		const Json& properties =
+				object.contains("properties") ? object.at("properties") : emptyArray;
 		const Json& methods =
 				object.contains("methods") ? object.at("methods") : emptyArray;
 
@@ -365,6 +449,28 @@ void emitRustObjects(std::ostringstream& out, const Json& schema)
 				out << " -> " << objectRustType(schema, results.at(0));
 			out << ";\n";
 		}
+		if (!properties.empty()) {
+			out << "\n";
+			for (const Json& property : properties) {
+				const std::string propIdent =
+						objectIdentifier(property.value("name", ""));
+				const std::string propMacro = macro + "_PROP_" + upperCopy(propIdent);
+				const Json& propType =
+						property.contains("type") ? property.at("type") : Json{};
+				out << "pub const " << propMacro << "_GET: &str = "
+					<< quoteName(property.value("get", ""), true) << ";\n";
+				if (property.contains("set"))
+					out << "pub const " << propMacro << "_SET: &str = "
+						<< quoteName(property.value("set", ""), true) << ";\n";
+				out << "pub type " << type << "_prop_" << propIdent
+					<< "_get_fn = unsafe extern \"C\" fn(*mut " << type << ") -> "
+					<< objectRustType(schema, propType) << ";\n";
+				if (property.contains("set"))
+					out << "pub type " << type << "_prop_" << propIdent
+						<< "_set_fn = unsafe extern \"C\" fn(*mut " << type << ", "
+						<< objectRustType(schema, propType) << ");\n";
+			}
+		}
 		out << "\npub static " << macro
 			<< "_FIELDS: &[wasmjit_object_meta_field] = &[\n";
 		for (const Json& field : fields) {
@@ -377,7 +483,30 @@ void emitRustObjects(std::ostringstream& out, const Json& schema)
 				<< ", is_mutable: "
 				<< (field.value("mutable", false) ? "true" : "false") << " },\n";
 		}
-		out << "];\npub static " << macro
+		out << "];\n";
+		if (!properties.empty()) {
+			out << "pub static " << macro
+				<< "_PROPERTIES: &[wasmjit_object_property_meta] = &[\n";
+			for (const Json& property : properties) {
+				const Json& propType =
+						property.contains("type") ? property.at("type") : Json{};
+				out << "    wasmjit_object_property_meta { name: "
+					<< quoteName(property.value("name", ""), true)
+					<< ", type_name: "
+					<< quoteName(descriptorTypeName(propType), true)
+					<< ", get_export: " << quoteName(property.value("get", ""), true)
+					<< ", set_export: ";
+				if (property.contains("set"))
+					out << "Some(" << quoteName(property.value("set", ""), true)
+						<< ")";
+				else
+					out << "None";
+				out << ", is_mutable: "
+					<< (property.contains("set") ? "true" : "false") << " },\n";
+			}
+			out << "];\n";
+		}
+		out << "pub static " << macro
 			<< ": wasmjit_object_meta = wasmjit_object_meta {\n"
 			<< "    name: " << quoteName(name, true) << ", version: " << version
 			<< ", size: " << size << ", parent: ";
@@ -386,7 +515,9 @@ void emitRustObjects(std::ostringstream& out, const Json& schema)
 				<< quoteName(object.at("parent").get<std::string>(), true) << ")";
 		else
 			out << "None";
-		out << ",\n    fields: " << macro << "_FIELDS,\n    methods: &[";
+		out << ",\n    fields: " << macro << "_FIELDS,\n    properties: "
+			<< (properties.empty() ? std::string("&[]") : macro + "_PROPERTIES")
+			<< ",\n    methods: &[";
 		for (std::size_t index = 0; index < methods.size(); ++index) {
 			if (index != 0u)
 				out << ", ";
@@ -440,8 +571,19 @@ void emitWitObjects(std::ostringstream& out, const Json& schema)
 		const std::uint32_t size = object.value("size", 0u);
 		const Json& fields =
 				object.contains("fields") ? object.at("fields") : emptyArray;
+		const Json& properties =
+				object.contains("properties") ? object.at("properties") : emptyArray;
 		const Json& methods =
 				object.contains("methods") ? object.at("methods") : emptyArray;
+		// An accessor is projected as part of its property, so the standalone
+		// method of that name is not emitted again: one member, one spelling.
+		std::set<std::string> claimed;
+		for (const Json& property : properties) {
+			if (property.contains("get"))
+				claimed.insert(property.value("get", ""));
+			if (property.contains("set"))
+				claimed.insert(property.value("set", ""));
+		}
 
 		out << "  /// Host-registered object `" << name << "`, descriptor version "
 			<< version << ".\n"
@@ -481,12 +623,41 @@ void emitWitObjects(std::ostringstream& out, const Json& schema)
 				members << "    set-" << witMemberName(fieldName)
 					<< ": func(value: " << *wit << ");\n";
 		}
+		for (const Json& property : properties) {
+			const std::string propName = property.value("name", "");
+			const Json& propType =
+					property.contains("type") ? property.at("type") : Json{};
+			const std::optional<std::string> wit = witType(schema, propType);
+			const bool isReference =
+					propType.is_object() && propType.value("type", "") == "ref";
+			if (!wit) {
+				members << "    /// " << witMemberName(propName)
+					<< ": a property of " << witOmission(propType)
+					<< " is not expressible in WIT; omitted.\n";
+				continue;
+			}
+			if (isReference)
+				members << "    /// " << witMemberName(propName)
+					<< ": a property of a reference has no WIT getter (a borrow"
+					   " cannot be returned).\n";
+			else
+				members << "    /// Property `" << propName << "`: computed by `"
+					<< property.value("get", "")
+					<< "`, not a stored slot.\n"
+					<< "    " << witMemberName(propName) << ": func() -> " << *wit
+					<< ";\n";
+			if (property.contains("set"))
+				members << "    set-" << witMemberName(propName) << ": func(value: "
+					<< *wit << ");\n";
+		}
 		for (const Json& method : methods) {
 			const Json& params =
 					method.contains("params") ? method.at("params") : emptyArray;
 			const Json& results =
 					method.contains("results") ? method.at("results") : emptyArray;
 			const std::string methodName = method.value("name", "");
+			if (claimed.count(methodName) != 0u)
+				continue;
 			std::vector<std::string> paramTypes;
 			std::string omission;
 			for (const Json& param : params) {
