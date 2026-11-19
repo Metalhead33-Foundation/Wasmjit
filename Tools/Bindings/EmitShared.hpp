@@ -23,6 +23,13 @@ namespace WASM::Bindings::detail {
 
 using Json = nlohmann::ordered_json; //!< Ordered JSON used at the emit boundary.
 
+//! Returns the `void` value a signature names when a call returns nothing.
+/*!
+  \brief Builds the typed `void` used in place of a result list.
+  \return A `ValueType` whose kind is `ValueKind::Void`.
+*/
+ValueType voidValue();
+
 //! Makes a schema name safe for every target language.
 std::string sanitize(std::string_view text);
 

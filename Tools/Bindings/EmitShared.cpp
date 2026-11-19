@@ -14,6 +14,13 @@
 
 namespace WASM::Bindings::detail {
 
+ValueType voidValue()
+{
+	ValueType type;
+	type.kind = ValueKind::Void;
+	return type;
+}
+
 void dedupeJsonSchema(Json& schema)
 {
 	const auto dedupe = [](Json& entries, bool imports) {

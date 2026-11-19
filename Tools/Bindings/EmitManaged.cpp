@@ -17,14 +17,6 @@ using Json = nlohmann::ordered_json;
 std::string javaType(const ValueType& type);
 std::string csharpType(const ValueType& type);
 
-//! The `void` value a Dart signature names when a call returns nothing.
-ValueType voidValue()
-{
-	ValueType type;
-	type.kind = ValueKind::Void;
-	return type;
-}
-
 std::string emitDartImpl(const Json& schema, const Schema& typed)
 {
 	std::set<std::string> refs;

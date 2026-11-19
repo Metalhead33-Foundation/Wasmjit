@@ -39,12 +39,12 @@ std::string pythonType(const ValueType& type)
 	return "ctypes.c_void_p";
 }
 
-std::string emitPythonImpl(const Json& schema)
+std::string emitPythonImpl(const Json& schema, const Schema& typed)
 {
 	std::ostringstream out;
 	out << "# Generated Python ctypes bindings from the "
-		<< schema.at("schema").get<std::string>() << " "
-		<< schema.at("direction").get<std::string>() << " schema. Do not edit.\n";
+		<< typed.id << " "
+		<< directionName(typed.direction) << " schema. Do not edit.\n";
 	out << "import ctypes\n\n";
 	out << "class WasmExternref(ctypes.Structure):\n\tpass\n\n";
 	std::set<std::string> witTypes;
@@ -52,28 +52,28 @@ std::string emitPythonImpl(const Json& schema)
 	for (const std::string& type : witTypes)
 		out << "class " << type << "(ctypes.Structure):\n\tpass\n";
 	out << "\n";
-	forEachFunction(schema, "imports", [&](const Json& entry) {
+	forEachFunction(typed, true, [&](const Entry& entry) {
 		const std::string name = "wasmjit_" + sanitize(importModule(entry)) + "_"
-				+ sanitize(entry.at("name").get<std::string>());
+				+ sanitize(entry.name);
 		out << "# G2H import: " << importComment(entry) << "\n";
 		out << name << "_type = ctypes.CFUNCTYPE("
-			<< pythonType(signatureResults(entry).size() == 1
-					? signatureResults(entry)[0] : Json{{"type", "void"}});
-		for (const Json& param : signatureParams(entry))
+			<< pythonType(entry.function.results.size() == 1
+					? entry.function.results[0] : voidValue());
+		for (const ValueType& param : entry.function.params)
 			out << ", " << pythonType(param);
-		if (signatureResults(entry).size() > 1u)
+		if (entry.function.results.size() > 1u)
 			out << ", ctypes.c_void_p";
 		out << ")\n\n";
 	});
-	forEachFunction(schema, "exports", [&](const Json& entry) {
-		const std::string name = "wasmjit_" + sanitize(entry.at("name").get<std::string>());
+	forEachFunction(typed, false, [&](const Entry& entry) {
+		const std::string name = "wasmjit_" + sanitize(entry.name);
 		out << "# H2G export: " << exportComment(entry) << "\n";
 		out << name << "_type = ctypes.CFUNCTYPE("
-			<< pythonType(signatureResults(entry).size() == 1
-					? signatureResults(entry)[0] : Json{{"type", "void"}});
-		for (const Json& param : signatureParams(entry))
+			<< pythonType(entry.function.results.size() == 1
+					? entry.function.results[0] : voidValue());
+		for (const ValueType& param : entry.function.params)
 			out << ", " << pythonType(param);
-		if (signatureResults(entry).size() > 1u)
+		if (entry.function.results.size() > 1u)
 			out << ", ctypes.c_void_p";
 		out << ")\n";
 		out << name << " = " << name << "_type()\n\n";
