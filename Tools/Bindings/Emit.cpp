@@ -68,7 +68,7 @@ std::string emit(const Schema& input, Language language)
 	switch (language) {
 	case Language::CHeader: return emitCHeader(input);
 	case Language::Rust: return emitRustModule(input);
-	case Language::TypeScript: return detail::emitTypeScriptImpl(schema);
+	case Language::TypeScript: return detail::emitTypeScriptImpl(schema, input);
 	case Language::AssemblyScript: return detail::emitAssemblyScriptImpl(schema);
 	case Language::Zig: return detail::emitZigImpl(schema);
 	case Language::Kotlin: return detail::emitKotlinImpl(schema, input);

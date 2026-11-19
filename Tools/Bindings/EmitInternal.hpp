@@ -28,7 +28,8 @@ std::string emitRustModuleImpl(const nlohmann::ordered_json& schema,
 		const Schema& typed);
 
 //! Emits TypeScript declarations.
-std::string emitTypeScriptImpl(const nlohmann::ordered_json& schema);
+std::string emitTypeScriptImpl(const nlohmann::ordered_json& schema,
+		const Schema& typed);
 
 //! Emits AssemblyScript declarations.
 std::string emitAssemblyScriptImpl(const nlohmann::ordered_json& schema);

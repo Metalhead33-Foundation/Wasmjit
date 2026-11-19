@@ -13,14 +13,14 @@ namespace WASM::Bindings::detail {
 
 using Json = nlohmann::ordered_json;
 
-std::string emitTypeScriptImpl(const Json& schema)
+std::string emitTypeScriptImpl(const Json& schema, const Schema& typed)
 {
 	std::set<std::string> refs;
 	collectSchemaRefs(schema, refs);
 
 	std::ostringstream out;
-	out << "/* Generated from the " << schema.at("schema").get<std::string>() << " "
-		<< schema.at("direction").get<std::string>() << " schema. Do not edit. */\n\n";
+	out << "/* Generated from the " << typed.id << " "
+		<< directionName(typed.direction) << " schema. Do not edit. */\n\n";
 	out << "export type wasm_v128 = Uint8Array;\n";
 	for (const std::string& ref : refs)
 		out << "export interface " << pascalName(ref) << " { readonly __" << ref
@@ -29,11 +29,10 @@ std::string emitTypeScriptImpl(const Json& schema)
 		   "// the adapter says otherwise; reference results carry an explicit\n"
 		   "// ownership note.\n\n";
 
-	forEachFunction(schema, "exports", [&](const Json& entry) {
+	forEachFunction(typed, false, [&](const Entry& entry) {
 		out << "// H2G export: " << exportComment(entry) << "\n";
-		out << "export declare function wasmjit_"
-			<< sanitize(entry.at("name").get<std::string>()) << "(";
-		const Json& params = signatureParams(entry);
+		out << "export declare function wasmjit_" << sanitize(entry.name) << "(";
+		const std::vector<ValueType>& params = entry.function.params;
 		for (std::size_t i = 0; i < params.size(); ++i) {
 			if (i != 0) out << ", ";
 			out << argumentName(entry, i) << ": " << tsType(params[i]);
@@ -41,7 +40,7 @@ std::string emitTypeScriptImpl(const Json& schema)
 		}
 		if (params.empty()) out << "void";
 		out << ")";
-		const Json& results = signatureResults(entry);
+		const std::vector<ValueType>& results = entry.function.results;
 		if (results.size() == 1) {
 			out << ": " << tsType(results[0]);
 			if (isReference(results[0])) out << " /* ownership: explicit */";
@@ -58,12 +57,11 @@ std::string emitTypeScriptImpl(const Json& schema)
 		out << ";\n\n";
 	});
 
-	forEachFunction(schema, "imports", [&](const Json& entry) {
+	forEachFunction(typed, true, [&](const Entry& entry) {
 		out << "// G2H import: " << importComment(entry) << "\n";
-		out << "export declare function wasmjit_"
-			<< sanitize(importModule(entry)) << "_"
-			<< sanitize(entry.at("name").get<std::string>()) << "(";
-		const Json& params = signatureParams(entry);
+		out << "export declare function wasmjit_" << sanitize(importModule(entry))
+			<< "_" << sanitize(entry.name) << "(";
+		const std::vector<ValueType>& params = entry.function.params;
 		for (std::size_t i = 0; i < params.size(); ++i) {
 			if (i != 0) out << ", ";
 			out << argumentName(entry, i) << ": " << tsType(params[i]);
@@ -71,7 +69,7 @@ std::string emitTypeScriptImpl(const Json& schema)
 		}
 		if (params.empty()) out << "void";
 		out << ")";
-		const Json& results = signatureResults(entry);
+		const std::vector<ValueType>& results = entry.function.results;
 		if (results.size() == 1)
 			out << ": " << tsType(results[0]);
 		else if (results.size() > 1)
