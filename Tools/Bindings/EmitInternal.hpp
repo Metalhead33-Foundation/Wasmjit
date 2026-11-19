@@ -84,7 +84,7 @@ std::string emitCrystalImpl(const nlohmann::ordered_json& schema, const Schema& 
 std::string emitAdaImpl(const nlohmann::ordered_json& schema, const Schema& typed);
 
 //! Emits Pascal `cdecl` declarations.
-std::string emitPascalImpl(const nlohmann::ordered_json& schema);
+std::string emitPascalImpl(const nlohmann::ordered_json& schema, const Schema& typed);
 
 //! Emits Haskell `foreign import ccall` declarations.
 std::string emitHaskellImpl(const nlohmann::ordered_json& schema);

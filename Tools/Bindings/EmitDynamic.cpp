@@ -587,46 +587,46 @@ std::string pascalType(const ValueType& type)
 	return "Pointer";
 }
 
-std::string emitPascalImpl(const Json& schema)
+std::string emitPascalImpl(const Json& schema, const Schema& typed)
 {
 	std::ostringstream out;
 	out << "{ Generated Pascal bindings from the "
-		<< schema.at("schema").get<std::string>() << " "
-		<< schema.at("direction").get<std::string>() << " schema. Do not edit. }\n";
+		<< typed.id << " "
+		<< directionName(typed.direction) << " schema. Do not edit. }\n";
 	out << "unit WasmJitBindings;\n\ninterface\n\ntype\n";
 	std::set<std::string> witTypes;
 	collectWitTypeNames(schema, witTypes);
 	for (const std::string& type : witTypes)
 		out << "  " << type << " = Pointer;\n";
-	forEachFunction(schema, "exports", [&](const Json& entry) {
-		const std::string name = sanitize(entry.at("name").get<std::string>());
+	forEachFunction(typed, false, [&](const Entry& entry) {
+		const std::string name = sanitize(entry.name);
 		out << "  Wasmjit_" << name << "_Fn = function (";
-		const Json& params = signatureParams(entry);
+		const std::vector<ValueType>& params = entry.function.params;
 		for (std::size_t i = 0; i < params.size(); ++i) {
 			if (i != 0) out << "; ";
 			out << argumentName(entry, i) << ": " << pascalType(params[i]);
 		}
-		if (signatureResults(entry).size() > 1u)
+		if (entry.function.results.size() > 1u)
 			out << (params.empty() ? "" : "; ") << "result: Pointer";
-		out << "): " << (signatureResults(entry).size() == 1
-				? pascalType(signatureResults(entry)[0]) : "LongInt")
+		out << "): " << (entry.function.results.size() == 1
+				? pascalType(entry.function.results[0]) : "LongInt")
 			<< "; cdecl;\n";
 	});
-	forEachFunction(schema, "imports", [&](const Json& entry) {
+	forEachFunction(typed, true, [&](const Entry& entry) {
 		out << "  // G2H import: " << importComment(entry) << "\n";
 		out << "  function wasmjit_" << sanitize(importModule(entry)) << "_"
-			<< sanitize(entry.at("name").get<std::string>()) << "(";
-		const Json& params = signatureParams(entry);
+			<< sanitize(entry.name) << "(";
+		const std::vector<ValueType>& params = entry.function.params;
 		for (std::size_t i = 0; i < params.size(); ++i) {
 			if (i != 0) out << "; ";
 			out << argumentName(entry, i) << ": " << pascalType(params[i]);
 		}
-		if (signatureResults(entry).size() > 1u)
+		if (entry.function.results.size() > 1u)
 			out << (params.empty() ? "" : "; ") << "result: Pointer";
-		out << "): " << (signatureResults(entry).size() == 1
-				? pascalType(signatureResults(entry)[0]) : "LongInt")
+		out << "): " << (entry.function.results.size() == 1
+				? pascalType(entry.function.results[0]) : "LongInt")
 			<< "; cdecl; external '" << importModule(entry) << "' name '"
-			<< entry.at("name").get<std::string>() << "';\n";
+			<< entry.name << "';\n";
 	});
 	out << "\nimplementation\n\nend.\n";
 	out << nonFunctionNotes(schema);
