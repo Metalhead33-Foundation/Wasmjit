@@ -96,7 +96,7 @@ std::string emitCppTypedefsImpl(const nlohmann::ordered_json& schema, const Sche
 std::string emitCppSourceImpl(const nlohmann::ordered_json& schema, const Schema& typed);
 
 //! Emits a compiled C++ adapter.
-std::string emitCppAdapterImpl(const nlohmann::ordered_json& schema);
+std::string emitCppAdapterImpl(const nlohmann::ordered_json& schema, const Schema& typed);
 
 //! Emits a WIT package/world representation.
 std::string emitWitImpl(const nlohmann::ordered_json& schema, const Schema& typed);

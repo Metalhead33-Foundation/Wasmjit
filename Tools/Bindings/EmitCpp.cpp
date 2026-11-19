@@ -496,13 +496,12 @@ std::string emitCppSourceImpl(const Json& schema, const Schema& typed)
 }
 
 
-std::string emitCppAdapterImpl(const Json& schema)
+std::string emitCppAdapterImpl(const Json& schema, const Schema& typed)
 {
-	const std::string direction = schema.value("direction", "g2h");
-	if (direction != "h2g")
+	if (typed.direction != Direction::HostToGuest)
 		return "// cpp-adapter is an H2G (host calls guest) surface; no output "
-			   "for " + direction + ".\n";
-	if (schema.value("kind", "module") == "component")
+			   "for " + std::string(directionName(typed.direction)) + ".\n";
+	if (typed.extras.value("kind", "module") == "component")
 		return "// Component adapters are not generated yet; use the C header and "
 			   "ComponentFunction.\n";
 
@@ -510,8 +509,8 @@ std::string emitCppAdapterImpl(const Json& schema)
 	collectSchemaRefs(schema, refs);
 
 	std::ostringstream out;
-	out << "// Generated adapter from the " << schema.at("schema").get<std::string>()
-		<< " " << schema.at("direction").get<std::string>() << " schema. Do not edit.\n";
+	out << "// Generated adapter from the " << typed.id << " "
+		<< directionName(typed.direction) << " schema. Do not edit.\n";
 	out << "#include <WasmBase/WasmRuntime.hpp>\n";
 	out << "#include <cstdint>\n";
 	out << "#include <stdexcept>\n";
@@ -561,10 +560,10 @@ std::string emitCppAdapterImpl(const Json& schema)
 	out << "} // namespace\n\n";
 	out << "extern \"C\" {\n";
 
-	forEachFunction(schema, "exports", [&](const Json& entry) {
-		const Json& params = signatureParams(entry);
-		const Json& results = signatureResults(entry);
-		const std::string exportName = entry.at("name").get<std::string>();
+	forEachFunction(typed, false, [&](const Entry& entry) {
+		const std::vector<ValueType>& params = entry.function.params;
+		const std::vector<ValueType>& results = entry.function.results;
+		const std::string& exportName = entry.name;
 		const std::string name = "wasmjit_" + sanitize(exportName);
 		out << "\n// H2G export: " << exportComment(entry) << "\n";
 		const bool multiValue = results.size() > 1u;
