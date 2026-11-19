@@ -100,57 +100,58 @@ std::string javaType(const ValueType& type)
 	return "WasmExternref";
 }
 
-void emitJavaParams(std::ostringstream& out, const Json& entry)
+void emitJavaParams(std::ostringstream& out, const Entry& entry)
 {
-	const Json& params = signatureParams(entry);
+	const std::vector<ValueType>& params = entry.function.params;
 	for (std::size_t i = 0; i < params.size(); ++i) {
 		if (i != 0) out << ", ";
 		out << javaType(params[i]) << " " << argumentName(entry, i);
 	}
-	if (signatureResults(entry).size() > 1u) {
+	if (entry.function.results.size() > 1u) {
 		if (!params.empty()) out << ", ";
 		out << "long[] result";
 	}
 }
 
-std::string emitJavaImpl(const Json& schema)
+std::string emitJavaImpl(const Json& schema, const Schema& typed)
 {
 	std::set<std::string> refs;
 	collectSchemaRefs(schema, refs);
 	std::ostringstream out;
-	out << "// Generated Java/Wasm bindings from the "
-		<< schema.at("schema").get<std::string>() << " "
-		<< schema.at("direction").get<std::string>() << " schema. Do not edit.\n";
+	out << "// Generated Java/Wasm bindings from the " << typed.id << " "
+		<< directionName(typed.direction) << " schema. Do not edit.\n";
 	out << "package wasmjit.bindings;\n\n";
 	out << "import org.teavm.interop.Export;\n";
 	out << "import org.teavm.interop.Import;\n\n";
 	out << "public final class WasmJitBindings {\n";
 	out << "\tprivate WasmJitBindings() {}\n";
 	for (const std::string& ref : refs)
-		out << "\tpublic static final class " << pascalName(ref)
-			<< " { private " << pascalName(ref) << "() {} }\n";
+		out << "\tpublic static final class " << pascalName(ref) << " { private "
+			<< pascalName(ref) << "() {} }\n";
 	out << "\n";
-	forEachFunction(schema, "exports", [&](const Json& entry) {
-		const std::string name = entry.at("name").get<std::string>();
+	forEachFunction(typed, false, [&](const Entry& entry) {
+		const std::string& name = entry.name;
 		out << "\t// H2G export: " << exportComment(entry) << "\n";
 		out << "\t@Export(name = \"" << name << "\")\n";
 		out << "\tpublic static "
-			<< (signatureResults(entry).size() == 1
-					? javaType(signatureResults(entry)[0]) : "void")
+			<< (entry.function.results.size() == 1
+					? javaType(entry.function.results[0])
+					: std::string("void"))
 			<< " wasmjit_" << sanitize(name) << "(";
 		emitJavaParams(out, entry);
 		out << ")\n\t{\n\t\tthrow new UnsupportedOperationException(\"" << name
 			<< " is not implemented\");\n\t}\n\n";
 	});
-	forEachFunction(schema, "imports", [&](const Json& entry) {
+	forEachFunction(typed, true, [&](const Entry& entry) {
 		out << "\t// G2H import: " << importComment(entry) << "\n";
 		out << "\t@Import(module = \"" << importModule(entry) << "\", name = \""
-			<< entry.at("name").get<std::string>() << "\")\n";
+			<< entry.name << "\")\n";
 		out << "\tprivate static native "
-			<< (signatureResults(entry).size() == 1
-					? javaType(signatureResults(entry)[0]) : "void")
+			<< (entry.function.results.size() == 1
+					? javaType(entry.function.results[0])
+					: std::string("void"))
 			<< " wasmjit_" << sanitize(importModule(entry)) << "_"
-			<< sanitize(entry.at("name").get<std::string>()) << "(";
+			<< sanitize(entry.name) << "(";
 		emitJavaParams(out, entry);
 		out << ");\n\n";
 	});
@@ -158,7 +159,6 @@ std::string emitJavaImpl(const Json& schema)
 	out << "}\n";
 	return out.str();
 }
-
 
 std::string csharpType(const Json& type)
 {

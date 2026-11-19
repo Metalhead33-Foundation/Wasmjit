@@ -51,7 +51,7 @@ std::string emitGoImpl(const nlohmann::ordered_json& schema, const Schema& typed
 std::string emitDartImpl(const nlohmann::ordered_json& schema, const Schema& typed);
 
 //! Emits Java declarations.
-std::string emitJavaImpl(const nlohmann::ordered_json& schema);
+std::string emitJavaImpl(const nlohmann::ordered_json& schema, const Schema& typed);
 
 //! Emits C# declarations.
 std::string emitCSharpImpl(const nlohmann::ordered_json& schema);
