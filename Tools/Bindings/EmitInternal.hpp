@@ -57,7 +57,7 @@ std::string emitJavaImpl(const nlohmann::ordered_json& schema, const Schema& typ
 std::string emitCSharpImpl(const nlohmann::ordered_json& schema, const Schema& typed);
 
 //! Emits F# declarations.
-std::string emitFSharpImpl(const nlohmann::ordered_json& schema);
+std::string emitFSharpImpl(const nlohmann::ordered_json& schema, const Schema& typed);
 
 //! Emits Python ctypes declarations.
 std::string emitPythonImpl(const nlohmann::ordered_json& schema);

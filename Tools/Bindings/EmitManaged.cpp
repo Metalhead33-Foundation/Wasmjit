@@ -243,12 +243,11 @@ std::string emitCSharpImpl(const Json& schema, const Schema& typed)
 	return out.str();
 }
 
-std::string emitFSharpImpl(const Json& schema)
+std::string emitFSharpImpl(const Json& schema, const Schema& typed)
 {
 	std::ostringstream out;
-	out << "// Generated F#/.NET Wasm bindings from the "
-		<< schema.at("schema").get<std::string>() << " "
-		<< schema.at("direction").get<std::string>() << " schema. Do not edit.\n";
+	out << "// Generated F#/.NET Wasm bindings from the " << typed.id << " "
+		<< directionName(typed.direction) << " schema. Do not edit.\n";
 	out << "open System\nopen System.Runtime.InteropServices\n\n";
 	out << "module WasmJitBindings\n\n";
 	std::set<std::string> witTypes;
@@ -256,30 +255,33 @@ std::string emitFSharpImpl(const Json& schema)
 	for (const std::string& type : witTypes)
 		out << "type " << pascalName(type) << " = nativeint\n";
 	out << "\n";
-	forEachFunction(schema, "exports", [&](const Json& entry) {
-		const std::string name = entry.at("name").get<std::string>();
+	forEachFunction(typed, false, [&](const Entry& entry) {
+		const std::string& name = entry.name;
 		out << "// H2G export: " << exportComment(entry) << "\n";
 		out << "[<UnmanagedCallersOnly(EntryPoint = \"" << name << "\")>]\n";
 		out << "let wasmjit_" << sanitize(name) << " ";
-		const Json& params = signatureParams(entry);
+		const std::vector<ValueType>& params = entry.function.params;
 		for (std::size_t i = 0; i < params.size(); ++i)
-			out << "(" << argumentName(entry, i) << " : " << csharpType(params[i]) << ") ";
+			out << "(" << argumentName(entry, i) << " : " << csharpType(params[i])
+				<< ") ";
 		out << ": "
-			<< (signatureResults(entry).size() == 1
-					? csharpType(signatureResults(entry)[0]) : "unit")
+			<< (entry.function.results.size() == 1
+					? csharpType(entry.function.results[0])
+					: std::string("unit"))
 			<< " =\n\traise (NotSupportedException(\"" << name
 			<< " is not implemented\"))\n\n";
 	});
-	forEachFunction(schema, "imports", [&](const Json& entry) {
+	forEachFunction(typed, true, [&](const Entry& entry) {
 		out << "// G2H import: " << importComment(entry) << "\n";
 		out << "[<DllImport(\"" << importModule(entry) << "\", EntryPoint = \""
-			<< entry.at("name").get<std::string>()
-			<< "\", CallingConvention = CallingConvention.Cdecl)>]\n";
-		out << "extern " << (signatureResults(entry).size() == 1
-				? csharpType(signatureResults(entry)[0]) : "void")
+			<< entry.name << "\", CallingConvention = CallingConvention.Cdecl)>]\n";
+		out << "extern "
+			<< (entry.function.results.size() == 1
+					? csharpType(entry.function.results[0])
+					: std::string("void"))
 			<< " wasmjit_" << sanitize(importModule(entry)) << "_"
-			<< sanitize(entry.at("name").get<std::string>()) << "(";
-		const Json& params = signatureParams(entry);
+			<< sanitize(entry.name) << "(";
+		const std::vector<ValueType>& params = entry.function.params;
 		for (std::size_t i = 0; i < params.size(); ++i) {
 			if (i != 0) out << ", ";
 			out << argumentName(entry, i) << " : " << csharpType(params[i]);
@@ -289,8 +291,5 @@ std::string emitFSharpImpl(const Json& schema)
 	out << nonFunctionNotes(schema);
 	return out.str();
 }
-
-
-
 
 } // namespace WASM::Bindings::detail

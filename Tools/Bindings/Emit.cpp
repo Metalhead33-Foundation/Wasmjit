@@ -77,7 +77,7 @@ std::string emit(const Schema& input, Language language)
 	case Language::Dart: return detail::emitDartImpl(schema, input);
 	case Language::Java: return detail::emitJavaImpl(schema, input);
 	case Language::CSharp: return detail::emitCSharpImpl(schema, input);
-	case Language::FSharp: return detail::emitFSharpImpl(schema);
+	case Language::FSharp: return detail::emitFSharpImpl(schema, input);
 	case Language::Python: return detail::emitPythonImpl(schema);
 	case Language::Ruby: return detail::emitRubyImpl(schema);
 	case Language::Lua: return detail::emitLuaImpl(schema);
