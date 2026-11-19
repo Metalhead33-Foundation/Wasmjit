@@ -102,7 +102,7 @@ std::string emitCppAdapterImpl(const nlohmann::ordered_json& schema, const Schem
 std::string emitWitImpl(const nlohmann::ordered_json& schema, const Schema& typed);
 
 //! Emits a legacy WITX module representation.
-std::string emitWitxImpl(const nlohmann::ordered_json& schema);
+std::string emitWitxImpl(const nlohmann::ordered_json& schema, const Schema& typed);
 
 } // namespace WASM::Bindings::detail
 

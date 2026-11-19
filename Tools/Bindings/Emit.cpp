@@ -92,7 +92,7 @@ std::string emit(const Schema& input, Language language)
 	case Language::CppTypedefs: return detail::emitCppTypedefsImpl(schema, input);
 	case Language::CppSource: return detail::emitCppSourceImpl(schema, input);
 	case Language::Wit: return detail::emitWitImpl(schema, input);
-	case Language::Witx: return detail::emitWitxImpl(schema);
+	case Language::Witx: return detail::emitWitxImpl(schema, input);
 	}
 	return {};
 }

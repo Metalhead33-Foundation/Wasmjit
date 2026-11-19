@@ -1201,7 +1201,7 @@ std::string emitWitImpl(const Json& schema, const Schema& typed)
 	return out.str();
 }
 
-std::string emitWitxImpl(const Json& schema)
+std::string emitWitxImpl(const Json& schema, const Schema& typed)
 {
 	const auto witxType = [](const Json& type) -> std::string {
 		if (type.is_string())
@@ -1216,53 +1216,46 @@ std::string emitWitxImpl(const Json& schema)
 		return kind.empty() ? "i32" : kind;
 	};
 	std::ostringstream out;
-	out << "(module $" << sanitize(schema.value("module", "module")) << "\n";
-	if (schema.contains("witxTypes") && schema.at("witxTypes").is_array())
-		for (const Json& definition : schema.at("witxTypes"))
+	out << "(module $" << sanitize(typed.module) << "\n";
+	if (typed.extras.contains("witxTypes") && typed.extras.at("witxTypes").is_array())
+		for (const Json& definition : typed.extras.at("witxTypes"))
 			if (definition.is_string())
 				out << "  " << definition.get<std::string>() << "\n";
-	const auto emitFunction = [&](const Json& entry) {
-		if (entry.contains("witxSource") && entry.at("witxSource").is_string()) {
-			out << "  " << entry.at("witxSource").get<std::string>() << "\n";
+	const auto emitFunction = [&](const Entry& entry) {
+		if (entry.raw.contains("witxSource") && entry.raw.at("witxSource").is_string()) {
+			out << "  " << entry.raw.at("witxSource").get<std::string>() << "\n";
 			return;
 		}
-		out << "  (@interface func (export \""
-			<< entry.value("name", std::string()) << "\")\n";
-		const Json& logical = entry.contains("type") ? entry.at("type")
-				: Json::object();
+		out << "  (@interface func (export \"" << entry.name << "\")\n";
+		// WITX names the structured types, so its parameter list is the payload
+		// in `raw`, not the canonical ABI flattening in `entry.function`.
+		const Json& logical = entry.raw.contains("type") ? entry.raw.at("type")
+			: Json::object();
 		const Json& params = logical.contains("params") ? logical.at("params")
-				: Json::array();
+			: Json::array();
 		for (std::size_t i = 0; i < params.size(); ++i) {
-			std::string name = "arg" + std::to_string(i);
-			if (entry.contains("argNames") && entry.at("argNames").is_array()
-					&& i < entry.at("argNames").size()
-					&& entry.at("argNames")[i].is_string())
-				name = entry.at("argNames")[i].get<std::string>();
+			std::string name = i < entry.argNames.size() && !entry.argNames[i].empty()
+					? entry.argNames[i]
+					: "arg" + std::to_string(i);
 			out << "    (param $" << sanitize(name) << " "
 				<< witxType(params[i]) << ")\n";
 		}
 		const Json& results = logical.contains("results") ? logical.at("results")
-				: Json::array();
+			: Json::array();
 		for (std::size_t i = 0; i < results.size(); ++i) {
 			std::string name = "result" + std::to_string(i);
-			if (entry.contains("resultNames")
-					&& entry.at("resultNames").is_array()
-					&& i < entry.at("resultNames").size()
-					&& entry.at("resultNames")[i].is_string())
-				name = entry.at("resultNames")[i].get<std::string>();
+			if (entry.raw.contains("resultNames")
+					&& entry.raw.at("resultNames").is_array()
+					&& i < entry.raw.at("resultNames").size()
+					&& entry.raw.at("resultNames")[i].is_string())
+				name = entry.raw.at("resultNames")[i].get<std::string>();
 			out << "    (result $" << sanitize(name) << " "
 				<< witxType(results[i]) << ")\n";
 		}
 		out << "  )\n";
 	};
-	if (schema.contains("imports") && schema.at("imports").is_array())
-		for (const Json& entry : schema.at("imports"))
-			if (entry.value("kind", "") == "function")
-				emitFunction(entry);
-	if (schema.contains("exports") && schema.at("exports").is_array())
-		for (const Json& entry : schema.at("exports"))
-			if (entry.value("kind", "") == "function")
-				emitFunction(entry);
+	forEachFunction(typed, true, emitFunction);
+	forEachFunction(typed, false, emitFunction);
 	out << ")\n";
 	return out.str();
 }
