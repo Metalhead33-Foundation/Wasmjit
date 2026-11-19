@@ -924,9 +924,9 @@ std::string emitWitImpl(const Json& schema, const Schema& typed)
 	std::map<std::size_t, std::string> typeNames;
 	std::map<std::string, std::string> refNames;
 	std::set<std::string> usedNames;
-	if (schema.contains("types") && schema.at("types").is_array()) {
+	if (typed.types.is_array()) {
 		std::size_t id = 0;
-		for (const Json& definition : schema.at("types")) {
+		for (const Json& definition : typed.types) {
 			std::string name = definition.contains("witName")
 					&& definition.at("witName").is_string()
 					? definition.at("witName").get<std::string>() : std::string();
@@ -986,21 +986,17 @@ std::string emitWitImpl(const Json& schema, const Schema& typed)
 		return "u32";
 	};
 
-	std::string packageName = schema.value("module", "wasmjit:bindings@0.1.0");
+	std::string packageName = typed.module;
 	if (packageName.find(':') == std::string::npos)
 		packageName = "wasmjit:bindings@0.1.0";
 	const std::string worldName = witName(
-			schema.value("world", schema.value("module", "component")));
+			typed.extras.value("world", typed.module));
 	out << "package " << packageName << ";\n\n";
 
-	if ((schema.contains("types") && schema.at("types").is_array()
-			&& !schema.at("types").empty())
-			|| (schema.contains("objects") && schema.at("objects").is_array()
-				&& !schema.at("objects").empty())) {
+	if ((typed.types.is_array() && !typed.types.empty())
+			|| !typed.objects.empty()) {
 		out << "interface types {\n";
-		const Json noTypes = Json::array();
-		const Json& definitions =
-				schema.contains("types") ? schema.at("types") : noTypes;
+		const Json& definitions = typed.types;
 		std::size_t id = 0;
 		for (const Json& definition : definitions) {
 			const std::string name = typeNames[id++];
@@ -1100,21 +1096,21 @@ std::string emitWitImpl(const Json& schema, const Schema& typed)
 		out << "}\n\n";
 	}
 
-	const auto emitFunction = [&](const Json& entry) -> std::string {
+	const auto emitFunction = [&](const Entry& entry) -> std::string {
 		std::ostringstream fn;
-		fn << witName(entry.value("name", std::string())) << ": func(";
-		const Json& logical = entry.contains("type") ? entry.at("type")
-				: Json::object();
+		fn << witName(entry.name) << ": func(";
+		// The *structured* parameter list is what WIT names; the canonical ABI
+		// flattening in `entry.function` is the other spelling of the same call.
+		const Json& logical = entry.raw.contains("type") ? entry.raw.at("type")
+			: Json::object();
 		const Json& params = logical.contains("params") ? logical.at("params")
-				: Json::array();
+			: Json::array();
 		for (std::size_t i = 0; i < params.size(); ++i) {
 			if (i != 0)
 				fn << ", ";
-			std::string name = "arg" + std::to_string(i);
-			if (entry.contains("argNames") && entry.at("argNames").is_array()
-					&& i < entry.at("argNames").size()
-					&& entry.at("argNames")[i].is_string())
-				name = entry.at("argNames")[i].get<std::string>();
+			std::string name = i < entry.argNames.size() && !entry.argNames[i].empty()
+					? entry.argNames[i]
+					: "arg" + std::to_string(i);
 			fn << witName(name) << ": " << ref(params[i], ref);
 		}
 		fn << ")";
@@ -1131,30 +1127,22 @@ std::string emitWitImpl(const Json& schema, const Schema& typed)
 		return fn.str();
 	};
 
-	std::map<std::string, std::vector<const Json*>> interfaceImports;
-	std::map<std::string, std::vector<const Json*>> interfaceExports;
-	std::vector<const Json*> worldImports;
-	std::vector<const Json*> worldExports;
-	if (schema.contains("imports") && schema.at("imports").is_array())
-		for (const Json& entry : schema.at("imports")) {
-			if (entry.value("kind", "") != "function")
-				continue;
-			const std::string module = entry.value("module", std::string());
-			if (module.empty())
-				worldImports.push_back(&entry);
-			else
-				interfaceImports[witName(module)].push_back(&entry);
-		}
-	if (schema.contains("exports") && schema.at("exports").is_array())
-		for (const Json& entry : schema.at("exports")) {
-			if (entry.value("kind", "") != "function")
-				continue;
-			const std::string module = entry.value("module", std::string());
-			if (module.empty())
-				worldExports.push_back(&entry);
-			else
-				interfaceExports[witName(module)].push_back(&entry);
-		}
+	std::map<std::string, std::vector<const Entry*>> interfaceImports;
+	std::map<std::string, std::vector<const Entry*>> interfaceExports;
+	std::vector<const Entry*> worldImports;
+	std::vector<const Entry*> worldExports;
+	forEachFunction(typed, true, [&](const Entry& entry) {
+		if (entry.module.empty())
+			worldImports.push_back(&entry);
+		else
+			interfaceImports[witName(entry.module)].push_back(&entry);
+	});
+	forEachFunction(typed, false, [&](const Entry& entry) {
+		if (entry.module.empty())
+			worldExports.push_back(&entry);
+		else
+			interfaceExports[witName(entry.module)].push_back(&entry);
+	});
 
 	const auto emitUseTypes = [&](std::ostringstream& target,
 			std::string_view indent) {
@@ -1175,14 +1163,14 @@ std::string emitWitImpl(const Json& schema, const Schema& typed)
 	for (const auto& [name, entries] : interfaceImports) {
 		out << "interface " << name << " {\n";
 		emitUseTypes(out, "  ");
-		for (const Json* entry : entries)
+		for (const Entry* entry : entries)
 			out << "  " << emitFunction(*entry);
 		out << "}\n\n";
 	}
 	for (const auto& [name, entries] : interfaceExports) {
 		out << "interface " << name << " {\n";
 		emitUseTypes(out, "  ");
-		for (const Json* entry : entries)
+		for (const Entry* entry : entries)
 			out << "  " << emitFunction(*entry);
 		out << "}\n\n";
 	}
@@ -1191,16 +1179,15 @@ std::string emitWitImpl(const Json& schema, const Schema& typed)
 	// A guest consumes host-registered objects, so the interface carrying their
 	// resources is an *import* of this world: the host owns the object, the guest
 	// gets a resource, and `resource.drop` is the release (SO-4, A.14.4).
-	if (schema.contains("objects") && schema.at("objects").is_array()
-			&& !schema.at("objects").empty()) {
+	if (!typed.objects.empty()) {
 		out << "  // The host provides the objects; a component that exports them\n"
 			   "  // instead would export this interface.\n"
 			   "  import types;\n";
 	}
 	emitUseTypes(out, "  ");
-	for (const Json* entry : worldImports)
+	for (const Entry* entry : worldImports)
 		out << "  import " << emitFunction(*entry);
-	for (const Json* entry : worldExports)
+	for (const Entry* entry : worldExports)
 		out << "  export " << emitFunction(*entry);
 	for (const auto& [name, ignored] : interfaceImports) {
 		(void)ignored;
