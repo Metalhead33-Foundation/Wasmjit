@@ -2,46 +2,14 @@
 
 *The Milestone, and How Close We Are*
 
-Status: **milestone met 2026-10-29** (revision 17 — 2026-11-16: `GAP-25` closed. A
-lowered function whose result does not fit the flat limit was marshalled into
-guest memory **twice** — once to flat values (unused) and once into the guest's
-result buffer — so every list or string a host returned cost two `cabi_realloc`
-calls. Go's preview1 adapter traps on the second, which is why the `S3` Go arm of
-`LF-4` looked red for a toolchain reason; on wasmtime the same artifact returns
-42. With it closed, all nine `LF-4` arms answer.
-Revision 16 — 2026-11-16: `GAP-24` closed,
-so a `canon lower` of a method on an imported resource now flattens; host-owned
-resource types are a documented embedding contract (`ComponentInstanceValue::resourceDrops`),
-and the fixture host built on it runs every preview2 `LF-4` arm.
-Revision 15 — 2026-11-16: a hermetic WASI stub for the test fixtures and `GAP-23` closed.
-Revision 14 — 2026-11-16: the three
-component-validator defects the `LF-4` component study found are **closed**;
-`GAP-20` (a 64-bit scalar counted as two flat slots, so a bare `canon lift` of a
-`-> u64` function was rejected for a missing `memory` option) plus `GAP-21` and
-`GAP-22`, which only became visible once `GAP-20` stopped masking them. Revision 13 — 2026-11-16: `GAP-20` recorded by
-the `LF-4` component study. Revision 12 — 2026-11-11: `GAP-19` closed and `GAP-8` met. An
-instance now releases the continuations it created when it is destroyed, and the parked-switch wait wakes on
-cancellation, so a worker's destructor can join a parked host thread; the fifteen-case cell and the full
-822-case ASan cell are clean on all three backends. Revision 11 — 2026-11-11: the full AddressSanitizer cell finally ran to 
-completion and found `GAP-19`, a continuation-handle leak that SLJIT and AsmJIT share and LibJIT does not; it also 
-exposed that the documented exclusion `~[tail],~[compilation-policy]` selected *everything* (Catch2 comma-separates 
-filters with OR), which is what every earlier attempt was measuring. Revision 10 closed
-`GAP-16`, a caller-side call-form mismatch the helpers now refuse by name, and
-records the AsmJIT sanitizer cells, moves `GAP-15`/`GAP-16` to the closed index (§8.4) so §8.1 lists only what is open, and adds the missing `S10` row to the frozen-surface table; revision 9 added the diagnostics
-synthetic module, the one deliberate exception to the
-embedder-owned host-namespace boundary, and its enum/`stringref`/AssemblyScript
-shapes. Revision 8 closed `GAP-1` with the per-signature call form `GR-8`, the
-last design gap in the register. Revision 7 closed `GAP-2`, `GAP-3`, `GAP-10`
-and `GAP-18`, recorded the AsmJIT `[spec]` sanitizer cell, and fixed the
-shared-reference validator gap the shared-table fixture exposed. Revision 6 added §8.5, the pre-emptive impact
-analysis of the open register against the claimed guest-language set of
-[`SCOPE.md`](SCOPE.md) §7.1, and §10.1, the closure plan that follows from it).
-This note re-measures
-the suite, records the `G3` re-check performed by
-[`READINESS_AUDIT.md`](READINESS_AUDIT.md), and now owns the **central defect,
-gap and limitation register** (§8) and the **per-backend production status**
-(§12) that were previously separate notes. `AAS1`, `AAS8`, `AAS9` and `AAS11`
-are closed, G1 and G3 are `✅`, and all four milestone gates pass.
+Status: **milestone met 2026-10-29** (revision 17 — 2026-11-16). All four gates
+pass, `G1` and `G3` are `✅`, and `AAS1`, `AAS8`, `AAS9` and `AAS11` are closed.
+The note re-measures the suite, records the `G3` re-check performed by
+[`READINESS_AUDIT.md`](READINESS_AUDIT.md), and owns the **central defect, gap and
+limitation register** (§8) and the **per-backend production status** (§12). The
+latest revision closed `GAP-25`: a lowered function whose result did not fit the
+flat limit marshalled the value twice, so every returned list or string cost two
+`cabi_realloc` calls — the toolchain defect behind the `S3` Go arm of `LF-4`.
 Audience: anyone planning work that changes an embedder-facing surface or the
 backend seam, anyone evaluating the `LibjitDispatcher` → `master` merge, and
 anyone who needs a defensible answer to "is it production ready yet?" or

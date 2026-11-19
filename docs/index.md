@@ -17,7 +17,7 @@ applies to `proposals/`, `languages/` and `backends/`.
 | If you are about to… | Read only | It owns |
 |---|---|---|
 | edit `WasmBase/`, or touch a backend at all | \subpage doc_layering | the rule that the core names no backend, the vocabulary to use, the contract rows, the check |
-| write, change or review a code generator | \subpage doc_writing_a_backend | **checklist *and* walkthrough**: the two seams, the four hooks, the twelve ABI obligations, memory/GC ownership, the helper split, packaging, capabilities, the SLJIT example, the definition of done |
+| write, change or review a code generator | \subpage doc_writing_a_backend | **checklist *and* walkthrough**: the two seams, the four hooks, the ABI obligations, packaging, the SLJIT example, the definition of done |
 | ship a backend as a separate shared library | \subpage doc_backend_plugin_abi | the C descriptor, what may cross it, the twelve plugin rules, the nine hard problems |
 | touch the loader, the instantiator, the trap path or an allocation | \subpage doc_safety | artifact detection, input-derived bounds, the budget, traps vs `abort`, RAII for locks, the pitfalls that produced them |
 | reason about threads, locks or the host boundary | \subpage doc_threadsafety | guest-vs-host thread safety, the responsibilities of engine / module / embedder |
@@ -45,7 +45,7 @@ applies to `proposals/`, `languages/` and `backends/`.
 | check whether a second code generator may begin | \subpage doc_readiness_audit | `G3` and `LF-0a` in one sweep, the seam inventory, the pinned snapshot |
 | decide whether something is an engine gap or an out-of-scope boundary | \subpage doc_scope | the triage rule, the embedder/text/encoding-blocked tables, the recorded deviations |
 | find a per-proposal note | \subpage proposals_index | the per-proposal notes: spec demands → shipped state → gaps → deviations → plan → tests |
-| design a cross-language object model, or ask whether “C can use a Wasm GC object” is a gap | [proposals/SYNTHETIC_OBJECTS.md](proposals/SYNTHETIC_OBJECTS.md) | the host-registered object type, the GObject precedent, the measured wire, what the Component Model already owns, `SO-1`…`SO-7` (`SO-1`, `SO-2`, `SO-3`, `SO-6`, `SO-7` shipped; `SO-4` partial; `SO-5` gated), and §4.12's end-to-end walkthrough |
+| design a cross-language object model, or ask whether “C can use a Wasm GC object” is a gap | [proposals/SYNTHETIC_OBJECTS.md](proposals/SYNTHETIC_OBJECTS.md) | the host-registered object type, the GObject precedent, the measured wire, what the Component Model owns, and §4.12's end-to-end walkthrough |
 | find a backend slice, defect or measurement | \subpage backends_index | the current backend facts, the two backend pages, and the frozen `HISTORY.md` |
 | find a language study | \subpage languages_index | the `LF-1` triage, the `LF-2` arms, the `LF-4` component arms, the verdicts and engine findings |
 
@@ -76,12 +76,11 @@ Two consequences worth stating, because both were live ambiguities:
   idea was studied and refused, the owner of that verdict is
   [`SCOPE.md`](SCOPE.md) §6 or the study itself — never the gap register, which
   counts only what the engine owes.
-- **A note may stop being only a study.** `SYNTHETIC_OBJECTS.md` revision 2 is the
-  first: its Appendix A is still the study (the wire measurement, the backings, the
-  arena), and its §7 opened `SO-1`…`SO-5` — `SO-1`, `SO-2`, `SO-3`, `SO-6` and
-  `SO-7` have since shipped, `SO-4` partly and `SO-5` is gated — so the note is
-  read as a **plan** whose evidence is the appendix. The kind a sentence belongs
-  to is the section's, not the file's.
+- **A note may stop being only a study.** `SYNTHETIC_OBJECTS.md` is the first: its
+  Appendix A is still the study (the wire measurement, the backings, the arena),
+  and its §7 opened `SO-1`…`SO-5` — most have shipped, `SO-4` partly and `SO-5`
+  is gated — so the note is read as a **plan** whose evidence is the appendix. The
+  kind a sentence belongs to is the section's, not the file's.
 
 ## 3. What is deliberately *not* a separate document
 

@@ -20,14 +20,6 @@ This note separates three questions that are easy to conflate:
 The spec answers (1) declaratively; (2) follows from the spec being
 representation-agnostic; (3) is our design choice.
 
-Revision 2 turns the design (§6) into an ordered implementation plan (§8) and
-test plan (§9), and records decisions that were previously open (§7). Revision 3
-adds the Store-owned/one-canonical-instance target and the JIT cutover pointer
-in §6.7/§10/§12.3; the detailed TM-6…TM-11 plan lives in
-[`proposals/TYPE_MODEL.md`](proposals/TYPE_MODEL.md) §7.10. Revision 4 adds §13,
-a feasibility study of host-object type identity; it records no implementation
-and changes no identity rule in §6.
-
 ## 1. Scope
 
 This is about **type identity**, not value layout. Layout already lives in
@@ -572,7 +564,7 @@ dedicated suite:
   small stack machine in `ModuleInstance::evalConstantExpr`.
 - Replacing the `Subtype` layout here. The canonical form is a second,
   index-oriented representation in this note; the compact-store refactor is in
-  [`proposals/TYPE_MODEL.md`](proposals/TYPE_MODEL.md). Revision 5 of that note
+  [`proposals/TYPE_MODEL.md`](proposals/TYPE_MODEL.md). That note's compact store
   removes the per-module `Subtype` block: a loaded core `Module` retains only
   `typeIds`/`typeGroups`, and the JIT/validator/runtime use `CoreTypeView`.
   `Subtype` remains the component parser's `CoreRecType` scratch type.

@@ -9,21 +9,14 @@ provider (default), the host-thread fallback, the `HostContinuation` /
 `resume_throw`/`resume_throw_ref`, serial A migration, ASAN fiber annotations,
 wide payloads, the suspended-stack root registry and symmetric `switch` are
 implemented. A continuation remains a serial execution context; multi-agent
-scheduling is an embedder-owned `Agent`/`ComponentExecutor` choice. Revision 14
-adds §4.1, the scheduler written as a host uses it.
+scheduling is an embedder-owned `Agent`/`ComponentExecutor` choice. §4.1 is the
+scheduler written as a host uses it.
 Audience: anyone touching `WasmModule` (types), `WasmType` (heap types),
 `WasmOpcode`, `WasmStore`, `WasmModuleInstance`, the JIT compiler, a backend's
 continuation lowering, or the exception-tag machinery.
 
 Follows the same split as [`GC.md`](GC.md) / [`SIMD.md`](SIMD.md) /
-[`THREADS.md`](THREADS.md). Revision 1 contained no code; revisions 2–4
-implement the continuation type, heap and tag model, revision 6 adds the
-per-execution-context state and the runtime decision, revision 7 propagates
-the no-bespoke-interpreter policy to the project-level documents, revision 8
-adds the B-provider runtime and its instruction lowering, and revision 9 adds
-the A provider (default), the host-facing continuation handle, multiple/loop
-handlers, `cont.bind`, injected exceptions, cross-thread A migration and ASAN
-fiber annotations.
+[`THREADS.md`](THREADS.md).
 
 ## 1. Document map
 

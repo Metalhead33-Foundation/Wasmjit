@@ -453,9 +453,9 @@ Two deviations, both deliberate, and one scope note:
    `CompilationPolicy` types got their own header
    (`WasmCompilationPolicy.hpp`) because they are a separate concept with a
    backend-facing query.
-2. **Every category has its own counter and cap.** Revision 2 shipped linear
-   memory, tables and the GC heap; revision 3 added strings, exception objects
-   and continuation stacks, so `MemoryCategory` and `MemoryBudget` now agree
+2. **Every category has its own counter and cap.** Linear memory, tables and the
+   GC heap were the first three categories; strings, exception objects and
+   continuation stacks followed, so `MemoryCategory` and `MemoryBudget` now agree
    field for field and `categoryCounter()` has no `nullptr` case left except
    `Other` (the deliberate total-only escape hatch).
 3. **The execution knobs are two structs, not one.** `StoreLimits` (string cap,

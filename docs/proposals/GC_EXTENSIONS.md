@@ -13,8 +13,7 @@ test surface.
 Follows the same split as [`GC.md`](GC.md) / [`SIMD.md`](SIMD.md) /
 [`THREADS.md`](THREADS.md), with the grouped allowance of
 [`SMALL_PROPOSALS.md`](SMALL_PROPOSALS.md) (three related proposals in one
-note). Revision 1 contained no code; revision 2 documents the implemented
-GX-1/GX-2 surface and the still-deferred GX-3.
+note).
 
 ## 1. Document map
 
@@ -181,7 +180,7 @@ because its encoding is provisional.
 
 `GX-3` is deliberately last: Frozen Values interacts with `TYPE_IDENTITY.md`
 and the GC reference-counting model more deeply than the two copy proposals.
-Revision 2 closes the two stable proposals; GX-3 needs a new upstream revision,
+The two stable proposals are closed; `GX-3` needs a new upstream revision,
 not more engine work.
 
 ## 8. Indicative test survey

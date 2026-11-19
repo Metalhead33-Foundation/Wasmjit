@@ -13,14 +13,14 @@ and the `[docs]` check fails ([`DOCUMENTATION.md`](../DOCUMENTATION.md) §9).
 |---|---|
 | \subpage prop_acquire_release_atomics | Acquire-release atomics and the `pause` hint |
 | \subpage prop_annotations | Custom annotation syntax for the text format |
-| \subpage prop_big_endian | Big-endian hosts: the byte-order policy, what the specification pins, and the port plan |
+| \subpage prop_big_endian | Big-endian hosts: the byte-order policy and the port plan |
 | \subpage prop_bulk_memory | Bulk memory operations |
 | \subpage prop_call_tags | Call tags (the stack-switching companion proposal) |
 | \subpage prop_component_model | WIT and the Component Model |
 | \subpage prop_compiler_policy | Compilation policy: optimization degree, strictness and interpreter fallback |
-| \subpage prop_configuration | Engine configuration and budgets: the hardcoded knobs, the per-runtime memory budget, and the budget model |
+| \subpage prop_configuration | Engine configuration and budgets |
 | \subpage prop_constant_time | Constant-time WebAssembly |
-| \subpage prop_continuation_abandonment | Continuation abandonment: what a parked fiber owns, and what the engine does not release |
+| \subpage prop_continuation_abandonment | Continuation abandonment: what a parked fiber owns |
 | \subpage prop_custom_page_sizes | Custom page sizes |
 | \subpage prop_exceptions | Exception handling with `exnref` |
 | \subpage prop_extended_const | Extended constant expressions |
@@ -30,11 +30,11 @@ and the `[docs]` check fails ([`DOCUMENTATION.md`](../DOCUMENTATION.md) §9).
 | \subpage prop_gc | Garbage collection: types, layout, reclamation |
 | \subpage prop_gc_extensions | Multibyte array access, more array constructors, frozen values |
 | \subpage prop_instrument_tracing | Instruction tracing (`i32.itt`) |
-| \subpage prop_js_integration | The JavaScript-facing proposals and where the engine seam ends |
-| \subpage prop_legacy_exceptions | Legacy (Phase-3) exception handling: encodings, conflict analysis, cost of admission, and the six questions |
+| \subpage prop_js_integration | The JavaScript-facing proposals and the engine seam |
+| \subpage prop_legacy_exceptions | Legacy (Phase-3) exception handling |
 | \subpage prop_memory64 | Memory64 |
 | \subpage prop_memory_control | Memory control: protection, mapping, virtual memory |
-| \subpage prop_memory_provider | The memory provider: what runtimes demand of the host, what the engine offers, and whether to open the seam |
+| \subpage prop_memory_provider | The memory provider: a host-chosen allocation policy |
 | \subpage prop_multi_memory | Multiple memories |
 | \subpage prop_multi_value | Multi-value blocks and returns |
 | \subpage prop_mutable_globals | Import/export of mutable globals |
@@ -43,12 +43,12 @@ and the `[docs]` check fails ([`DOCUMENTATION.md`](../DOCUMENTATION.md) §9).
 | \subpage prop_profiles | Language profiles |
 | \subpage prop_reference_types | Reference types |
 | \subpage prop_shared_everything_threads | Shared-everything threads |
-| \subpage prop_sharing_linear_memory | One memory, many modules: sharing a linear memory between instances, the pitfalls of doing so, and what a linker would change |
+| \subpage prop_sharing_linear_memory | One memory, many modules: sharing a linear memory |
 | \subpage prop_simd | Fixed-width and relaxed SIMD |
 | \subpage prop_small_proposals | Sign-extension, non-trapping float→int, branch hints and the rest of phase 5 |
 | \subpage prop_stack_switching | Stack switching (continuations) |
 | \subpage prop_stringref | Reference-typed strings (`stringref`) |
-| \subpage prop_synthetic_objects | Synthetic objects: host-registered object types (revision 11 — `SO-1`, `SO-2`, `SO-3`, `SO-6` and `SO-7` shipped, `SO-4` partial, `SO-5` gated), the GObject precedent, one object with two spellings, the handle table, accessor-backed properties, the Kotlin/Wasm and C++ façades, and what the Component Model already covers |
+| \subpage prop_synthetic_objects | Synthetic objects: host-registered object types, the GObject precedent, and what the Component Model already covers |
 | \subpage prop_tailcalls | Tail calls |
 | \subpage prop_threads | Threads and atomics |
 | \subpage prop_type_imports | Type imports and exports |

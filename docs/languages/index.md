@@ -2,17 +2,14 @@
 
 *The `LF-1` Screen and the `LF-2` Studies*
 
-Status: study report set (revision 9 — 2026-11-16: added the `LF-4`
-component-model set, `LF4_*`; revision 8 rendered a verdict as its swatch plus
-its name, [`../LANGUAGE_FEASIBILITY.md`](../LANGUAGE_FEASIBILITY.md) §5.1;
-revision 7 added the §11 ownership map and pointed the ABI amendment at
-`EMBEDDING_SURFACE.md` §11–16).
-The notes without an `LF2_` prefix are the **output of `LF-1`**, the pre-feasibility /
-scoping study defined in [`LANGUAGE_FEASIBILITY.md`](../LANGUAGE_FEASIBILITY.md)
-§7: they screen the whole canonical candidate list on three axes, cluster the
-candidates by shared blocker, record trigger conditions, write one charter per
-recommended cluster, and list what is deliberately **not** studied. The `LF2_*`
-notes are the commissioned full studies of [`CHARTERS.md`](CHARTERS.md).
+Status: study report set (revision 9 — 2026-11-16). The notes without an `LF2_`
+prefix are the **output of `LF-1`**, the pre-feasibility / scoping study defined in
+[`LANGUAGE_FEASIBILITY.md`](../LANGUAGE_FEASIBILITY.md) §7: they screen the whole
+canonical candidate list on three axes, cluster the candidates by shared blocker,
+record trigger conditions, write one charter per recommended cluster, and list what
+is deliberately **not** studied. The `LF2_*` notes are the commissioned full
+studies of [`CHARTERS.md`](CHARTERS.md), and the `LF4_*` notes are their
+component-model counterpart.
 
 **The `LF-1` notes carry no verdict.** No `LF-1` row is 🟩 green, 🟨 yellow or 🟥 red, no
 language is declared supported or unsupported, and nothing in the screen is a
@@ -42,19 +39,19 @@ the next person who is tempted to answer the question from a blog post.
 
 | Note | What it holds |
 |---|---|
-| \subpage lf_triage | **The screen.** The method, the evidence tiers as applied, the bottleneck vocabulary, and one row per *(language, toolchain)* pair over the whole canonical list — every row evidence-tiered, with its three axes, its study cost, its cluster and its trigger. |
-| \subpage lf_clustering | **The map.** `L1`–`L12`: why each group collapses into one study (or does not), how the commissioning examples map onto them, the trigger conditions (`T1`–`T3`) per cluster, the five-cluster shortlist, and the explicit "don't study" list. |
+| \subpage lf_triage | **The screen.** The method, the evidence tiers, the bottleneck vocabulary, and one evidence-tiered row per *(language, toolchain)* pair — with its axes, cost, cluster and trigger. |
+| \subpage lf_clustering | **The map.** `L1`–`L12`: why each group is one study (or is not), the trigger conditions (`T1`–`T3`), the five-cluster shortlist and the "don't study" list. |
 | \subpage lf_charters | **The commissionable units.** One charter per shortlisted cluster: scope, pinned candidates, questions, the bar for "feasible", the budget cap, the deliverable, the stop conditions, owner and date. |
 | \subpage lf_evidence | **The receipts.** Every external source with its retrieval date and tier, the in-repo evidence it leans on, and — explicitly — what was *not* verified. |
 | \subpage lf2_index | **The `LF-2` set.** The commissioned full studies: the verdict table, the three engine findings, the budget, and the reading order for the reports below. |
-| \subpage lf2_abi | **Cross-language ABI amendment.** The two call directions, synthetic host modules, core `Callable` versus component Canonical ABI, the scalar-to-GC/reference difficulty matrix per language, and its §11 engine/embedder/tooling/language ownership map; it links to `EMBEDDING_SURFACE.md` §11–16 for host bindings, native objects, GC references and the shared register. |
+| \subpage lf2_abi | **Cross-language ABI amendment.** The two call directions, synthetic host modules, core `Callable` versus component Canonical ABI, and the scalar-to-GC difficulty matrix per language. |
 | \subpage lf2_s1 | `S1` — C/C++ toolchain and ABI: five arms, all 🟩 green (the last one after the `LE-8` translation). |
 | \subpage lf2_s2 | `S2` — the LLVM-family languages: Rust (two targets), TinyGo and Zig, all 🟩 green. |
 | \subpage lf2_s3 | `S3` — AssemblyScript (and TypeScript by inheritance): 🟩 green, building on the harness evidence. |
 | \subpage lf2_s4 | `S4` — the WasmGC languages: Kotlin/Wasm in two target forms, Dart and MoonBit; the `F3` engine finding and its fix. |
 | \subpage lf2_s5 | `S5` — a guest scripting VM: Lua 5.4.8 built with wasi-sdk, 🟩 green. |
 | \subpage lf2_l6_l12 | The coverage note: every untested non-killed row, with the reason and the condition that would start it (and the `T09` Go arm). |
-| \subpage lf2_toolchains | The acquisition map: for each of those rows, the producer that emits a module and the site it is obtained from — with the three module shapes (`wasip1`, `bare`, `js-host`) that decide whether an install can pass the bar at all. |
+| \subpage lf2_toolchains | The acquisition map: the producer that emits a module and where it is obtained, with the three module shapes (`wasip1`, `bare`, `js-host`). |
 | \subpage lf2_evidence | The `LF-2` evidence log: toolchains, module hashes, transcripts, and `F1`–`F3` with their reproductions. |
 | \subpage lf2_deep_f1 | `F1` deep study: the libjit optimizer bug, the minimal repro, and the backend fix (`WASM.COMPILE.FUNCTION_FAILED`, level-0 default, context poisoning). |
 | \subpage lf2_deep_f2 | `F2` deep study: the `delegate`-skips-a-catch shape, the verified `wasm-opt --translate-to-exnref` workaround, and the escape-block translation that made the workaround optional. |

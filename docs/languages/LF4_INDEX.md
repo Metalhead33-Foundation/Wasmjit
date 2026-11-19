@@ -2,7 +2,7 @@
 
 *Producing and Running Components*
 
-Status: full-study report set (revision 2 — 2026-11-16). `LF-4` is the
+Status: full-study report set (revision 3 — 2026-11-16). `LF-4` is the
 component-model counterpart of `LF-2`: the same language-feasibility protocol
 ([`../LANGUAGE_FEASIBILITY.md`](../LANGUAGE_FEASIBILITY.md) §8) applied to a
 different artifact. `LF-2` asked whether a toolchain's **core module** reaches
@@ -10,21 +10,15 @@ the host ABI; this set asks whether the toolchain's **component** — a
 WIT-described, Canonical-ABI-lifted artifact — can be loaded, instantiated and
 called through `WASM::Runtime`'s component surface.
 
-**Revision 3** adds the fourth run: `GAP-24` closed, a hermetic fixture host
-written, and — because `S3` Go still trapped inside its own adapter — the
-cross-check that settled it. The Go artifact runs unchanged on wasmtime 50, so the
-trap was **ours**: a lowered indirect result was marshalled into guest memory
-*twice*, which calls the guest's allocator twice (`GAP-25`, closed). With that
-fixed all nine arms answer, and the `LF4-G1` toolchain hypothesis is withdrawn
-(§4.4, §5.5).
-
-**Revision 2** adds the re-run at commit `1ec91f8`, after the three
-component-validator defects the first run found (`GAP-20`) and then masked
-(`GAP-21`, `GAP-22`) were closed. The short answer to the question it was made
-to answer — *does closing `GAP-20` turn the yellow arms green?* — is **no**: it
-removes the load blocker and exposes the two behind it, and after all three the
-four preview2 arms stop at the host-import seam instead (§4.2, §5.4). No arm's
-verdict moved to 🟩 Green, and none was expected to: no WASI shim was written.
+**The current run** adds a hermetic fixture host and settles the Go arm: its
+artifact runs unchanged on wasmtime 50, so the trap was **ours** — a lowered
+indirect result was marshalled into guest memory *twice*, calling the guest's
+allocator twice (`GAP-25`, closed). With that fixed all nine arms answer, and the
+`LF4-G1` toolchain hypothesis is withdrawn (§4.4, §5.5). The earlier re-run at
+`1ec91f8` answered the question it was made for — *does closing `GAP-20` turn the
+yellow arms green?* — **no**: it removed the load blocker and exposed `GAP-21` and
+`GAP-22`, and the four preview2 arms stop at the host-import seam (§4.2, §5.4). No
+verdict moved to 🟩 Green, because no WASI shim was written.
 
 **Commissioning.** The repository owner commissioned the study on 2026-11-16
 with the scope below: the languages of the upstream *Building a Simple

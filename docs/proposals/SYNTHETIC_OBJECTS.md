@@ -2,87 +2,35 @@
 
 *Host-Registered Object Types, the GObject Precedent, and What the Component Model Already Covers*
 
-Status: design note / implementation reference (**revision 15 — 2026-11-19**). This
-is `EMBEDDING_SURFACE.md` §16 promoted to a note of its own: that section had grown
-into a six-hundred-line study inside an implementation reference, and the
-reference now keeps only the embedder-facing half. Revision 1 recorded a boundary —
-*study accepted, engine implementation rejected*. **Revision 2 reverses the
-implementation half and keeps the boundary where it belongs.** A host object model
-is now a planned, opt-in feature; the identity it uses is the
-Store's **`TypeId`**, not a third identity domain (`SOD2` is superseded); and the
-engine gains a generic *type-registration and allocation* seam, while the object
-model, its descriptors, its dispatch and its reflection stay outside `WasmBase/`
-(`SOD6` rewritten, not deleted). **Revision 3 implements that seam (`SO-1`)**: a
-host type interns through the same canonicalizer a module uses, the Store allocates
-its instances, and the count is the engine's one count; interning a **reference
-field** stays refused until the Store-level release walk lands (`SO17`, `SO-6`).
-**Revision 4 adds the descriptor and the schema (`SO-2`)**: `wasmjit.binding/2`
-carries an `objects` section whose offsets are validated against the engine's own
-layout and which the generator projects into versioned C, Rust and WIT artifacts.
-**Revision 5 completes the engine seam (`SO-6`)**: a host object may hold GC
-references, and releasing it at a safepoint drops them; a bridge-owned reference
-field is the one remaining limit (`SO18`).
-**Revision 6 adds properties (`SO-7`)**: a member whose value is a function call
-rather than a slot — the getter is required, the setter optional, and neither
-occupies a byte — which is what a *cascading* or *computed* member needs, and
-what the Component Model already models, because every resource member is a call
-there (§4.7). Signals are examined and deliberately left as a pattern (§4.8).
-**Revision 7 adds the handle table (`SO-3`)**: the `i64` slot of A.14.4 is a host
-table over the *same* engine count, with generation-based stale rejection, a type
-check on resolve, and the emitted `_h_fn` surface for a non-GC consumer (§4.9).
-**Revision 8 packages them (`SO-4`)**: the WIT world imports the interface that
-carries the object resources, and one Kotlin/Wasm class per object holds the slot
-with a single release — the façade a GC language consumes (§4.10). The component
-plumbing that would make `resource.drop` *be* the host release is `SO21`, and
-`SO-5` (the arena) is **gated** on the sharing study's `SLM-1`–`SLM-4`, so it is
-scoped rather than attempted (§4.11).
-**Revision 9 adds the C++ façade**: the C header's `extern "C"` section now
-declares the handle *entry points*, and a `#ifdef __cplusplus` block after it turns
-them into one move-only RAII class per descriptor — compiled and run in the test
-suite, which counts the releases (§4.10).
-**Revision 15 answers the provenance question**: §4.14 states the rule — `objects[]`
-is *authored*, by hand or by the embedder's own build step, because no front-end
-derives it (`SO22`) — gives the four routes, and walks author → `--emit schema` →
-emit, including the merge when the function half came from a candidate.
-**Revision 14 adds the owned half of that shape**: `"destructor"` names the method
-that ends the object's life, so a host that exports “make one” and “destroy it”
-gets a move-only C++ wrapper whose destructor calls it, and a declaration that is
-checked at load (a real method, no parameters, no results, not an accessor).
-**Revision 13 adds the second shape**: `objects[].self` is `"handle"` (the `SO-3`
-slot, unchanged) or `"externref"` — the same member tables over an opaque host
-reference, for a payload that cannot be written in Wasm at all. §4.13 is the
-walkthrough and §2.7 points at it from the question that motivates it.
-**Revision 12 adds the tutorials**: §2.7 answers the question §2.6 leaves open —
-whether an object with no fields, only methods and properties, is still a
-synthetic object (yes, as an object of the empty `(struct)`; opaque in its
-representation, and with no discriminating identity of its own), and §4.12 is the
-end-to-end walkthrough: describe, intern, create, root in a handle table, serve
-from imports, call, release, generate.
-**Revision 11 adds named parameters and a typed generator**: a method or a
-constructor carries `argNames`, and every emitter spells `width`/`height` rather
-than `p0`/`p1` (§4.10, A.14.5). Internally, `Tools/Bindings/` no longer traffics
-JSON in the object emitters at all: enums, structs and integers from the parse to
-the artifact.
+Status: design note / implementation reference (**revision 15 — 2026-11-19**).
+This is `EMBEDDING_SURFACE.md` §16 promoted to a note of its own. The question is
+whether a host may register an object type and allocate instances of it, and the
+answer is an opt-in feature: a host object is an ordinary Wasm `struct` or `array`,
+its identity is the Store's **`TypeId`** (not a third identity domain), and the
+engine owns the type-registration and allocation seam. The object model — its
+descriptors, dispatch, names, properties, signals and reflection — stays outside
+`WasmBase/` (`SOD6`), and `externref` + `HostBridge` remains the path for a truly
+opaque host object.
 
-**Revision 10 adds construction**: `constructors[]` declares the call that *makes*
-an object, and every emitter projects it as the host language's construction — a
-C++ constructor, a WIT `constructor`, a Kotlin companion factory — with the two
-collision rules that would otherwise produce a header that does not compile
-checked at load time (§4.10).
-The `externref` + `HostBridge`
-path is unchanged and remains the answer for truly opaque host objects; the new
-path is a second, opt-in one for objects that are **expressible in Wasm**.
+Shipped: `SO-1` (the seam), `SO-2` (the descriptor and the `wasmjit.binding/2`
+schema), `SO-3` (the handle table and its emitted surface), `SO-6` (reference
+fields) and `SO-7` (properties). Partly shipped: `SO-4` — the packaging and the
+Kotlin/Wasm and C++ façades exist, but `resource.drop` does not yet reach the host
+release (`SO21`). Gated: `SO-5` (the arena), on the sharing study's
+`SLM-1`–`SLM-4`. The latest revision (§4.14, `SO22`) records where `objects[]`
+comes from: it is authored, never derived, and the note walks author →
+`--emit schema` → emit.
 
 Audience: anyone designing a cross-language object layer, anyone asking whether
 “C can use a Wasm GC object” is an engine gap ([`../SCOPE.md`](../SCOPE.md) §3.2),
 anyone extending the generator plan of [`../EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md)
-§11/§14, and the implementer of `SO-3`…`SO-5`.
+§11/§14, and the implementer of `SO-4`/`SO-5`.
 
 Follows the same split as [`COMPONENT_MODEL.md`](COMPONENT_MODEL.md) and
 [`TYPE_MODEL.md`](TYPE_MODEL.md). **Appendix A** carries the study itself, at the
 section numbers it had as `EMBEDDING_SURFACE.md` §16.x (so an old reference still
-resolves: 16.5 → A.5); A.14 is new in revision 2 and is the mechanism the decisions
-now cite. §2–§8 state the decisions and cite the appendix rather than repeat it.
+resolves: 16.5 → A.5); A.14 is the mechanism the decisions cite. §2–§8 state the
+decisions and cite the appendix rather than repeat it.
 
 ## 1. Document map
 
@@ -2076,23 +2024,6 @@ compile-time reflection:
 
 A macro that expands to the table is a convenience for (1), not a fifth mechanism;
 it still produces plain arrays of structs.
-
-#### A.14.6 What revision 2 changes, and what it does not
-
-| Revision 1 said | Revision 2 says | Why |
-|---|---|---|
-| a synthetic object is not a `TypeId`, not a `GcHeader`, not a `TypeRegistry` entry | it is all three, and the descriptor is what it is not | the object is a Wasm GC object; that is what makes dedup and `ref.cast` work |
-| identity needs a third domain | identity is the Store's `TypeId`; names live in the descriptor | a nominal host id cannot participate in `ref.cast` and divides the object from its guest twin |
-| the engine never allocates a host object | the engine allocates one of a host-registered type (D2) | allocation is a primitive, not an object model |
-| the integer handle is the only wire | `(ref $T)` and `i64` are two spellings of one identity | a GC guest should not pay for a non-GC guest's limitation |
-| no reflection at all | hand-written descriptor tables and the existing JSON envelope | metadata is required for generation and the arena; RTTI is still forbidden |
-| study accepted, engine implementation rejected | `SO-1` opens; `SO-2`–`SO-5` follow | the identity and allocation half is generic engine work |
-
-What revision 1 got right and revision 2 keeps: the three layers (§2.2), the
-GObject shape and its cost (§2.3), the Component Model redundancy measurement
-(§2.4), `SOD3`/`SOD4`/`SOD5`, the six-arm wire measurement (§8/A.12), the arena
-(A.13), and the boundary that the engine does not ship properties, signals or a
-C++ class (`SOD6`, rewritten but not removed).
 
 ## 9. References
 

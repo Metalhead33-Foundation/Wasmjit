@@ -6,18 +6,14 @@ Status: engine-seam study, revision 6 (2026-11-18). It answers whether a large
 monolithic module and a set of small scripts can share one linear memory: aliasing
 is **yes**, coexistence is **yes with build-side work**, and accounting is **no,
 not today**. `Runtime::unload` and the `ModuleInstantiator::releaseInstance` hook
-shipped; layout and re-binding stay out of scope for the short term, with an
-allocator-injection pass and an embedder initializer contract written up instead.
-**Revision 4 ran `SLM-6`**: §10 is no longer a plan but ten measured toolchain
-arms, and the answer to coexistence is now per language — C, C++, Rust, Zig and
-AssemblyScript can import a shared memory; Go and TinyGo cannot. **Revision 5**
-closes the other half of rung 8 in code: `Runtime::unloadImage`, `hasImage` and
-`imageCount` release the parsed image once no instance holds it, so §12.2's table
-is now an asymmetry of *guest teardown* only. **Revision 6 records a preference,
-not a milestone** (§2.5): one embedder-provided (or libc-like, synthetic) allocator
-plus one shared memory, with the per-module stack as the open question. It changes
-no decision and prices nothing; it says what the ideal end-state looks like so the
-plan can be read against it.
+shipped, and `Runtime::unloadImage`/`hasImage`/`imageCount` release the parsed
+image once no instance holds it, so what remains asymmetric is *guest teardown*.
+§10 is ten measured toolchain arms: C, C++, Rust, Zig and AssemblyScript can
+import a shared memory; Go and TinyGo cannot. §2.5 records a preference, not a
+milestone — one embedder-provided (or libc-like, synthetic) allocator plus one
+shared memory, with the per-module stack as the open question. Layout and
+re-binding stay out of scope for the short term, with an allocator-injection pass
+and an embedder initializer contract written up instead.
 Audience: anyone writing the embedding host for a product that mixes one big
 module with many small ones (`WASM::Runtime`, `RegistryImportResolver`, the
 `HostBridge` boundary), anyone touching `Store`/`LinearMemory`/`MemoryBudget`, and

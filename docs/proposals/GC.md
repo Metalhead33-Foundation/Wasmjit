@@ -989,7 +989,7 @@ or guarded.
 
 ## 8. Indicative test survey
 
-> **Staleness note (revision 11):** this survey is the 2026-10-13 snapshot that
+> **Staleness note:** this survey is the 2026-10-13 snapshot that
 > *motivated* the plan, and the numbers have moved since — `i31` 63/5 → **68/0**,
 > `array` 36/4 → **40/0**, `array_init_data` 41/3 → **44/0**, `array_init_elem` and
 > `table` clean, `table_init`/`elem` no longer aborting, `ref_test` 38/32 →

@@ -14,30 +14,6 @@ Audience: anyone touching `WasmBase/WasmTrap.*`,
 optional [`HostBridge`](ABI.md#external-host-adapter-optional-hostbridge) host
 adapter.
 
-**Revision 3 shipped** (details in §12):
-
-- `WasmBase/WasmTrap.hpp` exposes a C-callable pending trap
-  (`wasm_trap_slot()`, `reportTrap`, `wasm_trap_report`), a `WASM::Trap`
-  exception, `checkTrap()`, and the explicit cleanup stack (`defer`,
-  `dismissDeferred`, `runDeferredCleanup`).
-- The LibJIT backend emits a per-function trap epilogue, a pending check after
-  every helper call and call site (`emitPendingTrapCheck`), and a prologue check
-  after the stack guard; the trampoline driver stops re-dispatching on a trap.
-- Every in-tree helper that generated code reaches (stringref, array, atomic,
-  memory/table bulk ops, GC allocation, exceptions, the stack guard) reports and
-  returns instead of throwing or jumping — including the string/array helpers
-  that previously held `std::vector` locals across a trap point.
-- `WASM::callCallable`, `callCallableWithResults` and the start-function call
-  convert the pending trap into `WASM::Trap`; `instantiate` therefore unwinds
-  normally, so `~ModuleInstance` and `HostBridge::instanceDestroying` run (the
-  old §7 gap). Nested calls (a host import re-entering Wasm) leave the trap
-  pending instead of throwing into a generated frame.
-- `Test/` uses try/catch and the harness trap result; `start.wast`'s
-  `assert_uninstantiable` path runs through the same unwinding.
-- The stringref/atomic/memory helper frames were the last POD-only sites; they
-  now demonstrate the opposite property — their destructors run on the trap path
-  (verified under AddressSanitizer on the trap-relevant test set).
-
 §§4–§11 are retained as the design record: the option set, the deferred-cleanup
 contract, the confinement alternative, and the per-backend study. Where they say
 "candidate", read the shipped status above.

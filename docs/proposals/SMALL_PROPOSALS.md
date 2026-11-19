@@ -146,10 +146,10 @@ consumer.
 Guardrail: do not conflate `trunc_f*` (trapping) with `trunc_sat_f*`
 (never traps); keep the `NaN → 0` and clamp rules exactly.
 
-**Revision 3 note.** The *trapping* forms are genuinely trapping now. The six
-integer `div`/`rem` forms and the eight `trunc_f*` forms used to be lowered with
-a bare LibJIT `jit_insn_div` / `jit_insn_convert`, which does **not** check
-anything (a divide by zero silently produced a value). `traps.wast` failed
+**A note on the trapping forms.** The *trapping* forms are genuinely trapping
+now. The six integer `div`/`rem` forms and the eight `trunc_f*` forms used to be
+lowered with a bare LibJIT `jit_insn_div` / `jit_insn_convert`, which does **not**
+check anything (a divide by zero silently produced a value). `traps.wast` failed
 18/18 the moment `assert_trap` started to execute. They now call native helpers
 that check divide-by-zero, `INT_MIN / -1`, `NaN` and out-of-range and raise
 `WASM::trap`; `traps.wast` and `address.wast` are green

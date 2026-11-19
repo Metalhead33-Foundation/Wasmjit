@@ -3,12 +3,12 @@
 *`WASM::Runtime`, the Umbrella Header, Versioning, and the Include Set*
 
 Status: implementation reference + design note (revision 45 — 2026-11-19).
-`WASM::Runtime` is shipped (`ES-1`…`ES-6` are all closed), so §2, §4 and §4.7
-describe the surface as it is rather than as it was planned. §2.1 is the
-embedder's walkthrough — engine, module, call — and §2.2 continues it to
-references, continuations and agents. `Tools/Bindings/`
-has a typed schema model, modular emitters, complete descriptor/candidate schemas,
-and a C++-front-end path that produces both JSON and every non-C++ header target;
+`WASM::Runtime` is shipped (`ES-1`…`ES-6` closed), so §2, §4 and §4.7 describe
+the surface as it is rather than as it was planned. §2.1 is the embedder's
+walkthrough — engine, module, call — and §2.2 continues it to references,
+continuations and agents. `Tools/Bindings/` has a typed schema model, modular
+emitters, complete descriptor/candidate schemas, and a C++-front-end path that
+produces both JSON and every non-C++ header target;
 `WasmBase/WasmCallCache.hpp` remains the optional libffi precache. This note
 answers `AAS1`/`AAS2` of [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) and records
 the fate of two empty placeholder headers. The binding-tool snapshot is in §10.
@@ -34,34 +34,6 @@ Four deliverables, in the order the questions were asked:
    `Elvavena`/`Euphemy` headers (§6.2).
 4. **Versioning, soname and install** — the shipped policy (`ES-4`/`ES-5`) and how
    it ties to the frozen surfaces of `API_ABI_STABILITY.md` §2.2.
-
-Revision 33 (2026-11-18) moves the GObject-shaped host object study out: it is
-[`proposals/SYNTHETIC_OBJECTS.md`](proposals/SYNTHETIC_OBJECTS.md) now, and §16
-keeps only the surface an embedder is handed plus the boundary. It also records
-the image half of module teardown in §4.7 (`Runtime::unloadImage`) and refreshes
-the snapshot. Revision 32 moved References to the end (§17), which is where every
-note keeps it, and re-derived §11–§16 from the shipped tree. **Revision 34
-(2026-11-18)** follows that note's revision 2: §11.8 gains the `objects` schema
-input, §12.1/§12.7 refine the non-options, §13.2 records the one-Store rule, §15.3
-adds `EN-14` (planned host type registration + allocation) and §15.4 `EM-17`/`EM-18`,
-and §16 states the accepted, opt-in model. **Revision 35 (2026-11-18)** adds the
-first `SO-1` scaffolding: `WasmHostType.hpp`
-(the definition/layout/intern/allocate seam) and `WasmHostObject.hpp` (the RAII
-owner), both embedder-tier and both documented in §6.1.1. `layoutHostType` is
-implemented; every state-changing entry point throws until `SO-1` lands.
-**Revision 36 (2026-11-18)** delivers `SO-1`: the seam interns through the module
-canonicalizer, the Store allocates, counts and safepoints host objects, `EN-14` is
-done, and `EN-15` records the reference-field restriction (`SO17`, `SO-6`).
-**Revision 37 (2026-11-18)** delivers `SO-2`: `wasmjit.binding/2` consumes an
-`objects` section, validates each descriptor against the engine's canonical layout
-at load, and emits the versioned C, Rust and WIT artifacts (§11.8).
-**Revision 38 (2026-11-18)** delivers `SO-6`: a host object may hold GC references,
-the safepoint walk drops them when the object is released, `EN-15` is done, and
-`EN-16` records the one remaining limit (a bridge-owned reference field).
-**Revision 39 (2026-11-19)** delivers `SO-7`: `objects[].properties[]` declares a
-value behind a `get`/`set` accessor pair, which the emitters project as export
-names plus accessor typedefs (C/Rust) and a `func()` member (WIT) — the member
-whose write has an effect, with no engine surface at all (§11.8).
 
 The earlier `JitRuntime`/`JitContext`/`ModuleInstance` sketch from a different
 repository is reviewed in §5 as a **salvage list**, not a template; its
@@ -3041,46 +3013,15 @@ does the embedder give it, and what does the Component Model already own? — wh
 this document is an implementation reference. What stays here is the surface an
 embedder is actually handed, and the boundary that keeps it out of `WasmBase/`.
 
-**Revision 2 of that note changed the answer.** It accepts an **opt-in** object
-model built on a *host-registered Wasm type*: the engine interns a canonical
-`struct`/`array` the host defines, allocates instances in the Store's `GcHeap`, and
-gives the host a reference the guest can hold as `(ref $T)`; the descriptor, the
-names, the dispatch, the properties, the signals and the reflection remain the
-host's. The opaque path below is unchanged and still the answer for an object that
-cannot be expressed in Wasm. This section describes the surface; the note carries
-the decisions (`SO-1`, `SO-2`, `SO-6` and `SO-7` shipped; `SO-3`…`SO-5` remain).
-
-**Revision 40 (2026-11-19)** delivers `SO-3`: the `i64` handle table of A.14.4 is
-`HostHandle`/`HostHandleTable` over the same engine count, the emitters add the
-`_h_fn` surface, `EM-1`'s option A is the shipped answer for a host-registered
-type, and `SO20` records the one limit (a handle carries no table identity).
-**Revision 41 (2026-11-19)** delivers `SO-4`'s tooling half: the emitted `world`
-imports the interface that carries the object resources — so `resource.drop` is
-the guest-side spelling of the host's release — and `--emit kotlin` gains one
-`AutoCloseable` wrapper per object holding the `i64` slot with a single guarded
-release. The engine half, `resource.drop` reaching a `HostHandleTable`, is the
-note's `SO21` and is not wired; `SO-5` (the arena) stays gated on the sharing
-study (`SLM-1`–`SLM-4`).
-**Revision 42 (2026-11-19)** adds the C++ half of that surface: the C header now
-declares the handle *entry points*, and the `#ifdef __cplusplus` block after
-`extern "C"` emits one move-only RAII class per descriptor — destructor releases,
-`reset()`/`release()` for the two ways to give the slot up, properties as
-`status()`/`setStatus()`, methods in lowerCamel. It is compiled and run by the test
-suite, which counts releases.
-**Revision 44 (2026-11-19)** adds named parameters — `argNames` on a method or a
-constructor, spelled by every emitter — and moves the object emitters onto the
-typed schema, so the generator stops trafficking JSON internally.
-**Revision 46 (2026-11-19)** adds the second object shape: `objects[].self` may be
-`"externref"`, so a class whose payload cannot be expressed in Wasm gets the same
-generated surface — declarations over `type*`, a copyable C++ wrapper, no
-`_release` — instead of being hand-written (§16.1, and §4.13 of the note).
-**Revision 47 (2026-11-19)** adds the owned half: `objects[].destructor` names the
-method that ends an `externref` object's life, so a host that also exports the
-destroy gets a move-only C++ wrapper whose destructor calls it, and a `<MACRO>_DESTRUCTOR`
-name for C.
-**Revision 48 (2026-11-19)** records the provenance rule: `objects[]` is authored
-and validated, never derived — no module, candidate front-end or WIT input produces
-it (§16.1, and §4.14 of the note, `SO22`).
+The object model is an **opt-in** feature built on a *host-registered Wasm type*:
+the engine interns a canonical `struct`/`array` the host defines, allocates
+instances in the Store's `GcHeap`, and gives the host a reference the guest can hold
+as `(ref $T)`; the descriptor, the names, the dispatch, the properties, the signals
+and the reflection remain the host's. Both object shapes and the generated surfaces
+are in §16.1 and in
+[`proposals/SYNTHETIC_OBJECTS.md`](proposals/SYNTHETIC_OBJECTS.md). The opaque path
+below is unchanged and still the answer for an object that cannot be expressed in
+Wasm.
 
 ### 16.1 The primitive an embedder gets
 
@@ -3115,7 +3056,7 @@ lab is the one the sharing study used
 ([`proposals/SHARING_LINEAR_MEMORY.md`](proposals/SHARING_LINEAR_MEMORY.md) §10,
 §15). The consequence for an embedder is one sentence: **design the wire as an
 integer handle, and treat `externref` as an optimisation where the toolchain offers
-it.** Revision 2 of the study adds one clause to that sentence: a producer whose
+it.** One clause qualifies that sentence: a producer whose
 toolchain emits GC references may also spell the same object as `(ref $T)`, and
 that spelling is a second view of one identity, not a second object
 ([`proposals/SYNTHETIC_OBJECTS.md`](proposals/SYNTHETIC_OBJECTS.md) A.14.4).

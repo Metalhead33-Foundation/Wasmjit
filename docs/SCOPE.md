@@ -7,19 +7,14 @@ surfaces WasmJit deliberately does **not** own and of the deviations it has
 chosen, so that none of them is counted as an implementation gap. Open defects
 and limitations live in one register,
 [`API_ABI_STABILITY.md`](API_ABI_STABILITY.md) §8; this note decides whether a
-missing thing is a gap or a boundary. The failed-instantiation retention closes
-the `linking*` boundary. Revision 4 added §7.1, the claimed guest-language set;
-revision 5 renders its verdict column with the swatch pair
-[`LANGUAGE_FEASIBILITY.md`](LANGUAGE_FEASIBILITY.md) §5.1 defines. Revision 6
-records the synthetic-module boundary and its one deliberate exception, the
-diagnostics guest-log facility (§3.1); revision 7 (2026-11-18) adds §3.2, the
-synthetic-object boundary, and its row in §3, so a product object model is not
-mistaken for engine debt ([`proposals/SYNTHETIC_OBJECTS.md`](proposals/SYNTHETIC_OBJECTS.md)).
-**Revision 8 (2026-11-18)** revises §3.2 and its row for that note's revision 2: the
-*identity and allocation* of a host-registered Wasm type are engine work, and
-§3.2's table records the split; only the object model remains a boundary. Revision
-9 (2026-11-18) records `SO-1` as shipped and the reference-field limit as a
-staging gap (`SO17`/`SO-6`).
+missing thing is a gap or a boundary. §3.1 records the synthetic-module boundary
+and its one exception, the diagnostics guest-log facility; §3.2 records the
+synthetic-object boundary and the split the host-object note introduced — the
+*identity and allocation* of a host-registered Wasm type are engine work (`SO-1`
+shipped), and only the object model remains a boundary. The failed-instantiation
+retention closes the `linking*` boundary, and §7.1 is the claimed guest-language
+set, rendered with the swatch pair
+[`LANGUAGE_FEASIBILITY.md`](LANGUAGE_FEASIBILITY.md) §5.1 defines.
 Audience: anyone triaging a missing feature, filling in a completeness meter,
 writing a proposal note, asking "which languages do we actually serve?", or
 asking "is this engine mature yet?".
@@ -120,7 +115,7 @@ emits GC references and as an integer handle everywhere else, and described by a
 host-side descriptor
 ([`proposals/SYNTHETIC_OBJECTS.md`](proposals/SYNTHETIC_OBJECTS.md) §2.1/§2.5).
 
-Revision 2 of that note splits the old boundary in two, and this document records
+The note splits the old boundary in two, and this document records
 the split because it decides who is behind on what:
 
 | Half | Owner | Status |

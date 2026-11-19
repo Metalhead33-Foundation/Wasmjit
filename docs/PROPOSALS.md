@@ -46,6 +46,10 @@ gaps → where we deliberately deviate → plan → test survey → references.
   Deliberate Deviations*`. The subtitle is ordinary prose, not part of the
   heading, so the page title stays short in the generated table of contents.
 - `Status: design note / implementation reference (revision N — <what changed>).`
+  One short paragraph: the state the note describes now, and what the latest
+  revision changed. Earlier revisions are history and live in git — restating
+  them here puts a changelog in the one place a reader looks for *now*
+  (`FRESHNESS.md` §2.3).
 - `Audience: anyone touching <files/classes>.`
 - One sentence placing the note in the family, e.g. "Follows the same split as
   GC / SIMD / THREADS. Contains **no new code**."
@@ -294,7 +298,8 @@ none is missing its front matter, and no note puts anything after its references
 note, not a WebAssembly feature proposal; `MEMORY_PROVIDER.md`,
 `CONFIGURATION.md` and `COMPILER_POLICY.md` are similarly engine-seam studies
 rather than feature proposals, and `SYNTHETIC_OBJECTS.md` is an engine-seam study
-and plan (revision 11: `SO-1`, `SO-2`, `SO-3`, `SO-6` and `SO-7` shipped, `SO-4` partial, `SO-5` gated) of a host-side object model.
+and plan (`SO-1`, `SO-2`, `SO-3`, `SO-6` and `SO-7` shipped, `SO-4` partial, `SO-5`
+gated) of a host-side object model.
 
 ## 9. References
 
