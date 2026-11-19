@@ -395,17 +395,23 @@ const Json& signatureResults(const Json& entry)
 void emitFunction(std::ostringstream& out, const Json& entry, const std::string& name,
 		const char* side, const std::string& attribute)
 {
-	std::string display = entry.value("module", "");
+	emitFunction(out, Entry::fromJson(entry, side[0] == 'G'), name, side, attribute);
+}
+
+void emitFunction(std::ostringstream& out, const Entry& entry, const std::string& name,
+		const char* side, const std::string& attribute)
+{
+	std::string display = entry.module;
 	if (!display.empty())
 		display += ".";
-	display += entry.at("name").get<std::string>();
+	display += entry.name;
 
 	out << "/* " << side << ": " << display << " */\n";
 	if (!functionDescription(entry).empty())
 		out << "/* " << functionDescription(entry) << " */\n";
 	if (!attribute.empty())
 		out << attribute << "\n";
-	const Json& results = signatureResults(entry);
+	const std::vector<ValueType>& results = entry.function.results;
 	const bool multiValue = results.size() > 1u;
 	if (multiValue) {
 		out << "/* multi-value result: use a generated result buffer */\n";
@@ -416,7 +422,7 @@ void emitFunction(std::ostringstream& out, const Json& entry, const std::string&
 		out << cType(results[0]) << " " << name << "(";
 	}
 
-	const Json& params = signatureParams(entry);
+	const std::vector<ValueType>& params = entry.function.params;
 	if (params.empty()) {
 		if (!multiValue)
 			out << "void";
@@ -483,22 +489,18 @@ std::string emitCHeaderImpl(const Json& schema, const Schema& typed)
 		emitCObjects(out, typed);
 	}
 
-	for (const Json& entry : schema.at("exports")) {
-		if (entry.value("kind", "") != "function")
-			continue;
-		emitFunction(out, entry, "wasmjit_" + sanitize(entry.at("name").get<std::string>()),
+	forEachFunction(typed, false, [&](const Entry& entry) {
+		emitFunction(out, entry, "wasmjit_" + sanitize(entry.name),
 				"H2G export");
-	}
-	for (const Json& entry : schema.at("imports")) {
-		if (entry.value("kind", "") != "function")
-			continue;
+	});
+	forEachFunction(typed, true, [&](const Entry& entry) {
 		const std::string attribute = "WASMJIT_WASM_IMPORT("
 				+ quoteName(importModule(entry), false) + ", "
-				+ quoteName(entry.at("name").get<std::string>(), false) + ")";
+				+ quoteName(entry.name, false) + ")";
 		emitFunction(out, entry,
 				importName(entry),
 				"G2H import", attribute);
-	}
+	});
 
 	out << nonFunctionNotes(schema);
 	out << "#ifdef __cplusplus\n}\n#endif\n\n";

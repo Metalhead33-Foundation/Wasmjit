@@ -118,8 +118,14 @@ const Json& signatureParams(const Json& entry);
 const Json& signatureResults(const Json& entry);
 
 //! Emits one C-style declaration.
-void emitFunction(std::ostringstream& out, const Json& entry, const std::string& name,
-		const char* side, const std::string& attribute = {});
+void emitFunction(std::ostringstream& out, const nlohmann::ordered_json& entry,
+		const std::string& name, const char* side,
+		const std::string& attribute = {});
+
+//! Emits one C-style declaration from a typed entry.
+void emitFunction(std::ostringstream& out, const Entry& entry,
+		const std::string& name, const char* side,
+		const std::string& attribute = {});
 
 //! Emits the C header body.
 std::string emitCHeaderImpl(const nlohmann::ordered_json& schema,
