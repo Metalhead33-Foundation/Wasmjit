@@ -17,46 +17,55 @@ using Json = nlohmann::ordered_json;
 std::string javaType(const ValueType& type);
 std::string csharpType(const ValueType& type);
 
-std::string emitDartImpl(const Json& schema)
+//! The `void` value a Dart signature names when a call returns nothing.
+ValueType voidValue()
+{
+	ValueType type;
+	type.kind = ValueKind::Void;
+	return type;
+}
+
+std::string emitDartImpl(const Json& schema, const Schema& typed)
 {
 	std::set<std::string> refs;
 	collectSchemaRefs(schema, refs);
 
 	std::ostringstream out;
-	out << "// Generated from the " << schema.at("schema").get<std::string>() << " "
-		<< schema.at("direction").get<std::string>() << " schema. Do not edit.\n\n";
+	out << "// Generated from the " << typed.id << " "
+		<< directionName(typed.direction) << " schema. Do not edit.\n\n";
 	out << "import 'dart:ffi';\n\n";
 	out << "typedef WasmV128 = Pointer<Uint8>;\n";
 	for (const std::string& ref : refs)
 		out << "typedef " << pascalName(ref) << " = Pointer<Void>;\n";
 	out << "\n";
 
-	const auto emitNative = [&](const Json& entry, const std::string& functionName) {
-		out << "@Native<" << dartNativeType(signatureResults(entry).size() == 1
-												   ? signatureResults(entry)[0]
-												   : Json{{"type", "void"}})
+	const auto emitNative = [&](const Entry& entry,
+								const std::string& functionName) {
+		const std::vector<ValueType>& params = entry.function.params;
+		const std::vector<ValueType>& results = entry.function.results;
+		out << "@Native<"
+			<< dartNativeType(results.size() == 1 ? results[0] : voidValue())
 			<< " Function(";
-		for (std::size_t i = 0; i < signatureParams(entry).size(); ++i) {
+		for (std::size_t i = 0; i < params.size(); ++i) {
 			if (i != 0) out << ", ";
-			out << dartNativeType(signatureParams(entry)[i]);
+			out << dartNativeType(params[i]);
 		}
 		out << ")>(" << "symbol: '" << functionName << "')\n";
 		out << "external "
-			<< (signatureResults(entry).size() == 1 ? dartType(signatureResults(entry)[0]) : "void")
+			<< (results.size() == 1 ? dartType(results[0]) : std::string("void"))
 			<< " " << functionName << "(";
-		for (std::size_t i = 0; i < signatureParams(entry).size(); ++i) {
+		for (std::size_t i = 0; i < params.size(); ++i) {
 			if (i != 0) out << ", ";
-			out << dartType(signatureParams(entry)[i]) << " " << argumentName(entry, i);
+			out << dartType(params[i]) << " " << argumentName(entry, i);
 		}
 		out << ");\n\n";
 	};
 
-	forEachFunction(schema, "exports", [&](const Json& entry) {
+	forEachFunction(typed, false, [&](const Entry& entry) {
 		out << "// H2G export: " << exportComment(entry) << "\n";
-		emitNative(entry,
-				"wasmjit_" + sanitize(entry.at("name").get<std::string>()));
+		emitNative(entry, "wasmjit_" + sanitize(entry.name));
 	});
-	forEachFunction(schema, "imports", [&](const Json& entry) {
+	forEachFunction(typed, true, [&](const Entry& entry) {
 		out << "// G2H import: " << importComment(entry) << "\n";
 		emitNative(entry, importName(entry));
 	});

@@ -48,7 +48,7 @@ std::string emitMoonBitImpl(const nlohmann::ordered_json& schema, const Schema& 
 std::string emitGoImpl(const nlohmann::ordered_json& schema, const Schema& typed);
 
 //! Emits Dart FFI declarations.
-std::string emitDartImpl(const nlohmann::ordered_json& schema);
+std::string emitDartImpl(const nlohmann::ordered_json& schema, const Schema& typed);
 
 //! Emits Java declarations.
 std::string emitJavaImpl(const nlohmann::ordered_json& schema);
