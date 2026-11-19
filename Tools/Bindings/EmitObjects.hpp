@@ -64,6 +64,20 @@ void emitRustObjects(std::ostringstream& out, const nlohmann::ordered_json& sche
 */
 void emitWitObjects(std::ostringstream& out, const nlohmann::ordered_json& schema);
 
+//! Emits one Kotlin/Wasm wrapper class per object: the façade that holds the handle.
+/*!
+  \brief Emits the garbage-collected-language façade (`SO-4`).
+  \param out The output stream.
+  \param schema The validated schema view; nothing is emitted when it has no objects.
+
+  The wrapper owns nothing the engine counts: it holds the `i64` slot and calls
+  the host's release once, so `close()`/`use { }` is the lifetime policy the
+  component model spells `resource.drop` (docs/proposals/SYNTHETIC_OBJECTS.md
+  A.14.4).
+*/
+void emitKotlinObjects(std::ostringstream& out,
+		const nlohmann::ordered_json& schema);
+
 } // namespace WASM::Bindings::detail
 
 #endif // WASMJIT_BINDINGS_EMITOBJECTS_HPP

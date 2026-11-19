@@ -11,6 +11,7 @@
 #include "WasmBase/WasmRegistryImportResolver.hpp"
 #include "WasmBase/WasmRuntime.hpp"
 #include "WasmBase/WasmStore.hpp"
+#include "WasmBase/WasmTrap.hpp"
 
 #ifndef WASM_TEST_DIR
 //! Fixture directory; the build defines it, this keeps a standalone compile honest.
@@ -423,5 +424,230 @@ TEST_CASE("a host cycle is collected by the engine's trial-deletion pass", "[hos
 	// The safepoint still collects the cycle: trial deletion owns it, and the
 	// guest's field store registered the candidate. The Store adds no collector.
 	runtime->safepoint();
+	CHECK(store.gc().liveObjectCount() == before);
+}
+
+namespace {
+
+//! The table the handle probe's imports resolve through. A `Callable` carries a
+//! plain C function pointer — no closure — so the fixture's two imports find the
+//! live table here (docs/proposals/SYNTHETIC_OBJECTS.md A.14.4).
+WASM::HostHandleTable* g_handleTable = nullptr;
+
+//! Binds `g_handleTable` for the lifetime of one test case.
+struct TableBinding {
+	explicit TableBinding(WASM::HostHandleTable& table) noexcept
+	{
+		g_handleTable = &table;
+	}
+	~TableBinding() { g_handleTable = nullptr; }
+	TableBinding(const TableBinding&) = delete;
+	TableBinding& operator=(const TableBinding&) = delete;
+};
+
+//! `env.handle_get`: field 0 of the object behind the slot, or a trap.
+//!
+//! The first parameter is the engine's host-import context (a `void*` the
+//! backend passes to every native import); this fixture resolves through the
+//! file-scope table instead, exactly like the register-ABI tests do.
+std::int32_t probeHandleGet(void* context, std::int64_t value)
+{
+	(void)context;
+	WASM::HostObject* object = g_handleTable == nullptr
+			? nullptr
+			: g_handleTable->resolve(
+					  WASM::HostHandle{static_cast<std::uint64_t>(value)});
+	if (object == nullptr) {
+		// A dead handle is a failure of the guest's obligation, not a value it
+		// can branch on: report the trap and return a benign word.
+		WASM::reportTrap(WASM::TrapKind::Internal, "host handle is not live");
+		return 0;
+	}
+	return object->readField<std::int32_t>(0);
+}
+
+//! `env.handle_set`: writes field 1 of the object behind the slot, or a trap.
+void probeHandleSet(void* context, std::int64_t value, std::int32_t written)
+{
+	(void)context;
+	WASM::HostObject* object = g_handleTable == nullptr
+			? nullptr
+			: g_handleTable->resolve(
+					  WASM::HostHandle{static_cast<std::uint64_t>(value)});
+	if (object == nullptr) {
+		WASM::reportTrap(WASM::TrapKind::Internal, "host handle is not live");
+		return;
+	}
+	object->writeField<std::int32_t>(1, written);
+}
+
+} // namespace
+
+// `SO-3`'s acceptance case: one object, two spellings. The table roots the
+// object, the guest reaches it as `(ref $pair)` and as the `i64` slot, and the
+// engine's count is the only count either path moves — the handle is a root,
+// never a second object (SOD4).
+TEST_CASE("one object is reached by a reference and by a handle (SO-3)",
+		"[hostobject][gc][handle]")
+{
+	auto runtime = WASM::Runtime::create("libjit");
+	REQUIRE(runtime != nullptr);
+	WASM::Store& store = runtime->store();
+
+	const std::filesystem::path path =
+			std::filesystem::path(WASM_TEST_DIR) / "host_handle_probe.wasm";
+	auto module = runtime->loadFile(path);
+	REQUIRE(module != nullptr);
+
+	WASM::HostHandleTable table(store);
+	TableBinding binding(table);
+	WASM::RegistryImportResolver imports;
+	imports.registerFunction("env", "handle_get",
+			WASM::Callable{reinterpret_cast<void*>(&probeHandleGet), nullptr, 0});
+	imports.registerFunction("env", "handle_set",
+			WASM::Callable{reinterpret_cast<void*>(&probeHandleSet), nullptr, 0});
+	WASM::ModuleInstance& instance = runtime->instantiate(*module, imports);
+
+	const WASM::HostType type = WASM::HostType::intern(store, leafStruct());
+	REQUIRE(type.isInterned());
+	CHECK(type.id() == module->typeId(WASM::LocalTypeIdx{0}));
+
+	const std::size_t before = store.gc().liveObjectCount();
+	WASM::HostObject created = WASM::HostObject::createStruct(store, type);
+	REQUIRE(created.isValid());
+	created.writeField<std::int32_t>(0, 20);
+	created.writeField<std::int32_t>(1, 22);
+
+	// Acquiring *moves* the one count the object already owns: no clone, no
+	// second object, and `liveObjectCount` does not move.
+	WASM::HostHandle handle = table.acquire(std::move(created), type);
+	CHECK_FALSE(created.isValid());
+	CHECK(handle.index() == 0u);
+	CHECK(handle.generation() == 1u);
+	CHECK(table.liveCount() == 1u);
+	CHECK(store.gc().liveObjectCount() == before + 1);
+
+	void* raw = table.raw(handle);
+	REQUIRE(raw != nullptr);
+	const std::int64_t wire = static_cast<std::int64_t>(handle.value);
+
+	// Spelling 1: a reference, validated by the guest's own `ref.test`.
+	CHECK(runtime->callExport<std::int32_t>(instance, "is_pair", raw) == 1);
+	CHECK(runtime->callExport<std::int32_t>(instance, "sum_pair", raw) == 42);
+
+	// Spelling 2: the slot, resolved by the host inside its own import.
+	CHECK(runtime->callExport<std::int32_t>(instance, "handle_read", wire) == 20);
+	CHECK_NOTHROW(runtime->callExport<void>(instance, "handle_write", wire,
+			std::int32_t{30}));
+	// The write went through the handle and landed in the object the typed path
+	// reads: 20 + 30, not two objects that happen to agree.
+	CHECK(runtime->callExport<std::int32_t>(instance, "sum_pair", raw) == 50);
+	CHECK(runtime->callExport<std::int32_t>(instance, "handle_read", wire) == 20);
+
+	// The host validates the type on resolve; a handle of another type is not one.
+	const WASM::HostType holder = WASM::HostType::intern(store, holderStruct());
+	CHECK(table.resolve(handle, holder) == nullptr);
+	CHECK(table.resolve(handle, type) != nullptr);
+
+	// The guest roots the object by reference. Releasing the handle now must not
+	// recycle it — the guest's count is not the table's.
+	CHECK(runtime->callExport<std::int32_t>(instance, "save", raw) == 1);
+	CHECK(table.release(handle));
+	CHECK(table.liveCount() == 0u);
+	runtime->safepoint();
+	CHECK(store.gc().liveObjectCount() == before + 1);
+	CHECK(runtime->callExport<std::int32_t>(instance, "sum_pair", raw) == 50);
+
+	// The retired handle can no longer reach the object, even though it is alive.
+	CHECK(table.raw(handle) == nullptr);
+	CHECK(table.resolve(handle) == nullptr);
+
+	// ... and the guest's last reference is what finally releases it.
+	CHECK(runtime->callExport<std::int32_t>(instance, "drop_saved") == 1);
+	runtime->safepoint();
+	CHECK(store.gc().liveObjectCount() == before);
+
+	// A dead handle that reaches the guest's own call path is refused, not
+	// resolved to something plausible: the host import traps with the reason.
+	try {
+		(void)runtime->callExport<std::int32_t>(instance, "handle_read", wire);
+		FAIL("a retired handle must not resolve");
+	} catch (const std::exception& error) {
+		CHECK(std::string(error.what()).find("host handle is not live")
+				!= std::string::npos);
+	}
+}
+
+// The other half of `SO-3`: every way a slot can be wrong is refused, and a
+// double release is a no-op rather than a second `refDrop`.
+TEST_CASE("a stale, forged or foreign handle is refused (SO-3)",
+		"[hostobject][handle]")
+{
+	WASM::Store store;
+	const WASM::HostType type = WASM::HostType::intern(store, leafStruct());
+	REQUIRE(type.isInterned());
+	WASM::HostHandleTable table(store);
+
+	const std::size_t before = store.gc().liveObjectCount();
+	WASM::HostHandle handle =
+			table.acquire(WASM::HostObject::createStruct(store, type), type);
+	REQUIRE(!handle.isNone());
+	REQUIRE(table.resolve(handle) != nullptr);
+	CHECK(store.gc().liveObjectCount() == before + 1);
+
+	// The null handle names nothing, and releasing it is not an error either.
+	CHECK(table.resolve(WASM::HostHandle{}) == nullptr);
+	CHECK(table.raw(WASM::HostHandle{}) == nullptr);
+	CHECK_FALSE(table.release(WASM::HostHandle{}));
+
+	// An index past the table, a generation the slot does not carry, and the
+	// reserved generation 0 are all dead handles.
+	CHECK(table.resolve(WASM::HostHandle::pack(99u, 1u)) == nullptr);
+	CHECK(table.resolve(WASM::HostHandle::pack(handle.index(),
+				  handle.generation() + 1u)) == nullptr);
+	CHECK(table.resolve(WASM::HostHandle::pack(handle.index(), 0u)) == nullptr);
+
+	// Release once: the root goes, the handle dies, and the slot's generation
+	// moves on so the *next* occupant cannot be reached through the old handle.
+	CHECK(table.release(handle));
+	CHECK(table.resolve(handle) == nullptr);
+	CHECK_FALSE(table.release(handle));
+	// The release queues the object; the drain is a safepoint operation, and this
+	// test has no instance, so the Store's own walk stands in for one.
+	store.collectHostObjects();
+	CHECK(store.gc().liveObjectCount() == before);
+	const std::uint32_t retired = handle.generation();
+
+	WASM::HostHandle reused =
+			table.acquire(WASM::HostObject::createStruct(store, type), type);
+	CHECK(reused.index() == handle.index());
+	CHECK(reused.generation() == retired + 1u);
+	CHECK(reused != handle);
+	CHECK(table.resolve(reused) != nullptr);
+	CHECK(table.resolve(handle) == nullptr);
+	CHECK(table.slotCount() == 1u);
+	CHECK(table.liveCount() == 1u);
+
+	// A foreign Store's object cannot be rooted: the index would mean nothing here.
+	WASM::Store other;
+	const WASM::HostType foreign = WASM::HostType::intern(other, leafStruct());
+	CHECK_THROWS_AS(
+			table.acquire(WASM::HostObject::createStruct(other, foreign), foreign),
+			std::invalid_argument);
+	// Neither can an object whose identity is not the type it would be filed under.
+	const WASM::HostType holder = WASM::HostType::intern(store, holderStruct());
+	CHECK_THROWS_AS(
+			table.acquire(WASM::HostObject::createStruct(store, holder), type),
+			std::logic_error);
+	// A refused acquire roots nothing and leaks nothing: both temporaries released
+	// their counts on the unwind, and the drain proves neither was rooted here.
+	store.collectHostObjects();
+	CHECK(table.liveCount() == 1u);
+	CHECK(store.gc().liveObjectCount() == before + 1);
+
+	// The table is the owner, not a registry with a manual sweep: releasing the
+	// last root puts the count back where it started.
+	CHECK(table.release(reused));
+	store.collectHostObjects();
 	CHECK(store.gc().liveObjectCount() == before);
 }

@@ -1011,6 +1011,15 @@ std::string emitWitImpl(const Json& schema)
 	}
 
 	out << "world " << worldName << " {\n";
+	// A guest consumes host-registered objects, so the interface carrying their
+	// resources is an *import* of this world: the host owns the object, the guest
+	// gets a resource, and `resource.drop` is the release (SO-4, A.14.4).
+	if (schema.contains("objects") && schema.at("objects").is_array()
+			&& !schema.at("objects").empty()) {
+		out << "  // The host provides the objects; a component that exports them\n"
+			   "  // instead would export this interface.\n"
+			   "  import types;\n";
+	}
 	emitUseTypes(out, "  ");
 	for (const Json* entry : worldImports)
 		out << "  import " << emitFunction(*entry);

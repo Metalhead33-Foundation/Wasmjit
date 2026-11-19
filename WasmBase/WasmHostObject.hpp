@@ -35,11 +35,14 @@
 
 WASMJIT_VISIBLE_BEGIN
 #include "WasmHostType.hpp"
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <deque>
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 namespace WASM {
 
@@ -267,6 +270,172 @@ private:
 	std::uint32_t  length_ = 0; //!< Element count for an array; 0 for a struct.
 };
 
+//! One host handle: a slot index and the generation that owns it.
+//!
+//! The wire form is a single `i64`, because that is what a non-GC guest can
+//! carry: the slot index in the low 32 bits and the slot's generation in the
+//! high 32. A released slot's generation moves on, so the handle that pointed at
+//! it is recognisably dead without a side table, and the null handle is 0
+//! (docs/proposals/SYNTHETIC_OBJECTS.md A.14.4).
+/** \brief A packed host-handle value, `generation << 32 | index`. */
+struct HostHandle
+{
+	std::uint64_t value = 0; //!< The packed value: the `i64` the guest carries.
+
+	//! True for the null handle.
+	/** \brief Tests whether the handle is the null handle. \return true when `value` is 0. */
+	bool isNone() const noexcept { return value == 0; }
+	//! True for any non-null handle; only the table can say whether a slot is live.
+	/** \brief Tests whether the handle is non-null. \return true when `value` is not 0. */
+	explicit operator bool() const noexcept { return value != 0; }
+	//! The slot index this handle names.
+	/** \brief Returns the slot index. \return The low 32 bits of the packed value. */
+	std::uint32_t index() const noexcept { return static_cast<std::uint32_t>(value); }
+	//! The generation the slot must still carry for the handle to be live.
+	/** \brief Returns the generation. \return The high 32 bits of the packed value. */
+	std::uint32_t generation() const noexcept
+	{
+		return static_cast<std::uint32_t>(value >> 32);
+	}
+
+	//! Packs one index and one generation into a handle.
+	/*!
+	  \brief Builds a handle from its two halves.
+	  \param index The slot index, packed into the low 32 bits.
+	  \param generation The slot generation, packed into the high 32 bits.
+	  \return The packed handle.
+	*/
+	static HostHandle pack(std::uint32_t index, std::uint32_t generation) noexcept
+	{
+		return HostHandle{(static_cast<std::uint64_t>(generation) << 32)
+				| static_cast<std::uint64_t>(index)};
+	}
+
+	//! Two handles are equal when their packed values are.
+	/*!
+	  \brief Compares two handles.
+	  \param other The handle to compare with.
+	  \return true when both carry the same index and the same generation.
+	*/
+	bool operator==(const HostHandle& other) const noexcept
+	{
+		return value == other.value;
+	}
+	//! The negation of `operator==`.
+	/*!
+	  \brief Compares two handles for inequality.
+	  \param other The handle to compare with.
+	  \return true when the packed values differ.
+	*/
+	bool operator!=(const HostHandle& other) const noexcept
+	{
+		return value != other.value;
+	}
+};
+
+//! The host-side slot table of A.14.4: one engine count per rooted object.
+//!
+//! A `(ref $T)` is a reference the guest validates with `ref.test`; a handle is a
+//! slot the *host* validates, and both end at the same `TypeId`. The table owns
+//! exactly the count its `HostObject` already holds — acquiring never clones — so
+//! an object still has one count, and there is no host-side counter (`SOD4`).
+//!
+//! One table belongs to one `Store`, and it must not outlive it: the handle means
+//! nothing anywhere else, `acquire` refuses an object from another Store, and the
+//! destructor releases every root still held through the same `HostObject`
+//! lifetime a local owner would use.
+class HostHandleTable
+{
+public:
+	//! Binds the table to the Store whose objects it will root.
+	/*!
+	  \brief Binds a table to a Store.
+	  \param store The Store every acquired object must come from.
+	*/
+	explicit HostHandleTable(Store& store) noexcept;
+	//! Releases every root still held; each slot's `HostObject` drops its count.
+	~HostHandleTable() = default;
+	HostHandleTable(const HostHandleTable&) = delete;
+	HostHandleTable& operator=(const HostHandleTable&) = delete;
+	HostHandleTable(HostHandleTable&&) = delete;
+	HostHandleTable& operator=(HostHandleTable&&) = delete;
+
+	//! Roots `object` and returns its handle, taking the count it already owns.
+	/*!
+	  \brief Roots a host object in a free or new slot.
+	  \param object The object to root; it must be non-empty and from this table's Store.
+	  \param type An interned type the object must have.
+	  \return The handle, carrying the slot's current generation.
+	  \throws std::invalid_argument when `object` is empty, belongs to another
+	          Store, or `type` is not interned.
+	  \throws std::logic_error when the object's identity is not `type`'s.
+	*/
+	HostHandle acquire(HostObject&& object, const HostType& type);
+
+	//! The object behind `handle`, or null when the handle is stale or forged.
+	/*!
+	  \brief Resolves a handle to the object it roots.
+	  \param handle The handle to resolve.
+	  \return The rooted object, valid until its slot is released, or null.
+	*/
+	HostObject* resolve(HostHandle handle) noexcept;
+	//! The const form of `resolve`.
+	/*!
+	  \brief Resolves a handle to the object it roots.
+	  \param handle The handle to resolve.
+	  \return The rooted object, valid until its slot is released, or null.
+	*/
+	const HostObject* resolve(HostHandle handle) const noexcept;
+	//! The object behind `handle` when it also has `type`.
+	/*!
+	  \brief Resolves a handle and checks its type.
+	  \param handle The handle to resolve.
+	  \param type An interned type the slot must have recorded.
+	  \return The rooted object, or null when the handle is dead or of another type.
+	*/
+	HostObject* resolve(HostHandle handle, const HostType& type) noexcept;
+
+	//! The raw reference a typed export takes, or null when the handle is dead.
+	/*!
+	  \brief Resolves a handle to a raw GC reference.
+	  \param handle The handle to resolve.
+	  \return The reference word the object is, or null when the handle is dead.
+	*/
+	void* raw(HostHandle handle) noexcept;
+
+	//! Releases the root behind `handle`; false when the handle is not live.
+	/*!
+	  \brief Releases one root and retires the slot's generation.
+	  \param handle The handle to release.
+	  \return true when a root was released; false for a stale, forged or null handle.
+	*/
+	bool release(HostHandle handle) noexcept;
+
+	//! The number of live slots.
+	/** \brief Returns the number of rooted objects. \return The live slot count. */
+	std::size_t liveCount() const noexcept { return live_; }
+	//! The number of slots ever created, live plus retired.
+	/** \brief Returns the slot count. \return The size of the slot table. */
+	std::size_t slotCount() const noexcept { return slots_.size(); }
+	//! The Store this table roots objects of.
+	/** \brief Returns the bound Store. \return Reference to the Store. */
+	Store& store() noexcept { return *store_; }
+
+private:
+	//! One slot: the root, the identity recorded with it and its generation.
+	struct Slot {
+		HostObject object{}; //!< The root; empty once the slot is retired.
+		TypeId type{TypeId::kNone}; //!< The identity `acquire` recorded.
+		std::uint32_t generation = 1; //!< The generation a live handle must carry.
+		bool live = false; //!< True while the slot roots an object.
+	};
+
+	Store* store_ = nullptr; //!< The Store whose objects this table roots.
+	std::deque<Slot> slots_; //!< Stable per-slot storage, so a resolved pointer survives growth.
+	std::vector<std::uint32_t> free_; //!< Retired slot indices awaiting reuse.
+	std::size_t live_ = 0; //!< The number of live slots.
+};
+
 //! \par Inline definitions
 //! The ergonomics layer is header-only: every function below is a thin wrapper
 //! over `WasmHostType.hpp`, so a host that only describes a type does not link
@@ -472,6 +641,95 @@ void HostObject::writeElement(std::uint32_t index, T value)
 		throw std::logic_error(
 				"HostObject::writeElement: sizeof(T) is not the element's storage size");
 	std::memcpy(static_cast<std::uint8_t*>(object_) + offset, &value, sizeof(T));
+}
+
+inline HostHandleTable::HostHandleTable(Store& store) noexcept
+	: store_(&store)
+{
+}
+
+inline HostHandle HostHandleTable::acquire(HostObject&& object, const HostType& type)
+{
+	if (!object.isValid())
+		throw std::invalid_argument("HostHandleTable::acquire: the object is empty");
+	if (object.store() != store_)
+		throw std::invalid_argument(
+				"HostHandleTable::acquire: the object belongs to another Store");
+	if (!type.isInterned())
+		throw std::invalid_argument(
+				"HostHandleTable::acquire: the type is not interned");
+	if (type.id() != object.typeId())
+		throw std::logic_error("HostHandleTable::acquire: the object's identity is"
+							   " not the given type");
+	std::uint32_t index = 0;
+	if (free_.empty()) {
+		Slot slot;
+		slot.object = std::move(object);
+		slot.type = type.id();
+		slot.live = true;
+		slots_.push_back(std::move(slot));
+		index = static_cast<std::uint32_t>(slots_.size() - 1);
+	} else {
+		//! Reuse retires nothing: `release` already moved the generation on, so a
+		//! handle from the slot's previous occupant cannot resolve.
+		index = free_.back();
+		free_.pop_back();
+		Slot& slot = slots_[index];
+		slot.object = std::move(object);
+		slot.type = type.id();
+		slot.live = true;
+	}
+	++live_;
+	return HostHandle::pack(index, slots_[index].generation);
+}
+
+inline HostObject* HostHandleTable::resolve(HostHandle handle) noexcept
+{
+	const std::uint32_t index = handle.index();
+	const std::uint32_t generation = handle.generation();
+	if (handle.isNone() || generation == 0u || index >= slots_.size())
+		return nullptr;
+	Slot& slot = slots_[index];
+	if (!slot.live || slot.generation != generation)
+		return nullptr;
+	return &slot.object;
+}
+
+inline const HostObject* HostHandleTable::resolve(HostHandle handle) const noexcept
+{
+	return const_cast<HostHandleTable*>(this)->resolve(handle);
+}
+
+inline HostObject* HostHandleTable::resolve(HostHandle handle,
+		const HostType& type) noexcept
+{
+	HostObject* object = resolve(handle);
+	if (object == nullptr || !type.isInterned() || object->typeId() != type.id())
+		return nullptr;
+	return object;
+}
+
+inline void* HostHandleTable::raw(HostHandle handle) noexcept
+{
+	HostObject* object = resolve(handle);
+	return object == nullptr ? nullptr : object->raw();
+}
+
+inline bool HostHandleTable::release(HostHandle handle) noexcept
+{
+	if (resolve(handle) == nullptr)
+		return false;
+	const std::uint32_t index = handle.index();
+	Slot& slot = slots_[index];
+	slot.object.reset();
+	slot.type = TypeId{TypeId::kNone};
+	slot.live = false;
+	++slot.generation;
+	if (slot.generation == 0u)
+		slot.generation = 1u;
+	free_.push_back(index);
+	--live_;
+	return true;
 }
 
 } // namespace WASM

@@ -304,6 +304,46 @@ void emitCObjects(std::ostringstream& out, const Json& schema)
 						<< objectCType(schema, propType) << " value);\n";
 			}
 		}
+		// The handle surface (A.14.4 option B): the same accessors over the `i64`
+		// a non-GC consumer carries. It is a *thunk* surface — resolve, then
+		// forward — so an operation keeps one implementation and two signatures.
+		out << "\n/* The handle surface (A.14.4): the `i64` slot a non-GC consumer\n"
+			   "   carries. A host that serves one emits a thunk per signature below\n"
+			   "   over the typed accessor above, so the operation keeps one\n"
+			   "   implementation. The slot is host state: this header declares the\n"
+			   "   spelling, never the table. */\n";
+		out << "typedef int64_t " << type << "_handle;\n";
+		out << "#define " << macro << "_HANDLE_NONE 0\n";
+		for (const Json& method : methods) {
+			const Json& params =
+					method.contains("params") ? method.at("params") : emptyArray;
+			const Json& results =
+					method.contains("results") ? method.at("results") : emptyArray;
+			out << "typedef ";
+			if (results.size() == 1u)
+				out << cType(results.at(0));
+			else
+				out << "void";
+			out << " (*" << type << "_"
+				<< objectIdentifier(method.value("name", "")) << "_h_fn)(int64_t self";
+			for (const Json& param : params)
+				out << ", " << objectCType(schema, param);
+			if (results.size() > 1u)
+				out << ", void* results";
+			out << ");\n";
+		}
+		for (const Json& property : properties) {
+			const std::string propIdent =
+					objectIdentifier(property.value("name", ""));
+			const Json& propType =
+					property.contains("type") ? property.at("type") : Json{};
+			out << "typedef " << objectCType(schema, propType) << " (*" << type
+				<< "_prop_" << propIdent << "_get_h_fn)(int64_t self);\n";
+			if (property.contains("set"))
+				out << "typedef void (*" << type << "_prop_" << propIdent
+					<< "_set_h_fn)(int64_t self, " << objectCType(schema, propType)
+					<< " value);\n";
+		}
 		out << "\n";
 
 		if (!fields.empty()) {
@@ -471,6 +511,42 @@ void emitRustObjects(std::ostringstream& out, const Json& schema)
 						<< objectRustType(schema, propType) << ");\n";
 			}
 		}
+		// The handle surface: the same signatures over the `i64` a non-GC
+		// consumer carries, so one operation keeps one implementation.
+		out << "\n// The handle surface (A.14.4): the `i64` slot a non-GC consumer\n"
+			   "// carries. Resolve the slot, then forward to the typed accessor.\n";
+		out << "pub type " << type << "_handle = i64;\n";
+		out << "pub const " << macro << "_HANDLE_NONE: i64 = 0;\n";
+		for (const Json& method : methods) {
+			const Json& params =
+					method.contains("params") ? method.at("params") : emptyArray;
+			const Json& results =
+					method.contains("results") ? method.at("results") : emptyArray;
+			out << "pub type " << type << "_"
+				<< objectIdentifier(method.value("name", ""))
+				<< "_h_fn = unsafe extern \"C\" fn(i64";
+			for (const Json& param : params)
+				out << ", " << objectRustType(schema, param);
+			if (results.size() > 1u)
+				out << ", result: *mut core::ffi::c_void";
+			out << ")";
+			if (results.size() == 1u)
+				out << " -> " << objectRustType(schema, results.at(0));
+			out << ";\n";
+		}
+		for (const Json& property : properties) {
+			const std::string propIdent =
+					objectIdentifier(property.value("name", ""));
+			const Json& propType =
+					property.contains("type") ? property.at("type") : Json{};
+			out << "pub type " << type << "_prop_" << propIdent
+				<< "_get_h_fn = unsafe extern \"C\" fn(i64) -> "
+				<< objectRustType(schema, propType) << ";\n";
+			if (property.contains("set"))
+				out << "pub type " << type << "_prop_" << propIdent
+					<< "_set_h_fn = unsafe extern \"C\" fn(i64, "
+					<< objectRustType(schema, propType) << ");\n";
+		}
 		out << "\npub static " << macro
 			<< "_FIELDS: &[wasmjit_object_meta_field] = &[\n";
 		for (const Json& field : fields) {
@@ -556,7 +632,69 @@ std::string witOmission(const Json& type)
 	return std::string("`") + type.value("type", "unknown") + "`";
 }
 
+//! A Kotlin type-name spelling of one object: `DemoWidgetV1`.
+std::string kotlinObjectName(const Json& object)
+{
+	const std::string name = object.value("name", std::string());
+	std::string out;
+	bool upper = true;
+	for (const char character : name) {
+		if (!std::isalnum(static_cast<unsigned char>(character))) {
+			upper = true;
+			continue;
+		}
+		out.push_back(upper ? static_cast<char>(
+							  std::toupper(static_cast<unsigned char>(character)))
+							: character);
+		upper = false;
+	}
+	if (out.empty() || !std::isalpha(static_cast<unsigned char>(out.front())))
+		out.insert(0, "Object");
+	return out + "V" + std::to_string(object.value("version", 1u));
+}
+
 } // namespace
+
+void emitKotlinObjects(std::ostringstream& out, const Json& schema)
+{
+	const Json* objects = objectArray(schema);
+	if (objects == nullptr)
+		return;
+
+	out << "\n// Host-registered objects (wasmjit.binding/2). The wrapper holds the `i64`\n"
+		   "// slot; the host's table owns the object, so `close()` is the one release and\n"
+		   "// `use { }` is the lifetime policy — the same contract the component model\n"
+		   "// spells `resource.drop` (docs/proposals/SYNTHETIC_OBJECTS.md A.14.4).\n\n";
+	for (const Json& object : *objects) {
+		const std::string wrapper = kotlinObjectName(object);
+		const std::string type = objectTypeName(object);
+		out << "// `" << object.value("name", "") << "` version "
+			<< object.value("version", 1u) << ".\n";
+		out << "class " << wrapper << "(private val handle: Long) : AutoCloseable {\n"
+			   "    private var released = false\n"
+			   "\n"
+			   "    /** The host's slot for this object. */\n"
+			   "    val raw: Long get() = handle\n"
+			   "\n"
+			   "    /** Releases the slot once; a second call is a no-op. */\n"
+			   "    override fun close() {\n"
+			   "        if (released) return\n"
+			   "        released = true\n"
+			   "        "
+			<< type << "_release(handle)\n"
+					   "    }\n"
+					   "\n"
+					   "    companion object {\n"
+					   "        /** The null slot. */\n"
+					   "        const val HANDLE_NONE: Long = 0\n"
+					   "    }\n"
+					   "}\n"
+					   "\n"
+					   "// Provided by the host: `HostHandleTable::release`, which is idempotent.\n"
+					   "external fun "
+			<< type << "_release(handle: Long)\n\n";
+	}
+}
 
 void emitWitObjects(std::ostringstream& out, const Json& schema)
 {

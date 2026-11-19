@@ -2,7 +2,7 @@
 
 *Host-Registered Object Types, the GObject Precedent, and What the Component Model Already Covers*
 
-Status: design note / implementation reference (**revision 6 — 2026-11-19**). This
+Status: design note / implementation reference (**revision 8 — 2026-11-19**). This
 is `EMBEDDING_SURFACE.md` §16 promoted to a note of its own: that section had grown
 into a six-hundred-line study inside an implementation reference, and the
 reference now keeps only the embedder-facing half. Revision 1 recorded a boundary —
@@ -27,6 +27,15 @@ rather than a slot — the getter is required, the setter optional, and neither
 occupies a byte — which is what a *cascading* or *computed* member needs, and
 what the Component Model already models, because every resource member is a call
 there (§4.7). Signals are examined and deliberately left as a pattern (§4.8).
+**Revision 7 adds the handle table (`SO-3`)**: the `i64` slot of A.14.4 is a host
+table over the *same* engine count, with generation-based stale rejection, a type
+check on resolve, and the emitted `_h_fn` surface for a non-GC consumer (§4.9).
+**Revision 8 packages them (`SO-4`)**: the WIT world imports the interface that
+carries the object resources, and one Kotlin/Wasm class per object holds the slot
+with a single release — the façade a GC language consumes (§4.10). The component
+plumbing that would make `resource.drop` *be* the host release is `SO21`, and
+`SO-5` (the arena) is **gated** on the sharing study's `SLM-1`–`SLM-4`, so it is
+scoped rather than attempted (§4.11).
 The `externref` + `HostBridge`
 path is unchanged and remains the answer for truly opaque host objects; the new
 path is a second, opt-in one for objects that are **expressible in Wasm**.
@@ -49,7 +58,7 @@ now cite. §2–§8 state the decisions and cite the appendix rather than repeat
 | §2 | What does the scenario demand, now that host objects are a planned feature? |
 | §3 | What does it *not* demand? |
 | §4 | What is implemented today? |
-| §5 | What is missing or untested (`SO1`–`SO19`)? |
+| §5 | What is missing or untested (`SO1`–`SO21`)? |
 | §6 | Where do we deliberately deviate (`SOD1`–`SOD7`)? |
 | §7 | What is the plan (`SO-1`–`SO-7`)? |
 | §8 | What does the test survey measure? |
@@ -618,6 +627,120 @@ a policy: a callback table with lifetime rules and a stated re-entrancy contract
 is a proposal of its own, and it belongs beside
 [`THREADS.md`](THREADS.md) rather than inside an object note.
 
+### 4.9 The handle table and the dual surface (`SO-3`, 2026-11-19)
+
+A.14.4 is now implemented, and it is deliberately small: the table is
+*bookkeeping over one count*, not an object model.
+
+| Piece | Where | What it does |
+|---|---|---|
+| **the handle** | `HostHandle` in [`../../WasmBase/WasmHostObject.hpp`](../../WasmBase/WasmHostObject.hpp) | `generation << 32` over the slot index, in one `i64`; 0 is the null handle |
+| **the table** | `HostHandleTable` | `acquire(HostObject&&, HostType)` takes the count; `resolve(handle)` / `resolve(handle, type)`; `raw(handle)`; `release(handle)`; `liveCount()`/`slotCount()` |
+| **the emission** | [`../../Tools/Bindings/EmitObjects.hpp`](../../Tools/Bindings/EmitObjects.hpp) | per object `…_handle`, `…_HANDLE_NONE` and one `_h_fn` typedef per method and property — the same signature with `int64_t self` |
+
+**One count, and acquiring never clones.** A `HostObject` already owns the engine
+count its allocation started with (`SO-1`); `acquire` *takes* that count into the
+slot, so `liveObjectCount()` does not move and no `refClone` happens. Releasing
+the handle is one `refDrop`, and a second release is a no-op rather than a second
+drop — the table never had a counter of its own to get out of step (`SOD4`).
+
+**Two spellings, one validation, two places to run it.** A `(ref $T)` is checked
+by `ref.test` inside the guest; an `i64` is checked by the host on resolve. Both
+end at the same `TypeId`, so neither is the weaker path — `resolve(handle, type)`
+is the host's `ref.test`, and it refuses a handle of another type even when the
+slot is live.
+
+**A retired generation cannot be re-entered.** `release` bumps the slot's
+generation, recycles the block at the next safepoint, and returns the index to a
+free list; the next occupant gets a *new* generation, so the old handle resolves
+to nothing while the slot is live again. A forged index, a forged generation and
+the reserved generation 0 are all refused the same way.
+
+Evidence: `Test/HostObjectTests.cpp` (`[hostobject][handle]`) runs the acceptance
+case against a real module (`Test/wasm_wat/host_handle_probe.wat`): one object
+reached as `(ref $pair)` (`sum_pair`, `is_pair`) and as the `i64` slot
+(`handle_read`/`handle_write`, resolved by the host inside its own import), a
+write through each spelling visible in the other, the handle released while the
+guest still holds the object (it survives, then the guest's drop collects it), and
+a *dead* handle reaching the guest's call path trapping with the host's reason
+instead of resolving to something plausible. The second case is the negative
+half: null, forged index, forged generation, generation 0, double release, a
+foreign Store's object, a wrong type and slot reuse.
+
+**What the emission is, and is not.** The `_h_fn` typedefs are *declarations* of
+the thunk surface A.14.4 option B describes — resolve, then forward — so a
+producer that must serve a non-GC consumer has one signature to implement per
+operation and no second implementation to keep in step. They are not thunks: the
+tool cannot write the resolve call, because the table is embedder state.
+
+**One honest limit** (`SO20`): a handle carries no table identity, so a handle
+handed to the wrong table either falls outside its slots or can alias a live slot
+with a matching generation. The mitigation is structural — one table per Store,
+the handle stays inside the host — and a table salt would make it checkable; that
+is recorded rather than assumed away (§5).
+
+### 4.10 Packaging and the GC-language façade (`SO-4`, 2026-11-19)
+
+`SO-3` gave one object two spellings inside the host. `SO-4` is about the *other*
+side of the boundary: a component-shaped package, and a wrapper for a language
+that owns references rather than integers.
+
+| Piece | Where | What it does |
+|---|---|---|
+| **the package** | `emitWitObjects` + the world in [`../../Tools/Bindings/EmitShared.cpp`](../../Tools/Bindings/EmitShared.cpp) | `interface types` carries one `resource` per `(name, version)`, and the `world` **imports** it: the host provides the objects, so `resource.drop` is the guest-side spelling of the host's release |
+| **the façade** | `emitKotlinObjects` | one Kotlin/Wasm class per object: it holds the `i64` slot, exposes `raw`, and `close()` releases it **once** (`use { }` is the lifetime policy) |
+
+**The direction is the decision.** A guest that consumes host objects imports the
+interface; a component that *exports* objects would export it. Making that
+explicit in the world is the whole of the packaging work — everything else about
+a resource (its `rep`, its drop, its borrow rules) is already the Canonical ABI's.
+
+**The façade owns nothing the engine counts.** The wrapper is a `Long` plus a
+`Boolean`: the table owns the count, so `close()` is exactly one
+`HostHandleTable::release`, and the table's release is idempotent — the second
+`close()` is guarded in the wrapper and would be a no-op in the table anyway.
+That is what makes "a wrapper's drop reaches one decrement" checkable without a
+Kotlin toolchain: the *link* the wrapper adds is tested in C++ (`[hostobject][handle]`
+releases twice), and the wrapper's own text is asserted by the emitter test.
+
+**What is not wired yet, and it has an ID.** The engine's component resource
+destructor is proven to run exactly once in the defining runtime
+(`component_resource_destructor` in the component suite). What does not exist is
+the *plumbing* that makes `resource.drop` reach a `HostHandleTable`: it needs a
+component-level import (`release: func(u32)`) lowered into the component's core
+module, and a fixture that declares it. `SO21` records that precisely, and it is
+the one item between `SO-4` as it stands and a product that hands objects to a
+component through a resource.
+
+Evidence: the emitter test (`[bindings][objects]`) asserts the world's import and
+the façade's class, release call, idempotence guard and `HANDLE_NONE`; the WIT
+still parses with `wasm-tools component wit`, which is what makes `import types;`
+an assertion rather than a guess. The component half is the existing, green
+`component resource destructor runs in the defining runtime` case.
+
+### 4.11 The arena backing: not started, on purpose (`SO-5`)
+
+`SO-5` is the last row, and it is **gated rather than deferred**: an arena object
+is an `i32` offset into a shared linear memory (A.13), so the milestone cannot
+start before the memory contract it indexes exists.
+
+| Blocker | Where it is defined | Status |
+|---|---|---|
+| the build-side recipe (which side owns the memory, in what order) | [`SHARING_LINEAR_MEMORY.md`](SHARING_LINEAR_MEMORY.md) `SLM-1` | not started |
+| the ownership and lifetime rule (creator outlives importers) | `SLM-2` | not started |
+| the allocator contract (one allocator, disjoint partitions, or the toolchain's own) | `SLM-3` | not started |
+| the four-case test set that makes the above executable | `SLM-4` | not started |
+
+Writing an arena allocator for host objects *before* `SLM-3` would invent a second
+allocator contract beside the one the sharing study exists to pin down — the exact
+duplication this note rejects everywhere else (`SO-2`'s offsets, `SO-7`'s
+accessor signatures, `SO-3`'s count). The milestone is therefore **not started**,
+and the honest deliverable is this dependency list: when `SLM-1`–`SLM-4` land, an
+arena object becomes "a `HostHandleTable` whose entry is a `{offset, size}` pair
+in a memory the plan says is shared", and the acceptance case is already written
+(`SO9`/`SO10`: the object survives the writer's unload, and a forged offset is a
+clean error).
+
 ## 5. Gaps
 
 Every row below is either a **claim that has not been demonstrated** or a missing
@@ -628,25 +751,27 @@ product ship this?”), not against the engine's completeness meter
 
 | # | Gap | Evidence | Severity |
 |---|---|---|---|
-| SO1 | **No handle-lifetime test anywhere.** Create, use, release, reuse the slot, then use the stale handle; a wrong-type handle must be rejected before the host touches the object | nothing in the tree; the lab built the *wire*, not a table | High for a product; host-side |
-| SO2 | **No RAII wrapper is exercised.** C++/Rust/Zig must release exactly once, including on an error path, and no exception or panic may cross the ABI | no generated wrapper exists (§4.3) | High for a product; tool-side |
-| SO3 | **No GC-language wrapper test.** A Kotlin/MoonBit/Dart object holding the handle must reach a single decrement on drop, and a cycle through the wrapper must be collected or documented as a host cycle | case 2 of §3.3 is unbuilt | Medium; tool-side |
-| SO4 | **Component resource parity is untested as a *parity* test.** `own` moves, `borrow` is scoped, `resource.drop` runs the destructor once, and a handle from another instance is rejected | the resource wires exist ([`COMPONENT_MODEL.md`](COMPONENT_MODEL.md)), but not against the same operation set | Medium; the redundancy test of §2.4 |
+| ~~SO1~~ | ~~**No handle-lifetime test anywhere.**~~ **Done (SO-3):** `[hostobject][handle]` creates, uses, releases, reuses the slot and then presents the stale handle — and forges the index and the generation beside it. | `HostHandleTable`; [`../../Test/HostObjectTests.cpp`](../../Test/HostObjectTests.cpp) | Closed — §4.9 |
+| ~~SO2~~ | ~~**No RAII wrapper is exercised.**~~ **Done (SO-3) for C++:** `HostObject` *is* the wrapper — move-only, one release in the destructor — and the handle case makes a refused `acquire` throw after allocation to prove the temporary's count leaves on the unwind. A Rust/Zig wrapper is emitted work, not engine work, and stays open as tooling. | [`../../WasmBase/WasmHostObject.hpp`](../../WasmBase/WasmHostObject.hpp) | Closed — §4.9 |
+| ~~SO3~~ | ~~**No GC-language wrapper test.**~~ **Partly closed (SO-4):** the Kotlin/Wasm façade is emitted and its text is asserted (`close()` guarded, one release, `HANDLE_NONE`); the decrement it performs is the table's idempotent `release`, which `[hostobject][handle]` exercises twice. No Kotlin toolchain runs in this tree, so the wrapper is text-verified, not compiled — and a cycle through it is a host cycle, collected by trial deletion as §4.6 records. | §4.10; `emitKotlinObjects` | Closed for the emitted façade — §4.10 |
+| SO4 | **Component resource parity is untested as a *parity* test.** The destructor-once half is green (`component resource destructor runs in the defining runtime`), but nothing yet makes `resource.drop` *be* a `HostHandleTable::release`, so an `own`/`borrow` on an object cannot be compared with the `i64` path | §4.10; `SO21` | Medium; the parity test is gated on `SO21` |
 | SO5 | **No cross-Store identity test.** Two Stores with the same stable type name must yield different `TypeId`s and the same host descriptor, and a handle from one must be rejected by the other | the rule is §3.2.1 and A.14.2; nothing in the tree | Medium; host-side — the test that justifies §3.2.1 |
-| SO6 | **No ownership accounting test.** `refClone`/`refDrop` counts must match the handle table's roots; no double free on `instanceDestroying`; an object shared by two instances must still have **one engine count**, not one per instance | [`../WasmHostBridge.hpp`](../../WasmBase/WasmHostBridge.hpp) has the host hooks and `refClone`/`refDrop` carry the engine count; no such test | High; host-side |
+| ~~SO6~~ | ~~**No ownership accounting test.**~~ **Done (SO-3):** the table's root *is* the engine count the object already had (`liveObjectCount()` does not move on `acquire`), a second `release` is a no-op, and recycling happens only at the safepoint. One object seen by a guest reference and a handle still has one count. | §4.9; `[hostobject][handle]` | Closed — §4.9 |
 | SO7 | **No thread-affinity test.** Two agents calling one object without synchronisation must be refused or serialised by a documented policy | `THREADSAFETY.md` covers guest state, not host objects | Medium; host-side |
-| SO8 | **No negative test.** A forged handle, a use-after-release, a raw pointer and a cross-runtime handle must all be clean errors | the rule is stated (§2.1); nothing measures it | High; host-side |
+| ~~SO8~~ | ~~**No negative test.**~~ **Done (SO-3):** null, forged index, forged generation, generation 0, double release, a foreign Store's object and a wrong type are each refused by name, and a dead handle that reaches the guest's import traps with the host's reason. | §4.9; `[hostobject][handle]` | Closed — §4.9 |
 | SO9 | **No arena-object test** (Appendix A.13): instance A creates, instance B reads, A is unloaded and re-instantiated and the object survives; a forged offset, a freed slot and a cross-Store tag are clean errors | the arena needs the layout of [`SHARING_LINEAR_MEMORY.md`](SHARING_LINEAR_MEMORY.md) `SLM-1`…`SLM-4` first | Medium; host-side, gated on the sharing plan |
 | SO10 | **No arena-ownership test**: the arena allocator and a host count must never both free one object, and a borrow must not outlive its owner | same gate as SO9 | Medium; host-side |
 | ~~SO11~~ | ~~**No descriptor registry and no generator output exists** for the object case.~~ **Done (SO-2):** the descriptor is a typed model (`ObjectField`/`ObjectMethod`/`ObjectDescriptor`), and C, Rust and WIT output is emitted from it (§4.5). | [`../../Tools/Bindings/BindingModel.hpp`](../../Tools/Bindings/BindingModel.hpp), [`../../Tools/Bindings/EmitObjects.hpp`](../../Tools/Bindings/EmitObjects.hpp) | Closed — §4.5 |
-| SO12 | **No transport for a host object that is not an `externref`** beyond the integer handle; `externref` is available in two of the tested toolchains (§8) | measured, §8 | Low; the `i64` wire covers all six |
+| ~~SO12~~ | ~~**No transport for a host object that is not an `externref`** beyond the integer handle~~ **Done (SO-3):** the handle *is* that transport, and it is now measured end to end in a module (`handle_read`/`handle_write` over `i64`, resolved by the host) rather than asserted. `externref` remains the optimisation the wire table describes (§8). | §4.9; `Test/wasm_wat/host_handle_probe.wat` | Closed — §4.9 |
 | ~~SO13~~ | ~~**No public way to register a host-originated type.**~~ **Done (SO-1):** `internHostType` builds a `Subtype` and runs `TypeRegistry::internGroup`, the *same* canonicalizer a module uses; `Store::allocateHostStruct`/`allocateHostArray` take a `TypeId` and need no module. | [`../WasmHostType.hpp`](../../WasmBase/WasmHostType.hpp), [`../WasmStore.hpp`](../../WasmBase/WasmStore.hpp) | Closed — §4.4 |
 | ~~SO14~~ | ~~**No object descriptor in the binding schema.**~~ **Done (SO-2):** `wasmjit.binding/2` carries an `objects` section; it is validated against the canonical layout at load and consumed by every emitter (§4.5, `EMBEDDING_SURFACE.md` §11.8). | [`../EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) §11.8; [`../../Tools/Bindings/BindingModel.cpp`](../../Tools/Bindings/BindingModel.cpp) | Closed — §4.5 |
-| SO15 | **No dual-surface test.** One object, two spellings: a `(ref $T)` export and an `i64` handle export of the same operation must reach the same object and the same count; dropping the last handle must not free an object the guest still holds | A.14.4; nothing in the tree | High; engine + tool (`SO-3`) |
+| ~~SO15~~ | ~~**No dual-surface test.**~~ **Done (SO-3):** one object is reached by a `(ref $pair)` export and by an `i64` handle export in the same run, a write through either is visible through the other, releasing the handle does not free the guest's object, and the guest's drop does not free a handle-rooted one. | §4.9; `[hostobject][handle]` | Closed — §4.9 |
 | ~~SO16~~ | ~~**No structural-dedup test for host types.**~~ **Done (SO-1):** `[hostobject]` pins a module-declared `{i32,i32}` and a host definition to one `TypeId`, and a mutability change to a different one — no name involved, which is the evidence for D1. | [`../../Test/HostObjectTests.cpp`](../../Test/HostObjectTests.cpp); [`../TYPE_IDENTITY.md`](../TYPE_IDENTITY.md) §6.2 | Closed — §4.4 |
 | ~~SO17~~ | ~~**A host type with a reference field cannot be interned.**~~ **Done (SO-6):** a GC reference field interns and is dropped by the Store's safepoint walk; the remaining restriction is narrower and has its own ID (`SO18`). | `internHostType`; `Store::hostChildSlots`; [`../WasmStore.hpp`](../../WasmBase/WasmStore.hpp) | Closed — §4.6 |
 | SO18 | **A reference field whose count is not the Store's cannot be interned.** An `externref` is counted by a host bridge and an `exnref`/`contref` by the exception/continuation machinery; the Store owns neither, so recycling such an object would leave the count behind. | `internHostType` refuses it by name; `layoutHostType` and the `SO-2` schema still describe it | **Documented limit**; `SO-3`'s bridge policy is where it could be lifted |
 | SO19 | **A signal the host raises between calls cannot re-enter the guest.** A subscription is a stored callback, and invoking it when no call is in flight crosses the one-agent-per-call contract; a *dynamic* signal name crosses SOD6 as well | §4.8; the `[multiagent]`/`[concurrency]` contract; no callback table with lifetime rules exists | **Documented limit**; the static pattern (§4.8 row 1) covers the product need; the callback table is its own proposal |
+| SO20 | **A handle carries no table identity.** Resolving it against a table it did not come from either falls outside that table's slots or — if the index and generation happen to match a live slot — aliases it | §4.9; the mitigation is structural (one table per Store, the handle stays host-side) | **Documented limit**; a per-table salt or tag would make it checkable, and `SO5`'s cross-Store test is where it would show |
+| SO21 | **`resource.drop` does not reach a `HostHandleTable`.** The component resource destructor runs once in the defining runtime (proven), but nothing lowers a component-level `release: func(u32)` into a core module and calls the table, so a component cannot yet release a host object through its resource | §4.10; no such fixture or import path exists | **High for `SO-4`'s component half**; needs a component fixture plus the lowered import, not an engine change |
 
 ## 6. Where we can and should play fast and loose
 
@@ -730,21 +855,20 @@ study and is **not** an engine milestone; `SO-7` is tooling-only — a section i
 |---|---|---|---|
 | **SO-1 — Host type registration and allocation** ✅ | A public path to intern a host-originated canonical type into the Store's `TypeRegistry` (the same interning that module types use), and a way to allocate/free an object of that `TypeId` in the Store's `GcHeap` with the header stamped and the count at its documented starting value. No descriptor, no names, no dispatch in `WasmBase/` (A.14.3). | SO13, SO16 | **Done 2026-11-18:** `internHostType` interns through `TypeRegistry::internGroup`; `Store::allocateHostStruct`/`allocateHostArray` allocate from a Store-owned region set; `[hostobject]` proves the module and the host share one `TypeId`, `ref.test`/`struct.get` see the object, and the counts balance across a guest store and a safepoint (§4.4). The name/version half of the original wording is `SO-2`'s descriptor and does not change the type-level test. |
 | **SO-2 — The descriptor and the schema** ✅ | A hand-written descriptor table (fields, methods, parent, interfaces, version) and an extension of the neutral envelope with a `types`/`objects` section, consumed by `Tools/Bindings/`. Emit WIT, and at least the C and Rust targets (A.14.5). | SO14, SO11 | **Done 2026-11-18:** one `wasmjit.binding/2` descriptor source validates each field offset against `WASM::layoutHostType` at load and emits a versioned C block (opaque handle, constants, method typedefs, walkable tables), a Rust block and a WIT `resource` per `(name, version)`; the emitted C compiles with `gcc`, the Rust with `rustc` and the WIT parses with `wasm-tools` (§4.5). The name/version half is the emitted table plus the host's `(name, version) -> TypeId` map (`SO-3`), not an engine registry. |
-| **SO-3 — The handle table and the dual surface** | A host-side handle table whose entry holds one `refClone` root, generated `i64` accessors, and the rule that a GC guest may pass the same object as `(ref $T)`. Explicit release, stale-handle rejection, no second count (A.14.4). | SO1, SO2, SO6, SO8, SO12, SO15 | one object is reached by a `(ref $T)` export and an `i64` export in the same run; dropping the handle does not free an object the guest still holds, and dropping the last guest reference does not free one the table still roots |
-| **SO-4 — Component packaging, GC-language façade** | A WIT resource version of the same API, plus the generated wrapper for a GC language (Kotlin/Wasm or MoonBit) and a Dart/Kotlin-style façade holding the handle. | SO3, SO4 | `resource.drop` runs the host release once; a wrapper's drop reaches one decrement; a cycle through the wrapper is collected or documented as a host cycle |
-| **SO-5 — The arena backing** | Objects as `i32` offsets in the shared memory of [`SHARING_LINEAR_MEMORY.md`](SHARING_LINEAR_MEMORY.md) A.13, gated on `SLM-1`…`SLM-4`. | SO9, SO10 | the object survives the writer's unload and re-instantiation, and a forged offset is a clean error |
+| **SO-3 — The handle table and the dual surface** ✅ | A host-side handle table whose entry holds one `refClone` root, generated `i64` accessors, and the rule that a GC guest may pass the same object as `(ref $T)`. Explicit release, stale-handle rejection, no second count (A.14.4). | SO1, SO2, SO6, SO8, SO12, SO15 | **Done 2026-11-19:** `HostHandle`/`HostHandleTable` in `WasmHostObject.hpp` take the count the object already owns, validate on resolve (generation *and* type), and retire a slot's generation on release; the emitters add `…_handle`, `…_HANDLE_NONE` and one `_h_fn` per method and property. `[hostobject][handle]` reaches one object through a `(ref $pair)` export and an `i64` export in the same run, releases in both orders, refuses seven forged/stale/foreign forms, and traps a dead handle on the guest's call path (§4.9). The one limit it keeps is `SO20`. |
+| **SO-4 — Component packaging, GC-language façade** 🟨 | A WIT resource version of the same API, plus the generated wrapper for a GC language (Kotlin/Wasm or MoonBit) and a Dart/Kotlin-style façade holding the handle. | SO3, SO4 | **Partial 2026-11-19:** the world now imports the interface that carries the object resources (parsed by `wasm-tools`), and `emitKotlinObjects` emits one Kotlin/Wasm `AutoCloseable` per object holding the `i64` slot with a single guarded release; the destructor-once half is the engine's green component case. **Not done:** `resource.drop` reaching a `HostHandleTable` — that is `SO21`, and the `own`/`borrow` parity test rides on it (§4.10). |
+| **SO-5 — The arena backing** ⛔ | Objects as `i32` offsets in the shared memory of [`SHARING_LINEAR_MEMORY.md`](SHARING_LINEAR_MEMORY.md) A.13, gated on `SLM-1`…`SLM-4`. | SO9, SO10 | **Not started 2026-11-19:** the gate is unshipped — `SLM-1` (recipe), `SLM-2` (ownership), `SLM-3` (allocator contract) and `SLM-4` (test set) are all open, so an arena allocator now would be a second allocator contract beside the one the sharing study owns (§4.11). The acceptance case is already written: the object survives the writer's unload and a forged offset is a clean error. |
 | **SO-6 — Reference-field graphs on the Store release path** ✅ | Let `internHostType` accept a reference field again: at a safepoint, a released host object drops each outgoing reference (the same `refClone`/`refDrop` contract) before its block is recycled, reusing the instance walker's type/layout logic rather than a second collector. | SO17 | **Done 2026-11-18:** a GC reference field interns; the drain walk drops each reference the object holds, queues a child that reaches zero in the same iterative list, and leaves cycles to the instance's trial-deletion pass. A bridge-owned reference field stays refused (`SO18`). `[hostobject][gc]` pins `gcRefCount` 2/2 → 1/1 → baseline and the empty release queue for a cycle (§4.6). |
 | **SO-7 — Accessor-backed properties** ✅ | A `properties[]` entry in the descriptor: a value type plus a required getter and an optional setter, both of which must be methods of the object. Emit the accessor names and signatures in C and Rust and a `func()` member in WIT; take no storage slot and check the declared signature against the property's type. | SO-2 (the schema); nothing engine-side | **Done 2026-11-19:** `demo.Widget` interns three properties with an unchanged `size` and unchanged offsets; ten malformed descriptors are refused at load (no getter, an `offset`, `mutable` without a setter, a field/method name clash, an undeclared accessor, a wrong getter or setter signature, a duplicate property, a shared accessor); the emitted C/Rust compile and the WIT parses with the accessor method projected once (§4.7). |
 
-**`SO-1`, `SO-2`, `SO-6` and `SO-7` landed 2026-11-18/19.** The engine seam and the
-reference-field walk are in the tree (§4.4/§4.6), and so are the tool-side
-descriptor, its emitters and the accessor-backed property (§4.5/§4.7), so every
-engine row of this plan is closed and the remaining rows are host/tool work:
-`SO-3` (the handle table, the dual surface and the `(name, version) -> TypeId`
-map), `SO-4` (component packaging) and `SO-5` (the arena). `SO18` is the one
-documented limit the engine keeps — a bridge-owned reference field is refused,
-because the Store has no bridge — and `SO19` is the one the object model keeps:
-a signal the host raises between calls cannot re-enter the guest (§4.8).
+**`SO-1`, `SO-2`, `SO-3`, `SO-6` and `SO-7` landed, `SO-4` partly.**
+The engine seam, the resource walk and the handle table are in the tree
+(§4.4/§4.6/§4.9), and so are the tool-side descriptor, its emitters, the
+accessor-backed property and the component/GC-language packaging (§4.5/§4.7/§4.10).
+`SO-5` (the arena) is the last row, gated on the sharing study. `SO18` and `SO20`
+are the documented limits the engine and the table keep, `SO19` is the object
+model's (a signal raised between calls cannot re-enter the guest), and `SO21` is
+`SO-4`'s residual: the plumbing from a component resource to the handle table.
 
 Ordering, and why it is not negotiable: `SO-1` is the only engine row and
 everything else is written against it — generating bindings for a type the engine
@@ -1214,6 +1338,13 @@ module.** A generated C header calls the handle surface, a generated Kotlin/Moon
 wrapper calls the typed surface, and both reach the same object. When a non-GC
 consumer must call a GC producer *directly*, the tool emits the `_h` thunk — and
 that is a tooling decision priced per module, not an engine feature.
+
+**Shipped (`SO-3`, 2026-11-19).** `HostHandle` and `HostHandleTable` in
+[`../../WasmBase/WasmHostObject.hpp`](../../WasmBase/WasmHostObject.hpp) implement
+this table: `{index, generation}` in one `i64`, `acquire` taking the count a
+`HostObject` already owns (no clone), a generation *and* type check on resolve, and
+a retired generation that cannot be re-entered. §4.9 has the evidence and the one
+limit (`SO20`: a handle carries no table identity).
 
 #### A.14.5 Poor Man's Reflection (`SO-2`)
 

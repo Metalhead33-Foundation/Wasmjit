@@ -1239,6 +1239,13 @@ second time. Signals are treated as a pattern, not a schema element: a
 a signal the host raises *between* calls is `SO19`
 ([`proposals/SYNTHETIC_OBJECTS.md`](proposals/SYNTHETIC_OBJECTS.md) §4.7/§4.8).
 
+**The handle surface is emitted, the table is not.** Each object block also carries
+`…_handle` (`int64_t`/`i64`), `…_HANDLE_NONE` and one `_h_fn` typedef per method and
+property — the typed signature with `int64_t self` in place of the pointer. Those
+are *declarations of the thunk*: resolve the slot through `WASM::HostHandleTable`,
+then forward. The tool cannot write the resolve call, because the table is
+embedder state (`SO-3`; the note's §4.9).
+
 #### Layout and build rules
 
 | Path | What it is | Rule |
@@ -2627,7 +2634,7 @@ do not name a host runtime or a source language.
 | **EN-13** | `Elvavena` remains in the public SDK headers | §6.2, §9 | **Accepted** | Deliberate first-freeze tradeoff; removal is a separate public-header/API decision, not an embedding-runtime bug. **Won't be removed. We in fact intend to make WasmJit a first-class member of the MhLib ecosystem in the distant future.** |
 | **EN-14** | A host cannot originate a type, and cannot allocate an object without a module-local index | §12.7.2, [`proposals/SYNTHETIC_OBJECTS.md`](proposals/SYNTHETIC_OBJECTS.md) A.14.3 | **Done (SO-1, 2026-11-18)** | `internHostType` runs the same `TypeRegistry` canonicalizer a module uses; `Store::allocateHostStruct`/`allocateHostArray` take a `TypeId` and allocate from a Store-owned region set. `[hostobject]` proves the shared `TypeId` and the end-to-end call. |
 | **EN-15** | A host type with a **reference field** could not be interned, so a host object could not be a graph node | §13.2, [`proposals/SYNTHETIC_OBJECTS.md`](proposals/SYNTHETIC_OBJECTS.md) A.14.4, `SO17` | **Done (SO-6, 2026-11-18)** | `internHostType` accepts a GC reference field; `Store::collectHostObjects` drops each reference the released object holds and queues a child that reaches zero. `[hostobject][gc]` pins the counts end to end. |
-| **EN-16** | A reference field whose count is **not the Store's** (`externref`, `exnref`, `contref`) still cannot be interned | §12.7.2, [`proposals/SYNTHETIC_OBJECTS.md`](proposals/SYNTHETIC_OBJECTS.md) §4.6, `SO18` | **Documented limit** (`SO-3` may lift it) | The count belongs to a host bridge or the continuation machinery; the Store owns neither, so recycling such an object would leave it behind. `internHostType` refuses the field by name. |
+| **EN-16** | A reference field whose count is **not the Store's** (`externref`, `exnref`, `contref`) still cannot be interned | §12.7.2, [`proposals/SYNTHETIC_OBJECTS.md`](proposals/SYNTHETIC_OBJECTS.md) §4.6, `SO18` | **Documented limit** | The count belongs to a host bridge or the continuation machinery; the Store owns neither, so recycling such an object would leave it behind. `internHostType` refuses the field by name. `SO-3` shipped without lifting it. |
 
 The **ENG** list is deliberately short, and it stays short in revision 2 of the
 object study: `EN-14` is the only planned engine row, and it is a type origin plus
@@ -2643,7 +2650,7 @@ product decisions.
 
 | ID | Problem / open question | Where | Status | Owner-side action |
 |---|---|---|---|---|
-| **EM-1** | How a guest sees a native C++ object or C struct: A/B/C | §12.4–§12.6 | **Open** | Choose/implement the handle table, generated stubs or host box. The engine supplies `externref`/barriers, and — for an object that *is* a Wasm type — the shipped `SO-1` intern/allocation (`EN-14`); a native object still stays outside. |
+| **EM-1** | How a guest sees a native C++ object or C struct: A/B/C | §12.4–§12.6 | **Option A shipped (`SO-3`)** | The **handle table** exists (`WASM::HostHandleTable`, one `i64` slot over one engine count) for an object that *is* a Wasm type (`EN-14`, `SO-1`); a native C++ object still stays outside it (`EN-5`), where option B/C (generated stubs, a host box) remain the choices. |
 | **EM-2** | Host-side descriptor registry, its JSON, and generated bindings | §12.7.3, §14.3–§14.5, §11.8 | **Planned** (`SO-2`/`SO-3`) | Build it outside `WasmBase`: names, versions, fields, methods, interfaces and the `wasmjit.binding/2` `objects` section. The engine owns only the type intern and the allocation (`EN-14`); it does not own the class model. |
 | **EM-3** | Native object lifetime and finalization | §12.6, §12.9 | **Open** | Pick `unique_ptr`, `shared_ptr`, arena, custom deleter or `HostBox`; install the `HostBridge` callbacks and drop per-instance roots. |
 | **EM-4** | Host object table storage and thread affinity | §12.5, §12.9 | **Open** | Choose a mutex/thread-local/per-agent table; document that a native object is not automatically thread-safe. |
@@ -2775,6 +2782,18 @@ host's. The opaque path below is unchanged and still the answer for an object th
 cannot be expressed in Wasm. This section describes the surface; the note carries
 the decisions (`SO-1`, `SO-2`, `SO-6` and `SO-7` shipped; `SO-3`…`SO-5` remain).
 
+**Revision 40 (2026-11-19)** delivers `SO-3`: the `i64` handle table of A.14.4 is
+`HostHandle`/`HostHandleTable` over the same engine count, the emitters add the
+`_h_fn` surface, `EM-1`'s option A is the shipped answer for a host-registered
+type, and `SO20` records the one limit (a handle carries no table identity).
+**Revision 41 (2026-11-19)** delivers `SO-4`'s tooling half: the emitted `world`
+imports the interface that carries the object resources — so `resource.drop` is
+the guest-side spelling of the host's release — and `--emit kotlin` gains one
+`AutoCloseable` wrapper per object holding the `i64` slot with a single guarded
+release. The engine half, `resource.drop` reaching a `HostHandleTable`, is the
+note's `SO21` and is not wired; `SO-5` (the arena) stays gated on the sharing
+study (`SLM-1`–`SLM-4`).
+
 ### 16.1 The primitive an embedder gets
 
 | Need | What the engine ships | Anchor |
@@ -2785,6 +2804,7 @@ the decisions (`SO-1`, `SO-2`, `SO-6` and `SO-7` shipped; `SO-3`…`SO-5` remain
 | the seam's **ergonomics** | `WasmHostType.hpp` (define/lay out/intern/allocate) and `WasmHostObject.hpp` (`HostType`/`HostObject`, one engine count each) | `WasmHostType.hpp`, `WasmHostObject.hpp`; `SO-1` |
 | the **descriptor and its schema** | **shipped** (`SO-2`): `wasmjit.binding/2` `objects` section → validated against `layoutHostType`, emitted as C/Rust metadata tables and WIT resources | §11.8; [`../Tools/Bindings/`](../Tools/Bindings/) `BindingModel`, `EmitObjects` |
 | a **property** of an object | **shipped** (`SO-7`, tooling only): `objects[].properties[]` declares a value type and a `get`/`set` accessor pair, checked against `methods[]` and emitted as export-name macros plus accessor typedefs in C/Rust and a `func()` member in WIT — no engine surface, because the value *is* a call | §11.8; [`proposals/SYNTHETIC_OBJECTS.md`](proposals/SYNTHETIC_OBJECTS.md) §4.7 |
+| a **handle** for a non-GC consumer | **shipped** (`SO-3`): `WASM::HostHandle` (one `i64`, generation over slot) and `WASM::HostHandleTable` (acquire/release/resolve, one engine count, stale and wrong-type rejection); the emitters declare the `_h_fn` thunk surface per method and property | `WasmHostObject.hpp`; [`proposals/SYNTHETIC_OBJECTS.md`](proposals/SYNTHETIC_OBJECTS.md) §4.9 |
 | a cross-language object *type* | component resources (`own`/`borrow`, `resource.drop`, `resource.rep`) | [`proposals/COMPONENT_MODEL.md`](proposals/COMPONENT_MODEL.md) §2.3/§4.3 |
 | a function namespace for the object's methods | synthetic modules and native imports | [`SCOPE.md`](SCOPE.md) §3.1 |
 

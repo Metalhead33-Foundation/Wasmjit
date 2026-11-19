@@ -1,4 +1,5 @@
 #include "EmitInternal.hpp"
+#include "EmitObjects.hpp"
 #include "EmitShared.hpp"
 
 #include <cstddef>
@@ -265,6 +266,7 @@ std::string emitKotlinImpl(const Json& schema)
 		out << "\n\n";
 	});
 	out << nonFunctionNotes(schema);
+	emitKotlinObjects(out, schema);
 	return out.str();
 }
 

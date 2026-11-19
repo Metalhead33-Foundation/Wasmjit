@@ -2861,6 +2861,24 @@ TEST_CASE("one object descriptor reaches the C, Rust and WIT emitters", "[bindin
 	CHECK(header.find("WASMJIT_OBJECT_DEMO_WIDGET_V1_PROP_CAPTION_SET")
 			== std::string::npos);
 
+	// The handle surface (`SO-3`): the same accessors over the `i64` slot a
+	// non-GC consumer carries, so one operation keeps one implementation.
+	CHECK(header.find("typedef int64_t wasmjit_object_demo_widget_v1_handle;")
+			!= std::string::npos);
+	CHECK(header.find("#define WASMJIT_OBJECT_DEMO_WIDGET_V1_HANDLE_NONE 0")
+			!= std::string::npos);
+	CHECK(header.find("typedef int32_t (*wasmjit_object_demo_widget_v1_area_h_fn)"
+			"(int64_t self);") != std::string::npos);
+	CHECK(header.find("typedef int32_t "
+			"(*wasmjit_object_demo_widget_v1_prop_status_get_h_fn)(int64_t self);")
+			!= std::string::npos);
+	CHECK(header.find("typedef void "
+			"(*wasmjit_object_demo_widget_v1_prop_status_set_h_fn)"
+			"(int64_t self, int32_t value);") != std::string::npos);
+	// A reference parameter keeps its typed spelling in the handle form too.
+	CHECK(header.find("(*wasmjit_object_demo_widget_v1_attach_h_fn)"
+			"(int64_t self, wasmjit_object_demo_node_v1*)") != std::string::npos);
+
 	const std::string rust = WASM::Bindings::emitRustModule(schema);
 	CHECK(rust.find("pub const WASMJIT_OBJECT_DEMO_WIDGET_V1_FIELD_TARGET: u32 = 32;")
 			!= std::string::npos);
@@ -2882,6 +2900,14 @@ TEST_CASE("one object descriptor reaches the C, Rust and WIT emitters", "[bindin
 			!= std::string::npos);
 	// An object without properties points at the empty slice, not at nothing.
 	CHECK(rust.find("properties: &[],") != std::string::npos);
+	CHECK(rust.find("pub type wasmjit_object_demo_widget_v1_handle = i64;")
+			!= std::string::npos);
+	CHECK(rust.find("pub const WASMJIT_OBJECT_DEMO_WIDGET_V1_HANDLE_NONE: i64 = 0;")
+			!= std::string::npos);
+	CHECK(rust.find("pub type wasmjit_object_demo_widget_v1_area_h_fn = "
+			"unsafe extern \"C\" fn(i64) -> i32;") != std::string::npos);
+	CHECK(rust.find("pub type wasmjit_object_demo_widget_v1_prop_status_get_h_fn = "
+			"unsafe extern \"C\" fn(i64) -> i32;") != std::string::npos);
 
 	const std::string wit = WASM::Bindings::emit(schema, WASM::Bindings::Language::Wit);
 	CHECK(wit.find("interface types {") != std::string::npos);
@@ -2915,6 +2941,26 @@ TEST_CASE("one object descriptor reaches the C, Rust and WIT emitters", "[bindin
 	CHECK(wit.find("get-status:") == std::string::npos);
 	CHECK(wit.find("preview: a property of a reference has no WIT getter")
 			!= std::string::npos);
+
+	// `SO-4`: the packaging. The host provides the objects, so the world imports
+	// the interface that carries their resources; `resource.drop` is then the
+	// guest-side spelling of the host's release.
+	CHECK(wit.find("world demo {") != std::string::npos);
+	CHECK(wit.find("// The host provides the objects") != std::string::npos);
+	CHECK(wit.find("  import types;") != std::string::npos);
+
+	// ... and the Kotlin façade holds the `i64` slot with exactly one release.
+	const std::string kotlin =
+			WASM::Bindings::emit(schema, WASM::Bindings::Language::Kotlin);
+	INFO(kotlin);
+	CHECK(kotlin.find("class DemoWidgetV1(private val handle: Long) : AutoCloseable")
+			!= std::string::npos);
+	CHECK(kotlin.find("class DemoWidgetV2(private val handle: Long) : AutoCloseable")
+			!= std::string::npos);
+	CHECK(kotlin.find("external fun wasmjit_object_demo_widget_v1_release"
+			"(handle: Long)") != std::string::npos);
+	CHECK(kotlin.find("if (released) return") != std::string::npos);
+	CHECK(kotlin.find("const val HANDLE_NONE: Long = 0") != std::string::npos);
 	CHECK(header.find("#define WASMJIT_OBJECT_DEMO_NODE_V1_SIZE 17u") != std::string::npos);
 
 	// Without objects the emitters are byte-for-byte what they were.
@@ -2957,12 +3003,19 @@ TEST_CASE("generated object bindings compile and their WIT is accepted", "[bindi
 				  "    (void)get;\n"
 				  "    return (int32_t)(self != 0);\n"
 				  "}\n"
+				  "static wasmjit_object_demo_widget_v1_handle demo_handle(void)\n"
+				  "{\n"
+				  "    wasmjit_object_demo_widget_v1_area_h_fn area = 0;\n"
+				  "    (void)area;\n"
+				  "    return WASMJIT_OBJECT_DEMO_WIDGET_V1_HANDLE_NONE;\n"
+				  "}\n"
 				  "int main(void)\n"
 				  "{\n"
 				  "    return (int)(demo_meta()->size\n"
 				  "            + WASMJIT_OBJECT_DEMO_WIDGET_V1_FIELD_TARGET\n"
 				  "            + WASMJIT_OBJECT_DEMO_WIDGET_V1_SIZE\n"
 				  "            + demo_meta()->property_count\n"
+				  "            + (unsigned)demo_handle()\n"
 				  "            + (unsigned)sizeof(WASMJIT_OBJECT_DEMO_WIDGET_V1_PROP_STATUS_GET));\n"
 				  "}\n";
 		std::ofstream rust(rustPath, std::ios::binary);
