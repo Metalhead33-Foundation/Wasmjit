@@ -318,16 +318,26 @@ struct ObjectConstructor {
  * it, by hand or with a builder — and it carries no engine `TypeId`: identity is
  * the Store's structural `TypeId`, and a name is only a lookup key (A.14.2).
  */
+/*! \brief What a generated receiver crosses as: the host's `i64` slot, or an `externref`. */
+enum class ObjectSelfKind {
+	Handle, //!< The `SO-3` handle table: an `i64` slot, released by `…_release`.
+	ExternRef //!< An opaque host reference: no slot, no canonical layout, no release entry point.
+};
+
+/*!
+ * \brief A host object descriptor: its members, and how its receiver crosses.
+ */
 struct ObjectDescriptor {
 	std::string name; //!< The descriptor name, for example `demo.Widget`.
 	std::uint32_t version = 1; //!< The descriptor version; a change is a new type.
 	std::string parent; //!< The optional parent descriptor name.
 	std::vector<std::string> interfaces; //!< The optional interface names.
+	ObjectSelfKind self = ObjectSelfKind::Handle; //!< The receiver's wire form.
 	std::vector<ObjectField> fields; //!< The stored-slot table.
 	std::vector<ObjectProperty> properties; //!< The accessor-backed properties.
 	std::vector<ObjectMethod> methods; //!< The method table (accessors included).
 	std::vector<ObjectConstructor> constructors; //!< The constructor table.
-	std::uint32_t size = 0; //!< The canonical object size, filled by validation.
+	std::uint32_t size = 0; //!< The canonical object size; 0 for an `externref` object.
 	nlohmann::ordered_json raw; //!< The original object, for open-ended fields.
 
 	/*!

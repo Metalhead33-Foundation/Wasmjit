@@ -1819,7 +1819,9 @@ TEST_CASE("WIT records get named C++ declarations", "[bindings]")
 	REQUIRE(header.find("struct wasmjit_wit_point;") != std::string::npos);
 	REQUIRE(header.find("struct wasmjit_wit_point {") != std::string::npos);
 	REQUIRE(header.find("int32_t x;") != std::string::npos);
-	REQUIRE(header.find("int32_t value") != std::string::npos);
+	// `echo(value: point)` takes and returns the named record, so the parameter's
+	// spelling is the record pointer — the name is what this case is about.
+	REQUIRE(header.find("wasmjit_wit_point* value") != std::string::npos);
 	REQUIRE(schema.types[0].at("witLayout").at("size") == 4);
 	REQUIRE(schema.types[0].at("witLayout").at("align") == 4);
 	REQUIRE(schema.types[5].at("witOwnership").at("kind") == "resource");
@@ -2864,6 +2866,148 @@ TEST_CASE("the wrapper's own member names are not taken by the descriptor",
 	} catch (const std::runtime_error& error) {
 		CHECK(std::string(error.what()).find("lifetime entry point")
 				!= std::string::npos);
+	}
+}
+
+// An `externref` object (docs/proposals/SYNTHETIC_OBJECTS.md §2.7, §4.13): the
+// same descriptor tables over an opaque host reference, for a native type whose
+// payload cannot be written as Wasm values. There is no slot and no canonical
+// layout, the bridge owns the lifetime, and a declared constructor is the call
+// that hands a reference over.
+TEST_CASE("an externref object projects an opaque receiver in every target",
+		"[bindings][objects]")
+{
+	using WASM::Bindings::Language;
+	using WASM::Bindings::ObjectSelfKind;
+	using WASM::Bindings::Schema;
+	const Json source = Json::parse(R"({
+		"schema": "wasmjit.binding/2", "direction": "all", "module": "demo",
+		"objects": [ { "name": "demo.Session", "version": 1, "self": "externref",
+			"properties": [ { "name": "status", "type": "i32", "get": "get_status" } ],
+			"methods": [ { "name": "send", "argNames": ["bytes"],
+			               "params": ["i32"], "results": ["i32"] },
+			             { "name": "get_status", "params": [], "results": ["i32"] } ],
+			"constructors": [ { "name": "open", "argNames": ["slot"], "params": ["i32"] } ] } ],
+		"imports": [], "exports": [] })");
+	const Schema schema = Schema::fromJson(source);
+	REQUIRE(schema.objects.size() == 1u);
+	CHECK(schema.objects.at(0).self == ObjectSelfKind::ExternRef);
+	// No canonical layout exists, so the descriptor carries no size.
+	CHECK(schema.objects.at(0).size == 0u);
+
+	const std::string header = WASM::Bindings::emit(schema, Language::CHeader);
+	// The typed accessor surface is the same shape as a handle object's...
+	CHECK(header.find("typedef int32_t (*wasmjit_object_demo_session_v1_send_fn)"
+			"(wasmjit_object_demo_session_v1* self, int32_t bytes);")
+			!= std::string::npos);
+	// ...a constructor hands a reference over instead of a slot...
+	CHECK(header.find("wasmjit_object_demo_session_v1*"
+			" wasmjit_object_demo_session_v1_open(int32_t slot);")
+			!= std::string::npos);
+	// ...and the slot surface is absent entirely: no handle, no size, no release.
+	CHECK(header.find("wasmjit_object_demo_session_v1_handle") == std::string::npos);
+	CHECK(header.find("_HANDLE_NONE") == std::string::npos);
+	CHECK(header.find("wasmjit_object_demo_session_v1_release") == std::string::npos);
+	CHECK(header.find("WASMJIT_OBJECT_DEMO_SESSION_V1_SIZE") == std::string::npos);
+	// The C++ wrapper holds the reference and owns nothing, so it copies.
+	CHECK(header.find("class DemoSessionV1 {") != std::string::npos);
+	CHECK(header.find("static DemoSessionV1 open(int32_t slot)") != std::string::npos);
+	CHECK(header.find("wasmjit_object_demo_session_v1* self() const noexcept")
+			!= std::string::npos);
+	CHECK(header.find("int32_t status() const") != std::string::npos);
+	CHECK(header.find("void reset() noexcept") == std::string::npos);
+
+	const std::string rust = WASM::Bindings::emit(schema, Language::Rust);
+	CHECK(rust.find("pub type wasmjit_object_demo_session_v1_ref ="
+			" *mut wasmjit_object_demo_session_v1;") != std::string::npos);
+	CHECK(rust.find("_SIZE") == std::string::npos);
+
+	const std::string wit = WASM::Bindings::emit(schema, Language::Wit);
+	CHECK(wit.find("Opaque: the payload is host-private") != std::string::npos);
+	CHECK(wit.find("resource demo-session-v1") != std::string::npos);
+
+	const std::string kotlin = WASM::Bindings::emit(schema, Language::Kotlin);
+	CHECK(kotlin.find("class DemoSessionV1(val ref: DemoSessionV1Ref)")
+			!= std::string::npos);
+	CHECK(kotlin.find("fun open(slot: Int): DemoSessionV1") != std::string::npos);
+	// No `AutoCloseable`, so no `close()`: the bridge owns the reference.
+	CHECK(kotlin.find("override fun close") == std::string::npos);
+	CHECK(kotlin.find("AutoCloseable") == std::string::npos);
+
+	// The shape round-trips, and both rules the wire cannot honour are refused.
+	const Json round = schema.toJson();
+	CHECK(round["objects"][0]["self"] == "externref");
+	CHECK(round["objects"][0]["size"] == 0);
+
+	const auto failure = [](const Json& candidate) {
+		try {
+			(void)Schema::fromJson(candidate);
+		} catch (const std::runtime_error& error) {
+			return std::string(error.what());
+		}
+		return std::string();
+	};
+	Json withFields = source;
+	withFields["objects"][0]["fields"] =
+			Json::parse(R"([ { "name": "x", "type": "i32" } ])");
+	CHECK(failure(withFields).find("has no fields") != std::string::npos);
+	Json unknownShape = source;
+	unknownShape["objects"][0]["self"] = "value";
+	CHECK(failure(unknownShape).find("must be") != std::string::npos);
+}
+
+// The generated artifacts compile: the declarations as C11, and the same header
+// as C++23, where the opaque wrapper is a real class that copies rather than owns.
+TEST_CASE("the generated externref object header compiles as C and C++",
+		"[bindings][objects]")
+{
+	const Json source = Json::parse(R"({
+		"schema": "wasmjit.binding/2", "direction": "all", "module": "demo",
+		"objects": [ { "name": "demo.Session", "version": 1, "self": "externref",
+			"methods": [ { "name": "send", "params": ["i32"], "results": ["i32"] },
+			             { "name": "touch", "params": [], "results": [] } ],
+			"constructors": [ { "name": "open", "params": [] } ] } ],
+		"imports": [], "exports": [] })");
+	const WASM::Bindings::Schema schema = WASM::Bindings::Schema::fromJson(source);
+	const std::filesystem::path dir = bindingsDir() / "opaque_object";
+	std::filesystem::create_directories(dir);
+	const std::filesystem::path headerPath = dir / "demo.h";
+	const std::filesystem::path cSourcePath = dir / "demo.c";
+	const std::filesystem::path cppSourcePath = dir / "demo.cpp";
+	const std::filesystem::path cLogPath = dir / "gcc.log";
+	const std::filesystem::path cppLogPath = dir / "g++.log";
+	{
+		std::ofstream header(headerPath, std::ios::binary);
+		header << WASM::Bindings::emit(schema, WASM::Bindings::Language::CHeader);
+		std::ofstream cSource(cSourcePath, std::ios::binary);
+		cSource << "#include \"demo.h\"\nint main(void) { return 0; }\n";
+		std::ofstream cppSource(cppSourcePath, std::ios::binary);
+		cppSource << "#include \"demo.h\"\n"
+				   "int main()\n{\n"
+				   "\tDemoSessionV1 session;\n"
+				   "\tif (session) return 1;          // false: no reference yet\n"
+				   "\tDemoSessionV1 copy = session;   // copies, does not own\n"
+				   "\treturn copy.self() == nullptr ? 0 : 2;\n}\n";
+	}
+
+	if (haveTool("gcc --version > /dev/null 2>&1")) {
+		const std::string command = "gcc -std=c11 -fsyntax-only -I\"" + dir.string()
+				+ "\" \"" + cSourcePath.string() + "\" > \"" + cLogPath.string()
+				+ "\" 2>&1";
+		INFO(readText(cLogPath));
+		REQUIRE(std::system(command.c_str()) == 0);
+	} else {
+		WARN("gcc not found; skipped the generated C header compile check");
+	}
+
+	if (haveTool("g++ --version > /dev/null 2>&1")) {
+		const std::string command = "g++ -std=c++2a -fsyntax-only -I\"" + dir.string()
+				+ "\" \"" + cppSourcePath.string() + "\" > \"" + cppLogPath.string()
+				+ "\" 2>&1";
+		INFO(readText(cppLogPath));
+		REQUIRE(std::system(command.c_str()) == 0);
+	} else {
+		WARN("g++ not found; skipped the generated C++ wrapper compile check");
 	}
 }
 

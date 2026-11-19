@@ -547,6 +547,151 @@ const ObjectMethod* findMethod(const ObjectDescriptor& object,
 	return nullptr;
 }
 
+//! Rejects two descriptors with one `(name, version)`; one name and version has
+//! one shape, and two versions of one name are two descriptors (A.14.2).
+void validateObjectKey(const ObjectDescriptor& object,
+		std::set<std::string>& keys)
+{
+	const std::string key = object.name + "@" + std::to_string(object.version);
+	if (!keys.insert(key).second)
+		throw std::runtime_error("object descriptor '" + key
+				+ "' is declared twice; one name and version has one shape");
+}
+
+//! Validates every member of one descriptor: names, accessors and signatures.
+//!
+//! A field, a property and a method share one member namespace, because every
+//! emitter projects all three as members of one resource/struct. This half is
+//! independent of how the receiver crosses, so an `externref` object is held to
+//! the same rules as a handle one.
+void validateObjectMembers(const ObjectDescriptor& object)
+{
+	std::set<std::string> names;
+	for (const ObjectField& field : object.fields)
+		names.insert(field.name);
+		// A field, a property and a method share one member namespace: every
+	// emitter projects all three as members of one resource/struct, so two
+	// members with one name would collide in the generated artifact.
+	std::set<std::string> methodNames;
+	// Entry points are spelled `<type>_<lowercased name>`, so the name checks
+	// below compare the lowered spelling: `Release` and `release` are one
+	// entry point in the generated header.
+	const auto lowered = [](std::string text) {
+		for (char& character : text)
+			character = static_cast<char>(std::tolower(
+					static_cast<unsigned char>(character)));
+		return text;
+	};
+	for (const ObjectMethod& method : object.methods) {
+		if (!methodNames.insert(method.name).second)
+			throw std::runtime_error("object '" + object.name
+					+ "' declares method '" + method.name + "' twice");
+		// The handle surface's lifetime entry point is `<type>_release`, and
+		// every C/C++ header and the Kotlin façade call it under that name:
+		// a method spelled the same way would collide with it rather than be
+		// a second function (`SO-3`/`SO-4`).
+		if (lowered(method.name) == "release")
+			throw std::runtime_error("object '" + object.name
+					+ "' declares a method named '" + method.name
+					+ "'; `release` is the object's lifetime entry point —"
+					" rename the method");
+	}
+	// A constructor is an entry point too (`<type>_<name>`), so it shares the
+	// method namespace; and two constructors with one parameter list would be
+	// one C++ constructor. Both are load-time errors, not a header that fails
+	// to compile in the consumer's build.
+	std::set<std::string> constructorNames;
+	std::set<std::string> constructorSignatures;
+	for (const ObjectConstructor& constructor : object.constructors) {
+		if (!constructorNames.insert(constructor.name).second)
+			throw std::runtime_error("object '" + object.name
+					+ "' declares constructor '" + constructor.name
+					+ "' twice");
+		if (methodNames.count(constructor.name) != 0u)
+			throw std::runtime_error("object '" + object.name
+					+ "' declares constructor '" + constructor.name
+					+ "' and a method of the same name; both are one"
+					" '<type>_<name>' entry point");
+		if (lowered(constructor.name) == "release")
+			throw std::runtime_error("object '" + object.name
+					+ "' declares a constructor named '" + constructor.name
+					+ "'; `release` is the object's lifetime entry point —"
+					" rename the constructor");
+		std::string signature;
+		for (const ValueType& param : constructor.params)
+			signature += typeLabel(param) + ";";
+		if (!constructorSignatures.insert(signature).second)
+			throw std::runtime_error("object '" + object.name
+					+ "' declares two constructors with the same parameter"
+					" list; they would be one C++ constructor");
+	}
+	// A name list may cover part of a signature but never more of it, and a
+	// named parameter must be a spelling every emitter can make an identifier
+	// from — `parseArgNames` already refused the empty, the duplicated and
+	// `self`.
+	const auto checkNames = [&object](const std::string& what,
+									  std::size_t params,
+									  std::size_t names) {
+		if (names > params)
+			throw std::runtime_error("object '" + object.name + "' " + what
+					+ " names " + std::to_string(names) + " parameters but takes "
+					+ std::to_string(params));
+	};
+	for (const ObjectMethod& method : object.methods)
+		checkNames("method '" + method.name + "'", method.params.size(),
+				method.argNames.size());
+	for (const ObjectConstructor& constructor : object.constructors)
+		checkNames("constructor '" + constructor.name + "'",
+				constructor.params.size(), constructor.argNames.size());
+	std::set<std::string> propertyNames;
+	std::set<std::string> accessors;
+	for (const ObjectProperty& property : object.properties) {
+		const std::string where =
+				"object '" + object.name + "' property '" + property.name + "'";
+		if (!propertyNames.insert(property.name).second)
+			throw std::runtime_error(where + "' is declared twice");
+		if (names.count(property.name) != 0u)
+			throw std::runtime_error(where
+					+ " has the same name as a field; a stored value and a"
+					" computed one cannot share a member name");
+		if (methodNames.count(property.name) != 0u)
+			throw std::runtime_error(where + " has the same name as a method");
+		for (const std::string* accessor : { &property.getter,
+					 &property.setter }) {
+			if (accessor->empty())
+				continue;
+			if (!accessors.insert(*accessor).second)
+				throw std::runtime_error(where + ": accessor '" + *accessor
+						+ "' is already claimed by another property");
+			if (names.count(*accessor) != 0u)
+				throw std::runtime_error(where + ": accessor '" + *accessor
+						+ "' is a field, not a function");
+			if (methodNames.count(*accessor) == 0u)
+				throw std::runtime_error(where + ": accessor '" + *accessor
+						+ "' is not declared in `methods`; an accessor is a"
+						" function of the object like any other");
+		}
+		const ObjectMethod* getter = findMethod(object, property.getter);
+		if (!getter->params.empty() || getter->results.size() != 1u
+				|| !sameType(getter->results.at(0), property.type))
+			throw std::runtime_error(where + ": getter '" + property.getter
+					+ "' must take no parameters and return "
+					+ typeLabel(property.type) + ", but `methods` declares "
+					+ signatureLabel(*getter));
+		if (!property.setter.empty()) {
+			const ObjectMethod* setter = findMethod(object, property.setter);
+			if (setter->params.size() != 1u || !setter->results.empty()
+					|| !sameType(setter->params.at(0), property.type))
+				throw std::runtime_error(where + ": setter '"
+						+ property.setter + "' must take "
+						+ typeLabel(property.type)
+						+ " and return nothing, but `methods` declares "
+						+ signatureLabel(*setter));
+		}
+	}
+
+}
+
 //! Validates every descriptor against the engine's canonical layout.
 //!
 //! This is the load-time check the note promises: a declared offset is an
@@ -563,6 +708,20 @@ void validateObjects(std::vector<ObjectDescriptor>& objects)
 {
 	std::set<std::string> keys;
 	for (ObjectDescriptor& object : objects) {
+		if (object.self == ObjectSelfKind::ExternRef) {
+			// An opaque object has no guest-visible representation: its payload
+			// lives in the host, so there is no canonical layout to check and a
+			// field would be a claim the wire cannot honour
+			// (docs/proposals/SYNTHETIC_OBJECTS.md §2.7).
+			if (!object.fields.empty())
+				throw std::runtime_error("object '" + object.name + "': an"
+						" `externref` object has no fields — the payload stays in"
+						" the host, so the guest reaches it only through the"
+						" declared accessors");
+			object.size = 0;
+			validateObjectMembers(object);
+			continue;
+		}
 		WASM::HostTypeDefinition definition;
 		definition.kind = WASM::HostTypeKind::Struct;
 		definition.fields.reserve(object.fields.size());
@@ -587,131 +746,8 @@ void validateObjects(std::vector<ObjectDescriptor>& objects)
 						+ " disagrees with the canonical offset "
 						+ std::to_string(field.offset));
 		}
-		// A field, a property and a method share one member namespace: every
-		// emitter projects all three as members of one resource/struct, so two
-		// members with one name would collide in the generated artifact.
-		std::set<std::string> methodNames;
-		// Entry points are spelled `<type>_<lowercased name>`, so the name checks
-		// below compare the lowered spelling: `Release` and `release` are one
-		// entry point in the generated header.
-		const auto lowered = [](std::string text) {
-			for (char& character : text)
-				character = static_cast<char>(std::tolower(
-						static_cast<unsigned char>(character)));
-			return text;
-		};
-		for (const ObjectMethod& method : object.methods) {
-			if (!methodNames.insert(method.name).second)
-				throw std::runtime_error("object '" + object.name
-						+ "' declares method '" + method.name + "' twice");
-			// The handle surface's lifetime entry point is `<type>_release`, and
-			// every C/C++ header and the Kotlin façade call it under that name:
-			// a method spelled the same way would collide with it rather than be
-			// a second function (`SO-3`/`SO-4`).
-			if (lowered(method.name) == "release")
-				throw std::runtime_error("object '" + object.name
-						+ "' declares a method named '" + method.name
-						+ "'; `release` is the object's lifetime entry point —"
-						" rename the method");
-		}
-		// A constructor is an entry point too (`<type>_<name>`), so it shares the
-		// method namespace; and two constructors with one parameter list would be
-		// one C++ constructor. Both are load-time errors, not a header that fails
-		// to compile in the consumer's build.
-		std::set<std::string> constructorNames;
-		std::set<std::string> constructorSignatures;
-		for (const ObjectConstructor& constructor : object.constructors) {
-			if (!constructorNames.insert(constructor.name).second)
-				throw std::runtime_error("object '" + object.name
-						+ "' declares constructor '" + constructor.name
-						+ "' twice");
-			if (methodNames.count(constructor.name) != 0u)
-				throw std::runtime_error("object '" + object.name
-						+ "' declares constructor '" + constructor.name
-						+ "' and a method of the same name; both are one"
-						" '<type>_<name>' entry point");
-			if (lowered(constructor.name) == "release")
-				throw std::runtime_error("object '" + object.name
-						+ "' declares a constructor named '" + constructor.name
-						+ "'; `release` is the object's lifetime entry point —"
-						" rename the constructor");
-			std::string signature;
-			for (const ValueType& param : constructor.params)
-				signature += typeLabel(param) + ";";
-			if (!constructorSignatures.insert(signature).second)
-				throw std::runtime_error("object '" + object.name
-						+ "' declares two constructors with the same parameter"
-						" list; they would be one C++ constructor");
-		}
-		// A name list may cover part of a signature but never more of it, and a
-		// named parameter must be a spelling every emitter can make an identifier
-		// from — `parseArgNames` already refused the empty, the duplicated and
-		// `self`.
-		const auto checkNames = [&object](const std::string& what,
-										  std::size_t params,
-										  std::size_t names) {
-			if (names > params)
-				throw std::runtime_error("object '" + object.name + "' " + what
-						+ " names " + std::to_string(names) + " parameters but takes "
-						+ std::to_string(params));
-		};
-		for (const ObjectMethod& method : object.methods)
-			checkNames("method '" + method.name + "'", method.params.size(),
-					method.argNames.size());
-		for (const ObjectConstructor& constructor : object.constructors)
-			checkNames("constructor '" + constructor.name + "'",
-					constructor.params.size(), constructor.argNames.size());
-		std::set<std::string> propertyNames;
-		std::set<std::string> accessors;
-		for (const ObjectProperty& property : object.properties) {
-			const std::string where =
-					"object '" + object.name + "' property '" + property.name + "'";
-			if (!propertyNames.insert(property.name).second)
-				throw std::runtime_error(where + "' is declared twice");
-			if (names.count(property.name) != 0u)
-				throw std::runtime_error(where
-						+ " has the same name as a field; a stored value and a"
-						" computed one cannot share a member name");
-			if (methodNames.count(property.name) != 0u)
-				throw std::runtime_error(where + " has the same name as a method");
-			for (const std::string* accessor : { &property.getter,
-						 &property.setter }) {
-				if (accessor->empty())
-					continue;
-				if (!accessors.insert(*accessor).second)
-					throw std::runtime_error(where + ": accessor '" + *accessor
-							+ "' is already claimed by another property");
-				if (names.count(*accessor) != 0u)
-					throw std::runtime_error(where + ": accessor '" + *accessor
-							+ "' is a field, not a function");
-				if (methodNames.count(*accessor) == 0u)
-					throw std::runtime_error(where + ": accessor '" + *accessor
-							+ "' is not declared in `methods`; an accessor is a"
-							" function of the object like any other");
-			}
-			const ObjectMethod* getter = findMethod(object, property.getter);
-			if (!getter->params.empty() || getter->results.size() != 1u
-					|| !sameType(getter->results.at(0), property.type))
-				throw std::runtime_error(where + ": getter '" + property.getter
-						+ "' must take no parameters and return "
-						+ typeLabel(property.type) + ", but `methods` declares "
-						+ signatureLabel(*getter));
-			if (!property.setter.empty()) {
-				const ObjectMethod* setter = findMethod(object, property.setter);
-				if (setter->params.size() != 1u || !setter->results.empty()
-						|| !sameType(setter->params.at(0), property.type))
-					throw std::runtime_error(where + ": setter '"
-							+ property.setter + "' must take "
-							+ typeLabel(property.type)
-							+ " and return nothing, but `methods` declares "
-							+ signatureLabel(*setter));
-			}
-		}
-
-		const std::string key = object.name + "@" + std::to_string(object.version);
-		if (!keys.insert(key).second)
-			throw std::runtime_error("object descriptor '" + key
-					+ "' is declared twice; one name and version has one shape");
+		validateObjectMembers(object);
+		validateObjectKey(object, keys);
 	}
 }
 
@@ -927,6 +963,18 @@ ObjectDescriptor ObjectDescriptor::fromJson(const Json& json)
 		throw std::runtime_error("object '" + out.name
 				+ "': version must be at least 1");
 	out.parent = jsonString(json, "parent");
+	// How the receiver crosses. `handle` is the `SO-3` slot this tool has always
+	// projected; `externref` is the same member tables over an opaque host
+	// reference, for an object whose payload cannot be expressed in Wasm
+	// (docs/proposals/SYNTHETIC_OBJECTS.md §2.7).
+	const std::string self = jsonString(json, "self");
+	if (self.empty() || self == "handle")
+		out.self = ObjectSelfKind::Handle;
+	else if (self == "externref")
+		out.self = ObjectSelfKind::ExternRef;
+	else
+		throw std::runtime_error("object '" + out.name + "': `self` must be"
+				" \"handle\" or \"externref\", not '" + self + "'");
 	if (json.contains("interfaces") && json.at("interfaces").is_array()) {
 		for (const Json& item : json.at("interfaces")) {
 			if (item.is_string())
@@ -978,6 +1026,10 @@ Json ObjectDescriptor::toJson() const
 		out.erase("interfaces");
 	else
 		out["interfaces"] = interfaces;
+	if (self == ObjectSelfKind::ExternRef)
+		out["self"] = "externref";
+	else
+		out.erase("self");
 	out["size"] = size;
 	out["fields"] = Json::array();
 	for (const ObjectField& field : fields)

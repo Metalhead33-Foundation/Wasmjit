@@ -193,6 +193,17 @@ std::string objectTypeName(const ObjectDescriptor& object)
 			+ std::to_string(object.version);
 }
 
+//! True when the receiver is an opaque host reference rather than a slot.
+//!
+//! The descriptor's member tables are identical either way; what changes is the
+//! receiver's wire form (`externref` instead of the `SO-3` `i64`), the presence of
+//! a canonical layout, and which entry point ends the object's life
+//! (docs/proposals/SYNTHETIC_OBJECTS.md §2.7, §4.13).
+bool isOpaqueObject(const ObjectDescriptor& object)
+{
+	return object.self == ObjectSelfKind::ExternRef;
+}
+
 void emitCObjects(std::ostringstream& out, const Schema& schema)
 {
 	const std::vector<ObjectDescriptor>* objects = objectList(schema);
@@ -203,7 +214,9 @@ void emitCObjects(std::ostringstream& out, const Schema& schema)
 		   "   A descriptor is host metadata, not a Wasm ABI: the offsets are the\n"
 		   "   canonical, header-inclusive offsets WASM::layoutHostType derives, and\n"
 		   "   a reference field is a GC reference, never an integer handle. Field\n"
-		   "   access goes through the engine's object API, not these constants. */\n\n";
+		   "   access goes through the engine's object API, not these constants.\n"
+		   "   An `externref` object has neither: it is opaque, so it carries no size\n"
+		   "   constant and no `_release` entry point. */\n\n";
 	out << "typedef struct wasmjit_object_meta_field {\n"
 		   "    const char* name;\n"
 		   "    uint32_t offset;\n"
@@ -263,7 +276,10 @@ void emitCObjects(std::ostringstream& out, const Schema& schema)
 		}
 		out << ". */\n";
 		out << "#define " << macro << "_VERSION " << version << "u\n";
-		out << "#define " << macro << "_SIZE " << size << "u\n";
+		// An opaque object has no canonical layout, so a size constant would be a
+		// number a consumer might believe; the metadata table carries 0 instead.
+		if (!isOpaqueObject(object))
+			out << "#define " << macro << "_SIZE " << size << "u\n";
 		for (const ObjectField& field : object.fields) {
 			out << "#define " << macro << "_FIELD_"
 				<< upperCopy(objectIdentifier(field.name)) << " " << field.offset
@@ -308,97 +324,147 @@ void emitCObjects(std::ostringstream& out, const Schema& schema)
 						<< objectCType(schema, property.type) << " value);\n";
 			}
 		}
-		// The handle surface (A.14.4 option B): the same accessors over the `i64`
-		// a non-GC consumer carries. It is a *thunk* surface — resolve, then
-		// forward — so an operation keeps one implementation and two signatures.
-		out << "\n/* The handle surface (A.14.4): the `i64` slot a non-GC consumer\n"
-			   "   carries. A host that serves one emits a thunk per signature below\n"
-			   "   over the typed accessor above, so the operation keeps one\n"
-			   "   implementation. The slot is host state: this header declares the\n"
-			   "   spelling, never the table. */\n";
-		out << "typedef int64_t " << type << "_handle;\n";
-		out << "#define " << macro << "_HANDLE_NONE 0\n";
-		// A constructor is the one entry point that has no `self`: it takes the
-		// arguments and returns the slot, which is what a C++ constructor projects.
-		for (const ObjectConstructor& constructor : object.constructors) {
-			out << "typedef int64_t (*" << type << "_"
-				<< objectIdentifier(constructor.name) << "_h_fn)(";
-			if (constructor.params.empty())
-				out << "void";
-			for (std::size_t index = 0; index < constructor.params.size(); ++index) {
-				if (index != 0)
-					out << ", ";
-				out << objectCType(schema, constructor.params.at(index)) << " "
-					<< objectIdentifier(constructor.paramName(index));
+		if (isOpaqueObject(object)) {
+			// Opaque: the receiver is an `externref`, so there is no slot and no
+			// canonical size. `HostBridge` counts the reference and the descriptor's
+			// own method is the call that ends the object's life; a guest that never
+			// drops it keeps it alive until the bridge does. Construction is the one
+			// call that hands a new reference over.
+			out << "\n/* Opaque host reference: no slot, no canonical size, no `_release`.\n"
+				   "   The bridge owns the lifetime; `" << type << "` values are the same\n"
+				   "   reference the host handed over. */\n";
+			for (const ObjectConstructor& constructor : object.constructors) {
+				out << type << "* " << type << "_"
+					<< objectIdentifier(constructor.name) << "(";
+				if (constructor.params.empty())
+					out << "void";
+				for (std::size_t index = 0; index < constructor.params.size(); ++index) {
+					if (index != 0)
+						out << ", ";
+					out << objectCType(schema, constructor.params.at(index)) << " "
+						<< objectIdentifier(constructor.paramName(index));
+				}
+				out << ");\n";
 			}
-			out << ");\n";
-		}
-		for (const ObjectMethod& method : object.methods) {
-			out << "typedef ";
-			if (method.results.size() == 1u)
-				out << cType(method.results.at(0));
-			else
-				out << "void";
-			out << " (*" << type << "_" << objectIdentifier(method.name)
-				<< "_h_fn)(int64_t self";
-			for (std::size_t index = 0; index < method.params.size(); ++index) {
-				out << ", " << objectCType(schema, method.params.at(index)) << " "
-					<< objectIdentifier(method.paramName(index));
-			}
-			if (method.results.size() > 1u)
-				out << ", void* results";
-			out << ");\n";
-		}
-		for (const ObjectProperty& property : object.properties) {
-			const std::string propIdent = objectIdentifier(property.name);
-			out << "typedef " << objectCType(schema, property.type) << " (*"
-				<< type << "_prop_" << propIdent << "_get_h_fn)(int64_t self);\n";
-			if (property.mutableProperty)
-				out << "typedef void (*" << type << "_prop_" << propIdent
-					<< "_set_h_fn)(int64_t self, "
-					<< objectCType(schema, property.type) << " value);\n";
-		}
-		// The entry points those typedefs describe. The tool declares them; the
-		// embedder implements one line each — resolve the slot, then forward to
-		// the typed accessor — so the operation keeps a single implementation.
-		out << "\n/* The handle entry points: one per signature above, plus the release.\n"
-			   "   Implement each as `resolve the slot, then forward`; the generated\n"
-			   "   C++ wrapper below calls them and owns the slot for you. */\n";
-		out << "void " << type << "_release(" << type << "_handle self);\n";
-		for (const ObjectConstructor& constructor : object.constructors) {
-			out << type << "_handle " << type << "_"
-				<< objectIdentifier(constructor.name) << "(";
-			if (constructor.params.empty())
-				out << "void";
-			for (std::size_t index = 0; index < constructor.params.size(); ++index) {
-				if (index != 0)
-					out << ", ";
-				out << objectCType(schema, constructor.params.at(index)) << " "
-					<< objectIdentifier(constructor.paramName(index));
-			}
-			out << ");\n";
-		}
-		for (const ObjectMethod& method : object.methods) {
-			out << (method.results.size() == 1u ? cType(method.results.at(0))
+
+			// The members are ordinary declarations over the opaque pointer, so a
+			// consumer calls them exactly as it calls the constructor above.
+			for (const ObjectMethod& method : object.methods) {
+				out << (method.results.size() == 1u ? cType(method.results.at(0))
 											   : std::string("void"))
-				<< " " << type << "_" << objectIdentifier(method.name) << "("
-				<< type << "_handle self";
-			for (std::size_t index = 0; index < method.params.size(); ++index) {
-				out << ", " << objectCType(schema, method.params.at(index)) << " "
-					<< objectIdentifier(method.paramName(index));
+					<< " " << type << "_" << objectIdentifier(method.name) << "("
+					<< type << "* self";
+				for (std::size_t index = 0; index < method.params.size(); ++index) {
+					out << ", " << objectCType(schema, method.params.at(index)) << " "
+						<< objectIdentifier(method.paramName(index));
+				}
+				if (method.results.size() > 1u)
+					out << ", void* results";
+				out << ");\n";
 			}
-			if (method.results.size() > 1u)
-				out << ", void* results";
-			out << ");\n";
-		}
-		for (const ObjectProperty& property : object.properties) {
-			const std::string propIdent = objectIdentifier(property.name);
-			out << objectCType(schema, property.type) << " " << type << "_prop_"
-				<< propIdent << "_get(" << type << "_handle self);\n";
-			if (property.mutableProperty)
-				out << "void " << type << "_prop_" << propIdent << "_set(" << type
-					<< "_handle self, " << objectCType(schema, property.type)
-					<< " value);\n";
+			for (const ObjectProperty& property : object.properties) {
+				const std::string propIdent = objectIdentifier(property.name);
+				out << objectCType(schema, property.type) << " " << type << "_prop_"
+					<< propIdent << "_get(" << type << "* self);\n";
+				if (property.mutableProperty)
+					out << "void " << type << "_prop_" << propIdent << "_set(" << type
+						<< "* self, " << objectCType(schema, property.type)
+						<< " value);\n";
+			}
+
+		} else {
+			// The handle surface (A.14.4 option B): the same accessors over the `i64`
+			// a non-GC consumer carries. It is a *thunk* surface — resolve, then
+			// forward — so an operation keeps one implementation and two signatures.
+			out << "\n/* The handle surface (A.14.4): the `i64` slot a non-GC consumer\n"
+				   "   carries. A host that serves one emits a thunk per signature below\n"
+				   "   over the typed accessor above, so the operation keeps one\n"
+				   "   implementation. The slot is host state: this header declares the\n"
+				   "   spelling, never the table. */\n";
+			out << "typedef int64_t " << type << "_handle;\n";
+			out << "#define " << macro << "_HANDLE_NONE 0\n";
+			// A constructor is the one entry point that has no `self`: it takes the
+			// arguments and returns the slot, which is what a C++ constructor projects.
+			for (const ObjectConstructor& constructor : object.constructors) {
+				out << "typedef int64_t (*" << type << "_"
+					<< objectIdentifier(constructor.name) << "_h_fn)(";
+				if (constructor.params.empty())
+					out << "void";
+				for (std::size_t index = 0; index < constructor.params.size(); ++index) {
+					if (index != 0)
+						out << ", ";
+					out << objectCType(schema, constructor.params.at(index)) << " "
+						<< objectIdentifier(constructor.paramName(index));
+				}
+				out << ");\n";
+			}
+			for (const ObjectMethod& method : object.methods) {
+				out << "typedef ";
+				if (method.results.size() == 1u)
+					out << cType(method.results.at(0));
+				else
+					out << "void";
+				out << " (*" << type << "_" << objectIdentifier(method.name)
+					<< "_h_fn)(int64_t self";
+				for (std::size_t index = 0; index < method.params.size(); ++index) {
+					out << ", " << objectCType(schema, method.params.at(index)) << " "
+						<< objectIdentifier(method.paramName(index));
+				}
+				if (method.results.size() > 1u)
+					out << ", void* results";
+				out << ");\n";
+			}
+			for (const ObjectProperty& property : object.properties) {
+				const std::string propIdent = objectIdentifier(property.name);
+				out << "typedef " << objectCType(schema, property.type) << " (*"
+					<< type << "_prop_" << propIdent << "_get_h_fn)(int64_t self);\n";
+				if (property.mutableProperty)
+					out << "typedef void (*" << type << "_prop_" << propIdent
+						<< "_set_h_fn)(int64_t self, "
+						<< objectCType(schema, property.type) << " value);\n";
+			}
+			// The entry points those typedefs describe. The tool declares them; the
+			// embedder implements one line each — resolve the slot, then forward to
+			// the typed accessor — so the operation keeps a single implementation.
+			out << "\n/* The handle entry points: one per signature above, plus the release.\n"
+				   "   Implement each as `resolve the slot, then forward`; the generated\n"
+				   "   C++ wrapper below calls them and owns the slot for you. */\n";
+			out << "void " << type << "_release(" << type << "_handle self);\n";
+			for (const ObjectConstructor& constructor : object.constructors) {
+				out << type << "_handle " << type << "_"
+					<< objectIdentifier(constructor.name) << "(";
+				if (constructor.params.empty())
+					out << "void";
+				for (std::size_t index = 0; index < constructor.params.size(); ++index) {
+					if (index != 0)
+						out << ", ";
+					out << objectCType(schema, constructor.params.at(index)) << " "
+						<< objectIdentifier(constructor.paramName(index));
+				}
+				out << ");\n";
+			}
+			for (const ObjectMethod& method : object.methods) {
+				out << (method.results.size() == 1u ? cType(method.results.at(0))
+												   : std::string("void"))
+					<< " " << type << "_" << objectIdentifier(method.name) << "("
+					<< type << "_handle self";
+				for (std::size_t index = 0; index < method.params.size(); ++index) {
+					out << ", " << objectCType(schema, method.params.at(index)) << " "
+						<< objectIdentifier(method.paramName(index));
+				}
+				if (method.results.size() > 1u)
+					out << ", void* results";
+				out << ");\n";
+			}
+			for (const ObjectProperty& property : object.properties) {
+				const std::string propIdent = objectIdentifier(property.name);
+				out << objectCType(schema, property.type) << " " << type << "_prop_"
+					<< propIdent << "_get(" << type << "_handle self);\n";
+				if (property.mutableProperty)
+					out << "void " << type << "_prop_" << propIdent << "_set(" << type
+						<< "_handle self, " << objectCType(schema, property.type)
+						<< " value);\n";
+			}
 		}
 		out << "\n";
 
@@ -512,7 +578,10 @@ void emitRustObjects(std::ostringstream& out, const Schema& schema)
 		out << ".\n";
 		out << "#[repr(C)]\npub struct " << type << " { _private: [u8; 0] }\n";
 		out << "pub const " << macro << "_VERSION: u32 = " << version << ";\n";
-		out << "pub const " << macro << "_SIZE: u32 = " << size << ";\n";
+		// An opaque object has no canonical layout, so there is no size constant
+		// to publish (docs/proposals/SYNTHETIC_OBJECTS.md §2.7).
+		if (!isOpaqueObject(object))
+			out << "pub const " << macro << "_SIZE: u32 = " << size << ";\n";
 		for (const ObjectField& field : object.fields) {
 			out << "pub const " << macro << "_FIELD_"
 				<< upperCopy(objectIdentifier(field.name)) << ": u32 = "
@@ -551,49 +620,70 @@ void emitRustObjects(std::ostringstream& out, const Schema& schema)
 						<< objectRustType(schema, property.type) << ");\n";
 			}
 		}
-		// The handle surface: the same signatures over the `i64` a non-GC
-		// consumer carries, so one operation keeps one implementation.
-		out << "\n// The handle surface (A.14.4): the `i64` slot a non-GC consumer\n"
-			   "// carries. Resolve the slot, then forward to the typed accessor.\n";
-		out << "pub type " << type << "_handle = i64;\n";
-		out << "pub const " << macro << "_HANDLE_NONE: i64 = 0;\n";
-		for (const ObjectMethod& method : object.methods) {
-			out << "pub type " << type << "_" << objectIdentifier(method.name)
-				<< "_h_fn = unsafe extern \"C\" fn(i64";
-			for (std::size_t index = 0; index < method.params.size(); ++index) {
-				out << ", " << objectIdentifier(method.paramName(index)) << ": "
-					<< objectRustType(schema, method.params.at(index));
+		if (isOpaqueObject(object)) {
+			// Opaque: the receiver is an `externref`, so there is no slot, no
+			// `_release`, and no canonical size. `HostBridge` owns the lifetime and a
+			// constructor alias hands a new reference over.
+			out << "\n/// The reference a `" << type
+				<< "` crosses as: an `externref` lowered to a pointer.\n";
+			out << "pub type " << type << "_ref = *mut " << type << ";\n";
+			for (const ObjectConstructor& constructor : object.constructors) {
+				out << "pub type " << type << "_"
+					<< objectIdentifier(constructor.name)
+					<< "_h_fn = unsafe extern \"C\" fn(";
+				for (std::size_t index = 0; index < constructor.params.size(); ++index) {
+					if (index != 0)
+						out << ", ";
+					out << objectIdentifier(constructor.paramName(index)) << ": "
+						<< objectRustType(schema, constructor.params.at(index));
+				}
+				out << ") -> *mut " << type << ";\n";
 			}
-			if (method.results.size() > 1u)
-				out << ", result: *mut core::ffi::c_void";
-			out << ")";
-			if (method.results.size() == 1u)
-				out << " -> " << objectRustType(schema, method.results.at(0));
-			out << ";\n";
-		}
-		// A constructor has no `self` and returns the slot: one alias per declared
-		// constructor, mirroring the C entry points.
-		for (const ObjectConstructor& constructor : object.constructors) {
-			out << "pub type " << type << "_"
-				<< objectIdentifier(constructor.name)
-				<< "_h_fn = unsafe extern \"C\" fn(";
-			for (std::size_t index = 0; index < constructor.params.size(); ++index) {
-				if (index != 0)
-					out << ", ";
-				out << objectIdentifier(constructor.paramName(index)) << ": "
-					<< objectRustType(schema, constructor.params.at(index));
+		} else {
+			// The handle surface: the same signatures over the `i64` a non-GC
+			// consumer carries, so one operation keeps one implementation.
+			out << "\n// The handle surface (A.14.4): the `i64` slot a non-GC consumer\n"
+				   "// carries. Resolve the slot, then forward to the typed accessor.\n";
+			out << "pub type " << type << "_handle = i64;\n";
+			out << "pub const " << macro << "_HANDLE_NONE: i64 = 0;\n";
+			for (const ObjectMethod& method : object.methods) {
+				out << "pub type " << type << "_" << objectIdentifier(method.name)
+					<< "_h_fn = unsafe extern \"C\" fn(i64";
+				for (std::size_t index = 0; index < method.params.size(); ++index) {
+					out << ", " << objectIdentifier(method.paramName(index)) << ": "
+						<< objectRustType(schema, method.params.at(index));
+				}
+				if (method.results.size() > 1u)
+					out << ", result: *mut core::ffi::c_void";
+				out << ")";
+				if (method.results.size() == 1u)
+					out << " -> " << objectRustType(schema, method.results.at(0));
+				out << ";\n";
 			}
-			out << ") -> i64;\n";
-		}
-		for (const ObjectProperty& property : object.properties) {
-			const std::string propIdent = objectIdentifier(property.name);
-			out << "pub type " << type << "_prop_" << propIdent
-				<< "_get_h_fn = unsafe extern \"C\" fn(i64) -> "
-				<< objectRustType(schema, property.type) << ";\n";
-			if (property.mutableProperty)
+			// A constructor has no `self` and returns the slot: one alias per declared
+			// constructor, mirroring the C entry points.
+			for (const ObjectConstructor& constructor : object.constructors) {
+				out << "pub type " << type << "_"
+					<< objectIdentifier(constructor.name)
+					<< "_h_fn = unsafe extern \"C\" fn(";
+				for (std::size_t index = 0; index < constructor.params.size(); ++index) {
+					if (index != 0)
+						out << ", ";
+					out << objectIdentifier(constructor.paramName(index)) << ": "
+						<< objectRustType(schema, constructor.params.at(index));
+				}
+				out << ") -> i64;\n";
+			}
+			for (const ObjectProperty& property : object.properties) {
+				const std::string propIdent = objectIdentifier(property.name);
 				out << "pub type " << type << "_prop_" << propIdent
-					<< "_set_h_fn = unsafe extern \"C\" fn(i64, "
-					<< objectRustType(schema, property.type) << ");\n";
+					<< "_get_h_fn = unsafe extern \"C\" fn(i64) -> "
+					<< objectRustType(schema, property.type) << ";\n";
+				if (property.mutableProperty)
+					out << "pub type " << type << "_prop_" << propIdent
+						<< "_set_h_fn = unsafe extern \"C\" fn(i64, "
+						<< objectRustType(schema, property.type) << ");\n";
+			}
 		}
 		out << "\npub static " << macro
 			<< "_FIELDS: &[wasmjit_object_meta_field] = &[\n";
@@ -729,6 +819,115 @@ std::string pascalMemberName(std::string_view name)
 
 } // namespace
 
+//! One C++ wrapper over an opaque host reference (`externref`).
+//!
+//! The reference is not owned here: the bridge counts it, so the wrapper copies,
+//! has no destructor work and no `release`. What ends the object's life is a call
+//! the descriptor declares. Construction is a static factory because the
+//! reference arrives from the host, not from a slot this class could own
+//! (docs/proposals/SYNTHETIC_OBJECTS.md §4.13).
+void emitCppOpaqueObject(std::ostringstream& out, const Schema& schema,
+		const ObjectDescriptor& object)
+{
+	const std::string klass = pascalObjectName(object);
+	const std::string type = objectTypeName(object);
+	const std::set<std::string> reserved = { "self", "valid" };
+	std::set<std::string> claimed;
+	for (const ObjectProperty& property : object.properties) {
+		if (!property.getter.empty())
+			claimed.insert(property.getter);
+		if (property.mutableProperty)
+			claimed.insert(property.setter);
+	}
+
+	out << "/* `" << object.name << "`: an opaque host reference. Copyable — the\n"
+		   "   bridge owns the lifetime — so there is nothing to release here. */\n";
+	out << "class " << klass << " {\npublic:\n";
+	out << "\t" << klass << "() noexcept = default;\n";
+	out << "\t//! Wraps a reference the caller already holds.\n";
+	out << "\texplicit " << klass << "(" << type << "* self) noexcept : _self(self) {}\n";
+	out << "\t//! True when the wrapper refers to an object.\n";
+	out << "\tbool valid() const noexcept { return _self != nullptr; }\n";
+	out << "\t//! The same test, so `if (object)` reads naturally.\n";
+	out << "\texplicit operator bool() const noexcept { return valid(); }\n";
+	out << "\t//! The reference, for a call that takes one.\n";
+	out << "\t" << type << "* self() const noexcept { return _self; }\n";
+
+	for (const ObjectConstructor& constructor : object.constructors) {
+		std::string declared;
+		std::string args;
+		for (std::size_t index = 0; index < constructor.params.size(); ++index) {
+			if (index != 0) {
+				declared += ", ";
+				args += ", ";
+			}
+			const std::string param = camelMemberName(constructor.paramName(index));
+			declared += objectCType(schema, constructor.params.at(index)) + " " + param;
+			args += param;
+		}
+		out << "\n\t//! `" << constructor.name << "`: the call that makes one.\n";
+		out << "\tstatic " << klass << " " << camelMemberName(constructor.name)
+			<< "(" << declared << ")\n\t{\n\t\treturn " << klass << "(" << type
+			<< "_" << objectIdentifier(constructor.name) << "(" << args
+			<< "));\n\t}\n";
+	}
+
+	for (const ObjectProperty& property : object.properties) {
+		const std::string member = camelMemberName(property.name);
+		if (reserved.count(member) != 0u) {
+			out << "\n\t//! `" << property.name << "` is not a member: the wrapper's"
+				   " own `" << member << "` is. Call `" << type << "_prop_"
+				<< objectIdentifier(property.name) << "_get` directly.\n";
+			continue;
+		}
+		out << "\n\t//! Property `" << property.name << "` (computed by `"
+			<< property.getter << "`).\n";
+		out << "\t" << objectCType(schema, property.type) << " " << member
+			<< "() const { return " << type << "_prop_"
+			<< objectIdentifier(property.name) << "_get(_self); }\n";
+		if (property.mutableProperty)
+			out << "\tvoid set" << pascalMemberName(property.name) << "("
+				<< objectCType(schema, property.type) << " value) { " << type
+				<< "_prop_" << objectIdentifier(property.name)
+				<< "_set(_self, value); }\n";
+	}
+
+	for (const ObjectMethod& method : object.methods) {
+		if (claimed.count(method.name) != 0u)
+			continue;
+		const std::string member = camelMemberName(method.name);
+		if (reserved.count(member) != 0u) {
+			out << "\n\t//! `" << method.name << "` is not a member: the wrapper's own"
+				   " `" << member << "` is. Call `" << type << "_"
+				<< objectIdentifier(method.name) << "` directly.\n";
+			continue;
+		}
+		out << "\n\t//! Method `" << method.name << "`.\n";
+		out << "\t"
+			<< (method.results.size() == 1u ? cType(method.results.at(0))
+											: std::string("void"))
+			<< " " << member << "(";
+		for (std::size_t index = 0; index < method.params.size(); ++index) {
+			if (index != 0)
+				out << ", ";
+			out << objectCType(schema, method.params.at(index)) << " "
+				<< camelMemberName(method.paramName(index));
+		}
+		if (method.results.size() > 1u)
+			out << (method.params.empty() ? "" : ", ") << "void* results";
+		out << ")\n\t{\n\t\t"
+			<< (method.results.size() == 1u ? "return " : "") << type << "_"
+			<< objectIdentifier(method.name) << "(_self";
+		for (std::size_t index = 0; index < method.params.size(); ++index)
+			out << ", " << camelMemberName(method.paramName(index));
+		if (method.results.size() > 1u)
+			out << ", results";
+		out << ");\n\t}\n";
+	}
+
+	out << "\nprivate:\n\t" << type << "* _self = nullptr;\n};\n\n";
+}
+
 void emitCppObjects(std::ostringstream& out, const Schema& schema)
 {
 	const std::vector<ObjectDescriptor>* objects = objectList(schema);
@@ -741,8 +940,14 @@ void emitCppObjects(std::ostringstream& out, const Schema& schema)
 		   "   slot through the `_release` entry point above, and every member forwards\n"
 		   "   to an entry point. The slot is host state — a wrapper means nothing in\n"
 		   "   another Store or process — and `release()` hands ownership back without\n"
-		   "   releasing, which is what a caller wants when passing the slot on. */\n\n";
+		   "   releasing, which is what a caller wants when passing the slot on.\n"
+		   "   An `externref` object has no slot: its wrapper holds the reference, owns\n"
+		   "   nothing and copies (§4.13). */\n\n";
 	for (const ObjectDescriptor& object : *objects) {
+		if (isOpaqueObject(object)) {
+			emitCppOpaqueObject(out, schema, object);
+			continue;
+		}
 		const std::string klass = pascalObjectName(object);
 		const std::string type = objectTypeName(object);
 		const std::string none = macroPrefix(object) + "_HANDLE_NONE";
@@ -905,17 +1110,77 @@ void emitCppObjects(std::ostringstream& out, const Schema& schema)
 	out << "#endif /* __cplusplus */\n\n";
 }
 
+//! The Kotlin façade over an opaque host reference (`externref`).
+//!
+//! A GC-language client holds the reference itself, so there is no slot, no
+//! `close()` and no `AutoCloseable`: the bridge owns the lifetime and a declared
+//! constructor is the companion factory that acquires one. The reference's Kotlin
+//! spelling is the compiler's (Kotlin/Wasm: `JsAny`), so it is a type alias the
+//! consumer points at its own toolchain type.
+void emitKotlinOpaqueObject(std::ostringstream& out, const Schema& schema,
+		const ObjectDescriptor& object)
+{
+	const std::string wrapper = pascalObjectName(object);
+	const std::string type = objectTypeName(object);
+	out << "// `" << object.name << "` version " << object.version
+		<< ": an opaque host reference. The bridge owns the lifetime, so there is\n"
+		   "// no `close()`; a declared constructor is the companion factory.\n";
+	out << "typealias " << wrapper << "Ref = Any   // the compiler's `externref` spelling\n\n";
+	out << "class " << wrapper << "(val ref: " << wrapper << "Ref) {\n"
+		   "    /** False for the null reference. */\n"
+		   "    val valid: Boolean get() = ref != null\n"
+		   "\n"
+		   "    companion object {\n";
+	for (const ObjectConstructor& constructor : object.constructors) {
+		std::string declared;
+		std::string args;
+		for (std::size_t index = 0; index < constructor.params.size(); ++index) {
+			const std::optional<std::string> kotlin =
+					objectKotlinType(constructor.params.at(index));
+			if (!kotlin)
+				break;
+			if (index != 0u) {
+				declared += ", ";
+				args += ", ";
+			}
+			const std::string param = camelMemberName(constructor.paramName(index));
+			declared += param + ": " + *kotlin;
+			args += param;
+		}
+		out << "        /** `" << constructor.name
+			<< "`: a declared constructor, returning the reference. */\n";
+		out << "        fun " << camelMemberName(constructor.name) << "("
+			<< declared << "): " << wrapper << " =\n"
+			<< "            " << wrapper << "(" << type << "_"
+			<< objectIdentifier(constructor.name) << "(" << args << "))\n\n";
+	}
+	out << "    }\n}\n\n";
+}
+
 void emitKotlinObjects(std::ostringstream& out, const Schema& schema)
 {
 	const std::vector<ObjectDescriptor>* objects = objectList(schema);
 	if (objects == nullptr)
 		return;
 
-	out << "\n// Host-registered objects (wasmjit.binding/2). The wrapper holds the `i64`\n"
-		   "// slot; the host's table owns the object, so `close()` is the one release and\n"
-		   "// `use { }` is the lifetime policy — the same contract the component model\n"
-		   "// spells `resource.drop` (docs/proposals/SYNTHETIC_OBJECTS.md A.14.4).\n\n";
+	bool anyHandle = false;
+	for (const ObjectDescriptor& object : *objects)
+		anyHandle = anyHandle || !isOpaqueObject(object);
+	if (anyHandle)
+		out << "\n// Host-registered objects (wasmjit.binding/2). The wrapper holds the `i64`\n"
+			   "// slot; the host's table owns the object, so `close()` is the one release and\n"
+			   "// `use { }` is the lifetime policy — the same contract the component model\n"
+			   "// spells `resource.drop` (docs/proposals/SYNTHETIC_OBJECTS.md A.14.4).\n\n";
+	else
+		out << "\n// Host-registered objects (wasmjit.binding/2). An `externref` object is a\n"
+			   "// host reference, so the bridge owns the lifetime and there is no `close()`:\n"
+			   "// a declared constructor is the factory that acquires one\n"
+			   "// (docs/proposals/SYNTHETIC_OBJECTS.md §4.13).\n\n";
 	for (const ObjectDescriptor& object : *objects) {
+		if (isOpaqueObject(object)) {
+			emitKotlinOpaqueObject(out, schema, object);
+			continue;
+		}
 		const std::string wrapper = pascalObjectName(object);
 		const std::string type = objectTypeName(object);
 		out << "// `" << object.name << "` version " << object.version << ".\n";
@@ -998,9 +1263,13 @@ void emitWitObjects(std::ostringstream& out, const Schema& schema)
 		}
 
 		out << "  /// Host-registered object `" << name << "`, descriptor version "
-			<< version << ".\n"
-			<< "  /// Canonical size " << size
-			<< " bytes; the offsets are host metadata, not a Wasm ABI.\n";
+			<< version << ".\n";
+		if (isOpaqueObject(object))
+			out << "  /// Opaque: the payload is host-private, so the guest sees a\n"
+				   "  /// resource and reaches it only through its (func) members.\n";
+		else
+			out << "  /// Canonical size " << size
+				<< " bytes; the offsets are host metadata, not a Wasm ABI.\n";
 		if (!object.parent.empty() || !object.interfaces.empty())
 			out << "  /// Parent and interfaces are descriptor metadata; WIT resources"
 				   " have no inheritance.\n";

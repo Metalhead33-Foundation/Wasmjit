@@ -2,7 +2,7 @@
 
 *Host-Registered Object Types, the GObject Precedent, and What the Component Model Already Covers*
 
-Status: design note / implementation reference (**revision 12 — 2026-11-19**). This
+Status: design note / implementation reference (**revision 13 — 2026-11-19**). This
 is `EMBEDDING_SURFACE.md` §16 promoted to a note of its own: that section had grown
 into a six-hundred-line study inside an implementation reference, and the
 reference now keeps only the embedder-facing half. Revision 1 recorded a boundary —
@@ -40,6 +40,10 @@ scoped rather than attempted (§4.11).
 declares the handle *entry points*, and a `#ifdef __cplusplus` block after it turns
 them into one move-only RAII class per descriptor — compiled and run in the test
 suite, which counts the releases (§4.10).
+**Revision 13 adds the second shape**: `objects[].self` is `"handle"` (the `SO-3`
+slot, unchanged) or `"externref"` — the same member tables over an opaque host
+reference, for a payload that cannot be written in Wasm at all. §4.13 is the
+walkthrough and §2.7 points at it from the question that motivates it.
 **Revision 12 adds the tutorials**: §2.7 answers the question §2.6 leaves open —
 whether an object with no fields, only methods and properties, is still a
 synthetic object (yes, as an object of the empty `(struct)`; opaque in its
@@ -375,7 +379,10 @@ properties is a token, not an object: register nothing and pass an `i64` or an
 `externref`. And if the guest must reach *inside* the native payload — index the
 `std::vector`, compare the `std::string` — no descriptor shape helps: the object
 stays behind the opaque path (D5, `externref` + `HostBridge`) or its data is
-copied through a canonical list/string record (§2.6, A.4).
+copied through a canonical list/string record (§2.6, A.4). The first of those two
+is now a **generated** shape rather than a hand-written one: `"self":
+"externref"` on a descriptor projects the same member tables over an opaque host
+reference, with no fields, no size and no `_release` (§4.13).
 
 
 ## 3. What the scenario does not demand
@@ -1077,6 +1084,100 @@ what a component-shaped package is (§4.10).
 | two classes resolve as each other | both registered fieldless — one shared empty `(struct)` | §2.7: add the `i32 kind` field, or use one table per class |
 | the import sees `hostData == nullptr` | the bridge was installed after `instantiate`, or `instanceCreated` is missing | set `RuntimeConfig::hostBridge` at `create` |
 | a C++ exception escapes the import and the host dies | the import threw instead of trapping | `WASM::trap(...)` inside the body; `nativeImport` catches what is left, because the generated caller has no unwind table |
+
+### 4.13 The other shape: an opaque host reference (`self: externref`)
+
+§2.7 answered “is a fieldless object still a synthetic object” with *yes, but its
+identity collapses*; §4.12 built one. This is the shape for the case that answer
+sent elsewhere: the native class whose payload cannot be written in Wasm at all —
+an `std::vector`, an `std::string`, a vtable. The guest then gets an **opaque host
+reference**, and the generated surface is the same one §4.12 walked.
+
+**The descriptor is one key longer.**
+
+```json
+{ "name": "demo.Session", "version": 1, "self": "externref",
+  "properties": [ { "name": "status", "type": "i32", "get": "get_status" } ],
+  "methods": [ { "name": "send", "argNames": ["bytes"], "params": ["i32"], "results": ["i32"] },
+               { "name": "get_status", "params": [], "results": ["i32"] } ],
+  "constructors": [ { "name": "open", "argNames": ["slot"], "params": ["i32"] } ] }
+```
+
+`"self": "handle"` is the default and means everything §4.12 described.
+`"externref"` changes five things, and only those:
+
+| | `self: handle` | `self: externref` |
+|---|---|---|
+| fields | the canonical layout, offset-checked at load | **refused** — the payload lives in the host |
+| size | `layoutHostType` | none: no `_SIZE`, metadata `size: 0` |
+| receiver | `int64_t` slot | `type*` — the `externref` payload |
+| lifetime | `…_release(slot)` on the host table | the `HostBridge` reference callbacks |
+| construction | `<type>_<name>` returns the slot | `<type>_<name>` returns the reference |
+
+The member tables — methods, properties, constructors, `argNames`, every accessor
+rule — are **identical**, because none of them was ever about the layout. That is
+the point of the shape: one descriptor, two wires, the same `<type>_<name>`
+entry-point names in both.
+
+**What each target emits.** The generator adds nothing language-specific; it
+projects the same members over a receiver that is a reference:
+
+| Target | The opaque projection |
+|---|---|
+| **C** | the opaque `struct` typedef, one `typedef` per method over `type* self`, the property macros and accessors, then the constructors and members as ordinary declarations over `type*`. No `_handle`, no `_HANDLE_NONE`, no `_h_fn`, no `_release` |
+| **C++** | a **copyable** wrapper holding `type*`, with `self()`, `valid()`, `operator bool`, the members and one static factory per constructor. No destructor work: it owns nothing |
+| **Rust** | `pub type <type>_ref = *mut <type>;` plus the `_fn` aliases, and a constructor alias returning that pointer |
+| **WIT** | the same `resource`. A component resource *is* the component-model spelling of an opaque host object, so the packaging half is unchanged (§4.10) |
+| **Kotlin** | `class X(val ref: XRef)` with a companion factory and no `close()`. The reference's spelling is the toolchain's, so `XRef` is a `typealias` the consumer points at it (Kotlin/Wasm: `JsAny`) |
+
+**The host side.** The import's parameter is the reference, so the host function
+takes it as the opaque payload:
+
+```cpp
+std::int32_t sessionSend(WASM::VMContext* context, void* self, std::int32_t bytes)
+{
+    auto* session = static_cast<Session*>(self);
+    if (session == nullptr)
+        WASM::trap(WASM::TrapKind::Internal, "sessionSend: null reference");
+    return session->send(bytes);          // the std::vector lives here, not in Wasm
+}
+
+void* sessionOpen(WASM::VMContext* context, std::int32_t slot);
+// returns the pointer the bridge will count: the constructor's result
+```
+
+```cpp
+imports.registerFunction("demo", "send", WASM::nativeImport<&sessionSend>());
+imports.registerFunction("demo", "open", WASM::nativeImport<&sessionOpen>());
+```
+
+The `HostBridge` callbacks from
+[`../EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md) §2.2 are what make it safe
+rather than lucky: `references.isHostReference` says the pointer is yours,
+`retain`/`release` are the engine's count on it, and `instanceDestroying` is where
+the last reference an instance was given is dropped.
+
+**The guest side is the generated wrapper and nothing else.**
+
+```cpp
+DemoSessionV1 session(referenceHandedOverByTheHost);   // copies, owns nothing
+const std::int32_t sent = session.send(64);            // the import above
+const std::int32_t status = session.status();          // the property accessor
+anotherCall(session.self());                           // pass the reference on
+```
+
+There is nothing to release and no lifetime scope to write: a GC guest's
+reference dies with its frame and the bridge's count is the authority, while a
+guest that wants an explicit end-of-life calls the `destroy` method its own
+descriptor declares.
+
+**What this shape is not.** It is not a synthetic object (§2.7): there is no
+`TypeId`, no `ref.test`, no canonical layout. It is not a component resource
+either until someone packages it — the WIT target is that projection, and
+`resource.drop` reaching a host table is still `SO21`. And it does not replace the
+handle shape: a guest whose toolchain cannot spell a reference uses `self: handle`
+on the *same* descriptor (§16.2 of [`../EMBEDDING_SURFACE.md`](../EMBEDDING_SURFACE.md)
+records which can), which is why both spellings live on one schema.
 
 ## 5. Gaps
 
